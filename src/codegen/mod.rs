@@ -63,12 +63,15 @@ pub fn generate(program: &Program, type_env: &TypeEnv) -> String {
 
     // Data section
     let data_output = data.emit();
+    let runtime_data = runtime::emit_runtime_data();
 
     let mut output = emitter.output();
     if !data_output.is_empty() {
         output.push('\n');
         output.push_str(&data_output);
     }
+    output.push('\n');
+    output.push_str(&runtime_data);
 
     output
 }

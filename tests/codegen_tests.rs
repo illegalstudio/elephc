@@ -127,6 +127,110 @@ fn test_echo_int_zero_variable() {
     assert_eq!(out, "0");
 }
 
+// --- Phase 3: Arithmetic ---
+
+#[test]
+fn test_addition() {
+    let out = compile_and_run("<?php echo 10 + 32;");
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_subtraction() {
+    let out = compile_and_run("<?php echo 100 - 58;");
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_multiplication() {
+    let out = compile_and_run("<?php echo 6 * 7;");
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_division() {
+    let out = compile_and_run("<?php echo 84 / 2;");
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_arithmetic_with_variables() {
+    let out = compile_and_run("<?php $a = 10; $b = 32; echo $a + $b;");
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_operator_precedence() {
+    let out = compile_and_run("<?php echo 2 + 3 * 4;");
+    assert_eq!(out, "14");
+}
+
+#[test]
+fn test_parenthesized_arithmetic() {
+    let out = compile_and_run("<?php echo (2 + 3) * 4;");
+    assert_eq!(out, "20");
+}
+
+#[test]
+fn test_complex_expression() {
+    let out = compile_and_run("<?php echo (10 + 5) * 2 - 7;");
+    assert_eq!(out, "23");
+}
+
+#[test]
+fn test_arithmetic_assign_and_echo() {
+    let out = compile_and_run("<?php $a = 10; $b = 32; $c = $a + $b; echo $c;");
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_subtraction_negative_result() {
+    let out = compile_and_run("<?php echo 3 - 10;");
+    assert_eq!(out, "-7");
+}
+
+#[test]
+fn test_nested_arithmetic() {
+    let out = compile_and_run("<?php echo 1 + 2 + 3 + 4;");
+    assert_eq!(out, "10");
+}
+
+// --- Phase 3: Concatenation ---
+
+#[test]
+fn test_concat_literals() {
+    let out = compile_and_run("<?php echo \"Hello, \" . \"World!\";");
+    assert_eq!(out, "Hello, World!");
+}
+
+#[test]
+fn test_concat_variables() {
+    let out = compile_and_run(
+        "<?php $a = \"Hello, \"; $b = \"World!\"; echo $a . $b;",
+    );
+    assert_eq!(out, "Hello, World!");
+}
+
+#[test]
+fn test_concat_chain() {
+    let out = compile_and_run("<?php echo \"a\" . \"b\" . \"c\";");
+    assert_eq!(out, "abc");
+}
+
+#[test]
+fn test_concat_assign() {
+    let out = compile_and_run(
+        "<?php $msg = \"foo\" . \"bar\"; echo $msg;",
+    );
+    assert_eq!(out, "foobar");
+}
+
+#[test]
+fn test_concat_with_newline() {
+    let out = compile_and_run("<?php echo \"hello\" . \"\\n\";");
+    assert_eq!(out, "hello\n");
+}
+
 // --- Edge cases ---
 
 #[test]

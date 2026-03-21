@@ -2,7 +2,7 @@ use super::abi;
 use super::context::Context;
 use super::data_section::DataSection;
 use super::emit::Emitter;
-use crate::parser::ast::{Expr, ExprKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind};
 use crate::types::PhpType;
 
 /// Emits code to evaluate an expression.
@@ -44,9 +44,51 @@ pub fn emit_expr(
             emitter.instruction("neg x0, x0");
             PhpType::Int
         }
-        ExprKind::BinaryOp { .. } => {
-            // TODO: implement in Phase 3
+        ExprKind::BinaryOp { left, op, right } => emit_binop(left, op, right, emitter, ctx, data),
+    }
+}
+
+fn emit_binop(
+    left: &Expr,
+    op: &BinOp,
+    right: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    match op {
+        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => {
+            emit_expr(left, emitter, ctx, data);
+            emitter.instruction("str x0, [sp, #-16]!");
+            emit_expr(right, emitter, ctx, data);
+            emitter.instruction("ldr x1, [sp], #16");
+            // x1 = left, x0 = right
+            let instr = match op {
+                BinOp::Add => "add x0, x1, x0",
+                BinOp::Sub => "sub x0, x1, x0",
+                BinOp::Mul => "mul x0, x1, x0",
+                BinOp::Div => "sdiv x0, x1, x0",
+                _ => unreachable!(),
+            };
+            emitter.instruction(instr);
             PhpType::Int
+        }
+        BinOp::Concat => {
+            // Evaluate left → x1 (ptr), x2 (len)
+            emit_expr(left, emitter, ctx, data);
+            // Save left on stack
+            emitter.instruction("stp x1, x2, [sp, #-16]!");
+            // Evaluate right → x1 (ptr), x2 (len)
+            emit_expr(right, emitter, ctx, data);
+            // Move right to x3, x4
+            emitter.instruction("mov x3, x1");
+            emitter.instruction("mov x4, x2");
+            // Restore left to x1, x2
+            emitter.instruction("ldp x1, x2, [sp], #16");
+            // __rt_concat(x1=left_ptr, x2=left_len, x3=right_ptr, x4=right_len)
+            // returns x1=result_ptr, x2=result_len
+            emitter.instruction("bl __rt_concat");
+            PhpType::Str
         }
     }
 }
