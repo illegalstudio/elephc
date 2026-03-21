@@ -1,3 +1,3 @@
 <?php
-$name = "elephc";
-echo $name;
+$x = 42;
+echo $x;
