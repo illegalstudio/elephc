@@ -39,6 +39,7 @@ fn emit_itoa(emitter: &mut Emitter) {
     // x0 is 0: store '0'
     emitter.instruction("mov w12, #48");
     emitter.instruction("strb w12, [x9]");
+    emitter.instruction("sub x9, x9, #1");
     emitter.instruction("mov x10, #1");
     emitter.instruction("b __rt_itoa_done");
 
