@@ -44,6 +44,44 @@ pub fn emit_expr(
             emitter.instruction("neg x0, x0");
             PhpType::Int
         }
+        ExprKind::PreIncrement(name) => {
+            let var = ctx.variables.get(name).expect("undefined variable");
+            let offset = var.stack_offset;
+            emitter.comment(&format!("++${}", name));
+            emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));
+            emitter.instruction("add x0, x0, #1");
+            emitter.instruction(&format!("stur x0, [x29, #-{}]", offset));
+            PhpType::Int
+        }
+        ExprKind::PostIncrement(name) => {
+            let var = ctx.variables.get(name).expect("undefined variable");
+            let offset = var.stack_offset;
+            emitter.comment(&format!("${}++", name));
+            emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));
+            emitter.instruction("add x1, x0, #1");
+            emitter.instruction(&format!("stur x1, [x29, #-{}]", offset));
+            // x0 still has old value
+            PhpType::Int
+        }
+        ExprKind::PreDecrement(name) => {
+            let var = ctx.variables.get(name).expect("undefined variable");
+            let offset = var.stack_offset;
+            emitter.comment(&format!("--${}", name));
+            emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));
+            emitter.instruction("sub x0, x0, #1");
+            emitter.instruction(&format!("stur x0, [x29, #-{}]", offset));
+            PhpType::Int
+        }
+        ExprKind::PostDecrement(name) => {
+            let var = ctx.variables.get(name).expect("undefined variable");
+            let offset = var.stack_offset;
+            emitter.comment(&format!("${}--", name));
+            emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));
+            emitter.instruction("sub x1, x0, #1");
+            emitter.instruction(&format!("stur x1, [x29, #-{}]", offset));
+            // x0 still has old value
+            PhpType::Int
+        }
         ExprKind::BinaryOp { left, op, right } => emit_binop(left, op, right, emitter, ctx, data),
     }
 }

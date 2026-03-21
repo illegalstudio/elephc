@@ -1,6 +1,6 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
-use crate::parser::ast::{Stmt, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::parse_expr;
 use crate::span::Span;
 
@@ -9,7 +9,8 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
 
     match &tokens[*pos].0 {
         Token::Echo => parse_echo(tokens, pos, span),
-        Token::Variable(_) => parse_assign(tokens, pos, span),
+        Token::Variable(_) => parse_variable_stmt(tokens, pos, span),
+        Token::PlusPlus | Token::MinusMinus => parse_incdec_stmt(tokens, pos, span),
         Token::If => parse_if(tokens, pos, span),
         Token::While => parse_while(tokens, pos, span),
         Token::For => parse_for(tokens, pos, span),
@@ -41,6 +42,40 @@ fn parse_echo(
     Ok(Stmt::new(StmtKind::Echo(expr), span))
 }
 
+/// Handle statements starting with $variable: assignment or post-increment/decrement.
+fn parse_variable_stmt(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    let name = match &tokens[*pos].0 {
+        Token::Variable(n) => n.clone(),
+        _ => unreachable!(),
+    };
+
+    // Peek at token after variable
+    if *pos + 1 < tokens.len() {
+        match &tokens[*pos + 1].0 {
+            Token::PlusPlus => {
+                *pos += 2; // consume $var and ++
+                expect_semicolon(tokens, pos)?;
+                let expr = Expr::new(ExprKind::PostIncrement(name), span);
+                return Ok(Stmt::new(StmtKind::ExprStmt(expr), span));
+            }
+            Token::MinusMinus => {
+                *pos += 2; // consume $var and --
+                expect_semicolon(tokens, pos)?;
+                let expr = Expr::new(ExprKind::PostDecrement(name), span);
+                return Ok(Stmt::new(StmtKind::ExprStmt(expr), span));
+            }
+            _ => {}
+        }
+    }
+
+    // Regular assignment
+    parse_assign(tokens, pos, span)
+}
+
 fn parse_assign(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -61,6 +96,34 @@ fn parse_assign(
     expect_semicolon(tokens, pos)?;
 
     Ok(Stmt::new(StmtKind::Assign { name, value }, span))
+}
+
+/// Handle ++$var; or --$var; as standalone statements.
+fn parse_incdec_stmt(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    let is_increment = tokens[*pos].0 == Token::PlusPlus;
+    *pos += 1;
+
+    let name = match tokens.get(*pos).map(|(t, _)| t) {
+        Some(Token::Variable(n)) => n.clone(),
+        _ => {
+            let op = if is_increment { "++" } else { "--" };
+            return Err(CompileError::new(span, &format!("Expected variable after '{}'", op)));
+        }
+    };
+    *pos += 1;
+    expect_semicolon(tokens, pos)?;
+
+    let kind = if is_increment {
+        ExprKind::PreIncrement(name)
+    } else {
+        ExprKind::PreDecrement(name)
+    };
+    let expr = Expr::new(kind, span);
+    Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
 }
 
 /// Parse: if (expr) { stmts } (elseif (expr) { stmts })* (else { stmts })?
@@ -177,18 +240,64 @@ fn parse_for(
     ))
 }
 
-/// Parse an assignment without trailing semicolon (for use inside for-loops).
+/// Parse a simple statement without trailing semicolon (for use inside for-loops).
+/// Handles: $var = expr, $var++, $var--, ++$var, --$var
 fn parse_assign_inline(
     tokens: &[(Token, Span)],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
+    // Pre-increment/decrement
+    if *pos < tokens.len() {
+        match &tokens[*pos].0 {
+            Token::PlusPlus => {
+                *pos += 1;
+                let name = match tokens.get(*pos).map(|(t, _)| t) {
+                    Some(Token::Variable(n)) => n.clone(),
+                    _ => return Err(CompileError::new(span, "Expected variable after '++'")),
+                };
+                *pos += 1;
+                let expr = Expr::new(ExprKind::PreIncrement(name), span);
+                return Ok(Stmt::new(StmtKind::ExprStmt(expr), span));
+            }
+            Token::MinusMinus => {
+                *pos += 1;
+                let name = match tokens.get(*pos).map(|(t, _)| t) {
+                    Some(Token::Variable(n)) => n.clone(),
+                    _ => return Err(CompileError::new(span, "Expected variable after '--'")),
+                };
+                *pos += 1;
+                let expr = Expr::new(ExprKind::PreDecrement(name), span);
+                return Ok(Stmt::new(StmtKind::ExprStmt(expr), span));
+            }
+            _ => {}
+        }
+    }
+
     let name = match &tokens[*pos].0 {
         Token::Variable(n) => n.clone(),
         _ => return Err(CompileError::new(span, "Expected variable in for clause")),
     };
     *pos += 1;
 
+    // Post-increment/decrement
+    if *pos < tokens.len() {
+        match &tokens[*pos].0 {
+            Token::PlusPlus => {
+                *pos += 1;
+                let expr = Expr::new(ExprKind::PostIncrement(name), span);
+                return Ok(Stmt::new(StmtKind::ExprStmt(expr), span));
+            }
+            Token::MinusMinus => {
+                *pos += 1;
+                let expr = Expr::new(ExprKind::PostDecrement(name), span);
+                return Ok(Stmt::new(StmtKind::ExprStmt(expr), span));
+            }
+            _ => {}
+        }
+    }
+
+    // Regular assignment
     if *pos >= tokens.len() || tokens[*pos].0 != Token::Assign {
         return Err(CompileError::new(span, "Expected '=' after variable name"));
     }

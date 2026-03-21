@@ -88,6 +88,10 @@ fn check_stmt(stmt: &Stmt, env: &mut HashMap<String, PhpType>) -> Result<(), Com
             Ok(())
         }
         StmtKind::Break | StmtKind::Continue => Ok(()),
+        StmtKind::ExprStmt(expr) => {
+            infer_type(expr, env)?;
+            Ok(())
+        }
     }
 }
 
@@ -107,6 +111,20 @@ fn infer_type(expr: &Expr, env: &HashMap<String, PhpType>) -> Result<PhpType, Co
                 ));
             }
             Ok(PhpType::Int)
+        }
+        ExprKind::PreIncrement(name) | ExprKind::PostIncrement(name)
+        | ExprKind::PreDecrement(name) | ExprKind::PostDecrement(name) => {
+            match env.get(name) {
+                Some(PhpType::Int) => Ok(PhpType::Int),
+                Some(other) => Err(CompileError::new(
+                    expr.span,
+                    &format!("Cannot increment/decrement ${} of type {:?}", name, other),
+                )),
+                None => Err(CompileError::new(
+                    expr.span,
+                    &format!("Undefined variable: ${}", name),
+                )),
+            }
         }
         ExprKind::BinaryOp { left, op, right } => {
             let lt = infer_type(left, env)?;

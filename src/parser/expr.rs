@@ -80,6 +80,28 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
             let inner = parse_expr_bp(tokens, pos, 11)?;
             Ok(Expr::new(ExprKind::Negate(Box::new(inner)), span))
         }
+        Token::PlusPlus => {
+            *pos += 1;
+            if *pos < tokens.len() {
+                if let Token::Variable(name) = &tokens[*pos].0 {
+                    let name = name.clone();
+                    *pos += 1;
+                    return Ok(Expr::new(ExprKind::PreIncrement(name), span));
+                }
+            }
+            Err(CompileError::new(span, "Expected variable after '++'"))
+        }
+        Token::MinusMinus => {
+            *pos += 1;
+            if *pos < tokens.len() {
+                if let Token::Variable(name) = &tokens[*pos].0 {
+                    let name = name.clone();
+                    *pos += 1;
+                    return Ok(Expr::new(ExprKind::PreDecrement(name), span));
+                }
+            }
+            Err(CompileError::new(span, "Expected variable after '--'"))
+        }
         Token::StringLiteral(s) => {
             let s = s.clone();
             *pos += 1;
@@ -93,6 +115,20 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
         Token::Variable(name) => {
             let name = name.clone();
             *pos += 1;
+            // Check for postfix ++/--
+            if *pos < tokens.len() {
+                match &tokens[*pos].0 {
+                    Token::PlusPlus => {
+                        *pos += 1;
+                        return Ok(Expr::new(ExprKind::PostIncrement(name), span));
+                    }
+                    Token::MinusMinus => {
+                        *pos += 1;
+                        return Ok(Expr::new(ExprKind::PostDecrement(name), span));
+                    }
+                    _ => {}
+                }
+            }
             Ok(Expr::new(ExprKind::Variable(name), span))
         }
         Token::LParen => {

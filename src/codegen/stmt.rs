@@ -152,6 +152,11 @@ pub fn emit_stmt(
             let labels = ctx.loop_stack.last().expect("break outside loop");
             emitter.instruction(&format!("b {}", labels.break_label));
         }
+        StmtKind::ExprStmt(expr) => {
+            emitter.blank();
+            emit_expr(expr, emitter, ctx, data);
+            // result discarded
+        }
         StmtKind::Continue => {
             let labels = ctx.loop_stack.last().expect("continue outside loop");
             emitter.instruction(&format!("b {}", labels.continue_label));

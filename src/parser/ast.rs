@@ -19,6 +19,10 @@ pub enum ExprKind {
         right: Box<Expr>,
     },
     Negate(Box<Expr>),
+    PreIncrement(String),
+    PostIncrement(String),
+    PreDecrement(String),
+    PostDecrement(String),
 }
 
 impl PartialEq for Expr {
@@ -112,6 +116,7 @@ pub enum StmtKind {
     },
     Break,
     Continue,
+    ExprStmt(Expr),
 }
 
 impl PartialEq for Stmt {

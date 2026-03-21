@@ -136,11 +136,21 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
         }
         '+' => {
             cursor.advance();
-            Ok(Token::Plus)
+            if cursor.peek() == Some('+') {
+                cursor.advance();
+                Ok(Token::PlusPlus)
+            } else {
+                Ok(Token::Plus)
+            }
         }
         '-' => {
             cursor.advance();
-            Ok(Token::Minus)
+            if cursor.peek() == Some('-') {
+                cursor.advance();
+                Ok(Token::MinusMinus)
+            } else {
+                Ok(Token::Minus)
+            }
         }
         '*' => {
             cursor.advance();

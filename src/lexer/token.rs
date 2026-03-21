@@ -34,6 +34,10 @@ pub enum Token {
     Percent,        // %
     Dot,            // .
 
+    // Increment/Decrement
+    PlusPlus,       // ++
+    MinusMinus,     // --
+
     // Comparison
     EqualEqual,     // ==
     NotEqual,       // !=

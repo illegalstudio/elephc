@@ -440,6 +440,56 @@ while ($i <= 15) {
     );
 }
 
+// --- Increment/Decrement ---
+
+#[test]
+fn test_pre_increment() {
+    let out = compile_and_run("<?php $i = 1; $k = ++$i; echo $i . \" \" . $k;");
+    assert_eq!(out, "2 2");
+}
+
+#[test]
+fn test_post_increment() {
+    let out = compile_and_run("<?php $i = 1; $k = $i++; echo $i . \" \" . $k;");
+    assert_eq!(out, "2 1");
+}
+
+#[test]
+fn test_pre_decrement() {
+    let out = compile_and_run("<?php $i = 5; $k = --$i; echo $i . \" \" . $k;");
+    assert_eq!(out, "4 4");
+}
+
+#[test]
+fn test_post_decrement() {
+    let out = compile_and_run("<?php $i = 5; $k = $i--; echo $i . \" \" . $k;");
+    assert_eq!(out, "4 5");
+}
+
+#[test]
+fn test_standalone_increment() {
+    let out = compile_and_run("<?php $x = 0; $x++; $x++; $x++; echo $x;");
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_standalone_decrement() {
+    let out = compile_and_run("<?php $x = 10; $x--; $x--; echo $x;");
+    assert_eq!(out, "8");
+}
+
+#[test]
+fn test_for_with_increment() {
+    let out = compile_and_run("<?php for ($i = 0; $i < 5; $i++) { echo $i; }");
+    assert_eq!(out, "01234");
+}
+
+#[test]
+fn test_while_with_pre_increment() {
+    let out = compile_and_run("<?php $i = 0; while ($i < 3) { ++$i; echo $i; }");
+    assert_eq!(out, "123");
+}
+
 // --- Edge cases ---
 
 #[test]
