@@ -31,11 +31,16 @@
 - [x] Tests for loops, nested loops, edge cases (zero iterations, break, continue)
 - [x] **Goal**: `fizzbuzz.php` compiles and runs correctly
 
-## Future
+## v0.3.0 (done)
 
-- [ ] Function declarations and calls (`function foo($x) { ... }`)
-- [ ] Local scope and stack frames per function
-- [ ] `return` statement
+- [x] Function declarations and calls (`function foo($x) { ... }`)
+- [x] Local scope and stack frames per function
+- [x] `return` statement
+- [x] Recursive functions (factorial)
+- [x] Nested function calls (`add(add(1,2), add(3,4))`)
+- [x] Pre/post increment/decrement (`$i++`, `++$i`, `$i--`, `--$i`)
+
+## Future
 - [ ] Multiple file compilation
 - [ ] Linux / x86_64 target
 - [ ] Basic optimizations (constant folding, dead code elimination)

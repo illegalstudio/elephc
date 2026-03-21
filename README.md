@@ -70,6 +70,10 @@ while ($i <= 15) {
 | While | `while (...) { }` |
 | For | `for ($i = 0; $i < 10; $i = $i + 1) { }` |
 | Break / Continue | `break;`, `continue;` |
+| Functions | `function foo($x) { return $x + 1; }` |
+| Function calls | `$r = foo(42);`, `foo();` |
+| Return | `return $x;`, `return;` |
+| Increment/Decrement | `$i++`, `++$i`, `$i--`, `--$i` |
 | Comments | `// ...`, `/* ... */` |
 
 ### Not supported (by design)
@@ -131,7 +135,7 @@ src/
 cargo test
 ```
 
-98 tests covering lexer, parser, codegen (end-to-end), and error reporting.
+114 tests covering lexer, parser, codegen (end-to-end), and error reporting.
 
 ## License
 
