@@ -1,49 +1,129 @@
 # Roadmap
 
-## v0.1.0 (done)
+## Completed
 
-- [x] **Phase 0 — Scaffolding**: Cargo project, data types (`Token`, `Expr`, `Stmt`), CLI, module structure
-- [x] **Phase 1 — Echo Strings**: Full pipeline for `echo "Hello, World!\n";`, ARM64 assembly output, `as` + `ld` linking
-- [x] **Phase 2 — Variables and Integers**: Variable assignment, integer literals, `echo` for both types, `itoa` runtime, static type checker
-- [x] **Phase 3 — Expressions**: Arithmetic operators (`+`, `-`, `*`, `/`), string concatenation (`.`) with auto int coercion, operator precedence (Pratt parser)
-- [x] **Phase 4 — Polish**: 77 tests (lexer, parser, codegen, errors), error messages with line/column, README, v0.1.0 tag
-- [x] **Refactoring**: Pratt parser, Span on AST nodes, `codegen/abi.rs` layer, `TypeEnv` from checker, `PhpType::stack_size()`
+- [x] Lexer, parser (Pratt), type checker, ARM64 codegen pipeline
+- [x] Integers, strings, echo, variables, comments
+- [x] Arithmetic (`+`, `-`, `*`, `/`, `%`), comparison (`==`, `!=`, `<`, `>`, `<=`, `>=`)
+- [x] String concatenation (`.`) with automatic int coercion
+- [x] `if` / `elseif` / `else`, `while`, `for`, `break`, `continue`
+- [x] Functions with local scope, return, recursion, nested calls
+- [x] Pre/post increment/decrement (`++$i`, `$i++`, `--$i`, `$i--`)
+- [x] Error messages with line/column numbers
+- [x] 114 tests (lexer, parser, codegen end-to-end, error reporting)
 
-## v0.2.0 (done)
+---
 
-### Step 1 — Comparison operators and `if`/`else`
+## v0.1.0 — Usable CLI compiler
 
-- [x] Comparison operators: `==`, `!=`, `<`, `>`, `<=`, `>=`
-- [x] Modulo operator (`%`)
-- [x] Boolean evaluation in codegen (`cmp` + `cset`)
-- [x] `if` / `else` / `elseif` statements
-- [x] Parser: `if` (`elseif`)* (`else`)? block structure with `{` `}`
-- [x] Codegen: conditional jumps, label generation for branches
-- [x] Tests for all comparison operators and branching paths
+The compiler should be able to produce real CLI tools that accept arguments and do basic I/O.
 
-### Step 2 — Loops
+- [ ] Logical operators: `&&`, `||`, `!` (with short-circuit evaluation)
+- [ ] Assignment operators: `+=`, `-=`, `*=`, `/=`, `.=`, `%=`
+- [ ] Boolean literals: `true`, `false`
+- [ ] `null` keyword and `is_null()`
+- [ ] Ternary operator: `$x = $a > $b ? $a : $b;`
+- [ ] `do { } while ();` loop
+- [ ] `$argc` / `$argv` globals (read command-line arguments)
+- [ ] `exit($code);` / `die();`
+- [ ] Single-quoted strings (`'no $interpolation'`)
+- [ ] Built-in `strlen()` and `intval()`
 
-- [x] `while` loops
-- [x] `for` loops (init; condition; increment)
-- [x] Parser: loop block structure
-- [x] Codegen: loop labels, backward jumps, condition re-evaluation
-- [x] `break` and `continue` support
-- [x] Tests for loops, nested loops, edge cases (zero iterations, break, continue)
-- [x] **Goal**: `fizzbuzz.php` compiles and runs correctly
+## v0.2.0 — Arrays
 
-## v0.3.0 (done)
+Core data structure support. Unlocks most real-world PHP patterns.
 
-- [x] Function declarations and calls (`function foo($x) { ... }`)
-- [x] Local scope and stack frames per function
-- [x] `return` statement
-- [x] Recursive functions (factorial)
-- [x] Nested function calls (`add(add(1,2), add(3,4))`)
-- [x] Pre/post increment/decrement (`$i++`, `++$i`, `$i--`, `--$i`)
+- [ ] Indexed arrays: `$arr = [1, 2, 3];`
+- [ ] Array access: `$arr[0]`, `$arr[$i]`
+- [ ] Array assignment: `$arr[0] = 42;`, `$arr[] = "new";`
+- [ ] `count()`, `array_push()`, `array_pop()`
+- [ ] `foreach ($arr as $value) { }` loop
+- [ ] `in_array()`, `array_keys()`, `array_values()`
+- [ ] `sort()`, `rsort()`
+- [ ] Heap allocator for dynamic-size arrays
+- [ ] `isset()`, `unset()` for array elements
 
-## Future
-- [ ] Multiple file compilation
-- [ ] Linux / x86_64 target
-- [ ] Basic optimizations (constant folding, dead code elimination)
-- [ ] Logical operators (`&&`, `||`, `!`)
-- [ ] String comparison
-- [ ] `print` as alias for `echo`
+## v0.3.0 — Strings and I/O
+
+Make string handling practical and add file I/O.
+
+- [ ] String interpolation: `"Hello $name"`, `"val={$expr}"`
+- [ ] Single-quoted raw strings
+- [ ] `substr()`, `strpos()`, `str_replace()`
+- [ ] `strtolower()`, `strtoupper()`, `trim()`
+- [ ] `explode()`, `implode()`
+- [ ] `fgets(STDIN)` / `readline()` — read from keyboard
+- [ ] `fopen()`, `fread()`, `fwrite()`, `fclose()`
+- [ ] `file_get_contents()`, `file_put_contents()`
+
+## v0.4.0 — Associative arrays and switch
+
+- [ ] Associative arrays: `$map = ["key" => "value"];`
+- [ ] `foreach ($map as $key => $value) { }`
+- [ ] Hash table runtime for string keys
+- [ ] `array_merge()`, `array_slice()`, `array_map()`, `array_filter()`
+- [ ] `switch` / `case` / `default` (with fall-through)
+- [ ] `match` expression (PHP 8 style, no fall-through)
+
+## v0.5.0 — Float and math
+
+- [ ] Float type: `3.14`, `1.0e-5`
+- [ ] Mixed int/float arithmetic (auto-promotion)
+- [ ] Float comparison and formatting
+- [ ] `abs()`, `min()`, `max()`, `floor()`, `ceil()`, `round()`
+- [ ] `sqrt()`, `pow()`
+- [ ] `rand()` / `mt_rand()`
+- [ ] `number_format()`
+- [ ] `is_int()`, `is_string()`, `is_float()`, `is_array()`
+
+## v0.6.0 — Optimizations
+
+Make the generated code competitive with C -O0.
+
+- [ ] Constant folding (`2 + 3` → `5` at compile time)
+- [ ] Dead code elimination (unreachable branches after `return`)
+- [ ] Register allocation (reduce stack spills for temporaries)
+- [ ] Inline small functions
+- [ ] Tail-call optimization for recursive functions
+- [ ] Peephole optimization (redundant load/store elimination)
+- [ ] Strength reduction (`$x * 2` → `$x << 1`)
+
+## v0.7.0 — Advanced language features
+
+- [ ] `global $var;` keyword
+- [ ] Static variables: `static $counter = 0;`
+- [ ] Null coalescing operator: `$x ?? $default`
+- [ ] Spread operator: `func(...$args)`, `[...$a, ...$b]`
+- [ ] List unpacking: `[$a, $b] = $array;`
+- [ ] Heredoc / nowdoc strings
+- [ ] `var_dump()`, `print_r()` for debugging
+- [ ] Type casting: `(int)`, `(string)`, `(float)`, `(array)`
+
+## v0.8.0 — Multi-platform and multi-file
+
+- [ ] Linux x86_64 target
+- [ ] Linux ARM64 target
+- [ ] `include` / `require` (static, resolved at compile time)
+- [ ] `include_once` / `require_once`
+- [ ] Cross-compilation support
+- [ ] Environment variables: `getenv()`, `putenv()`
+
+## v0.9.0 — Hardening and tooling
+
+- [ ] Comprehensive error recovery (multiple errors per compilation)
+- [ ] Warning system (unused variables, unreachable code)
+- [ ] Source maps (assembly ↔ PHP line mapping)
+- [ ] `--emit-asm` flag to keep assembly without linking
+- [ ] `--check` flag for type checking without compilation
+- [ ] Benchmark suite (vs C, vs PHP interpreter)
+- [ ] Regular expressions via `preg_match()` / `preg_replace()` (link libpcre or minimal engine)
+
+## v1.0.0 — Production-ready
+
+- [ ] Stable compilation pipeline with documented semantics
+- [ ] All built-in functions covered for CLI use cases
+- [ ] Full test coverage (>500 tests)
+- [ ] Documentation: language subset spec, architecture guide
+- [ ] CI/CD with release binaries for macOS ARM64 and Linux x86_64
+- [ ] Performance within 2x of C -O0 on compute benchmarks
+- [ ] Real-world CLI tools compiled as validation (JSON parser, file processor, etc.)
