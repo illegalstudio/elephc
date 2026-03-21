@@ -1,0 +1,9 @@
+[package]
+name = "elephc"
+version = "0.1.0"
+edition = "2021"
+description = "A PHP-to-native compiler targeting x86_64 Linux"
+
+[[bin]]
+name = "elephc"
+path = "src/main.rs"

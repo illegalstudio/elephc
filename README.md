@@ -5,7 +5,8 @@ tags:
   - "#compiler"
   - "#php"
   - "#assembly"
-  - "#x86_64"
+  - "#arm64"
+  - "#macos"
   - "#systems-programming"
 ---
 
@@ -13,11 +14,11 @@ tags:
 
 ## 1. Introduction
 
-**elephc** is a minimalist [[PHP]] compiler written in [[Rust]] that translates a static subset of PHP into [[x86_64]] [[assembly]], producing native [[Linux]] [[ELF]] binaries — no interpreter, no VM, no runtime.
+**elephc** is a minimalist [[PHP]] compiler written in [[Rust]] that translates a static subset of PHP into [[ARM64]] [[assembly]], producing native [[macOS]] [[Mach-O]] binaries — no interpreter, no VM, no runtime.
 
 The goal is not to replace the PHP interpreter. The goal is to prove that PHP syntax can serve as a valid surface language for systems-level compilation, and to give PHP developers a path to producing standalone CLI binaries from familiar code.
 
-The compiler pipeline is straightforward: PHP source → Lexer → Parser (AST) → Code Generator → [[NASM]] Assembly → Native Binary.
+The compiler pipeline is straightforward: PHP source → Lexer → Parser (AST) → Code Generator → [[ARM64]] Assembly → Native Binary.
 
 
 ## 2. Why
@@ -29,7 +30,7 @@ Existing approaches all add an intermediate layer: [[KPHP]] transpiles to [[C++]
 elephc fills this gap with a deliberately constrained approach:
 
 - **No dynamic features.** No `eval()`, no variable variables, no magic methods. If it can't be resolved at compile time, it doesn't exist.
-- **Direct assembly output.** The compiler emits human-readable [[NASM]] [[Intel syntax]] assembly. You can inspect every instruction your PHP code becomes.
+- **Direct assembly output.** The compiler emits human-readable [[ARM64]] assembly. You can inspect every instruction your PHP code becomes.
 - **Rust implementation.** Memory safety, strong typing, and excellent tooling for building compilers — pattern matching, algebraic types, zero-cost abstractions.
 - **Educational value.** Every module is small, focused, and documented. elephc is designed to be read and understood, not just used.
 
@@ -58,11 +59,11 @@ The initial version supports the following constructs:
 
 | Property | Value |
 |---|---|
-| Architecture | [[x86_64]] |
-| OS | [[Linux]] (syscall ABI) |
-| Assembly syntax | [[Intel syntax]] ([[NASM]]) |
-| Binary format | [[ELF]] 64-bit |
-| Syscalls used | `sys_write` (1), `sys_exit` (60) |
+| Architecture | [[ARM64]] ([[Apple Silicon]]) |
+| OS | [[macOS]] (syscall ABI) |
+| Assembler | System `as` (Xcode Command Line Tools) |
+| Binary format | [[Mach-O]] 64-bit |
+| Syscalls used | `sys_write` (4), `sys_exit` (1) |
 
 ### 3.3 Type System
 
@@ -77,14 +78,14 @@ A variable's type is locked at its first assignment. Reassigning to a different 
 
 ```
 ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
-│  Source   │────▶│  Lexer   │────▶│  Parser  │────▶│ Codegen  │────▶│   NASM   │
-│  (.php)   │     │ (tokens) │     │  (AST)   │     │  (.asm)  │     │  + ld    │
+│  Source   │────▶│  Lexer   │────▶│  Parser  │────▶│ Codegen  │────▶│    as    │
+│  (.php)   │     │ (tokens) │     │  (AST)   │     │   (.s)   │     │  + ld    │
 └──────────┘     └──────────┘     └──────────┘     └──────────┘     └──────────┘
                                                                       │
                                                                       ▼
                                                                 ┌──────────┐
                                                                 │  Binary  │
-                                                                │  (ELF)   │
+                                                                │ (Mach-O) │
                                                                 └──────────┘
 ```
 
@@ -151,7 +152,7 @@ elephc/
 |---|---|---|
 | `lexer/` | 4 | Transforms source text into a flat token stream |
 | `parser/` | 4 | Transforms tokens into an abstract syntax tree |
-| `codegen/` | 7 | Transforms AST into NASM x86_64 assembly |
+| `codegen/` | 7 | Transforms AST into ARM64 macOS assembly |
 | `types/` | 2 | Resolves and validates variable types |
 | `errors/` | 2 | Collects and formats all compiler diagnostics |
 
@@ -168,7 +169,7 @@ Set up the Cargo project, define all data types (`Token`, `Expr`, `Stmt`), wire 
 
 ### Phase 1 — Echo Strings (Week 2)
 
-Implement the full pipeline for the simplest possible case: `echo "Hello, World!\n";`. The lexer tokenizes, the parser builds an AST, the codegen emits NASM assembly, and a shell script assembles + links the binary.
+Implement the full pipeline for the simplest possible case: `echo "Hello, World!\n";`. The lexer tokenizes, the parser builds an AST, the codegen emits ARM64 assembly, and the compiler assembles + links the binary automatically.
 
 **Deliverable:** `./hello` prints "Hello, World!" to stdout.
 
@@ -196,5 +197,5 @@ Write comprehensive tests for all modules. Add meaningful error messages with li
 - `while` and `for` loops
 - Function declarations and calls
 - Multiple file compilation
-- [[macOS]] / [[ARM64]] targets
+- [[Linux]] / [[x86_64]] targets
 - Basic optimizations (constant folding, dead code elimination)
