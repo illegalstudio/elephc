@@ -16,9 +16,6 @@ impl CompileError {
         }
     }
 
-    pub fn at(line: usize, col: usize, message: &str) -> Self {
-        Self::new(Span::new(line, col), message)
-    }
 }
 
 impl std::fmt::Display for CompileError {

@@ -4,7 +4,6 @@ use crate::types::PhpType;
 
 pub struct Context {
     pub variables: HashMap<String, VarInfo>,
-    pub label_counter: usize,
     pub stack_offset: usize,
 }
 
@@ -17,7 +16,6 @@ impl Context {
     pub fn new() -> Self {
         Self {
             variables: HashMap::new(),
-            label_counter: 0,
             stack_offset: 0,
         }
     }
@@ -33,11 +31,5 @@ impl Context {
             },
         );
         offset
-    }
-
-    pub fn next_label(&mut self, prefix: &str) -> String {
-        let label = format!("_{}_{}", prefix, self.label_counter);
-        self.label_counter += 1;
-        label
     }
 }

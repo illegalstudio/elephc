@@ -27,6 +27,7 @@ impl PartialEq for Expr {
     }
 }
 
+#[allow(dead_code)] // Constructors used by test crate
 impl Expr {
     pub fn new(kind: ExprKind, span: Span) -> Self {
         Self { kind, span }
@@ -91,6 +92,7 @@ impl PartialEq for Stmt {
     }
 }
 
+#[allow(dead_code)] // Constructors used by test crate
 impl Stmt {
     pub fn new(kind: StmtKind, span: Span) -> Self {
         Self { kind, span }
