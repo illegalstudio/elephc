@@ -2,7 +2,7 @@
 name = "elephc"
 version = "0.1.0"
 edition = "2021"
-description = "A PHP-to-native compiler targeting x86_64 Linux"
+description = "A PHP-to-native compiler targeting macOS ARM64"
 
 [[bin]]
 name = "elephc"
