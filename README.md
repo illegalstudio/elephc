@@ -50,7 +50,7 @@ The initial version supports the following constructs:
 | Assignment | `$x = "hello";` | Binds a value to a variable |
 | Echo | `echo $x;` | Prints to stdout |
 | Arithmetic | `$x + $y` | `+`, `-`, `*`, `/` on integers |
-| Concatenation | `"a" . "b"` | Dot operator on strings |
+| Concatenation | `"a" . "b"` | Dot operator, auto-coerces integers to strings |
 | Comments | `// ...` and `/* ... */` | Ignored by lexer |
 
 **Explicitly unsupported** (by design): `eval`, `include`/`require`, classes, closures, arrays, type juggling, dynamic dispatch, standard library functions.
@@ -90,7 +90,87 @@ A variable's type is locked at its first assignment. Reassigning to a different 
 ```
 
 
-## 4. Project Structure
+## 4. Usage
+
+### Requirements
+
+- [[Rust]] toolchain (`cargo`)
+- [[Xcode]] Command Line Tools (`xcode-select --install`)
+- [[macOS]] on [[Apple Silicon]] (ARM64)
+
+### Build
+
+```bash
+cargo build --release
+```
+
+### Compile a PHP file
+
+```bash
+# Compile hello.php → hello (native Mach-O binary)
+cargo run -- hello.php
+
+# Or with the release binary
+./target/release/elephc hello.php
+./hello
+```
+
+### Examples
+
+**Hello World**
+
+```php
+<?php
+echo "Hello, World!\n";
+```
+
+```
+$ elephc hello.php && ./hello
+Hello, World!
+```
+
+**Variables and arithmetic**
+
+```php
+<?php
+$a = 10;
+$b = 32;
+echo "Sum: " . ($a + $b) . "\n";
+echo "Product: " . ($a * $b) . "\n";
+```
+
+```
+$ elephc math.php && ./math
+Sum: 42
+Product: 320
+```
+
+**String concatenation with type coercion**
+
+```php
+<?php
+$name = "elephc";
+$version = 1;
+echo $name . " v0." . $version . "\n";
+```
+
+```
+$ elephc version.php && ./version
+elephc v0.1
+```
+
+### Error messages
+
+The compiler reports errors with line and column numbers:
+
+```
+error[3:1]: Undefined variable: $x
+error[5:7]: Type error: cannot reassign $x from Int to Str
+error[1:1]: Expected '<?php' at start of file
+```
+
+
+## 5. Project Structure
 
 The project follows a strict one-responsibility-per-file philosophy. Every module is small, focused, and independently testable.
 
@@ -100,7 +180,9 @@ elephc/
 ├── README.md                   # Usage and examples
 │
 ├── src/
-│   ├── main.rs                 # CLI entry point, argument parsing
+│   ├── main.rs                 # CLI entry point, assembler + linker invocation
+│   ├── lib.rs                  # Public module exports
+│   ├── span.rs                 # Source position tracking (line, col)
 │   │
 │   ├── lexer/
 │   │   ├── mod.rs              # Lexer public API
@@ -110,21 +192,22 @@ elephc/
 │   │
 │   ├── parser/
 │   │   ├── mod.rs              # Parser public API
-│   │   ├── ast.rs              # AST node definitions (Expr, Stmt)
-│   │   ├── expr.rs             # Expression parsing (literals, binops)
+│   │   ├── ast.rs              # AST node definitions (Expr, Stmt, Span)
+│   │   ├── expr.rs             # Pratt parser for expressions
 │   │   └── stmt.rs             # Statement parsing (echo, assign)
 │   │
 │   ├── codegen/
 │   │   ├── mod.rs              # Codegen public API
+│   │   ├── abi.rs              # ARM64 calling conventions (load, store, write)
 │   │   ├── context.rs          # Compilation state (variables, labels)
 │   │   ├── emit.rs             # Assembly instruction emitter
 │   │   ├── expr.rs             # Expression code generation
 │   │   ├── stmt.rs             # Statement code generation
 │   │   ├── data_section.rs     # .data section builder (string literals)
-│   │   └── runtime.rs          # Built-in routines (itoa, string concat)
+│   │   └── runtime.rs          # Built-in routines (itoa, concat)
 │   │
 │   ├── types/
-│   │   ├── mod.rs              # Type system public API
+│   │   ├── mod.rs              # Type system + PhpType enum
 │   │   └── checker.rs          # Static type resolution and checking
 │   │
 │   └── errors/
@@ -134,16 +217,15 @@ elephc/
 ├── tests/
 │   ├── lexer_tests.rs          # Tokenization tests
 │   ├── parser_tests.rs         # AST construction tests
-│   ├── codegen_tests.rs        # Assembly output tests
-│   └── integration/
-│       ├── hello.php           # echo "Hello, World!\n";
-│       ├── variables.php       # Variable assignment and echo
-│       ├── arithmetic.php      # Integer arithmetic
-│       └── concat.php          # String concatenation
+│   ├── codegen_tests.rs        # End-to-end compilation tests
+│   └── error_tests.rs          # Error reporting tests
 │
 └── examples/
     ├── hello.php               # Minimal example
-    └── fizzbuzz.php            # Goal program for v0.2
+    ├── variables.php           # Variable assignment and echo
+    ├── integers.php            # Integer edge cases (0, negatives)
+    ├── arithmetic.php          # Operators and precedence
+    └── concat.php              # String concatenation
 ```
 
 ### Module Responsibilities
@@ -152,7 +234,7 @@ elephc/
 |---|---|---|
 | `lexer/` | 4 | Transforms source text into a flat token stream |
 | `parser/` | 4 | Transforms tokens into an abstract syntax tree |
-| `codegen/` | 7 | Transforms AST into ARM64 macOS assembly |
+| `codegen/` | 8 | Transforms AST into ARM64 macOS assembly |
 | `types/` | 2 | Resolves and validates variable types |
 | `errors/` | 2 | Collects and formats all compiler diagnostics |
 

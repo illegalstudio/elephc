@@ -63,7 +63,8 @@ fn infix_bp(token: &Token) -> Option<(BinOp, u8, u8)> {
 /// Prefix expressions: literals, variables, unary operators, parentheses.
 fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, CompileError> {
     if *pos >= tokens.len() {
-        return Err(CompileError::at(0, 0, "Unexpected end of input"));
+        let span = tokens.last().map(|(_, s)| *s).unwrap_or(Span::dummy());
+        return Err(CompileError::new(span, "Unexpected end of input"));
     }
 
     let span = tokens[*pos].1;
