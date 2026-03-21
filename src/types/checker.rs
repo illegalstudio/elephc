@@ -71,12 +71,7 @@ fn infer_type(expr: &Expr, env: &HashMap<String, PhpType>) -> Result<PhpType, Co
                     Ok(PhpType::Int)
                 }
                 BinOp::Concat => {
-                    if lt != PhpType::Str || rt != PhpType::Str {
-                        return Err(CompileError::new(
-                            expr.span,
-                            "Concatenation operator requires string operands",
-                        ));
-                    }
+                    // Concat coerces any type to string (like PHP)
                     Ok(PhpType::Str)
                 }
             }

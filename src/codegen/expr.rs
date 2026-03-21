@@ -74,19 +74,24 @@ fn emit_binop(
             PhpType::Int
         }
         BinOp::Concat => {
-            // Evaluate left → x1 (ptr), x2 (len)
-            emit_expr(left, emitter, ctx, data);
-            // Save left on stack
+            // Evaluate left, coerce to string if needed
+            let left_ty = emit_expr(left, emitter, ctx, data);
+            if left_ty == PhpType::Int {
+                emitter.instruction("bl __rt_itoa");
+            }
+            // Save left (x1=ptr, x2=len) on stack
             emitter.instruction("stp x1, x2, [sp, #-16]!");
-            // Evaluate right → x1 (ptr), x2 (len)
-            emit_expr(right, emitter, ctx, data);
+            // Evaluate right, coerce to string if needed
+            let right_ty = emit_expr(right, emitter, ctx, data);
+            if right_ty == PhpType::Int {
+                emitter.instruction("bl __rt_itoa");
+            }
             // Move right to x3, x4
             emitter.instruction("mov x3, x1");
             emitter.instruction("mov x4, x2");
             // Restore left to x1, x2
             emitter.instruction("ldp x1, x2, [sp], #16");
-            // __rt_concat(x1=left_ptr, x2=left_len, x3=right_ptr, x4=right_len)
-            // returns x1=result_ptr, x2=result_len
+            // __rt_concat returns x1=result_ptr, x2=result_len
             emitter.instruction("bl __rt_concat");
             PhpType::Str
         }

@@ -231,6 +231,44 @@ fn test_concat_with_newline() {
     assert_eq!(out, "hello\n");
 }
 
+// --- Phase 3: Mixed-type concatenation ---
+
+#[test]
+fn test_concat_string_and_int() {
+    let out = compile_and_run("<?php echo \"Value: \" . 42;");
+    assert_eq!(out, "Value: 42");
+}
+
+#[test]
+fn test_concat_int_and_string() {
+    let out = compile_and_run("<?php echo 42 . \" is the answer\";");
+    assert_eq!(out, "42 is the answer");
+}
+
+#[test]
+fn test_concat_int_and_int() {
+    let out = compile_and_run("<?php echo 1 . 2;");
+    assert_eq!(out, "12");
+}
+
+#[test]
+fn test_concat_expr_result() {
+    let out = compile_and_run("<?php $a = 10; $b = 32; echo \"Result: \" . ($a + $b);");
+    assert_eq!(out, "Result: 42");
+}
+
+#[test]
+fn test_concat_chain_mixed() {
+    let out = compile_and_run("<?php echo \"x=\" . 5 . \" y=\" . 10;");
+    assert_eq!(out, "x=5 y=10");
+}
+
+#[test]
+fn test_concat_negative_int() {
+    let out = compile_and_run("<?php echo \"num: \" . -7;");
+    assert_eq!(out, "num: -7");
+}
+
 // --- Edge cases ---
 
 #[test]
