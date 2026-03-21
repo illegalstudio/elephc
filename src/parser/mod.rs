@@ -6,20 +6,26 @@ pub use ast::Program;
 
 use crate::errors::CompileError;
 use crate::lexer::Token;
+use crate::span::Span;
 
-pub fn parse(tokens: &[Token]) -> Result<Program, CompileError> {
+pub fn parse(tokens: &[(Token, Span)]) -> Result<Program, CompileError> {
     let mut pos = 0;
     let mut stmts = Vec::new();
 
     // Skip OpenTag
-    if pos < tokens.len() && tokens[pos] == Token::OpenTag {
+    if pos < tokens.len() && tokens[pos].0 == Token::OpenTag {
         pos += 1;
     } else {
-        return Err(CompileError::at(0, 0, "Expected '<?php' open tag"));
+        let span = if pos < tokens.len() {
+            tokens[pos].1
+        } else {
+            Span::dummy()
+        };
+        return Err(CompileError::new(span, "Expected '<?php' open tag"));
     }
 
     while pos < tokens.len() {
-        if tokens[pos] == Token::Eof {
+        if tokens[pos].0 == Token::Eof {
             break;
         }
         let s = stmt::parse_stmt(tokens, &mut pos)?;

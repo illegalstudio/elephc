@@ -2,6 +2,7 @@ mod codegen;
 mod errors;
 mod lexer;
 mod parser;
+mod span;
 mod types;
 
 use std::env;
@@ -53,15 +54,15 @@ fn main() {
         }
     };
 
-    let typed_ast = match types::check(&ast) {
-        Ok(typed) => typed,
+    let (typed_ast, type_env) = match types::check(&ast) {
+        Ok(result) => result,
         Err(e) => {
             errors::report(&e);
             process::exit(1);
         }
     };
 
-    let asm = codegen::generate(&typed_ast);
+    let asm = codegen::generate(&typed_ast, &type_env);
 
     if let Err(e) = fs::write(&asm_path, &asm) {
         eprintln!("Error writing '{}': {}", asm_path.display(), e);

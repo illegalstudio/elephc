@@ -1,3 +1,4 @@
+mod abi;
 pub mod context;
 mod data_section;
 mod emit;
@@ -5,28 +6,23 @@ mod expr;
 mod runtime;
 mod stmt;
 
-use crate::parser::ast::{Expr, Program, Stmt};
-use crate::types::checker::PhpType;
+use crate::parser::ast::Program;
+use crate::types::TypeEnv;
 use context::Context;
 use data_section::DataSection;
 use emit::Emitter;
 
-pub fn generate(program: &Program) -> String {
+pub fn generate(program: &Program, type_env: &TypeEnv) -> String {
     let mut emitter = Emitter::new();
     let mut ctx = Context::new();
     let mut data = DataSection::new();
 
-    // Pre-scan to allocate all variables
-    for s in program {
-        if let Stmt::Assign { name, value } = s {
-            if !ctx.variables.contains_key(name) {
-                let ty = infer_expr_type(value);
-                ctx.alloc_var(name, ty);
-            }
-        }
+    // Pre-allocate all variables using type info from the checker
+    for (name, ty) in type_env {
+        ctx.alloc_var(name, ty.clone());
     }
 
-    // Stack frame size: variables + 16 (for saved fp/lr), aligned to 16
+    // Stack frame size: variables + 16 (saved fp/lr), aligned to 16
     let vars_size = ctx.stack_offset;
     let frame_size = align16(vars_size + 16);
 
@@ -79,17 +75,4 @@ pub fn generate(program: &Program) -> String {
 
 fn align16(n: usize) -> usize {
     (n + 15) & !15
-}
-
-fn infer_expr_type(expr: &Expr) -> PhpType {
-    match expr {
-        Expr::StringLiteral(_) => PhpType::Str,
-        Expr::IntLiteral(_) => PhpType::Int,
-        Expr::Variable(_) => PhpType::Int, // will be resolved properly by type checker
-        Expr::Negate(_) => PhpType::Int,
-        Expr::BinaryOp { op, .. } => match op {
-            crate::parser::ast::BinOp::Concat => PhpType::Str,
-            _ => PhpType::Int,
-        },
-    }
 }

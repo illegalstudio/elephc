@@ -1,10 +1,10 @@
 use super::CompileError;
 
 pub fn print_error(error: &CompileError) {
-    if error.line > 0 {
+    if error.span.line > 0 {
         eprintln!(
             "error[{}:{}]: {}",
-            error.line, error.col, error.message
+            error.span.line, error.span.col, error.message
         );
     } else {
         eprintln!("error: {}", error.message);

@@ -1,30 +1,30 @@
 mod report;
 
+use crate::span::Span;
+
 #[derive(Debug, Clone)]
 pub struct CompileError {
-    pub line: usize,
-    pub col: usize,
+    pub span: Span,
     pub message: String,
 }
 
 impl CompileError {
-    pub fn new(line: usize, col: usize, message: &str) -> Self {
+    pub fn new(span: Span, message: &str) -> Self {
         Self {
-            line,
-            col,
+            span,
             message: message.to_string(),
         }
     }
 
     pub fn at(line: usize, col: usize, message: &str) -> Self {
-        Self::new(line, col, message)
+        Self::new(Span::new(line, col), message)
     }
 }
 
 impl std::fmt::Display for CompileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.line > 0 {
-            write!(f, "[{}:{}] {}", self.line, self.col, self.message)
+        if self.span.line > 0 {
+            write!(f, "[{}:{}] {}", self.span.line, self.span.col, self.message)
         } else {
             write!(f, "{}", self.message)
         }

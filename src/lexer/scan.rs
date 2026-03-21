@@ -1,23 +1,24 @@
 use super::cursor::Cursor;
 use super::token::Token;
 use crate::errors::CompileError;
+use crate::span::Span;
 
-pub fn scan_tokens(source: &str) -> Result<Vec<Token>, CompileError> {
+pub fn scan_tokens(source: &str) -> Result<Vec<(Token, Span)>, CompileError> {
     let mut cursor = Cursor::new(source);
     let mut tokens = Vec::new();
 
     skip_whitespace(&mut cursor);
 
     // Expect <?php open tag
+    let span = cursor.span();
     if cursor.remaining().starts_with("<?php") {
         for _ in 0..5 {
             cursor.advance();
         }
-        tokens.push(Token::OpenTag);
+        tokens.push((Token::OpenTag, span));
     } else {
         return Err(CompileError::new(
-            cursor.line(),
-            cursor.col(),
+            span,
             "Expected '<?php' at start of file",
         ));
     }
@@ -28,12 +29,13 @@ pub fn scan_tokens(source: &str) -> Result<Vec<Token>, CompileError> {
         skip_whitespace(&mut cursor);
 
         if cursor.is_eof() {
-            tokens.push(Token::Eof);
+            tokens.push((Token::Eof, cursor.span()));
             break;
         }
 
+        let span = cursor.span();
         let token = scan_token(&mut cursor)?;
-        tokens.push(token);
+        tokens.push((token, span));
     }
 
     Ok(tokens)
@@ -117,16 +119,14 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
         '0'..='9' => scan_integer(cursor),
         'a'..='z' | 'A'..='Z' | '_' => scan_keyword(cursor),
         _ => Err(CompileError::new(
-            cursor.line(),
-            cursor.col(),
+            cursor.span(),
             &format!("Unexpected character: '{}'", ch),
         )),
     }
 }
 
 fn scan_string(cursor: &mut Cursor) -> Result<Token, CompileError> {
-    let line = cursor.line();
-    let col = cursor.col();
+    let span = cursor.span();
     cursor.advance(); // opening "
 
     let mut value = String::new();
@@ -144,11 +144,11 @@ fn scan_string(cursor: &mut Cursor) -> Result<Token, CompileError> {
                     value.push(c);
                 }
                 None => {
-                    return Err(CompileError::new(line, col, "Unterminated string literal"))
+                    return Err(CompileError::new(span, "Unterminated string literal"))
                 }
             },
             Some(c) => value.push(c),
-            None => return Err(CompileError::new(line, col, "Unterminated string literal")),
+            None => return Err(CompileError::new(span, "Unterminated string literal")),
         }
     }
 }
@@ -168,8 +168,7 @@ fn scan_variable(cursor: &mut Cursor) -> Result<Token, CompileError> {
 
     if name.is_empty() {
         return Err(CompileError::new(
-            cursor.line(),
-            cursor.col(),
+            cursor.span(),
             "Expected variable name after '$'",
         ));
     }
@@ -190,7 +189,7 @@ fn scan_integer(cursor: &mut Cursor) -> Result<Token, CompileError> {
     }
 
     let value: i64 = num_str.parse().map_err(|_| {
-        CompileError::new(cursor.line(), cursor.col(), "Invalid integer literal")
+        CompileError::new(cursor.span(), "Invalid integer literal")
     })?;
 
     Ok(Token::IntLiteral(value))
@@ -211,8 +210,7 @@ fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
     match word.as_str() {
         "echo" => Ok(Token::Echo),
         _ => Err(CompileError::new(
-            cursor.line(),
-            cursor.col(),
+            cursor.span(),
             &format!("Unknown keyword: '{}'", word),
         )),
     }

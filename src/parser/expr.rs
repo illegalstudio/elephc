@@ -1,135 +1,106 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
-use crate::parser::ast::{BinOp, Expr};
+use crate::parser::ast::{BinOp, Expr, ExprKind};
+use crate::span::Span;
 
-pub fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Expr, CompileError> {
-    parse_concat(tokens, pos)
+pub fn parse_expr(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, CompileError> {
+    parse_expr_bp(tokens, pos, 0)
 }
 
-fn parse_concat(tokens: &[Token], pos: &mut usize) -> Result<Expr, CompileError> {
-    let mut left = parse_additive(tokens, pos)?;
+/// Pratt parser: parses expressions with binding power `min_bp` or higher.
+/// Adding new operators = adding a line to `infix_bp()`.
+fn parse_expr_bp(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    min_bp: u8,
+) -> Result<Expr, CompileError> {
+    let mut lhs = parse_prefix(tokens, pos)?;
 
-    while *pos < tokens.len() {
-        match &tokens[*pos] {
-            Token::Dot => {
-                *pos += 1;
-                let right = parse_additive(tokens, pos)?;
-                left = Expr::BinaryOp {
-                    left: Box::new(left),
-                    op: BinOp::Concat,
-                    right: Box::new(right),
-                };
-            }
-            _ => break,
+    loop {
+        if *pos >= tokens.len() {
+            break;
         }
-    }
 
-    Ok(left)
-}
+        let (op, l_bp, r_bp) = match infix_bp(&tokens[*pos].0) {
+            Some(v) => v,
+            None => break,
+        };
 
-fn parse_additive(tokens: &[Token], pos: &mut usize) -> Result<Expr, CompileError> {
-    let mut left = parse_multiplicative(tokens, pos)?;
-
-    while *pos < tokens.len() {
-        match &tokens[*pos] {
-            Token::Plus => {
-                *pos += 1;
-                let right = parse_multiplicative(tokens, pos)?;
-                left = Expr::BinaryOp {
-                    left: Box::new(left),
-                    op: BinOp::Add,
-                    right: Box::new(right),
-                };
-            }
-            Token::Minus => {
-                *pos += 1;
-                let right = parse_multiplicative(tokens, pos)?;
-                left = Expr::BinaryOp {
-                    left: Box::new(left),
-                    op: BinOp::Sub,
-                    right: Box::new(right),
-                };
-            }
-            _ => break,
+        if l_bp < min_bp {
+            break;
         }
-    }
 
-    Ok(left)
-}
-
-fn parse_multiplicative(tokens: &[Token], pos: &mut usize) -> Result<Expr, CompileError> {
-    let mut left = parse_unary(tokens, pos)?;
-
-    while *pos < tokens.len() {
-        match &tokens[*pos] {
-            Token::Star => {
-                *pos += 1;
-                let right = parse_unary(tokens, pos)?;
-                left = Expr::BinaryOp {
-                    left: Box::new(left),
-                    op: BinOp::Mul,
-                    right: Box::new(right),
-                };
-            }
-            Token::Slash => {
-                *pos += 1;
-                let right = parse_unary(tokens, pos)?;
-                left = Expr::BinaryOp {
-                    left: Box::new(left),
-                    op: BinOp::Div,
-                    right: Box::new(right),
-                };
-            }
-            _ => break,
-        }
-    }
-
-    Ok(left)
-}
-
-fn parse_unary(tokens: &[Token], pos: &mut usize) -> Result<Expr, CompileError> {
-    if *pos < tokens.len() && tokens[*pos] == Token::Minus {
+        let span = tokens[*pos].1;
         *pos += 1;
-        let expr = parse_primary(tokens, pos)?;
-        return Ok(Expr::Negate(Box::new(expr)));
+        let rhs = parse_expr_bp(tokens, pos, r_bp)?;
+        lhs = Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(lhs),
+                op,
+                right: Box::new(rhs),
+            },
+            span,
+        );
     }
-    parse_primary(tokens, pos)
+
+    Ok(lhs)
 }
 
-fn parse_primary(tokens: &[Token], pos: &mut usize) -> Result<Expr, CompileError> {
+/// Infix operator binding powers.
+/// Left < right = left-associative.
+/// To add a new operator, add a line here.
+fn infix_bp(token: &Token) -> Option<(BinOp, u8, u8)> {
+    match token {
+        Token::Dot => Some((BinOp::Concat, 1, 2)),
+        Token::Plus => Some((BinOp::Add, 3, 4)),
+        Token::Minus => Some((BinOp::Sub, 3, 4)),
+        Token::Star => Some((BinOp::Mul, 5, 6)),
+        Token::Slash => Some((BinOp::Div, 5, 6)),
+        _ => None,
+    }
+}
+
+/// Prefix expressions: literals, variables, unary operators, parentheses.
+fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, CompileError> {
     if *pos >= tokens.len() {
         return Err(CompileError::at(0, 0, "Unexpected end of input"));
     }
 
-    match &tokens[*pos] {
+    let span = tokens[*pos].1;
+
+    match &tokens[*pos].0 {
+        Token::Minus => {
+            *pos += 1;
+            let inner = parse_expr_bp(tokens, pos, 7)?;
+            Ok(Expr::new(ExprKind::Negate(Box::new(inner)), span))
+        }
         Token::StringLiteral(s) => {
             let s = s.clone();
             *pos += 1;
-            Ok(Expr::StringLiteral(s))
+            Ok(Expr::new(ExprKind::StringLiteral(s), span))
         }
         Token::IntLiteral(n) => {
             let n = *n;
             *pos += 1;
-            Ok(Expr::IntLiteral(n))
+            Ok(Expr::new(ExprKind::IntLiteral(n), span))
         }
         Token::Variable(name) => {
             let name = name.clone();
             *pos += 1;
-            Ok(Expr::Variable(name))
+            Ok(Expr::new(ExprKind::Variable(name), span))
         }
         Token::LParen => {
             *pos += 1;
             let expr = parse_expr(tokens, pos)?;
-            if *pos < tokens.len() && tokens[*pos] == Token::RParen {
+            if *pos < tokens.len() && tokens[*pos].0 == Token::RParen {
                 *pos += 1;
                 Ok(expr)
             } else {
-                Err(CompileError::at(0, 0, "Expected closing ')'"))
+                Err(CompileError::new(span, "Expected closing ')'"))
             }
         }
-        other => Err(CompileError::at(
-            0,
-            0,
+        other => Err(CompileError::new(
+            span,
             &format!("Unexpected token: {:?}", other),
         )),
     }

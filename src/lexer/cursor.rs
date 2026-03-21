@@ -1,3 +1,5 @@
+use crate::span::Span;
+
 pub struct Cursor<'a> {
     source: &'a str,
     pos: usize,
@@ -15,14 +17,12 @@ impl<'a> Cursor<'a> {
         }
     }
 
-    pub fn peek(&self) -> Option<char> {
-        self.source[self.pos..].chars().next()
+    pub fn span(&self) -> Span {
+        Span::new(self.line, self.col)
     }
 
-    pub fn peek_next(&self) -> Option<char> {
-        let mut chars = self.source[self.pos..].chars();
-        chars.next();
-        chars.next()
+    pub fn peek(&self) -> Option<char> {
+        self.source[self.pos..].chars().next()
     }
 
     pub fn advance(&mut self) -> Option<char> {
@@ -39,14 +39,6 @@ impl<'a> Cursor<'a> {
 
     pub fn is_eof(&self) -> bool {
         self.pos >= self.source.len()
-    }
-
-    pub fn line(&self) -> usize {
-        self.line
-    }
-
-    pub fn col(&self) -> usize {
-        self.col
     }
 
     pub fn remaining(&self) -> &'a str {

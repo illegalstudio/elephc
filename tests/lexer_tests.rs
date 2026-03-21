@@ -1,17 +1,25 @@
 use elephc::lexer::{tokenize, Token};
 
+/// Helper: extract just the tokens (discard spans) for easy comparison.
+fn tokens(source: &str) -> Vec<Token> {
+    tokenize(source)
+        .unwrap()
+        .into_iter()
+        .map(|(t, _)| t)
+        .collect()
+}
+
 #[test]
 fn test_open_tag() {
-    let tokens = tokenize("<?php").unwrap();
-    assert_eq!(tokens[0], Token::OpenTag);
-    assert_eq!(tokens[1], Token::Eof);
+    let t = tokens("<?php");
+    assert_eq!(t, vec![Token::OpenTag, Token::Eof]);
 }
 
 #[test]
 fn test_echo_string() {
-    let tokens = tokenize("<?php echo \"hello\";").unwrap();
+    let t = tokens("<?php echo \"hello\";");
     assert_eq!(
-        tokens,
+        t,
         vec![
             Token::OpenTag,
             Token::Echo,
@@ -24,27 +32,27 @@ fn test_echo_string() {
 
 #[test]
 fn test_string_escape_sequences() {
-    let tokens = tokenize("<?php \"hello\\nworld\\t!\"").unwrap();
-    assert_eq!(tokens[1], Token::StringLiteral("hello\nworld\t!".into()));
+    let t = tokens("<?php \"hello\\nworld\\t!\"");
+    assert_eq!(t[1], Token::StringLiteral("hello\nworld\t!".into()));
 }
 
 #[test]
 fn test_integer_literal() {
-    let tokens = tokenize("<?php 42").unwrap();
-    assert_eq!(tokens[1], Token::IntLiteral(42));
+    let t = tokens("<?php 42");
+    assert_eq!(t[1], Token::IntLiteral(42));
 }
 
 #[test]
 fn test_variable() {
-    let tokens = tokenize("<?php $foo").unwrap();
-    assert_eq!(tokens[1], Token::Variable("foo".into()));
+    let t = tokens("<?php $foo");
+    assert_eq!(t[1], Token::Variable("foo".into()));
 }
 
 #[test]
 fn test_operators() {
-    let tokens = tokenize("<?php + - * / . =").unwrap();
+    let t = tokens("<?php + - * / . =");
     assert_eq!(
-        tokens[1..7],
+        t[1..7],
         [
             Token::Plus,
             Token::Minus,
@@ -58,14 +66,14 @@ fn test_operators() {
 
 #[test]
 fn test_line_comment() {
-    let tokens = tokenize("<?php // this is a comment\necho \"hi\";").unwrap();
-    assert_eq!(tokens[1], Token::Echo);
+    let t = tokens("<?php // this is a comment\necho \"hi\";");
+    assert_eq!(t[1], Token::Echo);
 }
 
 #[test]
 fn test_block_comment() {
-    let tokens = tokenize("<?php /* block */ echo \"hi\";").unwrap();
-    assert_eq!(tokens[1], Token::Echo);
+    let t = tokens("<?php /* block */ echo \"hi\";");
+    assert_eq!(t[1], Token::Echo);
 }
 
 #[test]
@@ -80,9 +88,9 @@ fn test_unterminated_string() {
 
 #[test]
 fn test_assignment_statement() {
-    let tokens = tokenize("<?php $x = 42;").unwrap();
+    let t = tokens("<?php $x = 42;");
     assert_eq!(
-        tokens,
+        t,
         vec![
             Token::OpenTag,
             Token::Variable("x".into()),
@@ -92,4 +100,13 @@ fn test_assignment_statement() {
             Token::Eof,
         ]
     );
+}
+
+#[test]
+fn test_span_tracking() {
+    let spanned = tokenize("<?php\necho \"hi\";").unwrap();
+    // "echo" starts on line 2, col 1
+    let echo_span = spanned[1].1;
+    assert_eq!(echo_span.line, 2);
+    assert_eq!(echo_span.col, 1);
 }

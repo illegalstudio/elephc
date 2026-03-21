@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::types::checker::PhpType;
+use crate::types::PhpType;
 
 pub struct Context {
     pub variables: HashMap<String, VarInfo>,
@@ -23,11 +23,7 @@ impl Context {
     }
 
     pub fn alloc_var(&mut self, name: &str, ty: PhpType) -> usize {
-        let size = match ty {
-            PhpType::Int => 8,
-            PhpType::Str => 16, // pointer + length
-        };
-        self.stack_offset += size;
+        self.stack_offset += ty.stack_size();
         let offset = self.stack_offset;
         self.variables.insert(
             name.to_string(),
