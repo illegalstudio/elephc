@@ -9,26 +9,27 @@
 - [x] **Phase 4 — Polish**: 77 tests (lexer, parser, codegen, errors), error messages with line/column, README, v0.1.0 tag
 - [x] **Refactoring**: Pratt parser, Span on AST nodes, `codegen/abi.rs` layer, `TypeEnv` from checker, `PhpType::stack_size()`
 
-## v0.2.0 (in progress)
+## v0.2.0 (done)
 
 ### Step 1 — Comparison operators and `if`/`else`
 
-- [ ] Comparison operators: `==`, `!=`, `<`, `>`, `<=`, `>=`
-- [ ] Boolean evaluation in codegen (compare → conditional branch)
-- [ ] `if` / `else` / `elseif` statements
-- [ ] Parser: `if` (`elseif`)* (`else`)? block structure with `{` `}`
-- [ ] Codegen: conditional jumps, label generation for branches
-- [ ] Tests for all comparison operators and branching paths
+- [x] Comparison operators: `==`, `!=`, `<`, `>`, `<=`, `>=`
+- [x] Modulo operator (`%`)
+- [x] Boolean evaluation in codegen (`cmp` + `cset`)
+- [x] `if` / `else` / `elseif` statements
+- [x] Parser: `if` (`elseif`)* (`else`)? block structure with `{` `}`
+- [x] Codegen: conditional jumps, label generation for branches
+- [x] Tests for all comparison operators and branching paths
 
 ### Step 2 — Loops
 
-- [ ] `while` loops
-- [ ] `for` loops (init; condition; increment)
-- [ ] Parser: loop block structure
-- [ ] Codegen: loop labels, backward jumps, condition re-evaluation
-- [ ] `break` and `continue` support
-- [ ] Tests for loops, nested loops, edge cases (zero iterations, etc.)
-- [ ] **Goal**: `fizzbuzz.php` compiles and runs correctly
+- [x] `while` loops
+- [x] `for` loops (init; condition; increment)
+- [x] Parser: loop block structure
+- [x] Codegen: loop labels, backward jumps, condition re-evaluation
+- [x] `break` and `continue` support
+- [x] Tests for loops, nested loops, edge cases (zero iterations, break, continue)
+- [x] **Goal**: `fizzbuzz.php` compiles and runs correctly
 
 ## Future
 
@@ -38,7 +39,6 @@
 - [ ] Multiple file compilation
 - [ ] Linux / x86_64 target
 - [ ] Basic optimizations (constant folding, dead code elimination)
-- [ ] Modulo operator (`%`)
 - [ ] Logical operators (`&&`, `||`, `!`)
 - [ ] String comparison
 - [ ] `print` as alias for `echo`

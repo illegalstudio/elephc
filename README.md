@@ -39,20 +39,19 @@ elephc supports a static subset of PHP:
 
 ```php
 <?php
-// Variables (statically typed at first assignment)
-$name = "elephc";
-$x = 42;
-
-// Arithmetic
-$sum = $x + 8;
-$product = 6 * 7;
-
-// String concatenation (auto-coerces integers)
-echo "Hello from " . $name . "!\n";
-echo "Result: " . ($sum * 2) . "\n";
-
-// Comments (line and block)
-/* this is ignored */
+$i = 1;
+while ($i <= 15) {
+    if ($i % 15 == 0) {
+        echo "FizzBuzz\n";
+    } elseif ($i % 3 == 0) {
+        echo "Fizz\n";
+    } elseif ($i % 5 == 0) {
+        echo "Buzz\n";
+    } else {
+        echo $i . "\n";
+    }
+    $i = $i + 1;
+}
 ```
 
 ### Supported constructs
@@ -64,8 +63,13 @@ echo "Result: " . ($sum * 2) . "\n";
 | Variables | `$name` |
 | Assignment | `$x = "hello";` |
 | Echo | `echo $x;` |
-| Arithmetic | `+`, `-`, `*`, `/` |
+| Arithmetic | `+`, `-`, `*`, `/`, `%` |
+| Comparison | `==`, `!=`, `<`, `>`, `<=`, `>=` |
 | Concatenation | `"a" . "b"`, `"val=" . 42` |
+| If / else | `if (...) { } elseif (...) { } else { }` |
+| While | `while (...) { }` |
+| For | `for ($i = 0; $i < 10; $i = $i + 1) { }` |
+| Break / Continue | `break;`, `continue;` |
 | Comments | `// ...`, `/* ... */` |
 
 ### Not supported (by design)
@@ -127,7 +131,7 @@ src/
 cargo test
 ```
 
-77 tests covering lexer, parser, codegen (end-to-end), and error reporting.
+98 tests covering lexer, parser, codegen (end-to-end), and error reporting.
 
 ## License
 
