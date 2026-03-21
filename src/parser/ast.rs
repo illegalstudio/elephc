@@ -23,6 +23,10 @@ pub enum ExprKind {
     PostIncrement(String),
     PreDecrement(String),
     PostDecrement(String),
+    FunctionCall {
+        name: String,
+        args: Vec<Expr>,
+    },
 }
 
 impl PartialEq for Expr {
@@ -117,6 +121,12 @@ pub enum StmtKind {
     Break,
     Continue,
     ExprStmt(Expr),
+    FunctionDecl {
+        name: String,
+        params: Vec<String>,
+        body: Vec<Stmt>,
+    },
+    Return(Option<Expr>),
 }
 
 impl PartialEq for Stmt {

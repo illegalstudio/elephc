@@ -152,6 +152,19 @@ pub fn emit_stmt(
             let labels = ctx.loop_stack.last().expect("break outside loop");
             emitter.instruction(&format!("b {}", labels.break_label));
         }
+        StmtKind::FunctionDecl { .. } => {
+            // Emitted separately in codegen/mod.rs
+        }
+        StmtKind::Return(expr) => {
+            emitter.blank();
+            emitter.comment("return");
+            if let Some(e) = expr {
+                emit_expr(e, emitter, ctx, data);
+            }
+            if let Some(label) = &ctx.return_label {
+                emitter.instruction(&format!("b {}", label));
+            }
+        }
         StmtKind::ExprStmt(expr) => {
             emitter.blank();
             emit_expr(expr, emitter, ctx, data);

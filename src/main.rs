@@ -54,7 +54,7 @@ fn main() {
         }
     };
 
-    let (typed_ast, type_env) = match types::check(&ast) {
+    let check_result = match types::check(&ast) {
         Ok(result) => result,
         Err(e) => {
             errors::report(&e);
@@ -62,7 +62,11 @@ fn main() {
         }
     };
 
-    let asm = codegen::generate(&typed_ast, &type_env);
+    let asm = codegen::generate(
+        &check_result.program,
+        &check_result.global_env,
+        &check_result.functions,
+    );
 
     if let Err(e) = fs::write(&asm_path, &asm) {
         eprintln!("Error writing '{}': {}", asm_path.display(), e);

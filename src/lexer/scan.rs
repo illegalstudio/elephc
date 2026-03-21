@@ -82,6 +82,10 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
             cursor.advance();
             Ok(Token::Semicolon)
         }
+        ',' => {
+            cursor.advance();
+            Ok(Token::Comma)
+        }
         '(' => {
             cursor.advance();
             Ok(Token::LParen)
@@ -270,9 +274,8 @@ fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
         "for" => Ok(Token::For),
         "break" => Ok(Token::Break),
         "continue" => Ok(Token::Continue),
-        _ => Err(CompileError::new(
-            cursor.span(),
-            &format!("Unknown keyword: '{}'", word),
-        )),
+        "function" => Ok(Token::Function),
+        "return" => Ok(Token::Return),
+        _ => Ok(Token::Identifier(word)),
     }
 }

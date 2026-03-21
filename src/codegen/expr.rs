@@ -82,6 +82,9 @@ pub fn emit_expr(
             // x0 still has old value
             PhpType::Int
         }
+        ExprKind::FunctionCall { name, args } => {
+            emit_function_call(name, args, emitter, ctx, data)
+        }
         ExprKind::BinaryOp { left, op, right } => emit_binop(left, op, right, emitter, ctx, data),
     }
 }
@@ -156,6 +159,67 @@ fn emit_binop(
             PhpType::Str
         }
     }
+}
+
+fn emit_function_call(
+    name: &str,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    emitter.comment(&format!("call {}()", name));
+
+    // Evaluate all arguments and push results to stack
+    let mut arg_types = Vec::new();
+    for arg in args {
+        let ty = emit_expr(arg, emitter, ctx, data);
+        match &ty {
+            PhpType::Int => {
+                emitter.instruction("str x0, [sp, #-16]!");
+            }
+            PhpType::Str => {
+                emitter.instruction("stp x1, x2, [sp, #-16]!");
+            }
+            PhpType::Void => {}
+        }
+        arg_types.push(ty);
+    }
+
+    // Pop arguments into registers in reverse order
+    // First calculate register assignments
+    let mut assignments: Vec<(PhpType, usize)> = Vec::new(); // (type, start_reg)
+    let mut reg_idx = 0;
+    for ty in &arg_types {
+        assignments.push((ty.clone(), reg_idx));
+        reg_idx += ty.register_count();
+    }
+
+    // Pop in reverse
+    for i in (0..args.len()).rev() {
+        let (ty, start_reg) = &assignments[i];
+        match ty {
+            PhpType::Int => {
+                emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg));
+            }
+            PhpType::Str => {
+                emitter.instruction(&format!(
+                    "ldp x{}, x{}, [sp], #16",
+                    start_reg,
+                    start_reg + 1
+                ));
+            }
+            PhpType::Void => {}
+        }
+    }
+
+    emitter.instruction(&format!("bl _fn_{}", name));
+
+    // Get return type from function signatures
+    ctx.functions
+        .get(name)
+        .map(|sig| sig.return_type.clone())
+        .unwrap_or(PhpType::Void)
 }
 
 fn load_immediate(emitter: &mut Emitter, reg: &str, value: i64) {

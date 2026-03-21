@@ -15,6 +15,9 @@ pub enum Token {
     // Identifiers
     Variable(String), // $name (stored without the $)
 
+    // Identifiers (function names etc.)
+    Identifier(String),
+
     // Keywords
     Echo,
     If,
@@ -24,6 +27,8 @@ pub enum Token {
     For,
     Break,
     Continue,
+    Function,
+    Return,
 
     // Operators
     Assign,         // =
@@ -33,6 +38,8 @@ pub enum Token {
     Slash,          // /
     Percent,        // %
     Dot,            // .
+
+    Comma,          // ,
 
     // Increment/Decrement
     PlusPlus,       // ++

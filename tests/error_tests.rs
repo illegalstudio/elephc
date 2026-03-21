@@ -41,8 +41,8 @@ fn test_error_empty_variable() {
 }
 
 #[test]
-fn test_error_unknown_keyword() {
-    expect_error("<?php function", "Unknown keyword");
+fn test_error_bare_identifier() {
+    expect_error("<?php foo;", "Unexpected identifier");
 }
 
 #[test]

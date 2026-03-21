@@ -141,6 +141,31 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                 Err(CompileError::new(span, "Expected closing ')'"))
             }
         }
+        Token::Identifier(name) => {
+            let name = name.clone();
+            *pos += 1;
+            // Must be a function call
+            if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
+                *pos += 1;
+                let mut args = Vec::new();
+                while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
+                    if !args.is_empty() {
+                        if tokens[*pos].0 != Token::Comma {
+                            return Err(CompileError::new(tokens[*pos].1, "Expected ',' between arguments"));
+                        }
+                        *pos += 1;
+                    }
+                    args.push(parse_expr(tokens, pos)?);
+                }
+                if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
+                    return Err(CompileError::new(span, "Expected ')' after arguments"));
+                }
+                *pos += 1;
+                Ok(Expr::new(ExprKind::FunctionCall { name, args }, span))
+            } else {
+                Err(CompileError::new(span, &format!("Unexpected identifier: '{}'", name)))
+            }
+        }
         other => Err(CompileError::new(
             span,
             &format!("Unexpected token: {:?}", other),

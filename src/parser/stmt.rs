@@ -11,6 +11,13 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
         Token::Echo => parse_echo(tokens, pos, span),
         Token::Variable(_) => parse_variable_stmt(tokens, pos, span),
         Token::PlusPlus | Token::MinusMinus => parse_incdec_stmt(tokens, pos, span),
+        Token::Function => parse_function_decl(tokens, pos, span),
+        Token::Return => parse_return(tokens, pos, span),
+        Token::Identifier(_) => {
+            let expr = parse_expr(tokens, pos)?;
+            expect_semicolon(tokens, pos)?;
+            Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
+        }
         Token::If => parse_if(tokens, pos, span),
         Token::While => parse_while(tokens, pos, span),
         Token::For => parse_for(tokens, pos, span),
@@ -305,6 +312,63 @@ fn parse_assign_inline(
 
     let value = parse_expr(tokens, pos)?;
     Ok(Stmt::new(StmtKind::Assign { name, value }, span))
+}
+
+/// Parse: function name($param1, $param2) { stmts }
+fn parse_function_decl(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1; // consume 'function'
+
+    let name = match tokens.get(*pos).map(|(t, _)| t) {
+        Some(Token::Identifier(n)) => n.clone(),
+        _ => return Err(CompileError::new(span, "Expected function name")),
+    };
+    *pos += 1;
+
+    expect_token(tokens, pos, &Token::LParen, "Expected '(' after function name")?;
+
+    let mut params = Vec::new();
+    while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
+        if !params.is_empty() {
+            expect_token(tokens, pos, &Token::Comma, "Expected ',' between parameters")?;
+        }
+        match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Variable(n)) => {
+                params.push(n.clone());
+                *pos += 1;
+            }
+            _ => return Err(CompileError::new(span, "Expected parameter variable")),
+        }
+    }
+    expect_token(tokens, pos, &Token::RParen, "Expected ')' after parameters")?;
+
+    let body = parse_block(tokens, pos)?;
+
+    Ok(Stmt::new(
+        StmtKind::FunctionDecl { name, params, body },
+        span,
+    ))
+}
+
+/// Parse: return; or return expr;
+fn parse_return(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1; // consume 'return'
+
+    if *pos < tokens.len() && tokens[*pos].0 == Token::Semicolon {
+        *pos += 1;
+        return Ok(Stmt::new(StmtKind::Return(None), span));
+    }
+
+    let expr = parse_expr(tokens, pos)?;
+    expect_semicolon(tokens, pos)?;
+    Ok(Stmt::new(StmtKind::Return(Some(expr)), span))
 }
 
 /// Parse a brace-delimited block: { stmt* }

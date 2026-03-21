@@ -1,12 +1,16 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::types::PhpType;
+use crate::types::{FunctionSig, PhpType};
+
+static GLOBAL_LABEL_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 pub struct Context {
     pub variables: HashMap<String, VarInfo>,
     pub stack_offset: usize,
-    label_counter: usize,
     pub loop_stack: Vec<LoopLabels>,
+    pub return_label: Option<String>,
+    pub functions: HashMap<String, FunctionSig>,
 }
 
 pub struct VarInfo {
@@ -24,8 +28,9 @@ impl Context {
         Self {
             variables: HashMap::new(),
             stack_offset: 0,
-            label_counter: 0,
             loop_stack: Vec::new(),
+            return_label: None,
+            functions: HashMap::new(),
         }
     }
 
@@ -43,8 +48,7 @@ impl Context {
     }
 
     pub fn next_label(&mut self, prefix: &str) -> String {
-        let label = format!("_{}_{}", prefix, self.label_counter);
-        self.label_counter += 1;
-        label
+        let id = GLOBAL_LABEL_COUNTER.fetch_add(1, Ordering::SeqCst);
+        format!("_{}_{}", prefix, id)
     }
 }

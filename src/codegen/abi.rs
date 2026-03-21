@@ -13,6 +13,7 @@ pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
             emitter.instruction(&format!("stur x1, [x29, #-{}]", offset));
             emitter.instruction(&format!("stur x2, [x29, #-{}]", offset - 8));
         }
+        PhpType::Void => {}
     }
 }
 
@@ -28,6 +29,7 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
             emitter.instruction(&format!("ldur x1, [x29, #-{}]", offset));
             emitter.instruction(&format!("ldur x2, [x29, #-{}]", offset - 8));
         }
+        PhpType::Void => {}
     }
 }
 
@@ -47,5 +49,6 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
             emitter.instruction("mov x16, #4");
             emitter.instruction("svc #0x80");
         }
+        PhpType::Void => {}
     }
 }

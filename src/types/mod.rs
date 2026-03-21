@@ -9,6 +9,7 @@ use crate::parser::ast::Program;
 pub enum PhpType {
     Int,
     Str,
+    Void,
 }
 
 impl PhpType {
@@ -17,6 +18,16 @@ impl PhpType {
         match self {
             PhpType::Int => 8,
             PhpType::Str => 16, // pointer + length
+            PhpType::Void => 0,
+        }
+    }
+
+    /// Number of registers used to pass this type as an argument.
+    pub fn register_count(&self) -> usize {
+        match self {
+            PhpType::Int => 1,
+            PhpType::Str => 2,
+            PhpType::Void => 0,
         }
     }
 }
@@ -24,6 +35,19 @@ impl PhpType {
 /// Maps variable names to their resolved types.
 pub type TypeEnv = HashMap<String, PhpType>;
 
-pub fn check(program: &Program) -> Result<(Program, TypeEnv), CompileError> {
+#[derive(Debug, Clone)]
+pub struct FunctionSig {
+    pub params: Vec<(String, PhpType)>,
+    pub return_type: PhpType,
+}
+
+#[derive(Debug)]
+pub struct CheckResult {
+    pub program: Program,
+    pub global_env: TypeEnv,
+    pub functions: HashMap<String, FunctionSig>,
+}
+
+pub fn check(program: &Program) -> Result<CheckResult, CompileError> {
     checker::check_types(program)
 }
