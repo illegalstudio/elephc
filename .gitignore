@@ -1,3 +1,12 @@
 target/
 *.s
+*.o
 examples/hello
+examples/fizzbuzz
+examples/variables
+examples/arithmetic
+examples/concat
+tests/integration/hello
+tests/integration/variables
+tests/integration/arithmetic
+tests/integration/concat
