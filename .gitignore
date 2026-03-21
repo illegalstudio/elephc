@@ -1,9 +1,15 @@
 target/
+
+# Generated assembly and object files
 *.s
 *.o
+*.asm
+
+# Compiled binaries (examples and tests)
 examples/hello
 examples/fizzbuzz
 examples/variables
+examples/integers
 examples/arithmetic
 examples/concat
 tests/integration/hello
