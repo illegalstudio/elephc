@@ -57,20 +57,42 @@ fn emit_binop(
     data: &mut DataSection,
 ) -> PhpType {
     match op {
-        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => {
+        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
             emit_expr(left, emitter, ctx, data);
             emitter.instruction("str x0, [sp, #-16]!");
             emit_expr(right, emitter, ctx, data);
             emitter.instruction("ldr x1, [sp], #16");
             // x1 = left, x0 = right
-            let instr = match op {
-                BinOp::Add => "add x0, x1, x0",
-                BinOp::Sub => "sub x0, x1, x0",
-                BinOp::Mul => "mul x0, x1, x0",
-                BinOp::Div => "sdiv x0, x1, x0",
+            match op {
+                BinOp::Add => emitter.instruction("add x0, x1, x0"),
+                BinOp::Sub => emitter.instruction("sub x0, x1, x0"),
+                BinOp::Mul => emitter.instruction("mul x0, x1, x0"),
+                BinOp::Div => emitter.instruction("sdiv x0, x1, x0"),
+                BinOp::Mod => {
+                    emitter.instruction("sdiv x2, x1, x0");
+                    emitter.instruction("msub x0, x2, x0, x1");
+                }
+                _ => unreachable!(),
+            }
+            PhpType::Int
+        }
+        BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
+            emit_expr(left, emitter, ctx, data);
+            emitter.instruction("str x0, [sp, #-16]!");
+            emit_expr(right, emitter, ctx, data);
+            emitter.instruction("ldr x1, [sp], #16");
+            // x1 = left, x0 = right
+            emitter.instruction("cmp x1, x0");
+            let cond = match op {
+                BinOp::Eq => "eq",
+                BinOp::NotEq => "ne",
+                BinOp::Lt => "lt",
+                BinOp::Gt => "gt",
+                BinOp::LtEq => "le",
+                BinOp::GtEq => "ge",
                 _ => unreachable!(),
             };
-            emitter.instruction(instr);
+            emitter.instruction(&format!("cset x0, {}", cond));
             PhpType::Int
         }
         BinOp::Concat => {

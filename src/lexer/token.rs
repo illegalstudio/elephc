@@ -5,6 +5,8 @@ pub enum Token {
     Semicolon,      // ;
     LParen,         // (
     RParen,         // )
+    LBrace,         // {
+    RBrace,         // }
 
     // Literals
     StringLiteral(String),
@@ -15,14 +17,30 @@ pub enum Token {
 
     // Keywords
     Echo,
+    If,
+    Else,
+    ElseIf,
+    While,
+    For,
+    Break,
+    Continue,
 
     // Operators
-    Assign,     // =
-    Plus,       // +
-    Minus,      // -
-    Star,       // *
-    Slash,      // /
-    Dot,        // .
+    Assign,         // =
+    Plus,           // +
+    Minus,          // -
+    Star,           // *
+    Slash,          // /
+    Percent,        // %
+    Dot,            // .
+
+    // Comparison
+    EqualEqual,     // ==
+    NotEqual,       // !=
+    Less,           // <
+    Greater,        // >
+    LessEqual,      // <=
+    GreaterEqual,   // >=
 
     // End of file
     Eof,

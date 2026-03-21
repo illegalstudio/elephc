@@ -69,7 +69,14 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
+    Mod,
     Concat,
+    Eq,
+    NotEq,
+    Lt,
+    Gt,
+    LtEq,
+    GtEq,
 }
 
 // --- Statements ---
@@ -83,7 +90,28 @@ pub struct Stmt {
 #[derive(Debug, Clone, PartialEq)]
 pub enum StmtKind {
     Echo(Expr),
-    Assign { name: String, value: Expr },
+    Assign {
+        name: String,
+        value: Expr,
+    },
+    If {
+        condition: Expr,
+        then_body: Vec<Stmt>,
+        elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
+        else_body: Option<Vec<Stmt>>,
+    },
+    While {
+        condition: Expr,
+        body: Vec<Stmt>,
+    },
+    For {
+        init: Option<Box<Stmt>>,
+        condition: Option<Expr>,
+        update: Option<Box<Stmt>>,
+        body: Vec<Stmt>,
+    },
+    Break,
+    Continue,
 }
 
 impl PartialEq for Stmt {

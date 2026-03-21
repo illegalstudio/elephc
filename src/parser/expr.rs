@@ -8,7 +8,6 @@ pub fn parse_expr(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Com
 }
 
 /// Pratt parser: parses expressions with binding power `min_bp` or higher.
-/// Adding new operators = adding a line to `infix_bp()`.
 fn parse_expr_bp(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -47,15 +46,21 @@ fn parse_expr_bp(
 }
 
 /// Infix operator binding powers.
-/// Left < right = left-associative.
 /// To add a new operator, add a line here.
 fn infix_bp(token: &Token) -> Option<(BinOp, u8, u8)> {
     match token {
-        Token::Dot => Some((BinOp::Concat, 1, 2)),
-        Token::Plus => Some((BinOp::Add, 3, 4)),
-        Token::Minus => Some((BinOp::Sub, 3, 4)),
-        Token::Star => Some((BinOp::Mul, 5, 6)),
-        Token::Slash => Some((BinOp::Div, 5, 6)),
+        Token::Dot          => Some((BinOp::Concat, 1, 2)),
+        Token::EqualEqual   => Some((BinOp::Eq,     3, 4)),
+        Token::NotEqual     => Some((BinOp::NotEq,  3, 4)),
+        Token::Less         => Some((BinOp::Lt,     5, 6)),
+        Token::Greater      => Some((BinOp::Gt,     5, 6)),
+        Token::LessEqual    => Some((BinOp::LtEq,   5, 6)),
+        Token::GreaterEqual => Some((BinOp::GtEq,   5, 6)),
+        Token::Plus         => Some((BinOp::Add,    7, 8)),
+        Token::Minus        => Some((BinOp::Sub,    7, 8)),
+        Token::Star         => Some((BinOp::Mul,    9, 10)),
+        Token::Slash        => Some((BinOp::Div,    9, 10)),
+        Token::Percent      => Some((BinOp::Mod,    9, 10)),
         _ => None,
     }
 }
@@ -72,7 +77,7 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
     match &tokens[*pos].0 {
         Token::Minus => {
             *pos += 1;
-            let inner = parse_expr_bp(tokens, pos, 7)?;
+            let inner = parse_expr_bp(tokens, pos, 11)?;
             Ok(Expr::new(ExprKind::Negate(Box::new(inner)), span))
         }
         Token::StringLiteral(s) => {

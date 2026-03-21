@@ -90,9 +90,49 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
             cursor.advance();
             Ok(Token::RParen)
         }
+        '{' => {
+            cursor.advance();
+            Ok(Token::LBrace)
+        }
+        '}' => {
+            cursor.advance();
+            Ok(Token::RBrace)
+        }
         '=' => {
             cursor.advance();
-            Ok(Token::Assign)
+            if cursor.peek() == Some('=') {
+                cursor.advance();
+                Ok(Token::EqualEqual)
+            } else {
+                Ok(Token::Assign)
+            }
+        }
+        '!' => {
+            cursor.advance();
+            if cursor.peek() == Some('=') {
+                cursor.advance();
+                Ok(Token::NotEqual)
+            } else {
+                Err(CompileError::new(cursor.span(), "Expected '=' after '!'"))
+            }
+        }
+        '<' => {
+            cursor.advance();
+            if cursor.peek() == Some('=') {
+                cursor.advance();
+                Ok(Token::LessEqual)
+            } else {
+                Ok(Token::Less)
+            }
+        }
+        '>' => {
+            cursor.advance();
+            if cursor.peek() == Some('=') {
+                cursor.advance();
+                Ok(Token::GreaterEqual)
+            } else {
+                Ok(Token::Greater)
+            }
         }
         '+' => {
             cursor.advance();
@@ -109,6 +149,10 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
         '/' => {
             cursor.advance();
             Ok(Token::Slash)
+        }
+        '%' => {
+            cursor.advance();
+            Ok(Token::Percent)
         }
         '.' => {
             cursor.advance();
@@ -209,6 +253,13 @@ fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
 
     match word.as_str() {
         "echo" => Ok(Token::Echo),
+        "if" => Ok(Token::If),
+        "else" => Ok(Token::Else),
+        "elseif" => Ok(Token::ElseIf),
+        "while" => Ok(Token::While),
+        "for" => Ok(Token::For),
+        "break" => Ok(Token::Break),
+        "continue" => Ok(Token::Continue),
         _ => Err(CompileError::new(
             cursor.span(),
             &format!("Unknown keyword: '{}'", word),

@@ -269,6 +269,177 @@ fn test_concat_negative_int() {
     assert_eq!(out, "num: -7");
 }
 
+// --- Modulo ---
+
+#[test]
+fn test_modulo() {
+    let out = compile_and_run("<?php echo 10 % 3;");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_modulo_zero_remainder() {
+    let out = compile_and_run("<?php echo 15 % 5;");
+    assert_eq!(out, "0");
+}
+
+// --- Comparison operators ---
+
+#[test]
+fn test_equal_true() {
+    let out = compile_and_run("<?php echo 1 == 1;");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_equal_false() {
+    let out = compile_and_run("<?php echo 1 == 2;");
+    assert_eq!(out, "0");
+}
+
+#[test]
+fn test_not_equal() {
+    let out = compile_and_run("<?php echo 1 != 2;");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_less_than() {
+    let out = compile_and_run("<?php echo 1 < 2;");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_greater_than() {
+    let out = compile_and_run("<?php echo 2 > 1;");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_less_equal() {
+    let out = compile_and_run("<?php echo 2 <= 2;");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_greater_equal() {
+    let out = compile_and_run("<?php echo 1 >= 2;");
+    assert_eq!(out, "0");
+}
+
+// --- if/else ---
+
+#[test]
+fn test_if_true() {
+    let out = compile_and_run("<?php if (1 == 1) { echo \"yes\"; }");
+    assert_eq!(out, "yes");
+}
+
+#[test]
+fn test_if_false() {
+    let out = compile_and_run("<?php if (1 == 2) { echo \"yes\"; }");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_if_else() {
+    let out = compile_and_run("<?php if (1 == 2) { echo \"a\"; } else { echo \"b\"; }");
+    assert_eq!(out, "b");
+}
+
+#[test]
+fn test_if_elseif_else() {
+    let out = compile_and_run(
+        "<?php $x = 2; if ($x == 1) { echo \"one\"; } elseif ($x == 2) { echo \"two\"; } else { echo \"other\"; }",
+    );
+    assert_eq!(out, "two");
+}
+
+#[test]
+fn test_if_else_falls_through() {
+    let out = compile_and_run(
+        "<?php $x = 99; if ($x == 1) { echo \"a\"; } elseif ($x == 2) { echo \"b\"; } else { echo \"c\"; }",
+    );
+    assert_eq!(out, "c");
+}
+
+// --- while ---
+
+#[test]
+fn test_while_loop() {
+    let out = compile_and_run(
+        "<?php $i = 0; while ($i < 5) { echo $i; $i = $i + 1; }",
+    );
+    assert_eq!(out, "01234");
+}
+
+#[test]
+fn test_while_zero_iterations() {
+    let out = compile_and_run("<?php while (0) { echo \"no\"; }");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_while_break() {
+    let out = compile_and_run(
+        "<?php $i = 0; while ($i < 10) { if ($i == 3) { break; } echo $i; $i = $i + 1; }",
+    );
+    assert_eq!(out, "012");
+}
+
+#[test]
+fn test_while_continue() {
+    let out = compile_and_run(
+        "<?php $i = 0; while ($i < 5) { $i = $i + 1; if ($i == 3) { continue; } echo $i; }",
+    );
+    assert_eq!(out, "1245");
+}
+
+// --- for ---
+
+#[test]
+fn test_for_loop() {
+    let out = compile_and_run(
+        "<?php for ($i = 0; $i < 5; $i = $i + 1) { echo $i; }",
+    );
+    assert_eq!(out, "01234");
+}
+
+#[test]
+fn test_for_break() {
+    let out = compile_and_run(
+        "<?php for ($i = 0; $i < 10; $i = $i + 1) { if ($i == 3) { break; } echo $i; }",
+    );
+    assert_eq!(out, "012");
+}
+
+// --- FizzBuzz ---
+
+#[test]
+fn test_fizzbuzz() {
+    let source = r#"<?php
+$i = 1;
+while ($i <= 15) {
+    if ($i % 15 == 0) {
+        echo "FizzBuzz\n";
+    } elseif ($i % 3 == 0) {
+        echo "Fizz\n";
+    } elseif ($i % 5 == 0) {
+        echo "Buzz\n";
+    } else {
+        echo $i;
+        echo "\n";
+    }
+    $i = $i + 1;
+}
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(
+        out,
+        "1\n2\nFizz\n4\nBuzz\nFizz\n7\n8\nFizz\nBuzz\n11\nFizz\n13\n14\nFizzBuzz\n"
+    );
+}
+
 // --- Edge cases ---
 
 #[test]
