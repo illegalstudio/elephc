@@ -12,10 +12,9 @@ The compiler should be able to produce real CLI tools that accept arguments and 
 - [x] Functions with local scope, return, recursion, nested calls
 - [x] Pre/post increment/decrement (`++$i`, `$i++`, `--$i`, `$i--`)
 - [x] Error messages with line/column numbers
-- [x] 169 tests (lexer, parser, codegen end-to-end, error reporting)
 - [x] Logical operators: `&&`, `||`, `!` (with short-circuit evaluation)
 - [x] Assignment operators: `+=`, `-=`, `*=`, `/=`, `.=`, `%=`
-- [x] Boolean literals: `true`, `false`
+- [x] Boolean literals: `true`, `false` (as integer 1/0)
 - [x] `null` keyword (basic, treated as 0)
 - [x] Ternary operator: `$x = $a > $b ? $a : $b;`
 - [x] `do { } while ();` loop
@@ -24,37 +23,54 @@ The compiler should be able to produce real CLI tools that accept arguments and 
 - [x] Single-quoted strings (`'no $interpolation'`)
 - [x] Built-in `strlen()` and `intval()`
 
-## v0.2.0 — Arrays
+## v0.2.0 — Arrays and null
 
-Core data structure support. Unlocks most real-world PHP patterns.
+Core data structure support and proper null semantics.
 
 - [x] Indexed arrays: `$arr = [1, 2, 3];`
 - [x] Array access: `$arr[0]`, `$arr[$i]`
 - [x] Array assignment: `$arr[0] = 42;`, `$arr[] = "new";`
-- [x] `count()`, `array_push()`
+- [x] `count()`, `array_push()`, `array_pop()`
 - [x] `foreach ($arr as $value) { }` loop
 - [x] Heap allocator for dynamic-size arrays (1MB bump allocator)
 - [x] String arrays: `["Alice", "Bob"]`
-- [x] `array_pop()`
 - [x] `in_array()`, `array_keys()`, `array_values()`
 - [x] `sort()`, `rsort()` (insertion sort)
 - [x] `isset()`
-- [x] Proper `null` type: `echo null` prints nothing, `is_null()` returns true, variables can be reassigned from null to any type
+- [x] Proper `null` type: `echo null` prints nothing, `is_null()` returns true, null coerces to 0/empty string in operations, variables can be reassigned from null to any type
 
-## v0.3.0 — Strings and I/O
+## v0.3.0 — Bool and float types
+
+Proper type system for PHP compatibility. Without these, basic PHP programs produce wrong output.
+
+- [ ] **Bool type**: `true`/`false` as distinct type, `echo false` prints nothing (like PHP), `echo true` prints `1`
+- [ ] `is_bool()`, `boolval()`
+- [ ] **Float type**: `3.14`, `1.0e-5`, `-0.5`
+- [ ] Division returns float: `10 / 3` → `3.3333...`
+- [ ] `intdiv()` for integer division
+- [ ] Mixed int/float arithmetic (auto-promotion to float)
+- [ ] Float comparison and formatting
+- [ ] `floatval()`, `is_float()`, `is_int()`, `is_string()`
+- [ ] `abs()`, `min()`, `max()`, `floor()`, `ceil()`, `round()`
+- [ ] `sqrt()`, `pow()`
+- [ ] `rand()` / `mt_rand()`
+- [ ] `number_format()`
+- [ ] Type casting: `(int)`, `(string)`, `(float)`, `(bool)`
+
+## v0.4.0 — Strings and I/O
 
 Make string handling practical and add file I/O.
 
 - [ ] String interpolation: `"Hello $name"`, `"val={$expr}"`
-- [ ] Single-quoted raw strings
 - [ ] `substr()`, `strpos()`, `str_replace()`
 - [ ] `strtolower()`, `strtoupper()`, `trim()`
 - [ ] `explode()`, `implode()`
+- [ ] `sprintf()`, `printf()`
 - [ ] `fgets(STDIN)` / `readline()` — read from keyboard
 - [ ] `fopen()`, `fread()`, `fwrite()`, `fclose()`
 - [ ] `file_get_contents()`, `file_put_contents()`
 
-## v0.4.0 — Associative arrays and switch
+## v0.5.0 — Associative arrays and switch
 
 - [ ] Associative arrays: `$map = ["key" => "value"];`
 - [ ] `foreach ($map as $key => $value) { }`
@@ -63,18 +79,18 @@ Make string handling practical and add file I/O.
 - [ ] `switch` / `case` / `default` (with fall-through)
 - [ ] `match` expression (PHP 8 style, no fall-through)
 
-## v0.5.0 — Float and math
+## v0.6.0 — Advanced language features
 
-- [ ] Float type: `3.14`, `1.0e-5`
-- [ ] Mixed int/float arithmetic (auto-promotion)
-- [ ] Float comparison and formatting
-- [ ] `abs()`, `min()`, `max()`, `floor()`, `ceil()`, `round()`
-- [ ] `sqrt()`, `pow()`
-- [ ] `rand()` / `mt_rand()`
-- [ ] `number_format()`
-- [ ] `is_int()`, `is_string()`, `is_float()`, `is_array()`
+- [ ] `global $var;` keyword
+- [ ] Static variables: `static $counter = 0;`
+- [ ] Null coalescing operator: `$x ?? $default`
+- [ ] Spread operator: `func(...$args)`, `[...$a, ...$b]`
+- [ ] List unpacking: `[$a, $b] = $array;`
+- [ ] Heredoc / nowdoc strings
+- [ ] `var_dump()`, `print_r()` for debugging
+- [ ] `print` as alias for `echo`
 
-## v0.6.0 — Optimizations
+## v0.7.0 — Optimizations
 
 Make the generated code competitive with C -O0.
 
@@ -85,17 +101,6 @@ Make the generated code competitive with C -O0.
 - [ ] Tail-call optimization for recursive functions
 - [ ] Peephole optimization (redundant load/store elimination)
 - [ ] Strength reduction (`$x * 2` → `$x << 1`)
-
-## v0.7.0 — Advanced language features
-
-- [ ] `global $var;` keyword
-- [ ] Static variables: `static $counter = 0;`
-- [ ] Null coalescing operator: `$x ?? $default`
-- [ ] Spread operator: `func(...$args)`, `[...$a, ...$b]`
-- [ ] List unpacking: `[$a, $b] = $array;`
-- [ ] Heredoc / nowdoc strings
-- [ ] `var_dump()`, `print_r()` for debugging
-- [ ] Type casting: `(int)`, `(string)`, `(float)`, `(array)`
 
 ## v0.8.0 — Multi-platform and multi-file
 
