@@ -41,6 +41,19 @@ pub enum ExprKind {
         then_expr: Box<Expr>,
         else_expr: Box<Expr>,
     },
+    Cast {
+        target: CastType,
+        expr: Box<Expr>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CastType {
+    Int,
+    Float,
+    String,
+    Bool,
+    Array,
 }
 
 impl PartialEq for Expr {

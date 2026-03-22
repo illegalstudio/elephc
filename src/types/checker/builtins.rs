@@ -229,6 +229,38 @@ impl Checker {
                 self.infer_type(&args[0], env)?;
                 Ok(Some(PhpType::Bool))
             }
+            "gettype" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "gettype() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Str))
+            }
+            "empty" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "empty() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Bool))
+            }
+            "unset" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "unset() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Void))
+            }
+            "settype" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "settype() takes exactly 2 arguments"));
+                }
+                self.infer_type(&args[0], env)?;
+                let ty = self.infer_type(&args[1], env)?;
+                if ty != PhpType::Str {
+                    return Err(CompileError::new(span, "settype() second argument must be a string"));
+                }
+                Ok(Some(PhpType::Bool))
+            }
             "is_nan" | "is_finite" | "is_infinite" => {
                 if args.len() != 1 {
                     return Err(CompileError::new(

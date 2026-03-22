@@ -1948,3 +1948,205 @@ fn test_division_by_zero_inf() {
     let out = compile_and_run("<?php echo 1.0 / 0.0;");
     assert_eq!(out, "INF");
 }
+
+// --- Type casting ---
+
+#[test]
+fn test_cast_int_from_float() {
+    let out = compile_and_run("<?php echo (int)3.7;");
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_cast_int_from_string() {
+    let out = compile_and_run("<?php echo (int)\"42\";");
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_cast_int_from_bool() {
+    let out = compile_and_run("<?php echo (int)true;");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_cast_float_from_int() {
+    let out = compile_and_run("<?php echo (float)42;");
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_cast_string_from_int() {
+    let out = compile_and_run("<?php echo (string)42;");
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_cast_string_from_float() {
+    let out = compile_and_run("<?php echo (string)3.14;");
+    assert_eq!(out, "3.14");
+}
+
+#[test]
+fn test_cast_string_from_bool_true() {
+    let out = compile_and_run("<?php echo (string)true;");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_cast_string_from_bool_false() {
+    let out = compile_and_run("<?php echo (string)false;");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_cast_bool_from_int_zero() {
+    let out = compile_and_run("<?php echo (bool)0;");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_cast_bool_from_int_nonzero() {
+    let out = compile_and_run("<?php echo (bool)42;");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_cast_bool_from_string_empty() {
+    let out = compile_and_run("<?php echo (bool)\"\";");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_cast_bool_from_string_nonempty() {
+    let out = compile_and_run("<?php echo (bool)\"hello\";");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_cast_integer_alias() {
+    let out = compile_and_run("<?php echo (integer)3.7;");
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_cast_double_alias() {
+    let out = compile_and_run("<?php echo (double)42;");
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_cast_boolean_alias() {
+    let out = compile_and_run("<?php echo (boolean)1;");
+    assert_eq!(out, "1");
+}
+
+// --- gettype ---
+
+#[test]
+fn test_gettype_int() {
+    let out = compile_and_run("<?php echo gettype(42);");
+    assert_eq!(out, "integer");
+}
+
+#[test]
+fn test_gettype_float() {
+    let out = compile_and_run("<?php echo gettype(3.14);");
+    assert_eq!(out, "double");
+}
+
+#[test]
+fn test_gettype_string() {
+    let out = compile_and_run("<?php echo gettype(\"hi\");");
+    assert_eq!(out, "string");
+}
+
+#[test]
+fn test_gettype_bool() {
+    let out = compile_and_run("<?php echo gettype(true);");
+    assert_eq!(out, "boolean");
+}
+
+#[test]
+fn test_gettype_null() {
+    let out = compile_and_run("<?php echo gettype(null);");
+    assert_eq!(out, "NULL");
+}
+
+// --- empty ---
+
+#[test]
+fn test_empty_zero() {
+    let out = compile_and_run("<?php echo empty(0);");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_empty_nonzero() {
+    let out = compile_and_run("<?php echo empty(42);");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_empty_empty_string() {
+    let out = compile_and_run("<?php echo empty(\"\");");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_empty_nonempty_string() {
+    let out = compile_and_run("<?php echo empty(\"hi\");");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_empty_null() {
+    let out = compile_and_run("<?php echo empty(null);");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_empty_false() {
+    let out = compile_and_run("<?php echo empty(false);");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_empty_true() {
+    let out = compile_and_run("<?php echo empty(true);");
+    assert_eq!(out, "");
+}
+
+// --- unset ---
+
+#[test]
+fn test_unset_variable() {
+    let out = compile_and_run(r#"<?php
+$x = 42;
+unset($x);
+echo is_null($x);
+"#);
+    assert_eq!(out, "1");
+}
+
+// --- settype ---
+
+#[test]
+fn test_settype_to_string() {
+    let out = compile_and_run(r#"<?php
+$x = 42;
+settype($x, "string");
+echo $x;
+"#);
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_settype_to_int() {
+    let out = compile_and_run(r#"<?php
+$x = 3.7;
+settype($x, "integer");
+echo $x;
+"#);
+    assert_eq!(out, "3");
+}

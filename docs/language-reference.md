@@ -108,6 +108,18 @@ Short-circuit evaluation: if `$a` is false in `$a && $b`, `$b` is not evaluated.
 $max = $a > $b ? $a : $b;
 ```
 
+### Type Casting
+
+```php
+$i = (int)3.7;       // 3
+$f = (float)42;      // 42.0
+$s = (string)42;     // "42"
+$b = (bool)0;        // false
+$a = (array)42;      // [42]
+```
+
+Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
+
 **Not supported yet:** `??` (null coalescing), `?:` (short ternary).
 
 ## Control Structures
@@ -366,6 +378,10 @@ foreach ($names as $name) {
 | `is_finite()` | `is_finite($val): bool` | Returns true if not INF/NAN |
 | `is_infinite()` | `is_infinite($val): bool` | Returns true if INF or -INF |
 | `boolval()` | `boolval($val): bool` | Convert to bool |
+| `gettype()` | `gettype($val): string` | Returns type name ("integer", "double", "string", "boolean", "NULL", "array") |
+| `empty()` | `empty($val): bool` | Returns true if value is falsy (0, 0.0, "", false, null, empty array) |
+| `unset()` | `unset($var): void` | Sets variable to null |
+| `settype()` | `settype($var, $type): bool` | Changes variable type in place |
 
 ### System functions
 

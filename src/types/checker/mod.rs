@@ -251,6 +251,17 @@ impl Checker {
                 }
                 Ok(then_ty)
             }
+            ExprKind::Cast { target, expr } => {
+                self.infer_type(expr, env)?;
+                use crate::parser::ast::CastType;
+                Ok(match target {
+                    CastType::Int => PhpType::Int,
+                    CastType::Float => PhpType::Float,
+                    CastType::String => PhpType::Str,
+                    CastType::Bool => PhpType::Bool,
+                    CastType::Array => PhpType::Array(Box::new(PhpType::Int)),
+                })
+            }
             ExprKind::FunctionCall { name, args } => {
                 let name = name.clone();
                 let args = args.clone();

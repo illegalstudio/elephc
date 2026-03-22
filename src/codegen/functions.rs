@@ -205,6 +205,16 @@ fn infer_local_type(
                 _ => PhpType::Int,
             }
         }
+        ExprKind::Cast { target, .. } => {
+            use crate::parser::ast::CastType;
+            match target {
+                CastType::Int => PhpType::Int,
+                CastType::Float => PhpType::Float,
+                CastType::String => PhpType::Str,
+                CastType::Bool => PhpType::Bool,
+                CastType::Array => PhpType::Array(Box::new(PhpType::Int)),
+            }
+        }
         _ => PhpType::Int,
     }
 }

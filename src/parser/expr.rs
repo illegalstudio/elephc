@@ -1,6 +1,6 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
-use crate::parser::ast::{BinOp, Expr, ExprKind};
+use crate::parser::ast::{BinOp, CastType, Expr, ExprKind};
 use crate::span::Span;
 
 pub fn parse_expr(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, CompileError> {
@@ -204,6 +204,15 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
             Ok(Expr::new(ExprKind::Variable(name), span))
         }
         Token::LParen => {
+            // Check for type cast: (int), (float), (string), (bool), (array)
+            if let Some(cast_ty) = peek_cast(tokens, *pos) {
+                *pos += 3; // skip (, type, )
+                let inner = parse_expr_bp(tokens, pos, 15)?;
+                return Ok(Expr::new(
+                    ExprKind::Cast { target: cast_ty, expr: Box::new(inner) },
+                    span,
+                ));
+            }
             *pos += 1;
             let expr = parse_expr(tokens, pos)?;
             if *pos < tokens.len() && tokens[*pos].0 == Token::RParen {
@@ -264,5 +273,29 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
             span,
             &format!("Unexpected token: {:?}", other),
         )),
+    }
+}
+
+/// Check if tokens at `pos` form a type cast: (int), (float), (string), (bool), (array)
+fn peek_cast(tokens: &[(Token, Span)], pos: usize) -> Option<CastType> {
+    if pos + 2 >= tokens.len() {
+        return None;
+    }
+    if tokens[pos].0 != Token::LParen {
+        return None;
+    }
+    if tokens[pos + 2].0 != Token::RParen {
+        return None;
+    }
+    match &tokens[pos + 1].0 {
+        Token::Identifier(name) => match name.as_str() {
+            "int" | "integer" => Some(CastType::Int),
+            "float" | "double" | "real" => Some(CastType::Float),
+            "string" => Some(CastType::String),
+            "bool" | "boolean" => Some(CastType::Bool),
+            "array" => Some(CastType::Array),
+            _ => None,
+        },
+        _ => None,
     }
 }

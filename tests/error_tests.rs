@@ -273,3 +273,25 @@ fn test_error_is_finite_wrong_args() {
 fn test_error_is_infinite_wrong_args() {
     expect_error("<?php is_infinite();", "is_infinite() takes exactly 1 argument");
 }
+
+// --- Type operation errors ---
+
+#[test]
+fn test_error_gettype_wrong_args() {
+    expect_error("<?php gettype();", "gettype() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_empty_wrong_args() {
+    expect_error("<?php empty();", "empty() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_unset_wrong_args() {
+    expect_error("<?php unset();", "unset() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_settype_wrong_args() {
+    expect_error("<?php settype(42);", "settype() takes exactly 2 arguments");
+}

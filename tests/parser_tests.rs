@@ -350,6 +350,21 @@ fn test_include_with_parens_parses() {
     }
 }
 
+// --- Type casting ---
+
+#[test]
+fn test_cast_int_parses() {
+    let stmts = parse_source("<?php echo (int)3.14;");
+    assert_eq!(stmts.len(), 1);
+}
+
+#[test]
+fn test_cast_not_confused_with_parens() {
+    // (1 + 2) should NOT be parsed as a cast
+    let stmts = parse_source("<?php echo (1 + 2);");
+    assert_eq!(stmts.len(), 1);
+}
+
 // --- Float ---
 
 #[test]

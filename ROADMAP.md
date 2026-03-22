@@ -49,10 +49,10 @@ Proper type system for PHP compatibility.
 - [x] `INF`, `NAN`, `is_nan()`, `is_finite()`, `is_infinite()`
 
 ### Type operations
-- [ ] Type casting: `(int)`, `(string)`, `(float)`, `(bool)`, `(array)`
-- [ ] `gettype()`, `settype()`
-- [ ] `empty()` — check if variable is empty/falsy
-- [ ] `unset()` — destroy variable
+- [x] Type casting: `(int)`, `(string)`, `(float)`, `(bool)`, `(array)`
+- [x] `gettype()`, `settype()`
+- [x] `empty()` — check if variable is empty/falsy
+- [x] `unset()` — destroy variable
 
 ### Math functions
 - [x] `abs()`, `min()`, `max()`, `floor()`, `ceil()`, `round()`

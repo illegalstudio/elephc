@@ -138,6 +138,7 @@ pub fn emit_expr(
             emitter.label(&end_label);
             ty
         }
+        ExprKind::Cast { target, expr } => emit_cast(target, expr, emitter, ctx, data),
         ExprKind::FunctionCall { name, args } => {
             if let Some(ty) = super::builtins::emit_builtin_call(name, args, emitter, ctx, data) {
                 return ty;
@@ -230,7 +231,7 @@ fn emit_array_access(
 /// Coerce a value to string (x1=ptr, x2=len) for concatenation.
 /// Coerce a value to string (x1=ptr, x2=len) for concatenation.
 /// PHP behavior: false → "", true → "1", null → "", int → itoa
-fn coerce_to_string(emitter: &mut Emitter, ty: &PhpType) {
+pub fn coerce_to_string(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
         PhpType::Int => {
             emitter.instruction("bl __rt_itoa");
@@ -501,6 +502,97 @@ fn emit_function_call(
         .get(name)
         .map(|sig| sig.return_type.clone())
         .unwrap_or(PhpType::Void)
+}
+
+fn emit_cast(
+    target: &crate::parser::ast::CastType,
+    expr: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    use crate::parser::ast::CastType;
+    let src_ty = emit_expr(expr, emitter, ctx, data);
+    emitter.comment(&format!("cast to {:?}", target));
+    match target {
+        CastType::Int => {
+            match &src_ty {
+                PhpType::Int => {}
+                PhpType::Float => { emitter.instruction("fcvtzs x0, d0"); }
+                PhpType::Bool => {} // already 0/1 in x0
+                PhpType::Void => { emitter.instruction("mov x0, #0"); }
+                PhpType::Str => { emitter.instruction("bl __rt_atoi"); }
+                PhpType::Array(_) => { emitter.instruction("ldr x0, [x0]"); } // count
+            }
+            PhpType::Int
+        }
+        CastType::Float => {
+            match &src_ty {
+                PhpType::Float => {}
+                PhpType::Int | PhpType::Bool => { emitter.instruction("scvtf d0, x0"); }
+                PhpType::Void => {
+                    emitter.instruction("mov x0, #0");
+                    emitter.instruction("scvtf d0, x0");
+                }
+                PhpType::Str | PhpType::Array(_) => {
+                    emitter.instruction("mov x0, #0");
+                    emitter.instruction("scvtf d0, x0");
+                }
+            }
+            PhpType::Float
+        }
+        CastType::String => {
+            coerce_to_string(emitter, &src_ty);
+            PhpType::Str
+        }
+        CastType::Bool => {
+            match &src_ty {
+                PhpType::Bool => {}
+                PhpType::Int | PhpType::Void => {
+                    coerce_null_to_zero(emitter, &src_ty);
+                    emitter.instruction("cmp x0, #0");
+                    emitter.instruction("cset x0, ne");
+                }
+                PhpType::Float => {
+                    emitter.instruction("fcmp d0, #0.0");
+                    emitter.instruction("cset x0, ne");
+                }
+                PhpType::Str => {
+                    // empty string or "0" → false, everything else → true
+                    emitter.instruction("cmp x2, #0");
+                    emitter.instruction("cset x0, ne");
+                }
+                PhpType::Array(_) => {
+                    // empty array → false
+                    emitter.instruction("ldr x0, [x0]");
+                    emitter.instruction("cmp x0, #0");
+                    emitter.instruction("cset x0, ne");
+                }
+            }
+            PhpType::Bool
+        }
+        CastType::Array => {
+            // Wrap scalar in single-element array
+            match &src_ty {
+                PhpType::Array(_) => { return src_ty; }
+                PhpType::Int | PhpType::Bool => {
+                    emitter.instruction("str x0, [sp, #-16]!");
+                    emitter.instruction("mov x0, #8");
+                    emitter.instruction("mov x1, #8");
+                    emitter.instruction("bl __rt_array_new");
+                    emitter.instruction("ldr x1, [sp], #16");
+                    emitter.instruction("bl __rt_array_push_int");
+                }
+                _ => {
+                    // For other types, create empty array
+                    emitter.instruction("mov x0, #8");
+                    emitter.instruction("mov x1, #8");
+                    emitter.instruction("bl __rt_array_new");
+                }
+            }
+            PhpType::Array(Box::new(PhpType::Int))
+        }
+    }
 }
 
 fn emit_strict_compare(

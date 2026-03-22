@@ -369,6 +369,121 @@ pub fn emit_builtin_call(
             emitter.instruction(&format!("mov x0, #{}", val));
             Some(PhpType::Bool)
         }
+        "gettype" => {
+            emitter.comment("gettype()");
+            let ty = emit_expr(&args[0], emitter, ctx, data);
+            let type_str = match &ty {
+                PhpType::Int => "integer",
+                PhpType::Float => "double",
+                PhpType::Str => "string",
+                PhpType::Bool => "boolean",
+                PhpType::Void => "NULL",
+                PhpType::Array(_) => "array",
+            };
+            let (label, len) = data.add_string(type_str.as_bytes());
+            emitter.instruction(&format!("adrp x1, {}@PAGE", label));
+            emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", label));
+            emitter.instruction(&format!("mov x2, #{}", len));
+            Some(PhpType::Str)
+        }
+        "empty" => {
+            emitter.comment("empty()");
+            let ty = emit_expr(&args[0], emitter, ctx, data);
+            match &ty {
+                PhpType::Int => {
+                    super::expr::coerce_null_to_zero(emitter, &ty);
+                    emitter.instruction("cmp x0, #0");
+                    emitter.instruction("cset x0, eq"); // empty if 0
+                }
+                PhpType::Float => {
+                    emitter.instruction("fcmp d0, #0.0");
+                    emitter.instruction("cset x0, eq");
+                }
+                PhpType::Bool => {
+                    // empty if false (x0 == 0)
+                    emitter.instruction("cmp x0, #0");
+                    emitter.instruction("cset x0, eq");
+                }
+                PhpType::Void => {
+                    emitter.instruction("mov x0, #1"); // null is always empty
+                }
+                PhpType::Str => {
+                    // empty if length == 0
+                    emitter.instruction("cmp x2, #0");
+                    emitter.instruction("cset x0, eq");
+                }
+                PhpType::Array(_) => {
+                    // empty if count == 0
+                    emitter.instruction("ldr x0, [x0]");
+                    emitter.instruction("cmp x0, #0");
+                    emitter.instruction("cset x0, eq");
+                }
+            }
+            Some(PhpType::Bool)
+        }
+        "unset" => {
+            emitter.comment("unset()");
+            // Get the variable name from the expression
+            if let crate::parser::ast::ExprKind::Variable(name) = &args[0].kind {
+                let var = ctx.variables.get(name).expect("undefined variable");
+                let offset = var.stack_offset;
+                // Store null sentinel
+                emitter.instruction("movz x0, #0xFFFE");
+                emitter.instruction("movk x0, #0xFFFF, lsl #16");
+                emitter.instruction("movk x0, #0xFFFF, lsl #32");
+                emitter.instruction("movk x0, #0x7FFF, lsl #48");
+                emitter.instruction(&format!("stur x0, [x29, #-{}]", offset));
+                ctx.variables.get_mut(name).unwrap().ty = PhpType::Void;
+            }
+            Some(PhpType::Void)
+        }
+        "settype" => {
+            emitter.comment("settype()");
+            // settype($var, "type") — resolve at compile time
+            if let crate::parser::ast::ExprKind::Variable(name) = &args[0].kind {
+                if let crate::parser::ast::ExprKind::StringLiteral(type_name) = &args[1].kind {
+                    let var = ctx.variables.get(name).expect("undefined variable");
+                    let offset = var.stack_offset;
+                    let old_ty = var.ty.clone();
+                    // Load current value
+                    super::abi::emit_load(emitter, &old_ty, offset);
+                    // Convert to target type
+                    let new_ty = match type_name.as_str() {
+                        "int" | "integer" => {
+                            match &old_ty {
+                                PhpType::Float => { emitter.instruction("fcvtzs x0, d0"); }
+                                PhpType::Bool | PhpType::Int => {}
+                                PhpType::Void => { emitter.instruction("mov x0, #0"); }
+                                _ => { emitter.instruction("mov x0, #0"); }
+                            }
+                            PhpType::Int
+                        }
+                        "float" | "double" => {
+                            match &old_ty {
+                                PhpType::Float => {}
+                                _ => { emitter.instruction("scvtf d0, x0"); }
+                            }
+                            PhpType::Float
+                        }
+                        "string" => {
+                            super::expr::coerce_to_string(emitter, &old_ty);
+                            PhpType::Str
+                        }
+                        "bool" | "boolean" => {
+                            super::expr::coerce_null_to_zero(emitter, &old_ty);
+                            emitter.instruction("cmp x0, #0");
+                            emitter.instruction("cset x0, ne");
+                            PhpType::Bool
+                        }
+                        _ => old_ty.clone(),
+                    };
+                    super::abi::emit_store(emitter, &new_ty, offset);
+                    ctx.variables.get_mut(name).unwrap().ty = new_ty;
+                }
+            }
+            emitter.instruction("mov x0, #1"); // settype returns true
+            Some(PhpType::Bool)
+        }
         "is_nan" => {
             emitter.comment("is_nan()");
             let ty = emit_expr(&args[0], emitter, ctx, data);
