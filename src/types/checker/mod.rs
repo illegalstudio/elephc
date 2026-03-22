@@ -59,7 +59,9 @@ impl Checker {
             StmtKind::Assign { name, value } => {
                 let ty = self.infer_type(value, env)?;
                 if let Some(existing) = env.get(name) {
-                    if *existing != ty {
+                    // Allow null (Void) to be assigned to any variable, and any
+                    // variable to be reassigned from null to a concrete type
+                    if *existing != ty && ty != PhpType::Void && *existing != PhpType::Void {
                         return Err(CompileError::new(
                             stmt.span,
                             &format!(
@@ -67,6 +69,10 @@ impl Checker {
                                 name, existing, ty
                             ),
                         ));
+                    }
+                    // If variable was null and now gets a real type, update it
+                    if *existing == PhpType::Void && ty != PhpType::Void {
+                        env.insert(name.clone(), ty);
                     }
                 } else {
                     env.insert(name.clone(), ty);
@@ -162,6 +168,7 @@ impl Checker {
 
     pub fn infer_type(&mut self, expr: &Expr, env: &TypeEnv) -> Result<PhpType, CompileError> {
         match &expr.kind {
+            ExprKind::Null => Ok(PhpType::Void), // null is Void type
             ExprKind::StringLiteral(_) => Ok(PhpType::Str),
             ExprKind::IntLiteral(_) => Ok(PhpType::Int),
             ExprKind::Variable(name) => env.get(name).cloned().ok_or_else(|| {

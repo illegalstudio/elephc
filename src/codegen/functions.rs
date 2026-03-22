@@ -130,6 +130,7 @@ fn infer_local_type(
     sig: &FunctionSig,
 ) -> PhpType {
     match &expr.kind {
+        ExprKind::Null => PhpType::Void,
         ExprKind::StringLiteral(_) => PhpType::Str,
         ExprKind::IntLiteral(_) => PhpType::Int,
         ExprKind::ArrayLiteral(elems) => {

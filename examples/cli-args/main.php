@@ -26,3 +26,9 @@ do {
     $n *= 2;
 } while ($n < 100);
 echo "First power of 2 >= 100: " . $n . "\n";
+
+// null
+$x = null;
+echo "is_null: " . is_null($x) . "\n";
+$x = 99;
+echo "after reassign: " . $x . "\n";

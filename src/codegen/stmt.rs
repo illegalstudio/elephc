@@ -17,7 +17,26 @@ pub fn emit_stmt(
             emitter.blank();
             emitter.comment("echo");
             let ty = emit_expr(expr, emitter, ctx, data);
-            abi::emit_write_stdout(emitter, &ty);
+            match &ty {
+                PhpType::Void => {
+                    // Compile-time null — don't print anything
+                }
+                PhpType::Int => {
+                    // Runtime null check (variable might hold null sentinel)
+                    let skip_label = ctx.next_label("echo_skip_null");
+                    emitter.instruction("movz x9, #0xFFFE");
+                    emitter.instruction("movk x9, #0xFFFF, lsl #16");
+                    emitter.instruction("movk x9, #0xFFFF, lsl #32");
+                    emitter.instruction("movk x9, #0x7FFF, lsl #48");
+                    emitter.instruction("cmp x0, x9");
+                    emitter.instruction(&format!("b.eq {}", skip_label));
+                    abi::emit_write_stdout(emitter, &ty);
+                    emitter.label(&skip_label);
+                }
+                _ => {
+                    abi::emit_write_stdout(emitter, &ty);
+                }
+            }
         }
         StmtKind::Assign { name, value } => {
             emitter.blank();

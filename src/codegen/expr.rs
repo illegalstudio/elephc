@@ -16,6 +16,15 @@ pub fn emit_expr(
     data: &mut DataSection,
 ) -> PhpType {
     match &expr.kind {
+        ExprKind::Null => {
+            emitter.comment("null");
+            // Load null sentinel value
+            emitter.instruction("movz x0, #0xFFFE");
+            emitter.instruction("movk x0, #0xFFFF, lsl #16");
+            emitter.instruction("movk x0, #0xFFFF, lsl #32");
+            emitter.instruction("movk x0, #0x7FFF, lsl #48");
+            PhpType::Void
+        }
         ExprKind::StringLiteral(s) => {
             let bytes = s.as_bytes();
             let (label, len) = data.add_string(bytes);

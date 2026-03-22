@@ -47,6 +47,7 @@ impl Checker {
                     return Err(CompileError::new(span, "is_null() takes exactly 1 argument"));
                 }
                 self.infer_type(&args[0], env)?;
+                // is_null is handled at codegen level using the null sentinel
                 Ok(Some(PhpType::Int))
             }
             "count" => {

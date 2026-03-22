@@ -43,7 +43,13 @@ pub fn emit_builtin_call(
         "is_null" => {
             emitter.comment("is_null()");
             emit_expr(&args[0], emitter, ctx, data);
-            emitter.instruction("mov x0, #0");
+            // Compare against null sentinel
+            emitter.instruction("movz x9, #0xFFFE");
+            emitter.instruction("movk x9, #0xFFFF, lsl #16");
+            emitter.instruction("movk x9, #0xFFFF, lsl #32");
+            emitter.instruction("movk x9, #0x7FFF, lsl #48");
+            emitter.instruction("cmp x0, x9");
+            emitter.instruction("cset x0, eq");
             Some(PhpType::Int)
         }
         "array_pop" => {

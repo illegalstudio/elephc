@@ -19,7 +19,7 @@ impl PhpType {
         match self {
             PhpType::Int => 8,
             PhpType::Str => 16,
-            PhpType::Void => 0,
+            PhpType::Void => 8, // null sentinel stored as 8 bytes
             PhpType::Array(_) => 8, // pointer to heap
         }
     }

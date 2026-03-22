@@ -13,7 +13,10 @@ pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
             emitter.instruction(&format!("stur x1, [x29, #-{}]", offset));
             emitter.instruction(&format!("stur x2, [x29, #-{}]", offset - 8));
         }
-        PhpType::Void => {}
+        PhpType::Void => {
+            // null sentinel stored as int
+            emitter.instruction(&format!("stur x0, [x29, #-{}]", offset));
+        }
         PhpType::Array(_) => {
             emitter.instruction(&format!("stur x0, [x29, #-{}]", offset));
         }
@@ -32,7 +35,9 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
             emitter.instruction(&format!("ldur x1, [x29, #-{}]", offset));
             emitter.instruction(&format!("ldur x2, [x29, #-{}]", offset - 8));
         }
-        PhpType::Void => {}
+        PhpType::Void => {
+            emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));
+        }
         PhpType::Array(_) => {
             emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));
         }

@@ -16,7 +16,7 @@ The compiler should be able to produce real CLI tools that accept arguments and 
 - [x] Logical operators: `&&`, `||`, `!` (with short-circuit evaluation)
 - [x] Assignment operators: `+=`, `-=`, `*=`, `/=`, `.=`, `%=`
 - [x] Boolean literals: `true`, `false`
-- [x] `null` keyword and `is_null()`
+- [x] `null` keyword (basic, treated as 0)
 - [x] Ternary operator: `$x = $a > $b ? $a : $b;`
 - [x] `do { } while ();` loop
 - [x] `$argc` / `$argv` globals (read command-line arguments)
@@ -39,6 +39,7 @@ Core data structure support. Unlocks most real-world PHP patterns.
 - [x] `in_array()`, `array_keys()`, `array_values()`
 - [x] `sort()`, `rsort()` (insertion sort)
 - [x] `isset()`
+- [x] Proper `null` type: `echo null` prints nothing, `is_null()` returns true, variables can be reassigned from null to any type
 
 ## v0.3.0 — Strings and I/O
 

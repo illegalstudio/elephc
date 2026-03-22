@@ -760,15 +760,33 @@ fn test_single_quoted_escaped_quote() {
 // --- null ---
 
 #[test]
-fn test_null_value() {
+fn test_null_echo_nothing() {
+    let out = compile_and_run("<?php echo null;");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_null_variable_echo_nothing() {
     let out = compile_and_run("<?php $x = null; echo $x;");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_is_null_true() {
+    let out = compile_and_run("<?php $x = null; echo is_null($x);");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_is_null_false() {
+    let out = compile_and_run("<?php $x = 42; echo is_null($x);");
     assert_eq!(out, "0");
 }
 
 #[test]
-fn test_is_null() {
-    let out = compile_and_run("<?php $x = null; echo is_null($x);");
-    assert_eq!(out, "0");
+fn test_null_reassign() {
+    let out = compile_and_run("<?php $x = null; $x = 42; echo $x;");
+    assert_eq!(out, "42");
 }
 
 // --- Built-in functions ---
