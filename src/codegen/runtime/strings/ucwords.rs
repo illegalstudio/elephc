@@ -7,7 +7,7 @@ pub fn emit_ucwords(emitter: &mut Emitter) {
     emitter.comment("--- runtime: ucwords ---");
     emitter.label("__rt_ucwords");
     emitter.instruction("sub sp, sp, #16");                                     // allocate stack frame
-    emitter.instruction("stp x29, x30, [sp]");                                 // save frame pointer and return address
+    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // set frame pointer
     emitter.instruction("bl __rt_strcopy");                                     // copy string to mutable concat_buf
     emitter.instruction("cbz x2, __rt_ucwords_done");                           // empty string → nothing to do
@@ -46,7 +46,7 @@ pub fn emit_ucwords(emitter: &mut Emitter) {
     emitter.instruction("b __rt_ucwords_loop");                                 // process next byte
 
     emitter.label("__rt_ucwords_done");
-    emitter.instruction("ldp x29, x30, [sp]");                                 // restore frame pointer and return address
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return with x1/x2 from strcopy
 }

@@ -14,14 +14,14 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("str_split()");
     emit_expr(&args[0], emitter, ctx, data);
-    emitter.instruction("stp x1, x2, [sp, #-16]!");                    // push string
+    emitter.instruction("stp x1, x2, [sp, #-16]!");                             // push string
     if args.len() >= 2 {
         emit_expr(&args[1], emitter, ctx, data);
-        emitter.instruction("mov x3, x0");                             // chunk length
+        emitter.instruction("mov x3, x0");                                      // chunk length
     } else {
-        emitter.instruction("mov x3, #1");                              // default chunk = 1
+        emitter.instruction("mov x3, #1");                                      // default chunk = 1
     }
-    emitter.instruction("ldp x1, x2, [sp], #16");                      // pop string
-    emitter.instruction("bl __rt_str_split");                           // call runtime: split string into chunks
+    emitter.instruction("ldp x1, x2, [sp], #16");                               // pop string
+    emitter.instruction("bl __rt_str_split");                                   // call runtime: split string into chunks
     Some(PhpType::Array(Box::new(PhpType::Str)))
 }

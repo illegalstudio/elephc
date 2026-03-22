@@ -14,14 +14,14 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("str_ireplace()");
     emit_expr(&args[0], emitter, ctx, data);
-    emitter.instruction("stp x1, x2, [sp, #-16]!");                    // push search string
+    emitter.instruction("stp x1, x2, [sp, #-16]!");                             // push search string
     emit_expr(&args[1], emitter, ctx, data);
-    emitter.instruction("stp x1, x2, [sp, #-16]!");                    // push replace string
+    emitter.instruction("stp x1, x2, [sp, #-16]!");                             // push replace string
     emit_expr(&args[2], emitter, ctx, data);
-    emitter.instruction("mov x5, x1");                                 // subject ptr
-    emitter.instruction("mov x6, x2");                                 // subject len
-    emitter.instruction("ldp x3, x4, [sp], #16");                      // pop replace
-    emitter.instruction("ldp x1, x2, [sp], #16");                      // pop search
-    emitter.instruction("bl __rt_str_ireplace");                        // call runtime: case-insensitive replace
+    emitter.instruction("mov x5, x1");                                          // subject ptr
+    emitter.instruction("mov x6, x2");                                          // subject len
+    emitter.instruction("ldp x3, x4, [sp], #16");                               // pop replace
+    emitter.instruction("ldp x1, x2, [sp], #16");                               // pop search
+    emitter.instruction("bl __rt_str_ireplace");                                // call runtime: case-insensitive replace
     Some(PhpType::Str)
 }

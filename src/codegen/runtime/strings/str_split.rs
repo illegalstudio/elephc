@@ -7,9 +7,9 @@ pub fn emit_str_split(emitter: &mut Emitter) {
     emitter.comment("--- runtime: str_split ---");
     emitter.label("__rt_str_split");
     emitter.instruction("sub sp, sp, #64");                                     // allocate stack frame
-    emitter.instruction("stp x29, x30, [sp, #48]");                            // save frame pointer and return address
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #48");                                    // set frame pointer
-    emitter.instruction("stp x1, x2, [sp]");                                   // save string ptr/len
+    emitter.instruction("stp x1, x2, [sp]");                                    // save string ptr/len
     emitter.instruction("str x3, [sp, #16]");                                   // save chunk length
 
     // -- create array --
@@ -20,8 +20,8 @@ pub fn emit_str_split(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #32]");                                  // current position = 0
 
     emitter.label("__rt_str_split_loop");
-    emitter.instruction("ldr x4, [sp, #32]");                                  // load current position
-    emitter.instruction("ldp x1, x2, [sp]");                                   // reload string ptr/len
+    emitter.instruction("ldr x4, [sp, #32]");                                   // load current position
+    emitter.instruction("ldp x1, x2, [sp]");                                    // reload string ptr/len
     emitter.instruction("cmp x4, x2");                                          // past end of string?
     emitter.instruction("b.ge __rt_str_split_done");                            // yes → done
 
@@ -29,24 +29,24 @@ pub fn emit_str_split(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload chunk length
     emitter.instruction("sub x5, x2, x4");                                      // remaining = len - pos
     emitter.instruction("cmp x5, x3");                                          // remaining vs chunk_length
-    emitter.instruction("csel x5, x3, x5, gt");                                // chunk = min(remaining, chunk_length)
+    emitter.instruction("csel x5, x3, x5, gt");                                 // chunk = min(remaining, chunk_length)
 
     // -- push chunk as string element --
-    emitter.instruction("ldr x0, [sp, #24]");                                  // reload array pointer
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload array pointer
     emitter.instruction("add x1, x1, x4");                                      // x1 = base + current position
     emitter.instruction("mov x2, x5");                                          // x2 = chunk length
     emitter.instruction("bl __rt_array_push_str");                              // push chunk onto array
 
     // -- advance position by chunk length --
-    emitter.instruction("ldr x4, [sp, #32]");                                  // reload position
+    emitter.instruction("ldr x4, [sp, #32]");                                   // reload position
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload chunk length
     emitter.instruction("add x4, x4, x3");                                      // position += chunk_length
     emitter.instruction("str x4, [sp, #32]");                                   // save updated position
     emitter.instruction("b __rt_str_split_loop");                               // continue
 
     emitter.label("__rt_str_split_done");
-    emitter.instruction("ldr x0, [sp, #24]");                                  // return array pointer
-    emitter.instruction("ldp x29, x30, [sp, #48]");                            // restore frame
+    emitter.instruction("ldr x0, [sp, #24]");                                   // return array pointer
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame
     emitter.instruction("add sp, sp, #64");                                     // deallocate
     emitter.instruction("ret");                                                 // return
 }
