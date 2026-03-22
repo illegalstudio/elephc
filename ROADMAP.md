@@ -41,12 +41,12 @@ Proper type system for PHP compatibility.
 
 ### Float type
 - [x] Float literals: `3.14`, `1.0e-5`, `-0.5`
-- [ ] Division returns float: `10 / 3` → `3.3333...`
+- [x] Division returns float: `10 / 3` → `3.3333...`
 - [x] `intdiv()` for integer division
 - [x] Mixed int/float arithmetic (auto-promotion to float)
 - [x] Float comparison and formatting
 - [x] `floatval()`, `is_float()`, `is_int()`, `is_string()`, `is_numeric()`
-- [ ] `INF`, `NAN`, `is_nan()`, `is_finite()`, `is_infinite()`
+- [x] `INF`, `NAN`, `is_nan()`, `is_finite()`, `is_infinite()`
 
 ### Type operations
 - [ ] Type casting: `(int)`, `(string)`, `(float)`, `(bool)`, `(array)`

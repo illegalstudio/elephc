@@ -10,7 +10,7 @@ This document describes the PHP subset supported by elephc. Every program listed
 | `string` | Yes | Pointer + length pair, double and single quoted |
 | `null` | Yes | Sentinel value, coerces to `0`/`""` in operations |
 | `bool` | Yes | `true`/`false` as distinct type. `echo false` prints nothing, `echo true` prints `1`. Coerces to 0/1 in arithmetic. |
-| `float` | Yes | 64-bit double-precision. Literals: `3.14`, `.5`, `1.5e3`, `1.0e-5`. |
+| `float` | Yes | 64-bit double-precision. Literals: `3.14`, `.5`, `1.5e3`, `1.0e-5`. Constants: `INF`, `NAN`. |
 | `array` | Partial | Indexed arrays only. No associative arrays. |
 | `object` | No | Not planned (no OOP support). |
 | `resource` | No | Not planned. |
@@ -29,7 +29,6 @@ $x = 42;              // reassignment from null works
 
 ### Known incompatibilities with PHP
 
-- Integer division (`10 / 3`) returns `3`, not `3.333...`. Use float operands (`10.0 / 3.0`) for float division, or `intdiv()` for explicit integer division.
 - `$argv[0]` returns the compiled binary path, not the `.php` file path.
 
 ## Operators
@@ -41,7 +40,7 @@ $x = 42;              // reassignment from null works
 | `+` | `$a + $b` | Addition |
 | `-` | `$a - $b` | Subtraction |
 | `*` | `$a * $b` | Multiplication |
-| `/` | `$a / $b` | Division (integer if both operands are int, float otherwise) |
+| `/` | `$a / $b` | Division (always returns float) |
 | `%` | `$a % $b` | Modulo |
 | `-$x` | `-$x` | Unary negation |
 
@@ -363,6 +362,9 @@ foreach ($names as $name) {
 | `is_string()` | `is_string($val): bool` | Returns true if string |
 | `is_numeric()` | `is_numeric($val): bool` | Returns true if int or float |
 | `is_bool()` | `is_bool($val): bool` | Returns true if bool |
+| `is_nan()` | `is_nan($val): bool` | Returns true if NAN |
+| `is_finite()` | `is_finite($val): bool` | Returns true if not INF/NAN |
+| `is_infinite()` | `is_infinite($val): bool` | Returns true if INF or -INF |
 | `boolval()` | `boolval($val): bool` | Convert to bool |
 
 ### System functions

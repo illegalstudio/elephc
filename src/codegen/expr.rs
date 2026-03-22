@@ -325,7 +325,8 @@ fn emit_binop(
             let rt = emit_expr(right, emitter, ctx, data);
             coerce_null_to_zero(emitter, &rt);
 
-            if lt == PhpType::Float || rt == PhpType::Float {
+            // Division always uses float path (PHP: 10/3 → 3.333...)
+            if lt == PhpType::Float || rt == PhpType::Float || *op == BinOp::Div {
                 // Float path: promote non-float operand if needed
                 if rt != PhpType::Float {
                     emitter.instruction("scvtf d0, x0");

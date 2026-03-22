@@ -271,7 +271,8 @@ impl Checker {
                                 expr.span, "Arithmetic operators require numeric operands",
                             ));
                         }
-                        if lt == PhpType::Float || rt == PhpType::Float {
+                        // Division always returns float (PHP compat: 10/3 → 3.333...)
+                        if *op == BinOp::Div || lt == PhpType::Float || rt == PhpType::Float {
                             Ok(PhpType::Float)
                         } else {
                             Ok(PhpType::Int)

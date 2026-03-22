@@ -1829,3 +1829,122 @@ fn test_require_missing_file_error() {
         ("main.php", "<?php require 'nonexistent.php';"),
     ], "main.php"));
 }
+
+// --- Division returns float ---
+
+#[test]
+fn test_int_division_returns_float() {
+    let out = compile_and_run("<?php echo 10 / 3;");
+    assert_eq!(out, "3.3333333333333");
+}
+
+#[test]
+fn test_int_division_exact() {
+    // Even exact division returns float-formatted output
+    let out = compile_and_run("<?php echo 10 / 2;");
+    assert_eq!(out, "5");
+}
+
+#[test]
+fn test_division_assign_updates_type() {
+    let out = compile_and_run("<?php $x = 10; $x /= 3; echo $x;");
+    assert_eq!(out, "3.3333333333333");
+}
+
+#[test]
+fn test_division_in_expression() {
+    let out = compile_and_run("<?php echo 1 / 3 + 1 / 3 + 1 / 3;");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_intdiv_still_returns_int() {
+    let out = compile_and_run("<?php echo intdiv(10, 3);");
+    assert_eq!(out, "3");
+}
+
+// --- INF, NAN, is_nan, is_finite, is_infinite ---
+
+#[test]
+fn test_inf_constant() {
+    let out = compile_and_run("<?php echo INF;");
+    assert_eq!(out, "INF");
+}
+
+#[test]
+fn test_nan_constant() {
+    let out = compile_and_run("<?php echo NAN;");
+    assert_eq!(out, "NAN");
+}
+
+#[test]
+fn test_negative_inf() {
+    let out = compile_and_run("<?php echo -INF;");
+    assert_eq!(out, "-INF");
+}
+
+#[test]
+fn test_is_nan_true() {
+    let out = compile_and_run("<?php echo is_nan(NAN);");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_is_nan_false() {
+    let out = compile_and_run("<?php echo is_nan(42.0);");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_is_nan_int() {
+    let out = compile_and_run("<?php echo is_nan(0);");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_is_infinite_true() {
+    let out = compile_and_run("<?php echo is_infinite(INF);");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_is_infinite_neg_inf() {
+    let out = compile_and_run("<?php echo is_infinite(-INF);");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_is_infinite_false() {
+    let out = compile_and_run("<?php echo is_infinite(42.0);");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_is_finite_true() {
+    let out = compile_and_run("<?php echo is_finite(42.0);");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_is_finite_inf() {
+    let out = compile_and_run("<?php echo is_finite(INF);");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_is_finite_nan() {
+    let out = compile_and_run("<?php echo is_finite(NAN);");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_inf_arithmetic() {
+    let out = compile_and_run("<?php echo INF + 1;");
+    assert_eq!(out, "INF");
+}
+
+#[test]
+fn test_division_by_zero_inf() {
+    let out = compile_and_run("<?php echo 1.0 / 0.0;");
+    assert_eq!(out, "INF");
+}

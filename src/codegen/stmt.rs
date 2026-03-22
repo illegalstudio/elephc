@@ -57,6 +57,11 @@ pub fn emit_stmt(
             let offset = var.stack_offset;
 
             abi::emit_store(emitter, &ty, offset);
+
+            // Update variable type if it changed (e.g. int /= produces float)
+            if var.ty != ty {
+                ctx.variables.get_mut(name).unwrap().ty = ty;
+            }
         }
         StmtKind::If {
             condition,
