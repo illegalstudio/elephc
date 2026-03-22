@@ -180,12 +180,6 @@ pub fn emit_builtin_call(
             }
             Some(PhpType::Void)
         }
-        "argv" => {
-            emitter.comment("argv()");
-            emit_expr(&args[0], emitter, ctx, data);
-            emitter.instruction("bl __rt_argv");
-            Some(PhpType::Str)
-        }
         _ => None,
     }
 }

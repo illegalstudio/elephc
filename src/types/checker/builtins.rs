@@ -135,16 +135,6 @@ impl Checker {
                 }
                 Ok(Some(PhpType::Void))
             }
-            "argv" => {
-                if args.len() != 1 {
-                    return Err(CompileError::new(span, "argv() takes exactly 1 argument"));
-                }
-                let ty = self.infer_type(&args[0], env)?;
-                if ty != PhpType::Int {
-                    return Err(CompileError::new(span, "argv() argument must be integer"));
-                }
-                Ok(Some(PhpType::Str))
-            }
             _ => Ok(None),
         }
     }

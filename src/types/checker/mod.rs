@@ -38,6 +38,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
 
     let mut global_env: TypeEnv = HashMap::new();
     global_env.insert("argc".to_string(), PhpType::Int);
+    global_env.insert("argv".to_string(), PhpType::Array(Box::new(PhpType::Str)));
     for stmt in program {
         checker.check_stmt(stmt, &mut global_env)?;
     }

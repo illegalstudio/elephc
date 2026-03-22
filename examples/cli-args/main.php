@@ -2,11 +2,11 @@
 echo "Arguments: " . $argc . "\n";
 
 for ($i = 0; $i < $argc; $i++) {
-    echo "  argv[" . $i . "] = " . argv($i) . "\n";
+    echo "  argv[" . $i . "] = " . $argv[$i] . "\n";
 }
 
 // Ternary operator
-$greeting = $argc > 1 ? "Hello, " . argv(1) : "Hello, stranger";
+$greeting = $argc > 1 ? "Hello, " . $argv[1] : "Hello, stranger";
 echo $greeting . "\n";
 
 // Single-quoted string

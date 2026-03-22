@@ -113,6 +113,18 @@ cargo run -- examples/fizzbuzz/main.php
 ./examples/fizzbuzz/main
 ```
 
+## PHP compatibility
+
+**The syntax must be 100% compatible with PHP.** Any valid elephc program must also be valid PHP and produce the same output when run with `php`. This means:
+
+- Variable names, keywords, operators, and built-in function names must match PHP exactly
+- Superglobals (`$argc`, `$argv`) must use PHP's syntax (e.g., `$argv[0]`, not `argv(0)`)
+- Operator precedence and associativity must match PHP
+- String escape sequences must match PHP behavior
+- Built-in function signatures must match PHP (argument count, order, types)
+
+When in doubt, test with `php -r '...'` to verify behavior.
+
 ## Roadmap management
 
 `ROADMAP.md` tracks all planned and completed work, organized by version.

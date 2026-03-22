@@ -44,6 +44,9 @@ pub fn generate(
     if !global_env.contains_key("argc") {
         ctx.alloc_var("argc", PhpType::Int);
     }
+    if !global_env.contains_key("argv") {
+        ctx.alloc_var("argv", PhpType::Array(Box::new(PhpType::Str)));
+    }
     for (name, ty) in global_env {
         ctx.alloc_var(name, ty.clone());
     }
@@ -71,6 +74,12 @@ pub fn generate(
 
     let argc_offset = ctx.variables.get("argc").unwrap().stack_offset;
     emitter.instruction(&format!("stur x0, [x29, #-{}]", argc_offset));
+
+    // Build $argv array from OS argv
+    let argv_offset = ctx.variables.get("argv").unwrap().stack_offset;
+    emitter.comment("build $argv array");
+    emitter.instruction("bl __rt_build_argv");
+    emitter.instruction(&format!("stur x0, [x29, #-{}]", argv_offset));
 
     for s in program {
         if matches!(&s.kind, StmtKind::FunctionDecl { .. }) {
