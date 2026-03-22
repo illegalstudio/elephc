@@ -784,6 +784,30 @@ fn test_is_null_false() {
 }
 
 #[test]
+fn test_null_plus_int() {
+    let out = compile_and_run("<?php $x = null; echo $x + 5;");
+    assert_eq!(out, "5");
+}
+
+#[test]
+fn test_null_concat() {
+    let out = compile_and_run("<?php $x = null; echo $x . \"hello\";");
+    assert_eq!(out, "hello");
+}
+
+#[test]
+fn test_null_equals_zero() {
+    let out = compile_and_run("<?php $x = null; echo $x == 0;");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_null_plus_assign() {
+    let out = compile_and_run("<?php $y = null; $y += 10; echo $y;");
+    assert_eq!(out, "10");
+}
+
+#[test]
 fn test_null_reassign() {
     let out = compile_and_run("<?php $x = null; $x = 42; echo $x;");
     assert_eq!(out, "42");

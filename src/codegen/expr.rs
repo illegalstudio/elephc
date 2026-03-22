@@ -207,6 +207,23 @@ fn emit_array_access(
     elem_ty
 }
 
+/// Replace null sentinel with 0 in x0 (for arithmetic/comparison with null).
+/// Handles both compile-time null (Void type) and runtime null (variable
+/// that was assigned null — sentinel value in x0).
+fn coerce_null_to_zero(emitter: &mut Emitter, ty: &PhpType) {
+    if *ty == PhpType::Void {
+        emitter.instruction("mov x0, #0");
+    } else if *ty == PhpType::Int {
+        // Runtime null check: if x0 == sentinel, replace with 0
+        emitter.instruction("movz x9, #0xFFFE");
+        emitter.instruction("movk x9, #0xFFFF, lsl #16");
+        emitter.instruction("movk x9, #0xFFFF, lsl #32");
+        emitter.instruction("movk x9, #0x7FFF, lsl #48");
+        emitter.instruction("cmp x0, x9");
+        emitter.instruction("csel x0, xzr, x0, eq"); // if x0 == sentinel, x0 = 0
+    }
+}
+
 fn emit_binop(
     left: &Expr,
     op: &BinOp,
@@ -239,9 +256,11 @@ fn emit_binop(
             return PhpType::Int;
         }
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-            emit_expr(left, emitter, ctx, data);
+            let lt = emit_expr(left, emitter, ctx, data);
+            coerce_null_to_zero(emitter, &lt);
             emitter.instruction("str x0, [sp, #-16]!");
-            emit_expr(right, emitter, ctx, data);
+            let rt = emit_expr(right, emitter, ctx, data);
+            coerce_null_to_zero(emitter, &rt);
             emitter.instruction("ldr x1, [sp], #16");
             match op {
                 BinOp::Add => emitter.instruction("add x0, x1, x0"),
@@ -257,9 +276,11 @@ fn emit_binop(
             PhpType::Int
         }
         BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
-            emit_expr(left, emitter, ctx, data);
+            let lt = emit_expr(left, emitter, ctx, data);
+            coerce_null_to_zero(emitter, &lt);
             emitter.instruction("str x0, [sp, #-16]!");
-            emit_expr(right, emitter, ctx, data);
+            let rt = emit_expr(right, emitter, ctx, data);
+            coerce_null_to_zero(emitter, &rt);
             emitter.instruction("ldr x1, [sp], #16");
             emitter.instruction("cmp x1, x0");
             let cond = match op {
@@ -278,11 +299,15 @@ fn emit_binop(
             let left_ty = emit_expr(left, emitter, ctx, data);
             if left_ty == PhpType::Int {
                 emitter.instruction("bl __rt_itoa");
+            } else if left_ty == PhpType::Void {
+                emitter.instruction("mov x2, #0"); // null → empty string
             }
             emitter.instruction("stp x1, x2, [sp, #-16]!");
             let right_ty = emit_expr(right, emitter, ctx, data);
             if right_ty == PhpType::Int {
                 emitter.instruction("bl __rt_itoa");
+            } else if right_ty == PhpType::Void {
+                emitter.instruction("mov x2, #0"); // null → empty string
             }
             emitter.instruction("mov x3, x1");
             emitter.instruction("mov x4, x2");

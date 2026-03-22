@@ -188,7 +188,7 @@ impl Checker {
             ExprKind::PreIncrement(name) | ExprKind::PostIncrement(name)
             | ExprKind::PreDecrement(name) | ExprKind::PostDecrement(name) => {
                 match env.get(name) {
-                    Some(PhpType::Int) => Ok(PhpType::Int),
+                    Some(PhpType::Int) | Some(PhpType::Void) => Ok(PhpType::Int),
                     Some(other) => Err(CompileError::new(
                         expr.span,
                         &format!("Cannot increment/decrement ${} of type {:?}", name, other),
@@ -252,7 +252,10 @@ impl Checker {
                 let rt = self.infer_type(right, env)?;
                 match op {
                     BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                        if lt != PhpType::Int || rt != PhpType::Int {
+                        // null is treated as 0 in arithmetic context
+                        let lt_ok = lt == PhpType::Int || lt == PhpType::Void;
+                        let rt_ok = rt == PhpType::Int || rt == PhpType::Void;
+                        if !lt_ok || !rt_ok {
                             return Err(CompileError::new(
                                 expr.span, "Arithmetic operators require integer operands",
                             ));
@@ -261,15 +264,18 @@ impl Checker {
                     }
                     BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt
                     | BinOp::LtEq | BinOp::GtEq => {
-                        if lt != PhpType::Int || rt != PhpType::Int {
+                        // null is treated as 0 in comparison context
+                        let lt_ok = lt == PhpType::Int || lt == PhpType::Void;
+                        let rt_ok = rt == PhpType::Int || rt == PhpType::Void;
+                        if !lt_ok || !rt_ok {
                             return Err(CompileError::new(
                                 expr.span, "Comparison operators require integer operands",
                             ));
                         }
                         Ok(PhpType::Int)
                     }
-                    BinOp::Concat => Ok(PhpType::Str),
-                    BinOp::And | BinOp::Or => Ok(PhpType::Int),
+                    BinOp::Concat => Ok(PhpType::Str), // null coerces to "" in concat
+                    BinOp::And | BinOp::Or => Ok(PhpType::Int), // null is falsy
                 }
             }
         }
