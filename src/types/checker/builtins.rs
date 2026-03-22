@@ -229,6 +229,15 @@ impl Checker {
                 self.infer_type(&args[0], env)?;
                 Ok(Some(PhpType::Bool))
             }
+            "is_nan" | "is_finite" | "is_infinite" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(
+                        span, &format!("{}() takes exactly 1 argument", name),
+                    ));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Bool))
+            }
             _ => Ok(None),
         }
     }

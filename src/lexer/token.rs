@@ -34,6 +34,8 @@ pub enum Token {
     Do,
     Foreach,
     As,
+    Inf,
+    Nan,
     Include,
     IncludeOnce,
     Require,

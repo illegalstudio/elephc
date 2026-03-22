@@ -209,6 +209,8 @@ pub fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
         "do" => Ok(Token::Do),
         "foreach" => Ok(Token::Foreach),
         "as" => Ok(Token::As),
+        "INF" => Ok(Token::Inf),
+        "NAN" => Ok(Token::Nan),
         "include" => Ok(Token::Include),
         "include_once" => Ok(Token::IncludeOnce),
         "require" => Ok(Token::Require),

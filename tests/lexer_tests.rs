@@ -344,6 +344,20 @@ fn test_require_once_keyword() {
     assert_eq!(t[1], Token::RequireOnce);
 }
 
+// --- INF / NAN ---
+
+#[test]
+fn test_inf_keyword() {
+    let t = tokens("<?php INF");
+    assert_eq!(t[1], Token::Inf);
+}
+
+#[test]
+fn test_nan_keyword() {
+    let t = tokens("<?php NAN");
+    assert_eq!(t[1], Token::Nan);
+}
+
 // --- Float literals ---
 
 #[test]

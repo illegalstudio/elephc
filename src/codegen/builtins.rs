@@ -369,6 +369,51 @@ pub fn emit_builtin_call(
             emitter.instruction(&format!("mov x0, #{}", val));
             Some(PhpType::Bool)
         }
+        "is_nan" => {
+            emitter.comment("is_nan()");
+            let ty = emit_expr(&args[0], emitter, ctx, data);
+            if ty != PhpType::Float {
+                emitter.instruction("scvtf d0, x0");
+            }
+            // NAN is the only value where d0 != d0
+            emitter.instruction("fcmp d0, d0");
+            emitter.instruction("cset x0, vs"); // VS = unordered (NAN)
+            Some(PhpType::Bool)
+        }
+        "is_infinite" => {
+            emitter.comment("is_infinite()");
+            let ty = emit_expr(&args[0], emitter, ctx, data);
+            if ty != PhpType::Float {
+                emitter.instruction("scvtf d0, x0");
+            }
+            // Check if abs(d0) == INF
+            emitter.instruction("fabs d0, d0");
+            let inf_label = data.add_float(f64::INFINITY);
+            emitter.instruction(&format!("adrp x9, {}@PAGE", inf_label));
+            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", inf_label));
+            emitter.instruction("ldr d1, [x9]");
+            emitter.instruction("fcmp d0, d1");
+            emitter.instruction("cset x0, eq");
+            Some(PhpType::Bool)
+        }
+        "is_finite" => {
+            emitter.comment("is_finite()");
+            let ty = emit_expr(&args[0], emitter, ctx, data);
+            if ty != PhpType::Float {
+                emitter.instruction("scvtf d0, x0");
+            }
+            // is_finite = not NAN and not INF
+            // fabs, compare with INF: if ordered-less-than INF → finite
+            // ARM64: for unordered (NAN), NZCV=0011, so use 'mi' (N==1) which is false for unordered
+            emitter.instruction("fabs d0, d0");
+            let inf_label = data.add_float(f64::INFINITY);
+            emitter.instruction(&format!("adrp x9, {}@PAGE", inf_label));
+            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", inf_label));
+            emitter.instruction("ldr d1, [x9]");
+            emitter.instruction("fcmp d0, d1");
+            emitter.instruction("cset x0, mi"); // MI = N flag set = ordered less-than
+            Some(PhpType::Bool)
+        }
         _ => None,
     }
 }

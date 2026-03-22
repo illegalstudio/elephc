@@ -139,6 +139,14 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
             *pos += 1;
             Ok(Expr::new(ExprKind::Null, span))
         }
+        Token::Inf => {
+            *pos += 1;
+            Ok(Expr::new(ExprKind::FloatLiteral(f64::INFINITY), span))
+        }
+        Token::Nan => {
+            *pos += 1;
+            Ok(Expr::new(ExprKind::FloatLiteral(f64::NAN), span))
+        }
         Token::PlusPlus => {
             *pos += 1;
             if *pos < tokens.len() {

@@ -256,3 +256,20 @@ fn test_error_include_missing_path() {
 fn test_error_include_non_string_path() {
     expect_error("<?php include 42;", "Expected string path");
 }
+
+// --- INF/NAN function errors ---
+
+#[test]
+fn test_error_is_nan_wrong_args() {
+    expect_error("<?php is_nan();", "is_nan() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_is_finite_wrong_args() {
+    expect_error("<?php is_finite();", "is_finite() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_is_infinite_wrong_args() {
+    expect_error("<?php is_infinite();", "is_infinite() takes exactly 1 argument");
+}
