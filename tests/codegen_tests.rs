@@ -1,61 +1,100 @@
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 static TEST_ID: AtomicU64 = AtomicU64::new(0);
+static SDK_PATH: OnceLock<String> = OnceLock::new();
+
+fn get_sdk_path() -> &'static str {
+    SDK_PATH.get_or_init(|| {
+        Command::new("xcrun")
+            .args(["--show-sdk-path"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default()
+    })
+}
+
+/// Compile ASM string to binary via as + ld, then run it and return stdout.
+fn assemble_and_run(asm: &str, dir: &Path) -> String {
+    let asm_path = dir.join("test.s");
+    let obj_path = dir.join("test.o");
+    let bin_path = dir.join("test");
+
+    fs::write(&asm_path, asm).unwrap();
+
+    let as_status = Command::new("as")
+        .args(["-arch", "arm64", "-o"])
+        .arg(&obj_path)
+        .arg(&asm_path)
+        .status()
+        .expect("failed to run assembler");
+    assert!(as_status.success(), "assembler failed");
+
+    let ld_status = Command::new("ld")
+        .args(["-arch", "arm64", "-e", "_main", "-o"])
+        .arg(&bin_path)
+        .arg(&obj_path)
+        .args(["-lSystem", "-syslibroot"])
+        .arg(get_sdk_path())
+        .status()
+        .expect("failed to run linker");
+    assert!(ld_status.success(), "linker failed");
+
+    let output = Command::new(&bin_path)
+        .output()
+        .expect("failed to run compiled binary");
+    assert!(output.status.success(), "binary exited with error");
+
+    String::from_utf8(output.stdout).unwrap()
+}
 
 /// Compile a PHP source string to a native binary, run it, and return stdout.
-/// Also verifies the output matches PHP interpreter if available.
+/// Uses the elephc library directly (no subprocess) for tokenize → parse → check → codegen.
+/// Only spawns as + ld + binary execution.
 fn compile_and_run(source: &str) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let dir = std::env::temp_dir().join(format!("elephc_test_{:?}_{}", tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let php_path = dir.join("test.php");
-    let bin_path = dir.join("test");
+    // Compile in-process using library
+    let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
+    let ast = elephc::parser::parse(&tokens).expect("parse failed");
+    let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
+    let check_result = elephc::types::check(&resolved).expect("type check failed");
+    let asm = elephc::codegen::generate(
+        &resolved,
+        &check_result.global_env,
+        &check_result.functions,
+    );
 
-    fs::write(&php_path, source).unwrap();
+    let elephc_out = assemble_and_run(&asm, &dir);
 
-    // Run elephc
-    let status = Command::new(env!("CARGO_BIN_EXE_elephc"))
-        .arg(&php_path)
-        .status()
-        .expect("failed to run elephc");
-    assert!(status.success(), "elephc failed to compile");
-
-    // Run the compiled binary
-    let output = Command::new(&bin_path)
-        .output()
-        .expect("failed to run compiled binary");
-    assert!(output.status.success(), "binary exited with error");
-
-    let elephc_out = String::from_utf8(output.stdout).unwrap();
-
-    // Cross-check with PHP interpreter if available.
-    // Differences are reported but don't fail the test — known semantic
-    // gaps (e.g., echo false prints "0" in elephc but "" in PHP) are
-    // tracked and will be resolved when a proper Bool type is added.
-    if let Ok(php_output) = Command::new("php").arg(&php_path).output() {
-        if php_output.status.success() {
-            let php_out = String::from_utf8_lossy(&php_output.stdout);
-            if elephc_out != php_out.as_ref() {
-                eprintln!(
-                    "PHP compat note: output differs for test.\n  elephc: {:?}\n  php:    {:?}",
-                    elephc_out, php_out
-                );
+    // PHP cross-check (opt-in via ELEPHC_PHP_CHECK=1)
+    if std::env::var("ELEPHC_PHP_CHECK").is_ok() {
+        let php_path = dir.join("test.php");
+        fs::write(&php_path, source).unwrap();
+        if let Ok(php_output) = Command::new("php").arg(&php_path).output() {
+            if php_output.status.success() {
+                let php_out = String::from_utf8_lossy(&php_output.stdout);
+                if elephc_out != php_out.as_ref() {
+                    eprintln!(
+                        "PHP compat note: output differs for test.\n  elephc: {:?}\n  php:    {:?}",
+                        elephc_out, php_out
+                    );
+                }
             }
         }
     }
 
-    // Cleanup
     let _ = fs::remove_dir_all(&dir);
-
     elephc_out
 }
 
-/// Compile a PHP project with multiple files. `files` maps relative paths to contents.
-/// The `main_file` is the entry point to compile.
+/// Compile a PHP project with multiple files using the library directly.
 fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
@@ -71,23 +110,21 @@ fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> String {
     }
 
     let php_path = dir.join(main_file);
-    let bin_path = php_path.with_extension("");
+    let source = fs::read_to_string(&php_path).unwrap();
+    let base_dir = php_path.parent().unwrap();
 
-    let status = Command::new(env!("CARGO_BIN_EXE_elephc"))
-        .arg(&php_path)
-        .status()
-        .expect("failed to run elephc");
-    assert!(status.success(), "elephc failed to compile");
+    let tokens = elephc::lexer::tokenize(&source).expect("tokenize failed");
+    let ast = elephc::parser::parse(&tokens).expect("parse failed");
+    let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
+    let check_result = elephc::types::check(&resolved).expect("type check failed");
+    let asm = elephc::codegen::generate(
+        &resolved,
+        &check_result.global_env,
+        &check_result.functions,
+    );
 
-    let output = Command::new(&bin_path)
-        .output()
-        .expect("failed to run compiled binary");
-    assert!(output.status.success(), "binary exited with error");
-
-    let elephc_out = String::from_utf8(output.stdout).unwrap();
-
+    let elephc_out = assemble_and_run(&asm, &dir);
     let _ = fs::remove_dir_all(&dir);
-
     elephc_out
 }
 
@@ -107,13 +144,19 @@ fn compile_files_fails(files: &[(&str, &str)], main_file: &str) -> bool {
     }
 
     let php_path = dir.join(main_file);
-    let status = Command::new(env!("CARGO_BIN_EXE_elephc"))
-        .arg(&php_path)
-        .output()
-        .expect("failed to run elephc");
+    let source = fs::read_to_string(&php_path).unwrap();
+    let base_dir = php_path.parent().unwrap();
+
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        let tokens = elephc::lexer::tokenize(&source)?;
+        let ast = elephc::parser::parse(&tokens)?;
+        let resolved = elephc::resolver::resolve(ast, base_dir)?;
+        elephc::types::check(&resolved)?;
+        Ok(())
+    })();
 
     let _ = fs::remove_dir_all(&dir);
-    !status.status.success()
+    result.is_err()
 }
 
 // --- Phase 1: Echo strings ---
