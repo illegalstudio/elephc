@@ -21,10 +21,18 @@ The compiler outputs a native binary next to the source file (e.g., `file.php` �
 ### Running tests
 
 ```bash
-cargo test               # run all tests
+cargo test               # run all tests (slow — ~65s due to as+ld per test)
 cargo test --test codegen_tests  # run only end-to-end tests
 cargo test test_fizzbuzz  # run a specific test
 ```
+
+### Test strategy during development
+
+The full test suite is slow because each codegen test spawns `as` + `ld` + runs the binary. To avoid waiting 60+ seconds on every change:
+
+1. **While developing a feature**: run only the tests for that feature (`cargo test test_my_feature`)
+2. **When the feature is complete**: run the full suite once (`cargo test`) to check for regressions
+3. **PHP cross-check**: opt-in via `ELEPHC_PHP_CHECK=1 cargo test` — verifies output matches PHP interpreter
 
 ### Test structure
 
