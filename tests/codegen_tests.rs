@@ -556,6 +556,86 @@ fn test_function_no_args() {
     assert_eq!(out, "42");
 }
 
+// --- Nested control flow ---
+
+#[test]
+fn test_nested_if() {
+    let out = compile_and_run(
+        "<?php $x = 5; if ($x > 0) { if ($x > 3) { echo \"big\"; } else { echo \"small\"; } }",
+    );
+    assert_eq!(out, "big");
+}
+
+#[test]
+fn test_nested_loops() {
+    let out = compile_and_run(
+        "<?php for ($i = 0; $i < 3; $i++) { for ($j = 0; $j < 2; $j++) { echo $i . $j . \" \"; } }",
+    );
+    assert_eq!(out, "00 01 10 11 20 21 ");
+}
+
+#[test]
+fn test_for_continue() {
+    let out = compile_and_run(
+        "<?php for ($i = 0; $i < 5; $i++) { if ($i == 2) { continue; } echo $i; }",
+    );
+    assert_eq!(out, "0134");
+}
+
+#[test]
+fn test_while_with_function() {
+    let out = compile_and_run(r#"<?php
+function sum_to($n) {
+    $s = 0;
+    $i = 1;
+    while ($i <= $n) {
+        $s = $s + $i;
+        $i++;
+    }
+    return $s;
+}
+echo sum_to(10);
+"#);
+    assert_eq!(out, "55");
+}
+
+#[test]
+fn test_function_with_if_return() {
+    let out = compile_and_run(r#"<?php
+function abs_val($x) {
+    if ($x < 0) {
+        return -$x;
+    }
+    return $x;
+}
+echo abs_val(-5) . " " . abs_val(3);
+"#);
+    assert_eq!(out, "5 3");
+}
+
+#[test]
+fn test_function_calling_function() {
+    let out = compile_and_run(r#"<?php
+function square($x) { return $x * $x; }
+function sum_of_squares($a, $b) { return square($a) + square($b); }
+echo sum_of_squares(3, 4);
+"#);
+    assert_eq!(out, "25");
+}
+
+#[test]
+fn test_multiple_elseif() {
+    let out = compile_and_run(r#"<?php
+$x = 4;
+if ($x == 1) { echo "one"; }
+elseif ($x == 2) { echo "two"; }
+elseif ($x == 3) { echo "three"; }
+elseif ($x == 4) { echo "four"; }
+else { echo "other"; }
+"#);
+    assert_eq!(out, "four");
+}
+
 // --- Edge cases ---
 
 #[test]
@@ -570,4 +650,16 @@ fn test_comments_ignored() {
 fn test_no_output_program() {
     let out = compile_and_run("<?php $x = 1;");
     assert_eq!(out, "");
+}
+
+#[test]
+fn test_empty_string_concat() {
+    let out = compile_and_run("<?php echo \"\" . \"hello\" . \"\";");
+    assert_eq!(out, "hello");
+}
+
+#[test]
+fn test_deeply_nested_arithmetic() {
+    let out = compile_and_run("<?php echo ((((1 + 2) * 3) - 4) / 5);");
+    assert_eq!(out, "1");
 }

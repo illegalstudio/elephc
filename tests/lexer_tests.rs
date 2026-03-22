@@ -9,6 +9,8 @@ fn tokens(source: &str) -> Vec<Token> {
         .collect()
 }
 
+// --- Basic tokens ---
+
 #[test]
 fn test_open_tag() {
     let t = tokens("<?php");
@@ -48,21 +50,124 @@ fn test_variable() {
     assert_eq!(t[1], Token::Variable("foo".into()));
 }
 
+// --- Operators ---
+
 #[test]
-fn test_operators() {
-    let t = tokens("<?php + - * / . =");
+fn test_arithmetic_operators() {
+    let t = tokens("<?php + - * / %");
+    assert_eq!(
+        t[1..6],
+        [Token::Plus, Token::Minus, Token::Star, Token::Slash, Token::Percent]
+    );
+}
+
+#[test]
+fn test_assignment_and_dot() {
+    let t = tokens("<?php . =");
+    assert_eq!(t[1..3], [Token::Dot, Token::Assign]);
+}
+
+#[test]
+fn test_comparison_operators() {
+    let t = tokens("<?php == != < > <= >=");
     assert_eq!(
         t[1..7],
         [
-            Token::Plus,
-            Token::Minus,
-            Token::Star,
-            Token::Slash,
-            Token::Dot,
-            Token::Assign,
+            Token::EqualEqual,
+            Token::NotEqual,
+            Token::Less,
+            Token::Greater,
+            Token::LessEqual,
+            Token::GreaterEqual,
         ]
     );
 }
+
+#[test]
+fn test_increment_decrement() {
+    let t = tokens("<?php ++ --");
+    assert_eq!(t[1..3], [Token::PlusPlus, Token::MinusMinus]);
+}
+
+#[test]
+fn test_braces() {
+    let t = tokens("<?php { }");
+    assert_eq!(t[1..3], [Token::LBrace, Token::RBrace]);
+}
+
+#[test]
+fn test_parens() {
+    let t = tokens("<?php ( )");
+    assert_eq!(t[1..3], [Token::LParen, Token::RParen]);
+}
+
+#[test]
+fn test_comma() {
+    let t = tokens("<?php ,");
+    assert_eq!(t[1], Token::Comma);
+}
+
+// --- Keywords ---
+
+#[test]
+fn test_keyword_echo() {
+    assert_eq!(tokens("<?php echo")[1], Token::Echo);
+}
+
+#[test]
+fn test_keyword_if() {
+    assert_eq!(tokens("<?php if")[1], Token::If);
+}
+
+#[test]
+fn test_keyword_else() {
+    assert_eq!(tokens("<?php else")[1], Token::Else);
+}
+
+#[test]
+fn test_keyword_elseif() {
+    assert_eq!(tokens("<?php elseif")[1], Token::ElseIf);
+}
+
+#[test]
+fn test_keyword_while() {
+    assert_eq!(tokens("<?php while")[1], Token::While);
+}
+
+#[test]
+fn test_keyword_for() {
+    assert_eq!(tokens("<?php for")[1], Token::For);
+}
+
+#[test]
+fn test_keyword_break() {
+    assert_eq!(tokens("<?php break")[1], Token::Break);
+}
+
+#[test]
+fn test_keyword_continue() {
+    assert_eq!(tokens("<?php continue")[1], Token::Continue);
+}
+
+#[test]
+fn test_keyword_function() {
+    assert_eq!(tokens("<?php function")[1], Token::Function);
+}
+
+#[test]
+fn test_keyword_return() {
+    assert_eq!(tokens("<?php return")[1], Token::Return);
+}
+
+#[test]
+fn test_identifier() {
+    assert_eq!(
+        tokens("<?php foo")[1],
+        Token::Identifier("foo".into())
+    );
+}
+
+// --- Comments ---
 
 #[test]
 fn test_line_comment() {
@@ -77,14 +182,12 @@ fn test_block_comment() {
 }
 
 #[test]
-fn test_missing_open_tag() {
-    assert!(tokenize("echo \"hi\";").is_err());
+fn test_consecutive_comments() {
+    let t = tokens("<?php /* a *//* b */// c\necho \"ok\";");
+    assert_eq!(t[1], Token::Echo);
 }
 
-#[test]
-fn test_unterminated_string() {
-    assert!(tokenize("<?php \"no closing").is_err());
-}
+// --- Complex tokens ---
 
 #[test]
 fn test_assignment_statement() {
@@ -103,16 +206,52 @@ fn test_assignment_statement() {
 }
 
 #[test]
-fn test_consecutive_comments() {
-    let t = tokens("<?php /* a *//* b */// c\necho \"ok\";");
-    assert_eq!(t[1], Token::Echo);
+fn test_equals_vs_assign() {
+    // = followed by = should be ==, not two Assigns
+    let t = tokens("<?php == =");
+    assert_eq!(t[1], Token::EqualEqual);
+    assert_eq!(t[2], Token::Assign);
 }
+
+#[test]
+fn test_function_declaration_tokens() {
+    let t = tokens("<?php function add($a, $b) { return $a; }");
+    assert_eq!(t[1], Token::Function);
+    assert_eq!(t[2], Token::Identifier("add".into()));
+    assert_eq!(t[3], Token::LParen);
+    assert_eq!(t[4], Token::Variable("a".into()));
+    assert_eq!(t[5], Token::Comma);
+    assert_eq!(t[6], Token::Variable("b".into()));
+    assert_eq!(t[7], Token::RParen);
+    assert_eq!(t[8], Token::LBrace);
+    assert_eq!(t[9], Token::Return);
+}
+
+// --- Error cases ---
+
+#[test]
+fn test_missing_open_tag() {
+    assert!(tokenize("echo \"hi\";").is_err());
+}
+
+#[test]
+fn test_unterminated_string() {
+    assert!(tokenize("<?php \"no closing").is_err());
+}
+
+// --- Spans ---
 
 #[test]
 fn test_span_tracking() {
     let spanned = tokenize("<?php\necho \"hi\";").unwrap();
-    // "echo" starts on line 2, col 1
     let echo_span = spanned[1].1;
     assert_eq!(echo_span.line, 2);
     assert_eq!(echo_span.col, 1);
+}
+
+#[test]
+fn test_span_multiline() {
+    let spanned = tokenize("<?php\n\n\n$x").unwrap();
+    let var_span = spanned[1].1;
+    assert_eq!(var_span.line, 4);
 }

@@ -1,9 +1,1 @@
 target/
-
-# Generated files in test integration
-tests/integration/*.s
-tests/integration/*.o
-tests/integration/hello
-tests/integration/variables
-tests/integration/arithmetic
-tests/integration/concat

@@ -50,6 +50,11 @@ fn test_error_unexpected_character() {
     expect_error("<?php @", "Unexpected character");
 }
 
+#[test]
+fn test_error_bang_without_equals() {
+    expect_error("<?php !;", "Expected '=' after '!'");
+}
+
 // --- Parser errors ---
 
 #[test]
@@ -75,6 +80,26 @@ fn test_error_unexpected_token_in_expr() {
 #[test]
 fn test_error_unexpected_token_in_stmt() {
     expect_error("<?php 42;", "Unexpected token");
+}
+
+#[test]
+fn test_error_missing_function_name() {
+    expect_error("<?php function () { }", "Expected function name");
+}
+
+#[test]
+fn test_error_missing_function_paren() {
+    expect_error("<?php function foo { }", "Expected '(' after function name");
+}
+
+#[test]
+fn test_error_missing_if_paren() {
+    expect_error("<?php if 1 { }", "Expected '(' after 'if'");
+}
+
+#[test]
+fn test_error_missing_while_paren() {
+    expect_error("<?php while 1 { }", "Expected '(' after 'while'");
 }
 
 // --- Type errors ---
@@ -105,6 +130,35 @@ fn test_error_negate_string() {
     expect_error(
         "<?php $x = \"hi\"; echo -$x;",
         "Cannot negate a non-integer",
+    );
+}
+
+#[test]
+fn test_error_comparison_on_string() {
+    expect_error(
+        "<?php $x = \"a\"; echo $x < 1;",
+        "Comparison operators require integer operands",
+    );
+}
+
+#[test]
+fn test_error_undefined_function() {
+    expect_error("<?php nope();", "Undefined function: nope");
+}
+
+#[test]
+fn test_error_wrong_arg_count() {
+    expect_error(
+        "<?php function f($a) { return $a; } f(1, 2);",
+        "expects 1 arguments, got 2",
+    );
+}
+
+#[test]
+fn test_error_increment_string() {
+    expect_error(
+        "<?php $x = \"hi\"; $x++;",
+        "Cannot increment/decrement",
     );
 }
 
