@@ -68,15 +68,19 @@ Proper type system for PHP compatibility.
 Make string handling practical.
 
 - [ ] String interpolation: `"Hello $name"`, `"val={$expr}"`
-- [ ] `substr()`, `strpos()`, `strrpos()`, `strstr()`
-- [ ] `str_replace()`, `str_ireplace()`, `substr_replace()`
-- [ ] `strtolower()`, `strtoupper()`, `ucfirst()`, `lcfirst()`, `ucwords()`
-- [ ] `trim()`, `ltrim()`, `rtrim()`
-- [ ] `str_pad()`, `str_repeat()`, `strrev()`
-- [ ] `explode()`, `implode()`, `str_split()`
+- [x] `substr()`, `strpos()`, `strrpos()`, `strstr()`
+- [x] `str_replace()`
+- [ ] `str_ireplace()`, `substr_replace()`
+- [x] `strtolower()`, `strtoupper()`, `ucfirst()`, `lcfirst()`
+- [ ] `ucwords()`
+- [x] `trim()`, `ltrim()`, `rtrim()`
+- [x] `str_repeat()`, `strrev()`
+- [ ] `str_pad()`
+- [x] `explode()`, `implode()`
+- [ ] `str_split()`
 - [ ] `sprintf()`, `printf()`, `sscanf()`
-- [ ] `strcmp()`, `strcasecmp()`, `str_contains()`, `str_starts_with()`, `str_ends_with()`
-- [ ] `ord()`, `chr()`
+- [x] `strcmp()`, `strcasecmp()`, `str_contains()`, `str_starts_with()`, `str_ends_with()`
+- [x] `ord()`, `chr()`
 - [ ] `nl2br()`, `wordwrap()`
 - [ ] `addslashes()`, `stripslashes()`
 - [ ] `htmlspecialchars()`, `htmlentities()`, `html_entity_decode()`

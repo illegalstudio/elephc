@@ -2405,3 +2405,209 @@ fn test_php_float_max() {
     let out = compile_and_run("<?php echo is_float(PHP_FLOAT_MAX);");
     assert_eq!(out, "1");
 }
+
+// --- String functions (v0.4) ---
+
+#[test]
+fn test_substr_basic() {
+    let out = compile_and_run(r#"<?php echo substr("Hello World", 6);"#);
+    assert_eq!(out, "World");
+}
+
+#[test]
+fn test_substr_with_length() {
+    let out = compile_and_run(r#"<?php echo substr("Hello World", 0, 5);"#);
+    assert_eq!(out, "Hello");
+}
+
+#[test]
+fn test_substr_negative_offset() {
+    let out = compile_and_run(r#"<?php echo substr("Hello World", -5);"#);
+    assert_eq!(out, "World");
+}
+
+#[test]
+fn test_strpos_found() {
+    let out = compile_and_run(r#"<?php echo strpos("Hello World", "World");"#);
+    assert_eq!(out, "6");
+}
+
+#[test]
+fn test_strpos_not_found() {
+    let out = compile_and_run(r#"<?php echo strpos("Hello", "xyz");"#);
+    assert_eq!(out, "-1");
+}
+
+#[test]
+fn test_strrpos() {
+    let out = compile_and_run(r#"<?php echo strrpos("abcabc", "bc");"#);
+    assert_eq!(out, "4");
+}
+
+#[test]
+fn test_strstr_found() {
+    let out = compile_and_run(r#"<?php echo strstr("user@example.com", "@");"#);
+    assert_eq!(out, "@example.com");
+}
+
+#[test]
+fn test_strtolower() {
+    let out = compile_and_run(r#"<?php echo strtolower("Hello WORLD");"#);
+    assert_eq!(out, "hello world");
+}
+
+#[test]
+fn test_strtoupper() {
+    let out = compile_and_run(r#"<?php echo strtoupper("Hello World");"#);
+    assert_eq!(out, "HELLO WORLD");
+}
+
+#[test]
+fn test_ucfirst() {
+    let out = compile_and_run(r#"<?php echo ucfirst("hello");"#);
+    assert_eq!(out, "Hello");
+}
+
+#[test]
+fn test_lcfirst() {
+    let out = compile_and_run(r#"<?php echo lcfirst("Hello");"#);
+    assert_eq!(out, "hello");
+}
+
+#[test]
+fn test_trim() {
+    let out = compile_and_run("<?php echo trim(\"  hello  \");");
+    assert_eq!(out, "hello");
+}
+
+#[test]
+fn test_ltrim() {
+    let out = compile_and_run("<?php echo ltrim(\"  hello\");");
+    assert_eq!(out, "hello");
+}
+
+#[test]
+fn test_rtrim() {
+    let out = compile_and_run("<?php echo rtrim(\"hello  \");");
+    assert_eq!(out, "hello");
+}
+
+#[test]
+fn test_str_repeat() {
+    let out = compile_and_run(r#"<?php echo str_repeat("ab", 3);"#);
+    assert_eq!(out, "ababab");
+}
+
+#[test]
+fn test_strrev() {
+    let out = compile_and_run(r#"<?php echo strrev("Hello");"#);
+    assert_eq!(out, "olleH");
+}
+
+#[test]
+fn test_ord() {
+    let out = compile_and_run(r#"<?php echo ord("A");"#);
+    assert_eq!(out, "65");
+}
+
+#[test]
+fn test_chr() {
+    let out = compile_and_run("<?php echo chr(65);");
+    assert_eq!(out, "A");
+}
+
+#[test]
+fn test_strcmp_equal() {
+    let out = compile_and_run(r#"<?php echo strcmp("abc", "abc");"#);
+    assert_eq!(out, "0");
+}
+
+#[test]
+fn test_strcmp_less() {
+    let out = compile_and_run(r#"<?php echo (strcmp("abc", "abd") < 0 ? "yes" : "no");"#);
+    assert_eq!(out, "yes");
+}
+
+#[test]
+fn test_strcasecmp() {
+    let out = compile_and_run(r#"<?php echo strcasecmp("Hello", "hello");"#);
+    assert_eq!(out, "0");
+}
+
+#[test]
+fn test_str_contains_true() {
+    let out = compile_and_run(r#"<?php echo str_contains("Hello World", "World");"#);
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_str_contains_false() {
+    let out = compile_and_run(r#"<?php echo str_contains("Hello", "xyz");"#);
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_str_starts_with_true() {
+    let out = compile_and_run(r#"<?php echo str_starts_with("Hello World", "Hello");"#);
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_str_starts_with_false() {
+    let out = compile_and_run(r#"<?php echo str_starts_with("Hello", "World");"#);
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_str_ends_with_true() {
+    let out = compile_and_run(r#"<?php echo str_ends_with("Hello World", "World");"#);
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_str_ends_with_false() {
+    let out = compile_and_run(r#"<?php echo str_ends_with("Hello", "xyz");"#);
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_str_replace() {
+    let out = compile_and_run(r#"<?php echo str_replace("World", "PHP", "Hello World");"#);
+    assert_eq!(out, "Hello PHP");
+}
+
+#[test]
+fn test_str_replace_multiple() {
+    let out = compile_and_run(r#"<?php echo str_replace("o", "0", "Hello World");"#);
+    assert_eq!(out, "Hell0 W0rld");
+}
+
+#[test]
+fn test_explode() {
+    let out = compile_and_run(r#"<?php
+$parts = explode(",", "a,b,c");
+echo count($parts);
+echo " ";
+echo $parts[0] . " " . $parts[1] . " " . $parts[2];
+"#);
+    assert_eq!(out, "3 a b c");
+}
+
+#[test]
+fn test_implode() {
+    let out = compile_and_run(r#"<?php
+$arr = ["Hello", "World"];
+echo implode(" ", $arr);
+"#);
+    assert_eq!(out, "Hello World");
+}
+
+#[test]
+fn test_explode_implode_roundtrip() {
+    let out = compile_and_run(r#"<?php
+$str = "one-two-three";
+$parts = explode("-", $str);
+echo implode(", ", $parts);
+"#);
+    assert_eq!(out, "one, two, three");
+}

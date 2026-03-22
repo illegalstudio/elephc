@@ -334,6 +334,29 @@ foreach ($names as $name) {
 | Function | Signature | Description |
 |---|---|---|
 | `strlen()` | `strlen($str): int` | Returns string length |
+| `substr()` | `substr($str, $start [, $len]): string` | Extract substring |
+| `strpos()` | `strpos($hay, $needle): int` | Find first occurrence (-1 if not found) |
+| `strrpos()` | `strrpos($hay, $needle): int` | Find last occurrence (-1 if not found) |
+| `strstr()` | `strstr($hay, $needle): string` | Find first occurrence and return rest |
+| `str_replace()` | `str_replace($search, $replace, $subject): string` | Replace all occurrences |
+| `strtolower()` | `strtolower($str): string` | Convert to lowercase |
+| `strtoupper()` | `strtoupper($str): string` | Convert to uppercase |
+| `ucfirst()` | `ucfirst($str): string` | Uppercase first character |
+| `lcfirst()` | `lcfirst($str): string` | Lowercase first character |
+| `trim()` | `trim($str): string` | Strip whitespace from both ends |
+| `ltrim()` | `ltrim($str): string` | Strip whitespace from left |
+| `rtrim()` | `rtrim($str): string` | Strip whitespace from right |
+| `str_repeat()` | `str_repeat($str, $times): string` | Repeat a string |
+| `strrev()` | `strrev($str): string` | Reverse a string |
+| `strcmp()` | `strcmp($a, $b): int` | Binary-safe string comparison |
+| `strcasecmp()` | `strcasecmp($a, $b): int` | Case-insensitive comparison |
+| `str_contains()` | `str_contains($hay, $needle): bool` | Check if string contains substring |
+| `str_starts_with()` | `str_starts_with($hay, $prefix): bool` | Check prefix |
+| `str_ends_with()` | `str_ends_with($hay, $suffix): bool` | Check suffix |
+| `ord()` | `ord($char): int` | ASCII value of first character |
+| `chr()` | `chr($code): string` | Character from ASCII code |
+| `explode()` | `explode($delim, $str): array` | Split string into array |
+| `implode()` | `implode($glue, $arr): string` | Join array into string |
 | `intval()` | `intval($val): int` | Converts to integer |
 
 ### Array functions

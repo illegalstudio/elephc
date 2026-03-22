@@ -42,6 +42,83 @@ impl Checker {
                 self.infer_type(&args[0], env)?;
                 Ok(Some(PhpType::Int))
             }
+            "substr" => {
+                if args.len() < 2 || args.len() > 3 {
+                    return Err(CompileError::new(span, "substr() takes 2 or 3 arguments"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                Ok(Some(PhpType::Str))
+            }
+            "strpos" | "strrpos" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, &format!("{}() takes exactly 2 arguments", name)));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                // Returns Int (position) or Bool (false if not found)
+                // We return Int for simplicity — false maps to -1 or similar
+                Ok(Some(PhpType::Int))
+            }
+            "strstr" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "strstr() takes exactly 2 arguments"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                Ok(Some(PhpType::Str))
+            }
+            "strtolower" | "strtoupper" | "ucfirst" | "lcfirst" | "trim" | "ltrim"
+            | "rtrim" | "strrev" | "str_repeat" | "str_replace" | "chr" => {
+                let expected = match name {
+                    "str_repeat" => 2,
+                    "str_replace" => 3,
+                    _ => 1,
+                };
+                if name == "chr" {
+                    if args.len() != 1 {
+                        return Err(CompileError::new(span, "chr() takes exactly 1 argument"));
+                    }
+                } else if args.len() != expected {
+                    return Err(CompileError::new(
+                        span, &format!("{}() takes exactly {} argument{}", name, expected, if expected > 1 { "s" } else { "" }),
+                    ));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                Ok(Some(PhpType::Str))
+            }
+            "ord" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "ord() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Int))
+            }
+            "strcmp" | "strcasecmp" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, &format!("{}() takes exactly 2 arguments", name)));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                Ok(Some(PhpType::Int))
+            }
+            "str_contains" | "str_starts_with" | "str_ends_with" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, &format!("{}() takes exactly 2 arguments", name)));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                Ok(Some(PhpType::Bool))
+            }
+            "explode" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "explode() takes exactly 2 arguments"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
+            }
+            "implode" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "implode() takes exactly 2 arguments"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                Ok(Some(PhpType::Str))
+            }
             "is_bool" => {
                 if args.len() != 1 {
                     return Err(CompileError::new(span, "is_bool() takes exactly 1 argument"));
