@@ -1,172 +1,203 @@
 # Roadmap
 
-## v0.1.0 — Usable CLI compiler
-
-The compiler should be able to produce real CLI tools that accept arguments and do basic I/O.
+## v0.1.0 — Usable CLI compiler (done)
 
 - [x] Lexer, parser (Pratt), type checker, ARM64 codegen pipeline
-- [x] Integers, strings, echo, variables, comments
+- [x] Integers, strings (double and single quoted), echo, variables, comments
 - [x] Arithmetic (`+`, `-`, `*`, `/`, `%`), comparison (`==`, `!=`, `<`, `>`, `<=`, `>=`)
 - [x] String concatenation (`.`) with automatic int coercion
-- [x] `if` / `elseif` / `else`, `while`, `for`, `break`, `continue`
+- [x] `if` / `elseif` / `else`, `while`, `for`, `do...while`, `break`, `continue`
 - [x] Functions with local scope, return, recursion, nested calls
 - [x] Pre/post increment/decrement (`++$i`, `$i++`, `--$i`, `$i--`)
-- [x] Error messages with line/column numbers
 - [x] Logical operators: `&&`, `||`, `!` (with short-circuit evaluation)
 - [x] Assignment operators: `+=`, `-=`, `*=`, `/=`, `.=`, `%=`
 - [x] Boolean literals: `true`, `false` (as integer 1/0)
-- [x] `null` keyword (basic, treated as 0)
 - [x] Ternary operator: `$x = $a > $b ? $a : $b;`
-- [x] `do { } while ();` loop
-- [x] `$argc` / `$argv` globals (read command-line arguments)
+- [x] `$argc` / `$argv` superglobals
 - [x] `exit($code);` / `die();`
-- [x] Single-quoted strings (`'no $interpolation'`)
-- [x] Built-in `strlen()` and `intval()`
+- [x] Built-in `strlen()`, `intval()`
+- [x] Error messages with line/column numbers
 
-## v0.2.0 — Arrays and null
-
-Core data structure support and proper null semantics.
+## v0.2.0 — Arrays and null (done)
 
 - [x] Indexed arrays: `$arr = [1, 2, 3];`
-- [x] Array access: `$arr[0]`, `$arr[$i]`
-- [x] Array assignment: `$arr[0] = 42;`, `$arr[] = "new";`
+- [x] Array access, assignment, push: `$arr[0]`, `$arr[0] = 42`, `$arr[] = "new"`
 - [x] `count()`, `array_push()`, `array_pop()`
 - [x] `foreach ($arr as $value) { }` loop
-- [x] Heap allocator for dynamic-size arrays (1MB bump allocator)
-- [x] String arrays: `["Alice", "Bob"]`
-- [x] `in_array()`, `array_keys()`, `array_values()`
-- [x] `sort()`, `rsort()` (insertion sort)
-- [x] `isset()`
-- [x] Proper `null` type: `echo null` prints nothing, `is_null()` returns true, null coerces to 0/empty string in operations, variables can be reassigned from null to any type
+- [x] `in_array()`, `array_keys()`, `array_values()`, `sort()`, `rsort()`, `isset()`
+- [x] Heap allocator (1MB bump allocator)
+- [x] Proper null: `echo null` prints nothing, `is_null()`, null coercion in operations
 
-## v0.3.0 — Bool and float types
+## v0.3.0 — Bool, float, and type system
 
-Proper type system for PHP compatibility. Without these, basic PHP programs produce wrong output.
+Proper type system for PHP compatibility.
 
-- [ ] **Bool type**: `true`/`false` as distinct type, `echo false` prints nothing (like PHP), `echo true` prints `1`
+### Bool type
+- [ ] `true`/`false` as distinct Bool type
+- [ ] `echo false` prints nothing, `echo true` prints `1` (like PHP)
+- [ ] Bool coercion: `false` → `0`/`""` in arithmetic/concat, `true` → `1`/`"1"`
 - [ ] `is_bool()`, `boolval()`
-- [ ] **Float type**: `3.14`, `1.0e-5`, `-0.5`
+- [ ] `===` and `!==` strict comparison (type-aware)
+
+### Float type
+- [ ] Float literals: `3.14`, `1.0e-5`, `-0.5`
 - [ ] Division returns float: `10 / 3` → `3.3333...`
 - [ ] `intdiv()` for integer division
 - [ ] Mixed int/float arithmetic (auto-promotion to float)
 - [ ] Float comparison and formatting
-- [ ] `floatval()`, `is_float()`, `is_int()`, `is_string()`
+- [ ] `floatval()`, `is_float()`, `is_int()`, `is_string()`, `is_numeric()`
+- [ ] `INF`, `NAN`, `is_nan()`, `is_finite()`, `is_infinite()`
+
+### Type operations
+- [ ] Type casting: `(int)`, `(string)`, `(float)`, `(bool)`, `(array)`
+- [ ] `gettype()`, `settype()`
+- [ ] `empty()` — check if variable is empty/falsy
+- [ ] `unset()` — destroy variable
+
+### Math functions
 - [ ] `abs()`, `min()`, `max()`, `floor()`, `ceil()`, `round()`
-- [ ] `sqrt()`, `pow()`
-- [ ] `rand()` / `mt_rand()`
+- [ ] `sqrt()`, `pow()`, `**` exponentiation operator
+- [ ] `fmod()`, `fdiv()`
+- [ ] `rand()`, `mt_rand()`, `random_int()`
 - [ ] `number_format()`
-- [ ] Type casting: `(int)`, `(string)`, `(float)`, `(bool)`
+- [ ] Constants: `PHP_INT_MAX`, `PHP_INT_MIN`, `PHP_FLOAT_MAX`, `M_PI`
 
-## v0.4.0 — Strings and I/O
+## v0.4.0 — Strings
 
-Make string handling practical and add file I/O.
+Make string handling practical.
 
 - [ ] String interpolation: `"Hello $name"`, `"val={$expr}"`
-- [ ] `substr()`, `strpos()`, `str_replace()`
-- [ ] `strtolower()`, `strtoupper()`, `trim()`
-- [ ] `explode()`, `implode()`
-- [ ] `sprintf()`, `printf()`
-- [ ] `fgets(STDIN)` / `readline()` — read from keyboard
-- [ ] `fopen()`, `fread()`, `fwrite()`, `fclose()`
-- [ ] `file_get_contents()`, `file_put_contents()`
+- [ ] `substr()`, `strpos()`, `strrpos()`, `strstr()`
+- [ ] `str_replace()`, `str_ireplace()`, `substr_replace()`
+- [ ] `strtolower()`, `strtoupper()`, `ucfirst()`, `lcfirst()`, `ucwords()`
+- [ ] `trim()`, `ltrim()`, `rtrim()`
+- [ ] `str_pad()`, `str_repeat()`, `strrev()`
+- [ ] `explode()`, `implode()`, `str_split()`
+- [ ] `sprintf()`, `printf()`, `sscanf()`
+- [ ] `strcmp()`, `strcasecmp()`, `str_contains()`, `str_starts_with()`, `str_ends_with()`
+- [ ] `ord()`, `chr()`
+- [ ] `nl2br()`, `wordwrap()`
+- [ ] `addslashes()`, `stripslashes()`
+- [ ] `htmlspecialchars()`, `htmlentities()`, `html_entity_decode()`
+- [ ] `urlencode()`, `urldecode()`, `rawurlencode()`, `rawurldecode()`
+- [ ] `md5()`, `sha1()`, `hash()`
+- [ ] `base64_encode()`, `base64_decode()`
+- [ ] `bin2hex()`, `hex2bin()`
+- [ ] `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, `ctype_space()`
 
-## v0.5.0 — Associative arrays and switch
+## v0.5.0 — I/O and file system
+
+- [ ] `fgets(STDIN)` / `readline()` — read from keyboard
+- [ ] `STDIN`, `STDOUT`, `STDERR` constants
+- [ ] `fopen()`, `fclose()`, `fread()`, `fwrite()`, `fgets()`, `feof()`
+- [ ] `fgetcsv()`, `fputcsv()`
+- [ ] `fseek()`, `ftell()`, `rewind()`
+- [ ] `file_get_contents()`, `file_put_contents()`
+- [ ] `file()` — read file into array
+- [ ] `file_exists()`, `is_file()`, `is_dir()`, `is_readable()`, `is_writable()`
+- [ ] `filesize()`, `filemtime()`
+- [ ] `copy()`, `rename()`, `unlink()`, `mkdir()`, `rmdir()`
+- [ ] `scandir()`, `glob()`, `getcwd()`, `chdir()`
+- [ ] `tempnam()`, `sys_get_temp_dir()`
+- [ ] `print` as alias for `echo`
+- [ ] `var_dump()`, `print_r()` for debugging
+
+## v0.6.0 — Associative arrays and switch
 
 - [ ] Associative arrays: `$map = ["key" => "value"];`
 - [ ] `foreach ($map as $key => $value) { }`
 - [ ] Hash table runtime for string keys
-- [ ] `array_merge()`, `array_slice()`, `array_map()`, `array_filter()`
+- [ ] `array_key_exists()`, `array_search()`
+- [ ] `array_merge()`, `array_slice()`, `array_splice()`
+- [ ] `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`
+- [ ] `array_combine()`, `array_flip()`, `array_reverse()`, `array_unique()`
+- [ ] `array_column()`, `array_sum()`, `array_product()`
+- [ ] `array_chunk()`, `array_pad()`, `array_fill()`, `array_fill_keys()`
+- [ ] `array_diff()`, `array_intersect()`, `array_diff_key()`, `array_intersect_key()`
+- [ ] `array_unshift()`, `array_shift()`
+- [ ] `usort()`, `uksort()`, `uasort()`, `asort()`, `arsort()`, `ksort()`, `krsort()`
+- [ ] `natsort()`, `natcasesort()`, `shuffle()`, `array_rand()`
+- [ ] `range()`, `compact()`, `extract()`
 - [ ] `switch` / `case` / `default` (with fall-through)
 - [ ] `match` expression (PHP 8 style, no fall-through)
 
-## v0.6.0 — Advanced language features
+## v0.7.0 — Advanced language features
 
+- [ ] `define()` / `const` constants
 - [ ] `global $var;` keyword
 - [ ] Static variables: `static $counter = 0;`
-- [ ] Null coalescing operator: `$x ?? $default`
+- [ ] Pass by reference: `function foo(&$x) { }`
+- [ ] Default parameter values: `function foo($x = 10) { }`
+- [ ] Variadic functions: `function foo(...$args) { }`
+- [ ] Anonymous functions / closures: `$fn = function($x) use ($y) { }`
+- [ ] Arrow functions: `$fn = fn($x) => $x * 2`
+- [ ] Null coalescing: `$x ?? $default`, `$x ??= $default`
 - [ ] Spread operator: `func(...$args)`, `[...$a, ...$b]`
 - [ ] List unpacking: `[$a, $b] = $array;`
 - [ ] Heredoc / nowdoc strings
-- [ ] `var_dump()`, `print_r()` for debugging
-- [ ] `print` as alias for `echo`
+- [ ] Bitwise operators: `&`, `|`, `^`, `~`, `<<`, `>>`
+- [ ] Spaceship operator: `<=>`
+- [ ] `call_user_func()`, `call_user_func_array()`
+- [ ] `function_exists()`
 
-## v0.7.0 — Optimizations
+## v0.8.0 — Date/time, JSON, regex
 
-Make the generated code competitive with C -O0.
+- [ ] `time()`, `microtime()`
+- [ ] `date()`, `mktime()`, `strtotime()`
+- [ ] `sleep()`, `usleep()`
+- [ ] `json_encode()`, `json_decode()`, `json_last_error()`
+- [ ] `preg_match()`, `preg_match_all()`, `preg_replace()`, `preg_split()`
+- [ ] `exec()`, `shell_exec()`, `system()`, `passthru()`
+- [ ] `getenv()`, `putenv()`, `$_ENV`
+- [ ] `php_uname()`, `phpversion()`
+- [ ] Constants: `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`
 
-- [ ] Constant folding (`2 + 3` → `5` at compile time)
-- [ ] Dead code elimination (unreachable branches after `return`)
-- [ ] Register allocation (reduce stack spills for temporaries)
-- [ ] Inline small functions
-- [ ] Tail-call optimization for recursive functions
-- [ ] Peephole optimization (redundant load/store elimination)
-- [ ] Strength reduction (`$x * 2` → `$x << 1`)
-
-## v0.8.0 — Multi-platform and multi-file
+## v0.9.0 — Multi-platform, multi-file, optimizations
 
 - [ ] Linux x86_64 target
 - [ ] Linux ARM64 target
-- [ ] `include` / `require` (static, resolved at compile time)
-- [ ] `include_once` / `require_once`
+- [ ] `include` / `require` / `include_once` / `require_once`
 - [ ] Cross-compilation support
-- [ ] Environment variables: `getenv()`, `putenv()`
+- [ ] Constant folding (`2 + 3` → `5` at compile time)
+- [ ] Dead code elimination
+- [ ] Register allocation (reduce stack spills)
+- [ ] Inline small functions
+- [ ] Tail-call optimization
+- [ ] Peephole optimization (redundant load/store elimination)
 
-## v0.9.0 — Hardening and tooling
+## v1.0.0 — Production-ready
 
 - [ ] Comprehensive error recovery (multiple errors per compilation)
 - [ ] Warning system (unused variables, unreachable code)
 - [ ] Source maps (assembly ↔ PHP line mapping)
-- [ ] `--emit-asm` flag to keep assembly without linking
-- [ ] `--check` flag for type checking without compilation
+- [ ] `--emit-asm`, `--check` flags
 - [ ] Benchmark suite (vs C, vs PHP interpreter)
-- [ ] Regular expressions via `preg_match()` / `preg_replace()` (link libpcre or minimal engine)
-
-## v1.0.0 — Production-ready
-
-- [ ] Stable compilation pipeline with documented semantics
-- [ ] All built-in functions covered for CLI use cases
 - [ ] Full test coverage (>500 tests)
 - [ ] Documentation: language subset spec, architecture guide
-- [ ] CI/CD with release binaries for macOS ARM64 and Linux x86_64
+- [ ] CI/CD with release binaries
 - [ ] Performance within 2x of C -O0 on compute benchmarks
-- [ ] Real-world CLI tools compiled as validation (JSON parser, file processor, etc.)
+- [ ] Real-world CLI tools compiled as validation
 
 ---
 
 ## v1.1.0 — Shared and static libraries (C ABI)
 
-PHP functions become callable from any language via FFI.
-
-- [ ] `--lib` flag: emit only function symbols (no `_main`, no exit syscall)
-- [ ] Export PHP functions as C-callable symbols (`function add()` → `_php_add`)
-- [ ] `.global` directives for all exported functions
-- [ ] Shared library output: `.dylib` (macOS) / `.so` (Linux) via `ld -dylib` / `ld -shared`
-- [ ] Static library output: `.a` via `ar rcs`
-- [ ] Auto-generated C header file (`.h`) with function signatures
-- [ ] Null-terminated string convention for C interop (append `\0` to string returns)
-- [ ] Wrapper functions for C-string input (`const char*` → internal ptr+len)
-- [ ] String return convention: caller-provided buffer or malloc'd pointer
-- [ ] Integration tests: call compiled PHP from C, verify results
-- [ ] Documentation: FFI usage examples for C, Rust, Python (ctypes), Go (cgo)
+- [ ] `--lib` flag, export PHP functions as C-callable symbols
+- [ ] `.dylib` / `.so` / `.a` output
+- [ ] Auto-generated C header file
+- [ ] Null-terminated string convention for C interop
+- [ ] FFI documentation for C, Rust, Python, Go
 
 ## v1.2.0 — Library ecosystem
 
-- [ ] `#[export]` annotation or `--export` flag to select which functions to expose
-- [ ] Multiple PHP files compiled into a single library
-- [ ] Symbol visibility control (public vs internal functions)
-- [ ] `pkg-config` / `.pc` file generation for library discovery
-- [ ] Versioned symbol names for ABI stability
-- [ ] Benchmarks: PHP-compiled library vs equivalent C library
+- [ ] `--export` flag for symbol selection
+- [ ] Multi-file library compilation
+- [ ] Symbol visibility control
+- [ ] `pkg-config` generation
 
 ## v1.3.0 — WebAssembly target
 
-PHP compiled to WASM — usable from any language with a WASM runtime, fully cross-platform.
-
-- [ ] WASM codegen backend (parallel to ARM64)
-- [ ] WASM text format (`.wat`) emission for debugging
-- [ ] WASM binary format (`.wasm`) emission
-- [ ] Linear memory management for strings and arrays
-- [ ] WASI support for I/O (`fd_write`, `fd_read`, `args_get`)
-- [ ] Integration tests: run compiled WASM via `wasmtime`
-- [ ] NPM package generation for JS/Node consumption
-- [ ] Documentation: usage from JS, Rust (wasmtime), Python (wasmer), Go
+- [ ] WASM codegen backend
+- [ ] `.wat` / `.wasm` emission
+- [ ] WASI support for I/O
+- [ ] NPM package generation

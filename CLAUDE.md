@@ -125,6 +125,19 @@ cargo run -- examples/fizzbuzz/main.php
 
 When in doubt, test with `php -r '...'` to verify behavior.
 
+## Documentation
+
+The `docs/` directory contains the project documentation:
+
+- `docs/language-reference.md` — What elephc supports: types, operators, control structures, functions, built-ins, limitations, and known incompatibilities with PHP. Includes examples of what works and what doesn't.
+- `docs/architecture.md` — Compiler internals: pipeline, module map, ARM64 conventions, memory layout.
+
+**Documentation must be kept up to date.** When adding a new feature:
+1. Add it to `docs/language-reference.md` — in the relevant section (operators, functions, built-ins, etc.)
+2. If it was previously listed as "not supported", remove that note
+3. If there are known incompatibilities with PHP, document them
+4. Update `docs/architecture.md` if the change affects the pipeline or module structure
+
 ## Roadmap management
 
 `ROADMAP.md` tracks all planned and completed work, organized by version.
