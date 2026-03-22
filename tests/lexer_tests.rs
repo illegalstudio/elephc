@@ -103,6 +103,12 @@ fn test_assignment_statement() {
 }
 
 #[test]
+fn test_consecutive_comments() {
+    let t = tokens("<?php /* a *//* b */// c\necho \"ok\";");
+    assert_eq!(t[1], Token::Echo);
+}
+
+#[test]
 fn test_span_tracking() {
     let spanned = tokenize("<?php\necho \"hi\";").unwrap();
     // "echo" starts on line 2, col 1

@@ -41,7 +41,6 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
     }
 
     Ok(CheckResult {
-        program: program.clone(),
         global_env,
         functions: checker.functions,
     })

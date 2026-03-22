@@ -1,33 +1,38 @@
+use std::fmt::Write;
+
 pub struct Emitter {
-    lines: Vec<String>,
+    buf: String,
 }
 
 impl Emitter {
     pub fn new() -> Self {
-        Self { lines: Vec::new() }
+        Self {
+            buf: String::with_capacity(4096),
+        }
     }
 
     pub fn instruction(&mut self, instr: &str) {
-        self.lines.push(format!("    {}", instr));
+        let _ = writeln!(self.buf, "    {}", instr);
     }
 
     pub fn label(&mut self, name: &str) {
-        self.lines.push(format!("{}:", name));
+        let _ = writeln!(self.buf, "{}:", name);
     }
 
     pub fn comment(&mut self, text: &str) {
-        self.lines.push(format!("    ; {}", text));
+        let _ = writeln!(self.buf, "    ; {}", text);
     }
 
     pub fn blank(&mut self) {
-        self.lines.push(String::new());
+        self.buf.push('\n');
     }
 
     pub fn raw(&mut self, text: &str) {
-        self.lines.push(text.to_string());
+        self.buf.push_str(text);
+        self.buf.push('\n');
     }
 
-    pub fn output(&self) -> String {
-        self.lines.join("\n") + "\n"
+    pub fn output(self) -> String {
+        self.buf
     }
 }

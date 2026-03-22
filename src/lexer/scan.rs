@@ -7,7 +7,7 @@ pub fn scan_tokens(source: &str) -> Result<Vec<(Token, Span)>, CompileError> {
     let mut cursor = Cursor::new(source);
     let mut tokens = Vec::new();
 
-    skip_whitespace(&mut cursor);
+    skip_whitespace_and_comments(&mut cursor);
 
     // Expect <?php open tag
     let span = cursor.span();
@@ -24,9 +24,7 @@ pub fn scan_tokens(source: &str) -> Result<Vec<(Token, Span)>, CompileError> {
     }
 
     loop {
-        skip_whitespace(&mut cursor);
-        skip_comments(&mut cursor);
-        skip_whitespace(&mut cursor);
+        skip_whitespace_and_comments(&mut cursor);
 
         if cursor.is_eof() {
             tokens.push((Token::Eof, cursor.span()));
@@ -41,36 +39,45 @@ pub fn scan_tokens(source: &str) -> Result<Vec<(Token, Span)>, CompileError> {
     Ok(tokens)
 }
 
-fn skip_whitespace(cursor: &mut Cursor) {
-    while let Some(ch) = cursor.peek() {
-        if ch.is_ascii_whitespace() {
-            cursor.advance();
-        } else {
-            break;
-        }
-    }
-}
-
-fn skip_comments(cursor: &mut Cursor) {
-    if cursor.remaining().starts_with("//") {
-        while let Some(ch) = cursor.advance() {
-            if ch == '\n' {
+fn skip_whitespace_and_comments(cursor: &mut Cursor) {
+    loop {
+        // Skip whitespace
+        while let Some(ch) = cursor.peek() {
+            if ch.is_ascii_whitespace() {
+                cursor.advance();
+            } else {
                 break;
             }
         }
-    } else if cursor.remaining().starts_with("/*") {
-        cursor.advance(); // /
-        cursor.advance(); // *
-        loop {
-            match cursor.advance() {
-                Some('*') if cursor.peek() == Some('/') => {
-                    cursor.advance();
+
+        // Skip line comment
+        if cursor.remaining().starts_with("//") {
+            while let Some(ch) = cursor.advance() {
+                if ch == '\n' {
                     break;
                 }
-                None => break,
-                _ => {}
             }
+            continue;
         }
+
+        // Skip block comment
+        if cursor.remaining().starts_with("/*") {
+            cursor.advance(); // /
+            cursor.advance(); // *
+            loop {
+                match cursor.advance() {
+                    Some('*') if cursor.peek() == Some('/') => {
+                        cursor.advance();
+                        break;
+                    }
+                    None => break,
+                    _ => {}
+                }
+            }
+            continue;
+        }
+
+        break;
     }
 }
 

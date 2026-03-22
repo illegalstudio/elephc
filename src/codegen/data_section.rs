@@ -22,8 +22,9 @@ impl DataSection {
 
         let label = format!("_str_{}", self.counter);
         self.counter += 1;
-        self.entries.push((label.clone(), bytes.to_vec()));
-        self.dedup.insert(bytes.to_vec(), label.clone());
+        let owned = bytes.to_vec();
+        self.dedup.insert(owned.clone(), label.clone());
+        self.entries.push((label.clone(), owned));
         (label, bytes.len())
     }
 

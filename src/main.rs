@@ -63,7 +63,7 @@ fn main() {
     };
 
     let asm = codegen::generate(
-        &check_result.program,
+        &ast,
         &check_result.global_env,
         &check_result.functions,
     );

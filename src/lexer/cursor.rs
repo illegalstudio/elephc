@@ -1,7 +1,7 @@
 use crate::span::Span;
 
 pub struct Cursor<'a> {
-    source: &'a str,
+    bytes: &'a [u8],
     pos: usize,
     line: usize,
     col: usize,
@@ -10,7 +10,7 @@ pub struct Cursor<'a> {
 impl<'a> Cursor<'a> {
     pub fn new(source: &'a str) -> Self {
         Self {
-            source,
+            bytes: source.as_bytes(),
             pos: 0,
             line: 1,
             col: 1,
@@ -21,13 +21,37 @@ impl<'a> Cursor<'a> {
         Span::new(self.line, self.col)
     }
 
+    #[inline]
     pub fn peek(&self) -> Option<char> {
-        self.source[self.pos..].chars().next()
+        if self.pos >= self.bytes.len() {
+            return None;
+        }
+        let b = self.bytes[self.pos];
+        if b.is_ascii() {
+            Some(b as char)
+        } else {
+            // Fallback for non-ASCII (rare in PHP source)
+            std::str::from_utf8(&self.bytes[self.pos..])
+                .ok()?
+                .chars()
+                .next()
+        }
     }
 
     pub fn advance(&mut self) -> Option<char> {
-        let ch = self.peek()?;
-        self.pos += ch.len_utf8();
+        if self.pos >= self.bytes.len() {
+            return None;
+        }
+        let b = self.bytes[self.pos];
+        let ch = if b.is_ascii() {
+            self.pos += 1;
+            b as char
+        } else {
+            let s = std::str::from_utf8(&self.bytes[self.pos..]).ok()?;
+            let ch = s.chars().next()?;
+            self.pos += ch.len_utf8();
+            ch
+        };
         if ch == '\n' {
             self.line += 1;
             self.col = 1;
@@ -38,10 +62,10 @@ impl<'a> Cursor<'a> {
     }
 
     pub fn is_eof(&self) -> bool {
-        self.pos >= self.source.len()
+        self.pos >= self.bytes.len()
     }
 
     pub fn remaining(&self) -> &'a str {
-        &self.source[self.pos..]
+        std::str::from_utf8(&self.bytes[self.pos..]).unwrap_or("")
     }
 }

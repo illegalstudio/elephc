@@ -43,7 +43,6 @@ pub struct FunctionSig {
 
 #[derive(Debug)]
 pub struct CheckResult {
-    pub program: Program,
     pub global_env: TypeEnv,
     pub functions: HashMap<String, FunctionSig>,
 }
