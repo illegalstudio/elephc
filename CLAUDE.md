@@ -100,7 +100,7 @@ PHP source → Lexer (tokens) → Parser (AST) → Resolver (include/require) �
 2. Add parser logic in `src/parser/stmt.rs`
 3. Add type checking in `src/types/checker.rs`
 4. Add codegen in `src/codegen/stmt.rs`
-5. If it introduces variables, update `collect_local_vars` in `src/codegen/mod.rs`
+5. If it introduces variables, update `collect_local_vars` in `src/codegen/functions.rs`
 6. Add tests
 
 ### Codegen conventions (ARM64)

@@ -54,57 +54,66 @@ src/
 ├── main.rs                    CLI entry point
 ├── lib.rs                     Public module exports
 ├── span.rs                    Source position (line, col)
+├── resolver.rs                Include/require file resolution
 │
 ├── lexer/
 │   ├── mod.rs                 tokenize() → Vec<(Token, Span)>
-│   ├── token.rs               Token enum (78 lines)
-│   ├── cursor.rs              Byte-level source reader (71 lines)
-│   ├── scan.rs                Main scanning loop, operators (166 lines)
-│   └── literals.rs            String, integer, variable, keyword scanning (127 lines)
+│   ├── token.rs               Token enum
+│   ├── cursor.rs              Byte-level source reader
+│   ├── scan.rs                Main scanning loop, operators
+│   └── literals.rs            String, number, variable, keyword scanning
 │
 ├── parser/
 │   ├── mod.rs                 parse() → Program
-│   ├── ast.rs                 ExprKind, StmtKind, BinOp, Span (190 lines)
-│   ├── expr.rs                Pratt parser for expressions (249 lines)
-│   ├── stmt.rs                Statement parsing, assignment, functions (292 lines)
-│   └── control.rs             if, while, for, do-while, foreach (248 lines)
+│   ├── ast.rs                 ExprKind, StmtKind, BinOp, CastType
+│   ├── expr.rs                Pratt parser for expressions
+│   ├── stmt.rs                Statement parsing, assignment, functions
+│   └── control.rs             if, while, for, do-while, foreach
 │
 ├── types/
 │   ├── mod.rs                 PhpType enum, TypeEnv, FunctionSig, CheckResult
 │   └── checker/
-│       ├── mod.rs             check_stmt(), infer_type() (269 lines)
-│       ├── builtins.rs        Built-in function type signatures (151 lines)
-│       └── functions.rs       User function type inference (125 lines)
+│       ├── mod.rs             check_stmt(), infer_type()
+│       ├── builtins.rs        Built-in function type signatures
+│       └── functions.rs       User function type inference
 │
 ├── codegen/
-│   ├── mod.rs                 generate() orchestration (108 lines)
-│   ├── expr.rs                Expression codegen (373 lines)
-│   ├── stmt.rs                Statement codegen (344 lines)
-│   ├── builtins.rs            Built-in function codegen (191 lines)
-│   ├── functions.rs           User function emission (155 lines)
-│   ├── abi.rs                 ARM64 register conventions (60 lines)
-│   ├── context.rs             Variables, labels, loop stack (54 lines)
-│   ├── data_section.rs        String literal .data section (54 lines)
-│   ├── emit.rs                Assembly text buffer (38 lines)
+│   ├── mod.rs                 generate() orchestration
+│   ├── expr.rs                Expression codegen
+│   ├── stmt.rs                Statement codegen
+│   ├── builtins/              Built-in function codegen
+│   │   ├── mod.rs             Dispatcher
+│   │   ├── arrays.rs          count, push, pop, sort, in_array, etc.
+│   │   ├── math.rs            abs, floor, pow, rand, fmod, fdiv, etc.
+│   │   ├── strings.rs         strlen, intval, number_format
+│   │   ├── system.rs          exit, die
+│   │   └── types.rs           is_*, gettype, empty, unset, settype
+│   ├── functions.rs           User function emission
+│   ├── abi.rs                 ARM64 register conventions
+│   ├── context.rs             Variables, labels, loop stack
+│   ├── data_section.rs        String/float literal .data section
+│   ├── emit.rs                Assembly text buffer
 │   └── runtime/
-│       ├── mod.rs             Runtime orchestration (29 lines)
-│       ├── strings.rs         itoa, concat, atoi (160 lines)
-│       ├── arrays.rs          heap_alloc, array_new, push, sort (122 lines)
-│       └── system.rs          build_argv (67 lines)
+│       ├── mod.rs             Runtime orchestration
+│       ├── strings.rs         itoa, concat, ftoa, atoi, str_eq, number_format
+│       ├── arrays.rs          heap_alloc, array_new, push, sort
+│       └── system.rs          build_argv
 │
 └── errors/
-    ├── mod.rs                 CompileError, Span-based errors (33 lines)
-    └── report.rs              Error formatting (12 lines)
+    ├── mod.rs                 CompileError, error trait
+    └── report.rs              Error formatting
 ```
 
 ## ARM64 calling conventions
 
 | What | Register | Notes |
 |---|---|---|
-| Integer result | `x0` | After emit_expr for Int |
+| Integer result | `x0` | After emit_expr for Int/Bool |
+| Float result | `d0` | After emit_expr for Float |
 | String result | `x1` (ptr), `x2` (len) | After emit_expr for Str |
 | Array result | `x0` (heap ptr) | After emit_expr for Array |
-| Function args | `x0`-`x7` | Int/Array = 1 reg, Str = 2 regs |
+| Function args (int) | `x0`-`x7` | Int/Bool/Array = 1 reg, Str = 2 regs |
+| Function args (float) | `d0`-`d7` | Separate index from int regs |
 | Frame pointer | `x29` | Saved in prologue |
 | Link register | `x30` | Saved in prologue |
 | Stack locals | `[x29, #-offset]` | Negative offsets from frame pointer |

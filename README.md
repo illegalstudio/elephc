@@ -1,6 +1,6 @@
 # elephc
 
-A PHP-to-native compiler. Takes a subset of PHP and compiles it directly to ARM64 assembly, producing standalone macOS binaries. No interpreter, no VM, no runtime.
+A PHP-to-native compiler. Takes a subset of PHP and compiles it directly to ARM64 assembly, producing standalone macOS binaries. No interpreter, no VM, no runtime dependencies.
 
 ## Requirements
 
@@ -35,55 +35,75 @@ cargo run -- hello.php
 
 ## What it compiles
 
-elephc supports a static subset of PHP:
+elephc supports a growing subset of PHP. Every program it compiles is also valid PHP and produces the same output when run with `php`.
 
 ```php
 <?php
-$i = 1;
-while ($i <= 15) {
-    if ($i % 15 == 0) {
-        echo "FizzBuzz\n";
-    } elseif ($i % 3 == 0) {
-        echo "Fizz\n";
-    } elseif ($i % 5 == 0) {
-        echo "Buzz\n";
-    } else {
-        echo $i . "\n";
-    }
-    $i = $i + 1;
+require_once 'math.php';
+
+$pi = M_PI;
+echo "Pi is approximately " . number_format($pi, 5) . "\n";
+echo "2 ** 10 = " . (2 ** 10) . "\n";
+echo "10 / 3 = " . (10 / 3) . "\n";
+echo "Type: " . gettype($pi) . "\n";
+
+$x = (int)$pi;
+echo "Truncated: " . $x . "\n";
+
+if ($x === 3) {
+    echo "Correct!\n";
 }
 ```
+
+### Supported types
+
+| Type | Example |
+|---|---|
+| `int` | `42`, `-7`, `PHP_INT_MAX` |
+| `float` | `3.14`, `.5`, `1e-5`, `INF`, `NAN` |
+| `string` | `"hello\n"`, `'raw'` |
+| `bool` | `true`, `false` |
+| `null` | `null` |
+| `array` | `[1, 2, 3]` (indexed only) |
 
 ### Supported constructs
 
 | Construct | Example |
 |---|---|
-| String literals | `"hello\n"` |
-| Integer literals | `42`, `-7` |
-| Variables | `$name` |
-| Assignment | `$x = "hello";` |
 | Echo | `echo $x;` |
-| Arithmetic | `+`, `-`, `*`, `/`, `%` |
-| Comparison | `==`, `!=`, `<`, `>`, `<=`, `>=` |
+| Variables | `$name = "hello";` |
+| Arithmetic | `+`, `-`, `*`, `/`, `%`, `**` |
+| Comparison | `==`, `!=`, `<`, `>`, `<=`, `>=`, `===`, `!==` |
+| Logical | `&&`, `\|\|`, `!` |
 | Concatenation | `"a" . "b"`, `"val=" . 42` |
-| If / else | `if (...) { } elseif (...) { } else { }` |
-| While | `while (...) { }` |
-| For | `for ($i = 0; $i < 10; $i = $i + 1) { }` |
+| Assignment | `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `.=` |
+| Increment/Decrement | `$i++`, `++$i`, `$i--`, `--$i` |
+| Type casting | `(int)`, `(float)`, `(string)`, `(bool)`, `(array)` |
+| Ternary | `$x > 0 ? "yes" : "no"` |
+| If / elseif / else | `if (...) { } elseif (...) { } else { }` |
+| While / Do-while | `while (...) { }`, `do { } while (...);` |
+| For / Foreach | `for (;;) { }`, `foreach ($arr as $v) { }` |
 | Break / Continue | `break;`, `continue;` |
 | Functions | `function foo($x) { return $x + 1; }` |
-| Function calls | `$r = foo(42);`, `foo();` |
-| Return | `return $x;`, `return;` |
-| Increment/Decrement | `$i++`, `++$i`, `$i--`, `--$i` |
+| Include/Require | `include 'file.php';`, `require_once 'lib.php';` |
 | Comments | `// ...`, `/* ... */` |
 
-### Not supported (by design)
+### Built-in functions
 
-`eval`, `include`/`require`, classes, closures, arrays, type juggling, dynamic dispatch, standard library functions.
+**Strings:** `strlen`, `intval`, `number_format`
+**Arrays:** `count`, `array_push`, `array_pop`, `in_array`, `array_keys`, `array_values`, `sort`, `rsort`, `isset`
+**Math:** `abs`, `floor`, `ceil`, `round`, `sqrt`, `pow`, `min`, `max`, `intdiv`, `fmod`, `fdiv`, `floatval`, `rand`, `mt_rand`, `random_int`
+**Types:** `gettype`, `settype`, `empty`, `unset`, `is_int`, `is_float`, `is_string`, `is_bool`, `is_null`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`, `boolval`
+**System:** `exit`, `die`
+
+### Constants
+
+`INF`, `NAN`, `PHP_INT_MAX`, `PHP_INT_MIN`, `PHP_FLOAT_MAX`, `M_PI`
 
 ## How it works
 
 ```
-PHP source → Lexer → Parser (AST) → Type Checker → Codegen → as + ld → Mach-O binary
+PHP source → Lexer → Parser (AST) → Resolver (include) → Type Checker → Codegen → as + ld → Mach-O binary
 ```
 
 The compiler emits human-readable ARM64 assembly. You can inspect the `.s` file to see exactly what your PHP becomes:
@@ -95,12 +115,16 @@ cat hello.s
 
 ### Type system
 
-Two types, resolved at compile time:
+Six types, resolved at compile time:
 
 - **Int** — 64-bit signed integer
+- **Float** — 64-bit double-precision
 - **Str** — pointer + length pair
+- **Bool** — `true`/`false`, coerces to 0/1
+- **Null** — sentinel value, coerces to 0/""
+- **Array** — heap-allocated indexed array (homogeneous)
 
-A variable's type is locked at first assignment. Reassigning to a different type is a compile error.
+A variable's type is set at first assignment. Compatible types (int/float/bool/null) can be reassigned between each other.
 
 ## Error messages
 
@@ -109,7 +133,7 @@ Errors include line and column numbers:
 ```
 error[3:1]: Undefined variable: $x
 error[5:7]: Type error: cannot reassign $x from Int to Str
-error[1:1]: Expected '<?php' at start of file
+error[2:1]: Required file not found: 'missing.php'
 ```
 
 ## Project structure
@@ -119,12 +143,15 @@ src/
 ├── main.rs              # CLI, assembler + linker invocation
 ├── lib.rs               # Public module exports
 ├── span.rs              # Source position tracking
+├── resolver.rs          # Include/require resolution
 ├── lexer/               # Source text → token stream
 ├── parser/              # Tokens → AST (Pratt parser)
 ├── types/               # Static type checking
+│   └── checker/         # Type inference, builtins, functions
 ├── codegen/             # AST → ARM64 assembly
+│   ├── builtins/        # Built-in function codegen (arrays, math, strings, types, system)
+│   ├── runtime/         # Runtime routines (itoa, concat, ftoa, arrays, number_format)
 │   ├── abi.rs           # Register conventions (load, store, write)
-│   ├── runtime.rs       # Built-in routines (itoa, concat)
 │   └── ...
 └── errors/              # Diagnostics
 ```
@@ -132,10 +159,15 @@ src/
 ## Tests
 
 ```bash
-cargo test
+cargo test                      # all tests (~460)
+cargo test test_my_feature      # run specific tests
+ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 ```
 
-114 tests covering lexer, parser, codegen (end-to-end), and error reporting.
+## Documentation
+
+- [`docs/language-reference.md`](docs/language-reference.md) — Complete spec of what elephc supports
+- [`docs/architecture.md`](docs/architecture.md) — Compiler internals and ARM64 conventions
 
 ## License
 
