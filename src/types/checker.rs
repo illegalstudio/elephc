@@ -377,6 +377,56 @@ impl Checker {
                 }
                 Ok(Some(PhpType::Int))
             }
+            "array_pop" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "array_pop() takes exactly 1 argument"));
+                }
+                let ty = self.infer_type(&args[0], env)?;
+                match ty {
+                    PhpType::Array(elem_ty) => Ok(Some(*elem_ty)),
+                    _ => Err(CompileError::new(span, "array_pop() argument must be array")),
+                }
+            }
+            "in_array" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "in_array() takes exactly 2 arguments"));
+                }
+                self.infer_type(&args[0], env)?;
+                let arr_ty = self.infer_type(&args[1], env)?;
+                if !matches!(arr_ty, PhpType::Array(_)) {
+                    return Err(CompileError::new(span, "in_array() second argument must be array"));
+                }
+                Ok(Some(PhpType::Int)) // returns 0 or 1
+            }
+            "array_keys" | "array_values" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, &format!("{}() takes exactly 1 argument", name)));
+                }
+                let ty = self.infer_type(&args[0], env)?;
+                match (name, &ty) {
+                    ("array_keys", PhpType::Array(_)) => Ok(Some(PhpType::Array(Box::new(PhpType::Int)))),
+                    ("array_values", PhpType::Array(elem_ty)) => Ok(Some(PhpType::Array(elem_ty.clone()))),
+                    _ => Err(CompileError::new(span, &format!("{}() argument must be array", name))),
+                }
+            }
+            "sort" | "rsort" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, &format!("{}() takes exactly 1 argument", name)));
+                }
+                let ty = self.infer_type(&args[0], env)?;
+                if !matches!(ty, PhpType::Array(_)) {
+                    return Err(CompileError::new(span, &format!("{}() argument must be array", name)));
+                }
+                Ok(Some(PhpType::Void))
+            }
+            "isset" => {
+                // isset can take any expression, returns int
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "isset() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Int))
+            }
             "array_push" => {
                 if args.len() != 2 {
                     return Err(CompileError::new(

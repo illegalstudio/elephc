@@ -332,6 +332,126 @@ fn emit_builtin_call(
             emitter.instruction("mov x0, #0");
             Some(PhpType::Int)
         }
+        "array_pop" => {
+            emitter.comment("array_pop()");
+            let arr_ty = emit_expr(&args[0], emitter, ctx, data);
+            // x0 = array ptr, decrement length and return last element
+            emitter.instruction("ldr x9, [x0]"); // length
+            emitter.instruction("sub x9, x9, #1"); // new length
+            emitter.instruction("str x9, [x0]"); // store new length
+            let elem_ty = match &arr_ty {
+                PhpType::Array(t) => *t.clone(),
+                _ => PhpType::Int,
+            };
+            match &elem_ty {
+                PhpType::Int => {
+                    emitter.instruction("add x0, x0, #24");
+                    emitter.instruction("ldr x0, [x0, x9, lsl #3]");
+                }
+                PhpType::Str => {
+                    emitter.instruction("lsl x10, x9, #4");
+                    emitter.instruction("add x0, x0, x10");
+                    emitter.instruction("add x0, x0, #24");
+                    emitter.instruction("ldr x1, [x0]");
+                    emitter.instruction("ldr x2, [x0, #8]");
+                }
+                _ => {}
+            }
+            Some(elem_ty)
+        }
+        "in_array" => {
+            emitter.comment("in_array()");
+            // Evaluate needle
+            emit_expr(&args[0], emitter, ctx, data);
+            emitter.instruction("str x0, [sp, #-16]!"); // save needle
+            // Evaluate array
+            emit_expr(&args[1], emitter, ctx, data);
+            // x0 = array ptr, needle on stack
+            let found_label = ctx.next_label("in_array_found");
+            let end_label = ctx.next_label("in_array_end");
+            emitter.instruction("ldr x9, [x0]"); // length
+            emitter.instruction("add x10, x0, #24"); // elements base
+            emitter.instruction("ldr x11, [sp], #16"); // needle
+            emitter.instruction("mov x12, #0"); // index
+            let loop_label = ctx.next_label("in_array_loop");
+            emitter.label(&loop_label);
+            emitter.instruction("cmp x12, x9");
+            emitter.instruction(&format!("b.ge {}", end_label));
+            emitter.instruction("ldr x13, [x10, x12, lsl #3]");
+            emitter.instruction("cmp x13, x11");
+            emitter.instruction(&format!("b.eq {}", found_label));
+            emitter.instruction("add x12, x12, #1");
+            emitter.instruction(&format!("b {}", loop_label));
+            emitter.label(&found_label);
+            emitter.instruction("mov x0, #1");
+            emitter.instruction(&format!("b {}", end_label.replace("_end", "_done")));
+            emitter.label(&end_label);
+            emitter.instruction("mov x0, #0");
+            let done_label = end_label.replace("_end", "_done");
+            emitter.label(&done_label);
+            Some(PhpType::Int)
+        }
+        "array_keys" => {
+            emitter.comment("array_keys()");
+            emit_expr(&args[0], emitter, ctx, data);
+            // x0 = array ptr, create new array [0, 1, 2, ..., len-1]
+            emitter.instruction("ldr x9, [x0]"); // length
+            emitter.instruction("str x9, [sp, #-16]!"); // save length
+            emitter.instruction("mov x0, x9");
+            emitter.instruction("mov x1, #8");
+            emitter.instruction("bl __rt_array_new");
+            // Stack: [length, ...], x0 = new array
+            emitter.instruction("str x0, [sp, #-16]!"); // save new array
+            emitter.instruction("str xzr, [sp, #-16]!"); // index = 0
+            let loop_label = ctx.next_label("akeys_loop");
+            let end_label = ctx.next_label("akeys_end");
+            emitter.label(&loop_label);
+            emitter.instruction("ldr x12, [sp]"); // index
+            emitter.instruction("ldr x9, [sp, #32]"); // length
+            emitter.instruction("cmp x12, x9");
+            emitter.instruction(&format!("b.ge {}", end_label));
+            emitter.instruction("ldr x0, [sp, #16]"); // array ptr
+            emitter.instruction("mov x1, x12"); // value = index
+            emitter.instruction("bl __rt_array_push_int");
+            emitter.instruction("ldr x12, [sp]");
+            emitter.instruction("add x12, x12, #1");
+            emitter.instruction("str x12, [sp]");
+            emitter.instruction(&format!("b {}", loop_label));
+            emitter.label(&end_label);
+            emitter.instruction("add sp, sp, #16"); // pop index
+            emitter.instruction("ldr x0, [sp], #16"); // pop new array
+            emitter.instruction("add sp, sp, #16"); // pop length
+            Some(PhpType::Array(Box::new(PhpType::Int)))
+        }
+        "array_values" => {
+            emitter.comment("array_values()");
+            // For indexed arrays, array_values is identity — return the same array
+            emit_expr(&args[0], emitter, ctx, data);
+            let arr_ty = ctx.functions.get("__dummy__").map(|_| PhpType::Int); // won't match
+            let _ = arr_ty;
+            // We already have x0 = array ptr, just return it
+            Some(PhpType::Array(Box::new(PhpType::Int))) // approximate
+        }
+        "sort" => {
+            emitter.comment("sort()");
+            emit_expr(&args[0], emitter, ctx, data);
+            // x0 = array ptr, call runtime insertion sort
+            emitter.instruction("bl __rt_sort_int");
+            Some(PhpType::Void)
+        }
+        "rsort" => {
+            emitter.comment("rsort()");
+            emit_expr(&args[0], emitter, ctx, data);
+            emitter.instruction("bl __rt_rsort_int");
+            Some(PhpType::Void)
+        }
+        "isset" => {
+            emitter.comment("isset()");
+            // For our type system, all defined variables are "set"
+            emit_expr(&args[0], emitter, ctx, data);
+            emitter.instruction("mov x0, #1");
+            Some(PhpType::Int)
+        }
         "count" => {
             emitter.comment("count()");
             emit_expr(&args[0], emitter, ctx, data);

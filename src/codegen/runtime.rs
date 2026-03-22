@@ -9,6 +9,8 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     emit_array_new(emitter);
     emit_array_push_int(emitter);
     emit_array_push_str(emitter);
+    emit_sort_int(emitter, false);
+    emit_sort_int(emitter, true);
 }
 
 /// Returns BSS directives needed by runtime routines.
@@ -292,6 +294,57 @@ fn emit_array_push_int(emitter: &mut Emitter) {
     // Increment length
     emitter.instruction("add x9, x9, #1");
     emitter.instruction("str x9, [x0]");
+    emitter.instruction("ret");
+}
+
+/// sort_int / rsort_int: insertion sort on integer array (in-place).
+/// Input: x0 = array pointer
+fn emit_sort_int(emitter: &mut Emitter, reverse: bool) {
+    let label = if reverse { "__rt_rsort_int" } else { "__rt_sort_int" };
+    let cmp_branch = if reverse { "b.ge" } else { "b.le" };
+
+    emitter.blank();
+    emitter.comment(&format!("--- runtime: {} ---", label));
+    emitter.label(label);
+    // Insertion sort: for i=1..len: key=arr[i], j=i-1, while j>=0 && arr[j]>key: arr[j+1]=arr[j], j--; arr[j+1]=key
+    emitter.instruction("ldr x1, [x0]"); // length
+    emitter.instruction("add x2, x0, #24"); // elements base
+    emitter.instruction("mov x3, #1"); // i = 1
+
+    let outer = format!("{}_outer", label);
+    let inner = format!("{}_inner", label);
+    let _shift = format!("{}_shift", label);
+    let insert = format!("{}_insert", label);
+    let done = format!("{}_done", label);
+
+    emitter.label(&outer);
+    emitter.instruction("cmp x3, x1");
+    emitter.instruction(&format!("b.ge {}", done));
+    // key = arr[i]
+    emitter.instruction("ldr x4, [x2, x3, lsl #3]"); // key
+    emitter.instruction("sub x5, x3, #1"); // j = i - 1
+
+    emitter.label(&inner);
+    // if j < 0, insert
+    emitter.instruction("cmp x5, #0");
+    emitter.instruction(&format!("b.lt {}", insert));
+    // if arr[j] <= key (sort) or arr[j] >= key (rsort), insert
+    emitter.instruction("ldr x6, [x2, x5, lsl #3]");
+    emitter.instruction("cmp x6, x4");
+    emitter.instruction(&format!("{} {}", cmp_branch, insert));
+    // shift: arr[j+1] = arr[j]
+    emitter.instruction("add x7, x5, #1");
+    emitter.instruction("str x6, [x2, x7, lsl #3]");
+    emitter.instruction("sub x5, x5, #1");
+    emitter.instruction(&format!("b {}", inner));
+
+    emitter.label(&insert);
+    emitter.instruction("add x7, x5, #1");
+    emitter.instruction("str x4, [x2, x7, lsl #3]");
+    emitter.instruction("add x3, x3, #1");
+    emitter.instruction(&format!("b {}", outer));
+
+    emitter.label(&done);
     emitter.instruction("ret");
 }
 

@@ -885,6 +885,50 @@ foreach ($names as $n) { echo $n . " "; }
     assert_eq!(out, "3: Alice Bob Charlie ");
 }
 
+// --- Array functions ---
+
+#[test]
+fn test_array_pop() {
+    let out = compile_and_run("<?php $a = [1, 2, 3]; $v = array_pop($a); echo $v . \" \" . count($a);");
+    assert_eq!(out, "3 2");
+}
+
+#[test]
+fn test_in_array_found() {
+    let out = compile_and_run("<?php $a = [10, 20, 30]; echo in_array(20, $a);");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_in_array_not_found() {
+    let out = compile_and_run("<?php $a = [10, 20, 30]; echo in_array(99, $a);");
+    assert_eq!(out, "0");
+}
+
+#[test]
+fn test_sort() {
+    let out = compile_and_run(r#"<?php $a = [5, 3, 1, 4, 2]; sort($a); foreach ($a as $v) { echo $v; }"#);
+    assert_eq!(out, "12345");
+}
+
+#[test]
+fn test_rsort() {
+    let out = compile_and_run(r#"<?php $a = [1, 3, 2]; rsort($a); foreach ($a as $v) { echo $v; }"#);
+    assert_eq!(out, "321");
+}
+
+#[test]
+fn test_array_keys() {
+    let out = compile_and_run(r#"<?php $a = [10, 20, 30]; $k = array_keys($a); foreach ($k as $v) { echo $v; }"#);
+    assert_eq!(out, "012");
+}
+
+#[test]
+fn test_isset() {
+    let out = compile_and_run("<?php $x = 42; echo isset($x);");
+    assert_eq!(out, "1");
+}
+
 // --- Nested control flow ---
 
 #[test]

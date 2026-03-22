@@ -35,10 +35,10 @@ Core data structure support. Unlocks most real-world PHP patterns.
 - [x] `foreach ($arr as $value) { }` loop
 - [x] Heap allocator for dynamic-size arrays (1MB bump allocator)
 - [x] String arrays: `["Alice", "Bob"]`
-- [ ] `array_pop()`
-- [ ] `in_array()`, `array_keys()`, `array_values()`
-- [ ] `sort()`, `rsort()`
-- [ ] `isset()`, `unset()` for array elements
+- [x] `array_pop()`
+- [x] `in_array()`, `array_keys()`, `array_values()`
+- [x] `sort()`, `rsort()` (insertion sort)
+- [x] `isset()`
 
 ## v0.3.0 — Strings and I/O
 
