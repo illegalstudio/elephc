@@ -28,14 +28,16 @@ The compiler should be able to produce real CLI tools that accept arguments and 
 
 Core data structure support. Unlocks most real-world PHP patterns.
 
-- [ ] Indexed arrays: `$arr = [1, 2, 3];`
-- [ ] Array access: `$arr[0]`, `$arr[$i]`
-- [ ] Array assignment: `$arr[0] = 42;`, `$arr[] = "new";`
-- [ ] `count()`, `array_push()`, `array_pop()`
-- [ ] `foreach ($arr as $value) { }` loop
+- [x] Indexed arrays: `$arr = [1, 2, 3];`
+- [x] Array access: `$arr[0]`, `$arr[$i]`
+- [x] Array assignment: `$arr[0] = 42;`, `$arr[] = "new";`
+- [x] `count()`, `array_push()`
+- [x] `foreach ($arr as $value) { }` loop
+- [x] Heap allocator for dynamic-size arrays (1MB bump allocator)
+- [x] String arrays: `["Alice", "Bob"]`
+- [ ] `array_pop()`
 - [ ] `in_array()`, `array_keys()`, `array_values()`
 - [ ] `sort()`, `rsort()`
-- [ ] Heap allocator for dynamic-size arrays
 - [ ] `isset()`, `unset()` for array elements
 
 ## v0.3.0 — Strings and I/O

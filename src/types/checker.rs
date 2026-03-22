@@ -95,6 +95,59 @@ impl Checker {
                 }
                 Ok(())
             }
+            StmtKind::ArrayAssign { array, index, value } => {
+                let arr_ty = env.get(array).cloned().ok_or_else(|| {
+                    CompileError::new(stmt.span, &format!("Undefined variable: ${}", array))
+                })?;
+                self.infer_type(index, env)?;
+                let val_ty = self.infer_type(value, env)?;
+                if let PhpType::Array(elem_ty) = arr_ty {
+                    if *elem_ty != val_ty {
+                        return Err(CompileError::new(
+                            stmt.span,
+                            &format!(
+                                "Array element type mismatch: expected {:?}, got {:?}",
+                                elem_ty, val_ty
+                            ),
+                        ));
+                    }
+                }
+                Ok(())
+            }
+            StmtKind::ArrayPush { array, value } => {
+                let arr_ty = env.get(array).cloned().ok_or_else(|| {
+                    CompileError::new(stmt.span, &format!("Undefined variable: ${}", array))
+                })?;
+                let val_ty = self.infer_type(value, env)?;
+                if let PhpType::Array(elem_ty) = arr_ty {
+                    if *elem_ty != val_ty {
+                        return Err(CompileError::new(
+                            stmt.span,
+                            "Array push type mismatch",
+                        ));
+                    }
+                }
+                Ok(())
+            }
+            StmtKind::Foreach {
+                array,
+                value_var,
+                body,
+            } => {
+                let arr_ty = self.infer_type(array, env)?;
+                if let PhpType::Array(elem_ty) = arr_ty {
+                    env.insert(value_var.clone(), *elem_ty);
+                } else {
+                    return Err(CompileError::new(
+                        stmt.span,
+                        "foreach requires an array",
+                    ));
+                }
+                for s in body {
+                    self.check_stmt(s, env)?;
+                }
+                Ok(())
+            }
             StmtKind::DoWhile { body, condition } => {
                 for s in body {
                     self.check_stmt(s, env)?;
@@ -176,6 +229,39 @@ impl Checker {
                     &format!("Undefined variable: ${}", name),
                 )),
             },
+            ExprKind::ArrayLiteral(elems) => {
+                if elems.is_empty() {
+                    return Err(CompileError::new(
+                        expr.span,
+                        "Cannot infer type of empty array literal",
+                    ));
+                }
+                let first_ty = self.infer_type(&elems[0], env)?;
+                for elem in &elems[1..] {
+                    let ty = self.infer_type(elem, env)?;
+                    if ty != first_ty {
+                        return Err(CompileError::new(
+                            elem.span,
+                            &format!(
+                                "Array element type mismatch: expected {:?}, got {:?}",
+                                first_ty, ty
+                            ),
+                        ));
+                    }
+                }
+                Ok(PhpType::Array(Box::new(first_ty)))
+            }
+            ExprKind::ArrayAccess { array, index } => {
+                let arr_ty = self.infer_type(array, env)?;
+                let idx_ty = self.infer_type(index, env)?;
+                if idx_ty != PhpType::Int {
+                    return Err(CompileError::new(expr.span, "Array index must be integer"));
+                }
+                match arr_ty {
+                    PhpType::Array(elem_ty) => Ok(*elem_ty),
+                    _ => Err(CompileError::new(expr.span, "Cannot index non-array")),
+                }
+            }
             ExprKind::Ternary {
                 condition,
                 then_expr,
@@ -280,6 +366,37 @@ impl Checker {
                 }
                 self.infer_type(&args[0], env)?;
                 Ok(Some(PhpType::Int))
+            }
+            "count" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "count() takes exactly 1 argument"));
+                }
+                let ty = self.infer_type(&args[0], env)?;
+                if !matches!(ty, PhpType::Array(_)) {
+                    return Err(CompileError::new(span, "count() argument must be array"));
+                }
+                Ok(Some(PhpType::Int))
+            }
+            "array_push" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(
+                        span,
+                        "array_push() takes exactly 2 arguments",
+                    ));
+                }
+                let arr_ty = self.infer_type(&args[0], env)?;
+                let val_ty = self.infer_type(&args[1], env)?;
+                if let PhpType::Array(elem_ty) = arr_ty {
+                    if *elem_ty != val_ty {
+                        return Err(CompileError::new(span, "array_push() type mismatch"));
+                    }
+                } else {
+                    return Err(CompileError::new(
+                        span,
+                        "array_push() first argument must be array",
+                    ));
+                }
+                Ok(Some(PhpType::Void))
             }
             "argv" => {
                 if args.len() != 1 {

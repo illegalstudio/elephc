@@ -21,6 +21,7 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
         Token::If => parse_if(tokens, pos, span),
         Token::While => parse_while(tokens, pos, span),
         Token::Do => parse_do_while(tokens, pos, span),
+        Token::Foreach => parse_foreach(tokens, pos, span),
         Token::For => parse_for(tokens, pos, span),
         Token::Break => {
             *pos += 1;
@@ -60,6 +61,54 @@ fn parse_variable_stmt(
         Token::Variable(n) => n.clone(),
         _ => unreachable!(),
     };
+
+    // Check for array access: $var[...]
+    if *pos + 1 < tokens.len() && tokens[*pos + 1].0 == Token::LBracket {
+        let var_name = match &tokens[*pos].0 {
+            Token::Variable(n) => n.clone(),
+            _ => unreachable!(),
+        };
+        *pos += 1; // consume $var
+        *pos += 1; // consume [
+
+        // $var[] = ... (push)
+        if *pos < tokens.len() && tokens[*pos].0 == Token::RBracket {
+            *pos += 1; // consume ]
+            expect_token(tokens, pos, &Token::Assign, "Expected '=' after '$var[]'")?;
+            let value = parse_expr(tokens, pos)?;
+            expect_semicolon(tokens, pos)?;
+            return Ok(Stmt::new(
+                StmtKind::ArrayPush {
+                    array: var_name,
+                    value,
+                },
+                span,
+            ));
+        }
+
+        // $var[index] = ... (assign)
+        let index = parse_expr(tokens, pos)?;
+        if *pos >= tokens.len() || tokens[*pos].0 != Token::RBracket {
+            return Err(CompileError::new(span, "Expected ']'"));
+        }
+        *pos += 1; // consume ]
+
+        if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
+            *pos += 1;
+            let value = parse_expr(tokens, pos)?;
+            expect_semicolon(tokens, pos)?;
+            return Ok(Stmt::new(
+                StmtKind::ArrayAssign {
+                    array: var_name,
+                    index,
+                    value,
+                },
+                span,
+            ));
+        }
+
+        return Err(CompileError::new(span, "Expected '=' after array access"));
+    }
 
     // Peek at token after variable
     if *pos + 1 < tokens.len() {
@@ -222,6 +271,37 @@ fn parse_while(
     let body = parse_block(tokens, pos)?;
 
     Ok(Stmt::new(StmtKind::While { condition, body }, span))
+}
+
+/// Parse: foreach ($array as $value) { stmts }
+fn parse_foreach(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1; // consume 'foreach'
+
+    expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'foreach'")?;
+    let array = parse_expr(tokens, pos)?;
+    expect_token(tokens, pos, &Token::As, "Expected 'as' in foreach")?;
+
+    let value_var = match tokens.get(*pos).map(|(t, _)| t) {
+        Some(Token::Variable(n)) => n.clone(),
+        _ => return Err(CompileError::new(span, "Expected variable after 'as'")),
+    };
+    *pos += 1;
+
+    expect_token(tokens, pos, &Token::RParen, "Expected ')' after foreach")?;
+    let body = parse_block(tokens, pos)?;
+
+    Ok(Stmt::new(
+        StmtKind::Foreach {
+            array,
+            value_var,
+            body,
+        },
+        span,
+    ))
 }
 
 /// Parse: do { stmts } while (expr);

@@ -44,6 +44,80 @@ pub fn emit_expr(
             emitter.instruction("neg x0, x0");
             PhpType::Int
         }
+        ExprKind::ArrayLiteral(elems) => {
+            if elems.is_empty() {
+                emitter.instruction("mov x0, #8");
+                emitter.instruction("mov x1, #8");
+                emitter.instruction("bl __rt_array_new");
+                return PhpType::Array(Box::new(PhpType::Int));
+            }
+
+            // Infer element type from context (peek at first elem kind)
+            let es = match &elems[0].kind {
+                ExprKind::StringLiteral(_) => 16,
+                _ => 8,
+            };
+            let elem_ty = if es == 16 { PhpType::Str } else { PhpType::Int };
+
+            // Create array first
+            emitter.comment("array literal");
+            emitter.instruction(&format!("mov x0, #{}", std::cmp::max(elems.len(), 8)));
+            emitter.instruction(&format!("mov x1, #{}", es));
+            emitter.instruction("bl __rt_array_new");
+            emitter.instruction("str x0, [sp, #-16]!"); // save array ptr
+
+            // Fill elements
+            for (i, elem) in elems.iter().enumerate() {
+                let ty = emit_expr(elem, emitter, ctx, data);
+                emitter.instruction("ldr x9, [sp]"); // reload array ptr
+                match &ty {
+                    PhpType::Int => {
+                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8));
+                    }
+                    PhpType::Str => {
+                        emitter.instruction(&format!("str x1, [x9, #{}]", 24 + i * 16));
+                        emitter.instruction(&format!("str x2, [x9, #{}]", 24 + i * 16 + 8));
+                    }
+                    _ => {}
+                }
+                emitter.instruction(&format!("mov x10, #{}", i + 1));
+                emitter.instruction("str x10, [x9]"); // update length
+            }
+
+            emitter.instruction("ldr x0, [sp], #16"); // pop array ptr
+            PhpType::Array(Box::new(elem_ty))
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            // Evaluate array → x0 = pointer
+            let arr_ty = emit_expr(array, emitter, ctx, data);
+            emitter.instruction("str x0, [sp, #-16]!"); // save array ptr
+            // Evaluate index → x0 = index
+            emit_expr(index, emitter, ctx, data);
+            emitter.instruction("ldr x9, [sp], #16"); // x9 = array ptr
+            // x0 = index
+            emitter.comment("array access");
+            let elem_ty = match &arr_ty {
+                PhpType::Array(t) => *t.clone(),
+                _ => PhpType::Int,
+            };
+            match &elem_ty {
+                PhpType::Int => {
+                    // Load from [x9 + 24 + x0 * 8]
+                    emitter.instruction("add x9, x9, #24");
+                    emitter.instruction("ldr x0, [x9, x0, lsl #3]");
+                }
+                PhpType::Str => {
+                    // Load from [x9 + 24 + x0 * 16]
+                    emitter.instruction("lsl x0, x0, #4"); // x0 * 16
+                    emitter.instruction("add x9, x9, x0");
+                    emitter.instruction("add x9, x9, #24");
+                    emitter.instruction("ldr x1, [x9]");
+                    emitter.instruction("ldr x2, [x9, #8]");
+                }
+                _ => {}
+            }
+            elem_ty
+        }
         ExprKind::Not(inner) => {
             emit_expr(inner, emitter, ctx, data);
             emitter.comment("logical not");
@@ -258,6 +332,34 @@ fn emit_builtin_call(
             emitter.instruction("mov x0, #0");
             Some(PhpType::Int)
         }
+        "count" => {
+            emitter.comment("count()");
+            emit_expr(&args[0], emitter, ctx, data);
+            // x0 = array pointer, load length
+            emitter.instruction("ldr x0, [x0]");
+            Some(PhpType::Int)
+        }
+        "array_push" => {
+            emitter.comment("array_push()");
+            emit_expr(&args[0], emitter, ctx, data);
+            emitter.instruction("str x0, [sp, #-16]!"); // save array ptr
+            let val_ty = emit_expr(&args[1], emitter, ctx, data);
+            emitter.instruction("ldr x9, [sp], #16"); // x9 = array ptr
+            match &val_ty {
+                PhpType::Int => {
+                    emitter.instruction("mov x1, x0"); // value
+                    emitter.instruction("mov x0, x9"); // array ptr
+                    emitter.instruction("bl __rt_array_push_int");
+                }
+                PhpType::Str => {
+                    // x1=ptr, x2=len already set from emit_expr
+                    emitter.instruction("mov x0, x9");
+                    emitter.instruction("bl __rt_array_push_str");
+                }
+                _ => {}
+            }
+            Some(PhpType::Void)
+        }
         "argv" => {
             emitter.comment("argv()");
             emit_expr(&args[0], emitter, ctx, data);
@@ -291,6 +393,9 @@ fn emit_function_call(
                 emitter.instruction("stp x1, x2, [sp, #-16]!");
             }
             PhpType::Void => {}
+            PhpType::Array(_) => {
+                emitter.instruction("str x0, [sp, #-16]!");
+            }
         }
         arg_types.push(ty);
     }
@@ -319,6 +424,9 @@ fn emit_function_call(
                 ));
             }
             PhpType::Void => {}
+            PhpType::Array(_) => {
+                emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg));
+            }
         }
     }
 

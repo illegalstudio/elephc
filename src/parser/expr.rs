@@ -15,6 +15,24 @@ fn parse_expr_bp(
 ) -> Result<Expr, CompileError> {
     let mut lhs = parse_prefix(tokens, pos)?;
 
+    // Postfix array access: $expr[index]
+    while *pos < tokens.len() && tokens[*pos].0 == Token::LBracket {
+        let span = tokens[*pos].1;
+        *pos += 1;
+        let index = parse_expr(tokens, pos)?;
+        if *pos >= tokens.len() || tokens[*pos].0 != Token::RBracket {
+            return Err(CompileError::new(span, "Expected ']'"));
+        }
+        *pos += 1;
+        lhs = Expr::new(
+            ExprKind::ArrayAccess {
+                array: Box::new(lhs),
+                index: Box::new(index),
+            },
+            span,
+        );
+    }
+
     loop {
         if *pos >= tokens.len() {
             break;
@@ -175,6 +193,28 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
             } else {
                 Err(CompileError::new(span, "Expected closing ')'"))
             }
+        }
+        Token::LBracket => {
+            *pos += 1;
+            let mut elems = Vec::new();
+            while *pos < tokens.len() && tokens[*pos].0 != Token::RBracket {
+                if !elems.is_empty() {
+                    if tokens[*pos].0 != Token::Comma {
+                        return Err(CompileError::new(tokens[*pos].1, "Expected ',' between array elements"));
+                    }
+                    *pos += 1;
+                    // Allow trailing comma
+                    if *pos < tokens.len() && tokens[*pos].0 == Token::RBracket {
+                        break;
+                    }
+                }
+                elems.push(parse_expr(tokens, pos)?);
+            }
+            if *pos >= tokens.len() || tokens[*pos].0 != Token::RBracket {
+                return Err(CompileError::new(span, "Expected ']'"));
+            }
+            *pos += 1;
+            Ok(Expr::new(ExprKind::ArrayLiteral(elems), span))
         }
         Token::Identifier(name) => {
             let name = name.clone();

@@ -161,6 +161,11 @@ fn emit_function(
                 reg_idx += 2;
             }
             PhpType::Void => {}
+            PhpType::Array(_) => {
+                emitter.comment(&format!("param ${} from x{}", pname, reg_idx));
+                emitter.instruction(&format!("stur x{}, [x29, #-{}]", reg_idx, offset));
+                reg_idx += 1;
+            }
         }
     }
 
@@ -200,6 +205,18 @@ fn collect_local_vars(
                     collect_local_vars(body, ctx, sig);
                 }
             }
+            StmtKind::Foreach { value_var, body, array, .. } => {
+                // Allocate value variable — infer element type
+                if !ctx.variables.contains_key(value_var) {
+                    let elem_ty = match infer_local_type(array, sig) {
+                        PhpType::Array(t) => *t,
+                        _ => PhpType::Int,
+                    };
+                    ctx.alloc_var(value_var, elem_ty);
+                }
+                collect_local_vars(body, ctx, sig);
+            }
+            StmtKind::ArrayAssign { .. } | StmtKind::ArrayPush { .. } => {}
             StmtKind::DoWhile { body, .. } | StmtKind::While { body, .. } => {
                 collect_local_vars(body, ctx, sig);
             }
@@ -226,6 +243,20 @@ fn infer_local_type(
     match &expr.kind {
         ExprKind::StringLiteral(_) => PhpType::Str,
         ExprKind::IntLiteral(_) => PhpType::Int,
+        ExprKind::ArrayLiteral(elems) => {
+            let elem_ty = if elems.is_empty() {
+                PhpType::Int
+            } else {
+                infer_local_type(&elems[0], _sig)
+            };
+            PhpType::Array(Box::new(elem_ty))
+        }
+        ExprKind::ArrayAccess { array, .. } => {
+            match infer_local_type(array, _sig) {
+                PhpType::Array(t) => *t,
+                _ => PhpType::Int,
+            }
+        }
         ExprKind::Negate(_) => PhpType::Int,
         ExprKind::BinaryOp { op, .. } => match op {
             crate::parser::ast::BinOp::Concat => PhpType::Str,

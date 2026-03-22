@@ -28,6 +28,11 @@ pub enum ExprKind {
         name: String,
         args: Vec<Expr>,
     },
+    ArrayLiteral(Vec<Expr>),
+    ArrayAccess {
+        array: Box<Expr>,
+        index: Box<Expr>,
+    },
     Ternary {
         condition: Box<Expr>,
         then_expr: Box<Expr>,
@@ -128,6 +133,20 @@ pub enum StmtKind {
         init: Option<Box<Stmt>>,
         condition: Option<Expr>,
         update: Option<Box<Stmt>>,
+        body: Vec<Stmt>,
+    },
+    ArrayAssign {
+        array: String,
+        index: Expr,
+        value: Expr,
+    },
+    ArrayPush {
+        array: String,
+        value: Expr,
+    },
+    Foreach {
+        array: Expr,
+        value_var: String,
         body: Vec<Stmt>,
     },
     Break,

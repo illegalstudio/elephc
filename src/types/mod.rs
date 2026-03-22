@@ -10,6 +10,7 @@ pub enum PhpType {
     Int,
     Str,
     Void,
+    Array(Box<PhpType>),
 }
 
 impl PhpType {
@@ -17,8 +18,9 @@ impl PhpType {
     pub fn stack_size(&self) -> usize {
         match self {
             PhpType::Int => 8,
-            PhpType::Str => 16, // pointer + length
+            PhpType::Str => 16,
             PhpType::Void => 0,
+            PhpType::Array(_) => 8, // pointer to heap
         }
     }
 
@@ -28,8 +30,10 @@ impl PhpType {
             PhpType::Int => 1,
             PhpType::Str => 2,
             PhpType::Void => 0,
+            PhpType::Array(_) => 1,
         }
     }
+
 }
 
 /// Maps variable names to their resolved types.

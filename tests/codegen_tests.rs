@@ -803,6 +803,88 @@ fn test_argc_exists() {
     assert_eq!(out, "1");
 }
 
+// --- Arrays ---
+
+#[test]
+fn test_array_literal_and_count() {
+    let out = compile_and_run("<?php $a = [1, 2, 3]; echo count($a);");
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_array_access() {
+    let out = compile_and_run("<?php $a = [10, 20, 30]; echo $a[0] . \" \" . $a[1] . \" \" . $a[2];");
+    assert_eq!(out, "10 20 30");
+}
+
+#[test]
+fn test_array_access_variable_index() {
+    let out = compile_and_run("<?php $a = [10, 20, 30]; $i = 2; echo $a[$i];");
+    assert_eq!(out, "30");
+}
+
+#[test]
+fn test_array_assign() {
+    let out = compile_and_run("<?php $a = [1, 2, 3]; $a[1] = 99; echo $a[1];");
+    assert_eq!(out, "99");
+}
+
+#[test]
+fn test_array_push() {
+    let out = compile_and_run("<?php $a = [1, 2]; $a[] = 3; echo count($a) . \" \" . $a[2];");
+    assert_eq!(out, "3 3");
+}
+
+#[test]
+fn test_array_push_builtin() {
+    let out = compile_and_run("<?php $a = [10]; array_push($a, 20); echo count($a) . \" \" . $a[1];");
+    assert_eq!(out, "2 20");
+}
+
+#[test]
+fn test_foreach_int() {
+    let out = compile_and_run("<?php $a = [1, 2, 3]; foreach ($a as $v) { echo $v; }");
+    assert_eq!(out, "123");
+}
+
+#[test]
+fn test_foreach_string() {
+    let out = compile_and_run(r#"<?php $a = ["a", "b", "c"]; foreach ($a as $v) { echo $v; }"#);
+    assert_eq!(out, "abc");
+}
+
+#[test]
+fn test_foreach_break() {
+    let out = compile_and_run("<?php $a = [1, 2, 3, 4, 5]; foreach ($a as $v) { if ($v == 3) { break; } echo $v; }");
+    assert_eq!(out, "12");
+}
+
+#[test]
+fn test_array_in_function() {
+    let out = compile_and_run(r#"<?php
+function sum($arr) {
+    $total = 0;
+    foreach ($arr as $v) {
+        $total += $v;
+    }
+    return $total;
+}
+echo sum([1, 2, 3, 4, 5]);
+"#);
+    assert_eq!(out, "15");
+}
+
+#[test]
+fn test_string_array() {
+    let out = compile_and_run(r#"<?php
+$names = ["Alice", "Bob"];
+$names[] = "Charlie";
+echo count($names) . ": ";
+foreach ($names as $n) { echo $n . " "; }
+"#);
+    assert_eq!(out, "3: Alice Bob Charlie ");
+}
+
 // --- Nested control flow ---
 
 #[test]

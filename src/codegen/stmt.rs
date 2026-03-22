@@ -1,5 +1,6 @@
 use super::abi;
 use super::context::{Context, LoopLabels};
+use crate::types::PhpType;
 use super::data_section::DataSection;
 use super::emit::Emitter;
 use super::expr::emit_expr;
@@ -75,6 +76,145 @@ pub fn emit_stmt(
             }
 
             emitter.label(&end_label);
+        }
+        StmtKind::ArrayAssign { array, index, value } => {
+            emitter.blank();
+            emitter.comment(&format!("${}[...] = ...", array));
+            let var = ctx.variables.get(array).expect("undefined variable");
+            let offset = var.stack_offset;
+            let elem_ty = match &var.ty {
+                PhpType::Array(t) => *t.clone(),
+                _ => PhpType::Int,
+            };
+            // Load array pointer
+            emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));
+            emitter.instruction("str x0, [sp, #-16]!"); // save array ptr
+            // Evaluate index
+            emit_expr(index, emitter, ctx, data);
+            emitter.instruction("str x0, [sp, #-16]!"); // save index
+            // Evaluate value
+            let val_ty = emit_expr(value, emitter, ctx, data);
+            // Pop index and array ptr
+            emitter.instruction("ldr x9, [sp], #16"); // index
+            emitter.instruction("ldr x10, [sp], #16"); // array ptr
+            match &elem_ty {
+                PhpType::Int => {
+                    emitter.instruction("add x10, x10, #24");
+                    emitter.instruction("str x0, [x10, x9, lsl #3]");
+                }
+                PhpType::Str => {
+                    emitter.instruction("lsl x9, x9, #4");
+                    emitter.instruction("add x10, x10, x9");
+                    emitter.instruction("add x10, x10, #24");
+                    emitter.instruction("str x1, [x10]");
+                    emitter.instruction("str x2, [x10, #8]");
+                }
+                _ => {}
+            }
+            let _ = val_ty;
+        }
+        StmtKind::ArrayPush { array, value } => {
+            emitter.blank();
+            emitter.comment(&format!("${}[] = ...", array));
+            let var = ctx.variables.get(array).expect("undefined variable");
+            let offset = var.stack_offset;
+            let elem_ty = match &var.ty {
+                PhpType::Array(t) => *t.clone(),
+                _ => PhpType::Int,
+            };
+            // Load array pointer
+            emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));
+            emitter.instruction("str x0, [sp, #-16]!"); // save
+            // Evaluate value
+            emit_expr(value, emitter, ctx, data);
+            emitter.instruction("ldr x9, [sp], #16"); // array ptr
+            match &elem_ty {
+                PhpType::Int => {
+                    emitter.instruction("mov x1, x0");
+                    emitter.instruction("mov x0, x9");
+                    emitter.instruction("bl __rt_array_push_int");
+                }
+                PhpType::Str => {
+                    emitter.instruction("mov x0, x9");
+                    emitter.instruction("bl __rt_array_push_str");
+                }
+                _ => {}
+            }
+        }
+        StmtKind::Foreach {
+            array,
+            value_var,
+            body,
+        } => {
+            let loop_start = ctx.next_label("foreach_start");
+            let loop_end = ctx.next_label("foreach_end");
+            let loop_cont = ctx.next_label("foreach_cont");
+
+            emitter.blank();
+            emitter.comment("foreach");
+
+            // Evaluate array
+            let arr_ty = emit_expr(array, emitter, ctx, data);
+            let elem_ty = match &arr_ty {
+                PhpType::Array(t) => *t.clone(),
+                _ => PhpType::Int,
+            };
+            // Save array ptr and length on stack
+            emitter.instruction("str x0, [sp, #-16]!"); // array ptr
+            emitter.instruction("ldr x9, [x0]"); // length
+            emitter.instruction("str x9, [sp, #-16]!"); // length
+            emitter.instruction("str xzr, [sp, #-16]!"); // index = 0
+
+            emitter.label(&loop_start);
+            // Load index and length
+            emitter.instruction("ldr x0, [sp]"); // index
+            emitter.instruction("ldr x1, [sp, #16]"); // length
+            emitter.instruction("cmp x0, x1");
+            emitter.instruction(&format!("b.ge {}", loop_end));
+
+            // Load element at index into $value_var
+            emitter.instruction("ldr x9, [sp, #32]"); // array ptr
+            let val_var = ctx.variables.get(value_var).expect("foreach var");
+            let val_offset = val_var.stack_offset;
+            match &elem_ty {
+                PhpType::Int => {
+                    emitter.instruction("add x9, x9, #24");
+                    emitter.instruction("ldr x0, [x9, x0, lsl #3]");
+                    emitter.instruction(&format!("stur x0, [x29, #-{}]", val_offset));
+                }
+                PhpType::Str => {
+                    emitter.instruction("lsl x10, x0, #4");
+                    emitter.instruction("add x9, x9, x10");
+                    emitter.instruction("add x9, x9, #24");
+                    emitter.instruction("ldr x1, [x9]");
+                    emitter.instruction("ldr x2, [x9, #8]");
+                    emitter.instruction(&format!("stur x1, [x29, #-{}]", val_offset));
+                    emitter.instruction(&format!("stur x2, [x29, #-{}]", val_offset - 8));
+                }
+                _ => {}
+            }
+
+            ctx.loop_stack.push(LoopLabels {
+                continue_label: loop_cont.clone(),
+                break_label: loop_end.clone(),
+            });
+
+            for s in body {
+                emit_stmt(s, emitter, ctx, data);
+            }
+
+            ctx.loop_stack.pop();
+
+            // Increment index
+            emitter.label(&loop_cont);
+            emitter.instruction("ldr x0, [sp]");
+            emitter.instruction("add x0, x0, #1");
+            emitter.instruction("str x0, [sp]");
+            emitter.instruction(&format!("b {}", loop_start));
+
+            emitter.label(&loop_end);
+            // Clean up stack (3 x 16 bytes)
+            emitter.instruction("add sp, sp, #48");
         }
         StmtKind::DoWhile { body, condition } => {
             let loop_start = ctx.next_label("dowhile_start");

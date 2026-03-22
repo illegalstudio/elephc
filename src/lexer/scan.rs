@@ -101,6 +101,14 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
             cursor.advance();
             Ok(Token::Colon)
         }
+        '[' => {
+            cursor.advance();
+            Ok(Token::LBracket)
+        }
+        ']' => {
+            cursor.advance();
+            Ok(Token::RBracket)
+        }
         '(' => {
             cursor.advance();
             Ok(Token::LParen)
@@ -358,6 +366,8 @@ fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
         "false" => Ok(Token::False),
         "null" => Ok(Token::Null),
         "do" => Ok(Token::Do),
+        "foreach" => Ok(Token::Foreach),
+        "as" => Ok(Token::As),
         _ => Ok(Token::Identifier(word)),
     }
 }

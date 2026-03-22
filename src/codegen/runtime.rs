@@ -5,6 +5,10 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     emit_concat(emitter);
     emit_atoi(emitter);
     emit_argv(emitter);
+    emit_heap_alloc(emitter);
+    emit_array_new(emitter);
+    emit_array_push_int(emitter);
+    emit_array_push_str(emitter);
 }
 
 /// Returns BSS directives needed by runtime routines.
@@ -14,6 +18,8 @@ pub fn emit_runtime_data() -> String {
     out.push_str(".comm _concat_off, 8, 3\n");
     out.push_str(".comm _global_argc, 8, 3\n");
     out.push_str(".comm _global_argv, 8, 3\n");
+    out.push_str(".comm _heap_buf, 1048576, 3\n");
+    out.push_str(".comm _heap_off, 8, 3\n");
     out
 }
 
@@ -222,5 +228,88 @@ fn emit_argv(emitter: &mut Emitter) {
     emitter.instruction("b __rt_argv_len");
 
     emitter.label("__rt_argv_done");
+    emitter.instruction("ret");
+}
+
+/// heap_alloc: bump allocator.
+/// Input: x0 = bytes needed
+/// Output: x0 = pointer to allocated memory
+fn emit_heap_alloc(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: heap_alloc ---");
+    emitter.label("__rt_heap_alloc");
+    emitter.instruction("adrp x9, _heap_off@PAGE");
+    emitter.instruction("add x9, x9, _heap_off@PAGEOFF");
+    emitter.instruction("ldr x10, [x9]"); // current offset
+    emitter.instruction("adrp x11, _heap_buf@PAGE");
+    emitter.instruction("add x11, x11, _heap_buf@PAGEOFF");
+    emitter.instruction("add x12, x11, x10"); // result pointer
+    emitter.instruction("add x10, x10, x0"); // bump offset
+    emitter.instruction("str x10, [x9]"); // store new offset
+    emitter.instruction("mov x0, x12"); // return pointer
+    emitter.instruction("ret");
+}
+
+/// array_new: create a new array on the heap.
+/// Input: x0 = capacity, x1 = element size (8 or 16)
+/// Output: x0 = pointer to array header
+/// Layout: [length:8][capacity:8][elem_size:8][elements...]
+fn emit_array_new(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: array_new ---");
+    emitter.label("__rt_array_new");
+    emitter.instruction("sub sp, sp, #32");
+    emitter.instruction("stp x29, x30, [sp, #16]");
+    emitter.instruction("add x29, sp, #16");
+    // Save capacity and elem_size
+    emitter.instruction("str x0, [sp, #0]"); // capacity
+    emitter.instruction("str x1, [sp, #8]"); // elem_size
+    // Allocate: 24 (header) + capacity * elem_size
+    emitter.instruction("mul x2, x0, x1");
+    emitter.instruction("add x0, x2, #24");
+    emitter.instruction("bl __rt_heap_alloc");
+    // x0 = allocated pointer, init header
+    emitter.instruction("str xzr, [x0]"); // length = 0
+    emitter.instruction("ldr x9, [sp, #0]");
+    emitter.instruction("str x9, [x0, #8]"); // capacity
+    emitter.instruction("ldr x9, [sp, #8]");
+    emitter.instruction("str x9, [x0, #16]"); // elem_size
+    emitter.instruction("ldp x29, x30, [sp, #16]");
+    emitter.instruction("add sp, sp, #32");
+    emitter.instruction("ret");
+}
+
+/// array_push_int: push an integer element to an array.
+/// Input: x0 = array pointer, x1 = value
+fn emit_array_push_int(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: array_push_int ---");
+    emitter.label("__rt_array_push_int");
+    emitter.instruction("ldr x9, [x0]"); // length
+    // Store at header + 24 + length * 8
+    emitter.instruction("add x10, x0, #24");
+    emitter.instruction("str x1, [x10, x9, lsl #3]");
+    // Increment length
+    emitter.instruction("add x9, x9, #1");
+    emitter.instruction("str x9, [x0]");
+    emitter.instruction("ret");
+}
+
+/// array_push_str: push a string element (ptr+len) to an array.
+/// Input: x0 = array pointer, x1 = str ptr, x2 = str len
+fn emit_array_push_str(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: array_push_str ---");
+    emitter.label("__rt_array_push_str");
+    emitter.instruction("ldr x9, [x0]"); // length
+    // Offset = 24 + length * 16
+    emitter.instruction("lsl x10, x9, #4"); // length * 16
+    emitter.instruction("add x10, x0, x10");
+    emitter.instruction("add x10, x10, #24");
+    emitter.instruction("str x1, [x10]"); // ptr
+    emitter.instruction("str x2, [x10, #8]"); // len
+    // Increment length
+    emitter.instruction("add x9, x9, #1");
+    emitter.instruction("str x9, [x0]");
     emitter.instruction("ret");
 }

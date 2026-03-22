@@ -31,6 +31,8 @@ pub enum Token {
     False,
     Null,
     Do,
+    Foreach,
+    As,
 
     // Operators
     Assign,         // =
@@ -41,6 +43,8 @@ pub enum Token {
     Percent,        // %
     Dot,            // .
     Comma,          // ,
+    LBracket,       // [
+    RBracket,       // ]
     Question,       // ?
     Colon,          // :
 
