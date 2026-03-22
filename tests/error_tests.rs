@@ -51,8 +51,13 @@ fn test_error_unexpected_character() {
 }
 
 #[test]
-fn test_error_bang_without_equals() {
-    expect_error("<?php !;", "Expected '=' after '!'");
+fn test_error_single_ampersand() {
+    expect_error("<?php &;", "Expected '&' after '&'");
+}
+
+#[test]
+fn test_error_single_pipe() {
+    expect_error("<?php |;", "Expected '|' after '|'");
 }
 
 // --- Parser errors ---

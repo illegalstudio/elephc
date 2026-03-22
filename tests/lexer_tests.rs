@@ -84,6 +84,40 @@ fn test_comparison_operators() {
 }
 
 #[test]
+fn test_logical_operators() {
+    let t = tokens("<?php && ||");
+    assert_eq!(t[1..3], [Token::AndAnd, Token::OrOr]);
+}
+
+#[test]
+fn test_bang() {
+    let t = tokens("<?php !");
+    assert_eq!(t[1], Token::Bang);
+}
+
+#[test]
+fn test_compound_assignment() {
+    let t = tokens("<?php += -= *= /= .= %=");
+    assert_eq!(
+        t[1..7],
+        [
+            Token::PlusAssign,
+            Token::MinusAssign,
+            Token::StarAssign,
+            Token::SlashAssign,
+            Token::DotAssign,
+            Token::PercentAssign,
+        ]
+    );
+}
+
+#[test]
+fn test_boolean_keywords() {
+    let t = tokens("<?php true false");
+    assert_eq!(t[1..3], [Token::True, Token::False]);
+}
+
+#[test]
 fn test_increment_decrement() {
     let t = tokens("<?php ++ --");
     assert_eq!(t[1..3], [Token::PlusPlus, Token::MinusMinus]);

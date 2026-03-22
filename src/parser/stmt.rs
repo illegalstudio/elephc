@@ -79,7 +79,7 @@ fn parse_variable_stmt(
         }
     }
 
-    // Regular assignment
+    // Regular or compound assignment
     parse_assign(tokens, pos, span)
 }
 
@@ -94,13 +94,40 @@ fn parse_assign(
     };
     *pos += 1;
 
-    if *pos >= tokens.len() || tokens[*pos].0 != Token::Assign {
+    if *pos >= tokens.len() {
         return Err(CompileError::new(span, "Expected '=' after variable name"));
     }
+
+    // Check for compound assignment operators
+    use crate::parser::ast::BinOp;
+    let compound_op = match &tokens[*pos].0 {
+        Token::PlusAssign => Some(BinOp::Add),
+        Token::MinusAssign => Some(BinOp::Sub),
+        Token::StarAssign => Some(BinOp::Mul),
+        Token::SlashAssign => Some(BinOp::Div),
+        Token::PercentAssign => Some(BinOp::Mod),
+        Token::DotAssign => Some(BinOp::Concat),
+        Token::Assign => None,
+        _ => return Err(CompileError::new(span, "Expected '=' after variable name")),
+    };
     *pos += 1;
 
-    let value = parse_expr(tokens, pos)?;
+    let rhs = parse_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
+
+    let value = if let Some(op) = compound_op {
+        // Desugar: $x += expr → $x = $x + expr
+        Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(Expr::new(ExprKind::Variable(name.clone()), span)),
+                op,
+                right: Box::new(rhs),
+            },
+            span,
+        )
+    } else {
+        rhs
+    };
 
     Ok(Stmt::new(StmtKind::Assign { name, value }, span))
 }

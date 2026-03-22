@@ -19,6 +19,7 @@ pub enum ExprKind {
         right: Box<Expr>,
     },
     Negate(Box<Expr>),
+    Not(Box<Expr>),
     PreIncrement(String),
     PostIncrement(String),
     PreDecrement(String),
@@ -85,6 +86,8 @@ pub enum BinOp {
     Gt,
     LtEq,
     GtEq,
+    And,
+    Or,
 }
 
 // --- Statements ---

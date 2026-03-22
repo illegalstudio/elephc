@@ -13,9 +13,9 @@ The compiler should be able to produce real CLI tools that accept arguments and 
 - [x] Pre/post increment/decrement (`++$i`, `$i++`, `--$i`, `$i--`)
 - [x] Error messages with line/column numbers
 - [x] 169 tests (lexer, parser, codegen end-to-end, error reporting)
-- [ ] Logical operators: `&&`, `||`, `!` (with short-circuit evaluation)
-- [ ] Assignment operators: `+=`, `-=`, `*=`, `/=`, `.=`, `%=`
-- [ ] Boolean literals: `true`, `false`
+- [x] Logical operators: `&&`, `||`, `!` (with short-circuit evaluation)
+- [x] Assignment operators: `+=`, `-=`, `*=`, `/=`, `.=`, `%=`
+- [x] Boolean literals: `true`, `false`
 - [ ] `null` keyword and `is_null()`
 - [ ] Ternary operator: `$x = $a > $b ? $a : $b;`
 - [ ] `do { } while ();` loop

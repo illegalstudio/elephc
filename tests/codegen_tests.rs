@@ -556,6 +556,130 @@ fn test_function_no_args() {
     assert_eq!(out, "42");
 }
 
+// --- Logical operators ---
+
+#[test]
+fn test_and_true() {
+    let out = compile_and_run("<?php echo 1 && 1;");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_and_false() {
+    let out = compile_and_run("<?php echo 1 && 0;");
+    assert_eq!(out, "0");
+}
+
+#[test]
+fn test_or_true() {
+    let out = compile_and_run("<?php echo 0 || 1;");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_or_false() {
+    let out = compile_and_run("<?php echo 0 || 0;");
+    assert_eq!(out, "0");
+}
+
+#[test]
+fn test_not_zero() {
+    let out = compile_and_run("<?php $x = 0; echo !$x;");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_not_nonzero() {
+    let out = compile_and_run("<?php $x = 42; echo !$x;");
+    assert_eq!(out, "0");
+}
+
+#[test]
+fn test_short_circuit_and() {
+    // With &&, if left is false the right side should not be evaluated.
+    // We test by using a function with side effects.
+    let out = compile_and_run(r#"<?php
+$count = 0;
+function inc() { return 1; }
+$r = 0 && inc();
+echo $r;
+"#);
+    assert_eq!(out, "0");
+}
+
+#[test]
+fn test_short_circuit_or() {
+    // With ||, if left is true the right side should not be evaluated.
+    let out = compile_and_run(r#"<?php
+function inc() { return 1; }
+$r = 1 || inc();
+echo $r;
+"#);
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_boolean_true() {
+    let out = compile_and_run("<?php echo true;");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_boolean_false() {
+    let out = compile_and_run("<?php echo false;");
+    assert_eq!(out, "0");
+}
+
+#[test]
+fn test_boolean_in_condition() {
+    let out = compile_and_run("<?php if (true) { echo \"yes\"; } if (false) { echo \"no\"; }");
+    assert_eq!(out, "yes");
+}
+
+// --- Assignment operators ---
+
+#[test]
+fn test_plus_assign() {
+    let out = compile_and_run("<?php $x = 10; $x += 5; echo $x;");
+    assert_eq!(out, "15");
+}
+
+#[test]
+fn test_minus_assign() {
+    let out = compile_and_run("<?php $x = 10; $x -= 3; echo $x;");
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_star_assign() {
+    let out = compile_and_run("<?php $x = 6; $x *= 7; echo $x;");
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_slash_assign() {
+    let out = compile_and_run("<?php $x = 84; $x /= 2; echo $x;");
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_percent_assign() {
+    let out = compile_and_run("<?php $x = 10; $x %= 3; echo $x;");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_dot_assign() {
+    let out = compile_and_run("<?php $s = \"hello\"; $s .= \" world\"; echo $s;");
+    assert_eq!(out, "hello world");
+}
+
+#[test]
+fn test_logical_with_comparison() {
+    let out = compile_and_run("<?php $x = 5; echo ($x > 3 && $x < 10);");
+    assert_eq!(out, "1");
+}
+
 // --- Nested control flow ---
 
 #[test]

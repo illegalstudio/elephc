@@ -149,6 +149,10 @@ impl Checker {
                 }
                 Ok(PhpType::Int)
             }
+            ExprKind::Not(inner) => {
+                self.infer_type(inner, env)?;
+                Ok(PhpType::Int) // !x returns 0 or 1
+            }
             ExprKind::PreIncrement(name)
             | ExprKind::PostIncrement(name)
             | ExprKind::PreDecrement(name)
@@ -192,6 +196,10 @@ impl Checker {
                         Ok(PhpType::Int)
                     }
                     BinOp::Concat => Ok(PhpType::Str),
+                BinOp::And | BinOp::Or => {
+                    // Both sides can be any type (truthy/falsy), result is Int (0 or 1)
+                    Ok(PhpType::Int)
+                }
                 }
             }
         }

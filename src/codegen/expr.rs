@@ -44,6 +44,13 @@ pub fn emit_expr(
             emitter.instruction("neg x0, x0");
             PhpType::Int
         }
+        ExprKind::Not(inner) => {
+            emit_expr(inner, emitter, ctx, data);
+            emitter.comment("logical not");
+            emitter.instruction("cmp x0, #0");
+            emitter.instruction("cset x0, eq");
+            PhpType::Int
+        }
         ExprKind::PreIncrement(name) => {
             let var = ctx.variables.get(name).expect("undefined variable");
             let offset = var.stack_offset;
@@ -98,6 +105,32 @@ fn emit_binop(
     data: &mut DataSection,
 ) -> PhpType {
     match op {
+        BinOp::And => {
+            // Short-circuit: if left is 0, skip right
+            let end_label = ctx.next_label("and_end");
+            emit_expr(left, emitter, ctx, data);
+            emitter.instruction("cmp x0, #0");
+            emitter.instruction(&format!("b.eq {}", end_label));
+            emit_expr(right, emitter, ctx, data);
+            // Normalize to 0/1
+            emitter.instruction("cmp x0, #0");
+            emitter.instruction("cset x0, ne");
+            emitter.label(&end_label);
+            return PhpType::Int;
+        }
+        BinOp::Or => {
+            // Short-circuit: if left is non-0, skip right
+            let end_label = ctx.next_label("or_end");
+            emit_expr(left, emitter, ctx, data);
+            emitter.instruction("cmp x0, #0");
+            emitter.instruction(&format!("b.ne {}", end_label));
+            emit_expr(right, emitter, ctx, data);
+            emitter.label(&end_label);
+            // Normalize to 0/1
+            emitter.instruction("cmp x0, #0");
+            emitter.instruction("cset x0, ne");
+            return PhpType::Int;
+        }
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
             emit_expr(left, emitter, ctx, data);
             emitter.instruction("str x0, [sp, #-16]!");

@@ -124,7 +124,25 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
                 cursor.advance();
                 Ok(Token::NotEqual)
             } else {
-                Err(CompileError::new(cursor.span(), "Expected '=' after '!'"))
+                Ok(Token::Bang)
+            }
+        }
+        '&' => {
+            cursor.advance();
+            if cursor.peek() == Some('&') {
+                cursor.advance();
+                Ok(Token::AndAnd)
+            } else {
+                Err(CompileError::new(cursor.span(), "Expected '&' after '&'"))
+            }
+        }
+        '|' => {
+            cursor.advance();
+            if cursor.peek() == Some('|') {
+                cursor.advance();
+                Ok(Token::OrOr)
+            } else {
+                Err(CompileError::new(cursor.span(), "Expected '|' after '|'"))
             }
         }
         '<' => {
@@ -147,37 +165,55 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
         }
         '+' => {
             cursor.advance();
-            if cursor.peek() == Some('+') {
-                cursor.advance();
-                Ok(Token::PlusPlus)
-            } else {
-                Ok(Token::Plus)
+            match cursor.peek() {
+                Some('+') => { cursor.advance(); Ok(Token::PlusPlus) }
+                Some('=') => { cursor.advance(); Ok(Token::PlusAssign) }
+                _ => Ok(Token::Plus),
             }
         }
         '-' => {
             cursor.advance();
-            if cursor.peek() == Some('-') {
-                cursor.advance();
-                Ok(Token::MinusMinus)
-            } else {
-                Ok(Token::Minus)
+            match cursor.peek() {
+                Some('-') => { cursor.advance(); Ok(Token::MinusMinus) }
+                Some('=') => { cursor.advance(); Ok(Token::MinusAssign) }
+                _ => Ok(Token::Minus),
             }
         }
         '*' => {
             cursor.advance();
-            Ok(Token::Star)
+            if cursor.peek() == Some('=') {
+                cursor.advance();
+                Ok(Token::StarAssign)
+            } else {
+                Ok(Token::Star)
+            }
         }
         '/' => {
             cursor.advance();
-            Ok(Token::Slash)
+            if cursor.peek() == Some('=') {
+                cursor.advance();
+                Ok(Token::SlashAssign)
+            } else {
+                Ok(Token::Slash)
+            }
         }
         '%' => {
             cursor.advance();
-            Ok(Token::Percent)
+            if cursor.peek() == Some('=') {
+                cursor.advance();
+                Ok(Token::PercentAssign)
+            } else {
+                Ok(Token::Percent)
+            }
         }
         '.' => {
             cursor.advance();
-            Ok(Token::Dot)
+            if cursor.peek() == Some('=') {
+                cursor.advance();
+                Ok(Token::DotAssign)
+            } else {
+                Ok(Token::Dot)
+            }
         }
         '"' => scan_string(cursor),
         '$' => scan_variable(cursor),
@@ -283,6 +319,8 @@ fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
         "continue" => Ok(Token::Continue),
         "function" => Ok(Token::Function),
         "return" => Ok(Token::Return),
+        "true" => Ok(Token::True),
+        "false" => Ok(Token::False),
         _ => Ok(Token::Identifier(word)),
     }
 }
