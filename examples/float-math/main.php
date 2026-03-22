@@ -11,7 +11,7 @@ echo "e:  " . $e . "\n";
 echo "\nArithmetic:\n";
 echo "  pi + e  = " . ($pi + $e) . "\n";
 echo "  pi * 2  = " . ($pi * 2) . "\n";
-echo "  10 / 3  = " . (10.0 / 3.0) . "\n";
+echo "  10 / 3  = " . (10 / 3) . "\n";
 
 // Math functions
 echo "\nMath functions:\n";
@@ -32,8 +32,17 @@ echo "  max(1.5, 2.5) = " . max(1.5, 2.5) . "\n";
 echo "\nInteger division:\n";
 echo "  intdiv(7, 2)  = " . intdiv(7, 2) . "\n";
 
+// Special values
+echo "\nSpecial values:\n";
+echo "  INF       = " . INF . "\n";
+echo "  -INF      = " . -INF . "\n";
+echo "  NAN       = " . NAN . "\n";
 // Type checks
 echo "\nType checks:\n";
-echo "  is_float(3.14) = " . is_float(3.14) . "\n";
-echo "  is_int(42)     = " . is_int(42) . "\n";
-echo "  is_string(\"x\") = " . is_string("x") . "\n";
+echo "  is_float(3.14)    = " . is_float(3.14) . "\n";
+echo "  is_int(42)        = " . is_int(42) . "\n";
+echo "  is_string(\"x\")    = " . is_string("x") . "\n";
+echo "  is_nan(NAN)       = " . is_nan(NAN) . "\n";
+echo "  is_infinite(INF)  = " . is_infinite(INF) . "\n";
+echo "  is_finite(3.14)   = " . is_finite(3.14) . "\n";
+echo "  is_finite(INF)    = " . is_finite(INF) . "\n";
