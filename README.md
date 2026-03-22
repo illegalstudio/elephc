@@ -144,26 +144,57 @@ error[2:1]: Required file not found: 'missing.php'
 
 ```
 src/
-├── main.rs              # CLI, assembler + linker invocation
+├── main.rs              # CLI entry point, assembler + linker invocation
 ├── lib.rs               # Public module exports
-├── span.rs              # Source position tracking
-├── resolver.rs          # Include/require resolution
+├── span.rs              # Source position tracking (line, col)
+├── resolver.rs          # Include/require file resolution
+│
 ├── lexer/               # Source text → token stream
+│   ├── token.rs         # Token enum
+│   ├── scan.rs          # Main scanning loop, operators
+│   ├── literals.rs      # String, number, variable, keyword scanning
+│   └── cursor.rs        # Byte-level source reader
+│
 ├── parser/              # Tokens → AST (Pratt parser)
+│   ├── ast.rs           # ExprKind, StmtKind, BinOp, CastType
+│   ├── expr.rs          # Expression parsing with binding powers
+│   ├── stmt.rs          # Statement parsing
+│   └── control.rs       # if, while, for, foreach, do-while
+│
 ├── types/               # Static type checking
-│   └── checker/         # Type inference, builtins, functions
+│   └── checker/
+│       ├── mod.rs       # check_stmt(), infer_type()
+│       ├── builtins.rs  # Built-in function type signatures
+│       └── functions.rs # User function type inference
+│
 ├── codegen/             # AST → ARM64 assembly
-│   ├── builtins/        # Built-in function codegen (arrays, math, strings, types, system)
-│   ├── runtime/         # Runtime routines (itoa, concat, ftoa, arrays, number_format)
+│   ├── expr.rs          # Expression codegen
+│   ├── stmt.rs          # Statement codegen
 │   ├── abi.rs           # Register conventions (load, store, write)
-│   └── ...
-└── errors/              # Diagnostics
+│   ├── functions.rs     # User function emission
+│   ├── context.rs       # Variables, labels, loop stack
+│   ├── data_section.rs  # String/float literal .data section
+│   ├── emit.rs          # Assembly text buffer
+│   │
+│   ├── builtins/        # Built-in function codegen (one file per function)
+│   │   ├── strings/     # strlen, substr, strpos, explode, implode, ...
+│   │   ├── arrays/      # count, array_push, array_pop, sort, ...
+│   │   ├── math/        # abs, floor, pow, rand, fmod, ...
+│   │   ├── types/       # is_int, gettype, empty, unset, settype, ...
+│   │   └── system/      # exit, die
+│   │
+│   └── runtime/         # ARM64 runtime routines (one file per function)
+│       ├── strings/     # itoa, concat, ftoa, strpos, str_replace, ...
+│       ├── arrays/      # heap_alloc, array_new, array_push, sort, ...
+│       └── system/      # build_argv
+│
+└── errors/              # Error formatting with line:col
 ```
 
 ## Tests
 
 ```bash
-cargo test                      # all tests (~460)
+cargo test                      # all tests (~500)
 cargo test test_my_feature      # run specific tests
 ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 ```

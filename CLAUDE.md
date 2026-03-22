@@ -103,6 +103,17 @@ PHP source → Lexer (tokens) → Parser (AST) → Resolver (include/require) �
 5. If it introduces variables, update `collect_local_vars` in `src/codegen/functions.rs`
 6. Add tests
 
+### Adding a new built-in function
+
+1. Add type signature in `src/types/checker/builtins.rs` (argument count, types, return type)
+2. Create a new file in `src/codegen/builtins/<category>/` (e.g., `strings/my_func.rs`)
+3. Add `pub mod my_func;` and a match arm in the category's `mod.rs`
+4. If the function needs an ARM64 runtime routine, create `src/codegen/runtime/strings/my_func.rs`
+5. Add `pub mod` and re-export in `runtime/strings/mod.rs`, call it from `runtime/mod.rs`
+6. Add codegen and error tests
+
+Each builtin and runtime file contains exactly **one function**. Never add to an existing file — always create a new one.
+
 ### Codegen conventions (ARM64)
 
 - **Integers**: result in `x0`

@@ -81,23 +81,25 @@ src/
 │   ├── mod.rs                 generate() orchestration
 │   ├── expr.rs                Expression codegen
 │   ├── stmt.rs                Statement codegen
-│   ├── builtins/              Built-in function codegen
-│   │   ├── mod.rs             Dispatcher
-│   │   ├── arrays.rs          count, push, pop, sort, in_array, etc.
-│   │   ├── math.rs            abs, floor, pow, rand, fmod, fdiv, etc.
-│   │   ├── strings.rs         strlen, intval, number_format
-│   │   ├── system.rs          exit, die
-│   │   └── types.rs           is_*, gettype, empty, unset, settype
 │   ├── functions.rs           User function emission
 │   ├── abi.rs                 ARM64 register conventions
 │   ├── context.rs             Variables, labels, loop stack
 │   ├── data_section.rs        String/float literal .data section
 │   ├── emit.rs                Assembly text buffer
-│   └── runtime/
-│       ├── mod.rs             Runtime orchestration
-│       ├── strings.rs         itoa, concat, ftoa, atoi, str_eq, number_format
-│       ├── arrays.rs          heap_alloc, array_new, push, sort
-│       └── system.rs          build_argv
+│   │
+│   ├── builtins/              Built-in function codegen (one file per function)
+│   │   ├── mod.rs             Dispatcher — chains to category modules
+│   │   ├── strings/           strlen, substr, strpos, explode, implode, ... (37 files)
+│   │   ├── arrays/            count, array_push, array_pop, sort, ... (9 files)
+│   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, ... (13 files)
+│   │   ├── types/             is_*, gettype, empty, unset, settype, ... (15 files)
+│   │   └── system/            exit, die (1 file)
+│   │
+│   └── runtime/               ARM64 runtime routines (one file per function)
+│       ├── mod.rs             Emits all runtime functions into assembly
+│       ├── strings/           itoa, concat, ftoa, strpos, str_replace, ... (35 files)
+│       ├── arrays/            heap_alloc, array_new, push_int/str, sort (5 files)
+│       └── system/            build_argv (1 file)
 │
 └── errors/
     ├── mod.rs                 CompileError, error trait
