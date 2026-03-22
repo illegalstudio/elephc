@@ -103,6 +103,7 @@ fn infix_bp(token: &Token) -> Option<(BinOp, u8, u8)> {
         Token::Star         => Some((BinOp::Mul,   13, 14)),
         Token::Slash        => Some((BinOp::Div,   13, 14)),
         Token::Percent      => Some((BinOp::Mod,   13, 14)),
+        Token::StarStar     => Some((BinOp::Pow,   17, 16)), // right-associative, above unary
         _ => None,
     }
 }
@@ -146,6 +147,22 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
         Token::Nan => {
             *pos += 1;
             Ok(Expr::new(ExprKind::FloatLiteral(f64::NAN), span))
+        }
+        Token::PhpIntMax => {
+            *pos += 1;
+            Ok(Expr::new(ExprKind::IntLiteral(i64::MAX), span))
+        }
+        Token::PhpIntMin => {
+            *pos += 1;
+            Ok(Expr::new(ExprKind::IntLiteral(i64::MIN), span))
+        }
+        Token::PhpFloatMax => {
+            *pos += 1;
+            Ok(Expr::new(ExprKind::FloatLiteral(f64::MAX), span))
+        }
+        Token::MPi => {
+            *pos += 1;
+            Ok(Expr::new(ExprKind::FloatLiteral(std::f64::consts::PI), span))
         }
         Token::PlusPlus => {
             *pos += 1;

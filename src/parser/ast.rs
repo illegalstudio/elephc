@@ -118,6 +118,7 @@ pub enum BinOp {
     Gt,
     LtEq,
     GtEq,
+    Pow,
     And,
     Or,
 }

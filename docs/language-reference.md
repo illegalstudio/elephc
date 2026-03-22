@@ -42,6 +42,7 @@ $x = 42;              // reassignment from null works
 | `*` | `$a * $b` | Multiplication |
 | `/` | `$a / $b` | Division (always returns float) |
 | `%` | `$a % $b` | Modulo |
+| `**` | `$a ** $b` | Exponentiation (right-associative, returns float) |
 | `-$x` | `-$x` | Unary negation |
 
 ### Comparison
@@ -362,7 +363,13 @@ foreach ($names as $name) {
 | `min()` | `min($a, $b): int\|float` | Minimum of two values |
 | `max()` | `max($a, $b): int\|float` | Maximum of two values |
 | `intdiv()` | `intdiv($a, $b): int` | Integer division |
+| `fmod()` | `fmod($a, $b): float` | Float modulo |
+| `fdiv()` | `fdiv($a, $b): float` | Float division (returns INF for /0) |
 | `floatval()` | `floatval($val): float` | Convert to float |
+| `rand()` | `rand([$min, $max]): int` | Random integer (0 or 2 args) |
+| `mt_rand()` | `mt_rand([$min, $max]): int` | Alias for rand() |
+| `random_int()` | `random_int($min, $max): int` | Cryptographic random |
+| `number_format()` | `number_format($n [, $dec [, $dec_point, $thou_sep]]): string` | Format with separators |
 
 ### Type functions
 
@@ -389,6 +396,17 @@ foreach ($names as $name) {
 |---|---|---|
 | `exit()` | `exit($code = 0): void` | Terminate program |
 | `die()` | `die(): void` | Alias for `exit(0)` |
+
+## Constants
+
+| Constant | Type | Value |
+|---|---|---|
+| `INF` | float | Positive infinity |
+| `NAN` | float | Not a Number |
+| `PHP_INT_MAX` | int | 9223372036854775807 |
+| `PHP_INT_MIN` | int | -9223372036854775808 |
+| `PHP_FLOAT_MAX` | float | ~1.8e308 |
+| `M_PI` | float | 3.14159265358979... |
 
 ## Superglobals
 

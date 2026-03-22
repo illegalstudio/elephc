@@ -143,8 +143,11 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
         }
         '*' => {
             cursor.advance();
-            if cursor.peek() == Some('=') { cursor.advance(); Ok(Token::StarAssign) }
-            else { Ok(Token::Star) }
+            match cursor.peek() {
+                Some('*') => { cursor.advance(); Ok(Token::StarStar) }
+                Some('=') => { cursor.advance(); Ok(Token::StarAssign) }
+                _ => Ok(Token::Star),
+            }
         }
         '/' => {
             cursor.advance();

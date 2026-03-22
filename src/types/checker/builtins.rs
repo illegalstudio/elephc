@@ -229,6 +229,40 @@ impl Checker {
                 self.infer_type(&args[0], env)?;
                 Ok(Some(PhpType::Bool))
             }
+            "fmod" | "fdiv" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, &format!("{}() takes exactly 2 arguments", name)));
+                }
+                self.infer_type(&args[0], env)?;
+                self.infer_type(&args[1], env)?;
+                Ok(Some(PhpType::Float))
+            }
+            "rand" | "mt_rand" => {
+                if args.len() != 0 && args.len() != 2 {
+                    return Err(CompileError::new(span, &format!("{}() takes 0 or 2 arguments", name)));
+                }
+                for arg in args {
+                    self.infer_type(arg, env)?;
+                }
+                Ok(Some(PhpType::Int))
+            }
+            "random_int" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "random_int() takes exactly 2 arguments"));
+                }
+                self.infer_type(&args[0], env)?;
+                self.infer_type(&args[1], env)?;
+                Ok(Some(PhpType::Int))
+            }
+            "number_format" => {
+                if args.is_empty() || args.len() > 4 {
+                    return Err(CompileError::new(span, "number_format() takes 1 to 4 arguments"));
+                }
+                for arg in args {
+                    self.infer_type(arg, env)?;
+                }
+                Ok(Some(PhpType::Str))
+            }
             "gettype" => {
                 if args.len() != 1 {
                     return Err(CompileError::new(span, "gettype() takes exactly 1 argument"));

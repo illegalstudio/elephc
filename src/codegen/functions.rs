@@ -166,7 +166,7 @@ fn infer_local_type(
                 BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt
                 | BinOp::LtEq | BinOp::GtEq | BinOp::StrictEq
                 | BinOp::StrictNotEq | BinOp::And | BinOp::Or => PhpType::Bool,
-                BinOp::Div => PhpType::Float,
+                BinOp::Div | BinOp::Pow => PhpType::Float,
                 BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Mod => {
                     let lt = infer_local_type(left, sig);
                     let rt = infer_local_type(right, sig);

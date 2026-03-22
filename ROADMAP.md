@@ -57,11 +57,11 @@ Proper type system for PHP compatibility.
 ### Math functions
 - [x] `abs()`, `min()`, `max()`, `floor()`, `ceil()`, `round()`
 - [x] `sqrt()`, `pow()`
-- [ ] `**` exponentiation operator
-- [ ] `fmod()`, `fdiv()`
-- [ ] `rand()`, `mt_rand()`, `random_int()`
-- [ ] `number_format()`
-- [ ] Constants: `PHP_INT_MAX`, `PHP_INT_MIN`, `PHP_FLOAT_MAX`, `M_PI`
+- [x] `**` exponentiation operator
+- [x] `fmod()`, `fdiv()`
+- [x] `rand()`, `mt_rand()`, `random_int()`
+- [x] `number_format()`
+- [x] Constants: `PHP_INT_MAX`, `PHP_INT_MIN`, `PHP_FLOAT_MAX`, `M_PI`
 
 ## v0.4.0 — Strings
 

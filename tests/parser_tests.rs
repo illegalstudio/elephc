@@ -350,6 +350,43 @@ fn test_include_with_parens_parses() {
     }
 }
 
+// --- Exponentiation ---
+
+#[test]
+fn test_pow_operator_parses() {
+    let stmts = parse_source("<?php echo 2 ** 3;");
+    let expected = Stmt::echo(Expr::binop(
+        Expr::int_lit(2),
+        BinOp::Pow,
+        Expr::int_lit(3),
+    ));
+    assert_eq!(stmts, vec![expected]);
+}
+
+#[test]
+fn test_pow_right_associative_parse() {
+    // 2 ** 3 ** 2 should parse as 2 ** (3 ** 2)
+    let stmts = parse_source("<?php echo 2 ** 3 ** 2;");
+    let expected = Stmt::echo(Expr::binop(
+        Expr::int_lit(2),
+        BinOp::Pow,
+        Expr::binop(Expr::int_lit(3), BinOp::Pow, Expr::int_lit(2)),
+    ));
+    assert_eq!(stmts, vec![expected]);
+}
+
+#[test]
+fn test_pow_higher_than_mul_parse() {
+    // 3 * 2 ** 3 should parse as 3 * (2 ** 3)
+    let stmts = parse_source("<?php echo 3 * 2 ** 3;");
+    let expected = Stmt::echo(Expr::binop(
+        Expr::int_lit(3),
+        BinOp::Mul,
+        Expr::binop(Expr::int_lit(2), BinOp::Pow, Expr::int_lit(3)),
+    ));
+    assert_eq!(stmts, vec![expected]);
+}
+
 // --- Type casting ---
 
 #[test]

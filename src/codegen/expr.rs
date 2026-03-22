@@ -314,6 +314,23 @@ fn emit_binop(
             emitter.instruction("cset x0, ne");
             return PhpType::Bool;
         }
+        BinOp::Pow => {
+            let lt = emit_expr(left, emitter, ctx, data);
+            coerce_null_to_zero(emitter, &lt);
+            if lt != PhpType::Float {
+                emitter.instruction("scvtf d0, x0");
+            }
+            emitter.instruction("str d0, [sp, #-16]!");
+            let rt = emit_expr(right, emitter, ctx, data);
+            coerce_null_to_zero(emitter, &rt);
+            if rt != PhpType::Float {
+                emitter.instruction("scvtf d0, x0");
+            }
+            emitter.instruction("fmov d1, d0");
+            emitter.instruction("ldr d0, [sp], #16");
+            emitter.instruction("bl _pow");
+            return PhpType::Float;
+        }
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
             let lt = emit_expr(left, emitter, ctx, data);
             coerce_null_to_zero(emitter, &lt);

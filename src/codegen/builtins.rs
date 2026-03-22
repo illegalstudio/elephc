@@ -369,6 +369,119 @@ pub fn emit_builtin_call(
             emitter.instruction(&format!("mov x0, #{}", val));
             Some(PhpType::Bool)
         }
+        "fmod" => {
+            emitter.comment("fmod()");
+            let t0 = emit_expr(&args[0], emitter, ctx, data);
+            if t0 != PhpType::Float { emitter.instruction("scvtf d0, x0"); }
+            emitter.instruction("str d0, [sp, #-16]!");
+            let t1 = emit_expr(&args[1], emitter, ctx, data);
+            if t1 != PhpType::Float { emitter.instruction("scvtf d0, x0"); }
+            emitter.instruction("ldr d1, [sp], #16"); // d1=a, d0=b
+            // fmod: a - floor(a/b) * b
+            emitter.instruction("fdiv d2, d1, d0");
+            emitter.instruction("frintm d2, d2");
+            emitter.instruction("fmsub d0, d2, d0, d1");
+            Some(PhpType::Float)
+        }
+        "fdiv" => {
+            emitter.comment("fdiv()");
+            let t0 = emit_expr(&args[0], emitter, ctx, data);
+            if t0 != PhpType::Float { emitter.instruction("scvtf d0, x0"); }
+            emitter.instruction("str d0, [sp, #-16]!");
+            let t1 = emit_expr(&args[1], emitter, ctx, data);
+            if t1 != PhpType::Float { emitter.instruction("scvtf d0, x0"); }
+            emitter.instruction("ldr d1, [sp], #16");
+            emitter.instruction("fdiv d0, d1, d0");
+            Some(PhpType::Float)
+        }
+        "rand" | "mt_rand" => {
+            emitter.comment(&format!("{}()", name));
+            if args.len() == 2 {
+                // rand($min, $max)
+                emit_expr(&args[0], emitter, ctx, data);
+                emitter.instruction("str x0, [sp, #-16]!"); // min
+                emit_expr(&args[1], emitter, ctx, data);
+                emitter.instruction("ldr x9, [sp], #16"); // x9=min, x0=max
+                emitter.instruction("sub x0, x0, x9"); // range = max - min
+                emitter.instruction("add x0, x0, #1"); // range = max - min + 1
+                emitter.instruction("str x9, [sp, #-16]!"); // save min
+                // w0 = range (32-bit for arc4random_uniform)
+                emitter.instruction("mov w0, w0");
+                emitter.instruction("bl _arc4random_uniform");
+                // x0 = random in [0, range), add min
+                emitter.instruction("ldr x9, [sp], #16");
+                emitter.instruction("add x0, x0, x9");
+            } else {
+                // rand() — 0 to RAND_MAX (2^31-1)
+                emitter.instruction("bl _arc4random");
+                emitter.instruction("lsr x0, x0, #1"); // mask to 31 bits
+            }
+            Some(PhpType::Int)
+        }
+        "random_int" => {
+            emitter.comment("random_int()");
+            emit_expr(&args[0], emitter, ctx, data);
+            emitter.instruction("str x0, [sp, #-16]!");
+            emit_expr(&args[1], emitter, ctx, data);
+            emitter.instruction("ldr x9, [sp], #16");
+            emitter.instruction("sub x0, x0, x9");
+            emitter.instruction("add x0, x0, #1");
+            emitter.instruction("str x9, [sp, #-16]!");
+            emitter.instruction("mov w0, w0");
+            emitter.instruction("bl _arc4random_uniform");
+            emitter.instruction("ldr x9, [sp], #16");
+            emitter.instruction("add x0, x0, x9");
+            Some(PhpType::Int)
+        }
+        "number_format" => {
+            emitter.comment("number_format()");
+            let t0 = emit_expr(&args[0], emitter, ctx, data);
+            if t0 != PhpType::Float { emitter.instruction("scvtf d0, x0"); }
+            emitter.instruction("str d0, [sp, #-16]!"); // save number
+
+            // Evaluate decimals (arg 2, default 0)
+            if args.len() >= 2 {
+                emit_expr(&args[1], emitter, ctx, data);
+                emitter.instruction("str x0, [sp, #-16]!"); // save decimals
+            } else {
+                emitter.instruction("str xzr, [sp, #-16]!"); // decimals = 0
+            }
+
+            // Evaluate dec_point (arg 3, default '.')
+            if args.len() >= 3 {
+                emit_expr(&args[2], emitter, ctx, data);
+                // x1=ptr, x2=len — take first byte
+                emitter.instruction("ldrb w0, [x1]");
+                emitter.instruction("str x0, [sp, #-16]!");
+            } else {
+                emitter.instruction("mov x0, #46"); // '.'
+                emitter.instruction("str x0, [sp, #-16]!");
+            }
+
+            // Evaluate thousands_sep (arg 4, default ',')
+            if args.len() >= 4 {
+                emit_expr(&args[3], emitter, ctx, data);
+                // Empty string means no separator
+                emitter.instruction("cbz x2, 1f");
+                emitter.instruction("ldrb w0, [x1]");
+                emitter.instruction("b 2f");
+                emitter.raw("1:");
+                emitter.instruction("mov x0, #0"); // no separator
+                emitter.raw("2:");
+                emitter.instruction("str x0, [sp, #-16]!");
+            } else {
+                emitter.instruction("mov x0, #44"); // ','
+                emitter.instruction("str x0, [sp, #-16]!");
+            }
+
+            // Pop args: x3=thousands_sep, x2=dec_point, x1=decimals, d0=number
+            emitter.instruction("ldr x3, [sp], #16");  // thousands_sep
+            emitter.instruction("ldr x2, [sp], #16");  // dec_point
+            emitter.instruction("ldr x1, [sp], #16");  // decimals
+            emitter.instruction("ldr d0, [sp], #16");   // number
+            emitter.instruction("bl __rt_number_format");
+            Some(PhpType::Str)
+        }
         "gettype" => {
             emitter.comment("gettype()");
             let ty = emit_expr(&args[0], emitter, ctx, data);

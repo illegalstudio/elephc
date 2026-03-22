@@ -344,6 +344,35 @@ fn test_require_once_keyword() {
     assert_eq!(t[1], Token::RequireOnce);
 }
 
+// --- StarStar ---
+
+#[test]
+fn test_star_star() {
+    let t = tokens("<?php **");
+    assert_eq!(t[1], Token::StarStar);
+}
+
+#[test]
+fn test_star_vs_star_star() {
+    let t = tokens("<?php ** *");
+    assert_eq!(t[1], Token::StarStar);
+    assert_eq!(t[2], Token::Star);
+}
+
+// --- Constants ---
+
+#[test]
+fn test_php_int_max_token() {
+    let t = tokens("<?php PHP_INT_MAX");
+    assert_eq!(t[1], Token::PhpIntMax);
+}
+
+#[test]
+fn test_m_pi_token() {
+    let t = tokens("<?php M_PI");
+    assert_eq!(t[1], Token::MPi);
+}
+
 // --- INF / NAN ---
 
 #[test]

@@ -28,9 +28,29 @@ echo "\nMin/Max:\n";
 echo "  min(3, 7)     = " . min(3, 7) . "\n";
 echo "  max(1.5, 2.5) = " . max(1.5, 2.5) . "\n";
 
+// Exponentiation
+echo "\nExponentiation:\n";
+echo "  2 ** 10     = " . (2 ** 10) . "\n";
+echo "  2 ** 0.5    = " . (2 ** 0.5) . "\n";
+
+// fmod, fdiv
+echo "\nfmod/fdiv:\n";
+echo "  fmod(10.5, 3.2) = " . fmod(10.5, 3.2) . "\n";
+echo "  fdiv(10, 3)     = " . fdiv(10, 3) . "\n";
+
 // Integer division
 echo "\nInteger division:\n";
 echo "  intdiv(7, 2)  = " . intdiv(7, 2) . "\n";
+
+// number_format
+echo "\nnumber_format:\n";
+echo "  number_format(1234567)    = " . number_format(1234567) . "\n";
+echo "  number_format(1234.56, 2) = " . number_format(1234.56, 2) . "\n";
+
+// Constants
+echo "\nConstants:\n";
+echo "  PHP_INT_MAX = " . PHP_INT_MAX . "\n";
+echo "  M_PI        = " . M_PI . "\n";
 
 // Special values
 echo "\nSpecial values:\n";

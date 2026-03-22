@@ -295,3 +295,18 @@ fn test_error_unset_wrong_args() {
 fn test_error_settype_wrong_args() {
     expect_error("<?php settype(42);", "settype() takes exactly 2 arguments");
 }
+
+#[test]
+fn test_error_fmod_wrong_args() {
+    expect_error("<?php fmod(1);", "fmod() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_random_int_wrong_args() {
+    expect_error("<?php random_int(1);", "random_int() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_number_format_wrong_args() {
+    expect_error("<?php number_format();", "number_format() takes 1 to 4 arguments");
+}

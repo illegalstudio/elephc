@@ -36,6 +36,10 @@ pub enum Token {
     As,
     Inf,
     Nan,
+    PhpIntMax,
+    PhpIntMin,
+    PhpFloatMax,
+    MPi,
     Include,
     IncludeOnce,
     Require,
@@ -46,6 +50,7 @@ pub enum Token {
     Plus,           // +
     Minus,          // -
     Star,           // *
+    StarStar,       // **
     Slash,          // /
     Percent,        // %
     Dot,            // .

@@ -203,6 +203,149 @@ pub fn emit_str_eq(emitter: &mut Emitter) {
     emitter.instruction("ret");
 }
 
+/// number_format: format a float with decimals and custom separators.
+/// Input:  d0 = number, x1 = decimals, x2 = dec_point char, x3 = thousands_sep char (0=none)
+/// Output: x1 = pointer to string, x2 = length
+/// Uses snprintf for decimal formatting, then inserts thousands separators.
+pub fn emit_number_format(emitter: &mut Emitter) {
+    // Stack frame layout (128 bytes):
+    //   [sp+0..47]  snprintf buffer (48 bytes)
+    //   [sp+64..68] format string "%.Nf\0"
+    //   [sp+72]     result start ptr
+    //   [sp+80]     raw_len
+    //   [sp+88]     number (d0)
+    //   [sp+96]     decimals
+    //   [sp+100]    dec_point char
+    //   [sp+104]    thousands_sep char
+    //   [sp+112]    saved x29, x30
+    emitter.blank();
+    emitter.comment("--- runtime: number_format ---");
+    emitter.label("__rt_number_format");
+    emitter.instruction("sub sp, sp, #128");
+    emitter.instruction("stp x29, x30, [sp, #112]");
+    emitter.instruction("add x29, sp, #112");
+
+    // Save args
+    emitter.instruction("str x1, [sp, #96]");   // decimals
+    emitter.instruction("str d0, [sp, #88]");    // number
+    emitter.instruction("str x2, [sp, #100]");   // dec_point char
+    emitter.instruction("str x3, [sp, #104]");   // thousands_sep char
+
+    // Build format string: "%.<decimals>f"
+    emitter.instruction("mov w9, #37");  // '%'
+    emitter.instruction("strb w9, [sp, #64]");
+    emitter.instruction("mov w9, #46");  // '.'
+    emitter.instruction("strb w9, [sp, #65]");
+    emitter.instruction("ldr x9, [sp, #96]");
+    emitter.instruction("add w9, w9, #48"); // '0' + decimals
+    emitter.instruction("strb w9, [sp, #66]");
+    emitter.instruction("mov w9, #102"); // 'f'
+    emitter.instruction("strb w9, [sp, #67]");
+    emitter.instruction("strb wzr, [sp, #68]");
+
+    // snprintf(buf, 48, fmt, d0) — Apple ARM64 variadic ABI
+    emitter.instruction("add x0, sp, #0");
+    emitter.instruction("mov x1, #48");
+    emitter.instruction("add x2, sp, #64");
+    emitter.instruction("ldr d0, [sp, #88]");
+    emitter.instruction("str d0, [sp, #-16]!");
+    emitter.instruction("bl _snprintf");
+    emitter.instruction("add sp, sp, #16");
+    emitter.instruction("str x0, [sp, #80]"); // raw_len
+
+    // Set up concat_buf destination
+    emitter.instruction("adrp x6, _concat_off@PAGE");
+    emitter.instruction("add x6, x6, _concat_off@PAGEOFF");
+    emitter.instruction("ldr x8, [x6]");
+    emitter.instruction("adrp x7, _concat_buf@PAGE");
+    emitter.instruction("add x7, x7, _concat_buf@PAGEOFF");
+    emitter.instruction("add x10, x7, x8"); // dest ptr
+    emitter.instruction("str x10, [sp, #72]"); // save result start
+
+    // Scan raw string: find integer part length
+    emitter.instruction("add x11, sp, #0"); // src ptr
+    emitter.instruction("ldr x12, [sp, #80]"); // raw_len
+    emitter.instruction("mov x13, #0"); // int_len
+
+    // Handle negative sign
+    emitter.instruction("ldrb w14, [x11]");
+    emitter.instruction("cmp w14, #45"); // '-'
+    emitter.instruction("b.ne __rt_nf_count");
+    emitter.instruction("strb w14, [x10], #1");
+    emitter.instruction("add x11, x11, #1");
+    emitter.instruction("sub x12, x12, #1");
+
+    emitter.label("__rt_nf_count");
+    emitter.instruction("mov x15, x11"); // start of integer digits
+    emitter.instruction("mov x13, #0");
+    emitter.label("__rt_nf_count_loop");
+    emitter.instruction("cbz x12, __rt_nf_count_done");
+    emitter.instruction("ldrb w14, [x11, x13]");
+    emitter.instruction("cmp w14, #46"); // '.' (snprintf always uses '.')
+    emitter.instruction("b.eq __rt_nf_count_done");
+    emitter.instruction("add x13, x13, #1");
+    emitter.instruction("sub x12, x12, #1");
+    emitter.instruction("b __rt_nf_count_loop");
+
+    emitter.label("__rt_nf_count_done");
+    // x13=int digit count, x15=start of digits, x12=remaining (decimal part)
+    // Copy integer digits with thousands separator
+    emitter.instruction("mov x16, #0"); // src index
+    emitter.instruction("mov x17, #3");
+    emitter.instruction("udiv x18, x13, x17");
+    emitter.instruction("msub x14, x18, x17, x13"); // first group size = int_len % 3
+    emitter.instruction("cbnz x14, __rt_nf_copy_int");
+    emitter.instruction("mov x14, #3");
+
+    emitter.label("__rt_nf_copy_int");
+    emitter.instruction("cmp x16, x13");
+    emitter.instruction("b.ge __rt_nf_decimal");
+    // Insert thousands separator between groups
+    emitter.instruction("cbz x16, __rt_nf_no_sep");
+    emitter.instruction("cmp x14, #0");
+    emitter.instruction("b.ne __rt_nf_no_sep");
+    // Check if thousands_sep is set (non-zero)
+    emitter.instruction("ldr x9, [sp, #104]");
+    emitter.instruction("cbz x9, __rt_nf_no_sep_reset"); // skip if no separator
+    emitter.instruction("strb w9, [x10], #1");
+    emitter.label("__rt_nf_no_sep_reset");
+    emitter.instruction("mov x14, #3");
+
+    emitter.label("__rt_nf_no_sep");
+    emitter.instruction("ldrb w9, [x15, x16]");
+    emitter.instruction("strb w9, [x10], #1");
+    emitter.instruction("add x16, x16, #1");
+    emitter.instruction("sub x14, x14, #1");
+    emitter.instruction("b __rt_nf_copy_int");
+
+    emitter.label("__rt_nf_decimal");
+    // Copy decimal part, replacing '.' with custom dec_point
+    emitter.instruction("add x15, x15, x13");
+    emitter.label("__rt_nf_copy_dec");
+    emitter.instruction("cbz x12, __rt_nf_done");
+    emitter.instruction("ldrb w9, [x15], #1");
+    // Replace '.' with custom decimal point
+    emitter.instruction("cmp w9, #46"); // '.'
+    emitter.instruction("b.ne __rt_nf_dec_store");
+    emitter.instruction("ldr x9, [sp, #100]"); // dec_point char
+    emitter.label("__rt_nf_dec_store");
+    emitter.instruction("strb w9, [x10], #1");
+    emitter.instruction("sub x12, x12, #1");
+    emitter.instruction("b __rt_nf_copy_dec");
+
+    emitter.label("__rt_nf_done");
+    emitter.instruction("ldr x1, [sp, #72]");
+    emitter.instruction("sub x2, x10, x1");
+    // Update concat_off
+    emitter.instruction("ldr x8, [x6]");
+    emitter.instruction("add x8, x8, x2");
+    emitter.instruction("str x8, [x6]");
+
+    emitter.instruction("ldp x29, x30, [sp, #112]");
+    emitter.instruction("add sp, sp, #128");
+    emitter.instruction("ret");
+}
+
 /// atoi: parse a string to a signed 64-bit integer.
 /// Input:  x1 = string pointer, x2 = string length
 /// Output: x0 = integer value

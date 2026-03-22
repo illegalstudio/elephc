@@ -274,6 +274,16 @@ impl Checker {
                 let lt = self.infer_type(left, env)?;
                 let rt = self.infer_type(right, env)?;
                 match op {
+                    BinOp::Pow => {
+                        let lt_ok = matches!(lt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
+                        let rt_ok = matches!(rt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
+                        if !lt_ok || !rt_ok {
+                            return Err(CompileError::new(
+                                expr.span, "Exponentiation requires numeric operands",
+                            ));
+                        }
+                        Ok(PhpType::Float)
+                    }
                     BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
                         let lt_ok = matches!(lt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
                         let rt_ok = matches!(rt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
