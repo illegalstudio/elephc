@@ -19,6 +19,7 @@ pub fn emit(
             emitter.instruction("ldr x0, [x0]");
             Some(PhpType::Int)
         }
+        // @todo: add support for array_push() with floats, booleans and other types
         "array_push" => {
             emitter.comment("array_push()");
             emit_expr(&args[0], emitter, ctx, data);
