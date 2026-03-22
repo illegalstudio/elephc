@@ -31,13 +31,17 @@ pub fn emit_function(
     let vars_size = ctx.stack_offset;
     let frame_size = super::align16(vars_size + 16);
 
+    // -- function prologue: set up stack frame --
     emitter.raw(".align 2");
     emitter.label(&label);
     emitter.comment("prologue");
-    emitter.instruction(&format!("sub sp, sp, #{}", frame_size));
-    emitter.instruction(&format!("stp x29, x30, [sp, #{}]", frame_size - 16));
-    emitter.instruction(&format!("add x29, sp, #{}", frame_size - 16));
+    emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for locals
+    emitter.instruction(&format!("stp x29, x30, [sp, #{}]", frame_size - 16));  // save caller's frame ptr & return addr
+    emitter.instruction(&format!("add x29, sp, #{}", frame_size - 16));         // set new frame pointer
 
+    // -- save parameters from registers to local stack slots --
+    // ARM64 ABI: int/bool/array args in x0-x7, float args in d0-d7
+    // Strings use two consecutive int registers (ptr + len)
     let mut int_reg_idx = 0usize;
     let mut float_reg_idx = 0usize;
     for (pname, pty) in &sig.params {
@@ -46,37 +50,39 @@ pub fn emit_function(
         match pty {
             PhpType::Bool | PhpType::Int => {
                 emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
-                emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx, offset));
+                emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx, offset)); // save int/bool param
                 int_reg_idx += 1;
             }
             PhpType::Float => {
                 emitter.comment(&format!("param ${} from d{}", pname, float_reg_idx));
-                emitter.instruction(&format!("stur d{}, [x29, #-{}]", float_reg_idx, offset));
+                emitter.instruction(&format!("stur d{}, [x29, #-{}]", float_reg_idx, offset)); // save float param
                 float_reg_idx += 1;
             }
             PhpType::Str => {
                 emitter.comment(&format!("param ${} from x{},x{}", pname, int_reg_idx, int_reg_idx + 1));
-                emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx, offset));
-                emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx + 1, offset - 8));
+                emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx, offset)); // save string pointer
+                emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx + 1, offset - 8)); // save string length
                 int_reg_idx += 2;
             }
             PhpType::Void => {}
             PhpType::Array(_) => {
                 emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
-                emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx, offset));
+                emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx, offset)); // save array heap ptr
                 int_reg_idx += 1;
             }
         }
     }
 
+    // -- emit function body statements --
     for s in body {
         stmt::emit_stmt(s, emitter, &mut ctx, data);
     }
 
+    // -- function epilogue: restore and return --
     emitter.label(&epilogue_label);
-    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16));
-    emitter.instruction(&format!("add sp, sp, #{}", frame_size));
-    emitter.instruction("ret");
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16));  // restore frame ptr & return addr
+    emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
+    emitter.instruction("ret");                                                 // return to caller
     emitter.blank();
 }
 

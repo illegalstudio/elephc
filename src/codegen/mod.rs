@@ -24,7 +24,7 @@ pub fn generate(
     let mut emitter = Emitter::new();
     let mut data = DataSection::new();
 
-    // Emit user functions
+    // Emit user-defined functions before _main
     for (name, sig) in functions {
         let body = program
             .iter()
@@ -37,10 +37,11 @@ pub fn generate(
         self::functions::emit_function(&mut emitter, &mut data, name, sig, body, functions);
     }
 
-    // Emit _main
+    // --- _main function ---
     let mut ctx = Context::new();
     ctx.functions = functions.clone();
 
+    // Pre-allocate $argc and $argv superglobals
     if !global_env.contains_key("argc") {
         ctx.alloc_var("argc", PhpType::Int);
     }
@@ -52,35 +53,38 @@ pub fn generate(
     }
 
     let vars_size = ctx.stack_offset;
-    let frame_size = align16(vars_size + 16);
+    let frame_size = align16(vars_size + 16);     // 16-byte aligned, +16 for saved x29/x30
 
+    // -- prologue: set up stack frame --
     emitter.raw(".global _main");
     emitter.raw(".align 2");
     emitter.blank();
     emitter.label("_main");
     emitter.comment("prologue");
-    emitter.instruction(&format!("sub sp, sp, #{}", frame_size));
-    emitter.instruction(&format!("stp x29, x30, [sp, #{}]", frame_size - 16));
-    emitter.instruction(&format!("add x29, sp, #{}", frame_size - 16));
+    emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // grow stack for locals + saved regs
+    emitter.instruction(&format!("stp x29, x30, [sp, #{}]", frame_size - 16));  // save frame pointer & return address
+    emitter.instruction(&format!("add x29, sp, #{}", frame_size - 16));         // set new frame pointer
 
-    // Save argc/argv
-    emitter.comment("save argc/argv");
-    emitter.instruction("adrp x9, _global_argc@PAGE");
-    emitter.instruction("add x9, x9, _global_argc@PAGEOFF");
-    emitter.instruction("str x0, [x9]");
-    emitter.instruction("adrp x9, _global_argv@PAGE");
-    emitter.instruction("add x9, x9, _global_argv@PAGEOFF");
-    emitter.instruction("str x1, [x9]");
+    // -- save argc/argv to globals (for $argv runtime builder) --
+    emitter.comment("save argc/argv to globals");
+    emitter.instruction("adrp x9, _global_argc@PAGE");                          // load page of argc global
+    emitter.instruction("add x9, x9, _global_argc@PAGEOFF");                    // add page offset
+    emitter.instruction("str x0, [x9]");                                        // store argc (x0 from OS)
+    emitter.instruction("adrp x9, _global_argv@PAGE");                          // load page of argv global
+    emitter.instruction("add x9, x9, _global_argv@PAGEOFF");                    // add page offset
+    emitter.instruction("str x1, [x9]");                                        // store argv pointer (x1 from OS)
 
+    // -- store $argc in local variable --
     let argc_offset = ctx.variables.get("argc").unwrap().stack_offset;
-    emitter.instruction(&format!("stur x0, [x29, #-{}]", argc_offset));
+    emitter.instruction(&format!("stur x0, [x29, #-{}]", argc_offset));         // $argc = OS argc
 
-    // Build $argv array from OS argv
+    // -- build $argv array from OS C strings --
     let argv_offset = ctx.variables.get("argv").unwrap().stack_offset;
-    emitter.comment("build $argv array");
-    emitter.instruction("bl __rt_build_argv");
-    emitter.instruction(&format!("stur x0, [x29, #-{}]", argv_offset));
+    emitter.comment("build $argv array from OS argv");
+    emitter.instruction("bl __rt_build_argv");                                  // returns array ptr in x0
+    emitter.instruction(&format!("stur x0, [x29, #-{}]", argv_offset));         // $argv = array
 
+    // -- emit user statements --
     for s in program {
         if matches!(&s.kind, StmtKind::FunctionDecl { .. }) {
             continue;
@@ -88,14 +92,16 @@ pub fn generate(
         stmt::emit_stmt(s, &mut emitter, &mut ctx, &mut data);
     }
 
+    // -- epilogue: restore stack and exit(0) via syscall --
     emitter.blank();
     emitter.comment("epilogue + exit(0)");
-    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16));
-    emitter.instruction(&format!("add sp, sp, #{}", frame_size));
-    emitter.instruction("mov x0, #0");
-    emitter.instruction("mov x16, #1");
-    emitter.instruction("svc #0x80");
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16));  // restore frame pointer & return address
+    emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
+    emitter.instruction("mov x0, #0");                                          // exit code 0
+    emitter.instruction("mov x16, #1");                                         // syscall number 1 = exit
+    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
 
+    // -- emit runtime routines and data sections --
     runtime::emit_runtime(&mut emitter);
 
     let data_output = data.emit();
