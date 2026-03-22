@@ -42,13 +42,26 @@ impl Checker {
                 self.infer_type(&args[0], env)?;
                 Ok(Some(PhpType::Int))
             }
+            "is_bool" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "is_bool() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Bool))
+            }
+            "boolval" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "boolval() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Bool))
+            }
             "is_null" => {
                 if args.len() != 1 {
                     return Err(CompileError::new(span, "is_null() takes exactly 1 argument"));
                 }
                 self.infer_type(&args[0], env)?;
-                // is_null is handled at codegen level using the null sentinel
-                Ok(Some(PhpType::Int))
+                Ok(Some(PhpType::Bool))
             }
             "count" => {
                 if args.len() != 1 {

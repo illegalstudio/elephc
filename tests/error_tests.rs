@@ -126,7 +126,7 @@ fn test_error_type_mismatch_reassign() {
 fn test_error_arithmetic_on_string() {
     expect_error(
         "<?php $x = \"hi\"; echo $x + 1;",
-        "Arithmetic operators require integer operands",
+        "Arithmetic operators require numeric operands",
     );
 }
 
@@ -142,7 +142,7 @@ fn test_error_negate_string() {
 fn test_error_comparison_on_string() {
     expect_error(
         "<?php $x = \"a\"; echo $x < 1;",
-        "Comparison operators require integer operands",
+        "Comparison operators require numeric operands",
     );
 }
 

@@ -311,7 +311,7 @@ fn test_equal_true() {
 #[test]
 fn test_equal_false() {
     let out = compile_and_run("<?php echo 1 == 2;");
-    assert_eq!(out, "0");
+    assert_eq!(out, ""); // echo false prints nothing in PHP
 }
 
 #[test]
@@ -341,7 +341,7 @@ fn test_less_equal() {
 #[test]
 fn test_greater_equal() {
     let out = compile_and_run("<?php echo 1 >= 2;");
-    assert_eq!(out, "0");
+    assert_eq!(out, "");
 }
 
 // --- if/else ---
@@ -584,7 +584,7 @@ fn test_and_true() {
 #[test]
 fn test_and_false() {
     let out = compile_and_run("<?php echo 1 && 0;");
-    assert_eq!(out, "0");
+    assert_eq!(out, "");
 }
 
 #[test]
@@ -596,7 +596,7 @@ fn test_or_true() {
 #[test]
 fn test_or_false() {
     let out = compile_and_run("<?php echo 0 || 0;");
-    assert_eq!(out, "0");
+    assert_eq!(out, "");
 }
 
 #[test]
@@ -608,20 +608,18 @@ fn test_not_zero() {
 #[test]
 fn test_not_nonzero() {
     let out = compile_and_run("<?php $x = 42; echo !$x;");
-    assert_eq!(out, "0");
+    assert_eq!(out, "");
 }
 
 #[test]
 fn test_short_circuit_and() {
-    // With &&, if left is false the right side should not be evaluated.
-    // We test by using a function with side effects.
     let out = compile_and_run(r#"<?php
 $count = 0;
 function inc() { return 1; }
 $r = 0 && inc();
 echo $r;
 "#);
-    assert_eq!(out, "0");
+    assert_eq!(out, ""); // false prints nothing
 }
 
 #[test]
@@ -644,7 +642,7 @@ fn test_boolean_true() {
 #[test]
 fn test_boolean_false() {
     let out = compile_and_run("<?php echo false;");
-    assert_eq!(out, "0");
+    assert_eq!(out, "");
 }
 
 #[test]
@@ -780,7 +778,7 @@ fn test_is_null_true() {
 #[test]
 fn test_is_null_false() {
     let out = compile_and_run("<?php $x = 42; echo is_null($x);");
-    assert_eq!(out, "0");
+    assert_eq!(out, "");
 }
 
 #[test]

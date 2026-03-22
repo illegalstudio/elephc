@@ -16,6 +16,11 @@ pub fn emit_expr(
     data: &mut DataSection,
 ) -> PhpType {
     match &expr.kind {
+        ExprKind::BoolLiteral(b) => {
+            emitter.comment(&format!("bool {}", b));
+            emitter.instruction(&format!("mov x0, #{}", if *b { 1 } else { 0 }));
+            PhpType::Bool
+        }
         ExprKind::Null => {
             emitter.comment("null");
             // Load null sentinel value
@@ -62,7 +67,7 @@ pub fn emit_expr(
             emitter.comment("logical not");
             emitter.instruction("cmp x0, #0");
             emitter.instruction("cset x0, eq");
-            PhpType::Int
+            PhpType::Bool
         }
         ExprKind::PreIncrement(name) => {
             let var = ctx.variables.get(name).expect("undefined variable");
@@ -207,12 +212,41 @@ fn emit_array_access(
     elem_ty
 }
 
+/// Coerce a value to string (x1=ptr, x2=len) for concatenation.
+/// Coerce a value to string (x1=ptr, x2=len) for concatenation.
+/// PHP behavior: false → "", true → "1", null → "", int → itoa
+fn coerce_to_string(emitter: &mut Emitter, ty: &PhpType) {
+    match ty {
+        PhpType::Int => {
+            emitter.instruction("bl __rt_itoa");
+        }
+        PhpType::Bool => {
+            // true → "1" (via itoa), false → "" (len=0)
+            // If x0 == 0, just set len=0; otherwise call itoa
+            // Use conditional: itoa always works but false should produce ""
+            // Simplest: if 0, mov x2,#0; if 1, call itoa
+            emitter.instruction("cbz x0, 1f");
+            emitter.instruction("bl __rt_itoa");
+            emitter.instruction("b 2f");
+            emitter.raw("1:");
+            emitter.instruction("mov x2, #0");
+            emitter.raw("2:");
+        }
+        PhpType::Void => {
+            emitter.instruction("mov x2, #0");
+        }
+        PhpType::Str | PhpType::Array(_) => {}
+    }
+}
+
 /// Replace null sentinel with 0 in x0 (for arithmetic/comparison with null).
 /// Handles both compile-time null (Void type) and runtime null (variable
 /// that was assigned null — sentinel value in x0).
 fn coerce_null_to_zero(emitter: &mut Emitter, ty: &PhpType) {
     if *ty == PhpType::Void {
         emitter.instruction("mov x0, #0");
+    } else if *ty == PhpType::Bool {
+        // Bool is already 0/1 in x0, compatible with Int arithmetic
     } else if *ty == PhpType::Int {
         // Runtime null check: if x0 == sentinel, replace with 0
         emitter.instruction("movz x9, #0xFFFE");
@@ -242,7 +276,7 @@ fn emit_binop(
             emitter.instruction("cmp x0, #0");
             emitter.instruction("cset x0, ne");
             emitter.label(&end_label);
-            return PhpType::Int;
+            return PhpType::Bool;
         }
         BinOp::Or => {
             let end_label = ctx.next_label("or_end");
@@ -253,7 +287,7 @@ fn emit_binop(
             emitter.label(&end_label);
             emitter.instruction("cmp x0, #0");
             emitter.instruction("cset x0, ne");
-            return PhpType::Int;
+            return PhpType::Bool;
         }
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
             let lt = emit_expr(left, emitter, ctx, data);
@@ -293,22 +327,14 @@ fn emit_binop(
                 _ => unreachable!(),
             };
             emitter.instruction(&format!("cset x0, {}", cond));
-            PhpType::Int
+            PhpType::Bool
         }
         BinOp::Concat => {
             let left_ty = emit_expr(left, emitter, ctx, data);
-            if left_ty == PhpType::Int {
-                emitter.instruction("bl __rt_itoa");
-            } else if left_ty == PhpType::Void {
-                emitter.instruction("mov x2, #0"); // null → empty string
-            }
+            coerce_to_string(emitter, &left_ty);
             emitter.instruction("stp x1, x2, [sp, #-16]!");
             let right_ty = emit_expr(right, emitter, ctx, data);
-            if right_ty == PhpType::Int {
-                emitter.instruction("bl __rt_itoa");
-            } else if right_ty == PhpType::Void {
-                emitter.instruction("mov x2, #0"); // null → empty string
-            }
+            coerce_to_string(emitter, &right_ty);
             emitter.instruction("mov x3, x1");
             emitter.instruction("mov x4, x2");
             emitter.instruction("ldp x1, x2, [sp], #16");
@@ -331,7 +357,7 @@ fn emit_function_call(
     for arg in args {
         let ty = emit_expr(arg, emitter, ctx, data);
         match &ty {
-            PhpType::Int | PhpType::Array(_) => {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) => {
                 emitter.instruction("str x0, [sp, #-16]!");
             }
             PhpType::Str => {
@@ -352,7 +378,7 @@ fn emit_function_call(
     for i in (0..args.len()).rev() {
         let (ty, start_reg) = &assignments[i];
         match ty {
-            PhpType::Int | PhpType::Array(_) => {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) => {
                 emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg));
             }
             PhpType::Str => {

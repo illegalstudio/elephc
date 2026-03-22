@@ -127,11 +127,11 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
         }
         Token::True => {
             *pos += 1;
-            Ok(Expr::new(ExprKind::IntLiteral(1), span))
+            Ok(Expr::new(ExprKind::BoolLiteral(true), span))
         }
         Token::False => {
             *pos += 1;
-            Ok(Expr::new(ExprKind::IntLiteral(0), span))
+            Ok(Expr::new(ExprKind::BoolLiteral(false), span))
         }
         Token::Null => {
             *pos += 1;

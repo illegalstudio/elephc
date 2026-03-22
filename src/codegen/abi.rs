@@ -6,7 +6,7 @@ use crate::types::PhpType;
 /// Str: x1 (ptr) → [x29, #-offset], x2 (len) → [x29, #-(offset-8)]
 pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty {
-        PhpType::Int => {
+        PhpType::Bool | PhpType::Int => {
             emitter.instruction(&format!("stur x0, [x29, #-{}]", offset));
         }
         PhpType::Str => {
@@ -28,7 +28,7 @@ pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
 /// Str: [x29, #-offset] → x1 (ptr), [x29, #-(offset-8)] → x2 (len)
 pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty {
-        PhpType::Int => {
+        PhpType::Bool | PhpType::Int => {
             emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));
         }
         PhpType::Str => {
@@ -50,6 +50,15 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
 pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
         PhpType::Str => {
+            emitter.instruction("mov x0, #1");
+            emitter.instruction("mov x16, #4");
+            emitter.instruction("svc #0x80");
+        }
+        PhpType::Bool => {
+            // echo true → "1", echo false → nothing (PHP behavior)
+            // Handled by the caller in stmt.rs which checks the type
+            // and skips for false. Here we just print if nonzero.
+            emitter.instruction("bl __rt_itoa");
             emitter.instruction("mov x0, #1");
             emitter.instruction("mov x16, #4");
             emitter.instruction("svc #0x80");

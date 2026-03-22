@@ -18,6 +18,7 @@ pub enum ExprKind {
         op: BinOp,
         right: Box<Expr>,
     },
+    BoolLiteral(bool),
     Null,
     Negate(Box<Expr>),
     Not(Box<Expr>),

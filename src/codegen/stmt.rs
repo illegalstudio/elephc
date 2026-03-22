@@ -19,10 +19,17 @@ pub fn emit_stmt(
             let ty = emit_expr(expr, emitter, ctx, data);
             match &ty {
                 PhpType::Void => {
-                    // Compile-time null — don't print anything
+                    // null — don't print anything
+                }
+                PhpType::Bool => {
+                    // echo false → nothing, echo true → "1"
+                    let skip_label = ctx.next_label("echo_skip_false");
+                    emitter.instruction(&format!("cbz x0, {}", skip_label));
+                    abi::emit_write_stdout(emitter, &ty);
+                    emitter.label(&skip_label);
                 }
                 PhpType::Int => {
-                    // Runtime null check (variable might hold null sentinel)
+                    // Runtime null check
                     let skip_label = ctx.next_label("echo_skip_null");
                     emitter.instruction("movz x9, #0xFFFE");
                     emitter.instruction("movk x9, #0xFFFF, lsl #16");

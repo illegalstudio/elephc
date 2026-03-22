@@ -9,6 +9,7 @@ use crate::parser::ast::Program;
 pub enum PhpType {
     Int,
     Str,
+    Bool,
     Void,
     Array(Box<PhpType>),
 }
@@ -17,6 +18,7 @@ impl PhpType {
     /// Size in bytes on the stack.
     pub fn stack_size(&self) -> usize {
         match self {
+            PhpType::Bool => 8,
             PhpType::Int => 8,
             PhpType::Str => 16,
             PhpType::Void => 8, // null sentinel stored as 8 bytes
@@ -27,6 +29,7 @@ impl PhpType {
     /// Number of registers used to pass this type as an argument.
     pub fn register_count(&self) -> usize {
         match self {
+            PhpType::Bool => 1,
             PhpType::Int => 1,
             PhpType::Str => 2,
             PhpType::Void => 0,

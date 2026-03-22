@@ -43,7 +43,7 @@ pub fn emit_function(
         let var = ctx.variables.get(pname).unwrap();
         let offset = var.stack_offset;
         match pty {
-            PhpType::Int => {
+            PhpType::Bool | PhpType::Int => {
                 emitter.comment(&format!("param ${} from x{}", pname, reg_idx));
                 emitter.instruction(&format!("stur x{}, [x29, #-{}]", reg_idx, offset));
                 reg_idx += 1;
@@ -130,6 +130,7 @@ fn infer_local_type(
     sig: &FunctionSig,
 ) -> PhpType {
     match &expr.kind {
+        ExprKind::BoolLiteral(_) => PhpType::Bool,
         ExprKind::Null => PhpType::Void,
         ExprKind::StringLiteral(_) => PhpType::Str,
         ExprKind::IntLiteral(_) => PhpType::Int,

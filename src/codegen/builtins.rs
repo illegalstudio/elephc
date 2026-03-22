@@ -40,6 +40,20 @@ pub fn emit_builtin_call(
             }
             Some(PhpType::Int)
         }
+        "is_bool" => {
+            emitter.comment("is_bool()");
+            let ty = emit_expr(&args[0], emitter, ctx, data);
+            let val = if ty == PhpType::Bool { 1 } else { 0 };
+            emitter.instruction(&format!("mov x0, #{}", val));
+            Some(PhpType::Bool)
+        }
+        "boolval" => {
+            emitter.comment("boolval()");
+            emit_expr(&args[0], emitter, ctx, data);
+            emitter.instruction("cmp x0, #0");
+            emitter.instruction("cset x0, ne");
+            Some(PhpType::Bool)
+        }
         "is_null" => {
             emitter.comment("is_null()");
             emit_expr(&args[0], emitter, ctx, data);
@@ -50,7 +64,7 @@ pub fn emit_builtin_call(
             emitter.instruction("movk x9, #0x7FFF, lsl #48");
             emitter.instruction("cmp x0, x9");
             emitter.instruction("cset x0, eq");
-            Some(PhpType::Int)
+            Some(PhpType::Bool)
         }
         "array_pop" => {
             emitter.comment("array_pop()");

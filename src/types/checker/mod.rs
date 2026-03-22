@@ -59,9 +59,14 @@ impl Checker {
             StmtKind::Assign { name, value } => {
                 let ty = self.infer_type(value, env)?;
                 if let Some(existing) = env.get(name) {
-                    // Allow null (Void) to be assigned to any variable, and any
-                    // variable to be reassigned from null to a concrete type
-                    if *existing != ty && ty != PhpType::Void && *existing != PhpType::Void {
+                    // Allow null (Void) to be assigned to any variable,
+                    // Bool and Int are interchangeable
+                    let compatible = *existing == ty
+                        || ty == PhpType::Void
+                        || *existing == PhpType::Void
+                        || (matches!(*existing, PhpType::Int | PhpType::Bool)
+                            && matches!(ty, PhpType::Int | PhpType::Bool));
+                    if !compatible {
                         return Err(CompileError::new(
                             stmt.span,
                             &format!(
@@ -168,7 +173,8 @@ impl Checker {
 
     pub fn infer_type(&mut self, expr: &Expr, env: &TypeEnv) -> Result<PhpType, CompileError> {
         match &expr.kind {
-            ExprKind::Null => Ok(PhpType::Void), // null is Void type
+            ExprKind::BoolLiteral(_) => Ok(PhpType::Bool),
+            ExprKind::Null => Ok(PhpType::Void),
             ExprKind::StringLiteral(_) => Ok(PhpType::Str),
             ExprKind::IntLiteral(_) => Ok(PhpType::Int),
             ExprKind::Variable(name) => env.get(name).cloned().ok_or_else(|| {
@@ -183,12 +189,12 @@ impl Checker {
             }
             ExprKind::Not(inner) => {
                 self.infer_type(inner, env)?;
-                Ok(PhpType::Int)
+                Ok(PhpType::Bool)
             }
             ExprKind::PreIncrement(name) | ExprKind::PostIncrement(name)
             | ExprKind::PreDecrement(name) | ExprKind::PostDecrement(name) => {
                 match env.get(name) {
-                    Some(PhpType::Int) | Some(PhpType::Void) => Ok(PhpType::Int),
+                    Some(PhpType::Int) | Some(PhpType::Bool) | Some(PhpType::Void) => Ok(PhpType::Int),
                     Some(other) => Err(CompileError::new(
                         expr.span,
                         &format!("Cannot increment/decrement ${} of type {:?}", name, other),
@@ -252,30 +258,28 @@ impl Checker {
                 let rt = self.infer_type(right, env)?;
                 match op {
                     BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                        // null is treated as 0 in arithmetic context
-                        let lt_ok = lt == PhpType::Int || lt == PhpType::Void;
-                        let rt_ok = rt == PhpType::Int || rt == PhpType::Void;
+                        let lt_ok = matches!(lt, PhpType::Int | PhpType::Bool | PhpType::Void);
+                        let rt_ok = matches!(rt, PhpType::Int | PhpType::Bool | PhpType::Void);
                         if !lt_ok || !rt_ok {
                             return Err(CompileError::new(
-                                expr.span, "Arithmetic operators require integer operands",
+                                expr.span, "Arithmetic operators require numeric operands",
                             ));
                         }
                         Ok(PhpType::Int)
                     }
                     BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt
                     | BinOp::LtEq | BinOp::GtEq => {
-                        // null is treated as 0 in comparison context
-                        let lt_ok = lt == PhpType::Int || lt == PhpType::Void;
-                        let rt_ok = rt == PhpType::Int || rt == PhpType::Void;
+                        let lt_ok = matches!(lt, PhpType::Int | PhpType::Bool | PhpType::Void);
+                        let rt_ok = matches!(rt, PhpType::Int | PhpType::Bool | PhpType::Void);
                         if !lt_ok || !rt_ok {
                             return Err(CompileError::new(
-                                expr.span, "Comparison operators require integer operands",
+                                expr.span, "Comparison operators require numeric operands",
                             ));
                         }
-                        Ok(PhpType::Int)
+                        Ok(PhpType::Bool)
                     }
-                    BinOp::Concat => Ok(PhpType::Str), // null coerces to "" in concat
-                    BinOp::And | BinOp::Or => Ok(PhpType::Int), // null is falsy
+                    BinOp::Concat => Ok(PhpType::Str),
+                    BinOp::And | BinOp::Or => Ok(PhpType::Bool),
                 }
             }
         }
