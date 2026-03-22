@@ -127,3 +127,43 @@ Make the generated code competitive with C -O0.
 - [ ] CI/CD with release binaries for macOS ARM64 and Linux x86_64
 - [ ] Performance within 2x of C -O0 on compute benchmarks
 - [ ] Real-world CLI tools compiled as validation (JSON parser, file processor, etc.)
+
+---
+
+## v1.1.0 — Shared and static libraries (C ABI)
+
+PHP functions become callable from any language via FFI.
+
+- [ ] `--lib` flag: emit only function symbols (no `_main`, no exit syscall)
+- [ ] Export PHP functions as C-callable symbols (`function add()` → `_php_add`)
+- [ ] `.global` directives for all exported functions
+- [ ] Shared library output: `.dylib` (macOS) / `.so` (Linux) via `ld -dylib` / `ld -shared`
+- [ ] Static library output: `.a` via `ar rcs`
+- [ ] Auto-generated C header file (`.h`) with function signatures
+- [ ] Null-terminated string convention for C interop (append `\0` to string returns)
+- [ ] Wrapper functions for C-string input (`const char*` → internal ptr+len)
+- [ ] String return convention: caller-provided buffer or malloc'd pointer
+- [ ] Integration tests: call compiled PHP from C, verify results
+- [ ] Documentation: FFI usage examples for C, Rust, Python (ctypes), Go (cgo)
+
+## v1.2.0 — Library ecosystem
+
+- [ ] `#[export]` annotation or `--export` flag to select which functions to expose
+- [ ] Multiple PHP files compiled into a single library
+- [ ] Symbol visibility control (public vs internal functions)
+- [ ] `pkg-config` / `.pc` file generation for library discovery
+- [ ] Versioned symbol names for ABI stability
+- [ ] Benchmarks: PHP-compiled library vs equivalent C library
+
+## v1.3.0 — WebAssembly target
+
+PHP compiled to WASM — usable from any language with a WASM runtime, fully cross-platform.
+
+- [ ] WASM codegen backend (parallel to ARM64)
+- [ ] WASM text format (`.wat`) emission for debugging
+- [ ] WASM binary format (`.wasm`) emission
+- [ ] Linear memory management for strings and arrays
+- [ ] WASI support for I/O (`fd_write`, `fd_read`, `args_get`)
+- [ ] Integration tests: run compiled WASM via `wasmtime`
+- [ ] NPM package generation for JS/Node consumption
+- [ ] Documentation: usage from JS, Rust (wasmtime), Python (wasmer), Go
