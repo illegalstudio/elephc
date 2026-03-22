@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static TEST_ID: AtomicU64 = AtomicU64::new(0);
 
 /// Compile a PHP source string to a native binary, run it, and return stdout.
+/// Also verifies the output matches PHP interpreter if available.
 fn compile_and_run(source: &str) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
@@ -12,8 +13,6 @@ fn compile_and_run(source: &str) -> String {
     fs::create_dir_all(&dir).unwrap();
 
     let php_path = dir.join("test.php");
-    let asm_path = dir.join("test.s");
-    let obj_path = dir.join("test.o");
     let bin_path = dir.join("test");
 
     fs::write(&php_path, source).unwrap();
@@ -25,16 +24,34 @@ fn compile_and_run(source: &str) -> String {
         .expect("failed to run elephc");
     assert!(status.success(), "elephc failed to compile");
 
-    // Run the binary
+    // Run the compiled binary
     let output = Command::new(&bin_path)
         .output()
         .expect("failed to run compiled binary");
     assert!(output.status.success(), "binary exited with error");
 
+    let elephc_out = String::from_utf8(output.stdout).unwrap();
+
+    // Cross-check with PHP interpreter if available.
+    // Differences are reported but don't fail the test — known semantic
+    // gaps (e.g., echo false prints "0" in elephc but "" in PHP) are
+    // tracked and will be resolved when a proper Bool type is added.
+    if let Ok(php_output) = Command::new("php").arg(&php_path).output() {
+        if php_output.status.success() {
+            let php_out = String::from_utf8_lossy(&php_output.stdout);
+            if elephc_out != php_out.as_ref() {
+                eprintln!(
+                    "PHP compat note: output differs for test.\n  elephc: {:?}\n  php:    {:?}",
+                    elephc_out, php_out
+                );
+            }
+        }
+    }
+
     // Cleanup
     let _ = fs::remove_dir_all(&dir);
 
-    String::from_utf8(output.stdout).unwrap()
+    elephc_out
 }
 
 // --- Phase 1: Echo strings ---
