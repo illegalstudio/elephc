@@ -929,6 +929,18 @@ fn test_isset() {
     assert_eq!(out, "1");
 }
 
+#[test]
+fn test_array_values() {
+    let out = compile_and_run(r#"<?php $a = [10, 20, 30]; $v = array_values($a); foreach ($v as $x) { echo $x; }"#);
+    assert_eq!(out, "102030");
+}
+
+#[test]
+fn test_die() {
+    let out = compile_and_run("<?php echo \"before\"; die(); echo \"after\";");
+    assert_eq!(out, "before");
+}
+
 // --- Nested control flow ---
 
 #[test]
