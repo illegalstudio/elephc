@@ -33,10 +33,10 @@
 Proper type system for PHP compatibility.
 
 ### Bool type
-- [ ] `true`/`false` as distinct Bool type
-- [ ] `echo false` prints nothing, `echo true` prints `1` (like PHP)
-- [ ] Bool coercion: `false` → `0`/`""` in arithmetic/concat, `true` → `1`/`"1"`
-- [ ] `is_bool()`, `boolval()`
+- [x] `true`/`false` as distinct Bool type
+- [x] `echo false` prints nothing, `echo true` prints `1` (like PHP)
+- [x] Bool coercion: `false` → `0`/`""` in arithmetic/concat, `true` → `1`/`"1"`
+- [x] `is_bool()`, `boolval()`
 - [ ] `===` and `!==` strict comparison (type-aware)
 
 ### Float type

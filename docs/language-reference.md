@@ -9,7 +9,7 @@ This document describes the PHP subset supported by elephc. Every program listed
 | `int` | Yes | 64-bit signed integer |
 | `string` | Yes | Pointer + length pair, double and single quoted |
 | `null` | Yes | Sentinel value, coerces to `0`/`""` in operations |
-| `bool` | Partial | `true`/`false` exist but are treated as `int(1)`/`int(0)`. `echo false` prints `0` instead of nothing. |
+| `bool` | Yes | `true`/`false` as distinct type. `echo false` prints nothing, `echo true` prints `1`. Coerces to 0/1 in arithmetic. |
 | `float` | Yes | 64-bit double-precision. Literals: `3.14`, `.5`, `1.5e3`, `1.0e-5`. |
 | `array` | Partial | Indexed arrays only. No associative arrays. |
 | `object` | No | Not planned (no OOP support). |
@@ -29,8 +29,6 @@ $x = 42;              // reassignment from null works
 
 ### Known incompatibilities with PHP
 
-- `echo false` prints `"0"` in elephc, nothing in PHP. Will be fixed when Bool type is added.
-- `echo true` prints `"1"` in both (correct).
 - Integer division (`10 / 3`) returns `3`, not `3.333...`. Use float operands (`10.0 / 3.0`) for float division, or `intdiv()` for explicit integer division.
 - `$argv[0]` returns the compiled binary path, not the `.php` file path.
 
