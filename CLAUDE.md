@@ -106,12 +106,51 @@ PHP source → Lexer (tokens) → Parser (AST) → Resolver (include/require) �
 ### Codegen conventions (ARM64)
 
 - **Integers**: result in `x0`
+- **Floats**: result in `d0`
 - **Strings**: pointer in `x1`, length in `x2`
-- **Function args**: `x0`-`x7` (int = 1 reg, string = 2 regs)
-- **Return value**: same as expression result (`x0` or `x1`/`x2`)
+- **Function args**: `x0`-`x7` (int = 1 reg, string = 2 regs), `d0`-`d7` (floats)
+- **Return value**: same as expression result (`x0`, `d0`, or `x1`/`x2`)
 - **Stack frame**: `x29` = frame pointer, `x30` = link register, locals at negative offsets from `x29`
 - **ABI helpers**: `src/codegen/abi.rs` centralizes load/store/write per type
 - **Labels**: use `ctx.next_label("prefix")` — global counter prevents collisions across functions
+
+### Assembly comment policy
+
+**Every `emitter.instruction(...)` call MUST have an inline `//` comment** explaining what the ARM64 instruction does. This is mandatory — the codebase is educational and every assembly line must be understandable by someone learning how compilers work.
+
+Rules:
+
+1. **Every instruction line gets a comment.** No exceptions. If you add a new `emitter.instruction(...)`, it must have a `// comment`.
+2. **Alignment: `//` starts at column 81.** Pad with spaces so the `//` is at the 81st character position (1-indexed). If the code itself is >= 80 characters, add exactly one space before `//`.
+3. **Block comments before related groups.** Use `// -- description --` on a standalone line before a block of related instructions (e.g., `// -- set up stack frame --`, `// -- copy bytes from source --`).
+4. **Comments explain intent, not mnemonics.** Write "store argc from OS" not "store x0 to memory". The reader can see the instruction — explain *why* it's there.
+
+Example of correct formatting:
+
+```rust
+    // -- set up stack frame --
+    emitter.instruction("sub sp, sp, #32");                                 // allocate 32 bytes on the stack
+    emitter.instruction("stp x29, x30, [sp, #16]");                        // save frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                // set new frame pointer
+
+    // -- convert integer to string and write to stdout --
+    emitter.instruction("bl __rt_itoa");                                    // convert x0 to decimal string → x1=ptr, x2=len
+    emitter.instruction("mov x0, #1");                                     // fd = stdout
+    emitter.instruction("mov x16, #4");                                    // syscall 4 = sys_write
+    emitter.instruction("svc #0x80");                                      // invoke macOS kernel
+```
+
+To verify alignment, run:
+```bash
+python3 -c "
+with open('path/to/file.rs') as f:
+    for i, line in enumerate(f, 1):
+        if 'emitter.instruction' in line and '//' in line:
+            pos = line.rstrip().index('//')
+            if pos != 80 and len(line[:pos].rstrip()) < 80:
+                print(f'Line {i}: // at col {pos+1}')
+"
+```
 
 ## Examples
 
