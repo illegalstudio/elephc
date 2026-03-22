@@ -1,48 +1,51 @@
 mod arrays;
 mod strings;
-mod strops;
-mod strops2;
 mod system;
 
 use super::emit::Emitter;
 
 pub fn emit_runtime(emitter: &mut Emitter) {
+    // String runtime functions
     strings::emit_itoa(emitter);
     strings::emit_ftoa(emitter);
     strings::emit_concat(emitter);
     strings::emit_atoi(emitter);
     strings::emit_str_eq(emitter);
     strings::emit_number_format(emitter);
-    strops::emit_strcopy(emitter);
-    strops::emit_strtolower(emitter);
-    strops::emit_strtoupper(emitter);
-    strops::emit_trim(emitter);
-    strops::emit_ltrim(emitter);
-    strops::emit_rtrim(emitter);
-    strops::emit_strpos(emitter);
-    strops::emit_strrpos(emitter);
-    strops::emit_str_repeat(emitter);
-    strops::emit_strrev(emitter);
-    strops::emit_chr(emitter);
-    strops::emit_strcmp(emitter);
-    strops::emit_strcasecmp(emitter);
-    strops::emit_str_starts_with(emitter);
-    strops::emit_str_ends_with(emitter);
-    strops::emit_str_replace(emitter);
-    strops::emit_explode(emitter);
-    strops::emit_implode(emitter);
-    strops2::emit_ucwords(emitter);
-    strops2::emit_str_ireplace(emitter);
-    strops2::emit_substr_replace(emitter);
-    strops2::emit_str_pad(emitter);
-    strops2::emit_str_split(emitter);
-    strops2::emit_addslashes(emitter);
-    strops2::emit_stripslashes(emitter);
-    strops2::emit_nl2br(emitter);
-    strops2::emit_wordwrap(emitter);
-    strops2::emit_bin2hex(emitter);
-    strops2::emit_hex2bin(emitter);
+    strings::emit_strcopy(emitter);
+    strings::emit_strtolower(emitter);
+    strings::emit_strtoupper(emitter);
+    strings::emit_trim(emitter);
+    strings::emit_ltrim(emitter);
+    strings::emit_rtrim(emitter);
+    strings::emit_strpos(emitter);
+    strings::emit_strrpos(emitter);
+    strings::emit_str_repeat(emitter);
+    strings::emit_strrev(emitter);
+    strings::emit_chr(emitter);
+    strings::emit_strcmp(emitter);
+    strings::emit_strcasecmp(emitter);
+    strings::emit_str_starts_with(emitter);
+    strings::emit_str_ends_with(emitter);
+    strings::emit_str_replace(emitter);
+    strings::emit_explode(emitter);
+    strings::emit_implode(emitter);
+    strings::emit_ucwords(emitter);
+    strings::emit_str_ireplace(emitter);
+    strings::emit_substr_replace(emitter);
+    strings::emit_str_pad(emitter);
+    strings::emit_str_split(emitter);
+    strings::emit_addslashes(emitter);
+    strings::emit_stripslashes(emitter);
+    strings::emit_nl2br(emitter);
+    strings::emit_wordwrap(emitter);
+    strings::emit_bin2hex(emitter);
+    strings::emit_hex2bin(emitter);
+
+    // System runtime functions
     system::emit_build_argv(emitter);
+
+    // Array runtime functions
     arrays::emit_heap_alloc(emitter);
     arrays::emit_array_new(emitter);
     arrays::emit_array_push_int(emitter);
