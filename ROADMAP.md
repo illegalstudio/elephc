@@ -1,6 +1,8 @@
 # Roadmap
 
-## Completed
+## v0.1.0 — Usable CLI compiler
+
+The compiler should be able to produce real CLI tools that accept arguments and do basic I/O.
 
 - [x] Lexer, parser (Pratt), type checker, ARM64 codegen pipeline
 - [x] Integers, strings, echo, variables, comments
@@ -10,14 +12,7 @@
 - [x] Functions with local scope, return, recursion, nested calls
 - [x] Pre/post increment/decrement (`++$i`, `$i++`, `--$i`, `$i--`)
 - [x] Error messages with line/column numbers
-- [x] 114 tests (lexer, parser, codegen end-to-end, error reporting)
-
----
-
-## v0.1.0 — Usable CLI compiler
-
-The compiler should be able to produce real CLI tools that accept arguments and do basic I/O.
-
+- [x] 169 tests (lexer, parser, codegen end-to-end, error reporting)
 - [ ] Logical operators: `&&`, `||`, `!` (with short-circuit evaluation)
 - [ ] Assignment operators: `+=`, `-=`, `*=`, `/=`, `.=`, `%=`
 - [ ] Boolean literals: `true`, `false`

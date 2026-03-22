@@ -112,6 +112,14 @@ cargo run -- examples/fizzbuzz/main.php
 ./examples/fizzbuzz/main
 ```
 
+## Roadmap management
+
+`ROADMAP.md` tracks all planned and completed work, organized by version.
+
+- **Never remove completed items** from a version section. Mark them as `[x]` and leave them under the version they belong to. This preserves the history of what was delivered in each release.
+- New work items go under the appropriate future version.
+- When all items in a version are completed, the version is considered done — do not move items elsewhere.
+
 ## Conventions
 
 - No `Co-Authored-By` lines in commits
