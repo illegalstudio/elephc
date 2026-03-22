@@ -8,8 +8,7 @@ while ($i <= 100) {
     } elseif ($i % 5 == 0) {
         echo "Buzz\n";
     } else {
-        echo $i;
-        echo "\n";
+        echo $i . "\n";
     }
-    $i = $i + 1;
+    $i++;
 }

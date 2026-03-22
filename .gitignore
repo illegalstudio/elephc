@@ -1,17 +1,8 @@
 target/
 
-# Generated assembly and object files
-*.s
-*.o
-*.asm
-
-# Compiled binaries (examples and tests)
-examples/hello
-examples/fizzbuzz
-examples/variables
-examples/integers
-examples/arithmetic
-examples/concat
+# Generated files in test integration
+tests/integration/*.s
+tests/integration/*.o
 tests/integration/hello
 tests/integration/variables
 tests/integration/arithmetic
