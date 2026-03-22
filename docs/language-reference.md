@@ -339,14 +339,19 @@ foreach ($names as $name) {
 | `strrpos()` | `strrpos($hay, $needle): int` | Find last occurrence (-1 if not found) |
 | `strstr()` | `strstr($hay, $needle): string` | Find first occurrence and return rest |
 | `str_replace()` | `str_replace($search, $replace, $subject): string` | Replace all occurrences |
+| `str_ireplace()` | `str_ireplace($search, $replace, $subject): string` | Case-insensitive replace |
+| `substr_replace()` | `substr_replace($str, $repl, $start [, $len]): string` | Replace substring |
 | `strtolower()` | `strtolower($str): string` | Convert to lowercase |
 | `strtoupper()` | `strtoupper($str): string` | Convert to uppercase |
 | `ucfirst()` | `ucfirst($str): string` | Uppercase first character |
 | `lcfirst()` | `lcfirst($str): string` | Lowercase first character |
+| `ucwords()` | `ucwords($str): string` | Uppercase first letter of each word |
 | `trim()` | `trim($str): string` | Strip whitespace from both ends |
 | `ltrim()` | `ltrim($str): string` | Strip whitespace from left |
 | `rtrim()` | `rtrim($str): string` | Strip whitespace from right |
 | `str_repeat()` | `str_repeat($str, $times): string` | Repeat a string |
+| `str_pad()` | `str_pad($str, $len [, $pad, $type]): string` | Pad string to length |
+| `str_split()` | `str_split($str [, $len]): array` | Split into chunks |
 | `strrev()` | `strrev($str): string` | Reverse a string |
 | `strcmp()` | `strcmp($a, $b): int` | Binary-safe string comparison |
 | `strcasecmp()` | `strcasecmp($a, $b): int` | Case-insensitive comparison |
@@ -357,6 +362,12 @@ foreach ($names as $name) {
 | `chr()` | `chr($code): string` | Character from ASCII code |
 | `explode()` | `explode($delim, $str): array` | Split string into array |
 | `implode()` | `implode($glue, $arr): string` | Join array into string |
+| `addslashes()` | `addslashes($str): string` | Escape quotes and backslashes |
+| `stripslashes()` | `stripslashes($str): string` | Remove escape backslashes |
+| `nl2br()` | `nl2br($str): string` | Insert `<br />` before newlines |
+| `wordwrap()` | `wordwrap($str [, $width, $break]): string` | Wrap text at width |
+| `bin2hex()` | `bin2hex($str): string` | Convert binary to hex |
+| `hex2bin()` | `hex2bin($str): string` | Convert hex to binary |
 | `intval()` | `intval($val): int` | Converts to integer |
 
 ### Array functions

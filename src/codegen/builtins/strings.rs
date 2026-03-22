@@ -395,6 +395,148 @@ pub fn emit(
 
             Some(PhpType::Str)
         }
+        "ucwords" => {
+            emitter.comment("ucwords()");
+            emit_expr(&args[0], emitter, ctx, data);
+            emitter.instruction("bl __rt_ucwords");                             // call runtime: uppercase first letter of each word
+            Some(PhpType::Str)
+        }
+        "str_ireplace" => {
+            emitter.comment("str_ireplace()");
+            emit_expr(&args[0], emitter, ctx, data);
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                    // push search string
+            emit_expr(&args[1], emitter, ctx, data);
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                    // push replace string
+            emit_expr(&args[2], emitter, ctx, data);
+            emitter.instruction("mov x5, x1");                                 // subject ptr
+            emitter.instruction("mov x6, x2");                                 // subject len
+            emitter.instruction("ldp x3, x4, [sp], #16");                      // pop replace
+            emitter.instruction("ldp x1, x2, [sp], #16");                      // pop search
+            emitter.instruction("bl __rt_str_ireplace");                        // call runtime: case-insensitive replace
+            Some(PhpType::Str)
+        }
+        "substr_replace" => {
+            emitter.comment("substr_replace()");
+            emit_expr(&args[0], emitter, ctx, data);
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                    // push subject string
+            emit_expr(&args[1], emitter, ctx, data);
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                    // push replacement string
+            emit_expr(&args[2], emitter, ctx, data);
+            emitter.instruction("str x0, [sp, #-16]!");                         // push offset
+            if args.len() >= 4 {
+                emit_expr(&args[3], emitter, ctx, data);
+                emitter.instruction("mov x7, x0");                             // length arg
+            } else {
+                emitter.instruction("mov x7, #-1");                             // sentinel: replace to end
+            }
+            emitter.instruction("ldr x0, [sp], #16");                          // pop offset
+            emitter.instruction("ldp x3, x4, [sp], #16");                      // pop replacement
+            emitter.instruction("ldp x1, x2, [sp], #16");                      // pop subject
+            // x1/x2=subject, x3/x4=replacement, x0=offset, x7=length
+            emitter.instruction("bl __rt_substr_replace");                      // call runtime: replace substring
+            Some(PhpType::Str)
+        }
+        "str_pad" => {
+            emitter.comment("str_pad()");
+            emit_expr(&args[0], emitter, ctx, data);
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                    // push input string
+            emit_expr(&args[1], emitter, ctx, data);
+            emitter.instruction("str x0, [sp, #-16]!");                         // push target length
+            // pad_string (arg 3, default " ")
+            if args.len() >= 3 {
+                emit_expr(&args[2], emitter, ctx, data);
+                emitter.instruction("stp x1, x2, [sp, #-16]!");                // push pad string
+            } else {
+                let (label, len) = data.add_string(b" ");
+                emitter.instruction(&format!("adrp x1, {}@PAGE", label));       // load default pad string " "
+                emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", label)); // resolve address
+                emitter.instruction(&format!("mov x2, #{}", len));              // pad string length = 1
+                emitter.instruction("stp x1, x2, [sp, #-16]!");                // push pad string
+            }
+            // pad_type (arg 4, default 1 = STR_PAD_RIGHT)
+            if args.len() >= 4 {
+                emit_expr(&args[3], emitter, ctx, data);
+                emitter.instruction("mov x7, x0");                             // pad type
+            } else {
+                emitter.instruction("mov x7, #1");                              // STR_PAD_RIGHT
+            }
+            emitter.instruction("ldp x3, x4, [sp], #16");                      // pop pad string
+            emitter.instruction("ldr x5, [sp], #16");                           // pop target length
+            emitter.instruction("ldp x1, x2, [sp], #16");                      // pop input string
+            // x1/x2=input, x3/x4=pad_str, x5=target_len, x7=pad_type
+            emitter.instruction("bl __rt_str_pad");                             // call runtime: pad string
+            Some(PhpType::Str)
+        }
+        "str_split" => {
+            emitter.comment("str_split()");
+            emit_expr(&args[0], emitter, ctx, data);
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                    // push string
+            if args.len() >= 2 {
+                emit_expr(&args[1], emitter, ctx, data);
+                emitter.instruction("mov x3, x0");                             // chunk length
+            } else {
+                emitter.instruction("mov x3, #1");                              // default chunk = 1
+            }
+            emitter.instruction("ldp x1, x2, [sp], #16");                      // pop string
+            emitter.instruction("bl __rt_str_split");                           // call runtime: split string into chunks
+            Some(PhpType::Array(Box::new(PhpType::Str)))
+        }
+        "addslashes" => {
+            emitter.comment("addslashes()");
+            emit_expr(&args[0], emitter, ctx, data);
+            emitter.instruction("bl __rt_addslashes");                          // call runtime: escape quotes and backslashes
+            Some(PhpType::Str)
+        }
+        "stripslashes" => {
+            emitter.comment("stripslashes()");
+            emit_expr(&args[0], emitter, ctx, data);
+            emitter.instruction("bl __rt_stripslashes");                        // call runtime: remove escape backslashes
+            Some(PhpType::Str)
+        }
+        "nl2br" => {
+            emitter.comment("nl2br()");
+            emit_expr(&args[0], emitter, ctx, data);
+            emitter.instruction("bl __rt_nl2br");                               // call runtime: insert <br /> before newlines
+            Some(PhpType::Str)
+        }
+        "wordwrap" => {
+            emitter.comment("wordwrap()");
+            emit_expr(&args[0], emitter, ctx, data);
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                    // push string
+            // width (arg 2, default 75)
+            if args.len() >= 2 {
+                emit_expr(&args[1], emitter, ctx, data);
+                emitter.instruction("mov x3, x0");                             // width
+            } else {
+                emitter.instruction("mov x3, #75");                             // default width
+            }
+            // break string (arg 3, default "\n")
+            if args.len() >= 3 {
+                emit_expr(&args[2], emitter, ctx, data);
+                emitter.instruction("mov x4, x1");                             // break ptr
+                emitter.instruction("mov x5, x2");                             // break len
+            } else {
+                let (label, len) = data.add_string(b"\n");
+                emitter.instruction(&format!("adrp x4, {}@PAGE", label));       // load default break "\n"
+                emitter.instruction(&format!("add x4, x4, {}@PAGEOFF", label)); // resolve address
+                emitter.instruction(&format!("mov x5, #{}", len));              // break length = 1
+            }
+            emitter.instruction("ldp x1, x2, [sp], #16");                      // pop input string
+            emitter.instruction("bl __rt_wordwrap");                            // call runtime: wrap text at word boundaries
+            Some(PhpType::Str)
+        }
+        "bin2hex" => {
+            emitter.comment("bin2hex()");
+            emit_expr(&args[0], emitter, ctx, data);
+            emitter.instruction("bl __rt_bin2hex");                             // call runtime: convert bytes to hex string
+            Some(PhpType::Str)
+        }
+        "hex2bin" => {
+            emitter.comment("hex2bin()");
+            emit_expr(&args[0], emitter, ctx, data);
+            emitter.instruction("bl __rt_hex2bin");                             // call runtime: convert hex string to bytes
+            Some(PhpType::Str)
+        }
         _ => None,
     }
 }

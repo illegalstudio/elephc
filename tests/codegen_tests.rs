@@ -2611,3 +2611,104 @@ echo implode(", ", $parts);
 "#);
     assert_eq!(out, "one, two, three");
 }
+
+// --- v0.4 batch 2: more string functions ---
+
+#[test]
+fn test_ucwords() {
+    let out = compile_and_run(r#"<?php echo ucwords("hello world foo");"#);
+    assert_eq!(out, "Hello World Foo");
+}
+
+#[test]
+fn test_str_ireplace() {
+    let out = compile_and_run(r#"<?php echo str_ireplace("WORLD", "PHP", "Hello World");"#);
+    assert_eq!(out, "Hello PHP");
+}
+
+#[test]
+fn test_substr_replace() {
+    let out = compile_and_run(r#"<?php echo substr_replace("hello world", "PHP", 6, 5);"#);
+    assert_eq!(out, "hello PHP");
+}
+
+#[test]
+fn test_substr_replace_no_length() {
+    let out = compile_and_run(r#"<?php echo substr_replace("hello world", "!", 5);"#);
+    assert_eq!(out, "hello!");
+}
+
+#[test]
+fn test_str_pad_right() {
+    let out = compile_and_run(r#"<?php echo str_pad("hi", 5);"#);
+    assert_eq!(out, "hi   ");
+}
+
+#[test]
+fn test_str_pad_left() {
+    let out = compile_and_run(r#"<?php echo str_pad("hi", 5, " ", 0);"#);
+    assert_eq!(out, "   hi");
+}
+
+#[test]
+fn test_str_pad_both() {
+    let out = compile_and_run(r#"<?php echo str_pad("hi", 6, "-", 2);"#);
+    assert_eq!(out, "--hi--");
+}
+
+#[test]
+fn test_str_pad_custom_char() {
+    let out = compile_and_run(r#"<?php echo str_pad("42", 5, "0", 0);"#);
+    assert_eq!(out, "00042");
+}
+
+#[test]
+fn test_str_split() {
+    let out = compile_and_run(r#"<?php
+$parts = str_split("Hello", 2);
+echo count($parts) . " " . $parts[0] . " " . $parts[1] . " " . $parts[2];
+"#);
+    assert_eq!(out, "3 He ll o");
+}
+
+#[test]
+fn test_addslashes() {
+    let out = compile_and_run(r#"<?php echo addslashes("He said \"hi\" and it's ok");"#);
+    assert_eq!(out, r#"He said \"hi\" and it\'s ok"#);
+}
+
+#[test]
+fn test_stripslashes() {
+    let out = compile_and_run(r#"<?php echo stripslashes("He said \\\"hi\\\"");"#);
+    assert_eq!(out, r#"He said "hi""#);
+}
+
+#[test]
+fn test_nl2br() {
+    let out = compile_and_run("<?php echo nl2br(\"line1\\nline2\");");
+    assert_eq!(out, "line1<br />\nline2");
+}
+
+#[test]
+fn test_wordwrap() {
+    let out = compile_and_run(r#"<?php echo wordwrap("The quick brown fox jumped over the lazy dog", 15, "\n");"#);
+    assert!(out.contains('\n'));
+}
+
+#[test]
+fn test_bin2hex() {
+    let out = compile_and_run(r#"<?php echo bin2hex("AB");"#);
+    assert_eq!(out, "4142");
+}
+
+#[test]
+fn test_hex2bin() {
+    let out = compile_and_run(r#"<?php echo hex2bin("4142");"#);
+    assert_eq!(out, "AB");
+}
+
+#[test]
+fn test_bin2hex_hex2bin_roundtrip() {
+    let out = compile_and_run(r#"<?php echo hex2bin(bin2hex("Hello"));"#);
+    assert_eq!(out, "Hello");
+}

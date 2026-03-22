@@ -65,11 +65,13 @@ impl Checker {
                 for arg in args { self.infer_type(arg, env)?; }
                 Ok(Some(PhpType::Str))
             }
-            "strtolower" | "strtoupper" | "ucfirst" | "lcfirst" | "trim" | "ltrim"
-            | "rtrim" | "strrev" | "str_repeat" | "str_replace" | "chr" => {
+            "strtolower" | "strtoupper" | "ucfirst" | "lcfirst" | "ucwords"
+            | "trim" | "ltrim" | "rtrim" | "strrev" | "str_repeat"
+            | "str_replace" | "str_ireplace" | "chr"
+            | "addslashes" | "stripslashes" | "nl2br" | "bin2hex" => {
                 let expected = match name {
                     "str_repeat" => 2,
-                    "str_replace" => 3,
+                    "str_replace" | "str_ireplace" => 3,
                     _ => 1,
                 };
                 if name == "chr" {
@@ -80,6 +82,41 @@ impl Checker {
                     return Err(CompileError::new(
                         span, &format!("{}() takes exactly {} argument{}", name, expected, if expected > 1 { "s" } else { "" }),
                     ));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                Ok(Some(PhpType::Str))
+            }
+            "hex2bin" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "hex2bin() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Str))
+            }
+            "substr_replace" => {
+                if args.len() != 3 && args.len() != 4 {
+                    return Err(CompileError::new(span, "substr_replace() takes 3 or 4 arguments"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                Ok(Some(PhpType::Str))
+            }
+            "str_pad" => {
+                if args.len() < 2 || args.len() > 4 {
+                    return Err(CompileError::new(span, "str_pad() takes 2 to 4 arguments"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                Ok(Some(PhpType::Str))
+            }
+            "str_split" => {
+                if args.len() < 1 || args.len() > 2 {
+                    return Err(CompileError::new(span, "str_split() takes 1 or 2 arguments"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
+            }
+            "wordwrap" => {
+                if args.is_empty() || args.len() > 4 {
+                    return Err(CompileError::new(span, "wordwrap() takes 1 to 4 arguments"));
                 }
                 for arg in args { self.infer_type(arg, env)?; }
                 Ok(Some(PhpType::Str))

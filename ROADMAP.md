@@ -70,24 +70,24 @@ Make string handling practical.
 - [ ] String interpolation: `"Hello $name"`, `"val={$expr}"`
 - [x] `substr()`, `strpos()`, `strrpos()`, `strstr()`
 - [x] `str_replace()`
-- [ ] `str_ireplace()`, `substr_replace()`
+- [x] `str_ireplace()`, `substr_replace()`
 - [x] `strtolower()`, `strtoupper()`, `ucfirst()`, `lcfirst()`
-- [ ] `ucwords()`
+- [x] `ucwords()`
 - [x] `trim()`, `ltrim()`, `rtrim()`
 - [x] `str_repeat()`, `strrev()`
-- [ ] `str_pad()`
+- [x] `str_pad()`
 - [x] `explode()`, `implode()`
-- [ ] `str_split()`
+- [x] `str_split()`
 - [ ] `sprintf()`, `printf()`, `sscanf()`
 - [x] `strcmp()`, `strcasecmp()`, `str_contains()`, `str_starts_with()`, `str_ends_with()`
 - [x] `ord()`, `chr()`
-- [ ] `nl2br()`, `wordwrap()`
-- [ ] `addslashes()`, `stripslashes()`
+- [x] `nl2br()`, `wordwrap()`
+- [x] `addslashes()`, `stripslashes()`
 - [ ] `htmlspecialchars()`, `htmlentities()`, `html_entity_decode()`
 - [ ] `urlencode()`, `urldecode()`, `rawurlencode()`, `rawurldecode()`
 - [ ] `md5()`, `sha1()`, `hash()`
 - [ ] `base64_encode()`, `base64_decode()`
-- [ ] `bin2hex()`, `hex2bin()`
+- [x] `bin2hex()`, `hex2bin()`
 - [ ] `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, `ctype_space()`
 
 ## v0.5.0 — I/O and file system

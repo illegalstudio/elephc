@@ -1,6 +1,7 @@
 mod arrays;
 mod strings;
 mod strops;
+mod strops2;
 mod system;
 
 use super::emit::Emitter;
@@ -30,6 +31,17 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     strops::emit_str_replace(emitter);
     strops::emit_explode(emitter);
     strops::emit_implode(emitter);
+    strops2::emit_ucwords(emitter);
+    strops2::emit_str_ireplace(emitter);
+    strops2::emit_substr_replace(emitter);
+    strops2::emit_str_pad(emitter);
+    strops2::emit_str_split(emitter);
+    strops2::emit_addslashes(emitter);
+    strops2::emit_stripslashes(emitter);
+    strops2::emit_nl2br(emitter);
+    strops2::emit_wordwrap(emitter);
+    strops2::emit_bin2hex(emitter);
+    strops2::emit_hex2bin(emitter);
     system::emit_build_argv(emitter);
     arrays::emit_heap_alloc(emitter);
     arrays::emit_array_new(emitter);
