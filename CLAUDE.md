@@ -42,6 +42,7 @@ cargo test test_fizzbuzz  # run a specific test
 - **New statement type**: needs at least one codegen test showing correct output, one test for edge cases (empty body, nested), and one error test for malformed syntax
 - **New built-in function**: needs codegen tests for normal use and error test for wrong argument count/types
 - **Bug fix**: must include a regression test that would have caught the bug
+- **Every feature also needs an example** in `examples/`. If an existing example can showcase the new feature naturally, update it. Otherwise, create a new `examples/<name>/main.php` with its own `.gitignore` (containing `*.s`, `*.o`, `main`). Examples should be small, readable programs that demonstrate real use cases — not just test cases.
 
 ### Writing codegen tests
 
