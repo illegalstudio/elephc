@@ -38,27 +38,33 @@ pub fn emit_function(
     emitter.instruction(&format!("stp x29, x30, [sp, #{}]", frame_size - 16));
     emitter.instruction(&format!("add x29, sp, #{}", frame_size - 16));
 
-    let mut reg_idx = 0usize;
+    let mut int_reg_idx = 0usize;
+    let mut float_reg_idx = 0usize;
     for (pname, pty) in &sig.params {
         let var = ctx.variables.get(pname).unwrap();
         let offset = var.stack_offset;
         match pty {
             PhpType::Bool | PhpType::Int => {
-                emitter.comment(&format!("param ${} from x{}", pname, reg_idx));
-                emitter.instruction(&format!("stur x{}, [x29, #-{}]", reg_idx, offset));
-                reg_idx += 1;
+                emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
+                emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx, offset));
+                int_reg_idx += 1;
+            }
+            PhpType::Float => {
+                emitter.comment(&format!("param ${} from d{}", pname, float_reg_idx));
+                emitter.instruction(&format!("stur d{}, [x29, #-{}]", float_reg_idx, offset));
+                float_reg_idx += 1;
             }
             PhpType::Str => {
-                emitter.comment(&format!("param ${} from x{},x{}", pname, reg_idx, reg_idx + 1));
-                emitter.instruction(&format!("stur x{}, [x29, #-{}]", reg_idx, offset));
-                emitter.instruction(&format!("stur x{}, [x29, #-{}]", reg_idx + 1, offset - 8));
-                reg_idx += 2;
+                emitter.comment(&format!("param ${} from x{},x{}", pname, int_reg_idx, int_reg_idx + 1));
+                emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx, offset));
+                emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx + 1, offset - 8));
+                int_reg_idx += 2;
             }
             PhpType::Void => {}
             PhpType::Array(_) => {
-                emitter.comment(&format!("param ${} from x{}", pname, reg_idx));
-                emitter.instruction(&format!("stur x{}, [x29, #-{}]", reg_idx, offset));
-                reg_idx += 1;
+                emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
+                emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx, offset));
+                int_reg_idx += 1;
             }
         }
     }
@@ -134,6 +140,7 @@ fn infer_local_type(
         ExprKind::Null => PhpType::Void,
         ExprKind::StringLiteral(_) => PhpType::Str,
         ExprKind::IntLiteral(_) => PhpType::Int,
+        ExprKind::FloatLiteral(_) => PhpType::Float,
         ExprKind::ArrayLiteral(elems) => {
             let elem_ty = if elems.is_empty() {
                 PhpType::Int
@@ -146,12 +153,49 @@ fn infer_local_type(
             PhpType::Array(t) => *t,
             _ => PhpType::Int,
         },
-        ExprKind::Negate(_) => PhpType::Int,
-        ExprKind::BinaryOp { op, .. } => match op {
+        ExprKind::Negate(inner) => {
+            let inner_ty = infer_local_type(inner, sig);
+            if inner_ty == PhpType::Float { PhpType::Float } else { PhpType::Int }
+        }
+        ExprKind::BinaryOp { left, op, right } => match op {
             crate::parser::ast::BinOp::Concat => PhpType::Str,
-            _ => PhpType::Int,
+            _ => {
+                let lt = infer_local_type(left, sig);
+                let rt = infer_local_type(right, sig);
+                if lt == PhpType::Float || rt == PhpType::Float {
+                    PhpType::Float
+                } else {
+                    PhpType::Int
+                }
+            }
         },
-        ExprKind::FunctionCall { .. } => PhpType::Int,
+        ExprKind::FunctionCall { name, args } => {
+            match name.as_str() {
+                "floatval" | "floor" | "ceil" | "round" | "sqrt" | "pow" => PhpType::Float,
+                "abs" => {
+                    if !args.is_empty() {
+                        let t = infer_local_type(&args[0], sig);
+                        if t == PhpType::Float { PhpType::Float } else { PhpType::Int }
+                    } else {
+                        PhpType::Int
+                    }
+                }
+                "min" | "max" => {
+                    if args.len() >= 2 {
+                        let t0 = infer_local_type(&args[0], sig);
+                        let t1 = infer_local_type(&args[1], sig);
+                        if t0 == PhpType::Float || t1 == PhpType::Float {
+                            PhpType::Float
+                        } else {
+                            PhpType::Int
+                        }
+                    } else {
+                        PhpType::Int
+                    }
+                }
+                _ => PhpType::Int,
+            }
+        }
         _ => PhpType::Int,
     }
 }

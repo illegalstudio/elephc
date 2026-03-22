@@ -44,6 +44,14 @@ pub fn emit_expr(
             load_immediate(emitter, "x0", *n);
             PhpType::Int
         }
+        ExprKind::FloatLiteral(f) => {
+            emitter.comment(&format!("load float {}", f));
+            let label = data.add_float(*f);
+            emitter.instruction(&format!("adrp x9, {}@PAGE", label));
+            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label));
+            emitter.instruction("ldr d0, [x9]");
+            PhpType::Float
+        }
         ExprKind::Variable(name) => {
             let var = ctx.variables.get(name).expect("undefined variable");
             let offset = var.stack_offset;
@@ -53,10 +61,15 @@ pub fn emit_expr(
             ty
         }
         ExprKind::Negate(inner) => {
-            emit_expr(inner, emitter, ctx, data);
+            let ty = emit_expr(inner, emitter, ctx, data);
             emitter.comment("negate");
-            emitter.instruction("neg x0, x0");
-            PhpType::Int
+            if ty == PhpType::Float {
+                emitter.instruction("fneg d0, d0");
+                PhpType::Float
+            } else {
+                emitter.instruction("neg x0, x0");
+                PhpType::Int
+            }
         }
         ExprKind::ArrayLiteral(elems) => emit_array_literal(elems, emitter, ctx, data),
         ExprKind::ArrayAccess { array, index } => {
@@ -220,6 +233,9 @@ fn coerce_to_string(emitter: &mut Emitter, ty: &PhpType) {
         PhpType::Int => {
             emitter.instruction("bl __rt_itoa");
         }
+        PhpType::Float => {
+            emitter.instruction("bl __rt_ftoa");
+        }
         PhpType::Bool => {
             // true → "1" (via itoa), false → "" (len=0)
             // If x0 == 0, just set len=0; otherwise call itoa
@@ -247,6 +263,8 @@ fn coerce_null_to_zero(emitter: &mut Emitter, ty: &PhpType) {
         emitter.instruction("mov x0, #0");
     } else if *ty == PhpType::Bool {
         // Bool is already 0/1 in x0, compatible with Int arithmetic
+    } else if *ty == PhpType::Float {
+        // Float is already in d0, no null sentinel to check
     } else if *ty == PhpType::Int {
         // Runtime null check: if x0 == sentinel, replace with 0
         emitter.instruction("movz x9, #0xFFFE");
@@ -292,31 +310,92 @@ fn emit_binop(
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
             let lt = emit_expr(left, emitter, ctx, data);
             coerce_null_to_zero(emitter, &lt);
-            emitter.instruction("str x0, [sp, #-16]!");
+            let use_float = lt == PhpType::Float;
+            if use_float {
+                emitter.instruction("str d0, [sp, #-16]!");
+            } else {
+                emitter.instruction("str x0, [sp, #-16]!");
+            }
             let rt = emit_expr(right, emitter, ctx, data);
             coerce_null_to_zero(emitter, &rt);
-            emitter.instruction("ldr x1, [sp], #16");
-            match op {
-                BinOp::Add => emitter.instruction("add x0, x1, x0"),
-                BinOp::Sub => emitter.instruction("sub x0, x1, x0"),
-                BinOp::Mul => emitter.instruction("mul x0, x1, x0"),
-                BinOp::Div => emitter.instruction("sdiv x0, x1, x0"),
-                BinOp::Mod => {
-                    emitter.instruction("sdiv x2, x1, x0");
-                    emitter.instruction("msub x0, x2, x0, x1");
+
+            if lt == PhpType::Float || rt == PhpType::Float {
+                // Float path: promote non-float operand if needed
+                if rt != PhpType::Float {
+                    emitter.instruction("scvtf d0, x0");
                 }
-                _ => unreachable!(),
+                // d0 = right operand (as float)
+                emitter.instruction("str d0, [sp, #-16]!"); // save right
+                if lt == PhpType::Float {
+                    emitter.instruction("ldr d1, [sp, #16]"); // left was float
+                } else {
+                    emitter.instruction("ldr x9, [sp, #16]"); // left was int
+                    emitter.instruction("scvtf d1, x9");
+                }
+                emitter.instruction("ldr d0, [sp], #16"); // restore right into d0
+                // d1 = left, d0 = right
+                match op {
+                    BinOp::Add => emitter.instruction("fadd d0, d1, d0"),
+                    BinOp::Sub => emitter.instruction("fsub d0, d1, d0"),
+                    BinOp::Mul => emitter.instruction("fmul d0, d1, d0"),
+                    BinOp::Div => emitter.instruction("fdiv d0, d1, d0"),
+                    BinOp::Mod => {
+                        // fmod: a - floor(a/b) * b
+                        emitter.instruction("fdiv d2, d1, d0");
+                        emitter.instruction("frintm d2, d2");
+                        emitter.instruction("fmsub d0, d2, d0, d1");
+                    }
+                    _ => unreachable!(),
+                }
+                emitter.instruction("add sp, sp, #16"); // pop left save slot
+                PhpType::Float
+            } else {
+                // Integer path (unchanged)
+                emitter.instruction("ldr x1, [sp], #16");
+                match op {
+                    BinOp::Add => emitter.instruction("add x0, x1, x0"),
+                    BinOp::Sub => emitter.instruction("sub x0, x1, x0"),
+                    BinOp::Mul => emitter.instruction("mul x0, x1, x0"),
+                    BinOp::Div => emitter.instruction("sdiv x0, x1, x0"),
+                    BinOp::Mod => {
+                        emitter.instruction("sdiv x2, x1, x0");
+                        emitter.instruction("msub x0, x2, x0, x1");
+                    }
+                    _ => unreachable!(),
+                }
+                PhpType::Int
             }
-            PhpType::Int
         }
         BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
             let lt = emit_expr(left, emitter, ctx, data);
             coerce_null_to_zero(emitter, &lt);
-            emitter.instruction("str x0, [sp, #-16]!");
+            let use_float = lt == PhpType::Float;
+            if use_float {
+                emitter.instruction("str d0, [sp, #-16]!");
+            } else {
+                emitter.instruction("str x0, [sp, #-16]!");
+            }
             let rt = emit_expr(right, emitter, ctx, data);
             coerce_null_to_zero(emitter, &rt);
-            emitter.instruction("ldr x1, [sp], #16");
-            emitter.instruction("cmp x1, x0");
+
+            if lt == PhpType::Float || rt == PhpType::Float {
+                // Float comparison
+                if rt != PhpType::Float {
+                    emitter.instruction("scvtf d0, x0");
+                }
+                if lt == PhpType::Float {
+                    emitter.instruction("ldr d1, [sp], #16");
+                } else {
+                    emitter.instruction("ldr x9, [sp], #16");
+                    emitter.instruction("scvtf d1, x9");
+                }
+                // d1 = left, d0 = right
+                emitter.instruction("fcmp d1, d0");
+            } else {
+                // Integer comparison
+                emitter.instruction("ldr x1, [sp], #16");
+                emitter.instruction("cmp x1, x0");
+            }
             let cond = match op {
                 BinOp::Eq => "eq",
                 BinOp::NotEq => "ne",
@@ -360,6 +439,9 @@ fn emit_function_call(
             PhpType::Bool | PhpType::Int | PhpType::Array(_) => {
                 emitter.instruction("str x0, [sp, #-16]!");
             }
+            PhpType::Float => {
+                emitter.instruction("str d0, [sp, #-16]!");
+            }
             PhpType::Str => {
                 emitter.instruction("stp x1, x2, [sp, #-16]!");
             }
@@ -368,18 +450,28 @@ fn emit_function_call(
         arg_types.push(ty);
     }
 
-    let mut assignments: Vec<(PhpType, usize)> = Vec::new();
-    let mut reg_idx = 0;
+    // Separate int and float register tracking
+    let mut assignments: Vec<(PhpType, usize, bool)> = Vec::new(); // (type, reg_idx, is_float)
+    let mut int_reg_idx = 0usize;
+    let mut float_reg_idx = 0usize;
     for ty in &arg_types {
-        assignments.push((ty.clone(), reg_idx));
-        reg_idx += ty.register_count();
+        if ty.is_float_reg() {
+            assignments.push((ty.clone(), float_reg_idx, true));
+            float_reg_idx += 1;
+        } else {
+            assignments.push((ty.clone(), int_reg_idx, false));
+            int_reg_idx += ty.register_count();
+        }
     }
 
     for i in (0..args.len()).rev() {
-        let (ty, start_reg) = &assignments[i];
+        let (ty, start_reg, is_float) = &assignments[i];
         match ty {
             PhpType::Bool | PhpType::Int | PhpType::Array(_) => {
                 emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg));
+            }
+            PhpType::Float => {
+                emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg));
             }
             PhpType::Str => {
                 emitter.instruction(&format!(
@@ -390,6 +482,7 @@ fn emit_function_call(
             }
             PhpType::Void => {}
         }
+        let _ = is_float;
     }
 
     emitter.instruction(&format!("bl _fn_{}", name));

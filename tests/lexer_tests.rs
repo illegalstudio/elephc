@@ -289,3 +289,41 @@ fn test_span_multiline() {
     let var_span = spanned[1].1;
     assert_eq!(var_span.line, 4);
 }
+
+// --- Float literals ---
+
+#[test]
+fn test_float_literal() {
+    let t = tokens("<?php 3.14");
+    assert_eq!(t[1], Token::FloatLiteral(3.14));
+}
+
+#[test]
+fn test_dot_prefix_float() {
+    let t = tokens("<?php .5");
+    assert_eq!(t[1], Token::FloatLiteral(0.5));
+}
+
+#[test]
+fn test_scientific_notation() {
+    let t = tokens("<?php 1.5e3");
+    assert_eq!(t[1], Token::FloatLiteral(1500.0));
+}
+
+#[test]
+fn test_scientific_notation_negative_exponent() {
+    let t = tokens("<?php 1.0e-5");
+    assert_eq!(t[1], Token::FloatLiteral(1.0e-5));
+}
+
+#[test]
+fn test_integer_not_mistaken_for_float() {
+    let t = tokens("<?php 42");
+    assert_eq!(t[1], Token::IntLiteral(42));
+}
+
+#[test]
+fn test_dot_operator_not_float() {
+    let t = tokens("<?php \"a\" . \"b\"");
+    assert_eq!(t[2], Token::Dot);
+}

@@ -11,6 +11,7 @@ pub enum Token {
     // Literals
     StringLiteral(String),
     IntLiteral(i64),
+    FloatLiteral(f64),
 
     // Identifiers
     Variable(String),

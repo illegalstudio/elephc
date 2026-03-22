@@ -60,12 +60,12 @@ impl Checker {
                 let ty = self.infer_type(value, env)?;
                 if let Some(existing) = env.get(name) {
                     // Allow null (Void) to be assigned to any variable,
-                    // Bool and Int are interchangeable
+                    // Bool and Int are interchangeable, Int and Float are interchangeable
                     let compatible = *existing == ty
                         || ty == PhpType::Void
                         || *existing == PhpType::Void
-                        || (matches!(*existing, PhpType::Int | PhpType::Bool)
-                            && matches!(ty, PhpType::Int | PhpType::Bool));
+                        || (matches!(*existing, PhpType::Int | PhpType::Bool | PhpType::Float)
+                            && matches!(ty, PhpType::Int | PhpType::Bool | PhpType::Float));
                     if !compatible {
                         return Err(CompileError::new(
                             stmt.span,
@@ -177,15 +177,17 @@ impl Checker {
             ExprKind::Null => Ok(PhpType::Void),
             ExprKind::StringLiteral(_) => Ok(PhpType::Str),
             ExprKind::IntLiteral(_) => Ok(PhpType::Int),
+            ExprKind::FloatLiteral(_) => Ok(PhpType::Float),
             ExprKind::Variable(name) => env.get(name).cloned().ok_or_else(|| {
                 CompileError::new(expr.span, &format!("Undefined variable: ${}", name))
             }),
             ExprKind::Negate(inner) => {
                 let ty = self.infer_type(inner, env)?;
-                if ty != PhpType::Int {
-                    return Err(CompileError::new(expr.span, "Cannot negate a non-integer"));
+                match ty {
+                    PhpType::Int => Ok(PhpType::Int),
+                    PhpType::Float => Ok(PhpType::Float),
+                    _ => Err(CompileError::new(expr.span, "Cannot negate a non-numeric value")),
                 }
-                Ok(PhpType::Int)
             }
             ExprKind::Not(inner) => {
                 self.infer_type(inner, env)?;
@@ -258,19 +260,23 @@ impl Checker {
                 let rt = self.infer_type(right, env)?;
                 match op {
                     BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                        let lt_ok = matches!(lt, PhpType::Int | PhpType::Bool | PhpType::Void);
-                        let rt_ok = matches!(rt, PhpType::Int | PhpType::Bool | PhpType::Void);
+                        let lt_ok = matches!(lt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
+                        let rt_ok = matches!(rt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
                         if !lt_ok || !rt_ok {
                             return Err(CompileError::new(
                                 expr.span, "Arithmetic operators require numeric operands",
                             ));
                         }
-                        Ok(PhpType::Int)
+                        if lt == PhpType::Float || rt == PhpType::Float {
+                            Ok(PhpType::Float)
+                        } else {
+                            Ok(PhpType::Int)
+                        }
                     }
                     BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt
                     | BinOp::LtEq | BinOp::GtEq => {
-                        let lt_ok = matches!(lt, PhpType::Int | PhpType::Bool | PhpType::Void);
-                        let rt_ok = matches!(rt, PhpType::Int | PhpType::Bool | PhpType::Void);
+                        let lt_ok = matches!(lt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
+                        let rt_ok = matches!(rt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
                         if !lt_ok || !rt_ok {
                             return Err(CompileError::new(
                                 expr.span, "Comparison operators require numeric operands",

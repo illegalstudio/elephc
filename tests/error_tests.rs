@@ -134,7 +134,7 @@ fn test_error_arithmetic_on_string() {
 fn test_error_negate_string() {
     expect_error(
         "<?php $x = \"hi\"; echo -$x;",
-        "Cannot negate a non-integer",
+        "Cannot negate a non-numeric value",
     );
 }
 
@@ -181,4 +181,66 @@ fn test_error_has_column() {
     let result = tokenize("<?php @");
     let err = result.unwrap_err();
     assert!(err.span.col > 0, "Error should have a column number");
+}
+
+// --- Float/math function errors ---
+
+#[test]
+fn test_error_floor_wrong_args() {
+    expect_error("<?php floor(1, 2);", "floor() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_ceil_wrong_args() {
+    expect_error("<?php ceil();", "ceil() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_round_wrong_args() {
+    expect_error("<?php round();", "round() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_sqrt_wrong_args() {
+    expect_error("<?php sqrt(1, 2);", "sqrt() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_pow_wrong_args() {
+    expect_error("<?php pow(1);", "pow() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_min_wrong_args() {
+    expect_error("<?php min(1);", "min() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_max_wrong_args() {
+    expect_error("<?php max(1);", "max() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_intdiv_wrong_args() {
+    expect_error("<?php intdiv(1);", "intdiv() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_abs_wrong_args() {
+    expect_error("<?php abs();", "abs() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_floatval_wrong_args() {
+    expect_error("<?php floatval();", "floatval() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_is_float_wrong_args() {
+    expect_error("<?php is_float();", "is_float() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_is_int_wrong_args() {
+    expect_error("<?php is_int();", "is_int() takes exactly 1 argument");
 }

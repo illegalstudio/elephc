@@ -6,6 +6,7 @@ use super::emit::Emitter;
 
 pub fn emit_runtime(emitter: &mut Emitter) {
     strings::emit_itoa(emitter);
+    strings::emit_ftoa(emitter);
     strings::emit_concat(emitter);
     strings::emit_atoi(emitter);
     system::emit_build_argv(emitter);
@@ -25,5 +26,6 @@ pub fn emit_runtime_data() -> String {
     out.push_str(".comm _global_argv, 8, 3\n");
     out.push_str(".comm _heap_buf, 1048576, 3\n");
     out.push_str(".comm _heap_off, 8, 3\n");
+    out.push_str("_fmt_g:\n    .asciz \"%.14G\"\n");
     out
 }

@@ -169,6 +169,11 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
             *pos += 1;
             Ok(Expr::new(ExprKind::IntLiteral(n), span))
         }
+        Token::FloatLiteral(f) => {
+            let f = *f;
+            *pos += 1;
+            Ok(Expr::new(ExprKind::FloatLiteral(f), span))
+        }
         Token::Variable(name) => {
             let name = name.clone();
             *pos += 1;

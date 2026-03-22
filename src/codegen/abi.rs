@@ -9,6 +9,9 @@ pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
         PhpType::Bool | PhpType::Int => {
             emitter.instruction(&format!("stur x0, [x29, #-{}]", offset));
         }
+        PhpType::Float => {
+            emitter.instruction(&format!("stur d0, [x29, #-{}]", offset));
+        }
         PhpType::Str => {
             emitter.instruction(&format!("stur x1, [x29, #-{}]", offset));
             emitter.instruction(&format!("stur x2, [x29, #-{}]", offset - 8));
@@ -30,6 +33,9 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty {
         PhpType::Bool | PhpType::Int => {
             emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));
+        }
+        PhpType::Float => {
+            emitter.instruction(&format!("ldur d0, [x29, #-{}]", offset));
         }
         PhpType::Str => {
             emitter.instruction(&format!("ldur x1, [x29, #-{}]", offset));
@@ -65,6 +71,12 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
         }
         PhpType::Int => {
             emitter.instruction("bl __rt_itoa");
+            emitter.instruction("mov x0, #1");
+            emitter.instruction("mov x16, #4");
+            emitter.instruction("svc #0x80");
+        }
+        PhpType::Float => {
+            emitter.instruction("bl __rt_ftoa");
             emitter.instruction("mov x0, #1");
             emitter.instruction("mov x16, #4");
             emitter.instruction("svc #0x80");

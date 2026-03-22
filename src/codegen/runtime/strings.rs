@@ -121,6 +121,57 @@ pub fn emit_concat(emitter: &mut Emitter) {
     emitter.instruction("ret");
 }
 
+/// ftoa: convert double-precision float to string.
+/// Input:  d0 = float value
+/// Output: x1 = pointer to string, x2 = length
+/// Uses _snprintf with "%.14G" format.
+/// On Apple ARM64 variadic ABI, the double goes on the stack.
+pub fn emit_ftoa(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: ftoa ---");
+    emitter.label("__rt_ftoa");
+    emitter.instruction("sub sp, sp, #64");
+    emitter.instruction("stp x29, x30, [sp, #48]");
+    emitter.instruction("add x29, sp, #48");
+
+    // Get current concat_buf position
+    emitter.instruction("adrp x9, _concat_off@PAGE");
+    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");
+    emitter.instruction("ldr x10, [x9]");
+    emitter.instruction("str x10, [sp, #32]");  // save original offset
+    emitter.instruction("str x9, [sp, #40]");   // save offset ptr
+
+    emitter.instruction("adrp x11, _concat_buf@PAGE");
+    emitter.instruction("add x11, x11, _concat_buf@PAGEOFF");
+    emitter.instruction("add x0, x11, x10"); // buf ptr = concat_buf + offset
+    emitter.instruction("str x0, [sp, #24]"); // save buf start
+
+    // Call snprintf(buf, 32, "%.14G", double)
+    // On Apple ARM64 variadic ABI, the double must go on the stack
+    emitter.instruction("mov x1, #32");         // buffer size
+    emitter.instruction("adrp x2, _fmt_g@PAGE");
+    emitter.instruction("add x2, x2, _fmt_g@PAGEOFF");
+    // Store the double on the stack for variadic call
+    emitter.instruction("str d0, [sp]");
+    emitter.instruction("bl _snprintf");
+
+    // x0 = number of chars written
+    emitter.instruction("mov x2, x0"); // length
+
+    // Update concat_off
+    emitter.instruction("ldr x9, [sp, #40]");   // offset ptr
+    emitter.instruction("ldr x10, [sp, #32]");   // original offset
+    emitter.instruction("add x10, x10, x2");
+    emitter.instruction("str x10, [x9]");
+
+    // x1 = buf start
+    emitter.instruction("ldr x1, [sp, #24]");
+
+    emitter.instruction("ldp x29, x30, [sp, #48]");
+    emitter.instruction("add sp, sp, #64");
+    emitter.instruction("ret");
+}
+
 /// atoi: parse a string to a signed 64-bit integer.
 /// Input:  x1 = string pointer, x2 = string length
 /// Output: x0 = integer value

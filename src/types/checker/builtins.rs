@@ -149,6 +149,86 @@ impl Checker {
                 }
                 Ok(Some(PhpType::Void))
             }
+            "floatval" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "floatval() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Float))
+            }
+            "abs" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "abs() takes exactly 1 argument"));
+                }
+                let ty = self.infer_type(&args[0], env)?;
+                match ty {
+                    PhpType::Float => Ok(Some(PhpType::Float)),
+                    _ => Ok(Some(PhpType::Int)),
+                }
+            }
+            "floor" | "ceil" | "round" | "sqrt" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, &format!("{}() takes exactly 1 argument", name)));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Float))
+            }
+            "pow" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "pow() takes exactly 2 arguments"));
+                }
+                self.infer_type(&args[0], env)?;
+                self.infer_type(&args[1], env)?;
+                Ok(Some(PhpType::Float))
+            }
+            "min" | "max" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, &format!("{}() takes exactly 2 arguments", name)));
+                }
+                let t0 = self.infer_type(&args[0], env)?;
+                let t1 = self.infer_type(&args[1], env)?;
+                if t0 == PhpType::Float || t1 == PhpType::Float {
+                    Ok(Some(PhpType::Float))
+                } else {
+                    Ok(Some(PhpType::Int))
+                }
+            }
+            "intdiv" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "intdiv() takes exactly 2 arguments"));
+                }
+                self.infer_type(&args[0], env)?;
+                self.infer_type(&args[1], env)?;
+                Ok(Some(PhpType::Int))
+            }
+            "is_float" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "is_float() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Bool))
+            }
+            "is_int" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "is_int() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Bool))
+            }
+            "is_string" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "is_string() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Bool))
+            }
+            "is_numeric" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "is_numeric() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Bool))
+            }
             _ => Ok(None),
         }
     }

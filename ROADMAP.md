@@ -40,12 +40,12 @@ Proper type system for PHP compatibility.
 - [ ] `===` and `!==` strict comparison (type-aware)
 
 ### Float type
-- [ ] Float literals: `3.14`, `1.0e-5`, `-0.5`
+- [x] Float literals: `3.14`, `1.0e-5`, `-0.5`
 - [ ] Division returns float: `10 / 3` → `3.3333...`
-- [ ] `intdiv()` for integer division
-- [ ] Mixed int/float arithmetic (auto-promotion to float)
-- [ ] Float comparison and formatting
-- [ ] `floatval()`, `is_float()`, `is_int()`, `is_string()`, `is_numeric()`
+- [x] `intdiv()` for integer division
+- [x] Mixed int/float arithmetic (auto-promotion to float)
+- [x] Float comparison and formatting
+- [x] `floatval()`, `is_float()`, `is_int()`, `is_string()`, `is_numeric()`
 - [ ] `INF`, `NAN`, `is_nan()`, `is_finite()`, `is_infinite()`
 
 ### Type operations
@@ -55,8 +55,9 @@ Proper type system for PHP compatibility.
 - [ ] `unset()` — destroy variable
 
 ### Math functions
-- [ ] `abs()`, `min()`, `max()`, `floor()`, `ceil()`, `round()`
-- [ ] `sqrt()`, `pow()`, `**` exponentiation operator
+- [x] `abs()`, `min()`, `max()`, `floor()`, `ceil()`, `round()`
+- [x] `sqrt()`, `pow()`
+- [ ] `**` exponentiation operator
 - [ ] `fmod()`, `fdiv()`
 - [ ] `rand()`, `mt_rand()`, `random_int()`
 - [ ] `number_format()`

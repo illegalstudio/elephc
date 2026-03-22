@@ -12,6 +12,7 @@ pub struct Expr {
 pub enum ExprKind {
     StringLiteral(String),
     IntLiteral(i64),
+    FloatLiteral(f64),
     Variable(String),
     BinaryOp {
         left: Box<Expr>,
@@ -60,6 +61,10 @@ impl Expr {
 
     pub fn int_lit(n: i64) -> Self {
         Self::new(ExprKind::IntLiteral(n), Span::dummy())
+    }
+
+    pub fn float_lit(f: f64) -> Self {
+        Self::new(ExprKind::FloatLiteral(f), Span::dummy())
     }
 
     pub fn var(name: impl Into<String>) -> Self {

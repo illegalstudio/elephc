@@ -10,7 +10,7 @@ This document describes the PHP subset supported by elephc. Every program listed
 | `string` | Yes | Pointer + length pair, double and single quoted |
 | `null` | Yes | Sentinel value, coerces to `0`/`""` in operations |
 | `bool` | Partial | `true`/`false` exist but are treated as `int(1)`/`int(0)`. `echo false` prints `0` instead of nothing. |
-| `float` | No | Not yet supported. Division is integer-only. |
+| `float` | Yes | 64-bit double-precision. Literals: `3.14`, `.5`, `1.5e3`, `1.0e-5`. |
 | `array` | Partial | Indexed arrays only. No associative arrays. |
 | `object` | No | Not planned (no OOP support). |
 | `resource` | No | Not planned. |
@@ -31,7 +31,7 @@ $x = 42;              // reassignment from null works
 
 - `echo false` prints `"0"` in elephc, nothing in PHP. Will be fixed when Bool type is added.
 - `echo true` prints `"1"` in both (correct).
-- Division is integer-only: `10 / 3` returns `3`, not `3.333...`. Will be fixed when Float type is added.
+- Integer division (`10 / 3`) returns `3`, not `3.333...`. Use float operands (`10.0 / 3.0`) for float division, or `intdiv()` for explicit integer division.
 - `$argv[0]` returns the compiled binary path, not the `.php` file path.
 
 ## Operators
@@ -43,7 +43,7 @@ $x = 42;              // reassignment from null works
 | `+` | `$a + $b` | Addition |
 | `-` | `$a - $b` | Subtraction |
 | `*` | `$a * $b` | Multiplication |
-| `/` | `$a / $b` | Division (integer-only, no float) |
+| `/` | `$a / $b` | Division (integer if both operands are int, float otherwise) |
 | `%` | `$a % $b` | Modulo |
 | `-$x` | `-$x` | Unary negation |
 
@@ -78,6 +78,7 @@ Short-circuit evaluation: if `$a` is false in `$a && $b`, `$b` is not evaluated.
 |---|---|---|
 | `.` | `"a" . "b"` | Concatenation |
 | `.` | `"val=" . 42` | Auto-coerces int to string |
+| `.` | `"pi=" . 3.14` | Auto-coerces float to string |
 
 ### Assignment
 
@@ -337,11 +338,32 @@ foreach ($names as $name) {
 | `rsort()` | `rsort($arr): void` | Sort descending (in-place) |
 | `isset()` | `isset($var): int` | Check if variable is defined (always 1) |
 
+### Math functions
+
+| Function | Signature | Description |
+|---|---|---|
+| `abs()` | `abs($val): int\|float` | Absolute value (preserves type) |
+| `floor()` | `floor($val): float` | Round down |
+| `ceil()` | `ceil($val): float` | Round up |
+| `round()` | `round($val): float` | Round to nearest |
+| `sqrt()` | `sqrt($val): float` | Square root |
+| `pow()` | `pow($base, $exp): float` | Exponentiation |
+| `min()` | `min($a, $b): int\|float` | Minimum of two values |
+| `max()` | `max($a, $b): int\|float` | Maximum of two values |
+| `intdiv()` | `intdiv($a, $b): int` | Integer division |
+| `floatval()` | `floatval($val): float` | Convert to float |
+
 ### Type functions
 
 | Function | Signature | Description |
 |---|---|---|
-| `is_null()` | `is_null($val): int` | Returns 1 if null, 0 otherwise |
+| `is_null()` | `is_null($val): bool` | Returns true if null |
+| `is_float()` | `is_float($val): bool` | Returns true if float |
+| `is_int()` | `is_int($val): bool` | Returns true if integer |
+| `is_string()` | `is_string($val): bool` | Returns true if string |
+| `is_numeric()` | `is_numeric($val): bool` | Returns true if int or float |
+| `is_bool()` | `is_bool($val): bool` | Returns true if bool |
+| `boolval()` | `boolval($val): bool` | Convert to bool |
 
 ### System functions
 

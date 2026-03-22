@@ -8,6 +8,7 @@ use crate::parser::ast::Program;
 #[derive(Debug, Clone, PartialEq)]
 pub enum PhpType {
     Int,
+    Float,
     Str,
     Bool,
     Void,
@@ -20,6 +21,7 @@ impl PhpType {
         match self {
             PhpType::Bool => 8,
             PhpType::Int => 8,
+            PhpType::Float => 8,
             PhpType::Str => 16,
             PhpType::Void => 8, // null sentinel stored as 8 bytes
             PhpType::Array(_) => 8, // pointer to heap
@@ -31,12 +33,17 @@ impl PhpType {
         match self {
             PhpType::Bool => 1,
             PhpType::Int => 1,
+            PhpType::Float => 1,
             PhpType::Str => 2,
             PhpType::Void => 0,
             PhpType::Array(_) => 1,
         }
     }
 
+    /// Returns true if this type uses a floating-point register (d0-d7).
+    pub fn is_float_reg(&self) -> bool {
+        matches!(self, PhpType::Float)
+    }
 }
 
 /// Maps variable names to their resolved types.

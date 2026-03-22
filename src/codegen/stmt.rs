@@ -40,6 +40,9 @@ pub fn emit_stmt(
                     abi::emit_write_stdout(emitter, &ty);
                     emitter.label(&skip_label);
                 }
+                PhpType::Float => {
+                    abi::emit_write_stdout(emitter, &ty);
+                }
                 _ => {
                     abi::emit_write_stdout(emitter, &ty);
                 }

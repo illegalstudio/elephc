@@ -2,17 +2,33 @@ use std::collections::HashMap;
 
 pub struct DataSection {
     entries: Vec<(String, Vec<u8>)>,
+    float_entries: Vec<(String, u64)>,
     counter: usize,
     dedup: HashMap<Vec<u8>, String>,
+    float_dedup: HashMap<u64, String>,
 }
 
 impl DataSection {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
+            float_entries: Vec::new(),
             counter: 0,
             dedup: HashMap::new(),
+            float_dedup: HashMap::new(),
         }
+    }
+
+    pub fn add_float(&mut self, value: f64) -> String {
+        let bits = value.to_bits();
+        if let Some(label) = self.float_dedup.get(&bits) {
+            return label.clone();
+        }
+        let label = format!("_float_{}", self.counter);
+        self.counter += 1;
+        self.float_dedup.insert(bits, label.clone());
+        self.float_entries.push((label.clone(), bits));
+        label
     }
 
     pub fn add_string(&mut self, bytes: &[u8]) -> (String, usize) {
@@ -29,7 +45,7 @@ impl DataSection {
     }
 
     pub fn emit(&self) -> String {
-        if self.entries.is_empty() {
+        if self.entries.is_empty() && self.float_entries.is_empty() {
             return String::new();
         }
 
@@ -48,6 +64,9 @@ impl DataSection {
                 }
             }
             out.push_str("\"\n");
+        }
+        for (label, bits) in &self.float_entries {
+            out.push_str(&format!(".align 3\n{}:\n    .quad 0x{:016x}\n", label, bits));
         }
         out
     }

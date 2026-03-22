@@ -254,3 +254,17 @@ fn test_missing_closing_brace() {
 fn test_missing_condition_parens() {
     assert!(parse_fails("<?php if 1 { echo \"a\"; }"));
 }
+
+// --- Float ---
+
+#[test]
+fn test_float_literal() {
+    let stmts = parse_source("<?php echo 3.14;");
+    assert_eq!(stmts, vec![Stmt::echo(Expr::float_lit(3.14))]);
+}
+
+#[test]
+fn test_negative_float() {
+    let stmts = parse_source("<?php echo -3.14;");
+    assert_eq!(stmts, vec![Stmt::echo(Expr::negate(Expr::float_lit(3.14)))]);
+}

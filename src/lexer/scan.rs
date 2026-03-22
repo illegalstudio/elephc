@@ -149,6 +149,11 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
             else { Ok(Token::Percent) }
         }
         '.' => {
+            // Check if next char is a digit → float literal like .5
+            let remaining = cursor.remaining();
+            if remaining.len() > 1 && remaining.as_bytes()[1].is_ascii_digit() {
+                return literals::scan_dot_float(cursor);
+            }
             cursor.advance();
             if cursor.peek() == Some('=') { cursor.advance(); Ok(Token::DotAssign) }
             else { Ok(Token::Dot) }
@@ -156,7 +161,7 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
         '"' => literals::scan_double_string(cursor),
         '\'' => literals::scan_single_string(cursor),
         '$' => literals::scan_variable(cursor),
-        '0'..='9' => literals::scan_integer(cursor),
+        '0'..='9' => literals::scan_number(cursor),
         'a'..='z' | 'A'..='Z' | '_' => literals::scan_keyword(cursor),
         _ => Err(CompileError::new(
             cursor.span(),
