@@ -26,8 +26,3 @@ do {
     $n *= 2;
 } while ($n < 100);
 echo "First power of 2 >= 100: " . $n . "\n";
-
-// null and is_null
-$x = null;
-echo "null value: " . $x . "\n";
-echo "is_null: " . is_null($x) . "\n";
