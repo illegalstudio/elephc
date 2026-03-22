@@ -1,4 +1,5 @@
 pub mod ast;
+mod control;
 pub mod expr;
 mod stmt;
 
