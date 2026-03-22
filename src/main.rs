@@ -2,6 +2,7 @@ mod codegen;
 mod errors;
 mod lexer;
 mod parser;
+mod resolver;
 mod span;
 mod types;
 
@@ -46,8 +47,16 @@ fn main() {
         }
     };
 
-    let ast = match parser::parse(&tokens) {
+    let parsed = match parser::parse(&tokens) {
         Ok(ast) => ast,
+        Err(e) => {
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+
+    let ast = match resolver::resolve(parsed, parent) {
+        Ok(resolved) => resolved,
         Err(e) => {
             errors::report(&e);
             process::exit(1);

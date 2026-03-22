@@ -158,6 +158,10 @@ impl Checker {
                 for s in body { self.check_stmt(s, env)?; }
                 Ok(())
             }
+            StmtKind::Include { .. } => {
+                // Should have been resolved before type checking
+                Err(CompileError::new(stmt.span, "Unresolved include statement"))
+            }
             StmtKind::Break | StmtKind::Continue => Ok(()),
             StmtKind::ExprStmt(expr) => {
                 self.infer_type(expr, env)?;

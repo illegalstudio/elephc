@@ -34,6 +34,10 @@ pub enum Token {
     Do,
     Foreach,
     As,
+    Include,
+    IncludeOnce,
+    Require,
+    RequireOnce,
 
     // Operators
     Assign,         // =

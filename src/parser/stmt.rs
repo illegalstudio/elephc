@@ -14,6 +14,10 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
         Token::PlusPlus | Token::MinusMinus => parse_incdec_stmt(tokens, pos, span),
         Token::Function => parse_function_decl(tokens, pos, span),
         Token::Return => parse_return(tokens, pos, span),
+        Token::Include => parse_include(tokens, pos, span, false, false),
+        Token::IncludeOnce => parse_include(tokens, pos, span, true, false),
+        Token::Require => parse_include(tokens, pos, span, false, true),
+        Token::RequireOnce => parse_include(tokens, pos, span, true, true),
         Token::Identifier(_) => {
             let expr = parse_expr(tokens, pos)?;
             expect_semicolon(tokens, pos)?;
@@ -40,6 +44,38 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
             &format!("Unexpected token at statement position: {:?}", other),
         )),
     }
+}
+
+fn parse_include(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+    once: bool,
+    required: bool,
+) -> Result<Stmt, CompileError> {
+    *pos += 1; // consume include/require keyword
+
+    // Support both: include 'file.php'; and include('file.php');
+    let has_parens = *pos < tokens.len() && tokens[*pos].0 == Token::LParen;
+    if has_parens {
+        *pos += 1;
+    }
+
+    let path = match tokens.get(*pos).map(|(t, _)| t) {
+        Some(Token::StringLiteral(s)) => s.clone(),
+        _ => return Err(CompileError::new(span, "Expected string path after include/require")),
+    };
+    *pos += 1;
+
+    if has_parens {
+        if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
+            return Err(CompileError::new(span, "Expected ')' after include path"));
+        }
+        *pos += 1;
+    }
+
+    expect_semicolon(tokens, pos)?;
+    Ok(Stmt::new(StmtKind::Include { path, once, required }, span))
 }
 
 fn parse_echo(

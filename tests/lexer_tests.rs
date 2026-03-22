@@ -318,6 +318,32 @@ fn test_strict_not_equal_vs_loose_not_equal() {
     assert_eq!(t[2], Token::NotEqual);
 }
 
+// --- Include/Require ---
+
+#[test]
+fn test_include_keyword() {
+    let t = tokens("<?php include");
+    assert_eq!(t[1], Token::Include);
+}
+
+#[test]
+fn test_include_once_keyword() {
+    let t = tokens("<?php include_once");
+    assert_eq!(t[1], Token::IncludeOnce);
+}
+
+#[test]
+fn test_require_keyword() {
+    let t = tokens("<?php require");
+    assert_eq!(t[1], Token::Require);
+}
+
+#[test]
+fn test_require_once_keyword() {
+    let t = tokens("<?php require_once");
+    assert_eq!(t[1], Token::RequireOnce);
+}
+
 // --- Float literals ---
 
 #[test]

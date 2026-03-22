@@ -54,6 +54,68 @@ fn compile_and_run(source: &str) -> String {
     elephc_out
 }
 
+/// Compile a PHP project with multiple files. `files` maps relative paths to contents.
+/// The `main_file` is the entry point to compile.
+fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{:?}_{}", tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    for (path, content) in files {
+        let full_path = dir.join(path);
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&full_path, content).unwrap();
+    }
+
+    let php_path = dir.join(main_file);
+    let bin_path = php_path.with_extension("");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_elephc"))
+        .arg(&php_path)
+        .status()
+        .expect("failed to run elephc");
+    assert!(status.success(), "elephc failed to compile");
+
+    let output = Command::new(&bin_path)
+        .output()
+        .expect("failed to run compiled binary");
+    assert!(output.status.success(), "binary exited with error");
+
+    let elephc_out = String::from_utf8(output.stdout).unwrap();
+
+    let _ = fs::remove_dir_all(&dir);
+
+    elephc_out
+}
+
+/// Write multiple files and attempt compilation. Returns true if compilation fails.
+fn compile_files_fails(files: &[(&str, &str)], main_file: &str) -> bool {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{:?}_{}", tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    for (path, content) in files {
+        let full_path = dir.join(path);
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&full_path, content).unwrap();
+    }
+
+    let php_path = dir.join(main_file);
+    let status = Command::new(env!("CARGO_BIN_EXE_elephc"))
+        .arg(&php_path)
+        .output()
+        .expect("failed to run elephc");
+
+    let _ = fs::remove_dir_all(&dir);
+    !status.status.success()
+}
+
 // --- Phase 1: Echo strings ---
 
 #[test]
@@ -1522,4 +1584,130 @@ $b = "bar";
 echo $a !== $b;
 "#);
     assert_eq!(out, "1");
+}
+
+// --- Include / Require ---
+
+#[test]
+fn test_include_basic() {
+    let out = compile_and_run_files(&[
+        ("main.php", "<?php include 'helper.php'; echo greet();"),
+        ("helper.php", "<?php function greet() { return \"hello\"; }"),
+    ], "main.php");
+    assert_eq!(out, "hello");
+}
+
+#[test]
+fn test_require_basic() {
+    let out = compile_and_run_files(&[
+        ("main.php", "<?php require 'math.php'; echo add(3, 4);"),
+        ("math.php", "<?php function add($a, $b) { return $a + $b; }"),
+    ], "main.php");
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_include_with_parens() {
+    let out = compile_and_run_files(&[
+        ("main.php", "<?php include('helper.php'); echo greet();"),
+        ("helper.php", "<?php function greet() { return \"hi\"; }"),
+    ], "main.php");
+    assert_eq!(out, "hi");
+}
+
+#[test]
+fn test_include_top_level_code() {
+    let out = compile_and_run_files(&[
+        ("main.php", "<?php echo \"before\"; include 'mid.php'; echo \"after\";"),
+        ("mid.php", "<?php echo \"middle\";"),
+    ], "main.php");
+    assert_eq!(out, "beforemiddleafter");
+}
+
+#[test]
+fn test_include_once() {
+    let out = compile_and_run_files(&[
+        ("main.php", r#"<?php
+include_once 'counter.php';
+include_once 'counter.php';
+echo $x;
+"#),
+        ("counter.php", "<?php $x = 42;"),
+    ], "main.php");
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_require_once() {
+    let out = compile_and_run_files(&[
+        ("main.php", r#"<?php
+require_once 'lib.php';
+require_once 'lib.php';
+echo double(5);
+"#),
+        ("lib.php", "<?php function double($n) { return $n * 2; }"),
+    ], "main.php");
+    assert_eq!(out, "10");
+}
+
+#[test]
+fn test_include_nested() {
+    let out = compile_and_run_files(&[
+        ("main.php", "<?php include 'a.php'; echo c_func();"),
+        ("a.php", "<?php include 'b.php';"),
+        ("b.php", "<?php include 'c.php';"),
+        ("c.php", "<?php function c_func() { return \"deep\"; }"),
+    ], "main.php");
+    assert_eq!(out, "deep");
+}
+
+#[test]
+fn test_include_subdirectory() {
+    let out = compile_and_run_files(&[
+        ("main.php", "<?php include 'lib/utils.php'; echo greet();"),
+        ("lib/utils.php", "<?php function greet() { return \"from lib\"; }"),
+    ], "main.php");
+    assert_eq!(out, "from lib");
+}
+
+#[test]
+fn test_include_variables_shared_scope() {
+    let out = compile_and_run_files(&[
+        ("main.php", r#"<?php
+$prefix = "Hello";
+include 'greet.php';
+"#),
+        ("greet.php", "<?php echo $prefix . \" World\";"),
+    ], "main.php");
+    assert_eq!(out, "Hello World");
+}
+
+#[test]
+fn test_include_multiple_files() {
+    let out = compile_and_run_files(&[
+        ("main.php", r#"<?php
+include 'a.php';
+include 'b.php';
+echo add(1, 2) . " " . mul(3, 4);
+"#),
+        ("a.php", "<?php function add($x, $y) { return $x + $y; }"),
+        ("b.php", "<?php function mul($x, $y) { return $x * $y; }"),
+    ], "main.php");
+    assert_eq!(out, "3 12");
+}
+
+#[test]
+fn test_circular_include_error() {
+    assert!(compile_files_fails(&[
+        ("main.php", "<?php include 'a.php';"),
+        ("a.php", "<?php include 'b.php';"),
+        ("b.php", "<?php include 'a.php';"),
+    ], "main.php"));
+}
+
+#[test]
+fn test_require_missing_file_error() {
+    assert!(compile_files_fails(&[
+        ("main.php", "<?php require 'nonexistent.php';"),
+    ], "main.php"));
 }

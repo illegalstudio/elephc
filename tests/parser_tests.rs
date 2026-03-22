@@ -291,6 +291,65 @@ fn test_strict_equal_same_precedence_as_loose() {
     assert_eq!(stmts, vec![expected]);
 }
 
+// --- Include/Require ---
+
+#[test]
+fn test_include_parses() {
+    let stmts = parse_source("<?php include 'file.php';");
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Include { path, once, required } = &stmts[0].kind {
+        assert_eq!(path, "file.php");
+        assert!(!once);
+        assert!(!required);
+    } else {
+        panic!("expected Include");
+    }
+}
+
+#[test]
+fn test_require_parses() {
+    let stmts = parse_source("<?php require 'file.php';");
+    if let StmtKind::Include { path, once, required } = &stmts[0].kind {
+        assert_eq!(path, "file.php");
+        assert!(!once);
+        assert!(required);
+    } else {
+        panic!("expected Include (require)");
+    }
+}
+
+#[test]
+fn test_include_once_parses() {
+    let stmts = parse_source("<?php include_once 'file.php';");
+    if let StmtKind::Include { once, required, .. } = &stmts[0].kind {
+        assert!(once);
+        assert!(!required);
+    } else {
+        panic!("expected Include (include_once)");
+    }
+}
+
+#[test]
+fn test_require_once_parses() {
+    let stmts = parse_source("<?php require_once 'file.php';");
+    if let StmtKind::Include { once, required, .. } = &stmts[0].kind {
+        assert!(once);
+        assert!(required);
+    } else {
+        panic!("expected Include (require_once)");
+    }
+}
+
+#[test]
+fn test_include_with_parens_parses() {
+    let stmts = parse_source("<?php include('file.php');");
+    if let StmtKind::Include { path, .. } = &stmts[0].kind {
+        assert_eq!(path, "file.php");
+    } else {
+        panic!("expected Include");
+    }
+}
+
 // --- Float ---
 
 #[test]

@@ -61,7 +61,7 @@ Each test runs in an isolated temp directory. Tests run in parallel — the `com
 ## Architecture
 
 ```
-PHP source → Lexer (tokens) → Parser (AST) → Type Checker → Codegen (ARM64 asm) → as + ld → binary
+PHP source → Lexer (tokens) → Parser (AST) → Resolver (include/require) → Type Checker → Codegen (ARM64 asm) → as + ld → binary
 ```
 
 ### Key modules
@@ -70,6 +70,7 @@ PHP source → Lexer (tokens) → Parser (AST) → Type Checker → Codegen (ARM
 |---|---|---|
 | `src/lexer/` | `tokenize()` | Source → `Vec<(Token, Span)>` |
 | `src/parser/` | `parse()` | Tokens → `Program` (Vec of Stmt). Pratt parser for expressions |
+| `src/resolver.rs` | `resolve()` | Resolves `include`/`require` by inlining referenced files. Runs between parse and type check |
 | `src/types/` | `check()` | Type checking, returns `CheckResult` with `TypeEnv` + `FunctionSig` map |
 | `src/codegen/` | `generate()` | AST → ARM64 assembly string. Emits function bodies + `_main` |
 | `src/errors/` | `report()` | Error formatting with line:col |

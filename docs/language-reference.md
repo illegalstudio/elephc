@@ -401,12 +401,37 @@ echo "code"; // inline comment
 /* a *//* b */ // consecutive comments work
 ```
 
+## Include / Require
+
+```php
+<?php
+include 'helpers.php';
+require 'config.php';
+include_once 'utils.php';
+require_once 'lib.php';
+```
+
+All four forms are resolved **at compile time** — the included file's code is inlined at the point of inclusion. Paths are relative to the including file's directory.
+
+| Form | Missing file | Already included |
+|---|---|---|
+| `include` | Skipped (compile continues) | Re-included |
+| `require` | Compile error | Re-included |
+| `include_once` | Skipped | Skipped |
+| `require_once` | Compile error | Skipped |
+
+Both `include 'f';` and `include('f');` syntax are supported.
+
+**Limitations:**
+- Path must be a string literal (no variables or expressions)
+- Included files must start with `<?php`
+
 ## What elephc cannot do (by design)
 
 - No classes, objects, interfaces, traits, enums
 - No exceptions (`try`/`catch`/`throw`)
 - No `eval()`
-- No `include`/`require` (yet)
+- No dynamic `include`/`require` (path must be a string literal)
 - No namespaces
 - No generators/yield
 - No fibers

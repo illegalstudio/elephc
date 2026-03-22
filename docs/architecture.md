@@ -21,6 +21,13 @@ PHP source (.php)
      │
      ▼
 ┌─────────┐
+│ Resolver │  src/resolver.rs
+│          │  Resolves include/require by inlining referenced files.
+│          │  Recursively parses and merges included ASTs.
+└────┬─────┘
+     │
+     ▼
+┌─────────┐
 │  Type    │  src/types/
 │  Checker │  checker/mod.rs, builtins.rs, functions.rs
 │          │  Validates types, returns CheckResult (TypeEnv + FunctionSig map)

@@ -158,6 +158,11 @@ pub enum StmtKind {
         value_var: String,
         body: Vec<Stmt>,
     },
+    Include {
+        path: String,
+        once: bool,
+        required: bool,
+    },
     Break,
     Continue,
     ExprStmt(Expr),

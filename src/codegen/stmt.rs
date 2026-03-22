@@ -369,5 +369,9 @@ pub fn emit_stmt(
             let labels = ctx.loop_stack.last().expect("continue outside loop");
             emitter.instruction(&format!("b {}", labels.continue_label));
         }
+        StmtKind::Include { .. } => {
+            // Should have been resolved before codegen
+            panic!("Unresolved include statement in codegen");
+        }
     }
 }

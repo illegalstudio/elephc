@@ -157,7 +157,7 @@ Make string handling practical.
 
 - [ ] Linux x86_64 target
 - [ ] Linux ARM64 target
-- [ ] `include` / `require` / `include_once` / `require_once`
+- [x] `include` / `require` / `include_once` / `require_once`
 - [ ] Cross-compilation support
 - [ ] Constant folding (`2 + 3` → `5` at compile time)
 - [ ] Dead code elimination

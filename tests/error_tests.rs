@@ -244,3 +244,15 @@ fn test_error_is_float_wrong_args() {
 fn test_error_is_int_wrong_args() {
     expect_error("<?php is_int();", "is_int() takes exactly 1 argument");
 }
+
+// --- Include/Require errors ---
+
+#[test]
+fn test_error_include_missing_path() {
+    expect_error("<?php include ;", "Expected string path");
+}
+
+#[test]
+fn test_error_include_non_string_path() {
+    expect_error("<?php include 42;", "Expected string path");
+}
