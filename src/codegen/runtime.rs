@@ -3,6 +3,8 @@ use super::emit::Emitter;
 pub fn emit_runtime(emitter: &mut Emitter) {
     emit_itoa(emitter);
     emit_concat(emitter);
+    emit_atoi(emitter);
+    emit_argv(emitter);
 }
 
 /// Returns BSS directives needed by runtime routines.
@@ -10,6 +12,8 @@ pub fn emit_runtime_data() -> String {
     let mut out = String::new();
     out.push_str(".comm _concat_buf, 65536, 3\n");
     out.push_str(".comm _concat_off, 8, 3\n");
+    out.push_str(".comm _global_argc, 8, 3\n");
+    out.push_str(".comm _global_argv, 8, 3\n");
     out
 }
 
@@ -152,5 +156,71 @@ fn emit_concat(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #32]");
     emitter.instruction("ldp x29, x30, [sp, #48]");
     emitter.instruction("add sp, sp, #64");
+    emitter.instruction("ret");
+}
+
+/// atoi: parse a string to a signed 64-bit integer.
+/// Input:  x1 = string pointer, x2 = string length
+/// Output: x0 = integer value
+fn emit_atoi(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: atoi ---");
+    emitter.label("__rt_atoi");
+    emitter.instruction("mov x0, #0"); // result
+    emitter.instruction("mov x3, #0"); // is_negative
+    emitter.instruction("cbz x2, __rt_atoi_done"); // empty string → 0
+
+    // Check for leading '-'
+    emitter.instruction("ldrb w4, [x1]");
+    emitter.instruction("cmp w4, #45"); // '-'
+    emitter.instruction("b.ne __rt_atoi_loop");
+    emitter.instruction("mov x3, #1");
+    emitter.instruction("add x1, x1, #1");
+    emitter.instruction("sub x2, x2, #1");
+
+    emitter.label("__rt_atoi_loop");
+    emitter.instruction("cbz x2, __rt_atoi_sign");
+    emitter.instruction("ldrb w4, [x1], #1");
+    emitter.instruction("sub w4, w4, #48"); // ASCII to digit
+    // If not a digit (< 0 or > 9), stop
+    emitter.instruction("cmp w4, #9");
+    emitter.instruction("b.hi __rt_atoi_sign");
+    emitter.instruction("mov x5, #10");
+    emitter.instruction("mul x0, x0, x5");
+    emitter.instruction("add x0, x0, x4");
+    emitter.instruction("sub x2, x2, #1");
+    emitter.instruction("b __rt_atoi_loop");
+
+    emitter.label("__rt_atoi_sign");
+    emitter.instruction("cbz x3, __rt_atoi_done");
+    emitter.instruction("neg x0, x0");
+
+    emitter.label("__rt_atoi_done");
+    emitter.instruction("ret");
+}
+
+/// argv: get command-line argument by index.
+/// Input:  x0 = argument index
+/// Output: x1 = string pointer, x2 = string length
+fn emit_argv(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: argv ---");
+    emitter.label("__rt_argv");
+    // Load global argv pointer
+    emitter.instruction("adrp x9, _global_argv@PAGE");
+    emitter.instruction("add x9, x9, _global_argv@PAGEOFF");
+    emitter.instruction("ldr x9, [x9]"); // x9 = argv array
+    // Index into argv: x1 = argv[x0]
+    emitter.instruction("ldr x1, [x9, x0, lsl #3]"); // x1 = pointer to C string
+
+    // Compute string length (scan for \0)
+    emitter.instruction("mov x2, #0");
+    emitter.label("__rt_argv_len");
+    emitter.instruction("ldrb w3, [x1, x2]");
+    emitter.instruction("cbz w3, __rt_argv_done");
+    emitter.instruction("add x2, x2, #1");
+    emitter.instruction("b __rt_argv_len");
+
+    emitter.label("__rt_argv_done");
     emitter.instruction("ret");
 }

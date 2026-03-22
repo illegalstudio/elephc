@@ -20,6 +20,7 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
         }
         Token::If => parse_if(tokens, pos, span),
         Token::While => parse_while(tokens, pos, span),
+        Token::Do => parse_do_while(tokens, pos, span),
         Token::For => parse_for(tokens, pos, span),
         Token::Break => {
             *pos += 1;
@@ -221,6 +222,25 @@ fn parse_while(
     let body = parse_block(tokens, pos)?;
 
     Ok(Stmt::new(StmtKind::While { condition, body }, span))
+}
+
+/// Parse: do { stmts } while (expr);
+fn parse_do_while(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1; // consume 'do'
+
+    let body = parse_block(tokens, pos)?;
+
+    expect_token(tokens, pos, &Token::While, "Expected 'while' after do block")?;
+    expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'while'")?;
+    let condition = parse_expr(tokens, pos)?;
+    expect_token(tokens, pos, &Token::RParen, "Expected ')' after condition")?;
+    expect_semicolon(tokens, pos)?;
+
+    Ok(Stmt::new(StmtKind::DoWhile { body, condition }, span))
 }
 
 /// Parse: for (init; condition; update) { stmts }

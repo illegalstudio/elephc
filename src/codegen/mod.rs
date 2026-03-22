@@ -41,6 +41,13 @@ pub fn generate(
     // Emit _main with global statements
     let mut ctx = Context::new();
     ctx.functions = functions.clone();
+
+    // Inject $argc as a pre-defined integer variable
+    let has_argc = global_env.contains_key("argc");
+    if !has_argc {
+        ctx.alloc_var("argc", crate::types::PhpType::Int);
+    }
+
     for (name, ty) in global_env {
         ctx.alloc_var(name, ty.clone());
     }
@@ -56,6 +63,19 @@ pub fn generate(
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));
     emitter.instruction(&format!("stp x29, x30, [sp, #{}]", frame_size - 16));
     emitter.instruction(&format!("add x29, sp, #{}", frame_size - 16));
+
+    // Save argc/argv from OS (x0=argc, x1=argv)
+    emitter.comment("save argc/argv");
+    emitter.instruction("adrp x9, _global_argc@PAGE");
+    emitter.instruction("add x9, x9, _global_argc@PAGEOFF");
+    emitter.instruction("str x0, [x9]");
+    emitter.instruction("adrp x9, _global_argv@PAGE");
+    emitter.instruction("add x9, x9, _global_argv@PAGEOFF");
+    emitter.instruction("str x1, [x9]");
+
+    // Initialize $argc variable
+    let argc_offset = ctx.variables.get("argc").unwrap().stack_offset;
+    emitter.instruction(&format!("stur x0, [x29, #-{}]", argc_offset));
 
     for s in program {
         if matches!(&s.kind, StmtKind::FunctionDecl { .. }) {
@@ -180,7 +200,7 @@ fn collect_local_vars(
                     collect_local_vars(body, ctx, sig);
                 }
             }
-            StmtKind::While { body, .. } => {
+            StmtKind::DoWhile { body, .. } | StmtKind::While { body, .. } => {
                 collect_local_vars(body, ctx, sig);
             }
             StmtKind::For { init, update, body, .. } => {

@@ -28,6 +28,11 @@ pub enum ExprKind {
         name: String,
         args: Vec<Expr>,
     },
+    Ternary {
+        condition: Box<Expr>,
+        then_expr: Box<Expr>,
+        else_expr: Box<Expr>,
+    },
 }
 
 impl PartialEq for Expr {
@@ -114,6 +119,10 @@ pub enum StmtKind {
     While {
         condition: Expr,
         body: Vec<Stmt>,
+    },
+    DoWhile {
+        body: Vec<Stmt>,
+        condition: Expr,
     },
     For {
         init: Option<Box<Stmt>>,

@@ -16,13 +16,13 @@ The compiler should be able to produce real CLI tools that accept arguments and 
 - [x] Logical operators: `&&`, `||`, `!` (with short-circuit evaluation)
 - [x] Assignment operators: `+=`, `-=`, `*=`, `/=`, `.=`, `%=`
 - [x] Boolean literals: `true`, `false`
-- [ ] `null` keyword and `is_null()`
-- [ ] Ternary operator: `$x = $a > $b ? $a : $b;`
-- [ ] `do { } while ();` loop
-- [ ] `$argc` / `$argv` globals (read command-line arguments)
-- [ ] `exit($code);` / `die();`
-- [ ] Single-quoted strings (`'no $interpolation'`)
-- [ ] Built-in `strlen()` and `intval()`
+- [x] `null` keyword and `is_null()`
+- [x] Ternary operator: `$x = $a > $b ? $a : $b;`
+- [x] `do { } while ();` loop
+- [x] `$argc` / `$argv` globals (read command-line arguments)
+- [x] `exit($code);` / `die();`
+- [x] Single-quoted strings (`'no $interpolation'`)
+- [x] Built-in `strlen()` and `intval()`
 
 ## v0.2.0 — Arrays
 

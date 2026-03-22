@@ -42,6 +42,26 @@ fn parse_expr_bp(
         );
     }
 
+    // Check for ternary operator (lowest precedence)
+    if *pos < tokens.len() && tokens[*pos].0 == Token::Question && min_bp == 0 {
+        let span = tokens[*pos].1;
+        *pos += 1;
+        let then_expr = parse_expr(tokens, pos)?;
+        if *pos >= tokens.len() || tokens[*pos].0 != Token::Colon {
+            return Err(CompileError::new(span, "Expected ':' in ternary operator"));
+        }
+        *pos += 1;
+        let else_expr = parse_expr_bp(tokens, pos, 0)?;
+        lhs = Expr::new(
+            ExprKind::Ternary {
+                condition: Box::new(lhs),
+                then_expr: Box::new(then_expr),
+                else_expr: Box::new(else_expr),
+            },
+            span,
+        );
+    }
+
     Ok(lhs)
 }
 
@@ -91,7 +111,7 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
             *pos += 1;
             Ok(Expr::new(ExprKind::IntLiteral(1), span))
         }
-        Token::False => {
+        Token::False | Token::Null => {
             *pos += 1;
             Ok(Expr::new(ExprKind::IntLiteral(0), span))
         }

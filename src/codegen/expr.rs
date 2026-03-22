@@ -89,7 +89,28 @@ pub fn emit_expr(
             // x0 still has old value
             PhpType::Int
         }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            let else_label = ctx.next_label("tern_else");
+            let end_label = ctx.next_label("tern_end");
+            emitter.comment("ternary");
+            emit_expr(condition, emitter, ctx, data);
+            emitter.instruction("cmp x0, #0");
+            emitter.instruction(&format!("b.eq {}", else_label));
+            let ty = emit_expr(then_expr, emitter, ctx, data);
+            emitter.instruction(&format!("b {}", end_label));
+            emitter.label(&else_label);
+            emit_expr(else_expr, emitter, ctx, data);
+            emitter.label(&end_label);
+            ty
+        }
         ExprKind::FunctionCall { name, args } => {
+            if let Some(ty) = emit_builtin_call(name, args, emitter, ctx, data) {
+                return ty;
+            }
             emit_function_call(name, args, emitter, ctx, data)
         }
         ExprKind::BinaryOp { left, op, right } => emit_binop(left, op, right, emitter, ctx, data),
@@ -191,6 +212,61 @@ fn emit_binop(
             emitter.instruction("bl __rt_concat");
             PhpType::Str
         }
+    }
+}
+
+fn emit_builtin_call(
+    name: &str,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Option<PhpType> {
+    match name {
+        "exit" | "die" => {
+            emitter.comment("exit()");
+            if let Some(arg) = args.first() {
+                emit_expr(arg, emitter, ctx, data);
+            } else {
+                emitter.instruction("mov x0, #0");
+            }
+            emitter.instruction("mov x16, #1");
+            emitter.instruction("svc #0x80");
+            Some(PhpType::Void)
+        }
+        "strlen" => {
+            emitter.comment("strlen()");
+            emit_expr(&args[0], emitter, ctx, data);
+            // String result: x1=ptr, x2=len. Move len to x0.
+            emitter.instruction("mov x0, x2");
+            Some(PhpType::Int)
+        }
+        "intval" => {
+            emitter.comment("intval()");
+            let ty = emit_expr(&args[0], emitter, ctx, data);
+            if ty == PhpType::Str {
+                // Call runtime atoi: x1=ptr, x2=len → x0=int
+                emitter.instruction("bl __rt_atoi");
+            }
+            // If already int, x0 is already the value
+            Some(PhpType::Int)
+        }
+        "is_null" => {
+            emitter.comment("is_null()");
+            emit_expr(&args[0], emitter, ctx, data);
+            // Basic null: always returns 0 (no real null type yet)
+            emitter.instruction("mov x0, #0");
+            Some(PhpType::Int)
+        }
+        "argv" => {
+            emitter.comment("argv()");
+            emit_expr(&args[0], emitter, ctx, data);
+            // x0 = index, call runtime
+            emitter.instruction("bl __rt_argv");
+            // returns x1=ptr, x2=len
+            Some(PhpType::Str)
+        }
+        _ => None,
     }
 }
 

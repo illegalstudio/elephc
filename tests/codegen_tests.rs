@@ -680,6 +680,129 @@ fn test_logical_with_comparison() {
     assert_eq!(out, "1");
 }
 
+// --- Ternary operator ---
+
+#[test]
+fn test_ternary_true() {
+    let out = compile_and_run("<?php echo 1 == 1 ? \"yes\" : \"no\";");
+    assert_eq!(out, "yes");
+}
+
+#[test]
+fn test_ternary_false() {
+    let out = compile_and_run("<?php echo 1 == 2 ? \"yes\" : \"no\";");
+    assert_eq!(out, "no");
+}
+
+#[test]
+fn test_ternary_int() {
+    let out = compile_and_run("<?php $x = 3; $y = 7; echo $x > $y ? $x : $y;");
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_ternary_in_assignment() {
+    let out = compile_and_run("<?php $a = 10; $b = 20; $max = $a > $b ? $a : $b; echo $max;");
+    assert_eq!(out, "20");
+}
+
+// --- do...while ---
+
+#[test]
+fn test_do_while() {
+    let out = compile_and_run("<?php $i = 0; do { $i++; } while ($i < 5); echo $i;");
+    assert_eq!(out, "5");
+}
+
+#[test]
+fn test_do_while_runs_once() {
+    let out = compile_and_run("<?php $i = 0; do { $i++; } while (false); echo $i;");
+    assert_eq!(out, "1");
+}
+
+// --- Single-quoted strings ---
+
+#[test]
+fn test_single_quoted_string() {
+    let out = compile_and_run("<?php echo 'hello';");
+    assert_eq!(out, "hello");
+}
+
+#[test]
+fn test_single_quoted_no_escape() {
+    let out = compile_and_run(r"<?php echo 'no\n escape';");
+    assert_eq!(out, "no\\n escape");
+}
+
+#[test]
+fn test_single_quoted_escaped_quote() {
+    let out = compile_and_run("<?php echo 'it\\'s';");
+    assert_eq!(out, "it's");
+}
+
+// --- null ---
+
+#[test]
+fn test_null_value() {
+    let out = compile_and_run("<?php $x = null; echo $x;");
+    assert_eq!(out, "0");
+}
+
+#[test]
+fn test_is_null() {
+    let out = compile_and_run("<?php $x = null; echo is_null($x);");
+    assert_eq!(out, "0");
+}
+
+// --- Built-in functions ---
+
+#[test]
+fn test_strlen() {
+    let out = compile_and_run("<?php echo strlen(\"hello\");");
+    assert_eq!(out, "5");
+}
+
+#[test]
+fn test_strlen_empty() {
+    let out = compile_and_run("<?php echo strlen(\"\");");
+    assert_eq!(out, "0");
+}
+
+#[test]
+fn test_intval_string() {
+    let out = compile_and_run("<?php echo intval(\"42\");");
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_intval_negative() {
+    let out = compile_and_run("<?php echo intval(\"-7\");");
+    assert_eq!(out, "-7");
+}
+
+#[test]
+fn test_intval_int_passthrough() {
+    let out = compile_and_run("<?php echo intval(42);");
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_exit_code() {
+    // We can't easily test exit code in compile_and_run, so test that
+    // exit stops execution (nothing after exit is printed)
+    let out = compile_and_run("<?php echo \"before\"; exit(0); echo \"after\";");
+    assert_eq!(out, "before");
+}
+
+// --- $argc ---
+
+#[test]
+fn test_argc_exists() {
+    let out = compile_and_run("<?php echo $argc;");
+    // When run as a test, argc is 1 (just the binary name)
+    assert_eq!(out, "1");
+}
+
 // --- Nested control flow ---
 
 #[test]

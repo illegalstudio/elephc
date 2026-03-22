@@ -93,6 +93,14 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
             cursor.advance();
             Ok(Token::Comma)
         }
+        '?' => {
+            cursor.advance();
+            Ok(Token::Question)
+        }
+        ':' => {
+            cursor.advance();
+            Ok(Token::Colon)
+        }
         '(' => {
             cursor.advance();
             Ok(Token::LParen)
@@ -215,7 +223,8 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
                 Ok(Token::Dot)
             }
         }
-        '"' => scan_string(cursor),
+        '"' => scan_double_string(cursor),
+        '\'' => scan_single_string(cursor),
         '$' => scan_variable(cursor),
         '0'..='9' => scan_integer(cursor),
         'a'..='z' | 'A'..='Z' | '_' => scan_keyword(cursor),
@@ -226,7 +235,7 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
     }
 }
 
-fn scan_string(cursor: &mut Cursor) -> Result<Token, CompileError> {
+fn scan_double_string(cursor: &mut Cursor) -> Result<Token, CompileError> {
     let span = cursor.span();
     cursor.advance(); // opening "
 
@@ -247,6 +256,32 @@ fn scan_string(cursor: &mut Cursor) -> Result<Token, CompileError> {
                 None => {
                     return Err(CompileError::new(span, "Unterminated string literal"))
                 }
+            },
+            Some(c) => value.push(c),
+            None => return Err(CompileError::new(span, "Unterminated string literal")),
+        }
+    }
+}
+
+fn scan_single_string(cursor: &mut Cursor) -> Result<Token, CompileError> {
+    let span = cursor.span();
+    cursor.advance(); // opening '
+
+    let mut value = String::new();
+
+    loop {
+        match cursor.advance() {
+            Some('\'') => return Ok(Token::StringLiteral(value)),
+            Some('\\') => match cursor.peek() {
+                Some('\'') => {
+                    cursor.advance();
+                    value.push('\'');
+                }
+                Some('\\') => {
+                    cursor.advance();
+                    value.push('\\');
+                }
+                _ => value.push('\\'),
             },
             Some(c) => value.push(c),
             None => return Err(CompileError::new(span, "Unterminated string literal")),
@@ -321,6 +356,8 @@ fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
         "return" => Ok(Token::Return),
         "true" => Ok(Token::True),
         "false" => Ok(Token::False),
+        "null" => Ok(Token::Null),
+        "do" => Ok(Token::Do),
         _ => Ok(Token::Identifier(word)),
     }
 }

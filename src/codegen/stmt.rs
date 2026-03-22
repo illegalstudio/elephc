@@ -76,6 +76,32 @@ pub fn emit_stmt(
 
             emitter.label(&end_label);
         }
+        StmtKind::DoWhile { body, condition } => {
+            let loop_start = ctx.next_label("dowhile_start");
+            let loop_end = ctx.next_label("dowhile_end");
+            let loop_cond = ctx.next_label("dowhile_cond");
+
+            emitter.blank();
+            emitter.comment("do...while");
+            emitter.label(&loop_start);
+
+            ctx.loop_stack.push(LoopLabels {
+                continue_label: loop_cond.clone(),
+                break_label: loop_end.clone(),
+            });
+
+            for s in body {
+                emit_stmt(s, emitter, ctx, data);
+            }
+
+            ctx.loop_stack.pop();
+
+            emitter.label(&loop_cond);
+            emit_expr(condition, emitter, ctx, data);
+            emitter.instruction("cmp x0, #0");
+            emitter.instruction(&format!("b.ne {}", loop_start));
+            emitter.label(&loop_end);
+        }
         StmtKind::While { condition, body } => {
             let loop_start = ctx.next_label("while_start");
             let loop_end = ctx.next_label("while_end");

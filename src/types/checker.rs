@@ -36,6 +36,8 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
 
     // Pass 2: type-check global statements
     let mut global_env: TypeEnv = HashMap::new();
+    // Pre-define $argc as a global integer variable
+    global_env.insert("argc".to_string(), PhpType::Int);
     for stmt in program {
         checker.check_stmt(stmt, &mut global_env)?;
     }
@@ -91,6 +93,13 @@ impl Checker {
                         self.check_stmt(s, env)?;
                     }
                 }
+                Ok(())
+            }
+            StmtKind::DoWhile { body, condition } => {
+                for s in body {
+                    self.check_stmt(s, env)?;
+                }
+                self.infer_type(condition, env)?;
                 Ok(())
             }
             StmtKind::While { condition, body } => {
@@ -167,9 +176,32 @@ impl Checker {
                     &format!("Undefined variable: ${}", name),
                 )),
             },
+            ExprKind::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                self.infer_type(condition, env)?;
+                let then_ty = self.infer_type(then_expr, env)?;
+                let else_ty = self.infer_type(else_expr, env)?;
+                if then_ty != else_ty {
+                    return Err(CompileError::new(
+                        expr.span,
+                        &format!(
+                            "Ternary branches must have the same type: {:?} vs {:?}",
+                            then_ty, else_ty
+                        ),
+                    ));
+                }
+                Ok(then_ty)
+            }
             ExprKind::FunctionCall { name, args } => {
                 let name = name.clone();
                 let args = args.clone();
+                // Check built-in functions first
+                if let Some(ty) = self.check_builtin(&name, &args, expr.span, env)? {
+                    return Ok(ty);
+                }
                 self.check_function_call(&name, &args, expr.span, env)
             }
             ExprKind::BinaryOp { left, op, right } => {
@@ -202,6 +234,64 @@ impl Checker {
                 }
                 }
             }
+        }
+    }
+
+    fn check_builtin(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        span: crate::span::Span,
+        env: &TypeEnv,
+    ) -> Result<Option<PhpType>, CompileError> {
+        match name {
+            "exit" | "die" => {
+                if args.len() > 1 {
+                    return Err(CompileError::new(span, "exit() takes 0 or 1 arguments"));
+                }
+                if let Some(arg) = args.first() {
+                    let ty = self.infer_type(arg, env)?;
+                    if ty != PhpType::Int {
+                        return Err(CompileError::new(span, "exit() argument must be integer"));
+                    }
+                }
+                Ok(Some(PhpType::Void))
+            }
+            "strlen" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "strlen() takes exactly 1 argument"));
+                }
+                let ty = self.infer_type(&args[0], env)?;
+                if ty != PhpType::Str {
+                    return Err(CompileError::new(span, "strlen() argument must be string"));
+                }
+                Ok(Some(PhpType::Int))
+            }
+            "intval" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "intval() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Int))
+            }
+            "is_null" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "is_null() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Int))
+            }
+            "argv" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "argv() takes exactly 1 argument"));
+                }
+                let ty = self.infer_type(&args[0], env)?;
+                if ty != PhpType::Int {
+                    return Err(CompileError::new(span, "argv() argument must be integer"));
+                }
+                Ok(Some(PhpType::Str))
+            }
+            _ => Ok(None), // not a built-in
         }
     }
 
@@ -334,7 +424,9 @@ impl Checker {
                 }
                 None
             }
-            StmtKind::While { body, .. } | StmtKind::For { body, .. } => {
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::For { body, .. } => {
                 for s in body {
                     if let Some(t) = self.find_return_type(s, env) {
                         return Some(t);

@@ -29,6 +29,8 @@ pub enum Token {
     Return,
     True,
     False,
+    Null,
+    Do,
 
     // Operators
     Assign,         // =
@@ -39,6 +41,8 @@ pub enum Token {
     Percent,        // %
     Dot,            // .
     Comma,          // ,
+    Question,       // ?
+    Colon,          // :
 
     // Compound assignment
     PlusAssign,     // +=
