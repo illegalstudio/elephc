@@ -76,7 +76,8 @@ pub fn emit_expr(
             emit_array_access(array, index, emitter, ctx, data)
         }
         ExprKind::Not(inner) => {
-            emit_expr(inner, emitter, ctx, data);
+            let ty = emit_expr(inner, emitter, ctx, data);
+            coerce_null_to_zero(emitter, &ty);
             emitter.comment("logical not");
             emitter.instruction("cmp x0, #0");
             emitter.instruction("cset x0, eq");
@@ -126,7 +127,8 @@ pub fn emit_expr(
             let else_label = ctx.next_label("tern_else");
             let end_label = ctx.next_label("tern_end");
             emitter.comment("ternary");
-            emit_expr(condition, emitter, ctx, data);
+            let cond_ty = emit_expr(condition, emitter, ctx, data);
+            coerce_null_to_zero(emitter, &cond_ty);
             emitter.instruction("cmp x0, #0");
             emitter.instruction(&format!("b.eq {}", else_label));
             let ty = emit_expr(then_expr, emitter, ctx, data);
@@ -258,7 +260,7 @@ fn coerce_to_string(emitter: &mut Emitter, ty: &PhpType) {
 /// Replace null sentinel with 0 in x0 (for arithmetic/comparison with null).
 /// Handles both compile-time null (Void type) and runtime null (variable
 /// that was assigned null — sentinel value in x0).
-fn coerce_null_to_zero(emitter: &mut Emitter, ty: &PhpType) {
+pub fn coerce_null_to_zero(emitter: &mut Emitter, ty: &PhpType) {
     if *ty == PhpType::Void {
         emitter.instruction("mov x0, #0");
     } else if *ty == PhpType::Bool {
@@ -287,10 +289,12 @@ fn emit_binop(
     match op {
         BinOp::And => {
             let end_label = ctx.next_label("and_end");
-            emit_expr(left, emitter, ctx, data);
+            let lt = emit_expr(left, emitter, ctx, data);
+            coerce_null_to_zero(emitter, &lt);
             emitter.instruction("cmp x0, #0");
             emitter.instruction(&format!("b.eq {}", end_label));
-            emit_expr(right, emitter, ctx, data);
+            let rt = emit_expr(right, emitter, ctx, data);
+            coerce_null_to_zero(emitter, &rt);
             emitter.instruction("cmp x0, #0");
             emitter.instruction("cset x0, ne");
             emitter.label(&end_label);
@@ -298,10 +302,12 @@ fn emit_binop(
         }
         BinOp::Or => {
             let end_label = ctx.next_label("or_end");
-            emit_expr(left, emitter, ctx, data);
+            let lt = emit_expr(left, emitter, ctx, data);
+            coerce_null_to_zero(emitter, &lt);
             emitter.instruction("cmp x0, #0");
             emitter.instruction(&format!("b.ne {}", end_label));
-            emit_expr(right, emitter, ctx, data);
+            let rt = emit_expr(right, emitter, ctx, data);
+            coerce_null_to_zero(emitter, &rt);
             emitter.label(&end_label);
             emitter.instruction("cmp x0, #0");
             emitter.instruction("cset x0, ne");
@@ -507,63 +513,84 @@ fn emit_strict_compare(
     let is_eq = *op == BinOp::StrictEq;
     emitter.comment(if is_eq { "===" } else { "!==" });
 
+    // Peek at compile-time types to decide the strategy
+    let lt_peek = peek_expr_type(left, ctx);
+    let rt_peek = peek_expr_type(right, ctx);
+
+    let types_match = match (&lt_peek, &rt_peek) {
+        (Some(l), Some(r)) => l == r,
+        _ => true, // unknown → assume they might match, use save path
+    };
+
     let lt = emit_expr(left, emitter, ctx, data);
 
-    // Save left operand
-    match &lt {
-        PhpType::Float => emitter.instruction("str d0, [sp, #-16]!"),
-        PhpType::Str => emitter.instruction("stp x1, x2, [sp, #-16]!"),
-        _ => emitter.instruction("str x0, [sp, #-16]!"),
-    }
-
-    let rt = emit_expr(right, emitter, ctx, data);
-
-    // Types differ at compile time → constant result
-    if lt != rt {
-        // Clean up saved left operand
-        emitter.instruction("add sp, sp, #16");
-        emitter.instruction(&format!("mov x0, #{}", if is_eq { 0 } else { 1 }));
-        return PhpType::Bool;
-    }
-
-    // Same type — compare values
-    match &lt {
-        PhpType::Int | PhpType::Bool | PhpType::Void => {
-            emitter.instruction("ldr x1, [sp], #16");
-            emitter.instruction("cmp x1, x0");
-            let cond = if is_eq { "eq" } else { "ne" };
-            emitter.instruction(&format!("cset x0, {}", cond));
+    if types_match {
+        // Types match (or unknown): save left, compare values
+        match &lt {
+            PhpType::Float => emitter.instruction("str d0, [sp, #-16]!"),
+            PhpType::Str => emitter.instruction("stp x1, x2, [sp, #-16]!"),
+            _ => emitter.instruction("str x0, [sp, #-16]!"),
         }
-        PhpType::Float => {
-            emitter.instruction("ldr d1, [sp], #16");
-            emitter.instruction("fcmp d1, d0");
-            let cond = if is_eq { "eq" } else { "ne" };
-            emitter.instruction(&format!("cset x0, {}", cond));
+
+        let rt = emit_expr(right, emitter, ctx, data);
+
+        if lt != rt {
+            // Types turned out different at emit time (unknown peek case)
+            emitter.instruction("add sp, sp, #16");
+            emitter.instruction(&format!("mov x0, #{}", if is_eq { 0 } else { 1 }));
+            return PhpType::Bool;
         }
-        PhpType::Str => {
-            // x0 right is in x1/x2 (from emit_expr for Str)
-            // Move right string to x3/x4
-            emitter.instruction("mov x3, x1");
-            emitter.instruction("mov x4, x2");
-            // Pop left string into x1/x2
-            emitter.instruction("ldp x1, x2, [sp], #16");
-            emitter.instruction("bl __rt_str_eq");
-            // x0 = 1 if equal, 0 if not
-            if !is_eq {
-                // Invert for !==
-                emitter.instruction("eor x0, x0, #1");
+
+        match &lt {
+            PhpType::Int | PhpType::Bool | PhpType::Void => {
+                emitter.instruction("ldr x1, [sp], #16");
+                emitter.instruction("cmp x1, x0");
+                let cond = if is_eq { "eq" } else { "ne" };
+                emitter.instruction(&format!("cset x0, {}", cond));
+            }
+            PhpType::Float => {
+                emitter.instruction("ldr d1, [sp], #16");
+                emitter.instruction("fcmp d1, d0");
+                let cond = if is_eq { "eq" } else { "ne" };
+                emitter.instruction(&format!("cset x0, {}", cond));
+            }
+            PhpType::Str => {
+                emitter.instruction("mov x3, x1");
+                emitter.instruction("mov x4, x2");
+                emitter.instruction("ldp x1, x2, [sp], #16");
+                emitter.instruction("bl __rt_str_eq");
+                if !is_eq {
+                    emitter.instruction("eor x0, x0, #1");
+                }
+            }
+            PhpType::Array(_) => {
+                emitter.instruction("ldr x1, [sp], #16");
+                emitter.instruction("cmp x1, x0");
+                let cond = if is_eq { "eq" } else { "ne" };
+                emitter.instruction(&format!("cset x0, {}", cond));
             }
         }
-        PhpType::Array(_) => {
-            // Reference equality for arrays
-            emitter.instruction("ldr x1, [sp], #16");
-            emitter.instruction("cmp x1, x0");
-            let cond = if is_eq { "eq" } else { "ne" };
-            emitter.instruction(&format!("cset x0, {}", cond));
-        }
+    } else {
+        // Types known to differ: evaluate right for side effects, emit constant
+        emit_expr(right, emitter, ctx, data);
+        emitter.instruction(&format!("mov x0, #{}", if is_eq { 0 } else { 1 }));
     }
 
     PhpType::Bool
+}
+
+/// Peek at the compile-time type of an expression without emitting code.
+/// Returns None if the type can't be determined cheaply (e.g., complex expressions).
+fn peek_expr_type(expr: &Expr, ctx: &Context) -> Option<PhpType> {
+    match &expr.kind {
+        ExprKind::IntLiteral(_) => Some(PhpType::Int),
+        ExprKind::FloatLiteral(_) => Some(PhpType::Float),
+        ExprKind::StringLiteral(_) => Some(PhpType::Str),
+        ExprKind::BoolLiteral(_) => Some(PhpType::Bool),
+        ExprKind::Null => Some(PhpType::Void),
+        ExprKind::Variable(name) => ctx.variables.get(name).map(|v| v.ty.clone()),
+        _ => None,
+    }
 }
 
 fn load_immediate(emitter: &mut Emitter, reg: &str, value: i64) {

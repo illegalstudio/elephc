@@ -69,7 +69,8 @@ pub fn emit_stmt(
             // Evaluate condition
             emitter.blank();
             emitter.comment("if");
-            emit_expr(condition, emitter, ctx, data);
+            let cond_ty = emit_expr(condition, emitter, ctx, data);
+            super::expr::coerce_null_to_zero(emitter, &cond_ty);
             let mut next_label = ctx.next_label("if_else");
             emitter.instruction("cmp x0, #0");
             emitter.instruction(&format!("b.eq {}", next_label));
@@ -84,7 +85,8 @@ pub fn emit_stmt(
             for (cond, body) in elseif_clauses {
                 emitter.label(&next_label);
                 emitter.comment("elseif");
-                emit_expr(cond, emitter, ctx, data);
+                let cond_ty = emit_expr(cond, emitter, ctx, data);
+                super::expr::coerce_null_to_zero(emitter, &cond_ty);
                 next_label = ctx.next_label("if_else");
                 emitter.instruction("cmp x0, #0");
                 emitter.instruction(&format!("b.eq {}", next_label));
@@ -266,7 +268,8 @@ pub fn emit_stmt(
             ctx.loop_stack.pop();
 
             emitter.label(&loop_cond);
-            emit_expr(condition, emitter, ctx, data);
+            let cond_ty = emit_expr(condition, emitter, ctx, data);
+            super::expr::coerce_null_to_zero(emitter, &cond_ty);
             emitter.instruction("cmp x0, #0");
             emitter.instruction(&format!("b.ne {}", loop_start));
             emitter.label(&loop_end);
@@ -278,7 +281,8 @@ pub fn emit_stmt(
             emitter.blank();
             emitter.comment("while");
             emitter.label(&loop_start);
-            emit_expr(condition, emitter, ctx, data);
+            let cond_ty = emit_expr(condition, emitter, ctx, data);
+            super::expr::coerce_null_to_zero(emitter, &cond_ty);
             emitter.instruction("cmp x0, #0");
             emitter.instruction(&format!("b.eq {}", loop_end));
 
@@ -318,7 +322,8 @@ pub fn emit_stmt(
 
             // Condition
             if let Some(cond) = condition {
-                emit_expr(cond, emitter, ctx, data);
+                let cond_ty = emit_expr(cond, emitter, ctx, data);
+                super::expr::coerce_null_to_zero(emitter, &cond_ty);
                 emitter.instruction("cmp x0, #0");
                 emitter.instruction(&format!("b.eq {}", loop_end));
             }

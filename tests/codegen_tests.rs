@@ -757,6 +757,91 @@ fn test_logical_with_comparison() {
     assert_eq!(out, "1");
 }
 
+// --- Logical operators with null ---
+
+#[test]
+fn test_null_and_true() {
+    // null && true → false (null coerces to false)
+    let out = compile_and_run("<?php echo null && true;");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_true_and_null() {
+    let out = compile_and_run("<?php echo true && null;");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_null_or_false() {
+    // null || false → false
+    let out = compile_and_run("<?php echo null || false;");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_false_or_null() {
+    let out = compile_and_run("<?php echo false || null;");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_null_or_true() {
+    // null || true → true
+    let out = compile_and_run("<?php echo null || true;");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_null_and_false() {
+    let out = compile_and_run("<?php echo null && false;");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_null_var_and() {
+    let out = compile_and_run("<?php $x = null; echo $x && true;");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_null_var_or() {
+    let out = compile_and_run("<?php $x = null; echo $x || false;");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_not_null_is_true() {
+    // !null → true
+    let out = compile_and_run("<?php $x = null; echo !$x;");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_if_null_is_falsy() {
+    let out = compile_and_run(r#"<?php
+$x = null;
+if ($x) {
+    echo "true";
+} else {
+    echo "false";
+}
+"#);
+    assert_eq!(out, "false");
+}
+
+#[test]
+fn test_ternary_null_is_falsy() {
+    let out = compile_and_run("<?php $x = null; echo $x ? \"yes\" : \"no\";");
+    assert_eq!(out, "no");
+}
+
+#[test]
+fn test_while_null_no_loop() {
+    let out = compile_and_run("<?php $x = null; while ($x) { echo \"bad\"; } echo \"ok\";");
+    assert_eq!(out, "ok");
+}
+
 // --- Ternary operator ---
 
 #[test]
@@ -1586,6 +1671,35 @@ echo $a !== $b;
     assert_eq!(out, "1");
 }
 
+#[test]
+fn test_strict_eq_side_effects_preserved() {
+    // Both operands must be evaluated even when types differ
+    let out = compile_and_run(r#"<?php
+function effect() { echo "X"; return 1; }
+$r = 1.0 === effect();
+echo $r;
+"#);
+    assert_eq!(out, "X");
+}
+
+#[test]
+fn test_strict_eq_assign_result() {
+    let out = compile_and_run(r#"<?php
+$x = 1 === 1;
+echo $x;
+"#);
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_strict_neq_assign_result() {
+    let out = compile_and_run(r#"<?php
+$x = 1 !== 2;
+echo $x;
+"#);
+    assert_eq!(out, "1");
+}
+
 // --- Include / Require ---
 
 #[test]
@@ -1617,6 +1731,7 @@ fn test_include_with_parens() {
 
 #[test]
 fn test_include_top_level_code() {
+    // Top-level code in included file executes at the include point
     let out = compile_and_run_files(&[
         ("main.php", "<?php echo \"before\"; include 'mid.php'; echo \"after\";"),
         ("mid.php", "<?php echo \"middle\";"),
@@ -1626,6 +1741,7 @@ fn test_include_top_level_code() {
 
 #[test]
 fn test_include_once() {
+    // include_once should only include the file once
     let out = compile_and_run_files(&[
         ("main.php", r#"<?php
 include_once 'counter.php';
@@ -1652,6 +1768,7 @@ echo double(5);
 
 #[test]
 fn test_include_nested() {
+    // a.php includes b.php which includes c.php
     let out = compile_and_run_files(&[
         ("main.php", "<?php include 'a.php'; echo c_func();"),
         ("a.php", "<?php include 'b.php';"),
@@ -1672,6 +1789,7 @@ fn test_include_subdirectory() {
 
 #[test]
 fn test_include_variables_shared_scope() {
+    // Variables from included file are in the same scope
     let out = compile_and_run_files(&[
         ("main.php", r#"<?php
 $prefix = "Hello";

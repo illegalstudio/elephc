@@ -157,18 +157,26 @@ fn infer_local_type(
             let inner_ty = infer_local_type(inner, sig);
             if inner_ty == PhpType::Float { PhpType::Float } else { PhpType::Int }
         }
-        ExprKind::BinaryOp { left, op, right } => match op {
-            crate::parser::ast::BinOp::Concat => PhpType::Str,
-            _ => {
-                let lt = infer_local_type(left, sig);
-                let rt = infer_local_type(right, sig);
-                if lt == PhpType::Float || rt == PhpType::Float {
-                    PhpType::Float
-                } else {
-                    PhpType::Int
+        ExprKind::Not(_) => PhpType::Bool,
+        ExprKind::Ternary { then_expr, .. } => infer_local_type(then_expr, sig),
+        ExprKind::BinaryOp { left, op, right } => {
+            use crate::parser::ast::BinOp;
+            match op {
+                BinOp::Concat => PhpType::Str,
+                BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt
+                | BinOp::LtEq | BinOp::GtEq | BinOp::StrictEq
+                | BinOp::StrictNotEq | BinOp::And | BinOp::Or => PhpType::Bool,
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
+                    let lt = infer_local_type(left, sig);
+                    let rt = infer_local_type(right, sig);
+                    if lt == PhpType::Float || rt == PhpType::Float {
+                        PhpType::Float
+                    } else {
+                        PhpType::Int
+                    }
                 }
             }
-        },
+        }
         ExprKind::FunctionCall { name, args } => {
             match name.as_str() {
                 "floatval" | "floor" | "ceil" | "round" | "sqrt" | "pow" => PhpType::Float,
