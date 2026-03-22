@@ -51,12 +51,14 @@ $x = 42;              // reassignment from null works
 |---|---|---|
 | `==` | `$a == $b` | Loose equality (integers only) |
 | `!=` | `$a != $b` | Inequality |
+| `===` | `$a === $b` | Strict equality (type and value) |
+| `!==` | `$a !== $b` | Strict inequality (type or value differs) |
 | `<` | `$a < $b` | Less than |
 | `>` | `$a > $b` | Greater than |
 | `<=` | `$a <= $b` | Less than or equal |
 | `>=` | `$a >= $b` | Greater than or equal |
 
-**Not supported yet:** `===`, `!==` (strict comparison), `<=>` (spaceship).
+**Not supported yet:** `<=>` (spaceship).
 
 ### Logical
 

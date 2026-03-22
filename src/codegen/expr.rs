@@ -408,6 +408,9 @@ fn emit_binop(
             emitter.instruction(&format!("cset x0, {}", cond));
             PhpType::Bool
         }
+        BinOp::StrictEq | BinOp::StrictNotEq => {
+            return emit_strict_compare(left, op, right, emitter, ctx, data);
+        }
         BinOp::Concat => {
             let left_ty = emit_expr(left, emitter, ctx, data);
             coerce_to_string(emitter, &left_ty);
@@ -491,6 +494,76 @@ fn emit_function_call(
         .get(name)
         .map(|sig| sig.return_type.clone())
         .unwrap_or(PhpType::Void)
+}
+
+fn emit_strict_compare(
+    left: &Expr,
+    op: &BinOp,
+    right: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let is_eq = *op == BinOp::StrictEq;
+    emitter.comment(if is_eq { "===" } else { "!==" });
+
+    let lt = emit_expr(left, emitter, ctx, data);
+
+    // Save left operand
+    match &lt {
+        PhpType::Float => emitter.instruction("str d0, [sp, #-16]!"),
+        PhpType::Str => emitter.instruction("stp x1, x2, [sp, #-16]!"),
+        _ => emitter.instruction("str x0, [sp, #-16]!"),
+    }
+
+    let rt = emit_expr(right, emitter, ctx, data);
+
+    // Types differ at compile time → constant result
+    if lt != rt {
+        // Clean up saved left operand
+        emitter.instruction("add sp, sp, #16");
+        emitter.instruction(&format!("mov x0, #{}", if is_eq { 0 } else { 1 }));
+        return PhpType::Bool;
+    }
+
+    // Same type — compare values
+    match &lt {
+        PhpType::Int | PhpType::Bool | PhpType::Void => {
+            emitter.instruction("ldr x1, [sp], #16");
+            emitter.instruction("cmp x1, x0");
+            let cond = if is_eq { "eq" } else { "ne" };
+            emitter.instruction(&format!("cset x0, {}", cond));
+        }
+        PhpType::Float => {
+            emitter.instruction("ldr d1, [sp], #16");
+            emitter.instruction("fcmp d1, d0");
+            let cond = if is_eq { "eq" } else { "ne" };
+            emitter.instruction(&format!("cset x0, {}", cond));
+        }
+        PhpType::Str => {
+            // x0 right is in x1/x2 (from emit_expr for Str)
+            // Move right string to x3/x4
+            emitter.instruction("mov x3, x1");
+            emitter.instruction("mov x4, x2");
+            // Pop left string into x1/x2
+            emitter.instruction("ldp x1, x2, [sp], #16");
+            emitter.instruction("bl __rt_str_eq");
+            // x0 = 1 if equal, 0 if not
+            if !is_eq {
+                // Invert for !==
+                emitter.instruction("eor x0, x0, #1");
+            }
+        }
+        PhpType::Array(_) => {
+            // Reference equality for arrays
+            emitter.instruction("ldr x1, [sp], #16");
+            emitter.instruction("cmp x1, x0");
+            let cond = if is_eq { "eq" } else { "ne" };
+            emitter.instruction(&format!("cset x0, {}", cond));
+        }
+    }
+
+    PhpType::Bool
 }
 
 fn load_immediate(emitter: &mut Emitter, reg: &str, value: i64) {

@@ -89,12 +89,20 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
         ']' => { cursor.advance(); Ok(Token::RBracket) }
         '=' => {
             cursor.advance();
-            if cursor.peek() == Some('=') { cursor.advance(); Ok(Token::EqualEqual) }
+            if cursor.peek() == Some('=') {
+                cursor.advance();
+                if cursor.peek() == Some('=') { cursor.advance(); Ok(Token::EqualEqualEqual) }
+                else { Ok(Token::EqualEqual) }
+            }
             else { Ok(Token::Assign) }
         }
         '!' => {
             cursor.advance();
-            if cursor.peek() == Some('=') { cursor.advance(); Ok(Token::NotEqual) }
+            if cursor.peek() == Some('=') {
+                cursor.advance();
+                if cursor.peek() == Some('=') { cursor.advance(); Ok(Token::NotEqualEqual) }
+                else { Ok(Token::NotEqual) }
+            }
             else { Ok(Token::Bang) }
         }
         '&' => {

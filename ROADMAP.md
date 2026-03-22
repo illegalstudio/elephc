@@ -37,7 +37,7 @@ Proper type system for PHP compatibility.
 - [x] `echo false` prints nothing, `echo true` prints `1` (like PHP)
 - [x] Bool coercion: `false` → `0`/`""` in arithmetic/concat, `true` → `1`/`"1"`
 - [x] `is_bool()`, `boolval()`
-- [ ] `===` and `!==` strict comparison (type-aware)
+- [x] `===` and `!==` strict comparison (type-aware)
 
 ### Float type
 - [x] Float literals: `3.14`, `1.0e-5`, `-0.5`

@@ -9,6 +9,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     strings::emit_ftoa(emitter);
     strings::emit_concat(emitter);
     strings::emit_atoi(emitter);
+    strings::emit_str_eq(emitter);
     system::emit_build_argv(emitter);
     arrays::emit_heap_alloc(emitter);
     arrays::emit_array_new(emitter);

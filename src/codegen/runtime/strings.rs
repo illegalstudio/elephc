@@ -172,6 +172,37 @@ pub fn emit_ftoa(emitter: &mut Emitter) {
     emitter.instruction("ret");
 }
 
+/// str_eq: compare two strings for equality.
+/// Input:  x1=ptr_a, x2=len_a, x3=ptr_b, x4=len_b
+/// Output: x0 = 1 if equal, 0 if not
+pub fn emit_str_eq(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: str_eq ---");
+    emitter.label("__rt_str_eq");
+
+    // Compare lengths first
+    emitter.instruction("cmp x2, x4");
+    emitter.instruction("b.ne __rt_str_eq_false");
+
+    // Same length — compare bytes
+    emitter.instruction("cbz x2, __rt_str_eq_true"); // both empty → equal
+    emitter.label("__rt_str_eq_loop");
+    emitter.instruction("ldrb w5, [x1], #1");
+    emitter.instruction("ldrb w6, [x3], #1");
+    emitter.instruction("cmp w5, w6");
+    emitter.instruction("b.ne __rt_str_eq_false");
+    emitter.instruction("sub x2, x2, #1");
+    emitter.instruction("cbnz x2, __rt_str_eq_loop");
+
+    emitter.label("__rt_str_eq_true");
+    emitter.instruction("mov x0, #1");
+    emitter.instruction("ret");
+
+    emitter.label("__rt_str_eq_false");
+    emitter.instruction("mov x0, #0");
+    emitter.instruction("ret");
+}
+
 /// atoi: parse a string to a signed 64-bit integer.
 /// Input:  x1 = string pointer, x2 = string length
 /// Output: x0 = integer value

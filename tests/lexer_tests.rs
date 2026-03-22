@@ -290,6 +290,34 @@ fn test_span_multiline() {
     assert_eq!(var_span.line, 4);
 }
 
+// --- Strict comparison ---
+
+#[test]
+fn test_strict_equal() {
+    let t = tokens("<?php ===");
+    assert_eq!(t[1], Token::EqualEqualEqual);
+}
+
+#[test]
+fn test_strict_not_equal() {
+    let t = tokens("<?php !==");
+    assert_eq!(t[1], Token::NotEqualEqual);
+}
+
+#[test]
+fn test_strict_equal_vs_loose_equal() {
+    let t = tokens("<?php === ==");
+    assert_eq!(t[1], Token::EqualEqualEqual);
+    assert_eq!(t[2], Token::EqualEqual);
+}
+
+#[test]
+fn test_strict_not_equal_vs_loose_not_equal() {
+    let t = tokens("<?php !== !=");
+    assert_eq!(t[1], Token::NotEqualEqual);
+    assert_eq!(t[2], Token::NotEqual);
+}
+
 // --- Float literals ---
 
 #[test]

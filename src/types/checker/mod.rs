@@ -284,6 +284,10 @@ impl Checker {
                         }
                         Ok(PhpType::Bool)
                     }
+                    BinOp::StrictEq | BinOp::StrictNotEq => {
+                        // Strict comparison accepts any types — compares both type and value
+                        Ok(PhpType::Bool)
+                    }
                     BinOp::Concat => Ok(PhpType::Str),
                     BinOp::And | BinOp::Or => Ok(PhpType::Bool),
                 }

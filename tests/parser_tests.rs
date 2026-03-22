@@ -255,6 +255,42 @@ fn test_missing_condition_parens() {
     assert!(parse_fails("<?php if 1 { echo \"a\"; }"));
 }
 
+// --- Strict comparison ---
+
+#[test]
+fn test_strict_equal_parses() {
+    let stmts = parse_source("<?php echo 1 === 1;");
+    let expected = Stmt::echo(Expr::binop(
+        Expr::int_lit(1),
+        BinOp::StrictEq,
+        Expr::int_lit(1),
+    ));
+    assert_eq!(stmts, vec![expected]);
+}
+
+#[test]
+fn test_strict_not_equal_parses() {
+    let stmts = parse_source("<?php echo 1 !== 2;");
+    let expected = Stmt::echo(Expr::binop(
+        Expr::int_lit(1),
+        BinOp::StrictNotEq,
+        Expr::int_lit(2),
+    ));
+    assert_eq!(stmts, vec![expected]);
+}
+
+#[test]
+fn test_strict_equal_same_precedence_as_loose() {
+    // 1 + 2 === 3 should parse as (1 + 2) === 3
+    let stmts = parse_source("<?php echo 1 + 2 === 3;");
+    let expected = Stmt::echo(Expr::binop(
+        Expr::binop(Expr::int_lit(1), BinOp::Add, Expr::int_lit(2)),
+        BinOp::StrictEq,
+        Expr::int_lit(3),
+    ));
+    assert_eq!(stmts, vec![expected]);
+}
+
 // --- Float ---
 
 #[test]

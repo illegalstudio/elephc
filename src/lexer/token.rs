@@ -68,7 +68,9 @@ pub enum Token {
 
     // Comparison
     EqualEqual,     // ==
+    EqualEqualEqual, // ===
     NotEqual,       // !=
+    NotEqualEqual,  // !==
     Less,           // <
     Greater,        // >
     LessEqual,      // <=

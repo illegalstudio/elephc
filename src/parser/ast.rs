@@ -99,6 +99,8 @@ pub enum BinOp {
     Concat,
     Eq,
     NotEq,
+    StrictEq,
+    StrictNotEq,
     Lt,
     Gt,
     LtEq,
