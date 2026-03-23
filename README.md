@@ -234,8 +234,22 @@ ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 
 ## Documentation
 
-- [`docs/language-reference.md`](docs/language-reference.md) — Complete spec of what elephc supports
-- [`docs/architecture.md`](docs/architecture.md) — Compiler internals and ARM64 conventions
+The `docs/` directory is a complete wiki covering every aspect of the compiler — from what a compiler is, to how each phase works, to the ARM64 instruction set. If you're new to compilers or assembly, start from the top and work your way down.
+
+| Guide | What you'll learn |
+|---|---|
+| [What is a compiler?](docs/what-is-a-compiler.md) | The big picture: source code in, binary out |
+| [How elephc works](docs/how-elephc-works.md) | The full pipeline walkthrough, step by step |
+| [The Lexer](docs/the-lexer.md) | How source text becomes a stream of tokens |
+| [The Parser](docs/the-parser.md) | How tokens become an AST (with Pratt parsing) |
+| [The Type Checker](docs/the-type-checker.md) | Static types, inference, and error detection |
+| [The Codegen](docs/the-codegen.md) | How the AST becomes ARM64 assembly |
+| [The Runtime](docs/the-runtime.md) | Runtime routines: itoa, concat, hash tables, I/O |
+| [Memory Model](docs/memory-model.md) | Stack, heap, concat buffer, hash tables |
+| [ARM64 Assembly](docs/arm64-assembly.md) | ARM64 primer for people who've never seen assembly |
+| [ARM64 Instructions](docs/arm64-instructions.md) | Quick reference for every instruction elephc uses |
+| [Language Reference](docs/language-reference.md) | Complete spec: types, operators, built-ins, limits |
+| [Architecture](docs/architecture.md) | Module map, file counts, conventions |
 
 ## License
 
