@@ -55,7 +55,9 @@ Things that have a value:
 | `PreDecrement(String)` | `--$i` | |
 | `PostDecrement(String)` | `$i--` | |
 | `FunctionCall { name, args }` | `strlen($s)` | |
-| `ArrayLiteral(Vec<Expr>)` | `[1, 2, 3]` | |
+| `ArrayLiteral(Vec<Expr>)` | `[1, 2, 3]` | Indexed array |
+| `ArrayLiteralAssoc(Vec<(Expr, Expr)>)` | `["a" => 1]` | Associative array |
+| `Match { subject, arms, default }` | `match($x) { 1 => "one" }` | Match expression (returns a value) |
 | `ArrayAccess { array, index }` | `$arr[0]` | |
 | `Ternary { cond, then, else }` | `$a ? $b : $c` | |
 | `Cast { target, expr }` | `(int)$x` | |
@@ -72,7 +74,8 @@ Things that do something:
 | `While { condition, body }` | `while (...) { }` |
 | `DoWhile { body, condition }` | `do { } while (...);` |
 | `For { init, condition, update, body }` | `for (...; ...; ...) { }` |
-| `Foreach { array, value_var, body }` | `foreach ($arr as $v) { }` |
+| `Foreach { array, key_var, value_var, body }` | `foreach ($arr as $v) { }` or `foreach ($arr as $k => $v) { }` |
+| `Switch { subject, cases, default }` | `switch ($x) { case 1: ...; default: ... }` |
 | `ArrayAssign { array, index, value }` | `$arr[0] = 5;` |
 | `ArrayPush { array, value }` | `$arr[] = 5;` |
 | `FunctionDecl { name, params, body }` | `function foo($a) { }` |

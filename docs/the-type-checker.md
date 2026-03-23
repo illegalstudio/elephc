@@ -30,12 +30,16 @@ pub enum PhpType {
     Float,
     Str,
     Bool,
-    Void,           // null
-    Array(Box<PhpType>),  // e.g., Array(Int) = int[]
+    Void,                          // null
+    Array(Box<PhpType>),           // e.g., Array(Int) = int[]
+    AssocArray {                    // e.g., AssocArray { key: Str, value: Int }
+        key: Box<PhpType>,
+        value: Box<PhpType>,
+    },
 }
 ```
 
-This is much simpler than PHP's runtime types — no union types, no mixed, no nullable syntax. Each variable gets exactly one type for its lifetime.
+This is simpler than PHP's runtime types — no union types, no mixed, no nullable syntax. Each variable gets exactly one type for its lifetime. The distinction between `Array` (indexed) and `AssocArray` (key-value) is determined at compile time from the literal syntax (`[1, 2]` vs `["a" => 1]`).
 
 ## How inference works
 
@@ -86,6 +90,8 @@ The type checker computes the type of every expression:
 | `"hello"` | `Str` |
 | `true` / `false` | `Bool` |
 | `null` | `Void` |
+| `[1, 2, 3]` | `Array(Int)` |
+| `["a" => 1]` | `AssocArray { key: Str, value: Int }` |
 
 ### Binary operations
 
