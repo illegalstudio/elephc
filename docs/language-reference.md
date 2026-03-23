@@ -410,9 +410,25 @@ foreach ($map as $key => $value) {
 
 Associative arrays use a hash table runtime for string keys. Keys are always strings; values must all be the same type.
 
+### Multi-dimensional arrays
+
+```php
+<?php
+$matrix = [[1, 2], [3, 4]];
+echo $matrix[0][1];    // 2
+echo $matrix[1][0];    // 3
+
+// Nested foreach
+foreach ($matrix as $row) {
+    foreach ($row as $val) {
+        echo $val . " ";
+    }
+    echo "\n";
+}
+```
+
 ### Limitations
 
-- No multi-dimensional arrays
 - No array union operator (`+`)
 - Arrays are homogeneous: all elements must be the same type
 

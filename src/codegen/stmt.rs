@@ -183,6 +183,11 @@ pub fn emit_stmt(
                         emitter.instruction("str x1, [x10]");                   // store string pointer at slot
                         emitter.instruction("str x2, [x10, #8]");               // store string length at slot+8
                     }
+                    PhpType::Array(_) | PhpType::AssocArray { .. } => {
+                        // -- store nested array pointer at array[index] --
+                        emitter.instruction("add x10, x10, #24");               // skip 24-byte array header
+                        emitter.instruction("str x0, [x10, x9, lsl #3]");       // store pointer at data[index]
+                    }
                     _ => {}
                 }
                 let _ = val_ty;
@@ -214,6 +219,12 @@ pub fn emit_stmt(
                     // -- call runtime to append string to array --
                     emitter.instruction("mov x0, x9");                          // move array pointer to x0 (first arg)
                     emitter.instruction("bl __rt_array_push_str");              // call runtime: append string (x1=ptr, x2=len) to array
+                }
+                PhpType::Array(_) | PhpType::AssocArray { .. } => {
+                    // -- call runtime to append nested array pointer --
+                    emitter.instruction("mov x1, x0");                          // move nested array pointer to x1
+                    emitter.instruction("mov x0, x9");                          // move outer array pointer to x0
+                    emitter.instruction("bl __rt_array_push_int");              // append pointer (8 bytes, same as int)
                 }
                 _ => {}
             }
@@ -340,6 +351,12 @@ pub fn emit_stmt(
                         emitter.instruction("ldr x2, [x9, #8]");                // load string length from slot+8
                         emitter.instruction(&format!("stur x1, [x29, #-{}]", val_offset)); // store string pointer into $value_var
                         emitter.instruction(&format!("stur x2, [x29, #-{}]", val_offset - 8)); // store string length into $value_var+8
+                    }
+                    PhpType::Array(_) | PhpType::AssocArray { .. } => {
+                        // -- load nested array pointer and store into $value_var --
+                        emitter.instruction("add x9, x9, #24");                 // skip 24-byte array header to reach data
+                        emitter.instruction("ldr x0, [x9, x0, lsl #3]");        // load nested array pointer at index
+                        emitter.instruction(&format!("stur x0, [x29, #-{}]", val_offset)); // store pointer into $value_var
                     }
                     _ => {}
                 }

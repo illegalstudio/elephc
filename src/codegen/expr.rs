@@ -181,11 +181,23 @@ fn emit_array_literal(
         return PhpType::Array(Box::new(PhpType::Int));
     }
 
-    let es = match &elems[0].kind {
-        ExprKind::StringLiteral(_) => 16,
-        _ => 8,
+    // -- determine element type and size from first element --
+    // Evaluate first element to determine actual type
+    let first_ty = {
+        // Peek at the expression kind to infer element type without emitting code
+        match &elems[0].kind {
+            ExprKind::StringLiteral(_) => PhpType::Str,
+            ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) => {
+                // Nested array — element is a pointer (8 bytes)
+                PhpType::Array(Box::new(PhpType::Int)) // placeholder, refined below
+            }
+            _ => PhpType::Int,
+        }
     };
-    let elem_ty = if es == 16 { PhpType::Str } else { PhpType::Int };
+    let es: usize = match &first_ty {
+        PhpType::Str => 16,
+        _ => 8, // int, bool, float, array pointers are all 8 bytes
+    };
 
     emitter.comment("array literal");
     // -- allocate array and populate elements --
@@ -193,18 +205,28 @@ fn emit_array_literal(
         "mov x0, #{}",
         std::cmp::max(elems.len(), 8)
     ));
-    emitter.instruction(&format!("mov x1, #{}", es));                           // element size in bytes (8=int, 16=string)
+    emitter.instruction(&format!("mov x1, #{}", es));                           // element size in bytes (8=int/ptr, 16=string)
     emitter.instruction("bl __rt_array_new");                                   // call runtime to heap-allocate array struct
     emitter.instruction("str x0, [sp, #-16]!");                                 // save array pointer on stack while filling
 
+    let mut actual_elem_ty = PhpType::Int;
     for (i, elem) in elems.iter().enumerate() {
         let ty = emit_expr(elem, emitter, ctx, data);
+        if i == 0 {
+            actual_elem_ty = ty.clone();
+        }
         // -- store element value into array at index i --
         emitter.instruction("ldr x9, [sp]");                                    // peek array pointer from stack (no pop)
         match &ty {
-            PhpType::Int => {
-                emitter.instruction(&format!(                                   // store int element at data offset
+            PhpType::Int | PhpType::Bool => {
+                emitter.instruction(&format!(                                   // store int/bool element at data offset
                     "str x0, [x9, #{}]",
+                    24 + i * 8
+                ));
+            }
+            PhpType::Float => {
+                emitter.instruction(&format!(                                   // store float element at data offset
+                    "str d0, [x9, #{}]",
                     24 + i * 8
                 ));
             }
@@ -218,6 +240,12 @@ fn emit_array_literal(
                     24 + i * 16 + 8
                 ));
             }
+            PhpType::Array(_) | PhpType::AssocArray { .. } => {
+                emitter.instruction(&format!(                                   // store nested array pointer at data offset
+                    "str x0, [x9, #{}]",
+                    24 + i * 8
+                ));
+            }
             _ => {}
         }
         // -- update array length after adding element --
@@ -227,7 +255,7 @@ fn emit_array_literal(
 
     // -- return array pointer --
     emitter.instruction("ldr x0, [sp], #16");                                   // pop array pointer from stack into x0
-    PhpType::Array(Box::new(elem_ty))
+    PhpType::Array(Box::new(actual_elem_ty))
 }
 
 fn emit_assoc_array_literal(
@@ -438,6 +466,11 @@ fn emit_array_access(
             emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header to reach data
             emitter.instruction("ldr x1, [x9]");                                // load string pointer from element slot
             emitter.instruction("ldr x2, [x9, #8]");                            // load string length from element slot
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            // -- load nested array/hash pointer: base + 24-byte header + index*8 --
+            emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header to reach data
+            emitter.instruction("ldr x0, [x9, x0, lsl #3]");                    // load nested array pointer at index
         }
         _ => {}
     }

@@ -68,7 +68,7 @@ if ($x === 3) {
 | `string` | `"hello\n"`, `'raw'` |
 | `bool` | `true`, `false` |
 | `null` | `null` |
-| `array` | `[1, 2, 3]`, `["key" => "value"]` (indexed and associative) |
+| `array` | `[1, 2, 3]`, `["key" => "value"]`, `[[1,2],[3,4]]` (indexed, associative, multi-dimensional) |
 
 ### Supported constructs
 
@@ -201,7 +201,7 @@ src/
 ## Tests
 
 ```bash
-cargo test                      # all tests (~720)
+cargo test                      # all tests (~750)
 cargo test test_my_feature      # run specific tests
 ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 ```

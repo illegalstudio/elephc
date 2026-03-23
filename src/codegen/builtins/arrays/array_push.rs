@@ -31,6 +31,12 @@ pub fn emit(
             emitter.instruction("mov x0, x9");                                  // move array pointer to x0 (first arg, x1/x2 already set)
             emitter.instruction("bl __rt_array_push_str");                      // call runtime: append string to array
         }
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            // -- push nested array pointer onto array --
+            emitter.instruction("mov x1, x0");                                  // move nested array pointer to x1
+            emitter.instruction("mov x0, x9");                                  // move outer array pointer to x0
+            emitter.instruction("bl __rt_array_push_int");                      // append pointer (8 bytes, same as int)
+        }
         _ => {}
     }
 

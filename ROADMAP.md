@@ -109,6 +109,7 @@ Make string handling practical.
 
 ## v0.6.0 — Associative arrays and switch
 
+- [x] Multi-dimensional arrays: `[[1,2],[3,4]]`, `$a[0][1]`
 - [x] Associative arrays: `$map = ["key" => "value"];`
 - [x] `foreach ($map as $key => $value) { }`
 - [x] Hash table runtime for string keys
