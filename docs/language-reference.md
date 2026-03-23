@@ -513,7 +513,7 @@ foreach ($matrix as $row) {
 | `array_search()` | `array_search($needle, $arr): int\|string\|bool` | Search for value, return key or false |
 | **Slicing** | | |
 | `array_slice()` | `array_slice($arr, $offset [, $length]): array` | Extract a slice of the array |
-| `array_splice()` | `array_splice($arr, $offset [, $length [, $replacement]]): array` | Remove/replace part of array |
+| `array_splice()` | `array_splice($arr, $offset [, $length]): array` | Remove/replace part of array |
 | `array_chunk()` | `array_chunk($arr, $size): array` | Split array into chunks |
 | **Combining** | | |
 | `array_merge()` | `array_merge($arr1, $arr2): array` | Merge two arrays |
@@ -521,7 +521,7 @@ foreach ($matrix as $row) {
 | `array_fill()` | `array_fill($start, $num, $value): array` | Fill array with values |
 | `array_fill_keys()` | `array_fill_keys($keys, $value): array` | Fill array with values using keys |
 | `array_pad()` | `array_pad($arr, $size, $value): array` | Pad array to specified length |
-| `range()` | `range($start, $end [, $step]): array` | Create array of sequential values |
+| `range()` | `range($start, $end): array` | Create array of sequential integers |
 | **Filtering** | | |
 | `array_diff()` | `array_diff($arr1, $arr2): array` | Values in $arr1 not in $arr2 |
 | `array_intersect()` | `array_intersect($arr1, $arr2): array` | Values present in both arrays |

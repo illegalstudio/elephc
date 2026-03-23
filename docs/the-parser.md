@@ -224,6 +224,7 @@ Statement parsing is simpler — it looks at the current token to decide what ki
 | `Do` | `DoWhile` loop |
 | `For` | `For` loop with init/condition/update |
 | `Foreach` | `Foreach` loop |
+| `Switch` | `Switch` statement with cases and optional default |
 | `Function` | Function declaration with parameters and body |
 | `Return` | Return with optional expression |
 | `Break` | Break statement |

@@ -36,7 +36,7 @@ PHP source (.php)
      ▼
 ┌─────────┐
 │ Codegen  │  src/codegen/
-│          │  mod.rs, expr.rs, stmt.rs, builtins.rs, functions.rs
+│          │  mod.rs, expr.rs, stmt.rs, functions.rs, abi.rs
 │          │  AST → ARM64 assembly string (.s file)
 └────┬─────┘
      │

@@ -387,6 +387,42 @@ foreach ($arr as $v) { body }
 
 The `loop_stack` in the Context tracks which labels to jump to for nested loops.
 
+### Switch
+
+```php
+switch ($x) {
+    case 1: echo "one"; break;
+    case 2: echo "two"; break;
+    default: echo "other"; break;
+}
+```
+
+1. Evaluate the subject expression once and push the result onto the stack
+2. For each case: pop subject, evaluate case value, compare (`cmp` + `b.ne` for integers, `bl __rt_str_eq` for strings)
+3. If match: emit case body, which may contain `break` (jump to end label) or fall through to next case
+4. Default case: emit body unconditionally
+5. End label after all cases
+
+The switch uses the loop stack so that `break` inside a case body jumps to the switch end label rather than an enclosing loop.
+
+### Match expression
+
+Match is an expression (returns a value), not a statement. It uses strict comparison (`===`) and has no fall-through:
+
+```php
+$result = match($x) {
+    1 => "one",
+    2 => "two",
+    default => "other",
+};
+```
+
+1. Evaluate subject, push onto stack
+2. For each arm: compare subject with each pattern in the arm's pattern list
+3. If any pattern matches: evaluate the arm's result expression, jump to end
+4. Default arm: evaluate result unconditionally
+5. Result is left in standard registers (`x0`, `d0`, or `x1`/`x2`)
+
 ## The ABI module
 
 **File:** `src/codegen/abi.rs`
@@ -439,7 +475,7 @@ Compiles a user-defined function:
 
 Pre-scans the function body AST to find every variable that will be used. This is necessary because stack space must be allocated in the prologue, before any code runs.
 
-It walks `Assign`, `If`, `While`, `For`, `Foreach`, `DoWhile` nodes recursively, collecting variable names and inferring their types from the expressions assigned to them.
+It walks `Assign`, `If`, `While`, `For`, `Foreach`, `DoWhile`, `Switch` nodes recursively, collecting variable names and inferring their types from the expressions assigned to them.
 
 ## Main program codegen
 

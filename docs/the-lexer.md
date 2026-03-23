@@ -124,15 +124,25 @@ The full set of tokens elephc recognizes:
 echo  if  else  elseif  while  do  for  foreach  as
 break  continue  function  return  include  require
 include_once  require_once  true  false  null  print
+switch  case  default  match
 ```
 
-Each keyword is a distinct token variant (e.g., `Token::If`, `Token::While`).
+Each keyword is a distinct token variant (e.g., `Token::If`, `Token::While`, `Token::Switch`).
+
+### Constants (keyword tokens)
+
+```
+INF  NAN  PHP_INT_MAX  PHP_INT_MIN  PHP_FLOAT_MAX  M_PI
+STDIN  STDOUT  STDERR
+```
+
+These are recognized as distinct tokens by the lexer, not as identifiers.
 
 ### Operators
 
 ```
 +  -  *  **  /  %  .
-=  +=  -=  *=  /=  .=  %=
+=  =>  +=  -=  *=  /=  .=  %=
 ==  ===  !=  !==  <  >  <=  >=
 &&  ||  !
 ++  --

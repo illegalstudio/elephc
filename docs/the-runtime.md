@@ -4,7 +4,7 @@
 
 ---
 
-**Source:** `src/codegen/runtime/` — `mod.rs`, `strings/`, `arrays/`, `system/`
+**Source:** `src/codegen/runtime/` — `mod.rs`, `strings/`, `arrays/`, `io/`, `system/`
 
 The runtime is a collection of **hand-written assembly routines** that handle operations too complex for inline code generation. When the [code generator](the-codegen.md) needs to convert an integer to a string or concatenate two strings, it emits a `bl __rt_itoa` or `bl __rt_concat` — a call to a runtime routine.
 
@@ -109,6 +109,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
+| `__rt_strcopy` | Copy string into concat buffer | `x1`/`x2` | `x1`/`x2` |
 | `__rt_strtolower` | Lowercase conversion | `x1`/`x2` | `x1`/`x2` |
 | `__rt_strtoupper` | Uppercase conversion | `x1`/`x2` | `x1`/`x2` |
 | `__rt_trim` | Strip whitespace | `x1`/`x2` | `x1`/`x2` |
@@ -122,6 +123,8 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_implode` | Join with glue | glue + array | `x1`/`x2` |
 | `__rt_strcmp` | Binary comparison | two strings | `x0` (-1, 0, 1) |
 | `__rt_strcasecmp` | Case-insensitive compare | two strings | `x0` |
+| `__rt_str_starts_with` | Check prefix match | `x1`/`x2` + `x3`/`x4` | `x0` (0 or 1) |
+| `__rt_str_ends_with` | Check suffix match | `x1`/`x2` + `x3`/`x4` | `x0` (0 or 1) |
 | `__rt_chr` | ASCII code → char | `x0` | `x1`/`x2` |
 | `__rt_addslashes` | Escape quotes/backslashes | `x1`/`x2` | `x1`/`x2` |
 | `__rt_nl2br` | Insert `<br />` before newlines | `x1`/`x2` | `x1`/`x2` |
@@ -244,14 +247,17 @@ The `emit_runtime()` function calls every routine's emitter in sequence:
 
 ```rust
 pub fn emit_runtime(emitter: &mut Emitter) {
-    strings::itoa::emit_itoa(emitter);
-    strings::ftoa::emit_ftoa(emitter);
-    strings::concat::emit_concat(emitter);
-    // ... 30+ more routines ...
-    arrays::heap_alloc::emit_heap_alloc(emitter);
-    arrays::array_new::emit_array_new(emitter);
-    // ...
-    system::build_argv::emit_build_argv(emitter);
+    strings::emit_itoa(emitter);
+    strings::emit_ftoa(emitter);
+    strings::emit_concat(emitter);
+    // ... 40+ more string routines ...
+    system::emit_build_argv(emitter);
+    arrays::emit_heap_alloc(emitter);
+    arrays::emit_array_new(emitter);
+    // ... 30+ more array routines ...
+    io::emit_cstr(emitter);
+    io::emit_fopen(emitter);
+    // ... 14 more I/O routines ...
 }
 ```
 
@@ -259,14 +265,24 @@ All routines are included in every binary, even if unused. This is simpler than 
 
 ## Runtime data
 
-The runtime also declares global buffers using `.comm`:
+The runtime also declares global buffers using `.comm` and static data tables:
 
 ```asm
 .comm _concat_buf, 65536     ; 64KB string buffer
 .comm _concat_off, 8         ; current offset into string buffer
+.comm _global_argc, 8        ; saved argc from OS
+.comm _global_argv, 8        ; saved argv pointer from OS
 .comm _heap_buf, 1048576     ; 1MB heap
 .comm _heap_off, 8           ; current heap offset
+.comm _cstr_buf, 4096        ; 4KB C-string conversion buffer
+.comm _cstr_buf2, 4096       ; 4KB second C-string buffer
+.comm _eof_flags, 256        ; EOF flag per file descriptor
 ```
+
+Additionally, the runtime emits static data tables:
+- `_fmt_g` — printf format string for float-to-string conversion via `%.14G`
+- `_b64_encode_tbl` — 64-byte Base64 encoding lookup table
+- `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
 
 See [Memory Model](memory-model.md) for details on how these buffers work.
 
