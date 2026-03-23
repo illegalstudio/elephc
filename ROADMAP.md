@@ -137,8 +137,8 @@ Make string handling practical.
 - [ ] Pass by reference: `function foo(&$x) { }`
 - [ ] Default parameter values: `function foo($x = 10) { }`
 - [ ] Variadic functions: `function foo(...$args) { }`
-- [ ] Anonymous functions / closures: `$fn = function($x) use ($y) { }`
-- [ ] Arrow functions: `$fn = fn($x) => $x * 2`
+- [x] Anonymous functions / closures: `$fn = function($x) { }` (`use` captures not yet supported)
+- [x] Arrow functions: `$fn = fn($x) => $x * 2`
 - [ ] Null coalescing: `$x ?? $default`, `$x ??= $default`
 - [ ] Spread operator: `func(...$args)`, `[...$a, ...$b]`
 - [ ] List unpacking: `[$a, $b] = $array;`
@@ -146,7 +146,7 @@ Make string handling practical.
 - [ ] Bitwise operators: `&`, `|`, `^`, `~`, `<<`, `>>`
 - [ ] Spaceship operator: `<=>`
 - [x] `call_user_func()` (string callbacks)
-- [ ] `call_user_func_array()`
+- [x] `call_user_func_array()`
 - [x] `function_exists()`
 
 ## v0.8.0 — Date/time, JSON, regex

@@ -309,12 +309,49 @@ echo $x;       // 1
 echo get_x();  // 99
 ```
 
+### Anonymous functions (closures)
+
+```php
+<?php
+$double = function($x) {
+    return $x * 2;
+};
+echo $double(5); // 10
+
+// Passing closures to array functions
+$nums = [1, 2, 3, 4];
+$doubled = array_map(function($n) { return $n * 2; }, $nums);
+// $doubled = [2, 4, 6, 8]
+```
+
+**Limitation:** `use ($var)` captures are not yet supported. Closures cannot access variables from the enclosing scope.
+
+### Arrow functions
+
+```php
+<?php
+$double = fn($x) => $x * 2;
+echo $double(5); // 10
+
+// Arrow functions with array callbacks
+$nums = [1, 2, 3, 4];
+$squared = array_map(fn($n) => $n * $n, $nums);
+// $squared = [1, 4, 9, 16]
+
+usort($nums, fn($a, $b) => $b - $a);
+// $nums = [4, 3, 2, 1]
+```
+
+Arrow functions are single-expression closures — the body is implicitly returned, no `return` keyword needed.
+
+**Limitation:** Like closures, arrow functions do not yet capture variables from the enclosing scope.
+
 ### Limitations
 
 - No default parameter values (`function foo($x = 10)` — not supported)
 - No pass by reference (`function foo(&$x)` — not supported)
 - No variadic functions (`function foo(...$args)` — not supported)
-- No anonymous functions / closures
+- No `use ($var)` captures in closures
 - No `global` keyword
 
 ## Print
@@ -560,7 +597,7 @@ foreach ($matrix as $row) {
 | `call_user_func()` | `call_user_func("name", ...): mixed` | Call a function by name with arguments |
 | `function_exists()` | `function_exists("name"): bool` | Check if a function is defined |
 
-> **Note:** Callback arguments must be string literals containing the function name (e.g., `"double"`). Variable callbacks and closures are not yet supported.
+> **Note:** Callback arguments can be string literals containing the function name (e.g., `"double"`), anonymous functions, or arrow functions.
 
 **Not yet supported:** `compact()`, `extract()` (require dynamic variables).
 
