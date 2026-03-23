@@ -126,7 +126,6 @@ Make string handling practical.
 - [x] `asort()`, `arsort()`, `ksort()`, `krsort()`
 - [x] `natsort()`, `natcasesort()`, `shuffle()`, `array_rand()`
 - [x] `range()`
-- [ ] `compact()`, `extract()` (need dynamic variables)
 - [x] `switch` / `case` / `default` (with fall-through)
 - [x] `match` expression (PHP 8 style, no fall-through)
 
@@ -210,3 +209,19 @@ Make string handling practical.
 - [ ] `.wat` / `.wasm` emission
 - [ ] WASI support for I/O
 - [ ] NPM package generation
+
+---
+
+## Will not implement
+
+Features that are fundamentally incompatible with a static ahead-of-time compiler.
+
+| Feature | Reason |
+|---|---|
+| `compact()` | Resolves variable names from strings at runtime. In elephc, variables are fixed stack slots allocated at compile time — there is no variable name table at runtime. |
+| `extract()` | Creates new variables from array keys at runtime. A static compiler must know all variables before execution — it cannot allocate stack slots on the fly. |
+| `$$var` (variable variables) | Requires a runtime symbol table to resolve variable names dynamically. Incompatible with static stack-based variable allocation. |
+| `eval()` | Requires a full interpreter/compiler at runtime. Fundamentally impossible in an AOT compiler. |
+| Classes / OOP | Out of scope. elephc targets procedural PHP — the subset where the language began. |
+| Generators / `yield` | Requires coroutine suspension and stack switching, which is far beyond the current single-stack execution model. |
+| Exceptions / `try`-`catch` | Requires stack unwinding infrastructure (setjmp/longjmp or DWARF unwinding). May be reconsidered in the future. |
