@@ -161,11 +161,20 @@ Make string handling practical.
 - [ ] `php_uname()`, `phpversion()`
 - [ ] Constants: `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`
 
-## v0.9.0 — Multi-platform, multi-file, optimizations
+## v0.9.0 — Memory management and runtime improvements
+
+- [ ] Free-list allocator (replace bump allocator with reusable memory)
+- [ ] Scope-based memory reset (free temporaries at end of scope/loop iteration)
+- [ ] Configurable heap size (currently hardcoded 1MB)
+- [ ] Concat buffer recycling (currently 64KB with silent wraparound)
+- [ ] String deduplication (avoid copying identical strings)
+- [ ] Hash table shrink on delete (currently only grows)
+- [x] `include` / `require` / `include_once` / `require_once`
+
+## v0.10.0 — Multi-platform and optimizations
 
 - [ ] Linux x86_64 target
 - [ ] Linux ARM64 target
-- [x] `include` / `require` / `include_once` / `require_once`
 - [ ] Cross-compilation support
 - [ ] Constant folding (`2 + 3` → `5` at compile time)
 - [ ] Dead code elimination
@@ -210,6 +219,15 @@ Make string handling practical.
 - [ ] `.wat` / `.wasm` emission
 - [ ] WASI support for I/O
 - [ ] NPM package generation
+
+## v1.4.0 — PHP extension bridge (experimental)
+
+- [ ] `zval` pack/unpack routines (convert elephc values ↔ PHP `zval` structs)
+- [ ] Link against PHP extension `.so`/`.dylib` shared libraries
+- [ ] Bridge for string, int, float, bool, array types
+- [ ] Proof of concept with one extension (e.g., `mbstring` or `curl`)
+- [ ] `--ext` flag to specify extension libraries at compile time
+- [ ] Documentation: how to bridge a PHP extension
 
 ---
 
