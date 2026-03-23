@@ -245,6 +245,38 @@ my_func($a, $b, $c)
 3. `bl _fn_my_func` — branch with link (saves return address)
 4. Result is in `x0`/`d0`/`x1`+`x2` depending on return type
 
+## Associative array codegen
+
+Associative arrays use a hash table stored on the heap. The codegen differs from indexed arrays at every level:
+
+### Literal creation
+
+```php
+$m = ["name" => "Alice", "age" => "30"];
+```
+
+1. Call `__rt_hash_new` with initial capacity and value type tag → `x0` = hash table pointer
+2. For each key-value pair: evaluate key (string → `x1`/`x2`), evaluate value, call `__rt_hash_set`
+
+### Access
+
+```php
+$m["name"]
+```
+
+1. Save hash table pointer on stack
+2. Evaluate key expression → `x1`/`x2` (string)
+3. Call `__rt_hash_get` → `x0` = found (0/1), `x1` = value_lo, `x2` = value_hi
+4. Move result to standard registers based on value type
+
+### Functions on associative arrays
+
+Builtin functions like `array_key_exists`, `in_array`, `array_keys`, `array_values` dispatch on the array type at compile time:
+- `PhpType::Array` → use indexed runtime routines (e.g., bounds check, linear scan)
+- `PhpType::AssocArray` → use hash table routines (e.g., `__rt_hash_get`, `__rt_hash_iter_next`)
+
+See [The Runtime](the-runtime.md) for details on hash table routines and [Memory Model](memory-model.md) for the hash table memory layout.
+
 ## Statement codegen
 
 **File:** `src/codegen/stmt.rs`
