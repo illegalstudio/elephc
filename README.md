@@ -201,7 +201,7 @@ src/
 ## Tests
 
 ```bash
-cargo test                      # all tests (~691)
+cargo test                      # all tests (~720)
 cargo test test_my_feature      # run specific tests
 ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 ```

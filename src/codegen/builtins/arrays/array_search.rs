@@ -20,7 +20,7 @@ pub fn emit(
     if let PhpType::AssocArray { value, .. } = &arr_ty {
         let val_ty = *value.clone();
         // -- save hash table pointer, evaluate needle --
-        emitter.instruction("str x0, [sp, #-16]!");                                 // push hash table pointer
+        emitter.instruction("str x0, [sp, #-16]!");                             // push hash table pointer
 
         let _needle_ty = emit_expr(&args[0], emitter, ctx, data);
 
@@ -32,16 +32,16 @@ pub fn emit(
         match &val_ty {
             PhpType::Str => {
                 // -- needle is a string in x1/x2, save it --
-                emitter.instruction("stp x1, x2, [sp, #-16]!");                     // push needle ptr+len
+                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push needle ptr+len
             }
             _ => {
                 // -- needle is an integer/bool in x0, save it --
-                emitter.instruction("str x0, [sp, #-16]!");                          // push needle value
+                emitter.instruction("str x0, [sp, #-16]!");                     // push needle value
             }
         }
 
         // -- push iteration index onto stack --
-        emitter.instruction("str xzr, [sp, #-16]!");                                 // push iter_index = 0
+        emitter.instruction("str xzr, [sp, #-16]!");                            // push iter_index = 0
 
         // Stack layout (top to bottom):
         //   sp+0:  iter_index (16 bytes)
@@ -49,62 +49,62 @@ pub fn emit(
         //   sp+32: hash_table_ptr (16 bytes)
 
         emitter.label(&loop_label);
-        emitter.instruction("ldr x0, [sp, #32]");                                   // load hash table pointer
-        emitter.instruction("ldr x1, [sp]");                                         // load current iteration index
-        emitter.instruction("bl __rt_hash_iter_next");                               // → x0=next_idx, x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi
-        emitter.instruction("cmn x0, #1");                                           // check if done
-        emitter.instruction(&format!("b.eq {}", end_label));                         // if done, not found
-        emitter.instruction("str x0, [sp]");                                         // save updated iteration index
+        emitter.instruction("ldr x0, [sp, #32]");                               // load hash table pointer
+        emitter.instruction("ldr x1, [sp]");                                    // load current iteration index
+        emitter.instruction("bl __rt_hash_iter_next");                          // → x0=next_idx, x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi
+        emitter.instruction("cmn x0, #1");                                      // check if done
+        emitter.instruction(&format!("b.eq {}", end_label));                    // if done, not found
+        emitter.instruction("str x0, [sp]");                                    // save updated iteration index
 
         // -- save key_ptr and key_len for return if matched --
-        emitter.instruction("stp x1, x2, [sp, #-16]!");                             // push key ptr+len
+        emitter.instruction("stp x1, x2, [sp, #-16]!");                         // push key ptr+len
 
         // Stack now: [key(16)] [iter_index(16)] [needle(16)] [hash_ptr(16)]
 
         // -- compare value with needle --
         match &val_ty {
             PhpType::Str => {
-                emitter.instruction("mov x1, x3");                                   // val ptr → x1
-                emitter.instruction("mov x2, x4");                                   // val len → x2
-                emitter.instruction("ldp x3, x4, [sp, #32]");                       // reload needle ptr+len
-                emitter.instruction("bl __rt_str_eq");                               // x0 = 1 if equal
-                emitter.instruction(&format!("cbnz x0, {}", found_label));           // if equal, found
+                emitter.instruction("mov x1, x3");                              // val ptr → x1
+                emitter.instruction("mov x2, x4");                              // val len → x2
+                emitter.instruction("ldp x3, x4, [sp, #32]");                   // reload needle ptr+len
+                emitter.instruction("bl __rt_str_eq");                          // x0 = 1 if equal
+                emitter.instruction(&format!("cbnz x0, {}", found_label));      // if equal, found
             }
             _ => {
-                emitter.instruction("ldr x5, [sp, #32]");                            // reload needle value
-                emitter.instruction("cmp x3, x5");                                   // compare entry value with needle
-                emitter.instruction(&format!("b.eq {}", found_label));               // if equal, found
+                emitter.instruction("ldr x5, [sp, #32]");                       // reload needle value
+                emitter.instruction("cmp x3, x5");                              // compare entry value with needle
+                emitter.instruction(&format!("b.eq {}", found_label));          // if equal, found
             }
         }
         // -- drop saved key and continue --
-        emitter.instruction("add sp, sp, #16");                                      // drop key ptr+len
-        emitter.instruction(&format!("b {}", loop_label));                           // continue iterating
+        emitter.instruction("add sp, sp, #16");                                 // drop key ptr+len
+        emitter.instruction(&format!("b {}", loop_label));                      // continue iterating
 
         // -- found: return key string --
         emitter.label(&found_label);
-        emitter.instruction("ldp x1, x2, [sp], #16");                               // pop key ptr+len into x1/x2
-        emitter.instruction(&format!("b {}", skip_label));                           // jump to cleanup
+        emitter.instruction("ldp x1, x2, [sp], #16");                           // pop key ptr+len into x1/x2
+        emitter.instruction(&format!("b {}", skip_label));                      // jump to cleanup
 
         // -- not found: return empty string (false) --
         emitter.label(&end_label);
-        emitter.instruction("mov x1, #0");                                           // null pointer for empty string
-        emitter.instruction("mov x2, #0");                                           // length = 0
+        emitter.instruction("mov x1, #0");                                      // null pointer for empty string
+        emitter.instruction("mov x2, #0");                                      // length = 0
 
         emitter.label(&skip_label);
         // -- clean up stack (iter_index + needle + hash_ptr) --
-        emitter.instruction("add sp, sp, #48");                                      // drop remaining stack
+        emitter.instruction("add sp, sp, #48");                                 // drop remaining stack
 
         // For assoc arrays, array_search returns a string key
         return Some(PhpType::Str);
     }
 
     // -- indexed array: use runtime for linear search --
-    emitter.instruction("str x0, [sp, #-16]!");                                      // push array pointer
+    emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer
     emit_expr(&args[0], emitter, ctx, data);
     // -- call runtime: x0=array, x1=needle --
-    emitter.instruction("mov x1, x0");                                               // move needle to x1
-    emitter.instruction("ldr x0, [sp], #16");                                        // pop array pointer
-    emitter.instruction("bl __rt_array_search");                                     // search array → x0=index or -1
+    emitter.instruction("mov x1, x0");                                          // move needle to x1
+    emitter.instruction("ldr x0, [sp], #16");                                   // pop array pointer
+    emitter.instruction("bl __rt_array_search");                                // search array → x0=index or -1
 
     Some(PhpType::Int)
 }

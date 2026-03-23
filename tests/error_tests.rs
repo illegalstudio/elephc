@@ -628,3 +628,143 @@ fn test_error_shuffle_wrong_args() {
 fn test_error_array_fill_wrong_args() {
     expect_error("<?php array_fill(0, 5);", "array_fill() takes exactly 3 arguments");
 }
+
+#[test]
+fn test_error_array_push_wrong_args() {
+    expect_error("<?php array_push();", "array_push() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_array_pop_wrong_args() {
+    expect_error("<?php array_pop();", "array_pop() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_in_array_wrong_args() {
+    expect_error("<?php in_array(1);", "in_array() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_array_keys_wrong_args() {
+    expect_error("<?php array_keys();", "array_keys() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_array_values_wrong_args() {
+    expect_error("<?php array_values();", "array_values() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_sort_wrong_args() {
+    expect_error("<?php sort();", "sort() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_rsort_wrong_args() {
+    expect_error("<?php rsort();", "rsort() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_isset_wrong_args() {
+    expect_error("<?php isset();", "isset() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_array_unique_wrong_args() {
+    expect_error("<?php array_unique();", "array_unique() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_array_product_wrong_args() {
+    expect_error("<?php array_product();", "array_product() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_array_shift_wrong_args() {
+    expect_error("<?php array_shift();", "array_shift() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_array_unshift_wrong_args() {
+    expect_error("<?php array_unshift();", "array_unshift() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_array_splice_wrong_args() {
+    expect_error("<?php array_splice();", "array_splice() takes 2 or 3 arguments");
+}
+
+#[test]
+fn test_error_array_flip_wrong_args() {
+    expect_error("<?php array_flip();", "array_flip() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_array_chunk_wrong_args() {
+    expect_error("<?php array_chunk();", "array_chunk() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_array_pad_wrong_args() {
+    expect_error("<?php array_pad();", "array_pad() takes exactly 3 arguments");
+}
+
+#[test]
+fn test_error_array_fill_keys_wrong_args() {
+    expect_error("<?php array_fill_keys();", "array_fill_keys() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_array_diff_wrong_args() {
+    expect_error("<?php array_diff();", "array_diff() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_array_intersect_wrong_args() {
+    expect_error("<?php array_intersect();", "array_intersect() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_array_diff_key_wrong_args() {
+    expect_error("<?php array_diff_key();", "array_diff_key() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_array_intersect_key_wrong_args() {
+    expect_error("<?php array_intersect_key();", "array_intersect_key() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_array_rand_wrong_args() {
+    expect_error("<?php array_rand();", "array_rand() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_asort_wrong_args() {
+    expect_error("<?php asort();", "asort() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_arsort_wrong_args() {
+    expect_error("<?php arsort();", "arsort() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_ksort_wrong_args() {
+    expect_error("<?php ksort();", "ksort() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_krsort_wrong_args() {
+    expect_error("<?php krsort();", "krsort() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_natsort_wrong_args() {
+    expect_error("<?php natsort();", "natsort() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_natcasesort_wrong_args() {
+    expect_error("<?php natcasesort();", "natcasesort() takes exactly 1 argument");
+}
