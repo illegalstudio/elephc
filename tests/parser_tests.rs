@@ -464,3 +464,51 @@ fn test_parse_foreach_key_value() {
         panic!("expected Foreach");
     }
 }
+
+#[test]
+fn test_parse_closure() {
+    let stmts = parse_source("<?php $fn = function($x) { return $x; };");
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Assign { value, .. } = &stmts[0].kind {
+        if let ExprKind::Closure { params, is_arrow, .. } = &value.kind {
+            assert_eq!(params, &vec!["x".to_string()]);
+            assert!(!is_arrow);
+        } else {
+            panic!("expected Closure");
+        }
+    } else {
+        panic!("expected Assign");
+    }
+}
+
+#[test]
+fn test_parse_arrow_function() {
+    let stmts = parse_source("<?php $fn = fn($x) => $x * 2;");
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Assign { value, .. } = &stmts[0].kind {
+        if let ExprKind::Closure { params, is_arrow, .. } = &value.kind {
+            assert_eq!(params, &vec!["x".to_string()]);
+            assert!(is_arrow);
+        } else {
+            panic!("expected Closure (arrow)");
+        }
+    } else {
+        panic!("expected Assign");
+    }
+}
+
+#[test]
+fn test_parse_closure_call() {
+    let stmts = parse_source("<?php $fn(1, 2);");
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::ExprStmt(expr) = &stmts[0].kind {
+        if let ExprKind::ClosureCall { var, args } = &expr.kind {
+            assert_eq!(var, "fn");
+            assert_eq!(args.len(), 2);
+        } else {
+            panic!("expected ClosureCall");
+        }
+    } else {
+        panic!("expected ExprStmt");
+    }
+}

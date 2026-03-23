@@ -484,3 +484,22 @@ fn test_match_token() {
     let t = tokens("<?php match($x) {}");
     assert_eq!(t[1], Token::Match);
 }
+
+#[test]
+fn test_fn_token() {
+    let t = tokens("<?php fn($x) => $x;");
+    assert_eq!(t[1], Token::Fn);
+}
+
+#[test]
+fn test_use_token() {
+    let t = tokens("<?php use;");
+    assert_eq!(t[1], Token::Use);
+}
+
+#[test]
+fn test_function_token_anonymous() {
+    let t = tokens("<?php function($x) {}");
+    assert_eq!(t[1], Token::Function);
+    assert_eq!(t[2], Token::LParen);
+}

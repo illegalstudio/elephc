@@ -146,7 +146,7 @@ Make string handling practical.
 - [ ] Bitwise operators: `&`, `|`, `^`, `~`, `<<`, `>>`
 - [ ] Spaceship operator: `<=>`
 - [x] `call_user_func()` (string callbacks)
-- [x] `call_user_func_array()`
+- [ ] `call_user_func_array()`
 - [x] `function_exists()`
 
 ## v0.8.0 — Date/time, JSON, regex
