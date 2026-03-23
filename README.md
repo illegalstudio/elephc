@@ -2,6 +2,8 @@
 
 A PHP-to-native compiler. Takes a subset of PHP and compiles it directly to **ARM64 assembly**, producing **standalone macOS binaries**. No interpreter, no VM, no runtime dependencies.
 
+> **If you like the idea or find it useful, please star the repo** — it helps others discover it and keeps the project going.
+
 ## Why
 
 My first "serious programming" book was *PHP 4 and MySQL*. After years of experimenting with code, that book turned my passion into a profession. I've worked with many languages over the past 20 years, but PHP is the one that has most consistently put food on the table.
