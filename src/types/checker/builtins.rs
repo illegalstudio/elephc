@@ -662,6 +662,260 @@ impl Checker {
                 for arg in args { self.infer_type(arg, env)?; }
                 Ok(Some(PhpType::Int))
             }
+            // -- v0.6 array functions --
+
+            // 1-arg array functions returning same array type
+            "array_reverse" | "array_unique" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(
+                        span, &format!("{}() takes exactly 1 argument", name),
+                    ));
+                }
+                let ty = self.infer_type(&args[0], env)?;
+                if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                    return Err(CompileError::new(
+                        span, &format!("{}() argument must be array", name),
+                    ));
+                }
+                Ok(Some(ty))
+            }
+            "array_flip" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "array_flip() takes exactly 1 argument"));
+                }
+                let ty = self.infer_type(&args[0], env)?;
+                match ty {
+                    PhpType::Array(elem_ty) => Ok(Some(PhpType::AssocArray {
+                        key: elem_ty,
+                        value: Box::new(PhpType::Int),
+                    })),
+                    PhpType::AssocArray { key, value } => Ok(Some(PhpType::AssocArray {
+                        key: value,
+                        value: key,
+                    })),
+                    _ => Err(CompileError::new(span, "array_flip() argument must be array")),
+                }
+            }
+            "array_shift" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "array_shift() takes exactly 1 argument"));
+                }
+                let ty = self.infer_type(&args[0], env)?;
+                match ty {
+                    PhpType::Array(elem_ty) => Ok(Some(*elem_ty)),
+                    PhpType::AssocArray { value, .. } => Ok(Some(*value)),
+                    _ => Err(CompileError::new(span, "array_shift() argument must be array")),
+                }
+            }
+
+            // 1-arg array functions returning scalar
+            "array_sum" | "array_product" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(
+                        span, &format!("{}() takes exactly 1 argument", name),
+                    ));
+                }
+                let ty = self.infer_type(&args[0], env)?;
+                match ty {
+                    PhpType::Array(ref elem_ty) if **elem_ty == PhpType::Float => {
+                        Ok(Some(PhpType::Float))
+                    }
+                    PhpType::Array(_) => Ok(Some(PhpType::Int)),
+                    PhpType::AssocArray { ref value, .. } if **value == PhpType::Float => {
+                        Ok(Some(PhpType::Float))
+                    }
+                    PhpType::AssocArray { .. } => Ok(Some(PhpType::Int)),
+                    _ => Err(CompileError::new(
+                        span, &format!("{}() argument must be array", name),
+                    )),
+                }
+            }
+            "array_rand" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "array_rand() takes exactly 1 argument"));
+                }
+                let ty = self.infer_type(&args[0], env)?;
+                if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                    return Err(CompileError::new(span, "array_rand() argument must be array"));
+                }
+                Ok(Some(PhpType::Int))
+            }
+
+            // 1-arg void (modify in place)
+            "shuffle" | "natsort" | "natcasesort"
+            | "asort" | "arsort" | "ksort" | "krsort" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(
+                        span, &format!("{}() takes exactly 1 argument", name),
+                    ));
+                }
+                let ty = self.infer_type(&args[0], env)?;
+                if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                    return Err(CompileError::new(
+                        span, &format!("{}() argument must be array", name),
+                    ));
+                }
+                Ok(Some(PhpType::Void))
+            }
+
+            // 2-arg: array_key_exists($key, $arr) → Bool
+            "array_key_exists" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "array_key_exists() takes exactly 2 arguments"));
+                }
+                self.infer_type(&args[0], env)?;
+                let arr_ty = self.infer_type(&args[1], env)?;
+                if !matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                    return Err(CompileError::new(span, "array_key_exists() second argument must be array"));
+                }
+                Ok(Some(PhpType::Bool))
+            }
+            // 2-arg: array_search($needle, $arr) → Int
+            "array_search" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "array_search() takes exactly 2 arguments"));
+                }
+                self.infer_type(&args[0], env)?;
+                let arr_ty = self.infer_type(&args[1], env)?;
+                if !matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                    return Err(CompileError::new(span, "array_search() second argument must be array"));
+                }
+                Ok(Some(PhpType::Int))
+            }
+            // 2-arg: array_merge($arr1, $arr2) → same array type
+            "array_merge" | "array_diff" | "array_intersect"
+            | "array_diff_key" | "array_intersect_key" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(
+                        span, &format!("{}() takes exactly 2 arguments", name),
+                    ));
+                }
+                let ty1 = self.infer_type(&args[0], env)?;
+                self.infer_type(&args[1], env)?;
+                if !matches!(ty1, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                    return Err(CompileError::new(
+                        span, &format!("{}() first argument must be array", name),
+                    ));
+                }
+                Ok(Some(ty1))
+            }
+            // 2-arg: array_unshift($arr, $val) → Int (new count)
+            "array_unshift" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "array_unshift() takes exactly 2 arguments"));
+                }
+                let arr_ty = self.infer_type(&args[0], env)?;
+                self.infer_type(&args[1], env)?;
+                if !matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                    return Err(CompileError::new(span, "array_unshift() first argument must be array"));
+                }
+                Ok(Some(PhpType::Int))
+            }
+            // 2-arg: array_combine($keys, $values) → AssocArray
+            "array_combine" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "array_combine() takes exactly 2 arguments"));
+                }
+                let keys_ty = self.infer_type(&args[0], env)?;
+                let vals_ty = self.infer_type(&args[1], env)?;
+                let key_elem = match keys_ty {
+                    PhpType::Array(elem) => *elem,
+                    _ => return Err(CompileError::new(span, "array_combine() first argument must be array")),
+                };
+                let val_elem = match vals_ty {
+                    PhpType::Array(elem) => *elem,
+                    _ => return Err(CompileError::new(span, "array_combine() second argument must be array")),
+                };
+                Ok(Some(PhpType::AssocArray {
+                    key: Box::new(key_elem),
+                    value: Box::new(val_elem),
+                }))
+            }
+            // 2-arg: array_fill_keys($keys, $val) → AssocArray
+            "array_fill_keys" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "array_fill_keys() takes exactly 2 arguments"));
+                }
+                let keys_ty = self.infer_type(&args[0], env)?;
+                let val_ty = self.infer_type(&args[1], env)?;
+                let key_elem = match keys_ty {
+                    PhpType::Array(elem) => *elem,
+                    _ => return Err(CompileError::new(span, "array_fill_keys() first argument must be array")),
+                };
+                Ok(Some(PhpType::AssocArray {
+                    key: Box::new(key_elem),
+                    value: Box::new(val_ty),
+                }))
+            }
+
+            // 3-arg: array_pad($arr, $size, $val) → same array type
+            "array_pad" => {
+                if args.len() != 3 {
+                    return Err(CompileError::new(span, "array_pad() takes exactly 3 arguments"));
+                }
+                let ty = self.infer_type(&args[0], env)?;
+                self.infer_type(&args[1], env)?;
+                self.infer_type(&args[2], env)?;
+                if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                    return Err(CompileError::new(span, "array_pad() first argument must be array"));
+                }
+                Ok(Some(ty))
+            }
+            // 3-arg: array_fill($start, $count, $val) → Array
+            "array_fill" => {
+                if args.len() != 3 {
+                    return Err(CompileError::new(span, "array_fill() takes exactly 3 arguments"));
+                }
+                self.infer_type(&args[0], env)?;
+                self.infer_type(&args[1], env)?;
+                let val_ty = self.infer_type(&args[2], env)?;
+                Ok(Some(PhpType::Array(Box::new(val_ty))))
+            }
+
+            // 2-3 arg: array_slice, array_splice → same array type
+            "array_slice" | "array_splice" => {
+                if args.len() < 2 || args.len() > 3 {
+                    return Err(CompileError::new(
+                        span, &format!("{}() takes 2 or 3 arguments", name),
+                    ));
+                }
+                let ty = self.infer_type(&args[0], env)?;
+                for arg in &args[1..] { self.infer_type(arg, env)?; }
+                if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                    return Err(CompileError::new(
+                        span, &format!("{}() first argument must be array", name),
+                    ));
+                }
+                Ok(Some(ty))
+            }
+            // 2-arg: array_chunk($arr, $size) → Array of arrays
+            "array_chunk" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "array_chunk() takes exactly 2 arguments"));
+                }
+                let ty = self.infer_type(&args[0], env)?;
+                self.infer_type(&args[1], env)?;
+                match ty {
+                    PhpType::Array(elem_ty) => {
+                        Ok(Some(PhpType::Array(Box::new(PhpType::Array(elem_ty)))))
+                    }
+                    PhpType::AssocArray { .. } => {
+                        Err(CompileError::new(span, "array_chunk() argument must be indexed array"))
+                    }
+                    _ => Err(CompileError::new(span, "array_chunk() first argument must be array")),
+                }
+            }
+
+            // 2-arg: range($start, $end) → Array(Int)
+            "range" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "range() takes exactly 2 arguments"));
+                }
+                self.infer_type(&args[0], env)?;
+                self.infer_type(&args[1], env)?;
+                Ok(Some(PhpType::Array(Box::new(PhpType::Int))))
+            }
+
             _ => Ok(None),
         }
     }

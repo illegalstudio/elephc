@@ -112,17 +112,20 @@ Make string handling practical.
 - [x] Associative arrays: `$map = ["key" => "value"];`
 - [x] `foreach ($map as $key => $value) { }`
 - [x] Hash table runtime for string keys
-- [ ] `array_key_exists()`, `array_search()`
-- [ ] `array_merge()`, `array_slice()`, `array_splice()`
-- [ ] `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`
-- [ ] `array_combine()`, `array_flip()`, `array_reverse()`, `array_unique()`
-- [ ] `array_column()`, `array_sum()`, `array_product()`
-- [ ] `array_chunk()`, `array_pad()`, `array_fill()`, `array_fill_keys()`
-- [ ] `array_diff()`, `array_intersect()`, `array_diff_key()`, `array_intersect_key()`
-- [ ] `array_unshift()`, `array_shift()`
-- [ ] `usort()`, `uksort()`, `uasort()`, `asort()`, `arsort()`, `ksort()`, `krsort()`
-- [ ] `natsort()`, `natcasesort()`, `shuffle()`, `array_rand()`
-- [ ] `range()`, `compact()`, `extract()`
+- [x] `array_key_exists()`, `array_search()`
+- [x] `array_merge()`, `array_slice()`, `array_splice()`
+- [ ] `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()` (need closures, v0.7)
+- [x] `array_combine()`, `array_flip()`, `array_reverse()`, `array_unique()`
+- [ ] `array_column()` (needs array-of-arrays)
+- [x] `array_sum()`, `array_product()`
+- [x] `array_chunk()`, `array_pad()`, `array_fill()`, `array_fill_keys()`
+- [x] `array_diff()`, `array_intersect()`, `array_diff_key()`, `array_intersect_key()`
+- [x] `array_unshift()`, `array_shift()`
+- [ ] `usort()`, `uksort()`, `uasort()` (need closures, v0.7)
+- [x] `asort()`, `arsort()`, `ksort()`, `krsort()`
+- [x] `natsort()`, `natcasesort()`, `shuffle()`, `array_rand()`
+- [x] `range()`
+- [ ] `compact()`, `extract()` (need dynamic variables)
 - [x] `switch` / `case` / `default` (with fall-through)
 - [x] `match` expression (PHP 8 style, no fall-through)
 

@@ -71,6 +71,33 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_hash_get(emitter);
     arrays::emit_hash_iter(emitter);
     arrays::emit_hash_count(emitter);
+    arrays::emit_array_key_exists(emitter);
+    arrays::emit_array_search(emitter);
+    arrays::emit_array_reverse(emitter);
+    arrays::emit_array_sum(emitter);
+    arrays::emit_array_product(emitter);
+    arrays::emit_array_shift(emitter);
+    arrays::emit_array_unshift(emitter);
+    arrays::emit_array_merge(emitter);
+    arrays::emit_array_slice(emitter);
+    arrays::emit_range(emitter);
+    arrays::emit_shuffle(emitter);
+    arrays::emit_array_unique(emitter);
+    arrays::emit_array_rand(emitter);
+    arrays::emit_array_fill(emitter);
+    arrays::emit_array_pad(emitter);
+    arrays::emit_array_diff(emitter);
+    arrays::emit_array_intersect(emitter);
+    arrays::emit_array_flip(emitter);
+    arrays::emit_array_combine(emitter);
+    arrays::emit_array_fill_keys(emitter);
+    arrays::emit_array_chunk(emitter);
+    arrays::emit_array_splice(emitter);
+    arrays::emit_array_diff_key(emitter);
+    arrays::emit_array_intersect_key(emitter);
+    arrays::emit_asort(emitter);
+    arrays::emit_ksort(emitter);
+    arrays::emit_natsort(emitter);
 
     // I/O runtime functions
     io::emit_cstr(emitter);

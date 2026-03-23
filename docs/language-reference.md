@@ -492,6 +492,46 @@ Associative arrays use a hash table runtime for string keys. Keys are always str
 | `sort()` | `sort($arr): void` | Sort ascending (in-place) |
 | `rsort()` | `rsort($arr): void` | Sort descending (in-place) |
 | `isset()` | `isset($var): int` | Check if variable is defined (always 1) |
+| **Searching** | | |
+| `array_key_exists()` | `array_key_exists($key, $arr): bool` | Check if key exists in array |
+| `array_search()` | `array_search($needle, $arr): int\|string\|bool` | Search for value, return key or false |
+| **Slicing** | | |
+| `array_slice()` | `array_slice($arr, $offset [, $length]): array` | Extract a slice of the array |
+| `array_splice()` | `array_splice($arr, $offset [, $length [, $replacement]]): array` | Remove/replace part of array |
+| `array_chunk()` | `array_chunk($arr, $size): array` | Split array into chunks |
+| **Combining** | | |
+| `array_merge()` | `array_merge($arr1, $arr2): array` | Merge two arrays |
+| `array_combine()` | `array_combine($keys, $values): array` | Create array using keys and values arrays |
+| `array_fill()` | `array_fill($start, $num, $value): array` | Fill array with values |
+| `array_fill_keys()` | `array_fill_keys($keys, $value): array` | Fill array with values using keys |
+| `array_pad()` | `array_pad($arr, $size, $value): array` | Pad array to specified length |
+| `range()` | `range($start, $end [, $step]): array` | Create array of sequential values |
+| **Filtering** | | |
+| `array_diff()` | `array_diff($arr1, $arr2): array` | Values in $arr1 not in $arr2 |
+| `array_intersect()` | `array_intersect($arr1, $arr2): array` | Values present in both arrays |
+| `array_diff_key()` | `array_diff_key($arr1, $arr2): array` | Keys in $arr1 not in $arr2 |
+| `array_intersect_key()` | `array_intersect_key($arr1, $arr2): array` | Keys present in both arrays |
+| `array_unique()` | `array_unique($arr): array` | Remove duplicate values |
+| **Transforming** | | |
+| `array_reverse()` | `array_reverse($arr): array` | Return array in reverse order |
+| `array_flip()` | `array_flip($arr): array` | Exchange keys and values |
+| `array_shift()` | `array_shift($arr): mixed` | Remove and return first element |
+| `array_unshift()` | `array_unshift($arr, $value): int` | Prepend element to array |
+| **Aggregating** | | |
+| `array_sum()` | `array_sum($arr): int\|float` | Sum of all values |
+| `array_product()` | `array_product($arr): int\|float` | Product of all values |
+| **Sorting** | | |
+| `asort()` | `asort($arr): void` | Sort by value, maintain key association |
+| `arsort()` | `arsort($arr): void` | Sort by value descending, maintain key association |
+| `ksort()` | `ksort($arr): void` | Sort by key ascending |
+| `krsort()` | `krsort($arr): void` | Sort by key descending |
+| `natsort()` | `natsort($arr): void` | Natural order sort |
+| `natcasesort()` | `natcasesort($arr): void` | Case-insensitive natural order sort |
+| **Random** | | |
+| `shuffle()` | `shuffle($arr): void` | Randomly shuffle array (in-place) |
+| `array_rand()` | `array_rand($arr [, $num]): int\|array` | Pick random key(s) |
+
+**Not yet supported:** `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, `uasort()` (planned for v0.7, require closures), `compact()`, `extract()` (require dynamic variables), `array_column()` (requires array-of-arrays).
 
 ### Math functions
 
