@@ -3951,3 +3951,82 @@ echo $a[0];
 "#);
     assert_eq!(out, "1");
 }
+
+// --- Associative array function tests ---
+
+#[test]
+fn test_assoc_array_key_exists() {
+    let out = compile_and_run(r#"<?php
+$m = ["name" => "Alice", "age" => "30"];
+if (array_key_exists("name", $m)) { echo "yes"; }
+if (array_key_exists("missing", $m)) { echo "bad"; } else { echo "no"; }
+"#);
+    assert_eq!(out, "yesno");
+}
+
+#[test]
+fn test_assoc_in_array_str() {
+    let out = compile_and_run(r#"<?php
+$m = ["a" => "apple", "b" => "banana"];
+if (in_array("apple", $m)) { echo "yes"; }
+if (in_array("cherry", $m)) { echo "bad"; } else { echo "no"; }
+"#);
+    assert_eq!(out, "yesno");
+}
+
+#[test]
+fn test_assoc_in_array_int() {
+    let out = compile_and_run(r#"<?php
+$m = ["x" => 10, "y" => 20];
+if (in_array(10, $m)) { echo "yes"; }
+if (in_array(99, $m)) { echo "bad"; } else { echo "no"; }
+"#);
+    assert_eq!(out, "yesno");
+}
+
+#[test]
+fn test_assoc_array_search_str() {
+    let out = compile_and_run(r#"<?php
+$m = ["first" => "Alice", "second" => "Bob"];
+$key = array_search("Bob", $m);
+echo $key;
+"#);
+    assert_eq!(out, "second");
+}
+
+#[test]
+fn test_assoc_array_keys() {
+    let out = compile_and_run(r#"<?php
+$m = ["x" => 1, "y" => 2];
+$keys = array_keys($m);
+$n = count($keys);
+for ($i = 0; $i < $n; $i++) {
+    echo $keys[$i] . " ";
+}
+"#);
+    // Hash iteration order may vary
+    assert!(out.contains("x") && out.contains("y"));
+}
+
+#[test]
+fn test_assoc_array_values_str() {
+    let out = compile_and_run(r#"<?php
+$m = ["a" => "one", "b" => "two"];
+$vals = array_values($m);
+$n = count($vals);
+for ($i = 0; $i < $n; $i++) {
+    echo $vals[$i] . " ";
+}
+"#);
+    assert!(out.contains("one") && out.contains("two"));
+}
+
+#[test]
+fn test_assoc_array_values_int() {
+    let out = compile_and_run(r#"<?php
+$m = ["a" => 10, "b" => 20, "c" => 30];
+$vals = array_values($m);
+echo $vals[0] + $vals[1] + $vals[2];
+"#);
+    assert_eq!(out, "60");
+}
