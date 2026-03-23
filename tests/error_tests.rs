@@ -382,3 +382,90 @@ fn test_error_hash_wrong_args() {
 fn test_error_sscanf_wrong_args() {
     expect_error(r#"<?php sscanf("hi");"#, "sscanf() takes at least 2 arguments");
 }
+
+// --- v0.5: I/O function errors ---
+
+#[test]
+fn test_error_var_dump_wrong_args() {
+    expect_error("<?php var_dump();", "var_dump() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_print_r_wrong_args() {
+    expect_error("<?php print_r();", "print_r() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_fopen_wrong_args() {
+    expect_error(r#"<?php fopen("file");"#, "fopen() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_fclose_wrong_args() {
+    expect_error("<?php fclose();", "fclose() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_fread_wrong_args() {
+    expect_error("<?php fread(1);", "fread() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_fwrite_wrong_args() {
+    expect_error("<?php fwrite(1);", "fwrite() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_fgets_wrong_args() {
+    expect_error("<?php fgets();", "fgets() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_feof_wrong_args() {
+    expect_error("<?php feof();", "feof() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_file_get_contents_wrong_args() {
+    expect_error("<?php file_get_contents();", "file_get_contents() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_file_put_contents_wrong_args() {
+    expect_error(r#"<?php file_put_contents("x");"#, "file_put_contents() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_file_exists_wrong_args() {
+    expect_error("<?php file_exists();", "file_exists() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_mkdir_wrong_args() {
+    expect_error("<?php mkdir();", "mkdir() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_copy_wrong_args() {
+    expect_error(r#"<?php copy("x");"#, "copy() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_rename_wrong_args() {
+    expect_error(r#"<?php rename("x");"#, "rename() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_getcwd_wrong_args() {
+    expect_error("<?php getcwd(1);", "getcwd() takes no arguments");
+}
+
+#[test]
+fn test_error_scandir_wrong_args() {
+    expect_error("<?php scandir();", "scandir() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_tempnam_wrong_args() {
+    expect_error(r#"<?php tempnam("x");"#, "tempnam() takes exactly 2 arguments");
+}

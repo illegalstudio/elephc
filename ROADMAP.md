@@ -90,22 +90,22 @@ Make string handling practical.
 - [x] `bin2hex()`, `hex2bin()`
 - [x] `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, `ctype_space()`
 
-## v0.5.0 — I/O and file system
+## v0.5.0 — I/O and file system (done)
 
-- [ ] `fgets(STDIN)` / `readline()` — read from keyboard
-- [ ] `STDIN`, `STDOUT`, `STDERR` constants
-- [ ] `fopen()`, `fclose()`, `fread()`, `fwrite()`, `fgets()`, `feof()`
-- [ ] `fgetcsv()`, `fputcsv()`
-- [ ] `fseek()`, `ftell()`, `rewind()`
-- [ ] `file_get_contents()`, `file_put_contents()`
-- [ ] `file()` — read file into array
-- [ ] `file_exists()`, `is_file()`, `is_dir()`, `is_readable()`, `is_writable()`
-- [ ] `filesize()`, `filemtime()`
-- [ ] `copy()`, `rename()`, `unlink()`, `mkdir()`, `rmdir()`
-- [ ] `scandir()`, `glob()`, `getcwd()`, `chdir()`
-- [ ] `tempnam()`, `sys_get_temp_dir()`
-- [ ] `print` as alias for `echo`
-- [ ] `var_dump()`, `print_r()` for debugging
+- [x] `fgets(STDIN)` / `readline()` — read from keyboard
+- [x] `STDIN`, `STDOUT`, `STDERR` constants
+- [x] `fopen()`, `fclose()`, `fread()`, `fwrite()`, `fgets()`, `feof()`
+- [x] `fgetcsv()`, `fputcsv()`
+- [x] `fseek()`, `ftell()`, `rewind()`
+- [x] `file_get_contents()`, `file_put_contents()`
+- [x] `file()` — read file into array
+- [x] `file_exists()`, `is_file()`, `is_dir()`, `is_readable()`, `is_writable()`
+- [x] `filesize()`, `filemtime()`
+- [x] `copy()`, `rename()`, `unlink()`, `mkdir()`, `rmdir()`
+- [x] `scandir()`, `glob()`, `getcwd()`, `chdir()`
+- [x] `tempnam()`, `sys_get_temp_dir()`
+- [x] `print` as alias for `echo`
+- [x] `var_dump()`, `print_r()` for debugging
 
 ## v0.6.0 — Associative arrays and switch
 

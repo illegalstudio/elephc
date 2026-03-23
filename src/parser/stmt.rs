@@ -9,7 +9,7 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
     let span = tokens[*pos].1;
 
     match &tokens[*pos].0 {
-        Token::Echo => parse_echo(tokens, pos, span),
+        Token::Echo | Token::Print => parse_echo(tokens, pos, span),
         Token::Variable(_) => parse_variable_stmt(tokens, pos, span),
         Token::PlusPlus | Token::MinusMinus => parse_incdec_stmt(tokens, pos, span),
         Token::Function => parse_function_decl(tokens, pos, span),

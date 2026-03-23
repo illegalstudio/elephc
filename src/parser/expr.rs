@@ -164,6 +164,18 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
             *pos += 1;
             Ok(Expr::new(ExprKind::FloatLiteral(std::f64::consts::PI), span))
         }
+        Token::Stdin => {
+            *pos += 1;
+            Ok(Expr::new(ExprKind::IntLiteral(0), span))
+        }
+        Token::Stdout => {
+            *pos += 1;
+            Ok(Expr::new(ExprKind::IntLiteral(1), span))
+        }
+        Token::Stderr => {
+            *pos += 1;
+            Ok(Expr::new(ExprKind::IntLiteral(2), span))
+        }
         Token::PlusPlus => {
             *pos += 1;
             if *pos < tokens.len() {

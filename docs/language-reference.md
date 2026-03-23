@@ -256,6 +256,19 @@ echo get_x();  // 99
 - No anonymous functions / closures
 - No `global` keyword
 
+## Print
+
+`print` is a language construct that works as an alias for `echo`:
+
+```php
+<?php
+$name = "World";
+print "Hello, $name\n";
+print 42;
+```
+
+Like PHP, `print` always returns 1, but elephc does not support using `print` as an expression (e.g., `$x = print "hello";` is not supported).
+
 ## Strings
 
 ### Double-quoted strings
@@ -450,6 +463,70 @@ foreach ($names as $name) {
 | `exit()` | `exit($code = 0): void` | Terminate program |
 | `die()` | `die(): void` | Alias for `exit(0)` |
 
+### I/O functions
+
+| Function | Signature | Description |
+|---|---|---|
+| `fopen()` | `fopen($filename, $mode): resource` | Open a file (modes: r, w, a, r+, w+, a+) |
+| `fclose()` | `fclose($handle): bool` | Close a file handle |
+| `fread()` | `fread($handle, $length): string` | Read up to $length bytes |
+| `fwrite()` | `fwrite($handle, $data): int` | Write string to file, returns bytes written |
+| `fgets()` | `fgets($handle): string` | Read a line from file or STDIN |
+| `feof()` | `feof($handle): bool` | Check if end-of-file reached |
+| `readline()` | `readline([$prompt]): string` | Read a line from STDIN |
+| `fseek()` | `fseek($handle, $offset): int` | Seek to position in file |
+| `ftell()` | `ftell($handle): int` | Get current position in file |
+| `rewind()` | `rewind($handle): bool` | Seek to beginning of file |
+| `fgetcsv()` | `fgetcsv($handle [, $sep]): array` | Read a CSV line into array |
+| `fputcsv()` | `fputcsv($handle, $fields [, $sep]): int` | Write array as CSV line |
+| `file_get_contents()` | `file_get_contents($filename): string` | Read entire file into string |
+| `file_put_contents()` | `file_put_contents($filename, $data): int` | Write string to file |
+| `file()` | `file($filename): array` | Read file into array of lines |
+| `file_exists()` | `file_exists($filename): bool` | Check if file or directory exists |
+| `is_file()` | `is_file($filename): bool` | Check if path is a regular file |
+| `is_dir()` | `is_dir($filename): bool` | Check if path is a directory |
+| `is_readable()` | `is_readable($filename): bool` | Check if file is readable |
+| `is_writable()` | `is_writable($filename): bool` | Check if file is writable |
+| `filesize()` | `filesize($filename): int` | Get file size in bytes |
+| `filemtime()` | `filemtime($filename): int` | Get file modification time (Unix timestamp) |
+| `copy()` | `copy($source, $dest): bool` | Copy a file |
+| `rename()` | `rename($old, $new): bool` | Rename/move a file |
+| `unlink()` | `unlink($filename): bool` | Delete a file |
+| `mkdir()` | `mkdir($pathname): bool` | Create a directory |
+| `rmdir()` | `rmdir($pathname): bool` | Remove a directory |
+| `scandir()` | `scandir($directory): array` | List files in directory |
+| `glob()` | `glob($pattern): array` | Find files matching pattern |
+| `getcwd()` | `getcwd(): string` | Get current working directory |
+| `chdir()` | `chdir($directory): bool` | Change working directory |
+| `tempnam()` | `tempnam($dir, $prefix): string` | Create a temporary file name |
+| `sys_get_temp_dir()` | `sys_get_temp_dir(): string` | Get system temporary directory |
+
+### Debugging functions
+
+| Function | Signature | Description |
+|---|---|---|
+| `var_dump()` | `var_dump($value): void` | Output type and value for debugging |
+| `print_r()` | `print_r($value): void` | Print human-readable representation |
+
+```php
+<?php
+$arr = [1, 2, 3];
+var_dump($arr);
+// array(3) {
+//   [0]=> int(1)
+//   [1]=> int(2)
+//   [2]=> int(3)
+// }
+
+print_r($arr);
+// Array
+// (
+//     [0] => 1
+//     [1] => 2
+//     [2] => 3
+// )
+```
+
 ## Constants
 
 | Constant | Type | Value |
@@ -460,6 +537,9 @@ foreach ($names as $name) {
 | `PHP_INT_MIN` | int | -9223372036854775808 |
 | `PHP_FLOAT_MAX` | float | ~1.8e308 |
 | `M_PI` | float | 3.14159265358979... |
+| `STDIN` | resource | Standard input stream (fd 0) |
+| `STDOUT` | resource | Standard output stream (fd 1) |
+| `STDERR` | resource | Standard error stream (fd 2) |
 
 ## Superglobals
 

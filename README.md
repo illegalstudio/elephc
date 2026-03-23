@@ -74,7 +74,7 @@ if ($x === 3) {
 
 | Construct | Example |
 |---|---|
-| Echo | `echo $x;` |
+| Echo / Print | `echo $x;`, `print $x;` |
 | Variables | `$name = "hello";` |
 | Arithmetic | `+`, `-`, `*`, `/`, `%`, `**` |
 | Comparison | `==`, `!=`, `<`, `>`, `<=`, `>=`, `===`, `!==` |
@@ -99,11 +99,13 @@ if ($x === 3) {
 **Arrays:** `count`, `array_push`, `array_pop`, `in_array`, `array_keys`, `array_values`, `sort`, `rsort`, `isset`
 **Math:** `abs`, `floor`, `ceil`, `round`, `sqrt`, `pow`, `min`, `max`, `intdiv`, `fmod`, `fdiv`, `rand`, `mt_rand`, `random_int`
 **Types:** `gettype`, `settype`, `empty`, `unset`, `is_int`, `is_float`, `is_string`, `is_bool`, `is_null`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`, `boolval`, `floatval`
+**I/O:** `fopen`, `fclose`, `fread`, `fwrite`, `fgets`, `feof`, `readline`, `fseek`, `ftell`, `rewind`, `file_get_contents`, `file_put_contents`, `file`, `fgetcsv`, `fputcsv`, `file_exists`, `is_file`, `is_dir`, `is_readable`, `is_writable`, `filesize`, `filemtime`, `copy`, `rename`, `unlink`, `mkdir`, `rmdir`, `scandir`, `glob`, `getcwd`, `chdir`, `tempnam`, `sys_get_temp_dir`
+**Debugging:** `var_dump`, `print_r`
 **System:** `exit`, `die`
 
 ### Constants
 
-`INF`, `NAN`, `PHP_INT_MAX`, `PHP_INT_MIN`, `PHP_FLOAT_MAX`, `M_PI`
+`INF`, `NAN`, `PHP_INT_MAX`, `PHP_INT_MIN`, `PHP_FLOAT_MAX`, `M_PI`, `STDIN`, `STDOUT`, `STDERR`
 
 ## How it works
 
@@ -182,11 +184,13 @@ src/
 │   │   ├── arrays/      # count, array_push, array_pop, sort, ...
 │   │   ├── math/        # abs, floor, pow, rand, fmod, ...
 │   │   ├── types/       # is_int, gettype, empty, unset, settype, ...
+│   │   ├── io/          # fopen, fclose, fread, fwrite, fgets, file_get_contents, ...
 │   │   └── system/      # exit, die
 │   │
 │   └── runtime/         # ARM64 runtime routines (one file per function)
 │       ├── strings/     # itoa, concat, ftoa, strpos, str_replace, ...
 │       ├── arrays/      # heap_alloc, array_new, array_push, sort, ...
+│       ├── io/          # fopen, fclose, fread, fwrite, file_ops, ...
 │       └── system/      # build_argv
 │
 └── errors/              # Error formatting with line:col
@@ -195,7 +199,7 @@ src/
 ## Tests
 
 ```bash
-cargo test                      # all tests (~560)
+cargo test                      # all tests (~619)
 cargo test test_my_feature      # run specific tests
 ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 ```

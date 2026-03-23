@@ -1,4 +1,5 @@
 mod arrays;
+mod io;
 mod math;
 mod strings;
 mod system;
@@ -24,4 +25,5 @@ pub fn emit_builtin_call(
         .or_else(|| arrays::emit(name, args, emitter, ctx, data))
         .or_else(|| math::emit(name, args, emitter, ctx, data))
         .or_else(|| types::emit(name, args, emitter, ctx, data))
+        .or_else(|| io::emit(name, args, emitter, ctx, data))
 }

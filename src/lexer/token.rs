@@ -40,10 +40,14 @@ pub enum Token {
     PhpIntMin,
     PhpFloatMax,
     MPi,
+    Print,
     Include,
     IncludeOnce,
     Require,
     RequireOnce,
+    Stdin,
+    Stdout,
+    Stderr,
 
     // Operators
     Assign,         // =

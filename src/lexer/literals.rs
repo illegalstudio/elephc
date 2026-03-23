@@ -281,10 +281,14 @@ pub fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
         "PHP_INT_MIN" => Ok(Token::PhpIntMin),
         "PHP_FLOAT_MAX" => Ok(Token::PhpFloatMax),
         "M_PI" => Ok(Token::MPi),
+        "print" => Ok(Token::Print),
         "include" => Ok(Token::Include),
         "include_once" => Ok(Token::IncludeOnce),
         "require" => Ok(Token::Require),
         "require_once" => Ok(Token::RequireOnce),
+        "STDIN" => Ok(Token::Stdin),
+        "STDOUT" => Ok(Token::Stdout),
+        "STDERR" => Ok(Token::Stderr),
         _ => Ok(Token::Identifier(word)),
     }
 }

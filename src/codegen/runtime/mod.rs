@@ -1,4 +1,5 @@
 mod arrays;
+mod io;
 mod strings;
 mod system;
 
@@ -64,6 +65,24 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_array_push_str(emitter);
     arrays::emit_sort_int(emitter, false);
     arrays::emit_sort_int(emitter, true);
+
+    // I/O runtime functions
+    io::emit_cstr(emitter);
+    io::emit_fopen(emitter);
+    io::emit_fgets(emitter);
+    io::emit_feof(emitter);
+    io::emit_fread(emitter);
+    io::emit_file_get_contents(emitter);
+    io::emit_file_put_contents(emitter);
+    io::emit_file(emitter);
+    io::emit_stat(emitter);
+    io::emit_fs(emitter);
+    io::emit_getcwd(emitter);
+    io::emit_scandir(emitter);
+    io::emit_glob(emitter);
+    io::emit_tempnam(emitter);
+    io::emit_fgetcsv(emitter);
+    io::emit_fputcsv(emitter);
 }
 
 pub fn emit_runtime_data() -> String {
@@ -74,6 +93,9 @@ pub fn emit_runtime_data() -> String {
     out.push_str(".comm _global_argv, 8, 3\n");
     out.push_str(".comm _heap_buf, 1048576, 3\n");
     out.push_str(".comm _heap_off, 8, 3\n");
+    out.push_str(".comm _cstr_buf, 4096, 3\n");
+    out.push_str(".comm _cstr_buf2, 4096, 3\n");
+    out.push_str(".comm _eof_flags, 256, 3\n");
     out.push_str("_fmt_g:\n    .asciz \"%.14G\"\n");
     // Base64 encode lookup table (A-Z, a-z, 0-9, +, /)
     out.push_str("_b64_encode_tbl:\n    .ascii \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\"\n");
