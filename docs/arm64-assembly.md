@@ -157,6 +157,7 @@ The CPU executes instructions sequentially unless a **branch** changes the flow:
 | `cbz x0, label` | Branch if x0 is zero | `if` conditions (falsy check) |
 | `cbnz x0, label` | Branch if x0 is not zero | Loop conditions |
 | `bl label` | Branch with link (function call) | Saves return address in x30 |
+| `blr xN` | Branch with link to register (indirect call) | Call function at address in register (used for closures) |
 | `ret` | Return from function | Jumps to address in x30 |
 
 ### How an `if` becomes assembly

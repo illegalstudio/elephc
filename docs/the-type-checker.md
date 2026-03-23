@@ -36,10 +36,13 @@ pub enum PhpType {
         key: Box<PhpType>,
         value: Box<PhpType>,
     },
+    Callable,                      // closures and function references
 }
 ```
 
 This is simpler than PHP's runtime types — no union types, no mixed, no nullable syntax. Each variable gets exactly one type for its lifetime. The distinction between `Array` (indexed) and `AssocArray` (key-value) is determined at compile time from the literal syntax (`[1, 2]` vs `["a" => 1]`).
+
+`Callable` is used for anonymous functions (closures) and arrow functions. A callable value is stored as a function pointer (8 bytes) on the stack, and is invoked via an indirect branch (`blr`).
 
 ## How inference works
 

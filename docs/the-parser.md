@@ -61,6 +61,8 @@ Things that have a value:
 | `ArrayAccess { array, index }` | `$arr[0]` | |
 | `Ternary { cond, then, else }` | `$a ? $b : $c` | |
 | `Cast { target, expr }` | `(int)$x` | |
+| `Closure { params, body, is_arrow }` | `function($x) { ... }` or `fn($x) => ...` | Anonymous function / arrow function |
+| `ClosureCall { var, args }` | `$fn(1, 2)` | Calling a closure stored in a variable |
 
 ### Statements (`Stmt`)
 
@@ -199,6 +201,8 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `(` | Parse inner expr, expect `)`, return inner expr |
 | `[` | Parse comma-separated exprs, expect `]`, return `ArrayLiteral` |
 | `Identifier` + `(` | Parse as function call with arguments |
+| `function` + `(` | Parse anonymous function (closure) → `Closure` |
+| `fn` + `(` | Parse arrow function → `Closure` (with `is_arrow = true`) |
 
 ### Postfix: array access
 

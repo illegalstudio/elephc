@@ -149,6 +149,7 @@ After `cmp`, these codes test the result:
 | `cbz` | `cbz x0, _label` | Jump if x0 == 0 |
 | `cbnz` | `cbnz x0, _label` | Jump if x0 != 0 |
 | `bl` | `bl _fn_add` | Branch with link — call a function (saves return address in x30) |
+| `blr` | `blr x9` | Branch with link to register — indirect function call through a register (used for closures and callbacks) |
 | `ret` | `ret` | Return — jump to address in x30 |
 
 ### How branches map to PHP

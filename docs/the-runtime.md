@@ -153,7 +153,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 ## Array routines
 
-**Source:** `src/codegen/runtime/arrays/` (40 files)
+**Source:** `src/codegen/runtime/arrays/` (45 files)
 
 ### Core allocation
 
@@ -200,6 +200,11 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_range` | Generate integer range array |
 | `__rt_shuffle` / `__rt_array_rand` | Randomize order / pick random |
 | `__rt_asort` / `__rt_ksort` / `__rt_natsort` | Sort preserving keys |
+| `__rt_array_map` | Apply callback to each element, return new array |
+| `__rt_array_filter` | Filter elements where callback returns truthy |
+| `__rt_array_reduce` | Reduce array to single value via callback |
+| `__rt_array_walk` | Call callback on each element (side-effects) |
+| `__rt_usort` | Sort array using user comparison callback |
 
 ## System routines
 

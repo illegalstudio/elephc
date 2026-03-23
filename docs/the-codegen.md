@@ -245,6 +245,33 @@ my_func($a, $b, $c)
 3. `bl _fn_my_func` — branch with link (saves return address)
 4. Result is in `x0`/`d0`/`x1`+`x2` depending on return type
 
+## Closure codegen
+
+### Anonymous functions and arrow functions
+
+Closures (`function($x) { ... }`) and arrow functions (`fn($x) => ...`) are compiled as separate labeled functions, similar to user-defined functions. The key difference is **deferred emission** — the closure body is not emitted inline. Instead:
+
+1. **At the closure expression site**: the codegen generates a unique label (e.g., `_closure_1`) and loads its address into `x0` using `adrp` + `add`. The address is then stored in the variable's stack slot as a `Callable` (8-byte function pointer).
+
+2. **The body is deferred**: the closure's parameter list, body statements, and label are pushed onto `ctx.deferred_closures`. This avoids emitting function code in the middle of the current function's instruction stream.
+
+3. **After `_main`**: all deferred closures are emitted as standalone labeled functions (prologue, body, epilogue), just like user-defined functions.
+
+### Closure calls
+
+When a closure variable is called (`$fn(1, 2)`), the codegen:
+
+1. Evaluates each argument and pushes results onto the stack
+2. Loads the closure function address from the variable's stack slot into `x9`
+3. Pushes `x9` temporarily while popping arguments into ABI registers
+4. Pops `x9` back and calls `blr x9` — an indirect branch through a register
+
+`blr` (Branch with Link to Register) is like `bl` but the target address comes from a register rather than a label. This is what makes closures work — the compiler doesn't know at compile time which function will be called, so it uses an indirect jump.
+
+### Closures as callback arguments
+
+Built-in functions like `array_map`, `array_filter`, `usort` etc. accept closures as callback arguments. The closure's function pointer is passed in a register (like any other `Callable` argument) and the runtime routine calls it via `blr`.
+
 ## Associative array codegen
 
 Associative arrays use a hash table stored on the heap. The codegen differs from indexed arrays at every level:
