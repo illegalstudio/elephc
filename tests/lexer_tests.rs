@@ -424,3 +424,31 @@ fn test_dot_operator_not_float() {
     let t = tokens("<?php \"a\" . \"b\"");
     assert_eq!(t[2], Token::Dot);
 }
+
+// --- Print keyword ---
+
+#[test]
+fn test_print_keyword() {
+    let t = tokens("<?php print \"hello\";");
+    assert_eq!(t[1], Token::Print);
+}
+
+// --- STDIN / STDOUT / STDERR ---
+
+#[test]
+fn test_stdin_token() {
+    let t = tokens("<?php STDIN;");
+    assert_eq!(t[1], Token::Stdin);
+}
+
+#[test]
+fn test_stdout_token() {
+    let t = tokens("<?php STDOUT;");
+    assert_eq!(t[1], Token::Stdout);
+}
+
+#[test]
+fn test_stderr_token() {
+    let t = tokens("<?php STDERR;");
+    assert_eq!(t[1], Token::Stderr);
+}

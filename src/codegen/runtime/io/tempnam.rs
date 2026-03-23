@@ -57,16 +57,16 @@ pub fn emit_tempnam(emitter: &mut Emitter) {
     emitter.instruction("strb wzr, [x9]");                                      // null-terminate the template
 
     // -- call mkstemp to create the temp file (modifies XXXXXX in-place) --
+    emitter.instruction("str x10, [sp, #32]");                                  // save buffer start (clobbered by mkstemp)
     emitter.instruction("mov x0, x10");                                         // pass template buffer to mkstemp
     emitter.instruction("bl _mkstemp");                                         // mkstemp(template), x0=fd
-    emitter.instruction("str x0, [sp, #32]");                                   // save fd
 
     // -- close the temp file (we only need the name) --
     emitter.instruction("mov x16, #6");                                         // syscall 6 = close
     emitter.instruction("svc #0x80");                                           // invoke macOS kernel
 
     // -- calculate length of resulting path --
-    emitter.instruction("mov x1, x10");                                         // x1 = buffer start (the path)
+    emitter.instruction("ldr x1, [sp, #32]");                                   // reload buffer start (was clobbered by mkstemp)
     emitter.instruction("mov x2, #0");                                          // initialize length counter
     emitter.label("__rt_tempnam_len");
     emitter.instruction("ldrb w11, [x1, x2]");                                  // load byte at current position

@@ -3366,3 +3366,120 @@ var_dump(true);
 "#);
     assert_eq!(out, "int(1)\nstring(2) \"hi\"\nbool(true)\n");
 }
+
+// --- File I/O: CSV, timestamps, directory listing, temp files, seek/rewind/eof ---
+
+#[test]
+fn test_fgetcsv() {
+    let (out, dir) = compile_and_run_in_dir(r#"<?php
+file_put_contents("data.csv", "alice,30,NY\n");
+$f = fopen("data.csv", "r");
+$row = fgetcsv($f);
+echo $row[0];
+fclose($f);
+unlink("data.csv");
+"#);
+    assert_eq!(out, "alice");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_fputcsv() {
+    let (out, dir) = compile_and_run_in_dir(r#"<?php
+$f = fopen("out.csv", "w");
+$data = ["hello", "world"];
+fputcsv($f, $data);
+fclose($f);
+$content = file_get_contents("out.csv");
+echo trim($content);
+unlink("out.csv");
+"#);
+    assert_eq!(out, "hello,world");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_filemtime() {
+    let (out, dir) = compile_and_run_in_dir(r#"<?php
+file_put_contents("ts.txt", "x");
+$t = filemtime("ts.txt");
+if ($t > 1000000000) { echo "ok"; }
+unlink("ts.txt");
+"#);
+    assert_eq!(out, "ok");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_scandir() {
+    let (out, dir) = compile_and_run_in_dir(r#"<?php
+mkdir("sd");
+file_put_contents("sd/a.txt", "a");
+file_put_contents("sd/b.txt", "b");
+$files = scandir("sd");
+echo count($files);
+unlink("sd/a.txt");
+unlink("sd/b.txt");
+rmdir("sd");
+"#);
+    assert_eq!(out, "4");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_glob_fn() {
+    let (out, dir) = compile_and_run_in_dir(r#"<?php
+mkdir("gd");
+file_put_contents("gd/g1.txt", "a");
+file_put_contents("gd/g2.txt", "b");
+$matches = glob("gd/*.txt");
+if (count($matches) >= 2) { echo "ok"; }
+unlink("gd/g1.txt");
+unlink("gd/g2.txt");
+rmdir("gd");
+"#);
+    assert_eq!(out, "ok");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_tempnam() {
+    let (out, dir) = compile_and_run_in_dir(r#"<?php
+$tmp = tempnam(".", "test");
+if (file_exists($tmp)) { echo "ok"; }
+unlink($tmp);
+"#);
+    assert_eq!(out, "ok");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_rewind() {
+    let (out, dir) = compile_and_run_in_dir(r#"<?php
+file_put_contents("rw.txt", "abcdef");
+$f = fopen("rw.txt", "r");
+$first = fread($f, 3);
+rewind($f);
+$again = fread($f, 3);
+fclose($f);
+echo $first . "|" . $again;
+unlink("rw.txt");
+"#);
+    assert_eq!(out, "abc|abc");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_feof() {
+    let (out, dir) = compile_and_run_in_dir(r#"<?php
+file_put_contents("eof.txt", "hi");
+$f = fopen("eof.txt", "r");
+$data = fread($f, 2);
+$data = fread($f, 1);
+if (feof($f)) { echo "eof"; }
+fclose($f);
+unlink("eof.txt");
+"#);
+    assert_eq!(out, "eof");
+    let _ = fs::remove_dir_all(&dir);
+}

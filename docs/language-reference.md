@@ -432,7 +432,6 @@ foreach ($names as $name) {
 | `intdiv()` | `intdiv($a, $b): int` | Integer division |
 | `fmod()` | `fmod($a, $b): float` | Float modulo |
 | `fdiv()` | `fdiv($a, $b): float` | Float division (returns INF for /0) |
-| `floatval()` | `floatval($val): float` | Convert to float |
 | `rand()` | `rand([$min, $max]): int` | Random integer (0 or 2 args) |
 | `mt_rand()` | `mt_rand([$min, $max]): int` | Alias for rand() |
 | `random_int()` | `random_int($min, $max): int` | Cryptographic random |
@@ -451,6 +450,7 @@ foreach ($names as $name) {
 | `is_finite()` | `is_finite($val): bool` | Returns true if not INF/NAN |
 | `is_infinite()` | `is_infinite($val): bool` | Returns true if INF or -INF |
 | `boolval()` | `boolval($val): bool` | Convert to bool |
+| `floatval()` | `floatval($val): float` | Convert to float |
 | `gettype()` | `gettype($val): string` | Returns type name ("integer", "double", "string", "boolean", "NULL", "array") |
 | `empty()` | `empty($val): bool` | Returns true if value is falsy (0, 0.0, "", false, null, empty array) |
 | `unset()` | `unset($var): void` | Sets variable to null |

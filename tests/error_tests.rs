@@ -469,3 +469,93 @@ fn test_error_scandir_wrong_args() {
 fn test_error_tempnam_wrong_args() {
     expect_error(r#"<?php tempnam("x");"#, "tempnam() takes exactly 2 arguments");
 }
+
+#[test]
+fn test_error_is_file_wrong_args() {
+    expect_error("<?php is_file();", "is_file() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_is_dir_wrong_args() {
+    expect_error("<?php is_dir();", "is_dir() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_is_readable_wrong_args() {
+    expect_error("<?php is_readable();", "is_readable() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_is_writable_wrong_args() {
+    expect_error("<?php is_writable();", "is_writable() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_filesize_wrong_args() {
+    expect_error("<?php filesize();", "filesize() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_filemtime_wrong_args() {
+    expect_error("<?php filemtime();", "filemtime() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_unlink_wrong_args() {
+    expect_error("<?php unlink();", "unlink() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_rmdir_wrong_args() {
+    expect_error("<?php rmdir();", "rmdir() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_chdir_wrong_args() {
+    expect_error("<?php chdir();", "chdir() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_glob_wrong_args() {
+    expect_error("<?php glob();", "glob() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_sys_get_temp_dir_wrong_args() {
+    expect_error("<?php sys_get_temp_dir(1);", "sys_get_temp_dir() takes no arguments");
+}
+
+#[test]
+fn test_error_rewind_wrong_args() {
+    expect_error("<?php rewind();", "rewind() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_ftell_wrong_args() {
+    expect_error("<?php ftell();", "ftell() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_fseek_wrong_args() {
+    expect_error("<?php fseek(1);", "fseek() takes 2 or 3 arguments");
+}
+
+#[test]
+fn test_error_file_wrong_args() {
+    expect_error("<?php file();", "file() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_readline_wrong_args() {
+    expect_error(r#"<?php readline(1, 2);"#, "readline() takes 0 or 1 arguments");
+}
+
+#[test]
+fn test_error_fgetcsv_wrong_args() {
+    expect_error("<?php fgetcsv();", "fgetcsv() takes 1 to 3 arguments");
+}
+
+#[test]
+fn test_error_fputcsv_wrong_args() {
+    expect_error("<?php fputcsv(1);", "fputcsv() takes 2 to 4 arguments");
+}
