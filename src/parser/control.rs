@@ -77,11 +77,24 @@ pub fn parse_foreach(
     let array = parse_expr(tokens, pos)?;
     expect_token(tokens, pos, &Token::As, "Expected 'as' in foreach")?;
 
-    let value_var = match tokens.get(*pos).map(|(t, _)| t) {
+    let first_var = match tokens.get(*pos).map(|(t, _)| t) {
         Some(Token::Variable(n)) => n.clone(),
         _ => return Err(CompileError::new(span, "Expected variable after 'as'")),
     };
     *pos += 1;
+
+    // Check for => (foreach $arr as $key => $value)
+    let (key_var, value_var) = if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
+        *pos += 1;
+        let val_var = match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Variable(n)) => n.clone(),
+            _ => return Err(CompileError::new(span, "Expected variable after '=>'")),
+        };
+        *pos += 1;
+        (Some(first_var), val_var)
+    } else {
+        (None, first_var)
+    };
 
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after foreach")?;
     let body = parse_block(tokens, pos)?;
@@ -89,6 +102,7 @@ pub fn parse_foreach(
     Ok(Stmt::new(
         StmtKind::Foreach {
             array,
+            key_var,
             value_var,
             body,
         },
@@ -220,6 +234,71 @@ pub fn parse_assign_inline(
 
     let value = parse_expr(tokens, pos)?;
     Ok(Stmt::new(StmtKind::Assign { name, value }, span))
+}
+
+/// Parse: switch (expr) { case expr: stmts... case expr: stmts... default: stmts... }
+pub fn parse_switch(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1; // consume 'switch'
+    expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'switch'")?;
+    let subject = parse_expr(tokens, pos)?;
+    expect_token(tokens, pos, &Token::RParen, "Expected ')' after switch expression")?;
+    expect_token(tokens, pos, &Token::LBrace, "Expected '{' after switch")?;
+
+    let mut cases: Vec<(Vec<Expr>, Vec<Stmt>)> = Vec::new();
+    let mut default: Option<Vec<Stmt>> = None;
+
+    while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
+        if tokens[*pos].0 == Token::Case {
+            // Parse one or more case values
+            let mut values = Vec::new();
+            while *pos < tokens.len() && tokens[*pos].0 == Token::Case {
+                *pos += 1;
+                values.push(parse_expr(tokens, pos)?);
+                expect_token(tokens, pos, &Token::Colon, "Expected ':' after case value")?;
+            }
+            // Parse case body (statements until next case/default/})
+            let mut body = Vec::new();
+            while *pos < tokens.len()
+                && tokens[*pos].0 != Token::Case
+                && tokens[*pos].0 != Token::Default
+                && tokens[*pos].0 != Token::RBrace
+            {
+                body.push(crate::parser::stmt::parse_stmt(tokens, pos)?);
+            }
+            cases.push((values, body));
+        } else if tokens[*pos].0 == Token::Default {
+            *pos += 1;
+            expect_token(tokens, pos, &Token::Colon, "Expected ':' after 'default'")?;
+            let mut body = Vec::new();
+            while *pos < tokens.len()
+                && tokens[*pos].0 != Token::Case
+                && tokens[*pos].0 != Token::RBrace
+            {
+                body.push(crate::parser::stmt::parse_stmt(tokens, pos)?);
+            }
+            default = Some(body);
+        } else {
+            return Err(CompileError::new(
+                tokens[*pos].1,
+                "Expected 'case' or 'default' inside switch",
+            ));
+        }
+    }
+
+    expect_token(tokens, pos, &Token::RBrace, "Expected '}' to close switch")?;
+
+    Ok(Stmt::new(
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        },
+        span,
+    ))
 }
 
 fn expect_semicolon(tokens: &[(Token, Span)], pos: &mut usize) -> Result<(), CompileError> {

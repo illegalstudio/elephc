@@ -109,9 +109,9 @@ Make string handling practical.
 
 ## v0.6.0 — Associative arrays and switch
 
-- [ ] Associative arrays: `$map = ["key" => "value"];`
-- [ ] `foreach ($map as $key => $value) { }`
-- [ ] Hash table runtime for string keys
+- [x] Associative arrays: `$map = ["key" => "value"];`
+- [x] `foreach ($map as $key => $value) { }`
+- [x] Hash table runtime for string keys
 - [ ] `array_key_exists()`, `array_search()`
 - [ ] `array_merge()`, `array_slice()`, `array_splice()`
 - [ ] `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`
@@ -123,8 +123,8 @@ Make string handling practical.
 - [ ] `usort()`, `uksort()`, `uasort()`, `asort()`, `arsort()`, `ksort()`, `krsort()`
 - [ ] `natsort()`, `natcasesort()`, `shuffle()`, `array_rand()`
 - [ ] `range()`, `compact()`, `extract()`
-- [ ] `switch` / `case` / `default` (with fall-through)
-- [ ] `match` expression (PHP 8 style, no fall-through)
+- [x] `switch` / `case` / `default` (with fall-through)
+- [x] `match` expression (PHP 8 style, no fall-through)
 
 ## v0.7.0 — Advanced language features
 

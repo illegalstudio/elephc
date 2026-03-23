@@ -253,9 +253,13 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
         }
         Token::LBracket => {
             *pos += 1;
+            // Check if this is an associative array (first elem has =>)
             let mut elems = Vec::new();
+            let mut assoc_elems = Vec::new();
+            let mut is_assoc = false;
+            let mut first = true;
             while *pos < tokens.len() && tokens[*pos].0 != Token::RBracket {
-                if !elems.is_empty() {
+                if !first {
                     if tokens[*pos].0 != Token::Comma {
                         return Err(CompileError::new(tokens[*pos].1, "Expected ',' between array elements"));
                     }
@@ -265,13 +269,108 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                         break;
                     }
                 }
-                elems.push(parse_expr(tokens, pos)?);
+                let expr = parse_expr(tokens, pos)?;
+                // Check for => (associative array)
+                if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
+                    is_assoc = true;
+                    *pos += 1;
+                    let value = parse_expr(tokens, pos)?;
+                    assoc_elems.push((expr, value));
+                } else if is_assoc {
+                    return Err(CompileError::new(span, "Cannot mix associative and indexed array elements"));
+                } else {
+                    elems.push(expr);
+                }
+                first = false;
             }
             if *pos >= tokens.len() || tokens[*pos].0 != Token::RBracket {
                 return Err(CompileError::new(span, "Expected ']'"));
             }
             *pos += 1;
-            Ok(Expr::new(ExprKind::ArrayLiteral(elems), span))
+            if is_assoc {
+                Ok(Expr::new(ExprKind::ArrayLiteralAssoc(assoc_elems), span))
+            } else {
+                Ok(Expr::new(ExprKind::ArrayLiteral(elems), span))
+            }
+        }
+        Token::Match => {
+            *pos += 1;
+            // match (subject) { expr => result, ... }
+            if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
+                return Err(CompileError::new(span, "Expected '(' after 'match'"));
+            }
+            *pos += 1;
+            let subject = parse_expr(tokens, pos)?;
+            if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
+                return Err(CompileError::new(span, "Expected ')' after match subject"));
+            }
+            *pos += 1;
+            if *pos >= tokens.len() || tokens[*pos].0 != Token::LBrace {
+                return Err(CompileError::new(span, "Expected '{' after match subject"));
+            }
+            *pos += 1;
+            let mut arms = Vec::new();
+            let mut default = None;
+            while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
+                if tokens[*pos].0 == Token::Default {
+                    *pos += 1;
+                    if *pos >= tokens.len() || tokens[*pos].0 != Token::DoubleArrow {
+                        return Err(CompileError::new(span, "Expected '=>' after 'default'"));
+                    }
+                    *pos += 1;
+                    let result = parse_expr(tokens, pos)?;
+                    default = Some(Box::new(result));
+                    // optional trailing comma
+                    if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
+                        *pos += 1;
+                    }
+                } else {
+                    // Parse one or more patterns separated by commas before =>
+                    let mut patterns = Vec::new();
+                    loop {
+                        patterns.push(parse_expr(tokens, pos)?);
+                        if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
+                            // peek ahead to see if next token is => (then this comma separates patterns)
+                            // or if it's something else (then the arm ended)
+                            // Actually in PHP, comma before => separates multiple patterns for same arm
+                            // Check: is there a => coming after more expressions?
+                            // Simple approach: if after comma we see => then break, otherwise continue
+                            let saved = *pos;
+                            *pos += 1;
+                            if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
+                                *pos = saved; // undo — this comma is from between arms
+                                break;
+                            }
+                            // This comma separates patterns for the same arm
+                            // pos already advanced past comma, continue parsing next pattern
+                        } else {
+                            break;
+                        }
+                    }
+                    if *pos >= tokens.len() || tokens[*pos].0 != Token::DoubleArrow {
+                        return Err(CompileError::new(span, "Expected '=>' in match arm"));
+                    }
+                    *pos += 1;
+                    let result = parse_expr(tokens, pos)?;
+                    arms.push((patterns, result));
+                    // optional trailing comma
+                    if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
+                        *pos += 1;
+                    }
+                }
+            }
+            if *pos >= tokens.len() || tokens[*pos].0 != Token::RBrace {
+                return Err(CompileError::new(span, "Expected '}' to close match"));
+            }
+            *pos += 1;
+            Ok(Expr::new(
+                ExprKind::Match {
+                    subject: Box::new(subject),
+                    arms,
+                    default,
+                },
+                span,
+            ))
         }
         Token::Identifier(name) => {
             let name = name.clone();

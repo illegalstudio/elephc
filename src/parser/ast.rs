@@ -32,6 +32,12 @@ pub enum ExprKind {
         args: Vec<Expr>,
     },
     ArrayLiteral(Vec<Expr>),
+    ArrayLiteralAssoc(Vec<(Expr, Expr)>),
+    Match {
+        subject: Box<Expr>,
+        arms: Vec<(Vec<Expr>, Expr)>,
+        default: Option<Box<Expr>>,
+    },
     ArrayAccess {
         array: Box<Expr>,
         index: Box<Expr>,
@@ -169,8 +175,14 @@ pub enum StmtKind {
     },
     Foreach {
         array: Expr,
+        key_var: Option<String>,
         value_var: String,
         body: Vec<Stmt>,
+    },
+    Switch {
+        subject: Expr,
+        cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
+        default: Option<Vec<Stmt>>,
     },
     Include {
         path: String,

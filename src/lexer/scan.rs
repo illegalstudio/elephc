@@ -100,6 +100,7 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
                 if cursor.peek() == Some('=') { cursor.advance(); Ok(Token::EqualEqualEqual) }
                 else { Ok(Token::EqualEqual) }
             }
+            else if cursor.peek() == Some('>') { cursor.advance(); Ok(Token::DoubleArrow) }
             else { Ok(Token::Assign) }
         }
         '!' => {

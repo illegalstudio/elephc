@@ -68,7 +68,7 @@ if ($x === 3) {
 | `string` | `"hello\n"`, `'raw'` |
 | `bool` | `true`, `false` |
 | `null` | `null` |
-| `array` | `[1, 2, 3]` (indexed only) |
+| `array` | `[1, 2, 3]`, `["key" => "value"]` (indexed and associative) |
 
 ### Supported constructs
 
@@ -86,7 +86,9 @@ if ($x === 3) {
 | Ternary | `$x > 0 ? "yes" : "no"` |
 | If / elseif / else | `if (...) { } elseif (...) { } else { }` |
 | While / Do-while | `while (...) { }`, `do { } while (...);` |
-| For / Foreach | `for (;;) { }`, `foreach ($arr as $v) { }` |
+| For / Foreach | `for (;;) { }`, `foreach ($arr as $v) { }`, `foreach ($arr as $k => $v) { }` |
+| Switch | `switch ($x) { case 1: ...; break; default: ...; }` |
+| Match | `$r = match($x) { 1 => "one", default => "other" };` |
 | Break / Continue | `break;`, `continue;` |
 | Functions | `function foo($x) { return $x + 1; }` |
 | Include/Require | `include 'file.php';`, `require_once 'lib.php';` |
@@ -129,7 +131,7 @@ Six types, resolved at compile time:
 - **Str** — pointer + length pair
 - **Bool** — `true`/`false`, coerces to 0/1
 - **Null** — sentinel value, coerces to 0/""
-- **Array** — heap-allocated indexed array (homogeneous)
+- **Array** — heap-allocated indexed or associative array (hash table for string keys)
 
 A variable's type is set at first assignment. Compatible types (int/float/bool/null) can be reassigned between each other.
 
@@ -199,7 +201,7 @@ src/
 ## Tests
 
 ```bash
-cargo test                      # all tests (~619)
+cargo test                      # all tests (~661)
 cargo test test_my_feature      # run specific tests
 ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 ```

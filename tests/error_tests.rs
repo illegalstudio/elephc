@@ -559,3 +559,20 @@ fn test_error_fgetcsv_wrong_args() {
 fn test_error_fputcsv_wrong_args() {
     expect_error("<?php fputcsv(1);", "fputcsv() takes 2 to 4 arguments");
 }
+
+// --- v0.6: switch/match/array errors ---
+
+#[test]
+fn test_error_switch_missing_paren() {
+    expect_error("<?php switch $x {}", "Expected '(' after 'switch'");
+}
+
+#[test]
+fn test_error_match_missing_paren() {
+    expect_error("<?php $x = match $x {};", "Expected '(' after 'match'");
+}
+
+#[test]
+fn test_error_assoc_array_mixed() {
+    expect_error("<?php $a = [\"b\" => 2, 1];", "Cannot mix");
+}

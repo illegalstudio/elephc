@@ -11,7 +11,7 @@ This document describes the PHP subset supported by elephc. Every program listed
 | `null` | Yes | Sentinel value, coerces to `0`/`""` in operations |
 | `bool` | Yes | `true`/`false` as distinct type. `echo false` prints nothing, `echo true` prints `1`. Coerces to 0/1 in arithmetic. |
 | `float` | Yes | 64-bit double-precision. Literals: `3.14`, `.5`, `1.5e3`, `1.0e-5`. Constants: `INF`, `NAN`. |
-| `array` | Partial | Indexed arrays only. No associative arrays. |
+| `array` | Yes | Indexed (`[1, 2, 3]`) and associative (`["key" => "value"]`). Hash table runtime for string keys. |
 | `object` | No | Not planned (no OOP support). |
 | `resource` | No | Not planned. |
 
@@ -176,9 +176,18 @@ $arr = [1, 2, 3];
 foreach ($arr as $value) {
     echo $value . "\n";
 }
-```
 
-**Not supported yet:** `foreach ($arr as $key => $value)`.
+// With key binding (indexed arrays)
+foreach ($arr as $i => $value) {
+    echo "$i: $value\n";
+}
+
+// With key binding (associative arrays)
+$map = ["name" => "Alice", "age" => "30"];
+foreach ($map as $key => $value) {
+    echo "$key = $value\n";
+}
+```
 
 ### break / continue
 
@@ -194,9 +203,61 @@ for ($i = 0; $i < 100; $i++) {
 
 **Not supported:** `break 2;` / `continue 2;` (multi-level).
 
-### switch / match
+### switch / case / default
 
-**Not supported yet.** Use `if`/`elseif`/`else` instead.
+Standard PHP switch with fall-through semantics. Use `break` to prevent fall-through.
+
+```php
+<?php
+$x = 2;
+switch ($x) {
+    case 1:
+        echo "one";
+        break;
+    case 2:
+        echo "two";
+        break;
+    case 3:
+        echo "three";
+        break;
+    default:
+        echo "other";
+        break;
+}
+// Output: two
+```
+
+Fall-through (no `break`) executes subsequent cases:
+
+```php
+<?php
+$x = 1;
+switch ($x) {
+    case 1:
+    case 2:
+        echo "one or two";
+        break;
+    default:
+        echo "other";
+}
+// Output: one or two
+```
+
+### match expression
+
+PHP 8 style match expression. No fall-through, returns a value, uses strict comparison (`===`).
+
+```php
+<?php
+$x = 2;
+$result = match($x) {
+    1 => "one",
+    2 => "two",
+    3 => "three",
+    default => "other",
+};
+echo $result; // two
+```
 
 ## Functions
 
@@ -332,10 +393,25 @@ foreach ($names as $name) {
 }
 ```
 
+### Associative arrays
+
+```php
+<?php
+$map = ["name" => "Alice", "city" => "Paris"];
+echo $map["name"];       // Alice
+
+$map["age"] = "30";      // add new key
+echo $map["age"];         // 30
+
+foreach ($map as $key => $value) {
+    echo "$key: $value\n";
+}
+```
+
+Associative arrays use a hash table runtime for string keys. Keys are always strings; values must all be the same type.
+
 ### Limitations
 
-- No associative arrays (`["key" => "value"]` — not supported)
-- No `foreach ($arr as $key => $value)` (key binding)
 - No multi-dimensional arrays
 - No array union operator (`+`)
 - Arrays are homogeneous: all elements must be the same type

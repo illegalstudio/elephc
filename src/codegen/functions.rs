@@ -65,7 +65,7 @@ pub fn emit_function(
                 int_reg_idx += 2;
             }
             PhpType::Void => {}
-            PhpType::Array(_) => {
+            PhpType::Array(_) | PhpType::AssocArray { .. } => {
                 emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
                 emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx, offset)); // save array heap ptr
                 int_reg_idx += 1;
@@ -109,7 +109,12 @@ pub fn collect_local_vars(
                     collect_local_vars(body, ctx, sig);
                 }
             }
-            StmtKind::Foreach { value_var, body, array, .. } => {
+            StmtKind::Foreach { value_var, body, array, key_var, .. } => {
+                if let Some(k) = key_var {
+                    if !ctx.variables.contains_key(k) {
+                        ctx.alloc_var(k, PhpType::Int);
+                    }
+                }
                 if !ctx.variables.contains_key(value_var) {
                     let elem_ty = match infer_local_type(array, sig) {
                         PhpType::Array(t) => *t,
@@ -118,6 +123,14 @@ pub fn collect_local_vars(
                     ctx.alloc_var(value_var, elem_ty);
                 }
                 collect_local_vars(body, ctx, sig);
+            }
+            StmtKind::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    collect_local_vars(body, ctx, sig);
+                }
+                if let Some(body) = default {
+                    collect_local_vars(body, ctx, sig);
+                }
             }
             StmtKind::ArrayAssign { .. } | StmtKind::ArrayPush { .. } => {}
             StmtKind::DoWhile { body, .. } | StmtKind::While { body, .. } => {

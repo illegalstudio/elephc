@@ -1,5 +1,5 @@
 use elephc::lexer::tokenize;
-use elephc::parser::ast::{BinOp, Expr, Stmt, StmtKind};
+use elephc::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
 use elephc::parser::parse;
 
 fn parse_source(src: &str) -> Vec<Stmt> {
@@ -414,4 +414,53 @@ fn test_float_literal() {
 fn test_negative_float() {
     let stmts = parse_source("<?php echo -3.14;");
     assert_eq!(stmts, vec![Stmt::echo(Expr::negate(Expr::float_lit(3.14)))]);
+}
+
+// --- Associative arrays ---
+
+#[test]
+fn test_parse_assoc_array() {
+    let stmts = parse_source("<?php $m = [\"a\" => 1];");
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Assign { value, .. } = &stmts[0].kind {
+        assert!(matches!(&value.kind, ExprKind::ArrayLiteralAssoc(_)));
+    } else {
+        panic!("expected Assign");
+    }
+}
+
+// --- Switch ---
+
+#[test]
+fn test_parse_switch() {
+    let stmts = parse_source("<?php switch ($x) { case 1: echo \"one\"; break; default: echo \"other\"; }");
+    assert_eq!(stmts.len(), 1);
+    assert!(matches!(&stmts[0].kind, StmtKind::Switch { .. }));
+}
+
+// --- Match ---
+
+#[test]
+fn test_parse_match() {
+    let stmts = parse_source("<?php $x = match(1) { 1 => \"a\" };");
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Assign { value, .. } = &stmts[0].kind {
+        assert!(matches!(&value.kind, ExprKind::Match { .. }));
+    } else {
+        panic!("expected Assign containing Match");
+    }
+}
+
+// --- Foreach with key => value ---
+
+#[test]
+fn test_parse_foreach_key_value() {
+    let stmts = parse_source("<?php foreach ($a as $k => $v) {}");
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Foreach { key_var, value_var, .. } = &stmts[0].kind {
+        assert_eq!(key_var, &Some("k".to_string()));
+        assert_eq!(value_var, "v");
+    } else {
+        panic!("expected Foreach");
+    }
 }

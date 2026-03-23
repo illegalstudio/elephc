@@ -20,7 +20,7 @@ pub fn emit(
         PhpType::Str => "string",
         PhpType::Bool => "boolean",
         PhpType::Void => "NULL",
-        PhpType::Array(_) => "array",
+        PhpType::Array(_) | PhpType::AssocArray { .. } => "array",
     };
     // -- load pointer and length of type name string --
     let (label, len) = data.add_string(type_str.as_bytes());

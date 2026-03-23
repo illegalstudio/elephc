@@ -40,7 +40,7 @@ pub fn emit(
             emitter.instruction("cmp x2, #0");                                  // compare string length against zero
             emitter.instruction("cset x0, eq");                                 // x0 = 1 if empty string, 0 otherwise
         }
-        PhpType::Array(_) => {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
             // -- array is empty if element count is zero --
             emitter.instruction("ldr x0, [x0]");                                // load array element count from header
             emitter.instruction("cmp x0, #0");                                  // compare element count against zero

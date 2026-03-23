@@ -80,6 +80,10 @@ pub fn emit_expr(
             }
         }
         ExprKind::ArrayLiteral(elems) => emit_array_literal(elems, emitter, ctx, data),
+        ExprKind::ArrayLiteralAssoc(pairs) => emit_assoc_array_literal(pairs, emitter, ctx, data),
+        ExprKind::Match { subject, arms, default } => {
+            emit_match_expr(subject, arms, default, emitter, ctx, data)
+        }
         ExprKind::ArrayAccess { array, index } => {
             emit_array_access(array, index, emitter, ctx, data)
         }
@@ -226,6 +230,150 @@ fn emit_array_literal(
     PhpType::Array(Box::new(elem_ty))
 }
 
+fn emit_assoc_array_literal(
+    pairs: &[(Expr, Expr)],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    emitter.comment("assoc array literal");
+
+    // -- determine value type from first pair --
+    let value_type_tag = match &pairs[0].1.kind {
+        ExprKind::StringLiteral(_) => 1,
+        ExprKind::FloatLiteral(_) => 2,
+        ExprKind::BoolLiteral(_) => 3,
+        _ => 0, // int
+    };
+
+    // -- create hash table --
+    emitter.instruction(&format!(                                               // initial capacity: max of pair count*2 or 16
+        "mov x0, #{}",
+        std::cmp::max(pairs.len() * 2, 16)
+    ));
+    emitter.instruction(&format!("mov x1, #{}", value_type_tag));               // value type tag
+    emitter.instruction("bl __rt_hash_new");                                    // create hash table → x0=ptr
+    emitter.instruction("str x0, [sp, #-16]!");                                 // save hash table pointer
+
+    let mut val_ty = PhpType::Int;
+    for pair in pairs {
+        // -- evaluate key --
+        emit_expr(&pair.0, emitter, ctx, data);
+        // key is a string → x1/x2
+        emitter.instruction("stp x1, x2, [sp, #-16]!");                         // save key ptr/len
+        // -- evaluate value --
+        let ty = emit_expr(&pair.1, emitter, ctx, data);
+        val_ty = ty.clone();
+        // -- prepare args for hash_set --
+        let (val_lo, val_hi) = match &ty {
+            PhpType::Int | PhpType::Bool => ("x0", "xzr"),
+            PhpType::Str => ("x1", "x2"),
+            PhpType::Float => {
+                emitter.instruction("fmov x9, d0");                             // move float bits to integer register
+                ("x9", "xzr")
+            }
+            _ => ("x0", "xzr"),
+        };
+        emitter.instruction(&format!("mov x3, {}", val_lo));                    // value_lo
+        emitter.instruction(&format!("mov x4, {}", val_hi));                    // value_hi
+        emitter.instruction("ldp x1, x2, [sp], #16");                           // pop key ptr/len
+        emitter.instruction("ldr x0, [sp]");                                    // peek hash table pointer
+        emitter.instruction("bl __rt_hash_set");                                // insert key-value pair
+    }
+
+    // -- return hash table pointer --
+    emitter.instruction("ldr x0, [sp], #16");                                   // pop hash table pointer into x0
+
+    let key_ty = match &pairs[0].0.kind {
+        ExprKind::IntLiteral(_) => PhpType::Int,
+        _ => PhpType::Str,
+    };
+
+    PhpType::AssocArray {
+        key: Box::new(key_ty),
+        value: Box::new(val_ty),
+    }
+}
+
+fn emit_match_expr(
+    subject: &Expr,
+    arms: &[(Vec<Expr>, Expr)],
+    default: &Option<Box<Expr>>,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    emitter.comment("match expression");
+    let subj_ty = emit_expr(subject, emitter, ctx, data);
+    // -- save subject value --
+    match &subj_ty {
+        PhpType::Str => {
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // save string subject
+        }
+        PhpType::Float => {
+            emitter.instruction("str d0, [sp, #-16]!");                         // save float subject
+        }
+        _ => {
+            emitter.instruction("str x0, [sp, #-16]!");                         // save int/bool subject
+        }
+    }
+
+    let end_label = ctx.next_label("match_end");
+    let mut result_ty = PhpType::Void;
+
+    // -- generate comparison for each arm --
+    for (patterns, result) in arms {
+        let arm_label = ctx.next_label("match_arm");
+        let next_arm = ctx.next_label("match_next");
+
+        for (i, pattern) in patterns.iter().enumerate() {
+            let pat_ty = emit_expr(pattern, emitter, ctx, data);
+            // -- reload subject for comparison --
+            match &subj_ty {
+                PhpType::Str => {
+                    // pattern result in x1/x2, subject on stack
+                    emitter.instruction("mov x3, x1");                          // move pattern ptr to x3
+                    emitter.instruction("mov x4, x2");                          // move pattern len to x4
+                    emitter.instruction("ldp x1, x2, [sp]");                    // peek subject string
+                    emitter.instruction("bl __rt_str_eq");                      // compare strings → x0=1 if equal
+                }
+                PhpType::Float => {
+                    emitter.instruction("ldr d1, [sp]");                        // peek subject float
+                    emitter.instruction("fcmp d1, d0");                         // compare floats
+                    emitter.instruction("cset x0, eq");                         // x0=1 if equal
+                }
+                _ => {
+                    emitter.instruction("ldr x9, [sp]");                        // peek subject int/bool
+                    emitter.instruction("cmp x9, x0");                          // compare integers
+                    emitter.instruction("cset x0, eq");                         // x0=1 if equal
+                }
+            }
+            emitter.instruction(&format!("cbnz x0, {}", arm_label));            // if matched, jump to arm body
+            if i == patterns.len() - 1 {
+                emitter.instruction(&format!("b {}", next_arm));                // no pattern matched → try next arm
+            }
+            let _ = pat_ty;
+        }
+
+        emitter.label(&arm_label);
+        result_ty = emit_expr(result, emitter, ctx, data);
+        emitter.instruction(&format!("b {}", end_label));                       // jump to end after evaluating arm
+
+        emitter.label(&next_arm);
+    }
+
+    // -- default arm --
+    if let Some(def) = default {
+        result_ty = emit_expr(def, emitter, ctx, data);
+    }
+
+    emitter.label(&end_label);
+    // -- pop saved subject --
+    emitter.instruction("add sp, sp, #16");                                     // deallocate subject save slot
+
+    result_ty
+}
+
 fn emit_array_access(
     array: &Expr,
     index: &Expr,
@@ -234,6 +382,40 @@ fn emit_array_access(
     data: &mut DataSection,
 ) -> PhpType {
     let arr_ty = emit_expr(array, emitter, ctx, data);
+
+    // -- check if this is an associative array access --
+    if let PhpType::AssocArray { value, .. } = &arr_ty {
+        let val_ty = *value.clone();
+        // -- save hash table pointer, evaluate key expression --
+        emitter.instruction("str x0, [sp, #-16]!");                             // push hash table pointer
+        let _key_ty = emit_expr(index, emitter, ctx, data);
+        // key is in x1/x2 (string)
+        emitter.instruction("mov x3, x1");                                      // move key ptr to x3 (temp)
+        emitter.instruction("mov x4, x2");                                      // move key len to x4 (temp)
+        emitter.instruction("ldr x0, [sp], #16");                               // pop hash table pointer
+        emitter.instruction("mov x1, x3");                                      // key ptr
+        emitter.instruction("mov x2, x4");                                      // key len
+        emitter.comment("assoc array access");
+        emitter.instruction("bl __rt_hash_get");                                // lookup key → x0=found, x1=val_lo, x2=val_hi
+        // Result is in x1/x2 (for strings) or x1 (for ints)
+        match &val_ty {
+            PhpType::Int | PhpType::Bool => {
+                emitter.instruction("mov x0, x1");                              // move value to x0
+            }
+            PhpType::Str => {
+                // x1=ptr, x2=len already set by hash_get
+            }
+            PhpType::Float => {
+                emitter.instruction("fmov d0, x1");                             // move bits to float register
+            }
+            _ => {
+                emitter.instruction("mov x0, x1");                              // move value to x0
+            }
+        }
+        return val_ty;
+    }
+
+    // -- indexed array access (existing code) --
     // -- save array pointer, evaluate index expression --
     emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer while evaluating index
     emit_expr(index, emitter, ctx, data);
@@ -292,7 +474,7 @@ pub fn coerce_to_string(emitter: &mut Emitter, ty: &PhpType) {
             // -- null coerces to empty string in PHP --
             emitter.instruction("mov x2, #0");                                  // null produces empty string (length = 0)
         }
-        PhpType::Str | PhpType::Array(_) => {}
+        PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. } => {}
     }
 }
 
@@ -532,7 +714,7 @@ fn emit_function_call(
         let ty = emit_expr(arg, emitter, ctx, data);
         // -- save each evaluated argument on stack --
         match &ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) => {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } => {
                 emitter.instruction("str x0, [sp, #-16]!");                     // push int/bool/array-ptr arg onto stack
             }
             PhpType::Float => {
@@ -564,7 +746,7 @@ fn emit_function_call(
     for i in (0..args.len()).rev() {
         let (ty, start_reg, is_float) = &assignments[i];
         match ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) => {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } => {
                 emitter.instruction(&format!(                                   // pop int/bool/array arg into register
                     "ldr x{}, [sp], #16",
                     start_reg
@@ -624,7 +806,7 @@ fn emit_cast(
                     // -- parse string as integer --
                     emitter.instruction("bl __rt_atoi");                        // runtime: ASCII string to integer conversion
                 }
-                PhpType::Array(_) => {
+                PhpType::Array(_) | PhpType::AssocArray { .. } => {
                     // -- (int)array returns element count --
                     emitter.instruction("ldr x0, [x0]");                        // load array length from header (first field)
                 }
@@ -643,7 +825,7 @@ fn emit_cast(
                     emitter.instruction("mov x0, #0");                          // load zero integer
                     emitter.instruction("scvtf d0, x0");                        // convert to 0.0 double
                 }
-                PhpType::Str | PhpType::Array(_) => {
+                PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. } => {
                     // -- unsupported source type: default to 0.0 --
                     emitter.instruction("mov x0, #0");                          // load zero integer
                     emitter.instruction("scvtf d0, x0");                        // convert to 0.0 double
@@ -675,7 +857,7 @@ fn emit_cast(
                     emitter.instruction("cmp x2, #0");                          // check if string length is zero
                     emitter.instruction("cset x0, ne");                         // x0=1 if non-empty, 0 if empty
                 }
-                PhpType::Array(_) => {
+                PhpType::Array(_) | PhpType::AssocArray { .. } => {
                     // empty array → false
                     // -- convert array to boolean based on element count --
                     emitter.instruction("ldr x0, [x0]");                        // load array length from header
@@ -688,7 +870,7 @@ fn emit_cast(
         CastType::Array => {
             // Wrap scalar in single-element array
             match &src_ty {
-                PhpType::Array(_) => { return src_ty; }
+                PhpType::Array(_) | PhpType::AssocArray { .. } => { return src_ty; }
                 PhpType::Int | PhpType::Bool => {
                     // -- wrap scalar in a new single-element array --
                     emitter.instruction("str x0, [sp, #-16]!");                 // save scalar value during allocation
@@ -786,7 +968,7 @@ fn emit_strict_compare(
                     emitter.instruction("eor x0, x0, #1");                      // invert result for !== (XOR with 1)
                 }
             }
-            PhpType::Array(_) => {
+            PhpType::Array(_) | PhpType::AssocArray { .. } => {
                 // -- strict compare arrays by reference (pointer equality) --
                 emitter.instruction("ldr x1, [sp], #16");                       // pop saved left array pointer
                 emitter.instruction("cmp x1, x0");                              // compare array pointers (reference equality)

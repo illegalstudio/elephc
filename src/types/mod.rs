@@ -13,6 +13,10 @@ pub enum PhpType {
     Bool,
     Void,
     Array(Box<PhpType>),
+    AssocArray {
+        key: Box<PhpType>,
+        value: Box<PhpType>,
+    },
 }
 
 impl PhpType {
@@ -25,6 +29,7 @@ impl PhpType {
             PhpType::Str => 16,
             PhpType::Void => 8, // null sentinel stored as 8 bytes
             PhpType::Array(_) => 8, // pointer to heap
+            PhpType::AssocArray { .. } => 8, // pointer to heap
         }
     }
 
@@ -37,6 +42,7 @@ impl PhpType {
             PhpType::Str => 2,
             PhpType::Void => 0,
             PhpType::Array(_) => 1,
+            PhpType::AssocArray { .. } => 1,
         }
     }
 

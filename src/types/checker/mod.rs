@@ -115,15 +115,40 @@ impl Checker {
                 }
                 Ok(())
             }
-            StmtKind::Foreach { array, value_var, body } => {
+            StmtKind::Foreach { array, key_var, value_var, body } => {
                 let arr_ty = self.infer_type(array, env)?;
-                if let PhpType::Array(elem_ty) = arr_ty {
-                    env.insert(value_var.clone(), *elem_ty);
+                if let PhpType::Array(elem_ty) = &arr_ty {
+                    if let Some(k) = key_var {
+                        env.insert(k.clone(), PhpType::Int);
+                    }
+                    env.insert(value_var.clone(), *elem_ty.clone());
+                } else if let PhpType::AssocArray { key, value } = &arr_ty {
+                    if let Some(k) = key_var {
+                        env.insert(k.clone(), *key.clone());
+                    }
+                    env.insert(value_var.clone(), *value.clone());
                 } else {
                     return Err(CompileError::new(stmt.span, "foreach requires an array"));
                 }
                 for s in body {
                     self.check_stmt(s, env)?;
+                }
+                Ok(())
+            }
+            StmtKind::Switch { subject, cases, default } => {
+                self.infer_type(subject, env)?;
+                for (values, body) in cases {
+                    for v in values {
+                        self.infer_type(v, env)?;
+                    }
+                    for s in body {
+                        self.check_stmt(s, env)?;
+                    }
+                }
+                if let Some(body) = default {
+                    for s in body {
+                        self.check_stmt(s, env)?;
+                    }
                 }
                 Ok(())
             }
@@ -210,6 +235,55 @@ impl Checker {
                     )),
                 }
             }
+            ExprKind::ArrayLiteralAssoc(pairs) => {
+                if pairs.is_empty() {
+                    return Err(CompileError::new(
+                        expr.span, "Cannot infer type of empty associative array literal",
+                    ));
+                }
+                let key_ty = self.infer_type(&pairs[0].0, env)?;
+                let val_ty = self.infer_type(&pairs[0].1, env)?;
+                for (k, v) in &pairs[1..] {
+                    let kt = self.infer_type(k, env)?;
+                    let vt = self.infer_type(v, env)?;
+                    if kt != key_ty {
+                        return Err(CompileError::new(
+                            k.span,
+                            &format!("Assoc array key type mismatch: expected {:?}, got {:?}", key_ty, kt),
+                        ));
+                    }
+                    if vt != val_ty {
+                        return Err(CompileError::new(
+                            v.span,
+                            &format!("Assoc array value type mismatch: expected {:?}, got {:?}", val_ty, vt),
+                        ));
+                    }
+                }
+                Ok(PhpType::AssocArray {
+                    key: Box::new(key_ty),
+                    value: Box::new(val_ty),
+                })
+            }
+            ExprKind::Match { subject, arms, default } => {
+                self.infer_type(subject, env)?;
+                let mut result_ty = None;
+                for (conditions, result) in arms {
+                    for c in conditions {
+                        self.infer_type(c, env)?;
+                    }
+                    let ty = self.infer_type(result, env)?;
+                    if result_ty.is_none() {
+                        result_ty = Some(ty);
+                    }
+                }
+                if let Some(d) = default {
+                    let ty = self.infer_type(d, env)?;
+                    if result_ty.is_none() {
+                        result_ty = Some(ty);
+                    }
+                }
+                Ok(result_ty.unwrap_or(PhpType::Void))
+            }
             ExprKind::ArrayLiteral(elems) => {
                 if elems.is_empty() {
                     return Err(CompileError::new(
@@ -231,11 +305,17 @@ impl Checker {
             ExprKind::ArrayAccess { array, index } => {
                 let arr_ty = self.infer_type(array, env)?;
                 let idx_ty = self.infer_type(index, env)?;
-                if idx_ty != PhpType::Int {
-                    return Err(CompileError::new(expr.span, "Array index must be integer"));
-                }
-                match arr_ty {
-                    PhpType::Array(elem_ty) => Ok(*elem_ty),
+                match &arr_ty {
+                    PhpType::Array(elem_ty) => {
+                        if idx_ty != PhpType::Int {
+                            return Err(CompileError::new(expr.span, "Array index must be integer"));
+                        }
+                        Ok(*elem_ty.clone())
+                    }
+                    PhpType::AssocArray { value, .. } => {
+                        // Assoc arrays accept string or int keys
+                        Ok(*value.clone())
+                    }
                     _ => Err(CompileError::new(expr.span, "Cannot index non-array")),
                 }
             }

@@ -182,7 +182,7 @@ impl Checker {
                     return Err(CompileError::new(span, "count() takes exactly 1 argument"));
                 }
                 let ty = self.infer_type(&args[0], env)?;
-                if !matches!(ty, PhpType::Array(_)) {
+                if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
                     return Err(CompileError::new(span, "count() argument must be array"));
                 }
                 Ok(Some(PhpType::Int))
@@ -194,6 +194,7 @@ impl Checker {
                 let ty = self.infer_type(&args[0], env)?;
                 match ty {
                     PhpType::Array(elem_ty) => Ok(Some(*elem_ty)),
+                    PhpType::AssocArray { value, .. } => Ok(Some(*value)),
                     _ => Err(CompileError::new(span, "array_pop() argument must be array")),
                 }
             }
@@ -203,7 +204,7 @@ impl Checker {
                 }
                 self.infer_type(&args[0], env)?;
                 let arr_ty = self.infer_type(&args[1], env)?;
-                if !matches!(arr_ty, PhpType::Array(_)) {
+                if !matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
                     return Err(CompileError::new(span, "in_array() second argument must be array"));
                 }
                 Ok(Some(PhpType::Int))
@@ -219,8 +220,14 @@ impl Checker {
                     ("array_keys", PhpType::Array(_)) => {
                         Ok(Some(PhpType::Array(Box::new(PhpType::Int))))
                     }
+                    ("array_keys", PhpType::AssocArray { key, .. }) => {
+                        Ok(Some(PhpType::Array(key.clone())))
+                    }
                     ("array_values", PhpType::Array(elem_ty)) => {
                         Ok(Some(PhpType::Array(elem_ty.clone())))
+                    }
+                    ("array_values", PhpType::AssocArray { value, .. }) => {
+                        Ok(Some(PhpType::Array(value.clone())))
                     }
                     _ => Err(CompileError::new(
                         span, &format!("{}() argument must be array", name),
@@ -234,7 +241,7 @@ impl Checker {
                     ));
                 }
                 let ty = self.infer_type(&args[0], env)?;
-                if !matches!(ty, PhpType::Array(_)) {
+                if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
                     return Err(CompileError::new(
                         span, &format!("{}() argument must be array", name),
                     ));

@@ -41,6 +41,10 @@ pub enum Token {
     PhpFloatMax,
     MPi,
     Print,
+    Switch,
+    Case,
+    Default,
+    Match,
     Include,
     IncludeOnce,
     Require,
@@ -51,6 +55,7 @@ pub enum Token {
 
     // Operators
     Assign,         // =
+    DoubleArrow,    // =>
     Plus,           // +
     Minus,          // -
     Star,           // *

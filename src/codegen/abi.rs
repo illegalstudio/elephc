@@ -25,7 +25,7 @@ pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
         PhpType::Void => {
             emitter.instruction(&format!("stur x0, [x29, #-{}]", offset));      // store null sentinel
         }
-        PhpType::Array(_) => {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
             emitter.instruction(&format!("stur x0, [x29, #-{}]", offset));      // store array heap pointer
         }
     }
@@ -49,7 +49,7 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
         PhpType::Void => {
             emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));      // load null sentinel
         }
-        PhpType::Array(_) => {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
             emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));      // load array heap pointer
         }
     }
@@ -84,6 +84,6 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
             emitter.instruction("mov x16, #4");                                 // syscall 4 = write
             emitter.instruction("svc #0x80");                                   // invoke kernel
         }
-        PhpType::Void | PhpType::Array(_) => {}                                 // null/array: nothing to print
+        PhpType::Void | PhpType::Array(_) | PhpType::AssocArray { .. } => {}      // null/array: nothing to print
     }
 }

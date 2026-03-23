@@ -452,3 +452,35 @@ fn test_stderr_token() {
     let t = tokens("<?php STDERR;");
     assert_eq!(t[1], Token::Stderr);
 }
+
+// --- v0.6: Arrays, switch, match ---
+
+#[test]
+fn test_double_arrow_token() {
+    let t = tokens("<?php [1 => 2];");
+    assert!(t.contains(&Token::DoubleArrow));
+}
+
+#[test]
+fn test_switch_token() {
+    let t = tokens("<?php switch ($x) {}");
+    assert_eq!(t[1], Token::Switch);
+}
+
+#[test]
+fn test_case_token() {
+    let t = tokens("<?php case 1:");
+    assert_eq!(t[1], Token::Case);
+}
+
+#[test]
+fn test_default_token() {
+    let t = tokens("<?php default:");
+    assert_eq!(t[1], Token::Default);
+}
+
+#[test]
+fn test_match_token() {
+    let t = tokens("<?php match($x) {}");
+    assert_eq!(t[1], Token::Match);
+}

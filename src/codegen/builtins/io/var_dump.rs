@@ -155,7 +155,7 @@ pub fn emit(
             emitter.instruction("mov x16, #4");                                 // syscall write
             emitter.instruction("svc #0x80");                                   // invoke kernel
         }
-        PhpType::Array(elem_ty) => {
+        PhpType::Array(elem_ty) | PhpType::AssocArray { value: elem_ty, .. } => {
             // -- print simplified array dump --
             let (pre, pre_len) = data.add_string(b"array(");
             emitter.instruction("str x0, [sp, #-16]!");                         // save array pointer
