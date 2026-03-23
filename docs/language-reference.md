@@ -282,13 +282,13 @@ echo 'It\'s here';   // prints: It's here
 
 ### String interpolation
 
-**Not supported yet.** Use concatenation:
+Variable interpolation in double-quoted strings:
 
 ```php
 <?php
 $name = "World";
-echo "Hello, " . $name . "\n";  // works
-// echo "Hello, $name\n";       // NOT supported yet
+echo "Hello, $name\n";          // prints: Hello, World
+echo "Hello, " . $name . "\n";  // also works (concatenation)
 ```
 
 ## Arrays

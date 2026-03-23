@@ -67,7 +67,7 @@ Proper type system for PHP compatibility.
 
 Make string handling practical.
 
-- [ ] String interpolation: `"Hello $name"`, `"val={$expr}"`
+- [x] String interpolation: `"Hello $name"`
 - [x] `substr()`, `strpos()`, `strrpos()`, `strstr()`
 - [x] `str_replace()`
 - [x] `str_ireplace()`, `substr_replace()`
@@ -78,17 +78,18 @@ Make string handling practical.
 - [x] `str_pad()`
 - [x] `explode()`, `implode()`
 - [x] `str_split()`
-- [ ] `sprintf()`, `printf()`, `sscanf()`
+- [x] `sprintf()`, `printf()`
+- [ ] `sscanf()`
 - [x] `strcmp()`, `strcasecmp()`, `str_contains()`, `str_starts_with()`, `str_ends_with()`
 - [x] `ord()`, `chr()`
 - [x] `nl2br()`, `wordwrap()`
 - [x] `addslashes()`, `stripslashes()`
-- [ ] `htmlspecialchars()`, `htmlentities()`, `html_entity_decode()`
-- [ ] `urlencode()`, `urldecode()`, `rawurlencode()`, `rawurldecode()`
+- [x] `htmlspecialchars()`, `htmlentities()`, `html_entity_decode()`
+- [x] `urlencode()`, `urldecode()`, `rawurlencode()`, `rawurldecode()`
 - [ ] `md5()`, `sha1()`, `hash()`
-- [ ] `base64_encode()`, `base64_decode()`
+- [x] `base64_encode()`, `base64_decode()`
 - [x] `bin2hex()`, `hex2bin()`
-- [ ] `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, `ctype_space()`
+- [x] `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, `ctype_space()`
 
 ## v0.5.0 — I/O and file system
 

@@ -29,8 +29,14 @@ pub fn scan_tokens(source: &str) -> Result<Vec<(Token, Span)>, CompileError> {
         }
 
         let span = cursor.span();
-        let token = scan_token(&mut cursor)?;
-        tokens.push((token, span));
+        if cursor.peek() == Some('"') {
+            // Double-quoted strings may contain interpolation ($var)
+            let string_tokens = literals::scan_double_string_interpolated(&mut cursor)?;
+            tokens.extend(string_tokens);
+        } else {
+            let token = scan_token(&mut cursor)?;
+            tokens.push((token, span));
+        }
     }
 
     Ok(tokens)
@@ -169,7 +175,7 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
             if cursor.peek() == Some('=') { cursor.advance(); Ok(Token::DotAssign) }
             else { Ok(Token::Dot) }
         }
-        '"' => literals::scan_double_string(cursor),
+        // '"' is handled in the main loop (interpolation support)
         '\'' => literals::scan_single_string(cursor),
         '$' => literals::scan_variable(cursor),
         '0'..='9' => literals::scan_number(cursor),

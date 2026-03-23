@@ -418,6 +418,40 @@ impl Checker {
                 self.infer_type(&args[0], env)?;
                 Ok(Some(PhpType::Bool))
             }
+            "sprintf" => {
+                if args.is_empty() {
+                    return Err(CompileError::new(span, "sprintf() requires at least 1 argument"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                Ok(Some(PhpType::Str))
+            }
+            "printf" => {
+                if args.is_empty() {
+                    return Err(CompileError::new(span, "printf() requires at least 1 argument"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                Ok(Some(PhpType::Int))
+            }
+            "htmlspecialchars" | "htmlentities" | "html_entity_decode"
+            | "urlencode" | "urldecode" | "rawurlencode" | "rawurldecode"
+            | "base64_encode" | "base64_decode" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(
+                        span, &format!("{}() takes exactly 1 argument", name),
+                    ));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Str))
+            }
+            "ctype_alpha" | "ctype_digit" | "ctype_alnum" | "ctype_space" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(
+                        span, &format!("{}() takes exactly 1 argument", name),
+                    ));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Bool))
+            }
             _ => Ok(None),
         }
     }

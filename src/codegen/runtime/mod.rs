@@ -41,6 +41,14 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     strings::emit_wordwrap(emitter);
     strings::emit_bin2hex(emitter);
     strings::emit_hex2bin(emitter);
+    strings::emit_htmlspecialchars(emitter);
+    strings::emit_html_entity_decode(emitter);
+    strings::emit_urlencode(emitter);
+    strings::emit_urldecode(emitter);
+    strings::emit_rawurlencode(emitter);
+    strings::emit_base64_encode(emitter);
+    strings::emit_base64_decode(emitter);
+    strings::emit_sprintf(emitter);
 
     // System runtime functions
     system::emit_build_argv(emitter);
@@ -63,5 +71,21 @@ pub fn emit_runtime_data() -> String {
     out.push_str(".comm _heap_buf, 1048576, 3\n");
     out.push_str(".comm _heap_off, 8, 3\n");
     out.push_str("_fmt_g:\n    .asciz \"%.14G\"\n");
+    // Base64 encode lookup table (A-Z, a-z, 0-9, +, /)
+    out.push_str("_b64_encode_tbl:\n    .ascii \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\"\n");
+    // Base64 decode lookup table (256 bytes, maps ASCII value to 6-bit value)
+    out.push_str("_b64_decode_tbl:\n");
+    let mut decode_tbl = vec![0u8; 256];
+    for (i, &c) in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".iter().enumerate() {
+        decode_tbl[c as usize] = i as u8;
+    }
+    out.push_str("    .byte ");
+    for (i, val) in decode_tbl.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&val.to_string());
+    }
+    out.push('\n');
     out
 }

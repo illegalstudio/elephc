@@ -1,8 +1,17 @@
 mod addslashes;
+mod base64_decode;
+mod base64_encode;
 mod bin2hex;
 mod chr;
+mod ctype_alnum;
+mod ctype_alpha;
+mod ctype_digit;
+mod ctype_space;
 mod explode;
 mod hex2bin;
+mod html_entity_decode;
+mod htmlentities;
+mod htmlspecialchars;
 mod implode;
 mod intval;
 mod lcfirst;
@@ -10,6 +19,10 @@ mod ltrim;
 mod nl2br;
 mod number_format;
 mod ord;
+mod printf;
+mod sprintf;
+mod rawurldecode;
+mod rawurlencode;
 mod rtrim;
 mod str_contains;
 mod str_ends_with;
@@ -34,6 +47,8 @@ mod substr_replace;
 mod trim;
 mod ucfirst;
 mod ucwords;
+mod urldecode;
+mod urlencode;
 mod wordwrap;
 
 use crate::codegen::context::Context;
@@ -87,6 +102,21 @@ pub fn emit(
         "wordwrap" => wordwrap::emit(name, args, emitter, ctx, data),
         "bin2hex" => bin2hex::emit(name, args, emitter, ctx, data),
         "hex2bin" => hex2bin::emit(name, args, emitter, ctx, data),
+        "htmlspecialchars" => htmlspecialchars::emit(name, args, emitter, ctx, data),
+        "htmlentities" => htmlentities::emit(name, args, emitter, ctx, data),
+        "html_entity_decode" => html_entity_decode::emit(name, args, emitter, ctx, data),
+        "urlencode" => urlencode::emit(name, args, emitter, ctx, data),
+        "urldecode" => urldecode::emit(name, args, emitter, ctx, data),
+        "rawurlencode" => rawurlencode::emit(name, args, emitter, ctx, data),
+        "rawurldecode" => rawurldecode::emit(name, args, emitter, ctx, data),
+        "base64_encode" => base64_encode::emit(name, args, emitter, ctx, data),
+        "base64_decode" => base64_decode::emit(name, args, emitter, ctx, data),
+        "ctype_alpha" => ctype_alpha::emit(name, args, emitter, ctx, data),
+        "ctype_digit" => ctype_digit::emit(name, args, emitter, ctx, data),
+        "ctype_alnum" => ctype_alnum::emit(name, args, emitter, ctx, data),
+        "ctype_space" => ctype_space::emit(name, args, emitter, ctx, data),
+        "sprintf" => sprintf::emit(name, args, emitter, ctx, data),
+        "printf" => printf::emit(name, args, emitter, ctx, data),
         _ => None,
     }
 }

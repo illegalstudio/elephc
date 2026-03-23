@@ -2,30 +2,96 @@ use super::cursor::Cursor;
 use super::token::Token;
 use crate::errors::CompileError;
 
-pub fn scan_double_string(cursor: &mut Cursor) -> Result<Token, CompileError> {
+/// Scan a double-quoted string with interpolation support.
+/// Returns one or more tokens: for `"Hello $name!"` it returns
+/// `StringLiteral("Hello ") . Variable("name") . StringLiteral("!")`
+/// (with Dot tokens for concatenation).
+pub fn scan_double_string_interpolated(
+    cursor: &mut Cursor,
+) -> Result<Vec<(Token, crate::span::Span)>, CompileError> {
     let span = cursor.span();
     cursor.advance(); // opening "
 
-    let mut value = String::new();
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut has_interpolation = false;
 
     loop {
-        match cursor.advance() {
-            Some('"') => return Ok(Token::StringLiteral(value)),
-            Some('\\') => match cursor.advance() {
-                Some('n') => value.push('\n'),
-                Some('t') => value.push('\t'),
-                Some('\\') => value.push('\\'),
-                Some('"') => value.push('"'),
-                Some(c) => {
-                    value.push('\\');
-                    value.push(c);
+        match cursor.peek() {
+            Some('"') => {
+                cursor.advance();
+                break;
+            }
+            Some('\\') => {
+                cursor.advance();
+                match cursor.advance() {
+                    Some('n') => current.push('\n'),
+                    Some('t') => current.push('\t'),
+                    Some('\\') => current.push('\\'),
+                    Some('"') => current.push('"'),
+                    Some('$') => current.push('$'),
+                    Some(c) => {
+                        current.push('\\');
+                        current.push(c);
+                    }
+                    None => return Err(CompileError::new(span, "Unterminated string literal")),
                 }
-                None => return Err(CompileError::new(span, "Unterminated string literal")),
-            },
-            Some(c) => value.push(c),
+            }
+            Some('$') => {
+                // Variable interpolation
+                cursor.advance(); // consume '$'
+                let mut name = String::new();
+                while let Some(ch) = cursor.peek() {
+                    if ch.is_ascii_alphanumeric() || ch == '_' {
+                        name.push(ch);
+                        cursor.advance();
+                    } else {
+                        break;
+                    }
+                }
+                if name.is_empty() {
+                    // Just a literal '$' (no valid variable name follows)
+                    current.push('$');
+                } else {
+                    has_interpolation = true;
+                    // Flush accumulated string
+                    if !current.is_empty() || tokens.is_empty() {
+                        if !tokens.is_empty() {
+                            tokens.push((Token::Dot, span));
+                        }
+                        tokens.push((Token::StringLiteral(std::mem::take(&mut current)), span));
+                    }
+                    // Add dot + variable
+                    if !tokens.is_empty() && !matches!(tokens.last(), Some((Token::Dot, _))) {
+                        tokens.push((Token::Dot, span));
+                    }
+                    tokens.push((Token::Variable(name), span));
+                }
+            }
+            Some(c) => {
+                current.push(c);
+                cursor.advance();
+            }
             None => return Err(CompileError::new(span, "Unterminated string literal")),
         }
     }
+
+    if !has_interpolation {
+        // No interpolation — return single StringLiteral
+        return Ok(vec![(Token::StringLiteral(current), span)]);
+    }
+
+    // Flush remaining string
+    if !current.is_empty() {
+        tokens.push((Token::Dot, span));
+        tokens.push((Token::StringLiteral(current), span));
+    }
+
+    // Wrap in parens so precedence is correct: ("..." . $var . "...")
+    let mut result = vec![(Token::LParen, span)];
+    result.extend(tokens);
+    result.push((Token::RParen, span));
+    Ok(result)
 }
 
 pub fn scan_single_string(cursor: &mut Cursor) -> Result<Token, CompileError> {
