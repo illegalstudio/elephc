@@ -10,12 +10,12 @@ pub fn emit_array_column(emitter: &mut Emitter) {
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #80");                                     // allocate stack frame
-    emitter.instruction("stp x29, x30, [sp, #64]");                            // save frame pointer and return address
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #64");                                    // set frame pointer
 
     // -- save inputs --
     emitter.instruction("str x0, [sp, #0]");                                    // save outer array pointer
-    emitter.instruction("stp x1, x2, [sp, #8]");                               // save column key ptr/len
+    emitter.instruction("stp x1, x2, [sp, #8]");                                // save column key ptr/len
 
     // -- load outer array length --
     emitter.instruction("ldr x9, [x0]");                                        // x9 = outer array length
@@ -42,7 +42,7 @@ pub fn emit_array_column(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x0, x9, lsl #3]");                            // load inner hash table pointer at index
 
     // -- look up column key in inner hash table --
-    emitter.instruction("ldp x1, x2, [sp, #8]");                               // reload column key ptr/len
+    emitter.instruction("ldp x1, x2, [sp, #8]");                                // reload column key ptr/len
     emitter.instruction("bl __rt_hash_get");                                    // lookup → x0=found, x1=val_lo, x2=val_hi
 
     // -- if found, push value to result array --
@@ -65,7 +65,7 @@ pub fn emit_array_column(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #32]");                                   // return result array
 
     // -- restore frame and return --
-    emitter.instruction("ldp x29, x30, [sp, #64]");                            // restore frame pointer and return address
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 }

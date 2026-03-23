@@ -768,3 +768,8 @@ fn test_error_natsort_wrong_args() {
 fn test_error_natcasesort_wrong_args() {
     expect_error("<?php natcasesort();", "natcasesort() takes exactly 1 argument");
 }
+
+#[test]
+fn test_error_array_column_wrong_args() {
+    expect_error(r#"<?php array_column([]);"#, "array_column() takes exactly 2 arguments");
+}

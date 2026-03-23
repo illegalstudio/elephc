@@ -546,8 +546,10 @@ foreach ($matrix as $row) {
 | **Random** | | |
 | `shuffle()` | `shuffle($arr): void` | Randomly shuffle array (in-place) |
 | `array_rand()` | `array_rand($arr [, $num]): int\|array` | Pick random key(s) |
+| **Multi-dimensional** | | |
+| `array_column()` | `array_column($arr, $column_key): array` | Extract column from array of assoc arrays |
 
-**Not yet supported:** `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, `uasort()` (planned for v0.7, require closures), `compact()`, `extract()` (require dynamic variables), `array_column()` (requires array-of-arrays).
+**Not yet supported:** `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, `uasort()` (planned for v0.7, require closures), `compact()`, `extract()` (require dynamic variables).
 
 ### Math functions
 
