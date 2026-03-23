@@ -169,6 +169,7 @@ Make string handling practical.
 - [ ] Concat buffer recycling (currently 64KB with silent wraparound)
 - [ ] String deduplication (avoid copying identical strings)
 - [ ] Hash table shrink on delete (currently only grows)
+- [ ] Sized array pre-allocation (when array size is known at compile time, allocate in one block instead of dynamic resize)
 - [x] `include` / `require` / `include_once` / `require_once`
 
 ## v0.10.0 — Multi-platform and optimizations
