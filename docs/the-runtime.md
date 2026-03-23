@@ -135,48 +135,67 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_urlencode` | URL encode | `x1`/`x2` | `x1`/`x2` |
 | `__rt_urldecode` | URL decode | `x1`/`x2` | `x1`/`x2` |
 | `__rt_htmlspecialchars` | HTML escape | `x1`/`x2` | `x1`/`x2` |
+| `__rt_html_entity_decode` | Decode HTML entities | `x1`/`x2` | `x1`/`x2` |
+| `__rt_rawurlencode` | URL encode (RFC 3986) | `x1`/`x2` | `x1`/`x2` |
+| `__rt_stripslashes` | Remove escape backslashes | `x1`/`x2` | `x1`/`x2` |
+| `__rt_ucwords` | Uppercase first letter of each word | `x1`/`x2` | `x1`/`x2` |
+| `__rt_str_ireplace` | Case-insensitive replace | search + replace + subject | `x1`/`x2` |
+| `__rt_substr_replace` | Replace substring at offset | str + replacement + start + len | `x1`/`x2` |
+| `__rt_str_pad` | Pad string to length | str + len + pad_str + type | `x1`/`x2` |
+| `__rt_str_split` | Split into chunks | str + chunk_len | `x0` (array ptr) |
+| `__rt_wordwrap` | Wrap text at width | str + width + break | `x1`/`x2` |
+| `__rt_number_format` | Format number with separators | float + decimals + sep | `x1`/`x2` |
+| `__rt_hash` | Hash with algorithm | algo + data | `x1`/`x2` |
+| `__rt_sscanf` | Parse string with format | str + format | `x0` (array ptr) |
 
 ## Array routines
 
-**Source:** `src/codegen/runtime/arrays/`
+**Source:** `src/codegen/runtime/arrays/` (39 files)
 
-### `__rt_heap_alloc` — Bump allocator
+### Core allocation
 
-**File:** `arrays/heap_alloc.rs`
+| Routine | What it does | Input | Output |
+|---|---|---|---|
+| `__rt_heap_alloc` | Bump-allocate N bytes from heap | `x0` = size | `x0` = pointer |
+| `__rt_array_new` | Create indexed array with header | `x0` = capacity, `x1` = elem_size | `x0` = array ptr |
+| `__rt_array_push_int` | Append int to indexed array | `x0` = array, `x1` = value | — |
+| `__rt_array_push_str` | Append string to indexed array | `x0` = array, `x1`/`x2` = str | — |
+| `__rt_sort_int` | In-place sort (ascending/descending) | `x0` = array | — |
 
-Allocates `x0` bytes from the [heap buffer](memory-model.md#the-heap). Simple bump allocation: read current offset, add requested size, write new offset, return pointer.
+### Hash table (for associative arrays)
 
-**Input:** `x0` = bytes to allocate
-**Output:** `x0` = pointer to allocated memory
+| Routine | What it does | Input | Output |
+|---|---|---|---|
+| `__rt_hash_fnv1a` | FNV-1a hash of string | `x1`/`x2` = string | `x0` = hash |
+| `__rt_hash_new` | Create hash table | `x0` = capacity, `x1` = value type | `x0` = hash ptr |
+| `__rt_hash_set` | Insert/update key-value pair | `x0`=hash, `x1`/`x2`=key, `x3`/`x4`=value | — |
+| `__rt_hash_get` | Look up value by key | `x0`=hash, `x1`/`x2`=key | `x0`=found, `x1`=val_lo, `x2`=val_hi |
+| `__rt_hash_iter_next` | Iterate to next entry | `x0`=hash, `x1`=index | `x0`=next_idx, `x1`/`x2`=key, `x3`/`x4`=value |
+| `__rt_hash_count` | Count occupied entries | `x0`=hash | `x0`=count |
 
-### `__rt_array_new` — Create array
+See [Memory Model](memory-model.md) for the hash table memory layout.
 
-**File:** `arrays/array_new.rs`
+### Array manipulation
 
-Allocates and initializes an array header (24 bytes):
-
-```
-Offset 0:  length = 0
-Offset 8:  capacity = initial capacity
-Offset 16: elem_size (8 for int, 16 for string)
-```
-
-Then allocates space for the initial elements.
-
-**Input:** `x0` = element size (8 or 16)
-**Output:** `x0` = pointer to array header
-
-### `__rt_array_push_int` / `__rt_array_push_str`
-
-**Files:** `arrays/array_push_int.rs`, `arrays/array_push_str.rs`
-
-Appends an element to an array. Checks capacity, reallocates if needed (copies existing elements to a larger buffer).
-
-### `__rt_sort_int` — In-place sort
-
-**File:** `arrays/sort_int.rs`
-
-Sorts an integer array using a simple algorithm (typically insertion sort or selection sort — efficient enough for the small arrays elephc handles).
+| Routine | What it does |
+|---|---|
+| `__rt_array_key_exists` | Check if integer key is in bounds |
+| `__rt_array_search` | Linear search for value in indexed array |
+| `__rt_array_reverse` | Reverse element order |
+| `__rt_array_sum` / `__rt_array_product` | Sum/product of all elements |
+| `__rt_array_shift` / `__rt_array_unshift` | Remove/add at beginning |
+| `__rt_array_merge` | Concatenate two indexed arrays |
+| `__rt_array_slice` / `__rt_array_splice` | Extract/replace subarray |
+| `__rt_array_unique` | Remove duplicate values |
+| `__rt_array_diff` / `__rt_array_intersect` | Set difference/intersection by value |
+| `__rt_array_diff_key` / `__rt_array_intersect_key` | Set operations by key |
+| `__rt_array_flip` | Swap keys and values → AssocArray |
+| `__rt_array_combine` | Combine key array + value array → AssocArray |
+| `__rt_array_fill` / `__rt_array_fill_keys` | Create filled arrays |
+| `__rt_array_chunk` / `__rt_array_pad` | Chunk/pad arrays |
+| `__rt_range` | Generate integer range array |
+| `__rt_shuffle` / `__rt_array_rand` | Randomize order / pick random |
+| `__rt_asort` / `__rt_ksort` / `__rt_natsort` | Sort preserving keys |
 
 ## System routines
 
@@ -191,6 +210,31 @@ At program start, the OS passes `argc` (argument count) in `x0` and `argv` (poin
 1. Creates a new string array
 2. For each C string pointer in argv: measures the string length (scan for null byte), pushes ptr+len into the array
 3. Returns the array pointer
+
+## I/O routines
+
+**Source:** `src/codegen/runtime/io/` (17 files)
+
+These routines handle file and filesystem operations via macOS system calls. PHP strings (pointer + length) must be converted to null-terminated C strings before passing to syscalls — the `__rt_cstr` helper handles this using a dedicated 4KB buffer.
+
+| Routine | What it does |
+|---|---|
+| `__rt_cstr` | Convert PHP string (ptr+len) to null-terminated C string |
+| `__rt_fopen` | Open file via `open()` syscall |
+| `__rt_fgets` | Read line from file descriptor |
+| `__rt_feof` | Check end-of-file flag for a file descriptor |
+| `__rt_fread` | Read N bytes from file descriptor |
+| `__rt_file_get_contents` | Read entire file into string |
+| `__rt_file_put_contents` | Write string to file (create/truncate) |
+| `__rt_file` | Read file into array of lines |
+| `__rt_stat` | Get file metadata (size, timestamps) |
+| `__rt_fs` | Filesystem operations (mkdir, rmdir, unlink, rename, copy, chmod) |
+| `__rt_getcwd` | Get current working directory |
+| `__rt_scandir` | List directory contents into array |
+| `__rt_glob` | Pattern-match filenames |
+| `__rt_tempnam` | Create temporary filename |
+| `__rt_fgetcsv` | Parse CSV line from file |
+| `__rt_fputcsv` | Write CSV line to file |
 
 ## How routines are emitted
 
