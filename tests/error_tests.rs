@@ -310,3 +310,65 @@ fn test_error_random_int_wrong_args() {
 fn test_error_number_format_wrong_args() {
     expect_error("<?php number_format();", "number_format() takes 1 to 4 arguments");
 }
+
+// --- String function errors ---
+
+#[test]
+fn test_error_substr_wrong_args() {
+    expect_error("<?php substr(\"hi\");", "substr() takes 2 or 3 arguments");
+}
+
+#[test]
+fn test_error_strpos_wrong_args() {
+    expect_error("<?php strpos(\"hi\");", "strpos() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_str_replace_wrong_args() {
+    expect_error("<?php str_replace(\"a\", \"b\");", "str_replace() takes exactly 3 arguments");
+}
+
+#[test]
+fn test_error_sprintf_no_args() {
+    expect_error("<?php sprintf();", "sprintf() requires at least 1 argument");
+}
+
+#[test]
+fn test_error_explode_wrong_args() {
+    expect_error("<?php explode(\",\");", "explode() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_str_pad_wrong_args() {
+    expect_error("<?php str_pad(\"x\");", "str_pad() takes 2 to 4 arguments");
+}
+
+#[test]
+fn test_error_md5_wrong_args() {
+    expect_error("<?php md5();", "md5() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_sha1_wrong_args() {
+    expect_error("<?php sha1();", "sha1() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_htmlspecialchars_wrong_args() {
+    expect_error("<?php htmlspecialchars();", "htmlspecialchars() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_urlencode_wrong_args() {
+    expect_error("<?php urlencode();", "urlencode() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_base64_encode_wrong_args() {
+    expect_error("<?php base64_encode();", "base64_encode() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_ctype_alpha_wrong_args() {
+    expect_error("<?php ctype_alpha();", "ctype_alpha() takes exactly 1 argument");
+}

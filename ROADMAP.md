@@ -86,7 +86,8 @@ Make string handling practical.
 - [x] `addslashes()`, `stripslashes()`
 - [x] `htmlspecialchars()`, `htmlentities()`, `html_entity_decode()`
 - [x] `urlencode()`, `urldecode()`, `rawurlencode()`, `rawurldecode()`
-- [ ] `md5()`, `sha1()`, `hash()`
+- [x] `md5()`, `sha1()`
+- [ ] `hash()`
 - [x] `base64_encode()`, `base64_decode()`
 - [x] `bin2hex()`, `hex2bin()`
 - [x] `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, `ctype_space()`

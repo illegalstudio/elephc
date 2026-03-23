@@ -8,17 +8,17 @@ pub fn emit_html_entity_decode(emitter: &mut Emitter) {
     emitter.label("__rt_html_entity_decode");
 
     // -- set up concat_buf destination --
-    emitter.instruction("adrp x6, _concat_off@PAGE");                          // load concat offset page
-    emitter.instruction("add x6, x6, _concat_off@PAGEOFF");                    // resolve address
+    emitter.instruction("adrp x6, _concat_off@PAGE");                           // load concat offset page
+    emitter.instruction("add x6, x6, _concat_off@PAGEOFF");                     // resolve address
     emitter.instruction("ldr x8, [x6]");                                        // load current offset
-    emitter.instruction("adrp x7, _concat_buf@PAGE");                          // load concat buffer page
-    emitter.instruction("add x7, x7, _concat_buf@PAGEOFF");                    // resolve address
+    emitter.instruction("adrp x7, _concat_buf@PAGE");                           // load concat buffer page
+    emitter.instruction("add x7, x7, _concat_buf@PAGEOFF");                     // resolve address
     emitter.instruction("add x9, x7, x8");                                      // destination pointer
     emitter.instruction("mov x10, x9");                                         // save result start
     emitter.instruction("mov x11, x2");                                         // remaining byte count
 
     emitter.label("__rt_hed_loop");
-    emitter.instruction("cbz x11, __rt_hed_done");                             // no bytes left → done
+    emitter.instruction("cbz x11, __rt_hed_done");                              // no bytes left → done
     emitter.instruction("ldrb w12, [x1]");                                      // peek at current byte
     emitter.instruction("cmp w12, #38");                                        // is it '&'?
     emitter.instruction("b.ne __rt_hed_copy");                                  // no → copy as-is

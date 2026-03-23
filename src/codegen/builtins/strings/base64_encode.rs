@@ -14,6 +14,6 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("base64_encode()");
     emit_expr(&args[0], emitter, ctx, data);
-    emitter.instruction("bl __rt_base64_encode");                         // call runtime: encode string to base64
+    emitter.instruction("bl __rt_base64_encode");                               // call runtime: encode string to base64
     Some(PhpType::Str)
 }

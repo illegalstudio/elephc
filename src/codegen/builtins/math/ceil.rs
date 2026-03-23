@@ -15,7 +15,7 @@ pub fn emit(
     emitter.comment("ceil()");
     let ty = emit_expr(&args[0], emitter, ctx, data);
     // -- convert int to float if needed, then round toward plus infinity --
-    if ty != PhpType::Float { emitter.instruction("scvtf d0, x0"); }    // convert signed int to float
-    emitter.instruction("frintp d0, d0");                               // round toward plus infinity (ceil)
+    if ty != PhpType::Float { emitter.instruction("scvtf d0, x0"); }            // convert signed int to float
+    emitter.instruction("frintp d0, d0");                                       // round toward plus infinity (ceil)
     Some(PhpType::Float)
 }

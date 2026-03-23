@@ -14,6 +14,6 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("base64_decode()");
     emit_expr(&args[0], emitter, ctx, data);
-    emitter.instruction("bl __rt_base64_decode");                         // call runtime: decode base64 string
+    emitter.instruction("bl __rt_base64_decode");                               // call runtime: decode base64 string
     Some(PhpType::Str)
 }

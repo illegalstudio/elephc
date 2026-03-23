@@ -14,6 +14,6 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("html_entity_decode()");
     emit_expr(&args[0], emitter, ctx, data);
-    emitter.instruction("bl __rt_html_entity_decode");                    // call runtime: decode HTML entities back to chars
+    emitter.instruction("bl __rt_html_entity_decode");                          // call runtime: decode HTML entities back to chars
     Some(PhpType::Str)
 }

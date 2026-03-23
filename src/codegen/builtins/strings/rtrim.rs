@@ -15,7 +15,7 @@ pub fn emit(
     emitter.comment("rtrim()");
     emit_expr(&args[0], emitter, ctx, data);
     // -- strip whitespace from the right --
-    emitter.instruction("bl __rt_rtrim");                               // call runtime: trim whitespace from end of string
+    emitter.instruction("bl __rt_rtrim");                                       // call runtime: trim whitespace from end of string
 
     Some(PhpType::Str)
 }

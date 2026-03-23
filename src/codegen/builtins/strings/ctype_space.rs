@@ -20,38 +20,38 @@ pub fn emit(
     let pass_label = ctx.next_label("ctype_pass");
     let end_label = ctx.next_label("ctype_end");
     // -- return false for empty string --
-    emitter.instruction(&format!("cbz x2, {}", fail_label));             // empty string returns false
-    emitter.instruction("mov x3, #0");                                    // x3 = loop index
+    emitter.instruction(&format!("cbz x2, {}", fail_label));                    // empty string returns false
+    emitter.instruction("mov x3, #0");                                          // x3 = loop index
     emitter.label(&loop_label);
-    emitter.instruction("cmp x3, x2");                                    // check if index reached length
-    emitter.instruction(&format!("b.ge {}", pass_label));                 // all bytes checked, pass
-    emitter.instruction("ldrb w4, [x1, x3]");                            // load byte at index
+    emitter.instruction("cmp x3, x2");                                          // check if index reached length
+    emitter.instruction(&format!("b.ge {}", pass_label));                       // all bytes checked, pass
+    emitter.instruction("ldrb w4, [x1, x3]");                                   // load byte at index
     // -- check space (32) --
-    emitter.instruction("cmp w4, #32");                                   // check if space
-    emitter.instruction(&format!("b.eq {}", next_label));                 // is space, next byte
+    emitter.instruction("cmp w4, #32");                                         // check if space
+    emitter.instruction(&format!("b.eq {}", next_label));                       // is space, next byte
     // -- check tab (9) --
-    emitter.instruction("cmp w4, #9");                                    // check if tab
-    emitter.instruction(&format!("b.eq {}", next_label));                 // is tab, next byte
+    emitter.instruction("cmp w4, #9");                                          // check if tab
+    emitter.instruction(&format!("b.eq {}", next_label));                       // is tab, next byte
     // -- check newline (10) --
-    emitter.instruction("cmp w4, #10");                                   // check if newline
-    emitter.instruction(&format!("b.eq {}", next_label));                 // is newline, next byte
+    emitter.instruction("cmp w4, #10");                                         // check if newline
+    emitter.instruction(&format!("b.eq {}", next_label));                       // is newline, next byte
     // -- check carriage return (13) --
-    emitter.instruction("cmp w4, #13");                                   // check if carriage return
-    emitter.instruction(&format!("b.eq {}", next_label));                 // is CR, next byte
+    emitter.instruction("cmp w4, #13");                                         // check if carriage return
+    emitter.instruction(&format!("b.eq {}", next_label));                       // is CR, next byte
     // -- check vertical tab (11) --
-    emitter.instruction("cmp w4, #11");                                   // check if vertical tab
-    emitter.instruction(&format!("b.eq {}", next_label));                 // is VT, next byte
+    emitter.instruction("cmp w4, #11");                                         // check if vertical tab
+    emitter.instruction(&format!("b.eq {}", next_label));                       // is VT, next byte
     // -- check form feed (12) --
-    emitter.instruction("cmp w4, #12");                                   // check if form feed
-    emitter.instruction(&format!("b.ne {}", fail_label));                 // not whitespace, fail
+    emitter.instruction("cmp w4, #12");                                         // check if form feed
+    emitter.instruction(&format!("b.ne {}", fail_label));                       // not whitespace, fail
     emitter.label(&next_label);
-    emitter.instruction("add x3, x3, #1");                                // increment index
-    emitter.instruction(&format!("b {}", loop_label));                    // continue loop
+    emitter.instruction("add x3, x3, #1");                                      // increment index
+    emitter.instruction(&format!("b {}", loop_label));                          // continue loop
     emitter.label(&fail_label);
-    emitter.instruction("mov x0, #0");                                    // return false
-    emitter.instruction(&format!("b {}", end_label));                     // jump to end
+    emitter.instruction("mov x0, #0");                                          // return false
+    emitter.instruction(&format!("b {}", end_label));                           // jump to end
     emitter.label(&pass_label);
-    emitter.instruction("mov x0, #1");                                    // return true
+    emitter.instruction("mov x0, #1");                                          // return true
     emitter.label(&end_label);
     Some(PhpType::Bool)
 }

@@ -15,12 +15,12 @@ pub fn emit(
     emitter.comment("str_ends_with()");
     emit_expr(&args[0], emitter, ctx, data);
     // -- save haystack, evaluate suffix --
-    emitter.instruction("stp x1, x2, [sp, #-16]!");                     // push haystack ptr and length onto stack
+    emitter.instruction("stp x1, x2, [sp, #-16]!");                             // push haystack ptr and length onto stack
     emit_expr(&args[1], emitter, ctx, data);
-    emitter.instruction("mov x3, x1");                                  // move suffix pointer to x3
-    emitter.instruction("mov x4, x2");                                  // move suffix length to x4
-    emitter.instruction("ldp x1, x2, [sp], #16");                       // pop haystack ptr into x1, length into x2
-    emitter.instruction("bl __rt_str_ends_with");                       // call runtime: check if haystack ends with suffix
+    emitter.instruction("mov x3, x1");                                          // move suffix pointer to x3
+    emitter.instruction("mov x4, x2");                                          // move suffix length to x4
+    emitter.instruction("ldp x1, x2, [sp], #16");                               // pop haystack ptr into x1, length into x2
+    emitter.instruction("bl __rt_str_ends_with");                               // call runtime: check if haystack ends with suffix
 
     Some(PhpType::Bool)
 }

@@ -14,6 +14,6 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("bin2hex()");
     emit_expr(&args[0], emitter, ctx, data);
-    emitter.instruction("bl __rt_bin2hex");                             // call runtime: convert bytes to hex string
+    emitter.instruction("bl __rt_bin2hex");                                     // call runtime: convert bytes to hex string
     Some(PhpType::Str)
 }

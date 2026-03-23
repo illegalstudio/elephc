@@ -12,10 +12,9 @@ pub fn emit(
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> Option<PhpType> {
-    emitter.comment("ltrim()");
+    emitter.comment("md5()");
     emit_expr(&args[0], emitter, ctx, data);
-    // -- strip whitespace from the left --
-    emitter.instruction("bl __rt_ltrim");                                       // call runtime: trim whitespace from start of string
-
+    // x1=string ptr, x2=string len
+    emitter.instruction("bl __rt_md5");                                         // call runtime: compute MD5 hash → x1/x2=hex string
     Some(PhpType::Str)
 }

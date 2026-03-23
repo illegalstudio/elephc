@@ -15,7 +15,7 @@ pub fn emit(
     emitter.comment("floor()");
     let ty = emit_expr(&args[0], emitter, ctx, data);
     // -- convert int to float if needed, then round toward minus infinity --
-    if ty != PhpType::Float { emitter.instruction("scvtf d0, x0"); }    // convert signed int to float
-    emitter.instruction("frintm d0, d0");                               // round toward minus infinity (floor)
+    if ty != PhpType::Float { emitter.instruction("scvtf d0, x0"); }            // convert signed int to float
+    emitter.instruction("frintm d0, d0");                                       // round toward minus infinity (floor)
     Some(PhpType::Float)
 }

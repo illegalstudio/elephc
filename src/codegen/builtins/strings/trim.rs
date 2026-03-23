@@ -15,7 +15,7 @@ pub fn emit(
     emitter.comment("trim()");
     emit_expr(&args[0], emitter, ctx, data);
     // -- strip whitespace from both ends --
-    emitter.instruction("bl __rt_trim");                                // call runtime: trim whitespace from both sides
+    emitter.instruction("bl __rt_trim");                                        // call runtime: trim whitespace from both sides
 
     Some(PhpType::Str)
 }

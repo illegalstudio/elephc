@@ -16,6 +16,6 @@ pub fn emit(
     let ty = emit_expr(&args[0], emitter, ctx, data);
     // -- return true/false based on compile-time type --
     let val = if ty == PhpType::Int { 1 } else { 0 };
-    emitter.instruction(&format!("mov x0, #{}", val));                  // set result: 1 if int, 0 otherwise
+    emitter.instruction(&format!("mov x0, #{}", val));                          // set result: 1 if int, 0 otherwise
     Some(PhpType::Bool)
 }

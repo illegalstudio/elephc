@@ -15,7 +15,7 @@ pub fn emit(
     emitter.comment("sqrt()");
     let ty = emit_expr(&args[0], emitter, ctx, data);
     // -- convert int to float if needed, then compute square root --
-    if ty != PhpType::Float { emitter.instruction("scvtf d0, x0"); }    // convert signed int to float
-    emitter.instruction("fsqrt d0, d0");                                // compute square root of d0
+    if ty != PhpType::Float { emitter.instruction("scvtf d0, x0"); }            // convert signed int to float
+    emitter.instruction("fsqrt d0, d0");                                        // compute square root of d0
     Some(PhpType::Float)
 }

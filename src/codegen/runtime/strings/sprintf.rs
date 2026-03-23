@@ -10,11 +10,11 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.comment("--- runtime: sprintf ---");
     emitter.label("__rt_sprintf");
     emitter.instruction("sub sp, sp, #80");                                     // allocate stack frame
-    emitter.instruction("stp x29, x30, [sp, #64]");                            // save frame pointer and return address
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #64");                                    // set frame pointer
 
     // -- save inputs --
-    emitter.instruction("stp x1, x2, [sp]");                                   // save format ptr/len
+    emitter.instruction("stp x1, x2, [sp]");                                    // save format ptr/len
     emitter.instruction("str x0, [sp, #16]");                                   // save arg count
     emitter.instruction("mov x13, #0");                                         // current arg index
     emitter.instruction("str x13, [sp, #24]");                                  // save arg index
@@ -25,17 +25,17 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("str x14, [sp, #32]");                                  // save args base
 
     // -- set up concat_buf destination --
-    emitter.instruction("adrp x6, _concat_off@PAGE");                          // load concat offset page
-    emitter.instruction("add x6, x6, _concat_off@PAGEOFF");                    // resolve address
+    emitter.instruction("adrp x6, _concat_off@PAGE");                           // load concat offset page
+    emitter.instruction("add x6, x6, _concat_off@PAGEOFF");                     // resolve address
     emitter.instruction("ldr x8, [x6]");                                        // load current offset
-    emitter.instruction("adrp x7, _concat_buf@PAGE");                          // load concat buffer page
-    emitter.instruction("add x7, x7, _concat_buf@PAGEOFF");                    // resolve address
+    emitter.instruction("adrp x7, _concat_buf@PAGE");                           // load concat buffer page
+    emitter.instruction("add x7, x7, _concat_buf@PAGEOFF");                     // resolve address
     emitter.instruction("add x9, x7, x8");                                      // destination pointer
     emitter.instruction("str x9, [sp, #40]");                                   // save result start
     emitter.instruction("str x6, [sp, #48]");                                   // save concat_off ptr
 
     // -- scan format string --
-    emitter.instruction("ldp x1, x2, [sp]");                                   // reload fmt ptr/len
+    emitter.instruction("ldp x1, x2, [sp]");                                    // reload fmt ptr/len
 
     emitter.label("__rt_sprintf_loop");
     emitter.instruction("cbz x2, __rt_sprintf_done");                           // no format chars left → done
@@ -64,7 +64,7 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("cmp w12, #100");                                       // is it 'd'?
     emitter.instruction("b.ne __rt_sprintf_check_s");                           // no → check %s
     // Save state, call itoa
-    emitter.instruction("stp x1, x2, [sp]");                                   // save fmt state
+    emitter.instruction("stp x1, x2, [sp]");                                    // save fmt state
     emitter.instruction("str x9, [sp, #56]");                                   // save dest ptr
     // -- load next arg (int) --
     emitter.instruction("ldr x13, [sp, #24]");                                  // load arg index
@@ -84,14 +84,14 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("sub x2, x2, #1");                                      // decrement
     emitter.instruction("b __rt_sprintf_copy_d");                               // continue
     emitter.label("__rt_sprintf_d_done");
-    emitter.instruction("ldp x1, x2, [sp]");                                   // restore fmt state
+    emitter.instruction("ldp x1, x2, [sp]");                                    // restore fmt state
     emitter.instruction("b __rt_sprintf_loop");                                 // next
 
     // -- %s → insert string --
     emitter.label("__rt_sprintf_check_s");
     emitter.instruction("cmp w12, #115");                                       // is it 's'?
     emitter.instruction("b.ne __rt_sprintf_check_f");                           // no → check %f
-    emitter.instruction("stp x1, x2, [sp]");                                   // save fmt state
+    emitter.instruction("stp x1, x2, [sp]");                                    // save fmt state
     // -- load next arg (string) --
     emitter.instruction("ldr x13, [sp, #24]");                                  // arg index
     emitter.instruction("ldr x14, [sp, #32]");                                  // args base
@@ -110,14 +110,14 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("sub x4, x4, #1");                                      // decrement
     emitter.instruction("b __rt_sprintf_copy_s");                               // continue
     emitter.label("__rt_sprintf_s_done");
-    emitter.instruction("ldp x1, x2, [sp]");                                   // restore fmt state
+    emitter.instruction("ldp x1, x2, [sp]");                                    // restore fmt state
     emitter.instruction("b __rt_sprintf_loop");                                 // next
 
     // -- %f → format float --
     emitter.label("__rt_sprintf_check_f");
     emitter.instruction("cmp w12, #102");                                       // is it 'f'?
     emitter.instruction("b.ne __rt_sprintf_check_x");                           // no → check %x
-    emitter.instruction("stp x1, x2, [sp]");                                   // save fmt state
+    emitter.instruction("stp x1, x2, [sp]");                                    // save fmt state
     emitter.instruction("str x9, [sp, #56]");                                   // save dest ptr
     // -- load next arg (float bits) --
     emitter.instruction("ldr x13, [sp, #24]");                                  // arg index
@@ -138,14 +138,14 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("sub x2, x2, #1");                                      // decrement
     emitter.instruction("b __rt_sprintf_copy_f");                               // continue
     emitter.label("__rt_sprintf_f_done");
-    emitter.instruction("ldp x1, x2, [sp]");                                   // restore fmt state
+    emitter.instruction("ldp x1, x2, [sp]");                                    // restore fmt state
     emitter.instruction("b __rt_sprintf_loop");                                 // next
 
     // -- %x → format int as hex --
     emitter.label("__rt_sprintf_check_x");
     emitter.instruction("cmp w12, #120");                                       // is it 'x'?
     emitter.instruction("b.ne __rt_sprintf_other");                             // no → unknown, skip
-    emitter.instruction("stp x1, x2, [sp]");                                   // save fmt state
+    emitter.instruction("stp x1, x2, [sp]");                                    // save fmt state
     // -- load next arg (int) --
     emitter.instruction("ldr x13, [sp, #24]");                                  // arg index
     emitter.instruction("ldr x14, [sp, #32]");                                  // args base
@@ -189,7 +189,7 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("sub x4, x4, #1");                                      // decrement
     emitter.instruction("b __rt_sprintf_x_copy");                               // continue
     emitter.label("__rt_sprintf_x_done");
-    emitter.instruction("ldp x1, x2, [sp]");                                   // restore fmt state
+    emitter.instruction("ldp x1, x2, [sp]");                                    // restore fmt state
     emitter.instruction("b __rt_sprintf_loop");                                 // next
 
     // -- unknown specifier: just write the character --
@@ -199,19 +199,19 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
 
     // -- done: clean up args from caller's stack --
     emitter.label("__rt_sprintf_done");
-    emitter.instruction("ldr x1, [sp, #40]");                                  // result start ptr
+    emitter.instruction("ldr x1, [sp, #40]");                                   // result start ptr
     emitter.instruction("sub x2, x9, x1");                                      // result length
     // Update concat_off
-    emitter.instruction("ldr x6, [sp, #48]");                                  // concat_off ptr
+    emitter.instruction("ldr x6, [sp, #48]");                                   // concat_off ptr
     emitter.instruction("ldr x8, [x6]");                                        // current offset
     emitter.instruction("add x8, x8, x2");                                      // advance
     emitter.instruction("str x8, [x6]");                                        // store
 
     // -- pop args from caller's stack --
-    emitter.instruction("ldr x0, [sp, #16]");                                  // arg_count
+    emitter.instruction("ldr x0, [sp, #16]");                                   // arg_count
     emitter.instruction("lsl x0, x0, #4");                                      // bytes = count * 16
 
-    emitter.instruction("ldp x29, x30, [sp, #64]");                            // restore frame
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame
     emitter.instruction("add sp, sp, #80");                                     // deallocate our frame
     emitter.instruction("add sp, sp, x0");                                      // pop caller's args
     emitter.instruction("ret");                                                 // return

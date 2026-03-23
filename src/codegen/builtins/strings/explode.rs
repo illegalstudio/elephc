@@ -16,12 +16,12 @@ pub fn emit(
     // explode($delimiter, $string)
     emit_expr(&args[0], emitter, ctx, data);
     // -- save delimiter, evaluate string --
-    emitter.instruction("stp x1, x2, [sp, #-16]!");                     // push delimiter ptr and length onto stack
+    emitter.instruction("stp x1, x2, [sp, #-16]!");                             // push delimiter ptr and length onto stack
     emit_expr(&args[1], emitter, ctx, data);
-    emitter.instruction("mov x3, x1");                                  // move string pointer to x3
-    emitter.instruction("mov x4, x2");                                  // move string length to x4
-    emitter.instruction("ldp x1, x2, [sp], #16");                       // pop delimiter ptr into x1, length into x2
-    emitter.instruction("bl __rt_explode");                             // call runtime: split string by delimiter into array
+    emitter.instruction("mov x3, x1");                                          // move string pointer to x3
+    emitter.instruction("mov x4, x2");                                          // move string length to x4
+    emitter.instruction("ldp x1, x2, [sp], #16");                               // pop delimiter ptr into x1, length into x2
+    emitter.instruction("bl __rt_explode");                                     // call runtime: split string by delimiter into array
 
     Some(PhpType::Array(Box::new(PhpType::Str)))
 }

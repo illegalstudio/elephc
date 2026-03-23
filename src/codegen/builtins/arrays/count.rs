@@ -15,7 +15,7 @@ pub fn emit(
     emitter.comment("count()");
     emit_expr(&args[0], emitter, ctx, data);
     // -- read element count from array header --
-    emitter.instruction("ldr x0, [x0]");                                // load array length from first field of array struct
+    emitter.instruction("ldr x0, [x0]");                                        // load array length from first field of array struct
 
     Some(PhpType::Int)
 }

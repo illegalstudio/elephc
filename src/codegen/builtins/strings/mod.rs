@@ -16,6 +16,7 @@ mod implode;
 mod intval;
 mod lcfirst;
 mod ltrim;
+mod md5;
 mod nl2br;
 mod number_format;
 mod ord;
@@ -24,6 +25,7 @@ mod sprintf;
 mod rawurldecode;
 mod rawurlencode;
 mod rtrim;
+mod sha1;
 mod str_contains;
 mod str_ends_with;
 mod str_ireplace;
@@ -116,6 +118,8 @@ pub fn emit(
         "ctype_alnum" => ctype_alnum::emit(name, args, emitter, ctx, data),
         "ctype_space" => ctype_space::emit(name, args, emitter, ctx, data),
         "sprintf" => sprintf::emit(name, args, emitter, ctx, data),
+        "md5" => md5::emit(name, args, emitter, ctx, data),
+        "sha1" => sha1::emit(name, args, emitter, ctx, data),
         "printf" => printf::emit(name, args, emitter, ctx, data),
         _ => None,
     }

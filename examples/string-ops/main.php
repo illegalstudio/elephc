@@ -44,3 +44,29 @@ echo "implode: " . implode(" | ", $parts) . "\n";
 echo "\n--- Char ---\n";
 echo "ord('A'): " . ord("A") . "\n";
 echo "chr(65): " . chr(65) . "\n";
+
+// String interpolation
+echo "\n--- Interpolation ---\n";
+$name = "PHP";
+echo "Hello $name!\n";
+
+// Formatting
+echo "\n--- Formatting ---\n";
+echo sprintf("Name: %s, Age: %d", "Alice", 30) . "\n";
+echo sprintf("Hex: %x", 255) . "\n";
+
+// Hashing
+echo "\n--- Hashing ---\n";
+echo "md5('hello'): " . md5("hello") . "\n";
+echo "sha1('hello'): " . sha1("hello") . "\n";
+
+// Encoding
+echo "\n--- Encoding ---\n";
+echo "htmlspecialchars: " . htmlspecialchars("<b>bold</b>") . "\n";
+echo "urlencode: " . urlencode("hello world") . "\n";
+echo "base64: " . base64_encode("Hello") . "\n";
+
+// Validation
+echo "\n--- Validation ---\n";
+echo "ctype_alpha('abc'): " . (ctype_alpha("abc") ? "yes" : "no") . "\n";
+echo "ctype_digit('123'): " . (ctype_digit("123") ? "yes" : "no") . "\n";

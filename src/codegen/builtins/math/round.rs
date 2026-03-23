@@ -15,7 +15,7 @@ pub fn emit(
     emitter.comment("round()");
     let ty = emit_expr(&args[0], emitter, ctx, data);
     // -- convert int to float if needed, then round to nearest with ties away from zero --
-    if ty != PhpType::Float { emitter.instruction("scvtf d0, x0"); }    // convert signed int to float
-    emitter.instruction("frinta d0, d0");                               // round to nearest, ties away from zero
+    if ty != PhpType::Float { emitter.instruction("scvtf d0, x0"); }            // convert signed int to float
+    emitter.instruction("frinta d0, d0");                                       // round to nearest, ties away from zero
     Some(PhpType::Float)
 }

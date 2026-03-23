@@ -24,8 +24,8 @@ pub fn emit(
     };
     // -- load pointer and length of type name string --
     let (label, len) = data.add_string(type_str.as_bytes());
-    emitter.instruction(&format!("adrp x1, {}@PAGE", label));           // load page address of type name string
-    emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", label));     // add page offset to get full address
-    emitter.instruction(&format!("mov x2, #{}", len));                  // load string length into x2
+    emitter.instruction(&format!("adrp x1, {}@PAGE", label));                   // load page address of type name string
+    emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", label));             // add page offset to get full address
+    emitter.instruction(&format!("mov x2, #{}", len));                          // load string length into x2
     Some(PhpType::Str)
 }

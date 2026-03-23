@@ -368,6 +368,23 @@ foreach ($names as $name) {
 | `wordwrap()` | `wordwrap($str [, $width, $break]): string` | Wrap text at width |
 | `bin2hex()` | `bin2hex($str): string` | Convert binary to hex |
 | `hex2bin()` | `hex2bin($str): string` | Convert hex to binary |
+| `sprintf()` | `sprintf($fmt, ...): string` | Format string (%s, %d, %f, %x, %%) |
+| `printf()` | `printf($fmt, ...): int` | Format and print |
+| `md5()` | `md5($str): string` | MD5 hash (32-char hex) |
+| `sha1()` | `sha1($str): string` | SHA1 hash (40-char hex) |
+| `htmlspecialchars()` | `htmlspecialchars($str): string` | Escape HTML special chars |
+| `htmlentities()` | `htmlentities($str): string` | Alias for htmlspecialchars |
+| `html_entity_decode()` | `html_entity_decode($str): string` | Decode HTML entities |
+| `urlencode()` | `urlencode($str): string` | URL-encode (spaces as +) |
+| `urldecode()` | `urldecode($str): string` | URL-decode |
+| `rawurlencode()` | `rawurlencode($str): string` | URL-encode (spaces as %20) |
+| `rawurldecode()` | `rawurldecode($str): string` | URL-decode (RFC 3986) |
+| `base64_encode()` | `base64_encode($str): string` | Base64 encode |
+| `base64_decode()` | `base64_decode($str): string` | Base64 decode |
+| `ctype_alpha()` | `ctype_alpha($str): bool` | All chars are A-Z/a-z |
+| `ctype_digit()` | `ctype_digit($str): bool` | All chars are 0-9 |
+| `ctype_alnum()` | `ctype_alnum($str): bool` | All chars are alphanumeric |
+| `ctype_space()` | `ctype_space($str): bool` | All chars are whitespace |
 | `intval()` | `intval($val): int` | Converts to integer |
 
 ### Array functions

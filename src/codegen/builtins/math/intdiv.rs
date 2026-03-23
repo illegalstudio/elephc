@@ -15,9 +15,9 @@ pub fn emit(
     emitter.comment("intdiv()");
     // -- integer division: dividend / divisor --
     emit_expr(&args[0], emitter, ctx, data);
-    emitter.instruction("str x0, [sp, #-16]!");                         // push dividend onto stack
+    emitter.instruction("str x0, [sp, #-16]!");                                 // push dividend onto stack
     emit_expr(&args[1], emitter, ctx, data);
-    emitter.instruction("ldr x1, [sp], #16");                           // pop dividend into x1
-    emitter.instruction("sdiv x0, x1, x0");                             // x0 = x1 / x0 (signed integer divide)
+    emitter.instruction("ldr x1, [sp], #16");                                   // pop dividend into x1
+    emitter.instruction("sdiv x0, x1, x0");                                     // x0 = x1 / x0 (signed integer divide)
     Some(PhpType::Int)
 }

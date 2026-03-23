@@ -41,6 +41,8 @@ mod rawurlencode;
 mod base64_encode;
 mod base64_decode;
 mod sprintf;
+mod md5;
+mod sha1;
 
 pub use itoa::emit_itoa;
 pub use concat::emit_concat;
@@ -85,3 +87,5 @@ pub use rawurlencode::emit_rawurlencode;
 pub use base64_encode::emit_base64_encode;
 pub use base64_decode::emit_base64_decode;
 pub use sprintf::emit_sprintf;
+pub use md5::emit_md5;
+pub use sha1::emit_sha1;

@@ -15,7 +15,7 @@ pub fn emit(
     emitter.comment("rsort()");
     emit_expr(&args[0], emitter, ctx, data);
     // -- sort integer array in descending order --
-    emitter.instruction("bl __rt_rsort_int");                           // call runtime: sort array of integers descending
+    emitter.instruction("bl __rt_rsort_int");                                   // call runtime: sort array of integers descending
 
     Some(PhpType::Void)
 }

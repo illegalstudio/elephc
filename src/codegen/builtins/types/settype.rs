@@ -24,7 +24,7 @@ pub fn emit(
                     match &old_ty {
                         PhpType::Float => { emitter.instruction("fcvtzs x0, d0"); } // convert float to signed int (truncate toward zero)
                         PhpType::Bool | PhpType::Int => {}
-                        _ => { emitter.instruction("mov x0, #0"); }     // unsupported types become 0
+                        _ => { emitter.instruction("mov x0, #0"); }             // unsupported types become 0
                     }
                     PhpType::Int
                 }
@@ -32,7 +32,7 @@ pub fn emit(
                     // -- convert value to float --
                     match &old_ty {
                         PhpType::Float => {}
-                        _ => { emitter.instruction("scvtf d0, x0"); }   // convert signed int/bool to float
+                        _ => { emitter.instruction("scvtf d0, x0"); }           // convert signed int/bool to float
                     }
                     PhpType::Float
                 }
@@ -43,8 +43,8 @@ pub fn emit(
                 "bool" | "boolean" => {
                     // -- convert value to boolean --
                     crate::codegen::expr::coerce_null_to_zero(emitter, &old_ty);
-                    emitter.instruction("cmp x0, #0");                  // compare value against zero
-                    emitter.instruction("cset x0, ne");                 // x0 = 1 if truthy, 0 if falsy
+                    emitter.instruction("cmp x0, #0");                          // compare value against zero
+                    emitter.instruction("cset x0, ne");                         // x0 = 1 if truthy, 0 if falsy
                     PhpType::Bool
                 }
                 _ => old_ty.clone(),
@@ -54,6 +54,6 @@ pub fn emit(
         }
     }
     // -- settype() always returns true --
-    emitter.instruction("mov x0, #1");                                  // return true (settype always succeeds)
+    emitter.instruction("mov x0, #1");                                          // return true (settype always succeeds)
     Some(PhpType::Bool)
 }

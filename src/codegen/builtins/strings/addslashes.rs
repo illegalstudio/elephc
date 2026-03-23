@@ -14,6 +14,6 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("addslashes()");
     emit_expr(&args[0], emitter, ctx, data);
-    emitter.instruction("bl __rt_addslashes");                          // call runtime: escape quotes and backslashes
+    emitter.instruction("bl __rt_addslashes");                                  // call runtime: escape quotes and backslashes
     Some(PhpType::Str)
 }

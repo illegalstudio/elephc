@@ -2905,3 +2905,29 @@ fn test_string_escaped_dollar() {
     let out = compile_and_run(r#"<?php echo "price is \$5";"#);
     assert_eq!(out, "price is $5");
 }
+
+// --- md5 / sha1 ---
+
+#[test]
+fn test_md5_empty() {
+    let out = compile_and_run(r#"<?php echo md5("");"#);
+    assert_eq!(out, "d41d8cd98f00b204e9800998ecf8427e");
+}
+
+#[test]
+fn test_md5_hello() {
+    let out = compile_and_run(r#"<?php echo md5("Hello");"#);
+    assert_eq!(out, "8b1a9953c4611296a827abf8c47804d7");
+}
+
+#[test]
+fn test_sha1_empty() {
+    let out = compile_and_run(r#"<?php echo sha1("");"#);
+    assert_eq!(out, "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+}
+
+#[test]
+fn test_sha1_hello() {
+    let out = compile_and_run(r#"<?php echo sha1("Hello");"#);
+    assert_eq!(out, "f7ff9e8b7bb2e09b70935a5d785e0cc5d9d0abf0");
+}

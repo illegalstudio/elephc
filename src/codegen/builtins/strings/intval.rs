@@ -16,7 +16,7 @@ pub fn emit(
     let ty = emit_expr(&args[0], emitter, ctx, data);
     if ty == PhpType::Str {
         // -- convert string to integer --
-        emitter.instruction("bl __rt_atoi");                            // call runtime: parse string as integer into x0
+        emitter.instruction("bl __rt_atoi");                                    // call runtime: parse string as integer into x0
     }
     Some(PhpType::Int)
 }

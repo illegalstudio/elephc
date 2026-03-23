@@ -15,7 +15,7 @@ pub fn emit(
     emitter.comment("strlen()");
     emit_expr(&args[0], emitter, ctx, data);
     // -- return the string length as an integer --
-    emitter.instruction("mov x0, x2");                                  // move string length to return register
+    emitter.instruction("mov x0, x2");                                          // move string length to return register
 
     Some(PhpType::Int)
 }

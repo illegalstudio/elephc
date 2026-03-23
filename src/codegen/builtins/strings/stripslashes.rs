@@ -14,6 +14,6 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("stripslashes()");
     emit_expr(&args[0], emitter, ctx, data);
-    emitter.instruction("bl __rt_stripslashes");                        // call runtime: remove escape backslashes
+    emitter.instruction("bl __rt_stripslashes");                                // call runtime: remove escape backslashes
     Some(PhpType::Str)
 }

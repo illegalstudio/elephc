@@ -15,7 +15,7 @@ pub fn emit(
     emitter.comment("strtoupper()");
     emit_expr(&args[0], emitter, ctx, data);
     // -- convert all characters to uppercase --
-    emitter.instruction("bl __rt_strtoupper");                          // call runtime: uppercase string in-place, result in x1/x2
+    emitter.instruction("bl __rt_strtoupper");                                  // call runtime: uppercase string in-place, result in x1/x2
 
     Some(PhpType::Str)
 }

@@ -15,7 +15,7 @@ pub fn emit(
     emitter.comment("strrev()");
     emit_expr(&args[0], emitter, ctx, data);
     // -- reverse the string --
-    emitter.instruction("bl __rt_strrev");                              // call runtime: reverse string, result in x1/x2
+    emitter.instruction("bl __rt_strrev");                                      // call runtime: reverse string, result in x1/x2
 
     Some(PhpType::Str)
 }

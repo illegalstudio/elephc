@@ -432,6 +432,13 @@ impl Checker {
                 for arg in args { self.infer_type(arg, env)?; }
                 Ok(Some(PhpType::Int))
             }
+            "md5" | "sha1" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, &format!("{}() takes exactly 1 argument", name)));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Str))
+            }
             "htmlspecialchars" | "htmlentities" | "html_entity_decode"
             | "urlencode" | "urldecode" | "rawurlencode" | "rawurldecode"
             | "base64_encode" | "base64_decode" => {

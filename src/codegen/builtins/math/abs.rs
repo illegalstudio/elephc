@@ -16,12 +16,12 @@ pub fn emit(
     let ty = emit_expr(&args[0], emitter, ctx, data);
     if ty == PhpType::Float {
         // -- float absolute value --
-        emitter.instruction("fabs d0, d0");                             // take absolute value of float in d0
+        emitter.instruction("fabs d0, d0");                                     // take absolute value of float in d0
         Some(PhpType::Float)
     } else {
         // -- integer absolute value via conditional negate --
-        emitter.instruction("cmp x0, #0");                              // compare integer value against zero
-        emitter.instruction("cneg x0, x0, lt");                         // negate x0 if it was negative (lt)
+        emitter.instruction("cmp x0, #0");                                      // compare integer value against zero
+        emitter.instruction("cneg x0, x0, lt");                                 // negate x0 if it was negative (lt)
         Some(PhpType::Int)
     }
 }

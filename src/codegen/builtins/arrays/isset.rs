@@ -15,7 +15,7 @@ pub fn emit(
     emitter.comment("isset()");
     emit_expr(&args[0], emitter, ctx, data);
     // -- compiled variables always exist, so isset returns true --
-    emitter.instruction("mov x0, #1");                                  // return 1 (true) since variable is always set
+    emitter.instruction("mov x0, #1");                                          // return 1 (true) since variable is always set
 
     Some(PhpType::Int)
 }

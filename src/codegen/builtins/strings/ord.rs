@@ -15,7 +15,7 @@ pub fn emit(
     emitter.comment("ord()");
     emit_expr(&args[0], emitter, ctx, data);
     // -- return ASCII value of first character --
-    emitter.instruction("ldrb w0, [x1]");                               // load first byte from string ptr as unsigned int
+    emitter.instruction("ldrb w0, [x1]");                                       // load first byte from string ptr as unsigned int
 
     Some(PhpType::Int)
 }

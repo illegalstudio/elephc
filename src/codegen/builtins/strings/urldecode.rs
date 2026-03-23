@@ -14,6 +14,6 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("urldecode()");
     emit_expr(&args[0], emitter, ctx, data);
-    emitter.instruction("bl __rt_urldecode");                             // call runtime: decode percent-encoded string
+    emitter.instruction("bl __rt_urldecode");                                   // call runtime: decode percent-encoded string
     Some(PhpType::Str)
 }

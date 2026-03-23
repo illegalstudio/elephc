@@ -15,7 +15,7 @@ pub fn emit(
     emitter.comment("chr()");
     emit_expr(&args[0], emitter, ctx, data);
     // -- convert ASCII code to single-character string --
-    emitter.instruction("bl __rt_chr");                                 // call runtime: write byte x0 to buffer, return x1/x2
+    emitter.instruction("bl __rt_chr");                                         // call runtime: write byte x0 to buffer, return x1/x2
 
     Some(PhpType::Str)
 }

@@ -16,7 +16,7 @@ pub fn emit(
     let ty = emit_expr(&args[0], emitter, ctx, data);
     if ty != PhpType::Float {
         // -- convert integer to double-precision float --
-        emitter.instruction("scvtf d0, x0");                            // convert signed int x0 to float d0
+        emitter.instruction("scvtf d0, x0");                                    // convert signed int x0 to float d0
     }
     Some(PhpType::Float)
 }

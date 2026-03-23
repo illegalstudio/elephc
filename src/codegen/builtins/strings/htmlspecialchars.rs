@@ -14,6 +14,6 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("htmlspecialchars()");
     emit_expr(&args[0], emitter, ctx, data);
-    emitter.instruction("bl __rt_htmlspecialchars");                       // call runtime: convert special chars to HTML entities
+    emitter.instruction("bl __rt_htmlspecialchars");                            // call runtime: convert special chars to HTML entities
     Some(PhpType::Str)
 }

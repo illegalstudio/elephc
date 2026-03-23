@@ -15,7 +15,7 @@ pub fn emit(
     emitter.comment("boolval()");
     // -- convert any value to boolean (truthy/falsy) --
     emit_expr(&args[0], emitter, ctx, data);
-    emitter.instruction("cmp x0, #0");                                  // compare value against zero
-    emitter.instruction("cset x0, ne");                                 // x0 = 1 if nonzero (truthy), 0 if zero
+    emitter.instruction("cmp x0, #0");                                          // compare value against zero
+    emitter.instruction("cset x0, ne");                                         // x0 = 1 if nonzero (truthy), 0 if zero
     Some(PhpType::Bool)
 }

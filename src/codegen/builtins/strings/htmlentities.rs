@@ -14,6 +14,6 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("htmlentities()");
     emit_expr(&args[0], emitter, ctx, data);
-    emitter.instruction("bl __rt_htmlspecialchars");                       // call runtime: alias for htmlspecialchars
+    emitter.instruction("bl __rt_htmlspecialchars");                            // call runtime: alias for htmlspecialchars
     Some(PhpType::Str)
 }

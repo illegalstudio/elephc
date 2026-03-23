@@ -14,6 +14,6 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("ucwords()");
     emit_expr(&args[0], emitter, ctx, data);
-    emitter.instruction("bl __rt_ucwords");                             // call runtime: uppercase first letter of each word
+    emitter.instruction("bl __rt_ucwords");                                     // call runtime: uppercase first letter of each word
     Some(PhpType::Str)
 }

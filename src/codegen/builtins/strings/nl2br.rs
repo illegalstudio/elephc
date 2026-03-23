@@ -14,6 +14,6 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("nl2br()");
     emit_expr(&args[0], emitter, ctx, data);
-    emitter.instruction("bl __rt_nl2br");                               // call runtime: insert <br /> before newlines
+    emitter.instruction("bl __rt_nl2br");                                       // call runtime: insert <br /> before newlines
     Some(PhpType::Str)
 }

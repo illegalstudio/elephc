@@ -14,6 +14,6 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("urlencode()");
     emit_expr(&args[0], emitter, ctx, data);
-    emitter.instruction("bl __rt_urlencode");                             // call runtime: percent-encode string for URLs
+    emitter.instruction("bl __rt_urlencode");                                   // call runtime: percent-encode string for URLs
     Some(PhpType::Str)
 }

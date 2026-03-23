@@ -15,8 +15,8 @@ pub fn emit(
     emitter.comment("is_nan()");
     let ty = emit_expr(&args[0], emitter, ctx, data);
     // -- NaN is the only value that does not equal itself --
-    if ty != PhpType::Float { emitter.instruction("scvtf d0, x0"); }    // convert int to float if needed
-    emitter.instruction("fcmp d0, d0");                                 // compare float with itself (NaN != NaN)
-    emitter.instruction("cset x0, vs");                                 // x0 = 1 if unordered (NaN), 0 otherwise
+    if ty != PhpType::Float { emitter.instruction("scvtf d0, x0"); }            // convert int to float if needed
+    emitter.instruction("fcmp d0, d0");                                         // compare float with itself (NaN != NaN)
+    emitter.instruction("cset x0, vs");                                         // x0 = 1 if unordered (NaN), 0 otherwise
     Some(PhpType::Bool)
 }

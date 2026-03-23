@@ -14,6 +14,6 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("rawurlencode()");
     emit_expr(&args[0], emitter, ctx, data);
-    emitter.instruction("bl __rt_rawurlencode");                          // call runtime: RFC 3986 percent-encode string
+    emitter.instruction("bl __rt_rawurlencode");                                // call runtime: RFC 3986 percent-encode string
     Some(PhpType::Str)
 }
