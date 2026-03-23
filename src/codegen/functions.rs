@@ -17,9 +17,33 @@ pub fn emit_function(
 ) {
     let label = format!("_fn_{}", name);
     let epilogue_label = format!("_fn_{}_epilogue", name);
+    emit_function_with_label(emitter, data, &label, &epilogue_label, sig, body, all_functions);
+}
+
+pub fn emit_closure(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    label: &str,
+    sig: &FunctionSig,
+    body: &[crate::parser::ast::Stmt],
+    all_functions: &HashMap<String, FunctionSig>,
+) {
+    let epilogue_label = format!("{}_epilogue", label);
+    emit_function_with_label(emitter, data, label, &epilogue_label, sig, body, all_functions);
+}
+
+fn emit_function_with_label(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    label: &str,
+    epilogue_label: &str,
+    sig: &FunctionSig,
+    body: &[crate::parser::ast::Stmt],
+    all_functions: &HashMap<String, FunctionSig>,
+) {
 
     let mut ctx = Context::new();
-    ctx.return_label = Some(epilogue_label.clone());
+    ctx.return_label = Some(epilogue_label.to_string());
     ctx.functions = all_functions.clone();
 
     for (pname, pty) in &sig.params {
@@ -234,6 +258,8 @@ fn infer_local_type(
                 CastType::Array => PhpType::Array(Box::new(PhpType::Int)),
             }
         }
+        ExprKind::Closure { .. } => PhpType::Callable,
+        ExprKind::ClosureCall { .. } => PhpType::Int,
         _ => PhpType::Int,
     }
 }

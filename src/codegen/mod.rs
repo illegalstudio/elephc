@@ -101,6 +101,9 @@ pub fn generate(
     emitter.instruction("mov x16, #1");                                         // syscall number 1 = exit
     emitter.instruction("svc #0x80");                                           // invoke macOS kernel
 
+    // -- emit deferred closures --
+    emit_deferred_closures(&mut emitter, &mut data, &mut ctx);
+
     // -- emit runtime routines and data sections --
     runtime::emit_runtime(&mut emitter);
 
@@ -116,6 +119,27 @@ pub fn generate(
     output.push_str(&runtime_data);
 
     output
+}
+
+fn emit_deferred_closures(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    ctx: &mut Context,
+) {
+    // Drain closures — new closures can be added during emission (nested closures)
+    while !ctx.deferred_closures.is_empty() {
+        let closures: Vec<_> = ctx.deferred_closures.drain(..).collect();
+        for closure in closures {
+            self::functions::emit_closure(
+                emitter,
+                data,
+                &closure.label,
+                &closure.sig,
+                &closure.body,
+                &ctx.functions,
+            );
+        }
+    }
 }
 
 fn align16(n: usize) -> usize {

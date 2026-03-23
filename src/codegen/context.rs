@@ -1,9 +1,19 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::parser::ast::Stmt;
 use crate::types::{FunctionSig, PhpType};
 
 static GLOBAL_LABEL_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+/// A closure body to be emitted after the current function.
+#[allow(dead_code)]
+pub struct DeferredClosure {
+    pub label: String,
+    pub params: Vec<String>,
+    pub body: Vec<Stmt>,
+    pub sig: FunctionSig,
+}
 
 pub struct Context {
     pub variables: HashMap<String, VarInfo>,
@@ -11,6 +21,7 @@ pub struct Context {
     pub loop_stack: Vec<LoopLabels>,
     pub return_label: Option<String>,
     pub functions: HashMap<String, FunctionSig>,
+    pub deferred_closures: Vec<DeferredClosure>,
 }
 
 pub struct VarInfo {
@@ -31,6 +42,7 @@ impl Context {
             loop_stack: Vec::new(),
             return_label: None,
             functions: HashMap::new(),
+            deferred_closures: Vec::new(),
         }
     }
 

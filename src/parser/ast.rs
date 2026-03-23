@@ -51,6 +51,15 @@ pub enum ExprKind {
         target: CastType,
         expr: Box<Expr>,
     },
+    Closure {
+        params: Vec<String>,
+        body: Vec<Stmt>,
+        is_arrow: bool,
+    },
+    ClosureCall {
+        var: String,
+        args: Vec<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

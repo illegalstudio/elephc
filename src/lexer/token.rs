@@ -52,6 +52,8 @@ pub enum Token {
     Stdin,
     Stdout,
     Stderr,
+    Fn,             // fn (arrow functions)
+    Use,            // use (closure captures — reserved for future)
 
     // Operators
     Assign,         // =

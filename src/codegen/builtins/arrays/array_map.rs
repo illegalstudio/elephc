@@ -14,24 +14,45 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("array_map()");
 
-    // -- resolve callback function address at compile time --
-    let func_name = match &args[0].kind {
-        ExprKind::StringLiteral(name) => name.clone(),
-        _ => panic!("array_map() callback must be a string literal"),
-    };
-    let label = format!("_fn_{}", func_name);
+    // -- evaluate the callback argument (may be a string literal or closure) --
+    let is_closure = matches!(&args[0].kind, ExprKind::Closure { .. });
+    if is_closure {
+        // Evaluate closure → x0 = function address
+        emit_expr(&args[0], emitter, ctx, data);
+        emitter.instruction("str x0, [sp, #-16]!");                             // save callback address on stack
+    }
 
     // -- evaluate the array argument --
     let arr_ty = emit_expr(&args[1], emitter, ctx, data);
 
     // -- save array pointer, load callback address into x19 --
     emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer onto stack
-    emitter.instruction(&format!("adrp x19, {}@PAGE", label));                  // load page address of callback function
-    emitter.instruction(&format!("add x19, x19, {}@PAGEOFF", label));           // resolve full address of callback function
+
+    if is_closure {
+        // -- load callback address from saved stack slot --
+        emitter.instruction("ldr x19, [sp, #16]");                              // peek callback address (saved before array)
+    } else if let ExprKind::Variable(var_name) = &args[0].kind {
+        // Callable variable — load from stack slot
+        let var = ctx.variables.get(var_name).expect("undefined callback variable");
+        let offset = var.stack_offset;
+        emitter.instruction(&format!("ldur x19, [x29, #-{}]", offset));         // load callback address from variable
+    } else {
+        // String literal — resolve at compile time
+        let func_name = match &args[0].kind {
+            ExprKind::StringLiteral(name) => name.clone(),
+            _ => panic!("array_map() callback must be a string literal, closure, or callable variable"),
+        };
+        let label = format!("_fn_{}", func_name);
+        emitter.instruction(&format!("adrp x19, {}@PAGE", label));              // load page address of callback function
+        emitter.instruction(&format!("add x19, x19, {}@PAGEOFF", label));       // resolve full address of callback function
+    }
 
     // -- call runtime: x0=callback_addr, x1=array_ptr --
     emitter.instruction("mov x0, x19");                                         // x0 = callback function address
     emitter.instruction("ldr x1, [sp], #16");                                   // pop array pointer into x1
+    if is_closure {
+        emitter.instruction("add sp, sp, #16");                                 // discard saved callback address
+    }
     emitter.instruction("bl __rt_array_map");                                   // call runtime: map callback over array → x0=new array
 
     match arr_ty {

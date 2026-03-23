@@ -20,14 +20,24 @@ pub fn emit(
     // -- save array pointer --
     emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer onto stack
 
-    // -- resolve callback function address at compile time --
-    let func_name = match &args[1].kind {
-        ExprKind::StringLiteral(name) => name.clone(),
-        _ => panic!("uasort() callback must be a string literal"),
-    };
-    let label = format!("_fn_{}", func_name);
-    emitter.instruction(&format!("adrp x19, {}@PAGE", label));                  // load page address of comparator function
-    emitter.instruction(&format!("add x19, x19, {}@PAGEOFF", label));           // resolve full address of comparator function
+    // -- resolve callback function address --
+    let is_closure = matches!(&args[1].kind, ExprKind::Closure { .. });
+    if is_closure {
+        emit_expr(&args[1], emitter, ctx, data);
+        emitter.instruction("mov x19, x0");                                     // move closure address to x19
+    } else if let ExprKind::Variable(var_name) = &args[1].kind {
+        let var = ctx.variables.get(var_name).expect("undefined callback variable");
+        let offset = var.stack_offset;
+        emitter.instruction(&format!("ldur x19, [x29, #-{}]", offset));         // load callback address from variable
+    } else {
+        let func_name = match &args[1].kind {
+            ExprKind::StringLiteral(name) => name.clone(),
+            _ => panic!("uasort() callback must be a string literal, closure, or callable variable"),
+        };
+        let label = format!("_fn_{}", func_name);
+        emitter.instruction(&format!("adrp x19, {}@PAGE", label));              // load page address of comparator function
+        emitter.instruction(&format!("add x19, x19, {}@PAGEOFF", label));       // resolve full address of comparator function
+    }
 
     // -- call runtime: x0=callback_addr, x1=array_ptr --
     emitter.instruction("mov x0, x19");                                         // x0 = comparator function address

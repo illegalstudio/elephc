@@ -350,6 +350,35 @@ impl Checker {
                 }
                 self.check_function_call(&name, &args, expr.span, env)
             }
+            ExprKind::Closure { params, body, is_arrow: _ } => {
+                // Type-check the closure body in its own environment
+                let mut closure_env: TypeEnv = env.clone();
+                // Add params as Int (simple default for now — they'll be refined at call site)
+                for p in params {
+                    closure_env.insert(p.clone(), PhpType::Int);
+                }
+                for stmt in body {
+                    self.check_stmt(stmt, &mut closure_env)?;
+                }
+                Ok(PhpType::Callable)
+            }
+            ExprKind::ClosureCall { var, args } => {
+                let var_ty = env.get(var).cloned().ok_or_else(|| {
+                    CompileError::new(expr.span, &format!("Undefined variable: ${}", var))
+                })?;
+                if var_ty != PhpType::Callable {
+                    return Err(CompileError::new(
+                        expr.span,
+                        &format!("Cannot call ${} — not a callable (got {:?})", var, var_ty),
+                    ));
+                }
+                for arg in args {
+                    self.infer_type(arg, env)?;
+                }
+                // We don't know the return type of the closure at the type-checking level,
+                // so we return Int as default. The codegen will handle it correctly.
+                Ok(PhpType::Int)
+            }
             ExprKind::BinaryOp { left, op, right } => {
                 let lt = self.infer_type(left, env)?;
                 let rt = self.infer_type(right, env)?;

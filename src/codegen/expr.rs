@@ -163,6 +163,12 @@ pub fn emit_expr(
             }
             emit_function_call(name, args, emitter, ctx, data)
         }
+        ExprKind::Closure { params, body, is_arrow: _ } => {
+            emit_closure(params, body, emitter, ctx, data)
+        }
+        ExprKind::ClosureCall { var, args } => {
+            emit_closure_call(var, args, emitter, ctx, data)
+        }
         ExprKind::BinaryOp { left, op, right } => emit_binop(left, op, right, emitter, ctx, data),
     }
 }
@@ -810,6 +816,119 @@ fn emit_function_call(
         .get(name)
         .map(|sig| sig.return_type.clone())
         .unwrap_or(PhpType::Void)
+}
+
+fn emit_closure(
+    params: &[String],
+    body: &[crate::parser::ast::Stmt],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    _data: &mut DataSection,
+) -> PhpType {
+    let closure_label = ctx.next_label("closure");
+
+    // -- build a FunctionSig for the closure (params default to Int) --
+    let param_types: Vec<(String, crate::types::PhpType)> = params
+        .iter()
+        .map(|p| (p.clone(), PhpType::Int))
+        .collect();
+    let sig = crate::types::FunctionSig {
+        params: param_types,
+        return_type: PhpType::Int,
+    };
+
+    // -- defer the closure body emission for later --
+    ctx.deferred_closures.push(super::context::DeferredClosure {
+        label: closure_label.clone(),
+        params: params.to_vec(),
+        body: body.to_vec(),
+        sig,
+    });
+
+    emitter.comment("closure: load function address");
+    // -- load closure function address into x0 --
+    emitter.instruction(&format!("adrp x0, {}@PAGE", closure_label));           // load page base of closure function
+    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", closure_label));     // add page offset to get exact closure address
+    PhpType::Callable
+}
+
+fn emit_closure_call(
+    var: &str,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    emitter.comment(&format!("call ${}()", var));
+
+    // -- evaluate arguments and push onto stack --
+    let mut arg_types = Vec::new();
+    for arg in args {
+        let ty = emit_expr(arg, emitter, ctx, data);
+        match &ty {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
+                emitter.instruction("str x0, [sp, #-16]!");                     // push int/bool/array/callable arg onto stack
+            }
+            PhpType::Float => {
+                emitter.instruction("str d0, [sp, #-16]!");                     // push float arg onto stack
+            }
+            PhpType::Str => {
+                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push string ptr+len arg onto stack
+            }
+            PhpType::Void => {}
+        }
+        arg_types.push(ty);
+    }
+
+    // -- load the closure function address from the variable's stack slot --
+    let var_info = ctx.variables.get(var).expect("undefined closure variable");
+    let var_offset = var_info.stack_offset;
+    emitter.instruction(&format!("ldur x9, [x29, #-{}]", var_offset));          // load closure function address from stack
+
+    // -- save closure address while we pop args into registers --
+    emitter.instruction("str x9, [sp, #-16]!");                                 // push closure address temporarily
+
+    // -- pop arguments from stack into ABI registers in reverse order --
+    // Separate int and float register tracking
+    let mut assignments: Vec<(PhpType, usize, bool)> = Vec::new();
+    let mut int_reg_idx = 0usize;
+    let mut float_reg_idx = 0usize;
+    for ty in &arg_types {
+        if ty.is_float_reg() {
+            assignments.push((ty.clone(), float_reg_idx, true));
+            float_reg_idx += 1;
+        } else {
+            assignments.push((ty.clone(), int_reg_idx, false));
+            int_reg_idx += ty.register_count();
+        }
+    }
+
+    // Pop closure address first (it's on top of args stack)
+    emitter.instruction("ldr x9, [sp], #16");                                   // pop closure function address into x9
+
+    for i in (0..args.len()).rev() {
+        let (ty, start_reg, _is_float) = &assignments[i];
+        match ty {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
+                emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop int/bool/array/callable arg into register
+            }
+            PhpType::Float => {
+                emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); // pop float arg into float register
+            }
+            PhpType::Str => {
+                emitter.instruction(&format!(                                   // pop string ptr+len into consecutive regs
+                    "ldp x{}, x{}, [sp], #16",
+                    start_reg,
+                    start_reg + 1
+                ));
+            }
+            PhpType::Void => {}
+        }
+    }
+
+    // -- indirect call through closure function address --
+    emitter.instruction("blr x9");                                              // branch to closure via function pointer in x9
+    PhpType::Int
 }
 
 fn emit_cast(

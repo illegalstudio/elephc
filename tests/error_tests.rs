@@ -818,3 +818,29 @@ fn test_error_call_user_func_wrong_args() {
 fn test_error_function_exists_wrong_args() {
     expect_error(r#"<?php function_exists();"#, "function_exists() takes exactly 1 argument");
 }
+
+// --- Closure / arrow function errors ---
+
+#[test]
+fn test_error_call_non_callable_variable() {
+    expect_error(
+        r#"<?php $x = 5; $x(1);"#,
+        "not a callable",
+    );
+}
+
+#[test]
+fn test_error_arrow_function_missing_arrow() {
+    expect_error(
+        r#"<?php $f = fn($x) $x * 2;"#,
+        "Expected '=>'",
+    );
+}
+
+#[test]
+fn test_error_arrow_function_missing_lparen() {
+    expect_error(
+        r#"<?php $f = fn $x => $x * 2;"#,
+        "Expected '(' after 'fn'",
+    );
+}

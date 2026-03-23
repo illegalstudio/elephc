@@ -151,6 +151,13 @@ fn parse_variable_stmt(
         }
     }
 
+    // Closure call: $fn(args);
+    if *pos + 1 < tokens.len() && tokens[*pos + 1].0 == Token::LParen {
+        let expr = parse_expr(tokens, pos)?;
+        expect_semicolon(tokens, pos)?;
+        return Ok(Stmt::new(StmtKind::ExprStmt(expr), span));
+    }
+
     // Regular or compound assignment
     parse_assign(tokens, pos, span)
 }

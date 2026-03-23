@@ -1,6 +1,6 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
-use crate::parser::ast::{BinOp, CastType, Expr, ExprKind};
+use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Stmt, StmtKind};
 use crate::span::Span;
 
 pub fn parse_expr(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, CompileError> {
@@ -227,6 +227,25 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                         *pos += 1;
                         return Ok(Expr::new(ExprKind::PostDecrement(name), span));
                     }
+                    // Closure call: $fn(args)
+                    Token::LParen => {
+                        *pos += 1;
+                        let mut args = Vec::new();
+                        while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
+                            if !args.is_empty() {
+                                if tokens[*pos].0 != Token::Comma {
+                                    return Err(CompileError::new(tokens[*pos].1, "Expected ',' between arguments"));
+                                }
+                                *pos += 1;
+                            }
+                            args.push(parse_expr(tokens, pos)?);
+                        }
+                        if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
+                            return Err(CompileError::new(span, "Expected ')' after arguments"));
+                        }
+                        *pos += 1;
+                        return Ok(Expr::new(ExprKind::ClosureCall { var: name, args }, span));
+                    }
                     _ => {}
                 }
             }
@@ -369,6 +388,79 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                     arms,
                     default,
                 },
+                span,
+            ))
+        }
+        Token::Function => {
+            // Anonymous function: function($x, $y) { ... }
+            // Only parse as expression if next token is '(' (no name)
+            if *pos + 1 < tokens.len() && tokens[*pos + 1].0 == Token::LParen {
+                *pos += 1; // consume 'function'
+                *pos += 1; // consume '('
+                let mut params = Vec::new();
+                while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
+                    if !params.is_empty() {
+                        if tokens[*pos].0 != Token::Comma {
+                            return Err(CompileError::new(tokens[*pos].1, "Expected ',' between parameters"));
+                        }
+                        *pos += 1;
+                    }
+                    match tokens.get(*pos).map(|(t, _)| t) {
+                        Some(Token::Variable(n)) => {
+                            params.push(n.clone());
+                            *pos += 1;
+                        }
+                        _ => return Err(CompileError::new(span, "Expected parameter variable")),
+                    }
+                }
+                if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
+                    return Err(CompileError::new(span, "Expected ')' after parameters"));
+                }
+                *pos += 1;
+                let body = crate::parser::stmt::parse_block(tokens, pos)?;
+                return Ok(Expr::new(
+                    ExprKind::Closure { params, body, is_arrow: false },
+                    span,
+                ));
+            }
+            return Err(CompileError::new(span, "Unexpected token: Function"));
+        }
+        Token::Fn => {
+            // Arrow function: fn($x) => expr
+            *pos += 1; // consume 'fn'
+            if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
+                return Err(CompileError::new(span, "Expected '(' after 'fn'"));
+            }
+            *pos += 1; // consume '('
+            let mut params = Vec::new();
+            while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
+                if !params.is_empty() {
+                    if tokens[*pos].0 != Token::Comma {
+                        return Err(CompileError::new(tokens[*pos].1, "Expected ',' between parameters"));
+                    }
+                    *pos += 1;
+                }
+                match tokens.get(*pos).map(|(t, _)| t) {
+                    Some(Token::Variable(n)) => {
+                        params.push(n.clone());
+                        *pos += 1;
+                    }
+                    _ => return Err(CompileError::new(span, "Expected parameter variable")),
+                }
+            }
+            if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
+                return Err(CompileError::new(span, "Expected ')' after arrow function parameters"));
+            }
+            *pos += 1;
+            // Expect =>
+            if *pos >= tokens.len() || tokens[*pos].0 != Token::DoubleArrow {
+                return Err(CompileError::new(span, "Expected '=>' after arrow function parameters"));
+            }
+            *pos += 1;
+            let body_expr = parse_expr(tokens, pos)?;
+            let body = vec![Stmt::new(StmtKind::Return(Some(body_expr)), span)];
+            Ok(Expr::new(
+                ExprKind::Closure { params, body, is_arrow: true },
                 span,
             ))
         }
