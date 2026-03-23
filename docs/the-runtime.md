@@ -153,7 +153,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 ## Array routines
 
-**Source:** `src/codegen/runtime/arrays/` (39 files)
+**Source:** `src/codegen/runtime/arrays/` (40 files)
 
 ### Core allocation
 
@@ -196,6 +196,7 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_array_combine` | Combine key array + value array → AssocArray |
 | `__rt_array_fill` / `__rt_array_fill_keys` | Create filled arrays |
 | `__rt_array_chunk` / `__rt_array_pad` | Chunk/pad arrays |
+| `__rt_array_column` | Extract column from array of assoc arrays |
 | `__rt_range` | Generate integer range array |
 | `__rt_shuffle` / `__rt_array_rand` | Randomize order / pick random |
 | `__rt_asort` / `__rt_ksort` / `__rt_natsort` | Sort preserving keys |
