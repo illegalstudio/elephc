@@ -334,6 +334,7 @@ foreach ($names as $name) {
 | Function | Signature | Description |
 |---|---|---|
 | `strlen()` | `strlen($str): int` | Returns string length |
+| `number_format()` | `number_format($n [, $dec [, $dec_point, $thou_sep]]): string` | Format number with separators |
 | `substr()` | `substr($str, $start [, $len]): string` | Extract substring |
 | `strpos()` | `strpos($hay, $needle): int` | Find first occurrence (-1 if not found) |
 | `strrpos()` | `strrpos($hay, $needle): int` | Find last occurrence (-1 if not found) |
@@ -422,7 +423,6 @@ foreach ($names as $name) {
 | `rand()` | `rand([$min, $max]): int` | Random integer (0 or 2 args) |
 | `mt_rand()` | `mt_rand([$min, $max]): int` | Alias for rand() |
 | `random_int()` | `random_int($min, $max): int` | Cryptographic random |
-| `number_format()` | `number_format($n [, $dec [, $dec_point, $thou_sep]]): string` | Format with separators |
 
 ### Type functions
 

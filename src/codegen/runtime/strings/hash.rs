@@ -9,9 +9,9 @@ pub fn emit_hash(emitter: &mut Emitter) {
     emitter.comment("--- runtime: hash ---");
     emitter.label("__rt_hash");
     emitter.instruction("sub sp, sp, #96");                                     // allocate stack frame (32 bytes hash + state)
-    emitter.instruction("stp x29, x30, [sp, #80]");                            // save frame pointer and return address
+    emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #80");                                    // set frame pointer
-    emitter.instruction("stp x3, x4, [sp, #64]");                              // save data ptr/len
+    emitter.instruction("stp x3, x4, [sp, #64]");                               // save data ptr/len
 
     // -- check algorithm name --
     // Compare first char to dispatch quickly
@@ -20,7 +20,7 @@ pub fn emit_hash(emitter: &mut Emitter) {
     // -- check for "md5" (len=3, starts with 'm') --
     emitter.instruction("cmp w9, #109");                                        // 'm'?
     emitter.instruction("b.ne __rt_hash_try_sha");                              // no → try sha*
-    emitter.instruction("ldp x0, x1, [sp, #64]");                              // x0=data ptr, x1 unused
+    emitter.instruction("ldp x0, x1, [sp, #64]");                               // x0=data ptr, x1 unused
     emitter.instruction("ldr x0, [sp, #64]");                                   // x0 = data ptr
     emitter.instruction("ldr x1, [sp, #72]");                                   // w1 = data len
     emitter.instruction("mov w1, w1");                                          // truncate to 32-bit CC_LONG
@@ -62,11 +62,11 @@ pub fn emit_hash(emitter: &mut Emitter) {
 
     // -- convert raw hash bytes to hex string --
     emitter.label("__rt_hash_hex");
-    emitter.instruction("adrp x6, _concat_off@PAGE");                          // load concat offset page
-    emitter.instruction("add x6, x6, _concat_off@PAGEOFF");                    // resolve address
+    emitter.instruction("adrp x6, _concat_off@PAGE");                           // load concat offset page
+    emitter.instruction("add x6, x6, _concat_off@PAGEOFF");                     // resolve address
     emitter.instruction("ldr x8, [x6]");                                        // load current offset
-    emitter.instruction("adrp x7, _concat_buf@PAGE");                          // load concat buffer page
-    emitter.instruction("add x7, x7, _concat_buf@PAGEOFF");                    // resolve address
+    emitter.instruction("adrp x7, _concat_buf@PAGE");                           // load concat buffer page
+    emitter.instruction("add x7, x7, _concat_buf@PAGEOFF");                     // resolve address
     emitter.instruction("add x9, x7, x8");                                      // destination pointer
     emitter.instruction("mov x10, x9");                                         // save result start
     emitter.instruction("add x11, sp, #0");                                     // source = raw hash bytes
@@ -106,7 +106,7 @@ pub fn emit_hash(emitter: &mut Emitter) {
     emitter.instruction("str x8, [x6]");                                        // store updated offset
 
     emitter.label("__rt_hash_done");
-    emitter.instruction("ldp x29, x30, [sp, #80]");                            // restore frame
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame
     emitter.instruction("add sp, sp, #96");                                     // deallocate
     emitter.instruction("ret");                                                 // return
 }
