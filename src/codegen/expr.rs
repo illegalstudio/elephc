@@ -507,7 +507,7 @@ pub fn coerce_to_string(emitter: &mut Emitter, ty: &PhpType) {
             // -- null coerces to empty string in PHP --
             emitter.instruction("mov x2, #0");                                  // null produces empty string (length = 0)
         }
-        PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. } => {}
+        PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {}
     }
 }
 
@@ -747,8 +747,8 @@ fn emit_function_call(
         let ty = emit_expr(arg, emitter, ctx, data);
         // -- save each evaluated argument on stack --
         match &ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } => {
-                emitter.instruction("str x0, [sp, #-16]!");                     // push int/bool/array-ptr arg onto stack
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
+                emitter.instruction("str x0, [sp, #-16]!");                     // push int/bool/array-ptr/callable arg onto stack
             }
             PhpType::Float => {
                 emitter.instruction("str d0, [sp, #-16]!");                     // push float arg onto stack
@@ -779,8 +779,8 @@ fn emit_function_call(
     for i in (0..args.len()).rev() {
         let (ty, start_reg, is_float) = &assignments[i];
         match ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } => {
-                emitter.instruction(&format!(                                   // pop int/bool/array arg into register
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
+                emitter.instruction(&format!(                                   // pop int/bool/array/callable arg into register
                     "ldr x{}, [sp], #16",
                     start_reg
                 ));
@@ -843,6 +843,7 @@ fn emit_cast(
                     // -- (int)array returns element count --
                     emitter.instruction("ldr x0, [x0]");                        // load array length from header (first field)
                 }
+                PhpType::Callable => {} // callable address already in x0
             }
             PhpType::Int
         }
@@ -858,7 +859,7 @@ fn emit_cast(
                     emitter.instruction("mov x0, #0");                          // load zero integer
                     emitter.instruction("scvtf d0, x0");                        // convert to 0.0 double
                 }
-                PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. } => {
+                PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
                     // -- unsupported source type: default to 0.0 --
                     emitter.instruction("mov x0, #0");                          // load zero integer
                     emitter.instruction("scvtf d0, x0");                        // convert to 0.0 double
@@ -897,6 +898,11 @@ fn emit_cast(
                     emitter.instruction("cmp x0, #0");                          // check if array is empty
                     emitter.instruction("cset x0, ne");                         // x0=1 if non-empty, 0 if empty
                 }
+                PhpType::Callable => {
+                    // -- callable is always truthy --
+                    emitter.instruction("cmp x0, #0");                          // test if callable address is zero
+                    emitter.instruction("cset x0, ne");                         // x0=1 if nonzero (truthy)
+                }
             }
             PhpType::Bool
         }
@@ -904,7 +910,7 @@ fn emit_cast(
             // Wrap scalar in single-element array
             match &src_ty {
                 PhpType::Array(_) | PhpType::AssocArray { .. } => { return src_ty; }
-                PhpType::Int | PhpType::Bool => {
+                PhpType::Int | PhpType::Bool | PhpType::Callable => {
                     // -- wrap scalar in a new single-element array --
                     emitter.instruction("str x0, [sp, #-16]!");                 // save scalar value during allocation
                     emitter.instruction("mov x0, #8");                          // initial capacity: 8 elements
@@ -1001,10 +1007,10 @@ fn emit_strict_compare(
                     emitter.instruction("eor x0, x0, #1");                      // invert result for !== (XOR with 1)
                 }
             }
-            PhpType::Array(_) | PhpType::AssocArray { .. } => {
-                // -- strict compare arrays by reference (pointer equality) --
-                emitter.instruction("ldr x1, [sp], #16");                       // pop saved left array pointer
-                emitter.instruction("cmp x1, x0");                              // compare array pointers (reference equality)
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
+                // -- strict compare arrays/callables by reference (pointer equality) --
+                emitter.instruction("ldr x1, [sp], #16");                       // pop saved left array/callable pointer
+                emitter.instruction("cmp x1, x0");                              // compare pointers (reference equality)
                 let cond = if is_eq { "eq" } else { "ne" };
                 emitter.instruction(&format!("cset x0, {}", cond));             // set boolean result from pointer comparison
             }

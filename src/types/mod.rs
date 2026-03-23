@@ -6,6 +6,7 @@ use crate::errors::CompileError;
 use crate::parser::ast::Program;
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)] // Callable used in match arms, constructed when closures are added
 pub enum PhpType {
     Int,
     Float,
@@ -17,6 +18,7 @@ pub enum PhpType {
         key: Box<PhpType>,
         value: Box<PhpType>,
     },
+    Callable,
 }
 
 impl PhpType {
@@ -30,6 +32,7 @@ impl PhpType {
             PhpType::Void => 8, // null sentinel stored as 8 bytes
             PhpType::Array(_) => 8, // pointer to heap
             PhpType::AssocArray { .. } => 8, // pointer to heap
+            PhpType::Callable => 8, // function address
         }
     }
 
@@ -43,6 +46,7 @@ impl PhpType {
             PhpType::Void => 0,
             PhpType::Array(_) => 1,
             PhpType::AssocArray { .. } => 1,
+            PhpType::Callable => 1,
         }
     }
 

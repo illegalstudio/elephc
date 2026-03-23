@@ -773,3 +773,48 @@ fn test_error_natcasesort_wrong_args() {
 fn test_error_array_column_wrong_args() {
     expect_error(r#"<?php array_column([]);"#, "array_column() takes exactly 2 arguments");
 }
+
+#[test]
+fn test_error_array_map_wrong_args() {
+    expect_error(r#"<?php array_map("fn");"#, "array_map() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_array_filter_wrong_args() {
+    expect_error(r#"<?php array_filter([]);"#, "array_filter() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_array_reduce_wrong_args() {
+    expect_error(r#"<?php array_reduce([], "fn");"#, "array_reduce() takes exactly 3 arguments");
+}
+
+#[test]
+fn test_error_array_walk_wrong_args() {
+    expect_error(r#"<?php array_walk([]);"#, "array_walk() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_usort_wrong_args() {
+    expect_error(r#"<?php usort([]);"#, "usort() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_uksort_wrong_args() {
+    expect_error(r#"<?php uksort([]);"#, "uksort() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_uasort_wrong_args() {
+    expect_error(r#"<?php uasort([]);"#, "uasort() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_call_user_func_wrong_args() {
+    expect_error(r#"<?php call_user_func();"#, "call_user_func() takes at least 1 argument");
+}
+
+#[test]
+fn test_error_function_exists_wrong_args() {
+    expect_error(r#"<?php function_exists();"#, "function_exists() takes exactly 1 argument");
+}

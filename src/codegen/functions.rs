@@ -65,9 +65,9 @@ pub fn emit_function(
                 int_reg_idx += 2;
             }
             PhpType::Void => {}
-            PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
                 emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
-                emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx, offset)); // save array heap ptr
+                emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx, offset)); // save array/callable heap ptr
                 int_reg_idx += 1;
             }
         }

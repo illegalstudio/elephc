@@ -99,6 +99,11 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_asort(emitter);
     arrays::emit_ksort(emitter);
     arrays::emit_natsort(emitter);
+    arrays::emit_array_map(emitter);
+    arrays::emit_array_filter(emitter);
+    arrays::emit_array_reduce(emitter);
+    arrays::emit_array_walk(emitter);
+    arrays::emit_usort(emitter);
 
     // I/O runtime functions
     io::emit_cstr(emitter);

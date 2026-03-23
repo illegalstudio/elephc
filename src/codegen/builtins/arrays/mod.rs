@@ -5,17 +5,20 @@ mod array_diff;
 mod array_diff_key;
 mod array_fill;
 mod array_fill_keys;
+mod array_filter;
 mod array_flip;
 mod array_intersect;
 mod array_intersect_key;
 mod array_key_exists;
 mod array_keys;
+mod array_map;
 mod array_merge;
 mod array_pad;
 mod array_pop;
 mod array_product;
 mod array_push;
 mod array_rand;
+mod array_reduce;
 mod array_reverse;
 mod array_search;
 mod array_shift;
@@ -25,9 +28,12 @@ mod array_sum;
 mod array_unique;
 mod array_unshift;
 mod array_values;
+mod array_walk;
 mod arsort;
 mod asort;
+mod call_user_func;
 mod count;
+mod function_exists;
 mod in_array;
 mod isset;
 mod krsort;
@@ -38,6 +44,9 @@ mod range;
 mod rsort;
 mod shuffle_fn;
 mod sort;
+mod uasort;
+mod uksort;
+mod usort;
 
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
@@ -93,6 +102,15 @@ pub fn emit(
         "krsort" => krsort::emit(name, args, emitter, ctx, data),
         "natsort" => natsort::emit(name, args, emitter, ctx, data),
         "natcasesort" => natcasesort::emit(name, args, emitter, ctx, data),
+        "array_map" => array_map::emit(name, args, emitter, ctx, data),
+        "array_filter" => array_filter::emit(name, args, emitter, ctx, data),
+        "array_reduce" => array_reduce::emit(name, args, emitter, ctx, data),
+        "array_walk" => array_walk::emit(name, args, emitter, ctx, data),
+        "usort" => usort::emit(name, args, emitter, ctx, data),
+        "uksort" => uksort::emit(name, args, emitter, ctx, data),
+        "uasort" => uasort::emit(name, args, emitter, ctx, data),
+        "call_user_func" => call_user_func::emit(name, args, emitter, ctx, data),
+        "function_exists" => function_exists::emit(name, args, emitter, ctx, data),
         _ => None,
     }
 }

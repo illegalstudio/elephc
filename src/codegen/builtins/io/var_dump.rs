@@ -183,6 +183,16 @@ pub fn emit(
             emitter.instruction("ldr x0, [sp], #16");                           // pop array pointer
             let _ = elem_ty;
         }
+        PhpType::Callable => {
+            // -- print "callable\n" --
+            let (lbl, len) = data.add_string(b"callable\n");
+            emitter.instruction(&format!("adrp x1, {}@PAGE", lbl));             // load "callable\n" page
+            emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", lbl));       // resolve address
+            emitter.instruction(&format!("mov x2, #{}", len));                  // string length
+            emitter.instruction("mov x0, #1");                                  // fd = stdout
+            emitter.instruction("mov x16, #4");                                 // syscall write
+            emitter.instruction("svc #0x80");                                   // invoke kernel
+        }
     }
     Some(PhpType::Void)
 }

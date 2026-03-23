@@ -548,8 +548,21 @@ foreach ($matrix as $row) {
 | `array_rand()` | `array_rand($arr [, $num]): int\|array` | Pick random key(s) |
 | **Multi-dimensional** | | |
 | `array_column()` | `array_column($arr, $column_key): array` | Extract column from array of assoc arrays |
+| **Callback-based** | | |
+| `array_map()` | `array_map("callback", $arr): array` | Apply callback to each element, return new array |
+| `array_filter()` | `array_filter($arr, "callback"): array` | Filter elements where callback returns truthy |
+| `array_reduce()` | `array_reduce($arr, "callback", $init): mixed` | Reduce array to single value via callback |
+| `array_walk()` | `array_walk($arr, "callback"): void` | Call callback on each element (side-effects) |
+| `usort()` | `usort($arr, "callback"): void` | Sort array using user comparison function |
+| `uksort()` | `uksort($arr, "callback"): void` | Sort by keys using user comparison function |
+| `uasort()` | `uasort($arr, "callback"): void` | Sort by values using user comparison, maintain keys |
+| **Function handling** | | |
+| `call_user_func()` | `call_user_func("name", ...): mixed` | Call a function by name with arguments |
+| `function_exists()` | `function_exists("name"): bool` | Check if a function is defined |
 
-**Not yet supported:** `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, `uasort()` (planned for v0.7, require closures), `compact()`, `extract()` (require dynamic variables).
+> **Note:** Callback arguments must be string literals containing the function name (e.g., `"double"`). Variable callbacks and closures are not yet supported.
+
+**Not yet supported:** `compact()`, `extract()` (require dynamic variables).
 
 ### Math functions
 

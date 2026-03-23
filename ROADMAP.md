@@ -115,14 +115,14 @@ Make string handling practical.
 - [x] Hash table runtime for string keys
 - [x] `array_key_exists()`, `array_search()`
 - [x] `array_merge()`, `array_slice()`, `array_splice()`
-- [ ] `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()` (need closures, v0.7)
+- [x] `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()` (string callbacks)
 - [x] `array_combine()`, `array_flip()`, `array_reverse()`, `array_unique()`
 - [x] `array_column()`
 - [x] `array_sum()`, `array_product()`
 - [x] `array_chunk()`, `array_pad()`, `array_fill()`, `array_fill_keys()`
 - [x] `array_diff()`, `array_intersect()`, `array_diff_key()`, `array_intersect_key()`
 - [x] `array_unshift()`, `array_shift()`
-- [ ] `usort()`, `uksort()`, `uasort()` (need closures, v0.7)
+- [x] `usort()`, `uksort()`, `uasort()` (string callbacks)
 - [x] `asort()`, `arsort()`, `ksort()`, `krsort()`
 - [x] `natsort()`, `natcasesort()`, `shuffle()`, `array_rand()`
 - [x] `range()`
@@ -145,8 +145,9 @@ Make string handling practical.
 - [ ] Heredoc / nowdoc strings
 - [ ] Bitwise operators: `&`, `|`, `^`, `~`, `<<`, `>>`
 - [ ] Spaceship operator: `<=>`
-- [ ] `call_user_func()`, `call_user_func_array()`
-- [ ] `function_exists()`
+- [x] `call_user_func()` (string callbacks)
+- [ ] `call_user_func_array()`
+- [x] `function_exists()`
 
 ## v0.8.0 — Date/time, JSON, regex
 

@@ -1,5 +1,5 @@
 use crate::errors::CompileError;
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::Checker;
@@ -934,6 +934,135 @@ impl Checker {
                 self.infer_type(&args[0], env)?;
                 self.infer_type(&args[1], env)?;
                 Ok(Some(PhpType::Array(Box::new(PhpType::Int))))
+            }
+
+            // -- callback-based array functions --
+
+            "array_map" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "array_map() takes exactly 2 arguments"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                let arr_ty = self.infer_type(&args[1], env)?;
+                // Resolve callback function so codegen emits it
+                if let ExprKind::StringLiteral(cb_name) = &args[0].kind {
+                    if let PhpType::Array(ref elem_ty) = arr_ty {
+                        let dummy_args = vec![Expr::new(
+                            ExprKind::IntLiteral(0), span,
+                        )];
+                        let mut dummy_env = env.clone();
+                        // Register param type for the callback's parameter
+                        if let Some(decl) = self.fn_decls.get(cb_name).cloned() {
+                            if !decl.params.is_empty() {
+                                dummy_env.insert(decl.params[0].clone(), *elem_ty.clone());
+                            }
+                        }
+                        let _ = self.check_function_call(cb_name, &dummy_args, span, &dummy_env);
+                    }
+                }
+                match arr_ty {
+                    PhpType::Array(elem_ty) => Ok(Some(PhpType::Array(elem_ty))),
+                    _ => Err(CompileError::new(span, "array_map() second argument must be array")),
+                }
+            }
+            "array_filter" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "array_filter() takes exactly 2 arguments"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                let arr_ty = self.infer_type(&args[0], env)?;
+                // Resolve callback function so codegen emits it
+                if let ExprKind::StringLiteral(cb_name) = &args[1].kind {
+                    let dummy_args = vec![Expr::new(
+                        ExprKind::IntLiteral(0), span,
+                    )];
+                    let _ = self.check_function_call(cb_name, &dummy_args, span, env);
+                }
+                match arr_ty {
+                    PhpType::Array(elem_ty) => Ok(Some(PhpType::Array(elem_ty))),
+                    _ => Err(CompileError::new(span, "array_filter() first argument must be array")),
+                }
+            }
+            "array_reduce" => {
+                if args.len() != 3 {
+                    return Err(CompileError::new(span, "array_reduce() takes exactly 3 arguments"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                // Resolve callback function so codegen emits it
+                if let ExprKind::StringLiteral(cb_name) = &args[1].kind {
+                    let dummy_args = vec![
+                        Expr::new(ExprKind::IntLiteral(0), span),
+                        Expr::new(ExprKind::IntLiteral(0), span),
+                    ];
+                    let _ = self.check_function_call(cb_name, &dummy_args, span, env);
+                }
+                Ok(Some(PhpType::Int))
+            }
+            "array_walk" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "array_walk() takes exactly 2 arguments"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                // Resolve callback function so codegen emits it
+                if let ExprKind::StringLiteral(cb_name) = &args[1].kind {
+                    let dummy_args = vec![Expr::new(
+                        ExprKind::IntLiteral(0), span,
+                    )];
+                    let _ = self.check_function_call(cb_name, &dummy_args, span, env);
+                }
+                Ok(Some(PhpType::Void))
+            }
+            "usort" | "uksort" | "uasort" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(
+                        span, &format!("{}() takes exactly 2 arguments", name),
+                    ));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                // Resolve callback function so codegen emits it
+                if let ExprKind::StringLiteral(cb_name) = &args[1].kind {
+                    let dummy_args = vec![
+                        Expr::new(ExprKind::IntLiteral(0), span),
+                        Expr::new(ExprKind::IntLiteral(0), span),
+                    ];
+                    let _ = self.check_function_call(cb_name, &dummy_args, span, env);
+                }
+                Ok(Some(PhpType::Void))
+            }
+            "call_user_func" => {
+                if args.is_empty() {
+                    return Err(CompileError::new(span, "call_user_func() takes at least 1 argument"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                // Resolve callback function so codegen emits it
+                if let ExprKind::StringLiteral(cb_name) = &args[0].kind {
+                    let cb_args = args[1..].to_vec();
+                    let ret_ty = self.check_function_call(cb_name, &cb_args, span, env)?;
+                    return Ok(Some(ret_ty));
+                }
+                Ok(Some(PhpType::Int))
+            }
+            "function_exists" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "function_exists() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                // If the function name is a string literal and exists in fn_decls,
+                // resolve it so codegen can see it in ctx.functions
+                if let ExprKind::StringLiteral(cb_name) = &args[0].kind {
+                    if self.fn_decls.contains_key(cb_name.as_str())
+                        && !self.functions.contains_key(cb_name.as_str())
+                    {
+                        // Create dummy args matching the function's parameter count
+                        if let Some(decl) = self.fn_decls.get(cb_name.as_str()).cloned() {
+                            let dummy_args: Vec<Expr> = decl.params.iter()
+                                .map(|_| Expr::new(ExprKind::IntLiteral(0), span))
+                                .collect();
+                            let _ = self.check_function_call(cb_name, &dummy_args, span, env);
+                        }
+                    }
+                }
+                Ok(Some(PhpType::Bool))
             }
 
             _ => Ok(None),
