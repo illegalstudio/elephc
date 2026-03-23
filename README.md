@@ -1,6 +1,6 @@
 # elephc
 
-A PHP-to-native compiler. Takes a subset of PHP and compiles it directly to ARM64 assembly, producing standalone macOS binaries. No interpreter, no VM, no runtime dependencies.
+A PHP-to-native compiler. Takes a subset of PHP and compiles it directly to **ARM64 assembly**, producing **standalone macOS binaries**. No interpreter, no VM, no runtime dependencies.
 
 ## Why
 
@@ -8,9 +8,9 @@ My first "serious programming" book was *PHP 4 and MySQL*. After years of experi
 
 One thing I always missed about PHP was the ability to produce optimized, fast native binaries. With the advent of AI, we can build ambitious things quickly. While everyone else is busy building the next Facebook, chasing ephemeral wealth that will never come, I thought I could try to fill that gap and write a compiler for PHP.
 
-It's not perfect — it's 99% written by Claude — but it works. It's a solid starting point, and more importantly, it's a great way to understand how a compiler works and how assembly language operates under the hood.
+It's not perfect — it's 99% written by Claude — but **it works**. It's a solid starting point, and more importantly, it's a great way to understand **how a compiler works** and how assembly language operates under the hood.
 
-I made the project as modular as possible. Every function has its own codegen file, and each one is commented line by line, so you can see exactly how a high-level construct gets translated into its low-level equivalent.
+I made the project as modular as possible. Every function has its own codegen file, and each one is **commented line by line**, so you can see exactly how a high-level construct gets translated into its low-level equivalent.
 
 ### What you should not expect
 
@@ -30,7 +30,7 @@ If you want to contribute, you're welcome. Mi casa es tu casa.
 
 ## Learn how a compiler works
 
-elephc is designed to be read. Every line of ARM64 assembly emitted by the compiler is annotated with an inline comment explaining what it does and why — from stack frame setup to syscall invocation, from integer-to-string conversion to array memory layout. If you've ever wondered what happens between `echo "hello"` and the CPU executing it, follow the code from `src/codegen/` and read the comments. No prior assembly knowledge required.
+elephc is designed to be read. **Every line of ARM64 assembly** emitted by the compiler is annotated with an inline comment explaining what it does and why — from stack frame setup to syscall invocation, from integer-to-string conversion to array memory layout. If you've ever wondered what happens between `echo "hello"` and the CPU executing it, follow the code from `src/codegen/` and read the comments. **No prior assembly knowledge required.**
 
 ## Requirements
 
@@ -65,7 +65,7 @@ cargo run -- hello.php
 
 ## What it compiles
 
-elephc supports a growing subset of PHP. Every program it compiles is also valid PHP and produces the same output when run with `php`.
+elephc supports a growing subset of PHP. **Every program it compiles is also valid PHP** and produces the same output when run with `php`.
 
 ```php
 <?php
@@ -234,7 +234,7 @@ ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 
 ## Documentation
 
-The `docs/` directory is a complete wiki covering every aspect of the compiler — from what a compiler is, to how each phase works, to the ARM64 instruction set. If you're new to compilers or assembly, start from the top and work your way down.
+The `docs/` directory is a **complete wiki** covering every aspect of the compiler — from what a compiler is, to how each phase works, to the ARM64 instruction set. If you're new to compilers or assembly, **start from the top and work your way down**.
 
 | Guide | What you'll learn |
 |---|---|
