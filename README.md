@@ -2,6 +2,32 @@
 
 A PHP-to-native compiler. Takes a subset of PHP and compiles it directly to ARM64 assembly, producing standalone macOS binaries. No interpreter, no VM, no runtime dependencies.
 
+## Why
+
+My first "serious programming" book was *PHP 4 and MySQL*. After years of experimenting with code, that book turned my passion into a profession. I've worked with many languages over the past 20 years, but PHP is the one that has most consistently put food on the table.
+
+One thing I always missed about PHP was the ability to produce optimized, fast native binaries. With the advent of AI, we can build ambitious things quickly. While everyone else is busy building the next Facebook, chasing ephemeral wealth that will never come, I thought I could try to fill that gap and write a compiler for PHP.
+
+It's not perfect — it's 99% written by Claude — but it works. It's a solid starting point, and more importantly, it's a great way to understand how a compiler works and how assembly language operates under the hood.
+
+I made the project as modular as possible. Every function has its own codegen file, and each one is commented line by line, so you can see exactly how a high-level construct gets translated into its low-level equivalent.
+
+### What you should not expect
+
+Don't expect to take any existing PHP project and magically compile it. There are no classes here, no Composer. We're roughly at the level of that famous *PHP 4* book where my journey began.
+
+### What you can expect
+
+You can write a PHP file using only the constructs documented in this project's [language reference](docs/language-reference.md). You can include other files with `include`, `require`, `include_once`, and `require_once`, and watch your code run at the speed of light after running:
+
+```bash
+elephc myfile.php
+```
+
+But you should also expect the binary to segfault, the compiler to blow up, or worse. So experiment, have fun, but don't expect to use elephc for anything serious — at least not yet. I'd love for that to be possible someday. We'll see how it evolves.
+
+If you want to contribute, you're welcome. Mi casa es tu casa.
+
 ## Learn how a compiler works
 
 elephc is designed to be read. Every line of ARM64 assembly emitted by the compiler is annotated with an inline comment explaining what it does and why — from stack frame setup to syscall invocation, from integer-to-string conversion to array memory layout. If you've ever wondered what happens between `echo "hello"` and the CPU executing it, follow the code from `src/codegen/` and read the comments. No prior assembly knowledge required.
