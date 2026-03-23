@@ -34,6 +34,10 @@ fn has_includes(stmts: &[Stmt]) -> bool {
         | StmtKind::For { body, .. }
         | StmtKind::Foreach { body, .. }
         | StmtKind::FunctionDecl { body, .. } => has_includes(body),
+        StmtKind::Switch { cases, default, .. } => {
+            cases.iter().any(|(_, body)| has_includes(body))
+                || default.as_ref().is_some_and(|b| has_includes(b))
+        }
         _ => false,
     })
 }
@@ -144,14 +148,36 @@ fn resolve_stmts(
                     stmt.span,
                 ));
             }
-            StmtKind::Foreach { array, value_var, body } => {
+            StmtKind::Foreach { array, key_var, value_var, body } => {
                 let body_resolved =
                     resolve_stmts(body.clone(), base_dir, included, include_chain)?;
                 result.push(Stmt::new(
                     StmtKind::Foreach {
                         array: array.clone(),
+                        key_var: key_var.clone(),
                         value_var: value_var.clone(),
                         body: body_resolved,
+                    },
+                    stmt.span,
+                ));
+            }
+            StmtKind::Switch { subject, cases, default } => {
+                let mut cases_resolved = Vec::new();
+                for (values, body) in cases {
+                    let body_resolved =
+                        resolve_stmts(body.clone(), base_dir, included, include_chain)?;
+                    cases_resolved.push((values.clone(), body_resolved));
+                }
+                let default_resolved = if let Some(body) = default {
+                    Some(resolve_stmts(body.clone(), base_dir, included, include_chain)?)
+                } else {
+                    None
+                };
+                result.push(Stmt::new(
+                    StmtKind::Switch {
+                        subject: subject.clone(),
+                        cases: cases_resolved,
+                        default: default_resolved,
                     },
                     stmt.span,
                 ));
