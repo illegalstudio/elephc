@@ -372,6 +372,8 @@ foreach ($names as $name) {
 | `printf()` | `printf($fmt, ...): int` | Format and print |
 | `md5()` | `md5($str): string` | MD5 hash (32-char hex) |
 | `sha1()` | `sha1($str): string` | SHA1 hash (40-char hex) |
+| `hash()` | `hash($algo, $data): string` | Hash with algorithm (md5, sha1, sha256) |
+| `sscanf()` | `sscanf($str, $fmt): array` | Parse string with format (%d, %s) |
 | `htmlspecialchars()` | `htmlspecialchars($str): string` | Escape HTML special chars |
 | `htmlentities()` | `htmlentities($str): string` | Alias for htmlspecialchars |
 | `html_entity_decode()` | `html_entity_decode($str): string` | Decode HTML entities |

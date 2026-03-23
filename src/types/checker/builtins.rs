@@ -432,6 +432,20 @@ impl Checker {
                 for arg in args { self.infer_type(arg, env)?; }
                 Ok(Some(PhpType::Int))
             }
+            "hash" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "hash() takes exactly 2 arguments"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                Ok(Some(PhpType::Str))
+            }
+            "sscanf" => {
+                if args.len() < 2 {
+                    return Err(CompileError::new(span, "sscanf() takes at least 2 arguments"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
+            }
             "md5" | "sha1" => {
                 if args.len() != 1 {
                     return Err(CompileError::new(span, &format!("{}() takes exactly 1 argument", name)));

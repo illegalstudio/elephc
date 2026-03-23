@@ -2931,3 +2931,52 @@ fn test_sha1_hello() {
     let out = compile_and_run(r#"<?php echo sha1("Hello");"#);
     assert_eq!(out, "f7ff9e8b7bb2e09b70935a5d785e0cc5d9d0abf0");
 }
+
+// --- hash() ---
+
+#[test]
+fn test_hash_md5() {
+    let out = compile_and_run(r#"<?php echo hash("md5", "Hello");"#);
+    assert_eq!(out, "8b1a9953c4611296a827abf8c47804d7");
+}
+
+#[test]
+fn test_hash_sha1() {
+    let out = compile_and_run(r#"<?php echo hash("sha1", "Hello");"#);
+    assert_eq!(out, "f7ff9e8b7bb2e09b70935a5d785e0cc5d9d0abf0");
+}
+
+#[test]
+fn test_hash_sha256() {
+    let out = compile_and_run(r#"<?php echo hash("sha256", "Hello");"#);
+    assert_eq!(out, "185f8db32271fe25f561a6fc938b2e264306ec304eda518007d1764826381969");
+}
+
+// --- sscanf() ---
+
+#[test]
+fn test_sscanf_int() {
+    let out = compile_and_run(r#"<?php
+$result = sscanf("Age: 25", "Age: %d");
+echo $result[0];
+"#);
+    assert_eq!(out, "25");
+}
+
+#[test]
+fn test_sscanf_string() {
+    let out = compile_and_run(r#"<?php
+$result = sscanf("Name: Alice", "Name: %s");
+echo $result[0];
+"#);
+    assert_eq!(out, "Alice");
+}
+
+#[test]
+fn test_sscanf_multiple() {
+    let out = compile_and_run(r#"<?php
+$result = sscanf("John 30", "%s %d");
+echo $result[0] . " " . $result[1];
+"#);
+    assert_eq!(out, "John 30");
+}

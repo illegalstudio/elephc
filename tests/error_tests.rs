@@ -372,3 +372,13 @@ fn test_error_base64_encode_wrong_args() {
 fn test_error_ctype_alpha_wrong_args() {
     expect_error("<?php ctype_alpha();", "ctype_alpha() takes exactly 1 argument");
 }
+
+#[test]
+fn test_error_hash_wrong_args() {
+    expect_error(r#"<?php hash("md5");"#, "hash() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_sscanf_wrong_args() {
+    expect_error(r#"<?php sscanf("hi");"#, "sscanf() takes at least 2 arguments");
+}

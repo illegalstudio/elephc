@@ -51,6 +51,8 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     strings::emit_sprintf(emitter);
     strings::emit_md5(emitter);
     strings::emit_sha1(emitter);
+    strings::emit_hash(emitter);
+    strings::emit_sscanf(emitter);
 
     // System runtime functions
     system::emit_build_argv(emitter);

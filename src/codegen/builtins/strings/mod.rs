@@ -8,6 +8,7 @@ mod ctype_alpha;
 mod ctype_digit;
 mod ctype_space;
 mod explode;
+mod hash;
 mod hex2bin;
 mod html_entity_decode;
 mod htmlentities;
@@ -26,6 +27,7 @@ mod rawurldecode;
 mod rawurlencode;
 mod rtrim;
 mod sha1;
+mod sscanf;
 mod str_contains;
 mod str_ends_with;
 mod str_ireplace;
@@ -121,6 +123,8 @@ pub fn emit(
         "md5" => md5::emit(name, args, emitter, ctx, data),
         "sha1" => sha1::emit(name, args, emitter, ctx, data),
         "printf" => printf::emit(name, args, emitter, ctx, data),
+        "hash" => hash::emit(name, args, emitter, ctx, data),
+        "sscanf" => sscanf::emit(name, args, emitter, ctx, data),
         _ => None,
     }
 }

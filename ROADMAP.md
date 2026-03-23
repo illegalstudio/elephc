@@ -78,16 +78,14 @@ Make string handling practical.
 - [x] `str_pad()`
 - [x] `explode()`, `implode()`
 - [x] `str_split()`
-- [x] `sprintf()`, `printf()`
-- [ ] `sscanf()`
+- [x] `sprintf()`, `printf()`, `sscanf()`
 - [x] `strcmp()`, `strcasecmp()`, `str_contains()`, `str_starts_with()`, `str_ends_with()`
 - [x] `ord()`, `chr()`
 - [x] `nl2br()`, `wordwrap()`
 - [x] `addslashes()`, `stripslashes()`
 - [x] `htmlspecialchars()`, `htmlentities()`, `html_entity_decode()`
 - [x] `urlencode()`, `urldecode()`, `rawurlencode()`, `rawurldecode()`
-- [x] `md5()`, `sha1()`
-- [ ] `hash()`
+- [x] `md5()`, `sha1()`, `hash()`
 - [x] `base64_encode()`, `base64_decode()`
 - [x] `bin2hex()`, `hex2bin()`
 - [x] `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, `ctype_space()`

@@ -43,6 +43,8 @@ mod base64_decode;
 mod sprintf;
 mod md5;
 mod sha1;
+mod hash;
+mod sscanf;
 
 pub use itoa::emit_itoa;
 pub use concat::emit_concat;
@@ -89,3 +91,5 @@ pub use base64_decode::emit_base64_decode;
 pub use sprintf::emit_sprintf;
 pub use md5::emit_md5;
 pub use sha1::emit_sha1;
+pub use hash::emit_hash;
+pub use sscanf::emit_sscanf;
