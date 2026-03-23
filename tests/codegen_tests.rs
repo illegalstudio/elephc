@@ -3828,3 +3828,126 @@ echo count($removed) . " " . count($a);
 "#);
     assert_eq!(out, "2 3");
 }
+
+#[test]
+fn test_array_combine() {
+    let out = compile_and_run(r#"<?php
+$keys = ["a", "b"];
+$vals = [1, 2];
+$m = array_combine($keys, $vals);
+echo count($m);
+"#);
+    assert_eq!(out, "2");
+}
+
+#[test]
+fn test_array_flip() {
+    let out = compile_and_run(r#"<?php
+$a = [10, 20, 30];
+$f = array_flip($a);
+echo count($f);
+"#);
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_array_chunk() {
+    let out = compile_and_run(r#"<?php
+$a = [1, 2, 3, 4, 5];
+$c = array_chunk($a, 2);
+echo count($c);
+"#);
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_array_fill_keys() {
+    let out = compile_and_run(r#"<?php
+$keys = ["x", "y"];
+$m = array_fill_keys($keys, 0);
+echo count($m);
+"#);
+    assert_eq!(out, "2");
+}
+
+#[test]
+fn test_array_diff_key() {
+    let out = compile_and_run(r#"<?php
+$a = ["a" => "1", "b" => "2"];
+$b = ["a" => "9"];
+$c = array_diff_key($a, $b);
+echo count($c);
+"#);
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_array_intersect_key() {
+    let out = compile_and_run(r#"<?php
+$a = ["a" => "1", "b" => "2"];
+$b = ["a" => "9"];
+$c = array_intersect_key($a, $b);
+echo count($c);
+"#);
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_asort() {
+    let out = compile_and_run(r#"<?php
+$a = [3, 1, 2];
+asort($a);
+echo $a[0];
+"#);
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_arsort() {
+    let out = compile_and_run(r#"<?php
+$a = [1, 3, 2];
+arsort($a);
+echo $a[0];
+"#);
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_ksort() {
+    let out = compile_and_run(r#"<?php
+$a = [3, 1, 2];
+ksort($a);
+echo count($a);
+"#);
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_krsort() {
+    let out = compile_and_run(r#"<?php
+$a = [1, 2, 3];
+krsort($a);
+echo count($a);
+"#);
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_natsort() {
+    let out = compile_and_run(r#"<?php
+$a = [3, 1, 2];
+natsort($a);
+echo $a[0];
+"#);
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_natcasesort() {
+    let out = compile_and_run(r#"<?php
+$a = [3, 1, 2];
+natcasesort($a);
+echo $a[0];
+"#);
+    assert_eq!(out, "1");
+}

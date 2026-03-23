@@ -576,3 +576,55 @@ fn test_error_match_missing_paren() {
 fn test_error_assoc_array_mixed() {
     expect_error("<?php $a = [\"b\" => 2, 1];", "Cannot mix");
 }
+
+// --- v0.6: array function argument errors ---
+
+#[test]
+fn test_error_array_reverse_wrong_args() {
+    expect_error("<?php array_reverse();", "array_reverse() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_array_merge_wrong_args() {
+    expect_error("<?php $a = [1]; array_merge($a);", "array_merge() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_array_sum_wrong_args() {
+    expect_error("<?php array_sum();", "array_sum() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_array_search_wrong_args() {
+    expect_error("<?php $a = [1]; array_search($a);", "array_search() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_array_key_exists_wrong_args() {
+    expect_error("<?php array_key_exists(1);", "array_key_exists() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_array_slice_wrong_args() {
+    expect_error("<?php $a = [1]; array_slice($a);", "array_slice() takes 2 or 3 arguments");
+}
+
+#[test]
+fn test_error_array_combine_wrong_args() {
+    expect_error("<?php $a = [1]; array_combine($a);", "array_combine() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_range_wrong_args() {
+    expect_error("<?php range(1);", "range() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_shuffle_wrong_args() {
+    expect_error("<?php shuffle();", "shuffle() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_array_fill_wrong_args() {
+    expect_error("<?php array_fill(0, 5);", "array_fill() takes exactly 3 arguments");
+}

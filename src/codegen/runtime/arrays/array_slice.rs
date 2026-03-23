@@ -22,7 +22,7 @@ pub fn emit_array_slice(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_array_slice_pos_off");                       // if non-negative, skip adjustment
     emitter.instruction("add x1, x9, x1");                                      // offset = length + offset (e.g., -2 → length-2)
     emitter.instruction("cmp x1, #0");                                          // clamp to 0 if still negative
-    emitter.instruction("csel x1, xzr, x1, lt");                               // if offset < 0, set to 0
+    emitter.instruction("csel x1, xzr, x1, lt");                                // if offset < 0, set to 0
 
     // -- compute actual slice length --
     emitter.label("__rt_array_slice_pos_off");
@@ -30,9 +30,9 @@ pub fn emit_array_slice(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_array_slice_empty");                         // if so, result is empty array
     emitter.instruction("sub x3, x9, x1");                                      // x3 = max possible length = array_len - offset
     emitter.instruction("cmn x2, #1");                                          // check if length == -1 (to end)
-    emitter.instruction("csel x2, x3, x2, eq");                                // if length == -1, use remaining length
+    emitter.instruction("csel x2, x3, x2, eq");                                 // if length == -1, use remaining length
     emitter.instruction("cmp x2, x3");                                          // clamp length to max possible
-    emitter.instruction("csel x2, x3, x2, gt");                                // if length > remaining, use remaining
+    emitter.instruction("csel x2, x3, x2, gt");                                 // if length > remaining, use remaining
     emitter.instruction("str x1, [sp, #16]");                                   // save computed offset
     emitter.instruction("str x2, [sp, #24]");                                   // save computed slice length
 
