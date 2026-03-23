@@ -1,3 +1,4 @@
+mod array_column;
 mod heap_alloc;
 mod array_new;
 mod array_push_int;
@@ -37,6 +38,7 @@ mod asort;
 mod ksort;
 mod natsort;
 
+pub use array_column::emit_array_column;
 pub use heap_alloc::emit_heap_alloc;
 pub use array_new::emit_array_new;
 pub use array_push_int::emit_array_push_int;

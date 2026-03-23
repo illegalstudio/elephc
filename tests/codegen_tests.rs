@@ -4092,3 +4092,17 @@ echo $a[0][0] . " " . $a[1][1];
 "#);
     assert_eq!(out, "hello bar");
 }
+
+#[test]
+fn test_array_column() {
+    let out = compile_and_run(r#"<?php
+$users = [
+    ["name" => "Alice", "age" => "30"],
+    ["name" => "Bob", "age" => "25"],
+    ["name" => "Charlie", "age" => "35"],
+];
+$names = array_column($users, "name");
+echo count($names);
+"#);
+    assert_eq!(out, "3");
+}

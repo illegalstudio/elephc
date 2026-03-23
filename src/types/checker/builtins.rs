@@ -906,6 +906,26 @@ impl Checker {
                 }
             }
 
+            // 2-arg: array_column($arr, $column_key) → Array of column values
+            "array_column" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "array_column() takes exactly 2 arguments"));
+                }
+                let ty = self.infer_type(&args[0], env)?;
+                self.infer_type(&args[1], env)?;
+                match ty {
+                    PhpType::Array(inner) => {
+                        match *inner {
+                            PhpType::AssocArray { value, .. } => {
+                                Ok(Some(PhpType::Array(value)))
+                            }
+                            _ => Err(CompileError::new(span, "array_column() requires an array of associative arrays")),
+                        }
+                    }
+                    _ => Err(CompileError::new(span, "array_column() first argument must be array")),
+                }
+            }
+
             // 2-arg: range($start, $end) → Array(Int)
             "range" => {
                 if args.len() != 2 {

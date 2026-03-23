@@ -117,7 +117,7 @@ Make string handling practical.
 - [x] `array_merge()`, `array_slice()`, `array_splice()`
 - [ ] `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()` (need closures, v0.7)
 - [x] `array_combine()`, `array_flip()`, `array_reverse()`, `array_unique()`
-- [ ] `array_column()` (needs array-of-arrays)
+- [x] `array_column()`
 - [x] `array_sum()`, `array_product()`
 - [x] `array_chunk()`, `array_pad()`, `array_fill()`, `array_fill_keys()`
 - [x] `array_diff()`, `array_intersect()`, `array_diff_key()`, `array_intersect_key()`

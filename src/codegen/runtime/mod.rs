@@ -92,6 +92,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_array_combine(emitter);
     arrays::emit_array_fill_keys(emitter);
     arrays::emit_array_chunk(emitter);
+    arrays::emit_array_column(emitter);
     arrays::emit_array_splice(emitter);
     arrays::emit_array_diff_key(emitter);
     arrays::emit_array_intersect_key(emitter);

@@ -1,4 +1,5 @@
 mod array_chunk;
+mod array_column;
 mod array_combine;
 mod array_diff;
 mod array_diff_key;
@@ -75,6 +76,7 @@ pub fn emit(
         "array_combine" => array_combine::emit(name, args, emitter, ctx, data),
         "array_flip" => array_flip::emit(name, args, emitter, ctx, data),
         "array_chunk" => array_chunk::emit(name, args, emitter, ctx, data),
+        "array_column" => array_column::emit(name, args, emitter, ctx, data),
         "array_pad" => array_pad::emit(name, args, emitter, ctx, data),
         "array_fill" => array_fill::emit(name, args, emitter, ctx, data),
         "array_fill_keys" => array_fill_keys::emit(name, args, emitter, ctx, data),
