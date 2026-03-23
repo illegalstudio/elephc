@@ -18,10 +18,13 @@ This page explains where every value lives in memory at runtime.
 │         (unused)             │
 ├─────────────────────────────┤
 │       Heap buffer            │  _heap_buf: 1MB, bump-allocated
-│  (arrays, dynamic data)      │
+│  (arrays, hash tables)       │
 ├─────────────────────────────┤
 │     String buffer            │  _concat_buf: 64KB, bump-allocated
 │  (string operation results)  │
+├─────────────────────────────┤
+│     I/O buffers              │  _cstr_buf: 4KB × 2, _eof_flags: 256B
+│  (C-string conversion, EOF)  │
 ├─────────────────────────────┤
 │       Data section           │  String literals, float constants
 │  (.data — read-only)         │
@@ -184,6 +187,61 @@ When `array_push` finds that `length == capacity`, it:
 3. Updates the header to point to the new data
 4. The old data is abandoned (never freed)
 
+## Hash table layout (associative arrays)
+
+Associative arrays use a separate heap-allocated structure — an open-addressing hash table with linear probing.
+
+### Header (24 bytes)
+
+```
+┌──────────┬──────────┬──────────┐
+│  count   │ capacity │ val_type │
+│ (8 bytes)│ (8 bytes)│ (8 bytes)│
+└──────────┴──────────┴──────────┘
+ offset+0   offset+8   offset+16
+```
+
+| Field | Size | Description |
+|---|---|---|
+| `count` | 8 bytes | Number of occupied entries |
+| `capacity` | 8 bytes | Total number of slots |
+| `val_type` | 8 bytes | Value type tag (0=int, 1=str, 2=float, 3=bool) |
+
+### Entries (40 bytes each)
+
+Starting at offset +24, each slot is 40 bytes:
+
+```
+┌──────────┬──────────┬──────────┬──────────┬──────────┐
+│ occupied │ key_ptr  │ key_len  │ value_lo │ value_hi │
+│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (8 bytes)│
+└──────────┴──────────┴──────────┴──────────┴──────────┘
+```
+
+| Field | Description |
+|---|---|
+| `occupied` | 0 = empty, 1 = occupied, 2 = tombstone (deleted) |
+| `key_ptr` | Pointer to key string bytes |
+| `key_len` | Key string length |
+| `value_lo` | Value (integer) or value pointer (string) |
+| `value_hi` | String length (for string values), unused for int |
+
+### Hashing and collision resolution
+
+Keys are hashed with **FNV-1a** (fast, good distribution for short strings). Collisions are resolved by **linear probing** — if slot `hash % capacity` is occupied, try `(hash + 1) % capacity`, and so on.
+
+Entry address: `base + 24 + (slot_index × 40)`
+
+### Comparison with indexed arrays
+
+| | Indexed array | Associative array |
+|---|---|---|
+| Header | 24 bytes | 24 bytes |
+| Element size | 8 or 16 bytes | 40 bytes (fixed) |
+| Access | O(1) by index | O(1) average by hash |
+| Iteration | Sequential | Scan for occupied slots |
+| Keys | Implicit (0, 1, 2, ...) | Explicit strings |
+
 ## The data section
 
 String literals and float constants are embedded directly in the binary:
@@ -210,6 +268,8 @@ These are **read-only** — the program never modifies them. When a string opera
 | Stack | OS default (~8MB) | Stack overflow (crash) |
 | String buffer | 64KB | Buffer overflow (undefined behavior) |
 | Heap | 1MB | Heap overflow (undefined behavior) |
+| C-string buffers | 4KB each (×2) | Truncation of file paths |
+| EOF flags | 256 bytes | Max 256 simultaneous file descriptors |
 | Data section | No fixed limit | Grows with number of unique literals |
 
 These limits are acceptable for educational purposes but would need to be addressed for production use:
