@@ -44,6 +44,7 @@ fn assemble_and_run(asm: &str, dir: &Path) -> String {
     assert!(ld_status.success(), "linker failed");
 
     let output = Command::new(&bin_path)
+        .current_dir(dir)
         .output()
         .expect("failed to run compiled binary");
     assert!(output.status.success(), "binary exited with error");
