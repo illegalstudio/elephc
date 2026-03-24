@@ -219,6 +219,58 @@ bl __rt_concat           ; result → x1 (ptr), x2 (len)
 
 See [The Runtime](the-runtime.md) for how `__rt_concat` works.
 
+### Bitwise operations
+
+The bitwise operators (`&`, `|`, `^`, `~`, `<<`, `>>`) operate on integers and emit single ARM64 instructions:
+
+```php
+$a & $b    →  and x0, x1, x0     // bitwise AND
+$a | $b    →  orr x0, x1, x0     // bitwise OR
+$a ^ $b    →  eor x0, x1, x0     // bitwise XOR
+$a << $b   →  lsl x0, x1, x0     // logical shift left
+$a >> $b   →  asr x0, x1, x0     // arithmetic shift right (preserves sign)
+~$a        →  mvn x0, x0         // bitwise complement (one's complement)
+```
+
+Like other binary operations, bitwise ops use the push/pop pattern — evaluate left, push, evaluate right, pop left, apply operation.
+
+### Spaceship operator
+
+The spaceship operator (`<=>`) returns -1, 0, or 1 depending on the comparison result. It uses conditional select instructions:
+
+```php
+$a <=> $b
+```
+
+```asm
+; ... push $a, evaluate $b ...
+cmp x1, x0                      ; compare left with right
+cset x0, gt                     ; x0 = 1 if left > right, else 0
+csinv x0, x0, xzr, ge           ; if left < right: x0 = ~0 = -1 (all ones)
+```
+
+`csinv` (conditional select invert) inverts `xzr` (the zero register) to produce -1 when the condition is not met.
+
+For floats, `fcmp` replaces `cmp`, but the same `cset`/`csinv` pattern applies.
+
+### Null coalescing operator
+
+The `??` operator returns the left operand if it is non-null, otherwise the right:
+
+```php
+$x ?? "default"
+```
+
+```asm
+; evaluate $x
+; compare with null sentinel (0x7FFFFFFFFFFFFFFE)
+b.ne _nc_done_1          ; if not null, keep left value
+; evaluate "default"      ; otherwise, use right side
+_nc_done_1:
+```
+
+The null check compares the value against the [null sentinel](memory-model.md). The operator is right-associative (`$a ?? $b ?? $c` = `$a ?? ($b ?? $c)`).
+
 ### Type coercions
 
 When types need to match (e.g., int + float), the codegen inserts conversion instructions:
@@ -497,6 +549,16 @@ Compiles a user-defined function:
 4. **Store parameters** — move from argument registers to stack slots
 5. **Emit body** — all statements
 6. **Emit epilogue** — `ldp x29, x30`, `add sp`, `ret`
+
+### Default parameter values
+
+Functions and closures support default parameter values:
+
+```php
+function greet($name, $greeting = "Hello") { ... }
+```
+
+When a call site omits an argument that has a default value, the codegen fills in the default. At the call site, the compiler checks how many arguments were actually passed and, for each missing parameter with a default, evaluates the default expression and places it in the appropriate argument register. This is handled at compile time — no runtime checks are needed.
 
 ### `collect_local_vars()`
 

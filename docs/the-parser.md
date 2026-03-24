@@ -50,6 +50,8 @@ Things that have a value:
 | `BinaryOp { left, op, right }` | `$a + $b` | See operator table below |
 | `Negate(Expr)` | `-$x` | Unary minus |
 | `Not(Expr)` | `!$x` | Logical NOT |
+| `BitNot(Expr)` | `~$x` | Bitwise NOT (complement) |
+| `NullCoalesce { value, default }` | `$x ?? $y` | Returns `$x` if non-null, otherwise `$y` |
 | `PreIncrement(String)` | `++$i` | Returns new value |
 | `PostIncrement(String)` | `$i++` | Returns old value |
 | `PreDecrement(String)` | `--$i` | |
@@ -61,7 +63,7 @@ Things that have a value:
 | `ArrayAccess { array, index }` | `$arr[0]` | |
 | `Ternary { cond, then, else }` | `$a ? $b : $c` | |
 | `Cast { target, expr }` | `(int)$x` | |
-| `Closure { params, body, is_arrow }` | `function($x) { ... }` or `fn($x) => ...` | Anonymous function / arrow function |
+| `Closure { params, body, is_arrow }` | `function($x, $y = 0) { ... }` or `fn($x) => ...` | Anonymous function / arrow function. Params support default values |
 | `ClosureCall { var, args }` | `$fn(1, 2)` | Calling a closure stored in a variable |
 
 ### Statements (`Stmt`)
@@ -80,7 +82,7 @@ Things that do something:
 | `Switch { subject, cases, default }` | `switch ($x) { case 1: ...; default: ... }` |
 | `ArrayAssign { array, index, value }` | `$arr[0] = 5;` |
 | `ArrayPush { array, value }` | `$arr[] = 5;` |
-| `FunctionDecl { name, params, body }` | `function foo($a) { }` |
+| `FunctionDecl { name, params, body }` | `function foo($a, $b = 10) { }` — params is `Vec<(String, Option<Expr>)>` where the `Option` is the default value |
 | `Return(Option<Expr>)` | `return $x;` or `return;` |
 | `Break` | `break;` |
 | `Continue` | `continue;` |
@@ -91,8 +93,10 @@ Things that do something:
 
 ```
 Add  Sub  Mul  Div  Mod  Pow  Concat
-Eq  NotEq  StrictEq  StrictNotEq  Lt  Gt  LtEq  GtEq
+Eq  NotEq  StrictEq  StrictNotEq  Lt  Gt  LtEq  GtEq  Spaceship
 And  Or
+BitAnd  BitOr  BitXor  ShiftLeft  ShiftRight
+NullCoalesce
 ```
 
 Every AST node carries a `Span` (line + column) from the source, so error messages in later phases can point to the right location.
@@ -116,14 +120,20 @@ elephc uses a **Pratt parser** (also called top-down operator precedence parser)
 ```
 Operator          Left BP    Right BP    Associativity
 ─────────────────────────────────────────────────────
-||                  1          2         left
-&&                  3          4         left
-.  (concat)         5          6         left
-== != === !==       7          8         left
-< > <= >=           7          8         left
-+ -                11         12         left
-* / %              13         14         left
-**                 17         16         RIGHT (r < l)
+??                  2          1         RIGHT (null coalescing)
+||                  3          4         left
+&&                  5          6         left
+|  (bitwise OR)     7          8         left
+^  (bitwise XOR)    9         10         left
+&  (bitwise AND)   11         12         left
+== != === !==      13         14         left
+< > <= >= <=>      15         16         left
+<< >>              17         18         left
+.  (concat)        19         20         left
++ -                21         22         left
+* / %              23         24         left
+unary (- ! ~)          27                prefix
+**                 29         28         RIGHT (r < l)
 ```
 
 **Left-associative** operators have `right_bp > left_bp`. This means `1 + 2 + 3` parses as `(1 + 2) + 3`.
@@ -158,14 +168,14 @@ parse_expr_bp(0):
   prefix → IntLiteral(1)
 
   loop iteration 1:
-    next token: +  → (left_bp=11, right_bp=12)
-    11 >= 0? yes → consume +
-    parse_expr_bp(12):
+    next token: +  → (left_bp=21, right_bp=22)
+    21 >= 0? yes → consume +
+    parse_expr_bp(22):
       prefix → IntLiteral(2)
       loop iteration:
-        next token: *  → (left_bp=13, right_bp=14)
-        13 >= 12? yes → consume *
-        parse_expr_bp(14):
+        next token: *  → (left_bp=23, right_bp=24)
+        23 >= 22? yes → consume *
+        parse_expr_bp(24):
           prefix → IntLiteral(3)
           loop: no more operators
           return IntLiteral(3)
@@ -194,8 +204,9 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `true` / `false` | Return `BoolLiteral` node |
 | `null` | Return `Null` node |
 | `Variable` | Return `Variable` node (with postfix `++`/`--` check) |
-| `-` (minus) | Parse inner expr at bp=15, return `Negate` |
-| `!` (not) | Parse inner expr at bp=15, return `Not` |
+| `-` (minus) | Parse inner expr at bp=27, return `Negate` |
+| `!` (not) | Parse inner expr at bp=27, return `Not` |
+| `~` (bitwise not) | Parse inner expr at bp=27, return `BitNot` |
 | `++` / `--` | Return `PreIncrement` / `PreDecrement` |
 | `(int)` / `(float)` / ... | Parse inner expr, return `Cast` |
 | `(` | Parse inner expr, expect `)`, return inner expr |

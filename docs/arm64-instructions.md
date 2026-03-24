@@ -87,6 +87,7 @@ These two always appear together — `adrp` gets the page, `add` gets the exact 
 | `movz` | `movz x0, #0x1234` | Load 16-bit value, zero the rest |
 | `movk` | `movk x0, #0x5678, lsl #16` | Insert 16-bit value at bit position, keep the rest |
 | `movn` | `movn x0, #0` | Load bitwise NOT of immediate. `movn x0, #0` = -1 |
+| `mvn` | `mvn x0, x0` | Bitwise NOT of register: x0 = ~x0. Used for PHP `~` operator |
 
 ### Loading large constants
 
@@ -112,6 +113,7 @@ See [Memory Model](memory-model.md) for why this specific value is used as the n
 | `cset` | `cset x0, eq` | x0 = 1 if equal flag set, 0 otherwise |
 | `csel` | `csel x0, x1, x2, gt` | x0 = x1 if greater, x2 otherwise |
 | `csinc` | `csinc x0, xzr, xzr, eq` | x0 = 1 if NOT equal (inverse cset pattern) |
+| `csinv` | `csinv x0, x0, xzr, ge` | If condition false: x0 = ~xzr = -1, else x0 unchanged. Used for spaceship (`<=>`) |
 
 ### Floating-point comparison
 
@@ -183,7 +185,7 @@ Used for PHP type casting (`(int)3.14`, `(float)42`) and mixed arithmetic. See [
 | `lsl` | `lsl x0, x0, #3` | Logical shift left |
 | `asr` | `asr x0, x0, #63` | Arithmetic shift right (preserves sign) |
 
-Used in [runtime routines](the-runtime.md) for things like hex conversion, hash algorithms, and base64 encoding.
+Used for PHP's bitwise operators (`&`, `|`, `^`, `<<`, `>>`) and in [runtime routines](the-runtime.md) for things like hex conversion, hash algorithms, and base64 encoding.
 
 ## System
 

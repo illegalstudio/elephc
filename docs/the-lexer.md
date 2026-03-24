@@ -83,9 +83,9 @@ For each token, the scanner looks at the current character and decides:
 
 5. **Letter or `_`** → Start of an identifier or keyword. Read the full word, then check if it's a keyword (`if`, `while`, `echo`, `function`, etc.) or a plain identifier (function name).
 
-6. **Operator characters** (`+`, `-`, `*`, `/`, `=`, `<`, `>`, `!`, `.`, `%`) → Look ahead to handle multi-character operators (`==`, `===`, `!=`, `!==`, `<=`, `>=`, `&&`, `||`, `**`, `++`, `--`, `+=`, `-=`, `*=`, `/=`, `.=`, `%=`).
+6. **Operator characters** (`+`, `-`, `*`, `/`, `=`, `<`, `>`, `!`, `.`, `%`, `&`, `|`, `^`, `~`) → Look ahead to handle multi-character operators (`==`, `===`, `!=`, `!==`, `<=`, `>=`, `<=>`, `<<`, `>>`, `&&`, `||`, `**`, `++`, `--`, `+=`, `-=`, `*=`, `/=`, `.=`, `%=`). Note that `<` may lead to `<=`, `<=>`, `<<`, or `<<<` (heredoc/nowdoc — see [below](#heredoc-and-nowdoc)).
 
-7. **Structural characters** (`(`, `)`, `{`, `}`, `[`, `]`, `;`, `,`, `?`, `:`) → Single-character tokens.
+7. **Structural characters** (`(`, `)`, `{`, `}`, `[`, `]`, `;`, `,`, `?`, `:`) → Single-character tokens. Note that `?` followed by another `?` produces the `??` (null coalescing) token instead.
 
 ### Whitespace and comments
 
@@ -143,8 +143,10 @@ These are recognized as distinct tokens by the lexer, not as identifiers.
 ```
 +  -  *  **  /  %  .
 =  =>  +=  -=  *=  /=  .=  %=
-==  ===  !=  !==  <  >  <=  >=
+==  ===  !=  !==  <  >  <=  >=  <=>
 &&  ||  !
+&  |  ^  ~  <<  >>
+??
 ++  --
 ```
 
@@ -197,6 +199,29 @@ In double-quoted strings, the lexer resolves escape sequences during scanning:
 | `\e` | Escape (0x1B) |
 
 Single-quoted strings only support `\\` and `\'` — everything else is literal.
+
+## Heredoc and nowdoc
+
+**File:** `src/lexer/literals.rs` — `scan_heredoc()`
+
+Heredoc and nowdoc are multi-line string syntaxes from PHP. The lexer recognizes `<<<` followed by a label:
+
+```php
+$s = <<<EOT
+Hello, $name!
+Multiple lines here.
+EOT;
+```
+
+The closing label must appear on its own line (optionally indented). The lexer handles three forms:
+
+- **Heredoc** (`<<<LABEL`): processes escape sequences (like double-quoted strings) and produces a `StringLiteral` token
+- **Quoted heredoc** (`<<<"LABEL"`): identical behavior to unquoted heredoc
+- **Nowdoc** (`<<<'LABEL'`): no escape processing (like single-quoted strings)
+
+The scanner reads everything between the opening label line and the closing label, strips any common leading indentation (matching the closing label's indent), and returns a single `StringLiteral` token. String interpolation within heredoc strings is handled the same way as in double-quoted strings.
+
+Note that `<<<` is distinguished from `<<` (shift left) by checking whether the third character is also `<`.
 
 ## Error handling
 
