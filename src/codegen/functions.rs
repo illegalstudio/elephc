@@ -50,6 +50,9 @@ fn emit_function_with_label(
         ctx.alloc_var(pname, pty.clone());
     }
 
+    // Pre-allocate stack slots for params with defaults that aren't passed
+    // (They'll be filled with default values at the call site or by the function prologue)
+
     collect_local_vars(body, &mut ctx, sig);
 
     let vars_size = ctx.stack_offset;
@@ -201,6 +204,8 @@ fn infer_local_type(
             if inner_ty == PhpType::Float { PhpType::Float } else { PhpType::Int }
         }
         ExprKind::Not(_) => PhpType::Bool,
+        ExprKind::BitNot(_) => PhpType::Int,
+        ExprKind::NullCoalesce { value, .. } => infer_local_type(value, sig),
         ExprKind::Ternary { then_expr, .. } => infer_local_type(then_expr, sig),
         ExprKind::BinaryOp { left, op, right } => {
             use crate::parser::ast::BinOp;
@@ -209,6 +214,9 @@ fn infer_local_type(
                 BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt
                 | BinOp::LtEq | BinOp::GtEq | BinOp::StrictEq
                 | BinOp::StrictNotEq | BinOp::And | BinOp::Or => PhpType::Bool,
+                BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor
+                | BinOp::ShiftLeft | BinOp::ShiftRight | BinOp::Spaceship => PhpType::Int,
+                BinOp::NullCoalesce => infer_local_type(left, sig),
                 BinOp::Div | BinOp::Pow => PhpType::Float,
                 BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Mod => {
                     let lt = infer_local_type(left, sig);

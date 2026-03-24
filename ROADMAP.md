@@ -135,16 +135,16 @@ Make string handling practical.
 - [ ] `global $var;` keyword
 - [ ] Static variables: `static $counter = 0;`
 - [ ] Pass by reference: `function foo(&$x) { }`
-- [ ] Default parameter values: `function foo($x = 10) { }`
+- [x] Default parameter values: `function foo($x = 10) { }`
 - [ ] Variadic functions: `function foo(...$args) { }`
 - [x] Anonymous functions / closures: `$fn = function($x) { }` (`use` captures not yet supported)
 - [x] Arrow functions: `$fn = fn($x) => $x * 2`
-- [ ] Null coalescing: `$x ?? $default`, `$x ??= $default`
+- [x] Null coalescing: `$x ?? $default` (`??=` not yet supported)
 - [ ] Spread operator: `func(...$args)`, `[...$a, ...$b]`
 - [ ] List unpacking: `[$a, $b] = $array;`
-- [ ] Heredoc / nowdoc strings
-- [ ] Bitwise operators: `&`, `|`, `^`, `~`, `<<`, `>>`
-- [ ] Spaceship operator: `<=>`
+- [x] Heredoc / nowdoc strings
+- [x] Bitwise operators: `&`, `|`, `^`, `~`, `<<`, `>>`
+- [x] Spaceship operator: `<=>`
 - [x] `call_user_func()` (string callbacks)
 - [ ] `call_user_func_array()`
 - [x] `function_exists()`

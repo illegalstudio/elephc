@@ -111,13 +111,13 @@ fn test_comparison_lower_than_arithmetic() {
 }
 
 #[test]
-fn test_concat_lower_than_comparison() {
-    // "x" . 1 < 2 should parse as "x" . (1 < 2)
+fn test_concat_higher_than_comparison() {
+    // "x" . 1 < 2 should parse as ("x" . 1) < 2 — PHP precedence
     let stmts = parse_source("<?php echo \"x\" . 1 < 2;");
     let expected = Stmt::echo(Expr::binop(
-        Expr::string_lit("x"),
-        BinOp::Concat,
-        Expr::binop(Expr::int_lit(1), BinOp::Lt, Expr::int_lit(2)),
+        Expr::binop(Expr::string_lit("x"), BinOp::Concat, Expr::int_lit(1)),
+        BinOp::Lt,
+        Expr::int_lit(2),
     ));
     assert_eq!(stmts, vec![expected]);
 }
@@ -201,7 +201,8 @@ fn test_function_declaration_parses() {
     let stmts = parse_source("<?php function foo($a, $b) { return $a; }");
     if let StmtKind::FunctionDecl { name, params, body } = &stmts[0].kind {
         assert_eq!(name, "foo");
-        assert_eq!(params, &["a".to_string(), "b".to_string()]);
+        let param_names: Vec<&str> = params.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(param_names, &["a", "b"]);
         assert_eq!(body.len(), 1);
     } else {
         panic!("expected FunctionDecl");
@@ -471,7 +472,8 @@ fn test_parse_closure() {
     assert_eq!(stmts.len(), 1);
     if let StmtKind::Assign { value, .. } = &stmts[0].kind {
         if let ExprKind::Closure { params, is_arrow, .. } = &value.kind {
-            assert_eq!(params, &vec!["x".to_string()]);
+            let param_names: Vec<&str> = params.iter().map(|(n, _)| n.as_str()).collect();
+            assert_eq!(param_names, &["x"]);
             assert!(!is_arrow);
         } else {
             panic!("expected Closure");
@@ -487,7 +489,8 @@ fn test_parse_arrow_function() {
     assert_eq!(stmts.len(), 1);
     if let StmtKind::Assign { value, .. } = &stmts[0].kind {
         if let ExprKind::Closure { params, is_arrow, .. } = &value.kind {
-            assert_eq!(params, &vec!["x".to_string()]);
+            let param_names: Vec<&str> = params.iter().map(|(n, _)| n.as_str()).collect();
+            assert_eq!(param_names, &["x"]);
             assert!(is_arrow);
         } else {
             panic!("expected Closure (arrow)");
@@ -511,4 +514,76 @@ fn test_parse_closure_call() {
     } else {
         panic!("expected ExprStmt");
     }
+}
+
+// --- Default parameter values ---
+
+#[test]
+fn test_parse_function_default_params() {
+    let stmts = parse_source("<?php function foo($a, $b = 10) { return $a + $b; }");
+    if let StmtKind::FunctionDecl { params, .. } = &stmts[0].kind {
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].0, "a");
+        assert!(params[0].1.is_none());
+        assert_eq!(params[1].0, "b");
+        assert!(params[1].1.is_some());
+    } else {
+        panic!("expected FunctionDecl");
+    }
+}
+
+// --- Bitwise operator precedence ---
+
+#[test]
+fn test_bitwise_and_lower_than_equality() {
+    // 1 == 1 & 0 should parse as (1 == 1) & 0 — PHP precedence
+    let stmts = parse_source("<?php echo 1 == 1 & 0;");
+    let expected = Stmt::echo(Expr::binop(
+        Expr::binop(Expr::int_lit(1), BinOp::Eq, Expr::int_lit(1)),
+        BinOp::BitAnd,
+        Expr::int_lit(0),
+    ));
+    assert_eq!(stmts, vec![expected]);
+}
+
+#[test]
+fn test_shift_higher_than_comparison() {
+    // 1 << 2 < 10 should parse as (1 << 2) < 10 — PHP precedence
+    let stmts = parse_source("<?php echo 1 << 2 < 10;");
+    let expected = Stmt::echo(Expr::binop(
+        Expr::binop(Expr::int_lit(1), BinOp::ShiftLeft, Expr::int_lit(2)),
+        BinOp::Lt,
+        Expr::int_lit(10),
+    ));
+    assert_eq!(stmts, vec![expected]);
+}
+
+// --- Null coalescing precedence ---
+
+#[test]
+fn test_null_coalesce_parse() {
+    let stmts = parse_source("<?php echo $x ?? 0;");
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Echo(expr) = &stmts[0].kind {
+        if let ExprKind::NullCoalesce { .. } = &expr.kind {
+            // good
+        } else {
+            panic!("expected NullCoalesce, got {:?}", expr.kind);
+        }
+    } else {
+        panic!("expected Echo");
+    }
+}
+
+// --- Spaceship operator ---
+
+#[test]
+fn test_spaceship_parse() {
+    let stmts = parse_source("<?php echo 1 <=> 2;");
+    let expected = Stmt::echo(Expr::binop(
+        Expr::int_lit(1),
+        BinOp::Spaceship,
+        Expr::int_lit(2),
+    ));
+    assert_eq!(stmts, vec![expected]);
 }

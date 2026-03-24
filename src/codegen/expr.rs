@@ -96,6 +96,17 @@ pub fn emit_expr(
             emitter.instruction("cset x0, eq");                                 // x0=1 if was zero (falsy), x0=0 if truthy
             PhpType::Bool
         }
+        ExprKind::BitNot(inner) => {
+            let ty = emit_expr(inner, emitter, ctx, data);
+            coerce_null_to_zero(emitter, &ty);
+            emitter.comment("bitwise not");
+            // -- PHP ~$x: invert all bits --
+            emitter.instruction("mvn x0, x0");                                  // bitwise complement of all 64 bits
+            PhpType::Int
+        }
+        ExprKind::NullCoalesce { value, default } => {
+            emit_null_coalesce(value, default, emitter, ctx, data)
+        }
         ExprKind::PreIncrement(name) => {
             let var = ctx.variables.get(name).expect("undefined variable");
             let offset = var.stack_offset;
@@ -164,7 +175,8 @@ pub fn emit_expr(
             emit_function_call(name, args, emitter, ctx, data)
         }
         ExprKind::Closure { params, body, is_arrow: _ } => {
-            emit_closure(params, body, emitter, ctx, data)
+            let param_names: Vec<String> = params.iter().map(|(n, _)| n.clone()).collect();
+            emit_closure(&param_names, body, emitter, ctx, data)
         }
         ExprKind::ClosureCall { var, args } => {
             emit_closure_call(var, args, emitter, ctx, data)
@@ -736,6 +748,77 @@ fn emit_binop(
             emitter.instruction("bl __rt_concat");                              // call runtime to concatenate two strings
             PhpType::Str
         }
+        BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor
+        | BinOp::ShiftLeft | BinOp::ShiftRight => {
+            let lt = emit_expr(left, emitter, ctx, data);
+            coerce_null_to_zero(emitter, &lt);
+            // -- save left operand on stack while evaluating right --
+            emitter.instruction("str x0, [sp, #-16]!");                         // push left integer operand onto stack
+            let rt = emit_expr(right, emitter, ctx, data);
+            coerce_null_to_zero(emitter, &rt);
+            // -- pop left operand and apply bitwise operation --
+            emitter.instruction("ldr x1, [sp], #16");                           // pop left integer operand into x1
+            match op {
+                BinOp::BitAnd => {
+                    emitter.instruction("and x0, x1, x0");                      // bitwise AND: left & right
+                }
+                BinOp::BitOr => {
+                    emitter.instruction("orr x0, x1, x0");                      // bitwise OR: left | right
+                }
+                BinOp::BitXor => {
+                    emitter.instruction("eor x0, x1, x0");                      // bitwise XOR: left ^ right
+                }
+                BinOp::ShiftLeft => {
+                    emitter.instruction("lsl x0, x1, x0");                      // left shift: left << right
+                }
+                BinOp::ShiftRight => {
+                    emitter.instruction("asr x0, x1, x0");                      // arithmetic right shift: left >> right
+                }
+                _ => unreachable!(),
+            }
+            PhpType::Int
+        }
+        BinOp::Spaceship => {
+            let lt = emit_expr(left, emitter, ctx, data);
+            coerce_null_to_zero(emitter, &lt);
+            let use_float = lt == PhpType::Float;
+            // -- save left operand on stack while evaluating right --
+            if use_float {
+                emitter.instruction("str d0, [sp, #-16]!");                     // push left float operand onto stack
+            } else {
+                emitter.instruction("str x0, [sp, #-16]!");                     // push left integer operand onto stack
+            }
+            let rt = emit_expr(right, emitter, ctx, data);
+            coerce_null_to_zero(emitter, &rt);
+
+            if lt == PhpType::Float || rt == PhpType::Float {
+                // -- float spaceship comparison --
+                if rt != PhpType::Float {
+                    emitter.instruction("scvtf d0, x0");                        // promote right int to float
+                }
+                if lt == PhpType::Float {
+                    emitter.instruction("ldr d1, [sp], #16");                   // pop left float
+                } else {
+                    emitter.instruction("ldr x9, [sp], #16");                   // pop left int
+                    emitter.instruction("scvtf d1, x9");                        // promote left int to float
+                }
+                // d1 = left, d0 = right
+                emitter.instruction("fcmp d1, d0");                             // compare left vs right floats
+            } else {
+                // -- integer spaceship comparison --
+                emitter.instruction("ldr x1, [sp], #16");                       // pop left integer
+                emitter.instruction("cmp x1, x0");                              // compare left vs right integers
+            }
+            // -- produce -1, 0, or 1 based on comparison flags --
+            emitter.instruction("cset x0, gt");                                 // x0=1 if left > right
+            emitter.instruction("csinv x0, x0, xzr, ge");                       // x0=-1 if left < right (invert zero → all-ones)
+            PhpType::Int
+        }
+        BinOp::NullCoalesce => {
+            // Should not reach here — handled by ExprKind::NullCoalesce
+            // But handle gracefully via the same mechanism
+            return emit_null_coalesce(left, right, emitter, ctx, data);
+        }
     }
 }
 
@@ -748,8 +831,29 @@ fn emit_function_call(
 ) -> PhpType {
     emitter.comment(&format!("call {}()", name));
 
+    // Get function sig to check for default parameter values
+    let sig = ctx.functions.get(name).cloned();
+
+    // Build full argument list including defaults for missing params
+    let total_params = sig.as_ref().map(|s| s.params.len()).unwrap_or(args.len());
+    let mut all_args: Vec<&Expr> = args.iter().collect();
+    let mut default_exprs: Vec<Expr> = Vec::new();
+
+    // For missing args, use default values from the function signature
+    if let Some(ref s) = sig {
+        for i in args.len()..total_params {
+            if let Some(Some(default)) = s.defaults.get(i) {
+                default_exprs.push(default.clone());
+            }
+        }
+    }
+
+    // Collect refs to default exprs
+    let default_refs: Vec<&Expr> = default_exprs.iter().collect();
+    all_args.extend(default_refs);
+
     let mut arg_types = Vec::new();
-    for arg in args {
+    for arg in &all_args {
         let ty = emit_expr(arg, emitter, ctx, data);
         // -- save each evaluated argument on stack --
         match &ty {
@@ -782,7 +886,7 @@ fn emit_function_call(
     }
 
     // -- pop arguments from stack into ABI registers in reverse order --
-    for i in (0..args.len()).rev() {
+    for i in (0..all_args.len()).rev() {
         let (ty, start_reg, is_float) = &assignments[i];
         match ty {
             PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
@@ -832,8 +936,10 @@ fn emit_closure(
         .iter()
         .map(|p| (p.clone(), PhpType::Int))
         .collect();
+    let defaults: Vec<Option<crate::parser::ast::Expr>> = params.iter().map(|_| None).collect();
     let sig = crate::types::FunctionSig {
         params: param_types,
+        defaults,
         return_type: PhpType::Int,
     };
 
@@ -1159,6 +1265,39 @@ fn peek_expr_type(expr: &Expr, ctx: &Context) -> Option<PhpType> {
         ExprKind::Variable(name) => ctx.variables.get(name).map(|v| v.ty.clone()),
         _ => None,
     }
+}
+
+fn emit_null_coalesce(
+    value: &Expr,
+    default: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    emitter.comment("null coalesce ??");
+    let val_ty = emit_expr(value, emitter, ctx, data);
+
+    if val_ty == PhpType::Void {
+        // Compile-time null: always use default
+        return emit_expr(default, emitter, ctx, data);
+    }
+
+    // -- check if value is null sentinel at runtime --
+    let end_label = ctx.next_label("nc_end");
+    // -- build null sentinel value for comparison --
+    emitter.instruction("movz x9, #0xFFFE");                                    // load lowest 16 bits of null sentinel
+    emitter.instruction("movk x9, #0xFFFF, lsl #16");                           // insert bits 16-31 of null sentinel
+    emitter.instruction("movk x9, #0xFFFF, lsl #32");                           // insert bits 32-47 of null sentinel
+    emitter.instruction("movk x9, #0x7FFF, lsl #48");                           // insert bits 48-63 of null sentinel
+    emitter.instruction("cmp x0, x9");                                          // compare value against null sentinel
+    emitter.instruction(&format!("b.ne {}", end_label));                        // if not null, skip default and keep value
+
+    // -- value is null, evaluate default expression --
+    let def_ty = emit_expr(default, emitter, ctx, data);
+    emitter.label(&end_label);
+
+    // Return the type of the non-null side
+    if val_ty == PhpType::Void { def_ty } else { val_ty }
 }
 
 fn load_immediate(emitter: &mut Emitter, reg: &str, value: i64) {

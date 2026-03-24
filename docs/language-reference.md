@@ -58,7 +58,18 @@ $x = 42;              // reassignment from null works
 | `<=` | `$a <= $b` | Less than or equal |
 | `>=` | `$a >= $b` | Greater than or equal |
 
-**Not supported yet:** `<=>` (spaceship).
+| `<=>` | `$a <=> $b` | Spaceship: returns -1, 0, or 1 |
+
+### Bitwise
+
+| Operator | Example | Notes |
+|---|---|---|
+| `&` | `$a & $b` | Bitwise AND |
+| `\|` | `$a \| $b` | Bitwise OR |
+| `^` | `$a ^ $b` | Bitwise XOR |
+| `~` | `~$a` | Bitwise NOT (complement) |
+| `<<` | `$a << $b` | Left shift |
+| `>>` | `$a >> $b` | Arithmetic right shift (preserves sign) |
 
 ### Logical
 
@@ -94,6 +105,14 @@ Short-circuit evaluation: if `$a` is false in `$a && $b`, `$b` is not evaluated.
 
 **Not supported yet:** `**=`, `&=`, `|=`, `^=`, `<<=`, `>>=`, `??=`.
 
+### Null Coalescing
+
+```php
+$x = null;
+echo $x ?? "default";    // prints "default"
+echo $x ?? $y ?? "last"; // chained — right-associative
+```
+
 ### Increment / Decrement
 
 | Operator | Example | Returns |
@@ -121,7 +140,7 @@ $a = (array)42;      // [42]
 
 Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 
-**Not supported yet:** `??` (null coalescing), `?:` (short ternary).
+**Not supported yet:** `?:` (short ternary).
 
 ## Control Structures
 
@@ -294,6 +313,26 @@ function greet($name) {
 greet("World");
 ```
 
+### Default parameter values
+
+```php
+<?php
+function greet($name = "world") {
+    echo "Hello " . $name . "\n";
+}
+greet();        // Hello world
+greet("PHP");   // Hello PHP
+
+function add($a, $b = 0, $c = 0) {
+    return $a + $b + $c;
+}
+echo add(5);       // 5
+echo add(5, 3);    // 8
+echo add(5, 3, 2); // 10
+```
+
+Parameters with defaults must come after required parameters. When calling, you can omit trailing arguments that have defaults.
+
 ### Local scope
 
 Variables inside a function are separate from the caller:
@@ -400,6 +439,30 @@ Variable interpolation in double-quoted strings:
 $name = "World";
 echo "Hello, $name\n";          // prints: Hello, World
 echo "Hello, " . $name . "\n";  // also works (concatenation)
+```
+
+### Heredoc strings
+
+Multi-line strings with escape sequence processing (like double-quoted):
+
+```php
+<?php
+echo <<<EOT
+Hello World
+This is line 2
+EOT;
+```
+
+### Nowdoc strings
+
+Multi-line strings without escape processing (like single-quoted):
+
+```php
+<?php
+echo <<<'EOT'
+Hello World
+No escapes: \n \t stay literal
+EOT;
 ```
 
 ## Arrays

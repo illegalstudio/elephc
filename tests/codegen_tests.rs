@@ -4405,3 +4405,230 @@ echo $sum;
 "#);
     assert_eq!(out, "10");
 }
+
+// ===== Feature 1: Default parameter values =====
+
+#[test]
+fn test_default_param_string() {
+    let out = compile_and_run(r#"<?php
+function greet($name = "world") {
+    echo "Hello " . $name;
+}
+greet();
+"#);
+    assert_eq!(out, "Hello world");
+}
+
+#[test]
+fn test_default_param_override() {
+    let out = compile_and_run(r#"<?php
+function greet($name = "world") {
+    echo "Hello " . $name;
+}
+greet("PHP");
+"#);
+    assert_eq!(out, "Hello PHP");
+}
+
+#[test]
+fn test_default_param_int() {
+    let out = compile_and_run(r#"<?php
+function add($a, $b = 0) {
+    return $a + $b;
+}
+echo add(5);
+"#);
+    assert_eq!(out, "5");
+}
+
+#[test]
+fn test_default_param_int_override() {
+    let out = compile_and_run(r#"<?php
+function add($a, $b = 0) {
+    return $a + $b;
+}
+echo add(5, 3);
+"#);
+    assert_eq!(out, "8");
+}
+
+#[test]
+fn test_default_param_multiple() {
+    let out = compile_and_run(r#"<?php
+function multi($a = 1, $b = 2, $c = 3) {
+    echo $a + $b + $c;
+}
+multi();
+"#);
+    assert_eq!(out, "6");
+}
+
+#[test]
+fn test_default_param_partial() {
+    let out = compile_and_run(r#"<?php
+function multi($a = 1, $b = 2, $c = 3) {
+    echo $a + $b + $c;
+}
+multi(10);
+"#);
+    assert_eq!(out, "15");
+}
+
+// ===== Feature 2: Null coalescing operator ?? =====
+
+#[test]
+fn test_null_coalesce_null_value() {
+    let out = compile_and_run(r#"<?php
+$x = null;
+echo $x ?? "default";
+"#);
+    assert_eq!(out, "default");
+}
+
+#[test]
+fn test_null_coalesce_non_null() {
+    let out = compile_and_run(r#"<?php
+$x = 42;
+echo $x ?? 0;
+"#);
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_null_coalesce_chained() {
+    let out = compile_and_run(r#"<?php
+$x = null;
+$y = null;
+echo $x ?? $y ?? "found";
+"#);
+    assert_eq!(out, "found");
+}
+
+#[test]
+fn test_null_coalesce_literal_null() {
+    let out = compile_and_run(r#"<?php
+echo null ?? "fallback";
+"#);
+    assert_eq!(out, "fallback");
+}
+
+// ===== Feature 3: Bitwise operators =====
+
+#[test]
+fn test_bitwise_and() {
+    let out = compile_and_run("<?php echo 5 & 3;");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_bitwise_or() {
+    let out = compile_and_run("<?php echo 5 | 3;");
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_bitwise_xor() {
+    let out = compile_and_run("<?php echo 5 ^ 3;");
+    assert_eq!(out, "6");
+}
+
+#[test]
+fn test_bitwise_not() {
+    let out = compile_and_run("<?php echo ~0;");
+    assert_eq!(out, "-1");
+}
+
+#[test]
+fn test_shift_left() {
+    let out = compile_and_run("<?php echo 1 << 4;");
+    assert_eq!(out, "16");
+}
+
+#[test]
+fn test_shift_right() {
+    let out = compile_and_run("<?php echo 16 >> 2;");
+    assert_eq!(out, "4");
+}
+
+#[test]
+fn test_bitwise_combined() {
+    let out = compile_and_run("<?php echo (255 & 15) | 48;");
+    assert_eq!(out, "63");
+}
+
+#[test]
+fn test_bitwise_not_positive() {
+    let out = compile_and_run("<?php echo ~255;");
+    assert_eq!(out, "-256");
+}
+
+#[test]
+fn test_shift_left_multiply() {
+    let out = compile_and_run("<?php echo 3 << 3;");
+    assert_eq!(out, "24");
+}
+
+#[test]
+fn test_shift_right_negative() {
+    // Arithmetic shift preserves sign
+    let out = compile_and_run("<?php echo -16 >> 2;");
+    assert_eq!(out, "-4");
+}
+
+// ===== Feature 4: Spaceship operator <=> =====
+
+#[test]
+fn test_spaceship_less() {
+    let out = compile_and_run("<?php echo 1 <=> 2;");
+    assert_eq!(out, "-1");
+}
+
+#[test]
+fn test_spaceship_equal() {
+    let out = compile_and_run("<?php echo 2 <=> 2;");
+    assert_eq!(out, "0");
+}
+
+#[test]
+fn test_spaceship_greater() {
+    let out = compile_and_run("<?php echo 3 <=> 2;");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_spaceship_negative() {
+    let out = compile_and_run("<?php echo -5 <=> 5;");
+    assert_eq!(out, "-1");
+}
+
+// ===== Feature 5: Heredoc / Nowdoc strings =====
+
+#[test]
+fn test_heredoc_basic() {
+    let out = compile_and_run("<?php\necho <<<EOT\nHello World\nEOT;\n");
+    assert_eq!(out, "Hello World");
+}
+
+#[test]
+fn test_heredoc_multiline() {
+    let out = compile_and_run("<?php\necho <<<EOT\nLine 1\nLine 2\nLine 3\nEOT;\n");
+    assert_eq!(out, "Line 1\nLine 2\nLine 3");
+}
+
+#[test]
+fn test_heredoc_escapes() {
+    let out = compile_and_run("<?php\necho <<<EOT\nHello\\tWorld\\n\nEOT;\n");
+    assert_eq!(out, "Hello\tWorld\n");
+}
+
+#[test]
+fn test_nowdoc_basic() {
+    let out = compile_and_run("<?php\necho <<<'EOT'\nHello World\nEOT;\n");
+    assert_eq!(out, "Hello World");
+}
+
+#[test]
+fn test_nowdoc_no_escapes() {
+    let out = compile_and_run("<?php\necho <<<'EOT'\nHello\\tWorld\nEOT;\n");
+    assert_eq!(out, "Hello\\tWorld");
+}

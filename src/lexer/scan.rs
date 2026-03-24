@@ -85,7 +85,11 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
     match ch {
         ';' => { cursor.advance(); Ok(Token::Semicolon) }
         ',' => { cursor.advance(); Ok(Token::Comma) }
-        '?' => { cursor.advance(); Ok(Token::Question) }
+        '?' => {
+            cursor.advance();
+            if cursor.peek() == Some('?') { cursor.advance(); Ok(Token::QuestionQuestion) }
+            else { Ok(Token::Question) }
+        }
         ':' => { cursor.advance(); Ok(Token::Colon) }
         '(' => { cursor.advance(); Ok(Token::LParen) }
         ')' => { cursor.advance(); Ok(Token::RParen) }
@@ -115,21 +119,48 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
         '&' => {
             cursor.advance();
             if cursor.peek() == Some('&') { cursor.advance(); Ok(Token::AndAnd) }
-            else { Err(CompileError::new(cursor.span(), "Expected '&' after '&'")) }
+            else { Ok(Token::Ampersand) }
         }
         '|' => {
             cursor.advance();
             if cursor.peek() == Some('|') { cursor.advance(); Ok(Token::OrOr) }
-            else { Err(CompileError::new(cursor.span(), "Expected '|' after '|'")) }
+            else { Ok(Token::Pipe) }
         }
+        '^' => { cursor.advance(); Ok(Token::Caret) }
+        '~' => { cursor.advance(); Ok(Token::Tilde) }
         '<' => {
             cursor.advance();
-            if cursor.peek() == Some('=') { cursor.advance(); Ok(Token::LessEqual) }
+            if cursor.peek() == Some('<') {
+                // Check for heredoc/nowdoc: <<<
+                let remaining = cursor.remaining();
+                if remaining.starts_with("<") && remaining.len() > 1 {
+                    // Could be <<< (heredoc/nowdoc) or << (shift left)
+                    // Check if next TWO chars are <<
+                    if remaining.starts_with("<") {
+                        // Peek ahead: is it <<< ?
+                        let after_first_lt = &remaining[1..];
+                        if after_first_lt.starts_with("<") {
+                            // It's <<<, handle heredoc/nowdoc
+                            cursor.advance(); // consume second <
+                            cursor.advance(); // consume third <
+                            return literals::scan_heredoc(cursor);
+                        }
+                    }
+                }
+                cursor.advance();
+                Ok(Token::LessLess)
+            }
+            else if cursor.peek() == Some('=') {
+                cursor.advance();
+                if cursor.peek() == Some('>') { cursor.advance(); Ok(Token::Spaceship) }
+                else { Ok(Token::LessEqual) }
+            }
             else { Ok(Token::Less) }
         }
         '>' => {
             cursor.advance();
-            if cursor.peek() == Some('=') { cursor.advance(); Ok(Token::GreaterEqual) }
+            if cursor.peek() == Some('>') { cursor.advance(); Ok(Token::GreaterGreater) }
+            else if cursor.peek() == Some('=') { cursor.advance(); Ok(Token::GreaterEqual) }
             else { Ok(Token::Greater) }
         }
         '+' => {

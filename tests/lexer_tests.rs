@@ -503,3 +503,92 @@ fn test_function_token_anonymous() {
     assert_eq!(t[1], Token::Function);
     assert_eq!(t[2], Token::LParen);
 }
+
+// --- Bitwise operator tokens ---
+
+#[test]
+fn test_ampersand_token() {
+    let t = tokens("<?php $x & $y;");
+    assert!(t.contains(&Token::Ampersand));
+}
+
+#[test]
+fn test_pipe_token() {
+    let t = tokens("<?php $x | $y;");
+    assert!(t.contains(&Token::Pipe));
+}
+
+#[test]
+fn test_caret_token() {
+    let t = tokens("<?php $x ^ $y;");
+    assert!(t.contains(&Token::Caret));
+}
+
+#[test]
+fn test_tilde_token() {
+    let t = tokens("<?php ~$x;");
+    assert!(t.contains(&Token::Tilde));
+}
+
+#[test]
+fn test_shift_left_token() {
+    let t = tokens("<?php $x << $y;");
+    assert!(t.contains(&Token::LessLess));
+}
+
+#[test]
+fn test_shift_right_token() {
+    let t = tokens("<?php $x >> $y;");
+    assert!(t.contains(&Token::GreaterGreater));
+}
+
+#[test]
+fn test_ampersand_vs_andand() {
+    let t = tokens("<?php $x & $y && $z;");
+    assert!(t.contains(&Token::Ampersand));
+    assert!(t.contains(&Token::AndAnd));
+}
+
+#[test]
+fn test_pipe_vs_oror() {
+    let t = tokens("<?php $x | $y || $z;");
+    assert!(t.contains(&Token::Pipe));
+    assert!(t.contains(&Token::OrOr));
+}
+
+// --- Spaceship operator ---
+
+#[test]
+fn test_spaceship_token() {
+    let t = tokens("<?php $x <=> $y;");
+    assert!(t.contains(&Token::Spaceship));
+}
+
+// --- Null coalescing operator ---
+
+#[test]
+fn test_question_question_token() {
+    let t = tokens("<?php $x ?? $y;");
+    assert!(t.contains(&Token::QuestionQuestion));
+}
+
+#[test]
+fn test_question_vs_question_question() {
+    let t = tokens("<?php $x ? $y : $z ?? $w;");
+    assert!(t.contains(&Token::Question));
+    assert!(t.contains(&Token::QuestionQuestion));
+}
+
+// --- Heredoc / Nowdoc ---
+
+#[test]
+fn test_heredoc_token() {
+    let t = tokens("<?php <<<EOT\nHello\nEOT;");
+    assert!(t.contains(&Token::StringLiteral("Hello".into())));
+}
+
+#[test]
+fn test_nowdoc_token() {
+    let t = tokens("<?php <<<'EOT'\nHello\nEOT;");
+    assert!(t.contains(&Token::StringLiteral("Hello".into())));
+}

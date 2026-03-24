@@ -23,6 +23,11 @@ pub enum ExprKind {
     Null,
     Negate(Box<Expr>),
     Not(Box<Expr>),
+    BitNot(Box<Expr>),
+    NullCoalesce {
+        value: Box<Expr>,
+        default: Box<Expr>,
+    },
     PreIncrement(String),
     PostIncrement(String),
     PreDecrement(String),
@@ -52,7 +57,7 @@ pub enum ExprKind {
         expr: Box<Expr>,
     },
     Closure {
-        params: Vec<String>,
+        params: Vec<(String, Option<Expr>)>,
         body: Vec<Stmt>,
         is_arrow: bool,
     },
@@ -136,6 +141,13 @@ pub enum BinOp {
     Pow,
     And,
     Or,
+    BitAnd,
+    BitOr,
+    BitXor,
+    ShiftLeft,
+    ShiftRight,
+    Spaceship,
+    NullCoalesce,
 }
 
 // --- Statements ---
@@ -203,7 +215,7 @@ pub enum StmtKind {
     ExprStmt(Expr),
     FunctionDecl {
         name: String,
-        params: Vec<String>,
+        params: Vec<(String, Option<Expr>)>,
         body: Vec<Stmt>,
     },
     Return(Option<Expr>),

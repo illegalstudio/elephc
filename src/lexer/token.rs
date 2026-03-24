@@ -97,6 +97,18 @@ pub enum Token {
     Greater,        // >
     LessEqual,      // <=
     GreaterEqual,   // >=
+    Spaceship,      // <=>
+
+    // Bitwise
+    Ampersand,      // &
+    Pipe,           // |
+    Caret,          // ^
+    Tilde,          // ~
+    LessLess,       // <<
+    GreaterGreater, // >>
+
+    // Null coalescing
+    QuestionQuestion, // ??
 
     // End of file
     Eof,

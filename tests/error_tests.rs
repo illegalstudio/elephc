@@ -52,12 +52,12 @@ fn test_error_unexpected_character() {
 
 #[test]
 fn test_error_single_ampersand() {
-    expect_error("<?php &;", "Expected '&' after '&'");
+    expect_error("<?php &;", "Unexpected token");
 }
 
 #[test]
 fn test_error_single_pipe() {
-    expect_error("<?php |;", "Expected '|' after '|'");
+    expect_error("<?php |;", "Unexpected token");
 }
 
 // --- Parser errors ---
@@ -155,7 +155,7 @@ fn test_error_undefined_function() {
 fn test_error_wrong_arg_count() {
     expect_error(
         "<?php function f($a) { return $a; } f(1, 2);",
-        "expects 1 arguments, got 2",
+        "expects 1 to 1 arguments, got 2",
     );
 }
 
@@ -842,5 +842,55 @@ fn test_error_arrow_function_missing_lparen() {
     expect_error(
         r#"<?php $f = fn $x => $x * 2;"#,
         "Expected '(' after 'fn'",
+    );
+}
+
+// --- v0.7: Default parameter, bitwise, spaceship errors ---
+
+#[test]
+fn test_error_too_many_args_with_defaults() {
+    expect_error(
+        "<?php function f($a, $b = 1) { return $a + $b; } f(1, 2, 3);",
+        "expects 1 to 2 arguments, got 3",
+    );
+}
+
+#[test]
+fn test_error_too_few_args_with_defaults() {
+    expect_error(
+        "<?php function f($a, $b = 1) { return $a + $b; } f();",
+        "expects 1 to 2 arguments, got 0",
+    );
+}
+
+#[test]
+fn test_error_bitwise_and_string() {
+    expect_error(
+        r#"<?php echo "hello" & 1;"#,
+        "Bitwise operators require integer operands",
+    );
+}
+
+#[test]
+fn test_error_bitwise_not_string() {
+    expect_error(
+        r#"<?php echo ~"hello";"#,
+        "Bitwise NOT requires integer operand",
+    );
+}
+
+#[test]
+fn test_error_spaceship_string() {
+    expect_error(
+        r#"<?php echo "a" <=> "b";"#,
+        "Spaceship operator requires numeric operands",
+    );
+}
+
+#[test]
+fn test_error_heredoc_unterminated() {
+    expect_error(
+        "<?php echo <<<EOT\nHello",
+        "Unterminated heredoc",
     );
 }

@@ -259,8 +259,16 @@ fn parse_function_decl(
         }
         match tokens.get(*pos).map(|(t, _)| t) {
             Some(Token::Variable(n)) => {
-                params.push(n.clone());
+                let n = n.clone();
                 *pos += 1;
+                // Check for default value
+                let default = if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
+                    *pos += 1;
+                    Some(parse_expr(tokens, pos)?)
+                } else {
+                    None
+                };
+                params.push((n, default));
             }
             _ => return Err(CompileError::new(span, "Expected parameter variable")),
         }

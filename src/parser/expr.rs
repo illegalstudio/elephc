@@ -50,14 +50,24 @@ fn parse_expr_bp(
         let span = tokens[*pos].1;
         *pos += 1;
         let rhs = parse_expr_bp(tokens, pos, r_bp)?;
-        lhs = Expr::new(
-            ExprKind::BinaryOp {
-                left: Box::new(lhs),
-                op,
-                right: Box::new(rhs),
-            },
-            span,
-        );
+        if op == BinOp::NullCoalesce {
+            lhs = Expr::new(
+                ExprKind::NullCoalesce {
+                    value: Box::new(lhs),
+                    default: Box::new(rhs),
+                },
+                span,
+            );
+        } else {
+            lhs = Expr::new(
+                ExprKind::BinaryOp {
+                    left: Box::new(lhs),
+                    op,
+                    right: Box::new(rhs),
+                },
+                span,
+            );
+        }
     }
 
     // Check for ternary operator (lowest precedence)
@@ -85,25 +95,36 @@ fn parse_expr_bp(
 
 /// Infix operator binding powers.
 /// To add a new operator, add a line here.
+///
+/// PHP precedence (high to low):
+///   ** (right-assoc) > unary ~ - ! > * / % > + - > . > << >> >
+///   < <= > >= <=> > == != === !== > & > ^ > | > && > || > ??
 fn infix_bp(token: &Token) -> Option<(BinOp, u8, u8)> {
     match token {
-        Token::OrOr         => Some((BinOp::Or,     1, 2)),
-        Token::AndAnd       => Some((BinOp::And,    3, 4)),
-        Token::Dot          => Some((BinOp::Concat, 5, 6)),
-        Token::EqualEqual      => Some((BinOp::Eq,         7, 8)),
-        Token::NotEqual        => Some((BinOp::NotEq,      7, 8)),
-        Token::EqualEqualEqual => Some((BinOp::StrictEq,   7, 8)),
-        Token::NotEqualEqual   => Some((BinOp::StrictNotEq,7, 8)),
-        Token::Less         => Some((BinOp::Lt,     9, 10)),
-        Token::Greater      => Some((BinOp::Gt,     9, 10)),
-        Token::LessEqual    => Some((BinOp::LtEq,   9, 10)),
-        Token::GreaterEqual => Some((BinOp::GtEq,   9, 10)),
-        Token::Plus         => Some((BinOp::Add,   11, 12)),
-        Token::Minus        => Some((BinOp::Sub,   11, 12)),
-        Token::Star         => Some((BinOp::Mul,   13, 14)),
-        Token::Slash        => Some((BinOp::Div,   13, 14)),
-        Token::Percent      => Some((BinOp::Mod,   13, 14)),
-        Token::StarStar     => Some((BinOp::Pow,   17, 16)), // right-associative, above unary
+        Token::QuestionQuestion => Some((BinOp::NullCoalesce, 2, 1)), // right-associative, lowest binop
+        Token::OrOr            => Some((BinOp::Or,         3, 4)),
+        Token::AndAnd          => Some((BinOp::And,        5, 6)),
+        Token::Pipe            => Some((BinOp::BitOr,      7, 8)),
+        Token::Caret           => Some((BinOp::BitXor,     9, 10)),
+        Token::Ampersand       => Some((BinOp::BitAnd,    11, 12)),
+        Token::EqualEqual      => Some((BinOp::Eq,        13, 14)),
+        Token::NotEqual        => Some((BinOp::NotEq,     13, 14)),
+        Token::EqualEqualEqual => Some((BinOp::StrictEq,  13, 14)),
+        Token::NotEqualEqual   => Some((BinOp::StrictNotEq,13,14)),
+        Token::Less            => Some((BinOp::Lt,        15, 16)),
+        Token::Greater         => Some((BinOp::Gt,        15, 16)),
+        Token::LessEqual       => Some((BinOp::LtEq,     15, 16)),
+        Token::GreaterEqual    => Some((BinOp::GtEq,      15, 16)),
+        Token::Spaceship       => Some((BinOp::Spaceship, 15, 16)),
+        Token::LessLess        => Some((BinOp::ShiftLeft, 17, 18)),
+        Token::GreaterGreater  => Some((BinOp::ShiftRight,17, 18)),
+        Token::Dot             => Some((BinOp::Concat,    19, 20)),
+        Token::Plus            => Some((BinOp::Add,       21, 22)),
+        Token::Minus           => Some((BinOp::Sub,       21, 22)),
+        Token::Star            => Some((BinOp::Mul,       23, 24)),
+        Token::Slash           => Some((BinOp::Div,       23, 24)),
+        Token::Percent         => Some((BinOp::Mod,       23, 24)),
+        Token::StarStar        => Some((BinOp::Pow,       29, 28)), // right-associative, above unary
         _ => None,
     }
 }
@@ -120,13 +141,18 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
     match &tokens[*pos].0 {
         Token::Minus => {
             *pos += 1;
-            let inner = parse_expr_bp(tokens, pos, 15)?;
+            let inner = parse_expr_bp(tokens, pos, 27)?;
             Ok(Expr::new(ExprKind::Negate(Box::new(inner)), span))
         }
         Token::Bang => {
             *pos += 1;
-            let inner = parse_expr_bp(tokens, pos, 15)?;
+            let inner = parse_expr_bp(tokens, pos, 27)?;
             Ok(Expr::new(ExprKind::Not(Box::new(inner)), span))
+        }
+        Token::Tilde => {
+            *pos += 1;
+            let inner = parse_expr_bp(tokens, pos, 27)?;
+            Ok(Expr::new(ExprKind::BitNot(Box::new(inner)), span))
         }
         Token::True => {
             *pos += 1;
@@ -255,7 +281,7 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
             // Check for type cast: (int), (float), (string), (bool), (array)
             if let Some(cast_ty) = peek_cast(tokens, *pos) {
                 *pos += 3; // skip (, type, )
-                let inner = parse_expr_bp(tokens, pos, 15)?;
+                let inner = parse_expr_bp(tokens, pos, 27)?;
                 return Ok(Expr::new(
                     ExprKind::Cast { target: cast_ty, expr: Box::new(inner) },
                     span,
@@ -407,8 +433,16 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                     }
                     match tokens.get(*pos).map(|(t, _)| t) {
                         Some(Token::Variable(n)) => {
-                            params.push(n.clone());
+                            let n = n.clone();
                             *pos += 1;
+                            // Check for default value
+                            let default = if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
+                                *pos += 1;
+                                Some(parse_expr(tokens, pos)?)
+                            } else {
+                                None
+                            };
+                            params.push((n, default));
                         }
                         _ => return Err(CompileError::new(span, "Expected parameter variable")),
                     }
@@ -442,8 +476,16 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                 }
                 match tokens.get(*pos).map(|(t, _)| t) {
                     Some(Token::Variable(n)) => {
-                        params.push(n.clone());
+                        let n = n.clone();
                         *pos += 1;
+                        // Check for default value
+                        let default = if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
+                            *pos += 1;
+                            Some(parse_expr(tokens, pos)?)
+                        } else {
+                            None
+                        };
+                        params.push((n, default));
                     }
                     _ => return Err(CompileError::new(span, "Expected parameter variable")),
                 }

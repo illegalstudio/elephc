@@ -15,6 +15,7 @@ pub(crate) struct Checker {
 #[derive(Clone)]
 pub(crate) struct FnDecl {
     pub params: Vec<String>,
+    pub defaults: Vec<Option<Expr>>,
     pub body: Vec<Stmt>,
 }
 
@@ -26,10 +27,13 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
 
     for stmt in program {
         if let StmtKind::FunctionDecl { name, params, body } = &stmt.kind {
+            let param_names: Vec<String> = params.iter().map(|(n, _)| n.clone()).collect();
+            let defaults: Vec<Option<Expr>> = params.iter().map(|(_, d)| d.clone()).collect();
             checker.fn_decls.insert(
                 name.clone(),
                 FnDecl {
-                    params: params.clone(),
+                    params: param_names,
+                    defaults,
                     body: body.clone(),
                 },
             );
@@ -350,11 +354,24 @@ impl Checker {
                 }
                 self.check_function_call(&name, &args, expr.span, env)
             }
+            ExprKind::BitNot(inner) => {
+                let ty = self.infer_type(inner, env)?;
+                if !matches!(ty, PhpType::Int | PhpType::Bool | PhpType::Void) {
+                    return Err(CompileError::new(expr.span, "Bitwise NOT requires integer operand"));
+                }
+                Ok(PhpType::Int)
+            }
+            ExprKind::NullCoalesce { value, default } => {
+                let vt = self.infer_type(value, env)?;
+                let dt = self.infer_type(default, env)?;
+                // Result type is the non-null type, prefer left if both non-void
+                if vt == PhpType::Void { Ok(dt) } else { Ok(vt) }
+            }
             ExprKind::Closure { params, body, is_arrow: _ } => {
                 // Type-check the closure body in its own environment
                 let mut closure_env: TypeEnv = env.clone();
                 // Add params as Int (simple default for now — they'll be refined at call site)
-                for p in params {
+                for (p, _default) in params {
                     closure_env.insert(p.clone(), PhpType::Int);
                 }
                 for stmt in body {
@@ -425,6 +442,32 @@ impl Checker {
                     }
                     BinOp::Concat => Ok(PhpType::Str),
                     BinOp::And | BinOp::Or => Ok(PhpType::Bool),
+                    BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor
+                    | BinOp::ShiftLeft | BinOp::ShiftRight => {
+                        let lt_ok = matches!(lt, PhpType::Int | PhpType::Bool | PhpType::Void);
+                        let rt_ok = matches!(rt, PhpType::Int | PhpType::Bool | PhpType::Void);
+                        if !lt_ok || !rt_ok {
+                            return Err(CompileError::new(
+                                expr.span, "Bitwise operators require integer operands",
+                            ));
+                        }
+                        Ok(PhpType::Int)
+                    }
+                    BinOp::Spaceship => {
+                        let lt_ok = matches!(lt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
+                        let rt_ok = matches!(rt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
+                        if !lt_ok || !rt_ok {
+                            return Err(CompileError::new(
+                                expr.span, "Spaceship operator requires numeric operands",
+                            ));
+                        }
+                        Ok(PhpType::Int)
+                    }
+                    BinOp::NullCoalesce => {
+                        // Handled by ExprKind::NullCoalesce — shouldn't reach here
+                        // but handle gracefully
+                        if lt == PhpType::Void { Ok(rt) } else { Ok(lt) }
+                    }
                 }
             }
         }
