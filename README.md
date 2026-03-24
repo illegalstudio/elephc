@@ -105,8 +105,10 @@ if ($x === 3) {
 | Echo / Print | `echo $x;`, `print $x;` |
 | Variables | `$name = "hello";` |
 | Arithmetic | `+`, `-`, `*`, `/`, `%`, `**` |
-| Comparison | `==`, `!=`, `<`, `>`, `<=`, `>=`, `===`, `!==` |
+| Comparison | `==`, `!=`, `<`, `>`, `<=`, `>=`, `===`, `!==`, `<=>` |
 | Logical | `&&`, `\|\|`, `!` |
+| Bitwise | `&`, `\|`, `^`, `~`, `<<`, `>>` |
+| Null coalescing | `$x ?? $default` |
 | Concatenation | `"a" . "b"`, `"val=" . 42` |
 | Assignment | `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `.=` |
 | Increment/Decrement | `$i++`, `++$i`, `$i--`, `--$i` |
@@ -118,10 +120,11 @@ if ($x === 3) {
 | Switch | `switch ($x) { case 1: ...; break; default: ...; }` |
 | Match | `$r = match($x) { 1 => "one", default => "other" };` |
 | Break / Continue | `break;`, `continue;` |
-| Functions | `function foo($x) { return $x + 1; }` |
+| Functions | `function foo($x, $y = 10) { return $x + $y; }` |
 | Closures / Arrow | `$fn = function($x) { return $x * 2; };`, `fn($x) => $x * 2` |
 | Include/Require | `include 'file.php';`, `require_once 'lib.php';` |
 | String interpolation | `"Hello $name"` |
+| Heredoc / Nowdoc | `<<<EOT ... EOT;`, `<<<'EOT' ... EOT;` |
 | Comments | `// ...`, `/* ... */` |
 
 ### Built-in functions
@@ -230,7 +233,7 @@ src/
 ## Tests
 
 ```bash
-cargo test                      # all tests (~797)
+cargo test                      # all tests (~856)
 cargo test test_my_feature      # run specific tests
 ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 ```

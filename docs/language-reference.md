@@ -387,7 +387,6 @@ Arrow functions are single-expression closures — the body is implicitly return
 
 ### Limitations
 
-- No default parameter values (`function foo($x = 10)` — not supported)
 - No pass by reference (`function foo(&$x)` — not supported)
 - No variadic functions (`function foo(...$args)` — not supported)
 - No `use ($var)` captures in closures
