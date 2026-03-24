@@ -1,6 +1,6 @@
 # Roadmap
 
-## v0.1.0 — Usable CLI compiler (done)
+## v0.1.x — Usable CLI compiler (done)
 
 - [x] Lexer, parser (Pratt), type checker, ARM64 codegen pipeline
 - [x] Integers, strings (double and single quoted), echo, variables, comments
@@ -18,7 +18,7 @@
 - [x] Built-in `strlen()`, `intval()`
 - [x] Error messages with line/column numbers
 
-## v0.2.0 — Arrays and null (done)
+## v0.2.x — Arrays and null (done)
 
 - [x] Indexed arrays: `$arr = [1, 2, 3];`
 - [x] Array access, assignment, push: `$arr[0]`, `$arr[0] = 42`, `$arr[] = "new"`
@@ -28,7 +28,7 @@
 - [x] Heap allocator (1MB bump allocator)
 - [x] Proper null: `echo null` prints nothing, `is_null()`, null coercion in operations
 
-## v0.3.0 — Bool, float, and type system
+## v0.3.x — Bool, float, and type system (done)
 
 Proper type system for PHP compatibility.
 
@@ -63,9 +63,7 @@ Proper type system for PHP compatibility.
 - [x] `number_format()`
 - [x] Constants: `PHP_INT_MAX`, `PHP_INT_MIN`, `PHP_FLOAT_MAX`, `M_PI`
 
-## v0.4.0 — Strings
-
-Make string handling practical.
+## v0.4.x — Strings (done)
 
 - [x] String interpolation: `"Hello $name"`
 - [x] `substr()`, `strpos()`, `strrpos()`, `strstr()`
@@ -90,7 +88,7 @@ Make string handling practical.
 - [x] `bin2hex()`, `hex2bin()`
 - [x] `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, `ctype_space()`
 
-## v0.5.0 — I/O and file system (done)
+## v0.5.x — I/O and file system (done)
 
 - [x] `fgets(STDIN)` / `readline()` — read from keyboard
 - [x] `STDIN`, `STDOUT`, `STDERR` constants
@@ -107,7 +105,7 @@ Make string handling practical.
 - [x] `print` as alias for `echo`
 - [x] `var_dump()`, `print_r()` for debugging
 
-## v0.6.0 — Associative arrays and switch
+## v0.6.x — Associative arrays and switch (done)
 
 - [x] Multi-dimensional arrays: `[[1,2],[3,4]]`, `$a[0][1]`
 - [x] Associative arrays: `$map = ["key" => "value"];`
@@ -129,7 +127,7 @@ Make string handling practical.
 - [x] `switch` / `case` / `default` (with fall-through)
 - [x] `match` expression (PHP 8 style, no fall-through)
 
-## v0.7.0 — Advanced language features
+## v0.7.x — Advanced language features
 
 - [ ] `define()` / `const` constants
 - [ ] `global $var;` keyword
@@ -149,7 +147,7 @@ Make string handling practical.
 - [ ] `call_user_func_array()`
 - [x] `function_exists()`
 
-## v0.8.0 — Date/time, JSON, regex
+## v0.8.x — Date/time, JSON, regex
 
 - [ ] `time()`, `microtime()`
 - [ ] `date()`, `mktime()`, `strtotime()`
@@ -161,7 +159,7 @@ Make string handling practical.
 - [ ] `php_uname()`, `phpversion()`
 - [ ] Constants: `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`
 
-## v0.9.0 — Memory management and runtime improvements
+## v0.9.x — Memory management and runtime improvements
 
 - [ ] Free-list allocator (replace bump allocator with reusable memory)
 - [ ] Scope-based memory reset (free temporaries at end of scope/loop iteration)
@@ -172,7 +170,7 @@ Make string handling practical.
 - [ ] Sized array pre-allocation (when array size is known at compile time, allocate in one block instead of dynamic resize)
 - [x] `include` / `require` / `include_once` / `require_once`
 
-## v0.10.0 — Multi-platform and optimizations
+## v0.10.x — Multi-platform and optimizations
 
 - [ ] Linux x86_64 target
 - [ ] Linux ARM64 target
@@ -184,7 +182,7 @@ Make string handling practical.
 - [ ] Tail-call optimization
 - [ ] Peephole optimization (redundant load/store elimination)
 
-## v1.0.0 — Production-ready
+## v1.0.x — Production-ready
 
 - [ ] Comprehensive error recovery (multiple errors per compilation)
 - [ ] Warning system (unused variables, unreachable code)
@@ -199,7 +197,7 @@ Make string handling practical.
 
 ---
 
-## v1.1.0 — Shared and static libraries (C ABI)
+## v1.1.x — Shared and static libraries (C ABI)
 
 - [ ] `--lib` flag, export PHP functions as C-callable symbols
 - [ ] `.dylib` / `.so` / `.a` output
@@ -207,21 +205,21 @@ Make string handling practical.
 - [ ] Null-terminated string convention for C interop
 - [ ] FFI documentation for C, Rust, Python, Go
 
-## v1.2.0 — Library ecosystem
+## v1.2.x — Library ecosystem
 
 - [ ] `--export` flag for symbol selection
 - [ ] Multi-file library compilation
 - [ ] Symbol visibility control
 - [ ] `pkg-config` generation
 
-## v1.3.0 — WebAssembly target
+## v1.3.x — WebAssembly target
 
 - [ ] WASM codegen backend
 - [ ] `.wat` / `.wasm` emission
 - [ ] WASI support for I/O
 - [ ] NPM package generation
 
-## v1.4.0 — PHP extension bridge (experimental)
+## v1.4.x — PHP extension bridge (experimental)
 
 - [ ] `zval` pack/unpack routines (convert elephc values ↔ PHP `zval` structs)
 - [ ] Link against PHP extension `.so`/`.dylib` shared libraries
