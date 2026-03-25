@@ -4803,6 +4803,15 @@ fn test_getenv_nonexistent() {
     assert_eq!(out, "0");
 }
 
+#[test]
+fn test_putenv() {
+    let out = compile_and_run(r#"<?php
+$r = putenv("ELEPHC_TEST_VAR=hello");
+if ($r) { echo "ok"; }
+"#);
+    assert_eq!(out, "ok");
+}
+
 // -- v0.8 phpversion / php_uname --
 
 #[test]
