@@ -509,7 +509,7 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
         Token::Identifier(name) => {
             let name = name.clone();
             *pos += 1;
-            // Must be a function call
+            // Function call: name(...)
             if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
                 *pos += 1;
                 let mut args = Vec::new();
@@ -528,7 +528,8 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                 *pos += 1;
                 Ok(Expr::new(ExprKind::FunctionCall { name, args }, span))
             } else {
-                Err(CompileError::new(span, &format!("Unexpected identifier: '{}'", name)))
+                // Bare identifier — treat as constant reference (validated by type checker)
+                Ok(Expr::new(ExprKind::ConstRef(name), span))
             }
         }
         other => Err(CompileError::new(

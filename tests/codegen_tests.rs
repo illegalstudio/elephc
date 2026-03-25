@@ -4632,3 +4632,111 @@ fn test_nowdoc_no_escapes() {
     let out = compile_and_run("<?php\necho <<<'EOT'\nHello\\tWorld\nEOT;\n");
     assert_eq!(out, "Hello\\tWorld");
 }
+
+// --- Constants (const / define) ---
+
+#[test]
+fn test_const_int() {
+    let out = compile_and_run("<?php\nconst MAX = 100;\necho MAX;\n");
+    assert_eq!(out, "100");
+}
+
+#[test]
+fn test_const_string() {
+    let out = compile_and_run("<?php\nconst GREETING = \"hello\";\necho GREETING;\n");
+    assert_eq!(out, "hello");
+}
+
+#[test]
+fn test_const_float() {
+    let out = compile_and_run("<?php\nconst PI = 3.14;\necho PI;\n");
+    assert_eq!(out, "3.14");
+}
+
+#[test]
+fn test_const_bool() {
+    let out = compile_and_run("<?php\nconst DEBUG = true;\necho DEBUG;\n");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_define_int() {
+    let out = compile_and_run("<?php\ndefine(\"MAX_SIZE\", 256);\necho MAX_SIZE;\n");
+    assert_eq!(out, "256");
+}
+
+#[test]
+fn test_define_string() {
+    let out = compile_and_run("<?php\ndefine(\"APP_NAME\", \"elephc\");\necho APP_NAME;\n");
+    assert_eq!(out, "elephc");
+}
+
+#[test]
+fn test_const_in_expression() {
+    let out = compile_and_run("<?php\nconst X = 10;\nconst Y = 20;\necho X + Y;\n");
+    assert_eq!(out, "30");
+}
+
+#[test]
+fn test_const_in_function() {
+    let out = compile_and_run("<?php\nconst LIMIT = 42;\nfunction test() { echo LIMIT; }\ntest();\n");
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_define_in_function() {
+    let out = compile_and_run("<?php\ndefine(\"RATE\", 100);\nfunction show() { echo RATE; }\nshow();\n");
+    assert_eq!(out, "100");
+}
+
+#[test]
+fn test_const_concat() {
+    let out = compile_and_run("<?php\nconst PREFIX = \"hello\";\necho PREFIX . \" world\";\n");
+    assert_eq!(out, "hello world");
+}
+
+// --- List unpacking ---
+
+#[test]
+fn test_list_unpack_int() {
+    let out = compile_and_run("<?php\n[$a, $b, $c] = [10, 20, 30];\necho $a . \" \" . $b . \" \" . $c;\n");
+    assert_eq!(out, "10 20 30");
+}
+
+#[test]
+fn test_list_unpack_string() {
+    let out = compile_and_run("<?php\n[$x, $y] = [\"hello\", \"world\"];\necho $x . \" \" . $y;\n");
+    assert_eq!(out, "hello world");
+}
+
+#[test]
+fn test_list_unpack_from_variable() {
+    let out = compile_and_run("<?php\n$arr = [1, 2, 3];\n[$a, $b, $c] = $arr;\necho $a . \" \" . $b . \" \" . $c;\n");
+    assert_eq!(out, "1 2 3");
+}
+
+#[test]
+fn test_list_unpack_two_vars() {
+    let out = compile_and_run("<?php\n[$first, $second] = [42, 99];\necho $first + $second;\n");
+    assert_eq!(out, "141");
+}
+
+// --- call_user_func_array ---
+
+#[test]
+fn test_call_user_func_array_basic() {
+    let out = compile_and_run("<?php\nfunction add($a, $b) { return $a + $b; }\necho call_user_func_array(\"add\", [3, 4]);\n");
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_call_user_func_array_single_arg() {
+    let out = compile_and_run("<?php\nfunction double($n) { return $n * 2; }\necho call_user_func_array(\"double\", [21]);\n");
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_call_user_func_array_string_return() {
+    let out = compile_and_run("<?php\nfunction greet($name) { return \"Hello \" . $name; }\necho call_user_func_array(\"greet\", [\"World\"]);\n");
+    assert_eq!(out, "Hello World");
+}

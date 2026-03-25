@@ -54,6 +54,7 @@ pub enum Token {
     Stderr,
     Fn,             // fn (arrow functions)
     Use,            // use (closure captures — reserved for future)
+    Const,          // const
 
     // Operators
     Assign,         // =

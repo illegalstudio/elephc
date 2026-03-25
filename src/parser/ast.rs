@@ -65,6 +65,7 @@ pub enum ExprKind {
         var: String,
         args: Vec<Expr>,
     },
+    ConstRef(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -219,6 +220,14 @@ pub enum StmtKind {
         body: Vec<Stmt>,
     },
     Return(Option<Expr>),
+    ConstDecl {
+        name: String,
+        value: Expr,
+    },
+    ListUnpack {
+        vars: Vec<String>,
+        value: Expr,
+    },
 }
 
 impl PartialEq for Stmt {

@@ -595,6 +595,85 @@ pub fn emit_stmt(
             // -- clean up saved subject --
             emitter.instruction("add sp, sp, #16");                             // pop saved subject
         }
+        StmtKind::ConstDecl { name, value } => {
+            // Store constant value in context for later ConstRef resolution
+            let ty = match &value.kind {
+                crate::parser::ast::ExprKind::IntLiteral(_) => PhpType::Int,
+                crate::parser::ast::ExprKind::FloatLiteral(_) => PhpType::Float,
+                crate::parser::ast::ExprKind::StringLiteral(_) => PhpType::Str,
+                crate::parser::ast::ExprKind::BoolLiteral(_) => PhpType::Bool,
+                crate::parser::ast::ExprKind::Null => PhpType::Void,
+                _ => PhpType::Int,
+            };
+            ctx.constants.insert(name.clone(), (value.kind.clone(), ty));
+        }
+        StmtKind::ListUnpack { vars, value } => {
+            emitter.blank();
+            emitter.comment("list unpack");
+
+            // Evaluate the array expression
+            let arr_ty = emit_expr(value, emitter, ctx, data);
+            let elem_ty = match &arr_ty {
+                PhpType::Array(t) => *t.clone(),
+                _ => PhpType::Int,
+            };
+
+            // -- save array pointer on stack --
+            emitter.instruction("str x0, [sp, #-16]!");                         // push array pointer onto stack
+
+            for (i, var_name) in vars.iter().enumerate() {
+                let var = ctx.variables.get(var_name).expect("variable not pre-allocated");
+                let offset = var.stack_offset;
+
+                // -- load element at index i from array --
+                emitter.instruction("ldr x9, [sp]");                            // peek array pointer from stack
+                match &elem_ty {
+                    PhpType::Int | PhpType::Bool => {
+                        emitter.instruction("add x9, x9, #24");                 // skip 24-byte array header
+                        emitter.instruction(&format!(                           // load element at index
+                            "ldr x0, [x9, #{}]", i * 8
+                        ));
+                        emitter.instruction(&format!(                           // store into variable
+                            "stur x0, [x29, #-{}]", offset
+                        ));
+                    }
+                    PhpType::Str => {
+                        emitter.instruction(&format!(                           // offset to string slot
+                            "add x9, x9, #{}", 24 + i * 16
+                        ));
+                        emitter.instruction("ldr x1, [x9]");                    // load string pointer
+                        emitter.instruction("ldr x2, [x9, #8]");                // load string length
+                        emitter.instruction(&format!(                           // store string ptr
+                            "stur x1, [x29, #-{}]", offset
+                        ));
+                        emitter.instruction(&format!(                           // store string len
+                            "stur x2, [x29, #-{}]", offset - 8
+                        ));
+                    }
+                    PhpType::Float => {
+                        emitter.instruction("add x9, x9, #24");                 // skip 24-byte array header
+                        emitter.instruction(&format!(                           // load float at index
+                            "ldr d0, [x9, #{}]", i * 8
+                        ));
+                        emitter.instruction(&format!(                           // store float into variable
+                            "stur d0, [x29, #-{}]", offset
+                        ));
+                    }
+                    _ => {
+                        emitter.instruction("add x9, x9, #24");                 // skip 24-byte array header
+                        emitter.instruction(&format!(                           // load element at index
+                            "ldr x0, [x9, #{}]", i * 8
+                        ));
+                        emitter.instruction(&format!(                           // store into variable
+                            "stur x0, [x29, #-{}]", offset
+                        ));
+                    }
+                }
+            }
+
+            // -- clean up saved array pointer --
+            emitter.instruction("add sp, sp, #16");                             // pop saved array pointer
+        }
         StmtKind::Include { .. } => {
             // Should have been resolved before codegen
             panic!("Unresolved include statement in codegen");

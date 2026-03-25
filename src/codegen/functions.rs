@@ -14,10 +14,11 @@ pub fn emit_function(
     sig: &FunctionSig,
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
+    constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
 ) {
     let label = format!("_fn_{}", name);
     let epilogue_label = format!("_fn_{}_epilogue", name);
-    emit_function_with_label(emitter, data, &label, &epilogue_label, sig, body, all_functions);
+    emit_function_with_label(emitter, data, &label, &epilogue_label, sig, body, all_functions, constants);
 }
 
 pub fn emit_closure(
@@ -27,9 +28,10 @@ pub fn emit_closure(
     sig: &FunctionSig,
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
+    constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
 ) {
     let epilogue_label = format!("{}_epilogue", label);
-    emit_function_with_label(emitter, data, label, &epilogue_label, sig, body, all_functions);
+    emit_function_with_label(emitter, data, label, &epilogue_label, sig, body, all_functions, constants);
 }
 
 fn emit_function_with_label(
@@ -40,11 +42,13 @@ fn emit_function_with_label(
     sig: &FunctionSig,
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
+    constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
 ) {
 
     let mut ctx = Context::new();
     ctx.return_label = Some(epilogue_label.to_string());
     ctx.functions = all_functions.clone();
+    ctx.constants = constants.clone();
 
     for (pname, pty) in &sig.params {
         ctx.alloc_var(pname, pty.clone());
@@ -159,6 +163,18 @@ pub fn collect_local_vars(
                     collect_local_vars(body, ctx, sig);
                 }
             }
+            StmtKind::ConstDecl { .. } => {}
+            StmtKind::ListUnpack { vars, value, .. } => {
+                let elem_ty = match infer_local_type(value, sig) {
+                    PhpType::Array(t) => *t,
+                    _ => PhpType::Int,
+                };
+                for var in vars {
+                    if !ctx.variables.contains_key(var) {
+                        ctx.alloc_var(var, elem_ty.clone());
+                    }
+                }
+            }
             StmtKind::ArrayAssign { .. } | StmtKind::ArrayPush { .. } => {}
             StmtKind::DoWhile { body, .. } | StmtKind::While { body, .. } => {
                 collect_local_vars(body, ctx, sig);
@@ -268,6 +284,7 @@ fn infer_local_type(
         }
         ExprKind::Closure { .. } => PhpType::Callable,
         ExprKind::ClosureCall { .. } => PhpType::Int,
+        ExprKind::ConstRef(_) => PhpType::Int, // constants resolved at emit time
         _ => PhpType::Int,
     }
 }

@@ -587,3 +587,67 @@ fn test_spaceship_parse() {
     ));
     assert_eq!(stmts, vec![expected]);
 }
+
+// --- Constants ---
+
+#[test]
+fn test_const_decl_int() {
+    let stmts = parse_source("<?php const MAX = 100;");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::ConstDecl { name, value } => {
+            assert_eq!(name, "MAX");
+            assert_eq!(value.kind, ExprKind::IntLiteral(100));
+        }
+        _ => panic!("Expected ConstDecl"),
+    }
+}
+
+#[test]
+fn test_const_decl_string() {
+    let stmts = parse_source("<?php const NAME = \"hello\";");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::ConstDecl { name, value } => {
+            assert_eq!(name, "NAME");
+            assert_eq!(value.kind, ExprKind::StringLiteral("hello".into()));
+        }
+        _ => panic!("Expected ConstDecl"),
+    }
+}
+
+#[test]
+fn test_const_ref_in_echo() {
+    let stmts = parse_source("<?php echo MAX;");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => {
+            assert_eq!(expr.kind, ExprKind::ConstRef("MAX".into()));
+        }
+        _ => panic!("Expected Echo"),
+    }
+}
+
+#[test]
+fn test_list_unpack() {
+    let stmts = parse_source("<?php [$a, $b] = [1, 2];");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::ListUnpack { vars, .. } => {
+            assert_eq!(vars, &["a".to_string(), "b".to_string()]);
+        }
+        _ => panic!("Expected ListUnpack"),
+    }
+}
+
+#[test]
+fn test_list_unpack_three_vars() {
+    let stmts = parse_source("<?php [$x, $y, $z] = [10, 20, 30];");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::ListUnpack { vars, .. } => {
+            assert_eq!(vars, &["x".to_string(), "y".to_string(), "z".to_string()]);
+        }
+        _ => panic!("Expected ListUnpack"),
+    }
+}

@@ -32,6 +32,7 @@ mod array_walk;
 mod arsort;
 mod asort;
 mod call_user_func;
+mod call_user_func_array;
 mod count;
 mod function_exists;
 mod in_array;
@@ -110,6 +111,7 @@ pub fn emit(
         "uksort" => uksort::emit(name, args, emitter, ctx, data),
         "uasort" => uasort::emit(name, args, emitter, ctx, data),
         "call_user_func" => call_user_func::emit(name, args, emitter, ctx, data),
+        "call_user_func_array" => call_user_func_array::emit(name, args, emitter, ctx, data),
         "function_exists" => function_exists::emit(name, args, emitter, ctx, data),
         _ => None,
     }

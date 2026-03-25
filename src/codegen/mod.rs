@@ -10,7 +10,7 @@ mod stmt;
 
 use std::collections::HashMap;
 
-use crate::parser::ast::{Program, StmtKind};
+use crate::parser::ast::{ExprKind, Program, StmtKind};
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 use context::Context;
 use data_section::DataSection;
@@ -24,6 +24,9 @@ pub fn generate(
     let mut emitter = Emitter::new();
     let mut data = DataSection::new();
 
+    // Pre-scan for compile-time constants (const declarations and define() calls)
+    let global_constants = collect_constants(program);
+
     // Emit user-defined functions before _main
     for (name, sig) in functions {
         let body = program
@@ -34,12 +37,13 @@ pub fn generate(
             })
             .expect("function body not found");
 
-        self::functions::emit_function(&mut emitter, &mut data, name, sig, body, functions);
+        self::functions::emit_function(&mut emitter, &mut data, name, sig, body, functions, &global_constants);
     }
 
     // --- _main function ---
     let mut ctx = Context::new();
     ctx.functions = functions.clone();
+    ctx.constants = global_constants.clone();
 
     // Pre-allocate $argc and $argv superglobals
     if !global_env.contains_key("argc") {
@@ -137,9 +141,47 @@ fn emit_deferred_closures(
                 &closure.sig,
                 &closure.body,
                 &ctx.functions,
+                &ctx.constants,
             );
         }
     }
+}
+
+/// Pre-scan the program for compile-time constants (const declarations and define() calls).
+fn collect_constants(program: &Program) -> HashMap<String, (ExprKind, PhpType)> {
+    let mut constants = HashMap::new();
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::ConstDecl { name, value } => {
+                let ty = match &value.kind {
+                    ExprKind::IntLiteral(_) => PhpType::Int,
+                    ExprKind::FloatLiteral(_) => PhpType::Float,
+                    ExprKind::StringLiteral(_) => PhpType::Str,
+                    ExprKind::BoolLiteral(_) => PhpType::Bool,
+                    _ => PhpType::Int,
+                };
+                constants.insert(name.clone(), (value.kind.clone(), ty));
+            }
+            StmtKind::ExprStmt(expr) => {
+                if let ExprKind::FunctionCall { name, args } = &expr.kind {
+                    if name == "define" && args.len() == 2 {
+                        if let ExprKind::StringLiteral(const_name) = &args[0].kind {
+                            let ty = match &args[1].kind {
+                                ExprKind::IntLiteral(_) => PhpType::Int,
+                                ExprKind::FloatLiteral(_) => PhpType::Float,
+                                ExprKind::StringLiteral(_) => PhpType::Str,
+                                ExprKind::BoolLiteral(_) => PhpType::Bool,
+                                _ => PhpType::Int,
+                            };
+                            constants.insert(const_name.clone(), (args[1].kind.clone(), ty));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    constants
 }
 
 fn align16(n: usize) -> usize {

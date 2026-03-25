@@ -1029,6 +1029,41 @@ impl Checker {
                 }
                 Ok(Some(PhpType::Void))
             }
+            "define" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "define() takes exactly 2 arguments"));
+                }
+                let name_str = match &args[0].kind {
+                    ExprKind::StringLiteral(s) => s.clone(),
+                    _ => return Err(CompileError::new(span, "define() first argument must be a string literal")),
+                };
+                let ty = self.infer_type(&args[1], env)?;
+                self.constants.insert(name_str, ty);
+                Ok(Some(PhpType::Void))
+            }
+            "call_user_func_array" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "call_user_func_array() takes exactly 2 arguments"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                // Resolve callback function so codegen emits it
+                if let ExprKind::StringLiteral(cb_name) = &args[0].kind {
+                    // Extract actual args from the array literal to get correct types
+                    if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
+                        let ret_ty = self.check_function_call(cb_name, elems, span, env)?;
+                        return Ok(Some(ret_ty));
+                    }
+                    // Fallback: use dummy args
+                    if let Some(decl) = self.fn_decls.get(cb_name.as_str()).cloned() {
+                        let dummy_args: Vec<Expr> = decl.params.iter()
+                            .map(|_| Expr::new(ExprKind::IntLiteral(0), span))
+                            .collect();
+                        let ret_ty = self.check_function_call(cb_name, &dummy_args, span, env)?;
+                        return Ok(Some(ret_ty));
+                    }
+                }
+                Ok(Some(PhpType::Int))
+            }
             "call_user_func" => {
                 if args.is_empty() {
                     return Err(CompileError::new(span, "call_user_func() takes at least 1 argument"));

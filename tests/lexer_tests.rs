@@ -592,3 +592,39 @@ fn test_nowdoc_token() {
     let t = tokens("<?php <<<'EOT'\nHello\nEOT;");
     assert!(t.contains(&Token::StringLiteral("Hello".into())));
 }
+
+// --- Const keyword ---
+
+#[test]
+fn test_const_keyword() {
+    let t = tokens("<?php const MAX = 100;");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Const,
+            Token::Identifier("MAX".into()),
+            Token::Assign,
+            Token::IntLiteral(100),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
+fn test_const_string_value() {
+    let t = tokens("<?php const NAME = \"test\";");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Const,
+            Token::Identifier("NAME".into()),
+            Token::Assign,
+            Token::StringLiteral("test".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}

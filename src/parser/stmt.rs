@@ -18,6 +18,8 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
         Token::IncludeOnce => parse_include(tokens, pos, span, true, false),
         Token::Require => parse_include(tokens, pos, span, false, true),
         Token::RequireOnce => parse_include(tokens, pos, span, true, true),
+        Token::Const => parse_const_decl(tokens, pos, span),
+        Token::LBracket => parse_list_unpack(tokens, pos, span),
         Token::Identifier(_) => {
             let expr = parse_expr(tokens, pos)?;
             expect_semicolon(tokens, pos)?;
@@ -235,6 +237,64 @@ fn parse_incdec_stmt(
     };
     let expr = Expr::new(kind, span);
     Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
+}
+
+fn parse_const_decl(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1; // consume 'const'
+
+    let name = match tokens.get(*pos).map(|(t, _)| t) {
+        Some(Token::Identifier(n)) => n.clone(),
+        _ => return Err(CompileError::new(span, "Expected constant name after 'const'")),
+    };
+    *pos += 1;
+
+    expect_token(tokens, pos, &Token::Assign, "Expected '=' after constant name")?;
+
+    let value = parse_expr(tokens, pos)?;
+    expect_semicolon(tokens, pos)?;
+
+    Ok(Stmt::new(StmtKind::ConstDecl { name, value }, span))
+}
+
+fn parse_list_unpack(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1; // consume '['
+
+    let mut vars = Vec::new();
+    while *pos < tokens.len() && tokens[*pos].0 != Token::RBracket {
+        if !vars.is_empty() {
+            if tokens[*pos].0 != Token::Comma {
+                return Err(CompileError::new(tokens[*pos].1, "Expected ',' between list variables"));
+            }
+            *pos += 1;
+        }
+        match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Variable(n)) => {
+                vars.push(n.clone());
+                *pos += 1;
+            }
+            _ => return Err(CompileError::new(span, "Expected variable in list unpacking")),
+        }
+    }
+
+    if *pos >= tokens.len() || tokens[*pos].0 != Token::RBracket {
+        return Err(CompileError::new(span, "Expected ']' after list variables"));
+    }
+    *pos += 1;
+
+    expect_token(tokens, pos, &Token::Assign, "Expected '=' after list pattern")?;
+
+    let value = parse_expr(tokens, pos)?;
+    expect_semicolon(tokens, pos)?;
+
+    Ok(Stmt::new(StmtKind::ListUnpack { vars, value }, span))
 }
 
 fn parse_function_decl(

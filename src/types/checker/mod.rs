@@ -10,6 +10,7 @@ use crate::types::{CheckResult, FunctionSig, PhpType, TypeEnv};
 pub(crate) struct Checker {
     pub fn_decls: HashMap<String, FnDecl>,
     pub functions: HashMap<String, FunctionSig>,
+    pub constants: HashMap<String, PhpType>,
 }
 
 #[derive(Clone)]
@@ -23,6 +24,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
     let mut checker = Checker {
         fn_decls: HashMap::new(),
         functions: HashMap::new(),
+        constants: HashMap::new(),
     };
 
     for stmt in program {
@@ -196,6 +198,28 @@ impl Checker {
                 self.infer_type(expr, env)?;
                 Ok(())
             }
+            StmtKind::ConstDecl { name, value } => {
+                let ty = self.infer_type(value, env)?;
+                self.constants.insert(name.clone(), ty);
+                Ok(())
+            }
+            StmtKind::ListUnpack { vars, value } => {
+                let arr_ty = self.infer_type(value, env)?;
+                match &arr_ty {
+                    PhpType::Array(elem_ty) => {
+                        for var in vars {
+                            env.insert(var.clone(), *elem_ty.clone());
+                        }
+                    }
+                    _ => {
+                        return Err(CompileError::new(
+                            stmt.span,
+                            "List unpacking requires an array on the right-hand side",
+                        ));
+                    }
+                }
+                Ok(())
+            }
             StmtKind::FunctionDecl { .. } => Ok(()),
             StmtKind::Return(expr) => {
                 if let Some(e) = expr { self.infer_type(e, env)?; }
@@ -366,6 +390,11 @@ impl Checker {
                 let dt = self.infer_type(default, env)?;
                 // Result type is the non-null type, prefer left if both non-void
                 if vt == PhpType::Void { Ok(dt) } else { Ok(vt) }
+            }
+            ExprKind::ConstRef(name) => {
+                self.constants.get(name).cloned().ok_or_else(|| {
+                    CompileError::new(expr.span, &format!("Undefined constant: {}", name))
+                })
             }
             ExprKind::Closure { params, body, is_arrow: _ } => {
                 // Type-check the closure body in its own environment

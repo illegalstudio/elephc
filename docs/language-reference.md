@@ -105,6 +105,26 @@ Short-circuit evaluation: if `$a` is false in `$a && $b`, `$b` is not evaluated.
 
 **Not supported yet:** `**=`, `&=`, `|=`, `^=`, `<<=`, `>>=`, `??=`.
 
+### List Unpacking
+
+Destructure an array into individual variables:
+
+```php
+<?php
+[$a, $b, $c] = [10, 20, 30];
+echo $a;  // 10
+echo $b;  // 20
+echo $c;  // 30
+
+$arr = ["hello", "world"];
+[$x, $y] = $arr;
+echo $x . " " . $y;  // hello world
+```
+
+**Limitations:**
+- All elements in the list pattern must be variables (no nested patterns or skipping with commas).
+- The right-hand side must be an indexed array.
+
 ### Null Coalescing
 
 ```php
@@ -657,7 +677,9 @@ foreach ($matrix as $row) {
 | `uasort()` | `uasort($arr, "callback"): void` | Sort by values using user comparison, maintain keys |
 | **Function handling** | | |
 | `call_user_func()` | `call_user_func("name", ...): mixed` | Call a function by name with arguments |
+| `call_user_func_array()` | `call_user_func_array("name", $args): mixed` | Call a function with arguments from an array |
 | `function_exists()` | `function_exists("name"): bool` | Check if a function is defined |
+| `define()` | `define("NAME", value): void` | Define a named constant |
 
 > **Note:** Callback arguments can be string literals containing the function name (e.g., `"double"`), anonymous functions, or arrow functions.
 
@@ -774,6 +796,33 @@ print_r($arr);
 ```
 
 ## Constants
+
+### User-defined constants
+
+Constants can be defined with `const` or `define()`. They are resolved at compile time and are globally accessible, including inside functions.
+
+```php
+<?php
+const MAX_RETRIES = 3;
+const APP_NAME = "elephc";
+
+define("PI", 3.14159);
+define("GREETING", "Hello");
+
+echo APP_NAME;    // elephc
+echo PI;          // 3.14159
+
+function show() {
+    echo MAX_RETRIES;  // constants are global
+}
+show();
+```
+
+**Limitations:**
+- Constant values must be literals (int, float, string, bool, null). Expressions are not supported as constant values.
+- `define()` first argument must be a string literal (not a variable).
+
+### Predefined constants
 
 | Constant | Type | Value |
 |---|---|---|

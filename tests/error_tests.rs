@@ -42,7 +42,7 @@ fn test_error_empty_variable() {
 
 #[test]
 fn test_error_bare_identifier() {
-    expect_error("<?php foo;", "Unexpected identifier");
+    expect_error("<?php foo;", "Undefined constant: foo");
 }
 
 #[test]
@@ -892,5 +892,67 @@ fn test_error_heredoc_unterminated() {
     expect_error(
         "<?php echo <<<EOT\nHello",
         "Unterminated heredoc",
+    );
+}
+
+// --- Constants errors ---
+
+#[test]
+fn test_error_undefined_constant() {
+    expect_error(
+        "<?php echo UNDEFINED_CONST;",
+        "Undefined constant",
+    );
+}
+
+#[test]
+fn test_error_const_missing_name() {
+    expect_error(
+        "<?php const = 5;",
+        "Expected constant name",
+    );
+}
+
+#[test]
+fn test_error_const_missing_value() {
+    expect_error(
+        "<?php const MAX;",
+        "Expected '='",
+    );
+}
+
+#[test]
+fn test_error_define_wrong_args() {
+    expect_error(
+        "<?php define(\"X\");",
+        "define() takes exactly 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_define_non_string_name() {
+    expect_error(
+        "<?php define(42, 100);",
+        "define() first argument must be a string literal",
+    );
+}
+
+// --- List unpack errors ---
+
+#[test]
+fn test_error_list_unpack_non_array() {
+    expect_error(
+        "<?php [$a, $b] = 42;",
+        "List unpacking requires an array",
+    );
+}
+
+// --- call_user_func_array errors ---
+
+#[test]
+fn test_error_call_user_func_array_wrong_args() {
+    expect_error(
+        "<?php call_user_func_array(\"foo\");",
+        "call_user_func_array() takes exactly 2 arguments",
     );
 }

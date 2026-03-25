@@ -1,3 +1,4 @@
+mod define;
 mod exit;
 
 use crate::codegen::context::Context;
@@ -15,6 +16,7 @@ pub fn emit(
 ) -> Option<PhpType> {
     match name {
         "exit" | "die" => exit::emit(name, args, emitter, ctx, data),
+        "define" => define::emit(name, args, emitter, ctx, data),
         _ => None,
     }
 }

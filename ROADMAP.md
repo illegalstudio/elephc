@@ -129,7 +129,7 @@ Proper type system for PHP compatibility.
 
 ## v0.7.x — Advanced language features
 
-- [ ] `define()` / `const` constants
+- [x] `define()` / `const` constants
 - [ ] `global $var;` keyword
 - [ ] Static variables: `static $counter = 0;`
 - [ ] Pass by reference: `function foo(&$x) { }`
@@ -139,12 +139,12 @@ Proper type system for PHP compatibility.
 - [x] Arrow functions: `$fn = fn($x) => $x * 2`
 - [x] Null coalescing: `$x ?? $default` (`??=` not yet supported)
 - [ ] Spread operator: `func(...$args)`, `[...$a, ...$b]`
-- [ ] List unpacking: `[$a, $b] = $array;`
+- [x] List unpacking: `[$a, $b] = $array;`
 - [x] Heredoc / nowdoc strings
 - [x] Bitwise operators: `&`, `|`, `^`, `~`, `<<`, `>>`
 - [x] Spaceship operator: `<=>`
 - [x] `call_user_func()` (string callbacks)
-- [ ] `call_user_func_array()`
+- [x] `call_user_func_array()`
 - [x] `function_exists()`
 
 ## v0.8.x — Date/time, JSON, regex

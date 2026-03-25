@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::parser::ast::Stmt;
+use crate::parser::ast::{ExprKind, Stmt};
 use crate::types::{FunctionSig, PhpType};
 
 static GLOBAL_LABEL_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -22,6 +22,7 @@ pub struct Context {
     pub return_label: Option<String>,
     pub functions: HashMap<String, FunctionSig>,
     pub deferred_closures: Vec<DeferredClosure>,
+    pub constants: HashMap<String, (ExprKind, PhpType)>,
 }
 
 pub struct VarInfo {
@@ -43,6 +44,7 @@ impl Context {
             return_label: None,
             functions: HashMap::new(),
             deferred_closures: Vec::new(),
+            constants: HashMap::new(),
         }
     }
 

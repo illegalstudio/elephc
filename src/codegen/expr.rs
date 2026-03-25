@@ -181,6 +181,11 @@ pub fn emit_expr(
         ExprKind::ClosureCall { var, args } => {
             emit_closure_call(var, args, emitter, ctx, data)
         }
+        ExprKind::ConstRef(name) => {
+            let (value, _ty) = ctx.constants.get(name).expect("undefined constant").clone();
+            let synthetic_expr = Expr::new(value, expr.span);
+            emit_expr(&synthetic_expr, emitter, ctx, data)
+        }
         ExprKind::BinaryOp { left, op, right } => emit_binop(left, op, right, emitter, ctx, data),
     }
 }
