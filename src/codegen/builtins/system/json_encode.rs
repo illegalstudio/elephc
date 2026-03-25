@@ -19,47 +19,47 @@ pub fn emit(
     match ty {
         PhpType::Int => {
             // -- convert integer to JSON (just itoa) --
-            emitter.instruction("bl __rt_itoa");                                    // convert int x0 → string x1/x2
+            emitter.instruction("bl __rt_itoa");                                // convert int x0 → string x1/x2
         }
         PhpType::Float => {
             // -- convert float to JSON (ftoa) --
-            emitter.instruction("bl __rt_ftoa");                                    // convert float d0 → string x1/x2
+            emitter.instruction("bl __rt_ftoa");                                // convert float d0 → string x1/x2
         }
         PhpType::Bool => {
             // -- convert bool to JSON "true"/"false" --
-            emitter.instruction("bl __rt_json_encode_bool");                        // convert bool x0 → string x1/x2
+            emitter.instruction("bl __rt_json_encode_bool");                    // convert bool x0 → string x1/x2
         }
         PhpType::Str => {
             // -- wrap string with JSON quotes and escape special chars --
-            emitter.instruction("bl __rt_json_encode_str");                         // escape and quote string x1/x2 → x1/x2
+            emitter.instruction("bl __rt_json_encode_str");                     // escape and quote string x1/x2 → x1/x2
         }
         PhpType::Void => {
             // -- null → "null" --
-            emitter.instruction("bl __rt_json_encode_null");                        // produce "null" → x1/x2
+            emitter.instruction("bl __rt_json_encode_null");                    // produce "null" → x1/x2
         }
         PhpType::Array(ref elem_ty) => {
             match elem_ty.as_ref() {
                 PhpType::Int => {
                     // x0 = array pointer
-                    emitter.instruction("bl __rt_json_encode_array_int");           // encode int array → x1/x2
+                    emitter.instruction("bl __rt_json_encode_array_int");       // encode int array → x1/x2
                 }
                 PhpType::Str => {
                     // x0 = array pointer
-                    emitter.instruction("bl __rt_json_encode_array_str");           // encode string array → x1/x2
+                    emitter.instruction("bl __rt_json_encode_array_str");       // encode string array → x1/x2
                 }
                 _ => {
                     // Fallback: treat as int array
-                    emitter.instruction("bl __rt_json_encode_array_int");           // encode array → x1/x2
+                    emitter.instruction("bl __rt_json_encode_array_int");       // encode array → x1/x2
                 }
             }
         }
         PhpType::AssocArray { .. } => {
             // x0 = hash table pointer
-            emitter.instruction("bl __rt_json_encode_assoc");                       // encode assoc array → x1/x2
+            emitter.instruction("bl __rt_json_encode_assoc");                   // encode assoc array → x1/x2
         }
         _ => {
             // Fallback: encode as "null"
-            emitter.instruction("bl __rt_json_encode_null");                        // produce "null" → x1/x2
+            emitter.instruction("bl __rt_json_encode_null");                    // produce "null" → x1/x2
         }
     }
 

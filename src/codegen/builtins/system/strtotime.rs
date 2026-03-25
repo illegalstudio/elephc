@@ -19,7 +19,7 @@ pub fn emit(
     // x1=string ptr, x2=string len
 
     // -- call runtime to parse date string and return timestamp --
-    emitter.instruction("bl __rt_strtotime");                                       // parse date string → x0=timestamp
+    emitter.instruction("bl __rt_strtotime");                                   // parse date string → x0=timestamp
 
     Some(PhpType::Int)
 }

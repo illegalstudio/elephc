@@ -19,7 +19,7 @@ pub fn emit(
     // x1=string ptr, x2=string len
 
     // -- call runtime to decode JSON string value --
-    emitter.instruction("bl __rt_json_decode");                                     // decode JSON → x1=result ptr, x2=result len
+    emitter.instruction("bl __rt_json_decode");                                 // decode JSON → x1=result ptr, x2=result len
 
     Some(PhpType::Str)
 }

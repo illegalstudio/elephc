@@ -13,6 +13,6 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("json_last_error()");
     // -- always return 0 (JSON_ERROR_NONE) --
-    emitter.instruction("mov x0, #0");                                              // return 0 = no error
+    emitter.instruction("mov x0, #0");                                          // return 0 = no error
     Some(PhpType::Int)
 }
