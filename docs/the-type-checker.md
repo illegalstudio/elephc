@@ -148,7 +148,22 @@ When the type checker encounters a function declaration, it:
 2. **Creates a local type environment** for the function body (separate from global scope)
 3. **Infers parameter types** from how they're used in the body
 4. **Infers return type** from `return` expressions
-5. **Stores the `FunctionSig`** — parameter count, parameter types, return type
+5. **Stores the `FunctionSig`** — parameter count, parameter types, return type, reference parameters, and variadic parameter
+
+The `FunctionSig` struct:
+
+```rust
+pub struct FunctionSig {
+    pub params: Vec<(String, PhpType)>,
+    pub defaults: Vec<Option<Expr>>,
+    pub return_type: PhpType,
+    pub ref_params: Vec<bool>,         // which parameters are pass-by-reference (&$param)
+    pub variadic: Option<String>,      // variadic parameter name (...$args), if any
+}
+```
+
+- `ref_params` tracks which parameters use `&` (pass by reference). The codegen passes the stack address of the argument instead of its value.
+- `variadic` holds the name of the variadic parameter (e.g., `$args` in `function foo(...$args)`). Extra arguments beyond the regular parameters are collected into an array.
 
 This information is then used when checking calls to that function.
 

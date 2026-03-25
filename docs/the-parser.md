@@ -63,8 +63,9 @@ Things that have a value:
 | `ArrayAccess { array, index }` | `$arr[0]` | |
 | `Ternary { cond, then, else }` | `$a ? $b : $c` | |
 | `Cast { target, expr }` | `(int)$x` | |
-| `Closure { params, body, is_arrow }` | `function($x, $y = 0) { ... }` or `fn($x) => ...` | Anonymous function / arrow function. Params support default values |
+| `Closure { params, variadic, body, is_arrow }` | `function($x, $y = 0) { ... }` or `fn($x) => ...` | Anonymous function / arrow function. Params is `Vec<(String, Option<Expr>, bool)>` — name, default, is_ref. `variadic` is an optional parameter name that collects remaining args |
 | `ClosureCall { var, args }` | `$fn(1, 2)` | Calling a closure stored in a variable |
+| `Spread(Expr)` | `...$arr` | Spread/unpack operator — expands an array into individual arguments or elements |
 | `ConstRef(String)` | `MAX_RETRIES` | Reference to a user-defined constant |
 
 ### Statements (`Stmt`)
@@ -83,13 +84,15 @@ Things that do something:
 | `Switch { subject, cases, default }` | `switch ($x) { case 1: ...; default: ... }` |
 | `ArrayAssign { array, index, value }` | `$arr[0] = 5;` |
 | `ArrayPush { array, value }` | `$arr[] = 5;` |
-| `FunctionDecl { name, params, body }` | `function foo($a, $b = 10) { }` — params is `Vec<(String, Option<Expr>)>` where the `Option` is the default value |
+| `FunctionDecl { name, params, variadic, body }` | `function foo($a, &$b, $c = 10) { }` — params is `Vec<(String, Option<Expr>, bool)>` where the `Option` is the default value and `bool` is `is_ref` (pass by reference). `variadic` is `Option<String>` for variadic parameters (`...$args`) |
 | `Return(Option<Expr>)` | `return $x;` or `return;` |
 | `Break` | `break;` |
 | `Continue` | `continue;` |
 | `Include { path, once, required }` | `include 'file.php';` |
 | `ConstDecl { name, value }` | `const MAX = 100;` |
 | `ListUnpack { vars, value }` | `[$a, $b] = [1, 2];` |
+| `Global { vars }` | `global $x, $y;` — declares variables as referencing global storage |
+| `StaticVar { name, init }` | `static $count = 0;` — declares a variable that persists across function calls |
 | `ExprStmt(Expr)` | `my_func();` (expression used as statement) |
 
 ### Binary operators (`BinOp`)
@@ -218,6 +221,7 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `Identifier` (no `(`) | Parse as constant reference → `ConstRef` |
 | `function` + `(` | Parse anonymous function (closure) → `Closure` |
 | `fn` + `(` | Parse arrow function → `Closure` (with `is_arrow = true`) |
+| `...` + expr | Parse spread/unpack → `Spread` |
 
 ### Postfix: array access
 
@@ -250,6 +254,8 @@ Statement parsing is simpler — it looks at the current token to decide what ki
 | `Continue` | Continue statement |
 | `Include`/`Require` | Include statement (path must be a string literal) |
 | `Const` | Constant declaration (`const NAME = value;`) |
+| `Global` | Global variable declaration (`global $x, $y;`) |
+| `Static` | Static variable declaration (`static $count = 0;`) |
 | `[` | List unpacking (`[$a, $b] = expr;`) |
 | `Identifier` + `(` | Expression statement (function call) |
 

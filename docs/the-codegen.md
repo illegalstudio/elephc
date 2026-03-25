@@ -398,6 +398,45 @@ const MAX = 100;
 
 `ConstDecl` registers a compile-time constant. The value is stored in the codegen context and substituted directly wherever the constant is referenced via `ConstRef`. No runtime storage or stack allocation is needed.
 
+### Global variables
+
+```php
+$x = 10;
+function inc() {
+    global $x;
+    $x++;
+}
+```
+
+The `global` statement inside a function declares that a variable refers to global storage rather than a local stack slot. The codegen uses BSS-allocated storage (`_gvar_NAME`, 16 bytes each) for global variables:
+
+1. At `global $x;`: the variable is marked as global in the context. The current value is loaded from `_gvar_x` into the local stack slot.
+2. On assignment to a global variable: the codegen writes to the BSS storage (`_gvar_x`) via `adrp`/`add`/`str` instead of (or in addition to) the local stack slot.
+3. In `_main`: when the main scope assigns to a variable that any function declares as `global`, the value is also written to `_gvar_NAME` so that functions can read it.
+
+### Static variables
+
+```php
+function counter() {
+    static $count = 0;
+    $count++;
+    echo $count;
+}
+```
+
+Static variables persist their value across function calls. Each static variable gets two BSS slots:
+
+- `_static_FUNC_VAR` (16 bytes) — stores the persisted value
+- `_static_FUNC_VAR_init` (8 bytes) — initialization flag (0 = not yet initialized)
+
+The codegen for `static $count = 0;`:
+
+1. Check the init flag — if already initialized, skip to loading the persisted value
+2. If not initialized: evaluate the init expression, store to the BSS slot, set the init flag to 1
+3. Load the persisted value into the local stack slot
+
+At function epilogue, variables marked as static are written back to their BSS storage.
+
 ### List unpacking
 
 ```php
@@ -581,6 +620,39 @@ Compiles a user-defined function:
 5. **Emit body** — all statements
 6. **Emit epilogue** — `ldp x29, x30`, `add sp`, `ret`
 
+### Pass by reference
+
+```php
+function increment(&$val) {
+    $val++;
+}
+```
+
+When a parameter is declared with `&`, the codegen passes the **stack address** of the argument instead of its value:
+
+1. At the call site: the address of the argument's stack slot is computed (`sub x_n, x29, #offset`) and passed in the argument register.
+2. In the function prologue: the address is stored in the parameter's stack slot (it holds a pointer, not a value).
+3. On reads: the codegen dereferences the pointer (`ldr x0, [x0]`) to get the actual value.
+4. On writes: the codegen stores through the pointer (`str x0, [addr]`), modifying the caller's variable directly.
+
+The context tracks which parameters are pass-by-reference via `ctx.ref_params`.
+
+### Variadic parameters and spread operator
+
+```php
+function sum(...$nums) { /* $nums is an array */ }
+sum(1, 2, 3);
+sum(...$arr);  // spread
+```
+
+**Variadic functions**: The last parameter can be prefixed with `...` to collect all remaining arguments into an array. At the call site, the codegen:
+
+1. Passes regular (non-variadic) arguments normally via registers
+2. Builds a new indexed array for the variadic arguments by calling `__rt_array_new` and `__rt_array_push_int`/`__rt_array_push_str` for each extra argument
+3. Passes the array pointer as the last argument register
+
+**Spread operator** (`...$arr`): When calling a function with `...$arr`, the array is passed directly as the variadic parameter without unpacking individual elements. In array literals, the spread operator uses `__rt_array_merge_into` to append all elements from the spread array into the target array.
+
 ### Default parameter values
 
 Functions and closures support default parameter values:
@@ -595,7 +667,7 @@ When a call site omits an argument that has a default value, the codegen fills i
 
 Pre-scans the function body AST to find every variable that will be used. This is necessary because stack space must be allocated in the prologue, before any code runs.
 
-It walks `Assign`, `If`, `While`, `For`, `Foreach`, `DoWhile`, `Switch`, `ListUnpack` nodes recursively, collecting variable names and inferring their types from the expressions assigned to them.
+It walks `Assign`, `If`, `While`, `For`, `Foreach`, `DoWhile`, `Switch`, `ListUnpack`, `Global`, `StaticVar` nodes recursively, collecting variable names and inferring their types from the expressions assigned to them.
 
 ## Main program codegen
 

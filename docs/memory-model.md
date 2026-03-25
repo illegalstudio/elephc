@@ -274,6 +274,28 @@ Two 8-byte BSS slots store the program's command-line arguments:
 
 These are written once in `_main` (from the OS-provided `x0` and `x1`) and read by the `__rt_build_argv` routine to construct `$argv`.
 
+### User global variables (`global $var`)
+
+When a function uses `global $var`, the compiler allocates BSS storage for that variable:
+
+```asm
+.comm _gvar_x, 16, 3        ; 16 bytes for global $x (enough for string ptr+len or int/float)
+.comm _gvar_y, 16, 3        ; 16 bytes for global $y
+```
+
+Each global variable gets 16 bytes of BSS storage (enough to hold any PHP value). The `_main` scope writes to these slots when assigning to variables that any function declares as `global`, and functions read/write through these slots instead of using local stack slots.
+
+### Static variables (`static $var`)
+
+Static variables persist their value across calls to the same function. Each static variable gets two BSS allocations:
+
+```asm
+.comm _static_counter_count, 16, 3    ; 16 bytes for the persisted value
+.comm _static_counter_count_init, 8, 3 ; 8-byte init flag (0 = uninitialized)
+```
+
+The naming pattern is `_static_FUNCNAME_VARNAME`. The init flag ensures the initial value expression is evaluated only on the first call. At function epilogue, variables marked as static are saved back to their BSS storage.
+
 ## Memory limits and trade-offs
 
 | Resource | Size | What happens when full |

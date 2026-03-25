@@ -153,7 +153,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 ## Array routines
 
-**Source:** `src/codegen/runtime/arrays/` (44 files)
+**Source:** `src/codegen/runtime/arrays/` (45 files)
 
 ### Core allocation
 
@@ -187,7 +187,8 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_array_reverse` | Reverse element order |
 | `__rt_array_sum` / `__rt_array_product` | Sum/product of all elements |
 | `__rt_array_shift` / `__rt_array_unshift` | Remove/add at beginning |
-| `__rt_array_merge` | Concatenate two indexed arrays |
+| `__rt_array_merge` | Concatenate two indexed arrays into a new array |
+| `__rt_array_merge_into` | Append all elements from source array into dest array (in-place) |
 | `__rt_array_slice` / `__rt_array_splice` | Extract/replace subarray |
 | `__rt_array_unique` | Remove duplicate values |
 | `__rt_array_diff` / `__rt_array_intersect` | Set difference/intersection by value |
@@ -296,6 +297,11 @@ The runtime also declares global buffers using `.comm` and static data tables:
 .comm _cstr_buf, 4096        ; 4KB C-string conversion buffer
 .comm _cstr_buf2, 4096       ; 4KB second C-string buffer
 .comm _eof_flags, 256        ; EOF flag per file descriptor
+; Per-program: global variable storage (one per `global $var` used)
+.comm _gvar_x, 16            ; 16 bytes per global variable
+; Per-program: static variable storage (one pair per `static $var`)
+.comm _static_func_var, 16   ; 16 bytes for persisted value
+.comm _static_func_var_init, 8 ; 8-byte initialization flag
 ```
 
 Additionally, the runtime emits static data tables:

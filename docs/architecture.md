@@ -99,7 +99,7 @@ src/
 │   └── runtime/               ARM64 runtime routines (one file per function)
 │       ├── mod.rs             Emits all runtime functions into assembly
 │       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, ... (47 files)
-│       ├── arrays/            heap_alloc, array_new, hash_*, sort, usort, ... (44 files)
+│       ├── arrays/            heap_alloc, array_new, hash_*, sort, usort, ... (45 files)
 │       ├── io/                fopen, fgets, fread, stat, scandir, ... (16 files)
 │       └── system/            build_argv, time, microtime, getenv, shell_exec (4 files)
 │
