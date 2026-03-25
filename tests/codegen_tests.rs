@@ -3319,6 +3319,16 @@ echo "got: " . $line;
 }
 
 #[test]
+fn test_fopen_nonexistent_fgets_no_hang() {
+    let out = compile_and_run(r#"<?php
+$f = fopen("no_such_file.txt", "r");
+$line = fgets($f);
+echo "done";
+"#);
+    assert_eq!(out, "done");
+}
+
+#[test]
 fn test_readline() {
     let out = compile_and_run_with_stdin(r#"<?php
 $line = readline();

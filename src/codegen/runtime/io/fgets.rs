@@ -9,7 +9,15 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.comment("--- runtime: fgets ---");
     emitter.label("__rt_fgets");
 
+    // -- check for invalid fd (negative = fopen failed) --
+    emitter.instruction("cmp x0, #0");                                          // check if fd is negative
+    emitter.instruction("b.ge __rt_fgets_fd_ok");                               // if fd >= 0, proceed normally
+    emitter.instruction("mov x1, #0");                                          // return empty string: null pointer
+    emitter.instruction("mov x2, #0");                                          // return empty string: zero length
+    emitter.instruction("ret");                                                 // return immediately to caller
+
     // -- set up stack frame --
+    emitter.label("__rt_fgets_fd_ok");
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // establish new frame pointer
@@ -40,7 +48,8 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.instruction("mov x16, #3");                                         // syscall 3 = read
     emitter.instruction("svc #0x80");                                           // invoke macOS kernel
 
-    // -- check if read returned 0 (EOF) --
+    // -- check if read failed (carry set) or returned 0 (EOF) --
+    emitter.instruction("b.cs __rt_fgets_eof");                                 // if carry set, read syscall failed
     emitter.instruction("cbz x0, __rt_fgets_eof");                              // if 0 bytes read, we hit EOF
 
     // -- advance concat_off by 1 --

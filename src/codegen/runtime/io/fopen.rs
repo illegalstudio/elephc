@@ -60,7 +60,12 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("mov x16, #5");                                         // syscall 5 = open
     emitter.instruction("svc #0x80");                                           // invoke macOS kernel
 
+    // -- check if open failed (carry flag set on macOS syscall error) --
+    emitter.instruction("b.cc __rt_fopen_ok");                                  // if carry clear, syscall succeeded
+    emitter.instruction("mov x0, #-1");                                         // return -1 to indicate failure
+
     // -- restore frame and return fd in x0 --
+    emitter.label("__rt_fopen_ok");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller with fd in x0
