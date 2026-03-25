@@ -9,8 +9,19 @@ pub fn emit_array_shift(emitter: &mut Emitter) {
     emitter.comment("--- runtime: array_shift ---");
     emitter.label("__rt_array_shift");
 
-    // -- load array metadata --
+    // -- check if array is empty --
     emitter.instruction("ldr x9, [x0]");                                        // x9 = current array length
+    emitter.instruction("cbnz x9, __rt_array_shift_notempty");                  // if length != 0, proceed normally
+
+    // -- empty array: return null sentinel --
+    emitter.instruction("movz x0, #0xFFFE");                                    // load null sentinel bits [15:0]
+    emitter.instruction("movk x0, #0xFFFF, lsl #16");                           // load null sentinel bits [31:16]
+    emitter.instruction("movk x0, #0xFFFF, lsl #32");                           // load null sentinel bits [47:32]
+    emitter.instruction("movk x0, #0x7FFF, lsl #48");                           // load null sentinel bits [63:48] = 0x7FFFFFFFFFFFFFFE
+    emitter.instruction("ret");                                                 // return null to caller
+
+    // -- array is not empty, proceed --
+    emitter.label("__rt_array_shift_notempty");
     emitter.instruction("add x10, x0, #24");                                    // x10 = base of data region
 
     // -- save the first element --

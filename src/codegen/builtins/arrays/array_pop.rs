@@ -14,14 +14,21 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("array_pop()");
     let arr_ty = emit_expr(&args[0], emitter, ctx, data);
-    // -- decrement array length to remove last element --
-    emitter.instruction("ldr x9, [x0]");                                        // load current array length into x9
-    emitter.instruction("sub x9, x9, #1");                                      // decrement length by 1
-    emitter.instruction("str x9, [x0]");                                        // store decremented length back to array header
     let elem_ty = match &arr_ty {
         PhpType::Array(t) => *t.clone(),
         _ => PhpType::Int,
     };
+
+    let empty_label = ctx.next_label("array_pop_empty");
+    let end_label = ctx.next_label("array_pop_end");
+
+    // -- check if array is empty --
+    emitter.instruction("ldr x9, [x0]");                                        // load current array length into x9
+    emitter.instruction(&format!("cbz x9, {}", empty_label));                   // if length == 0, jump to empty handler
+
+    // -- decrement array length to remove last element --
+    emitter.instruction("sub x9, x9, #1");                                      // decrement length by 1
+    emitter.instruction("str x9, [x0]");                                        // store decremented length back to array header
     match &elem_ty {
         PhpType::Int => {
             // -- load the popped integer element --
@@ -38,6 +45,16 @@ pub fn emit(
         }
         _ => {}
     }
+    emitter.instruction(&format!("b {}", end_label));                           // skip empty handler
+
+    // -- empty array: return null sentinel --
+    emitter.label(&empty_label);
+    emitter.instruction("movz x0, #0xFFFE");                                    // load null sentinel bits [15:0]
+    emitter.instruction("movk x0, #0xFFFF, lsl #16");                           // load null sentinel bits [31:16]
+    emitter.instruction("movk x0, #0xFFFF, lsl #32");                           // load null sentinel bits [47:32]
+    emitter.instruction("movk x0, #0x7FFF, lsl #48");                           // load null sentinel bits [63:48] = 0x7FFFFFFFFFFFFFFE
+
+    emitter.label(&end_label);
 
     Some(elem_ty)
 }

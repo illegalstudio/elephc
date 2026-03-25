@@ -1224,6 +1224,12 @@ fn test_array_pop() {
 }
 
 #[test]
+fn test_array_pop_empty() {
+    let out = compile_and_run("<?php $a = [1]; array_pop($a); echo array_pop($a);");
+    assert_eq!(out, "");
+}
+
+#[test]
 fn test_in_array_found() {
     let out = compile_and_run("<?php $a = [10, 20, 30]; echo in_array(20, $a);");
     assert_eq!(out, "1");
@@ -3758,6 +3764,12 @@ $first = array_shift($a);
 echo $first . " " . count($a);
 "#);
     assert_eq!(out, "10 2");
+}
+
+#[test]
+fn test_array_shift_empty() {
+    let out = compile_and_run("<?php $a = [1]; array_shift($a); echo array_shift($a);");
+    assert_eq!(out, "");
 }
 
 #[test]
