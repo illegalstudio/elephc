@@ -46,7 +46,7 @@ This is simpler than PHP's runtime types — no union types, no mixed, no nullab
 
 ## How inference works
 
-The type checker walks the AST top-down, maintaining a **type environment** — a `HashMap<String, PhpType>` that maps variable names to their types.
+The type checker walks the AST top-down, maintaining a **type environment** — a `HashMap<String, PhpType>` that maps variable names to their types. It also tracks a **constants map** — a `HashMap<String, PhpType>` that records the type of each user-defined constant (declared via `const` or `define()`).
 
 ### Assignments create types
 

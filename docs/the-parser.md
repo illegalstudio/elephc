@@ -65,6 +65,7 @@ Things that have a value:
 | `Cast { target, expr }` | `(int)$x` | |
 | `Closure { params, body, is_arrow }` | `function($x, $y = 0) { ... }` or `fn($x) => ...` | Anonymous function / arrow function. Params support default values |
 | `ClosureCall { var, args }` | `$fn(1, 2)` | Calling a closure stored in a variable |
+| `ConstRef(String)` | `MAX_RETRIES` | Reference to a user-defined constant |
 
 ### Statements (`Stmt`)
 
@@ -87,6 +88,8 @@ Things that do something:
 | `Break` | `break;` |
 | `Continue` | `continue;` |
 | `Include { path, once, required }` | `include 'file.php';` |
+| `ConstDecl { name, value }` | `const MAX = 100;` |
+| `ListUnpack { vars, value }` | `[$a, $b] = [1, 2];` |
 | `ExprStmt(Expr)` | `my_func();` (expression used as statement) |
 
 ### Binary operators (`BinOp`)
@@ -212,6 +215,7 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `(` | Parse inner expr, expect `)`, return inner expr |
 | `[` | Parse comma-separated exprs, expect `]`, return `ArrayLiteral` |
 | `Identifier` + `(` | Parse as function call with arguments |
+| `Identifier` (no `(`) | Parse as constant reference → `ConstRef` |
 | `function` + `(` | Parse anonymous function (closure) → `Closure` |
 | `fn` + `(` | Parse arrow function → `Closure` (with `is_arrow = true`) |
 
@@ -245,6 +249,8 @@ Statement parsing is simpler — it looks at the current token to decide what ki
 | `Break` | Break statement |
 | `Continue` | Continue statement |
 | `Include`/`Require` | Include statement (path must be a string literal) |
+| `Const` | Constant declaration (`const NAME = value;`) |
+| `[` | List unpacking (`[$a, $b] = expr;`) |
 | `Identifier` + `(` | Expression statement (function call) |
 
 ### Assignment parsing

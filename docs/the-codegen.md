@@ -69,6 +69,8 @@ pub struct Context {
     pub loop_stack: Vec<LoopLabels>,          // for break/continue
     pub return_label: Option<String>,         // for early returns
     pub functions: HashMap<String, FunctionSig>,
+    pub deferred_closures: Vec<DeferredClosure>, // closures emitted after _main
+    pub constants: HashMap<String, (ExprKind, PhpType)>, // compile-time constants
 }
 ```
 
@@ -286,6 +288,15 @@ The `.` (concat) operator also coerces non-strings:
 - `Bool true` → string "1"
 - `Bool false` / `Null` → empty string (length 0)
 
+### Constant references
+
+```php
+const MAX = 100;
+echo MAX;
+```
+
+Constants declared with `const` or `define()` are resolved at compile time. When the codegen encounters a `ConstRef`, it looks up the constant's value and emits it as a literal — `mov x0, #100` for an integer, or loads a string label from the data section. No runtime lookup is needed.
+
 ### Function calls
 
 ```php
@@ -378,6 +389,26 @@ $x = expr;
 
 1. Evaluate expression
 2. `emit_store()` — write result to `$x`'s stack slot
+
+### Constant declaration
+
+```php
+const MAX = 100;
+```
+
+`ConstDecl` registers a compile-time constant. The value is stored in the codegen context and substituted directly wherever the constant is referenced via `ConstRef`. No runtime storage or stack allocation is needed.
+
+### List unpacking
+
+```php
+[$a, $b, $c] = [10, 20, 30];
+```
+
+`ListUnpack` destructures an indexed array into individual variables. The codegen:
+
+1. Evaluates the right-hand side expression (an array)
+2. Saves the array pointer on the stack
+3. For each variable in the list: loads the element at the corresponding index from the array, stores it into the variable's stack slot
 
 ### If / Elseif / Else
 
@@ -564,7 +595,7 @@ When a call site omits an argument that has a default value, the codegen fills i
 
 Pre-scans the function body AST to find every variable that will be used. This is necessary because stack space must be allocated in the prologue, before any code runs.
 
-It walks `Assign`, `If`, `While`, `For`, `Foreach`, `DoWhile`, `Switch` nodes recursively, collecting variable names and inferring their types from the expressions assigned to them.
+It walks `Assign`, `If`, `While`, `For`, `Foreach`, `DoWhile`, `Switch`, `ListUnpack` nodes recursively, collecting variable names and inferring their types from the expressions assigned to them.
 
 ## Main program codegen
 

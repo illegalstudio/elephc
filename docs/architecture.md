@@ -90,11 +90,11 @@ src/
 │   ├── builtins/              Built-in function codegen (one file per function)
 │   │   ├── mod.rs             Dispatcher — chains to category modules
 │   │   ├── strings/           strlen, substr, strpos, explode, sprintf, md5, ... (57 files)
-│   │   ├── arrays/            count, array_push, sort, array_map, usort, ... (50 files)
+│   │   ├── arrays/            count, array_push, sort, array_map, usort, ... (51 files)
 │   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, ... (14 files)
 │   │   ├── types/             is_*, gettype, empty, unset, settype, ... (16 files)
 │   │   ├── io/                fopen, fwrite, file_get_contents, scandir, ... (36 files)
-│   │   └── system/            exit, die (2 files)
+│   │   └── system/            exit, define (3 files)
 │   │
 │   └── runtime/               ARM64 runtime routines (one file per function)
 │       ├── mod.rs             Emits all runtime functions into assembly
