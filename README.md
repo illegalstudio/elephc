@@ -137,6 +137,9 @@ if ($x === 3) {
 | Match | `$r = match($x) { 1 => "one", default => "other" };` |
 | Break / Continue | `break;`, `continue;` |
 | Functions | `function foo($x, $y = 10) { return $x + $y; }` |
+| Variadic / Spread | `function sum(...$args) { }`, `func(...$arr)`, `[...$a, ...$b]` |
+| Pass by reference | `function inc(&$x) { $x++; }` |
+| Global / Static | `global $var;`, `static $counter = 0;` |
 | Closures / Arrow | `$fn = function($x) { return $x * 2; };`, `fn($x) => $x * 2` |
 | Constants | `const MAX = 100;`, `define("PI", 3.14)` |
 | List unpacking | `[$a, $b] = [1, 2];` |
@@ -253,7 +256,7 @@ src/
 ## Tests
 
 ```bash
-cargo test                      # all tests (~914)
+cargo test                      # all tests (~964)
 cargo test test_my_feature      # run specific tests
 ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 ```
