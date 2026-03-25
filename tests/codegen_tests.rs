@@ -2612,6 +2612,12 @@ fn test_ord() {
 }
 
 #[test]
+fn test_ord_empty_string() {
+    let out = compile_and_run(r#"<?php echo ord("");"#);
+    assert_eq!(out, "0");
+}
+
+#[test]
 fn test_chr() {
     let out = compile_and_run("<?php echo chr(65);");
     assert_eq!(out, "A");
