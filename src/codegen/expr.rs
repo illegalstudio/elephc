@@ -287,7 +287,7 @@ pub fn emit_expr(
             }
             emit_function_call(name, args, emitter, ctx, data)
         }
-        ExprKind::Closure { params, body, is_arrow: _ } => {
+        ExprKind::Closure { params, body, is_arrow: _, variadic: _ } => {
             let param_names: Vec<String> = params.iter().map(|(n, _, _)| n.clone()).collect();
             emit_closure(&param_names, body, emitter, ctx, data)
         }
@@ -300,6 +300,11 @@ pub fn emit_expr(
             emit_expr(&synthetic_expr, emitter, ctx, data)
         }
         ExprKind::BinaryOp { left, op, right } => emit_binop(left, op, right, emitter, ctx, data),
+        ExprKind::Spread(inner) => {
+            // Spread is handled at call site / array literal level.
+            // If we reach here, just evaluate the inner expression.
+            emit_expr(inner, emitter, ctx, data)
+        }
     }
 }
 
@@ -315,6 +320,13 @@ fn emit_array_literal(
         emitter.instruction("mov x1, #8");                                      // element size: 8 bytes (int-sized)
         emitter.instruction("bl __rt_array_new");                               // call runtime to heap-allocate array struct
         return PhpType::Array(Box::new(PhpType::Int));
+    }
+
+    // Check if any element is a spread — requires runtime-index code path
+    let has_spread = elems.iter().any(|e| matches!(e.kind, ExprKind::Spread(_)));
+
+    if has_spread {
+        return emit_array_literal_with_spread(elems, emitter, ctx, data);
     }
 
     // -- determine element type and size from first element --
@@ -391,6 +403,67 @@ fn emit_array_literal(
 
     // -- return array pointer --
     emitter.instruction("ldr x0, [sp], #16");                                   // pop array pointer from stack into x0
+    PhpType::Array(Box::new(actual_elem_ty))
+}
+
+/// Emit an array literal that contains spread elements like `[...$a, 1, ...$b]`.
+/// Uses array_push at runtime since spread array lengths are not known at compile time.
+fn emit_array_literal_with_spread(
+    elems: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    emitter.comment("array literal with spread");
+
+    // -- allocate a new array with generous capacity --
+    emitter.instruction("mov x0, #16");                                         // initial capacity: 16 elements
+    emitter.instruction("mov x1, #8");                                          // element size: 8 bytes (int-sized)
+    emitter.instruction("bl __rt_array_new");                                   // allocate destination array
+    emitter.instruction("str x0, [sp, #-16]!");                                 // save dest array pointer on stack
+
+    let mut actual_elem_ty = PhpType::Int;
+
+    for (i, elem) in elems.iter().enumerate() {
+        if let ExprKind::Spread(inner) = &elem.kind {
+            // -- spread: copy all elements from source array into dest array --
+            emitter.comment("spread array into dest");
+            let _src_ty = emit_expr(inner, emitter, ctx, data);
+            // x0 = source array pointer
+            emitter.instruction("mov x1, x0");                                  // x1 = source array pointer
+            emitter.instruction("ldr x0, [sp]");                                // x0 = dest array pointer (peek)
+            emitter.instruction("bl __rt_array_merge_into");                    // append all src elements to dest array
+        } else {
+            // -- regular element: push single value --
+            let ty = emit_expr(elem, emitter, ctx, data);
+            if i == 0 || actual_elem_ty == PhpType::Int {
+                actual_elem_ty = ty.clone();
+            }
+            emitter.instruction("ldr x9, [sp]");                                // peek dest array pointer from stack
+            match &ty {
+                PhpType::Int | PhpType::Bool => {
+                    // -- push int element using runtime push --
+                    emitter.instruction("mov x1, x0");                          // x1 = value to push
+                    emitter.instruction("mov x0, x9");                          // x0 = array pointer
+                    emitter.instruction("bl __rt_array_push_int");              // push value onto array
+                }
+                PhpType::Float => {
+                    // -- push float element --
+                    emitter.instruction("fmov x1, d0");                         // move float bits to int register
+                    emitter.instruction("mov x0, x9");                          // x0 = array pointer
+                    emitter.instruction("bl __rt_array_push_int");              // push value onto array
+                }
+                _ => {
+                    emitter.instruction("mov x1, x0");                          // x1 = value to push
+                    emitter.instruction("mov x0, x9");                          // x0 = array pointer
+                    emitter.instruction("bl __rt_array_push_int");              // push value onto array
+                }
+            }
+        }
+    }
+
+    // -- return array pointer --
+    emitter.instruction("ldr x0, [sp], #16");                                   // pop dest array pointer from stack into x0
     PhpType::Array(Box::new(actual_elem_ty))
 }
 
@@ -949,29 +1022,52 @@ fn emit_function_call(
 ) -> PhpType {
     emitter.comment(&format!("call {}()", name));
 
-    // Get function sig to check for default parameter values
+    // Get function sig to check for default parameter values and variadic
     let sig = ctx.functions.get(name).cloned();
+    let is_variadic = sig.as_ref().map(|s| s.variadic.is_some()).unwrap_or(false);
 
-    // Build full argument list including defaults for missing params
-    let total_params = sig.as_ref().map(|s| s.params.len()).unwrap_or(args.len());
-    let mut all_args: Vec<&Expr> = args.iter().collect();
+    // Determine how many regular (non-variadic) params the function has
+    let regular_param_count = if is_variadic {
+        // The last param in sig.params is the variadic array param — don't count it
+        sig.as_ref().map(|s| s.params.len().saturating_sub(1)).unwrap_or(0)
+    } else {
+        sig.as_ref().map(|s| s.params.len()).unwrap_or(args.len())
+    };
+
+    // Separate regular args from variadic args
+    // Also detect spread args: func(...$arr) passes array directly as variadic
+    let mut regular_args: Vec<&Expr> = Vec::new();
+    let mut variadic_args: Vec<&Expr> = Vec::new();
+    let mut spread_arg: Option<&Expr> = None;
+
+    for (i, arg) in args.iter().enumerate() {
+        if let ExprKind::Spread(inner) = &arg.kind {
+            // Spread arg — the inner expr should be an array
+            spread_arg = Some(inner.as_ref());
+        } else if is_variadic && i >= regular_param_count {
+            variadic_args.push(arg);
+        } else {
+            regular_args.push(arg);
+        }
+    }
+
+    // Build full argument list: regular args + defaults for missing regular params
+    let mut all_args: Vec<&Expr> = regular_args;
     let mut default_exprs: Vec<Expr> = Vec::new();
 
-    // For missing args, use default values from the function signature
     if let Some(ref s) = sig {
-        for i in args.len()..total_params {
+        for i in all_args.len()..regular_param_count {
             if let Some(Some(default)) = s.defaults.get(i) {
                 default_exprs.push(default.clone());
             }
         }
     }
-
-    // Collect refs to default exprs
     let default_refs: Vec<&Expr> = default_exprs.iter().collect();
     all_args.extend(default_refs);
 
     let ref_params = sig.as_ref().map(|s| s.ref_params.clone()).unwrap_or_default();
 
+    // -- evaluate and push regular args onto stack --
     let mut arg_types = Vec::new();
     for (i, arg) in all_args.iter().enumerate() {
         let is_ref = ref_params.get(i).copied().unwrap_or(false);
@@ -979,14 +1075,11 @@ fn emit_function_call(
             // For ref params, push the ADDRESS of the variable, not its value
             if let ExprKind::Variable(var_name) = &arg.kind {
                 if ctx.global_vars.contains(var_name) {
-                    // Address of global variable
                     let label = format!("_gvar_{}", var_name);
                     emitter.comment(&format!("ref arg: address of global ${}", var_name));
                     emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page of global var
                     emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); // add page offset
                 } else if ctx.in_main && ctx.all_global_var_names.contains(var_name) {
-                    // In main scope and var is used globally — pass address of local stack slot
-                    // but also sync to global before passing
                     let var = ctx.variables.get(var_name).expect("undefined variable");
                     let offset = var.stack_offset;
                     emitter.comment(&format!("ref arg: address of ${}", var_name));
@@ -998,14 +1091,12 @@ fn emit_function_call(
                     emitter.instruction(&format!("sub x0, x29, #{}", offset));  // compute address of local variable
                 }
             } else {
-                // Not a variable — evaluate and pass value (shouldn't happen in valid PHP)
                 emit_expr(arg, emitter, ctx, data);
             }
             emitter.instruction("str x0, [sp, #-16]!");                         // push address onto stack
-            arg_types.push(PhpType::Int); // Address is an integer-sized value
+            arg_types.push(PhpType::Int);
         } else {
             let ty = emit_expr(arg, emitter, ctx, data);
-            // -- save each evaluated argument on stack --
             match &ty {
                 PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
                     emitter.instruction("str x0, [sp, #-16]!");                 // push int/bool/array-ptr/callable arg onto stack
@@ -1022,8 +1113,88 @@ fn emit_function_call(
         }
     }
 
+    // -- build variadic array if this function has a variadic parameter --
+    if is_variadic {
+        if let Some(spread_expr) = spread_arg {
+            // Spread: ...$arr — pass the array directly as the variadic param
+            emitter.comment("spread array as variadic param");
+            let _ty = emit_expr(spread_expr, emitter, ctx, data);
+            // Array pointer is in x0
+            emitter.instruction("str x0, [sp, #-16]!");                         // push variadic array pointer onto stack
+        } else if variadic_args.is_empty() {
+            // No variadic args — create an empty array
+            emitter.comment("empty variadic array");
+            emitter.instruction("mov x0, #8");                                  // initial capacity: 8 elements
+            emitter.instruction("mov x1, #8");                                  // element size: 8 bytes
+            emitter.instruction("bl __rt_array_new");                           // allocate empty array for variadic param
+            emitter.instruction("str x0, [sp, #-16]!");                         // push empty variadic array onto stack
+        } else {
+            // Build array from variadic args
+            let n = variadic_args.len();
+            emitter.comment(&format!("build variadic array ({} elements)", n));
+            // -- determine element type from first variadic arg --
+            let first_elem_ty = match &variadic_args[0].kind {
+                ExprKind::StringLiteral(_) => PhpType::Str,
+                _ => PhpType::Int,
+            };
+            let es: usize = match &first_elem_ty {
+                PhpType::Str => 16,
+                _ => 8,
+            };
+            emitter.instruction(&format!(                                       // capacity: max of element count or 8
+                "mov x0, #{}",
+                std::cmp::max(n, 8)
+            ));
+            emitter.instruction(&format!("mov x1, #{}", es));                   // element size in bytes
+            emitter.instruction("bl __rt_array_new");                           // allocate array for variadic args
+            emitter.instruction("str x0, [sp, #-16]!");                         // save variadic array pointer on stack
+
+            for (i, varg) in variadic_args.iter().enumerate() {
+                let ty = emit_expr(varg, emitter, ctx, data);
+                emitter.instruction("ldr x9, [sp]");                            // peek variadic array pointer from stack
+                match &ty {
+                    PhpType::Int | PhpType::Bool => {
+                        emitter.instruction(&format!(                           // store int element at data offset
+                            "str x0, [x9, #{}]",
+                            24 + i * 8
+                        ));
+                    }
+                    PhpType::Float => {
+                        emitter.instruction(&format!(                           // store float element at data offset
+                            "str d0, [x9, #{}]",
+                            24 + i * 8
+                        ));
+                    }
+                    PhpType::Str => {
+                        emitter.instruction(&format!(                           // store string pointer at data offset
+                            "str x1, [x9, #{}]",
+                            24 + i * 16
+                        ));
+                        emitter.instruction(&format!(                           // store string length right after pointer
+                            "str x2, [x9, #{}]",
+                            24 + i * 16 + 8
+                        ));
+                    }
+                    PhpType::Array(_) | PhpType::AssocArray { .. } => {
+                        emitter.instruction(&format!(                           // store nested array pointer at data offset
+                            "str x0, [x9, #{}]",
+                            24 + i * 8
+                        ));
+                    }
+                    _ => {}
+                }
+                // -- update array length --
+                emitter.instruction(&format!("mov x10, #{}", i + 1));           // new length after adding this element
+                emitter.instruction("str x10, [x9]");                           // write updated length to array header
+            }
+            // Array pointer is already on the stack (pushed earlier)
+        }
+        arg_types.push(PhpType::Array(Box::new(PhpType::Int)));
+    }
+
     // Separate int and float register tracking
-    let mut assignments: Vec<(PhpType, usize, bool)> = Vec::new(); // (type, reg_idx, is_float)
+    let total_args = all_args.len() + if is_variadic { 1 } else { 0 };
+    let mut assignments: Vec<(PhpType, usize, bool)> = Vec::new();
     let mut int_reg_idx = 0usize;
     let mut float_reg_idx = 0usize;
     for ty in &arg_types {
@@ -1037,7 +1208,7 @@ fn emit_function_call(
     }
 
     // -- pop arguments from stack into ABI registers in reverse order --
-    for i in (0..all_args.len()).rev() {
+    for i in (0..total_args).rev() {
         let (ty, start_reg, is_float) = &assignments[i];
         match ty {
             PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
@@ -1094,6 +1265,7 @@ fn emit_closure(
         defaults,
         return_type: PhpType::Int,
         ref_params,
+        variadic: None,
     };
 
     // -- defer the closure body emission for later --

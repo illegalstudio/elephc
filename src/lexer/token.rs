@@ -116,6 +116,9 @@ pub enum Token {
     // Null coalescing
     QuestionQuestion, // ??
 
+    // Variadic / spread
+    Ellipsis,         // ...
+
     // End of file
     Eof,
 }

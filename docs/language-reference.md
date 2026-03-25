@@ -468,9 +468,57 @@ echo $q; // 1
 
 Reference parameters can be mixed with regular parameters: `function foo(&$ref, $val) { }`
 
+### Variadic Functions
+
+A variadic parameter collects all remaining arguments into an array:
+
+```php
+<?php
+function sum(...$nums) {
+    $total = 0;
+    foreach ($nums as $n) {
+        $total += $n;
+    }
+    return $total;
+}
+echo sum(1, 2, 3); // 6
+echo sum();         // 0
+```
+
+Variadic parameters can be combined with regular parameters. The variadic parameter must be the last one:
+
+```php
+<?php
+function greet($greeting, ...$names) {
+    foreach ($names as $name) {
+        echo $greeting . " " . $name . "\n";
+    }
+}
+greet("Hello", "Alice", "Bob");
+```
+
+### Spread Operator
+
+The spread operator (`...`) unpacks an array into individual arguments:
+
+```php
+<?php
+$args = [10, 20, 30];
+echo sum(...$args); // 60
+```
+
+Spread can also be used in array literals to merge arrays:
+
+```php
+<?php
+$a = [1, 2];
+$b = [3, 4];
+$c = [...$a, ...$b];      // [1, 2, 3, 4]
+$d = [...$a, 5, 6, ...$b]; // [1, 2, 5, 6, 3, 4]
+```
+
 ### Limitations
 
-- No variadic functions (`function foo(...$args)` — not supported)
 - No `use ($var)` captures in closures
 
 ## Print

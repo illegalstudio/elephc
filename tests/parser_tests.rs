@@ -199,7 +199,7 @@ fn test_continue_parses() {
 #[test]
 fn test_function_declaration_parses() {
     let stmts = parse_source("<?php function foo($a, $b) { return $a; }");
-    if let StmtKind::FunctionDecl { name, params, body } = &stmts[0].kind {
+    if let StmtKind::FunctionDecl { name, params, body, .. } = &stmts[0].kind {
         assert_eq!(name, "foo");
         let param_names: Vec<&str> = params.iter().map(|(n, _, _)| n.as_str()).collect();
         assert_eq!(param_names, &["a", "b"]);
@@ -733,5 +733,76 @@ fn test_parse_non_ref_param() {
             assert!(!params[0].2, "Normal param should not be ref");
         }
         _ => panic!("Expected FunctionDecl"),
+    }
+}
+
+// --- Variadic and Spread ---
+
+#[test]
+fn test_parse_variadic_function() {
+    let stmts = parse_source("<?php function foo(...$args) { }");
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl { name, params, variadic, .. } => {
+            assert_eq!(name, "foo");
+            assert!(params.is_empty());
+            assert_eq!(variadic.as_deref(), Some("args"));
+        }
+        _ => panic!("Expected FunctionDecl"),
+    }
+}
+
+#[test]
+fn test_parse_variadic_with_regular_params() {
+    let stmts = parse_source("<?php function foo($a, $b, ...$rest) { }");
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl { params, variadic, .. } => {
+            assert_eq!(params.len(), 2);
+            assert_eq!(params[0].0, "a");
+            assert_eq!(params[1].0, "b");
+            assert_eq!(variadic.as_deref(), Some("rest"));
+        }
+        _ => panic!("Expected FunctionDecl"),
+    }
+}
+
+#[test]
+fn test_parse_no_variadic() {
+    let stmts = parse_source("<?php function foo($a) { }");
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl { variadic, .. } => {
+            assert!(variadic.is_none());
+        }
+        _ => panic!("Expected FunctionDecl"),
+    }
+}
+
+#[test]
+fn test_parse_spread_in_function_call() {
+    let stmts = parse_source("<?php foo(...$arr);");
+    match &stmts[0].kind {
+        StmtKind::ExprStmt(expr) => match &expr.kind {
+            ExprKind::FunctionCall { args, .. } => {
+                assert_eq!(args.len(), 1);
+                assert!(matches!(&args[0].kind, ExprKind::Spread(_)));
+            }
+            _ => panic!("Expected FunctionCall"),
+        },
+        _ => panic!("Expected ExprStmt"),
+    }
+}
+
+#[test]
+fn test_parse_spread_in_array_literal() {
+    let stmts = parse_source("<?php $x = [...$a, ...$b];");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::ArrayLiteral(elems) => {
+                assert_eq!(elems.len(), 2);
+                assert!(matches!(&elems[0].kind, ExprKind::Spread(_)));
+                assert!(matches!(&elems[1].kind, ExprKind::Spread(_)));
+            }
+            _ => panic!("Expected ArrayLiteral"),
+        },
+        _ => panic!("Expected Assign"),
     }
 }

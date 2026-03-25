@@ -1035,3 +1035,26 @@ fn test_error_static_missing_var() {
 fn test_error_static_missing_init() {
     expect_error("<?php static $x;", "Expected '=' after static variable");
 }
+
+// --- Variadic / Spread errors ---
+
+#[test]
+fn test_error_variadic_missing_variable() {
+    expect_error("<?php function foo(... ) {}", "Expected variable after '...'");
+}
+
+#[test]
+fn test_error_variadic_not_last() {
+    expect_error(
+        "<?php function foo(...$a, $b) {}",
+        "Variadic parameter must be the last parameter",
+    );
+}
+
+#[test]
+fn test_error_spread_non_array() {
+    expect_error(
+        "<?php $x = 5; $y = [...$x];",
+        "Spread operator requires an array",
+    );
+}

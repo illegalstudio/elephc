@@ -5035,3 +5035,164 @@ echo $x;
 "#);
     assert_eq!(out, "15");
 }
+
+// --- Variadic functions ---
+
+#[test]
+fn test_variadic_sum() {
+    let out = compile_and_run(r#"<?php
+function sum(...$nums) {
+    $total = 0;
+    foreach ($nums as $n) {
+        $total += $n;
+    }
+    return $total;
+}
+echo sum(1, 2, 3);
+"#);
+    assert_eq!(out, "6");
+}
+
+#[test]
+fn test_variadic_five_args() {
+    let out = compile_and_run(r#"<?php
+function sum(...$nums) {
+    $total = 0;
+    foreach ($nums as $n) {
+        $total += $n;
+    }
+    return $total;
+}
+echo sum(1, 2, 3, 4, 5);
+"#);
+    assert_eq!(out, "15");
+}
+
+#[test]
+fn test_variadic_empty() {
+    let out = compile_and_run(r#"<?php
+function sum(...$nums) {
+    $total = 0;
+    foreach ($nums as $n) {
+        $total += $n;
+    }
+    return $total;
+}
+echo sum();
+"#);
+    assert_eq!(out, "0");
+}
+
+#[test]
+fn test_variadic_with_regular_params() {
+    let out = compile_and_run(r#"<?php
+function greet($greeting, ...$names) {
+    foreach ($names as $name) {
+        echo $greeting . " " . $name . "\n";
+    }
+}
+greet("Hello", "Alice", "Bob");
+"#);
+    assert_eq!(out, "Hello Alice\nHello Bob\n");
+}
+
+#[test]
+fn test_variadic_count() {
+    let out = compile_and_run(r#"<?php
+function num_args(...$args) {
+    return count($args);
+}
+echo num_args(10, 20, 30, 40);
+"#);
+    assert_eq!(out, "4");
+}
+
+#[test]
+fn test_variadic_single_arg() {
+    let out = compile_and_run(r#"<?php
+function wrap(...$items) {
+    return $items;
+}
+$arr = wrap(42);
+echo $arr[0];
+"#);
+    assert_eq!(out, "42");
+}
+
+// --- Spread operator ---
+
+#[test]
+fn test_spread_in_function_call() {
+    let out = compile_and_run(r#"<?php
+function sum(...$nums) {
+    $total = 0;
+    foreach ($nums as $n) {
+        $total += $n;
+    }
+    return $total;
+}
+$args = [10, 20, 30];
+echo sum(...$args);
+"#);
+    assert_eq!(out, "60");
+}
+
+#[test]
+fn test_spread_in_array_literal() {
+    let out = compile_and_run(r#"<?php
+$a = [1, 2];
+$b = [3, 4];
+$c = [...$a, ...$b];
+echo count($c);
+"#);
+    assert_eq!(out, "4");
+}
+
+#[test]
+fn test_spread_array_values() {
+    let out = compile_and_run(r#"<?php
+$a = [1, 2];
+$b = [3, 4];
+$c = [...$a, ...$b];
+foreach ($c as $v) {
+    echo $v;
+}
+"#);
+    assert_eq!(out, "1234");
+}
+
+#[test]
+fn test_spread_mixed_with_elements() {
+    let out = compile_and_run(r#"<?php
+$a = [1, 2];
+$b = [5, 6];
+$c = [...$a, 3, 4, ...$b];
+echo count($c);
+echo " ";
+foreach ($c as $v) {
+    echo $v;
+}
+"#);
+    assert_eq!(out, "6 123456");
+}
+
+#[test]
+fn test_spread_single_source() {
+    let out = compile_and_run(r#"<?php
+$a = [1, 2, 3];
+$c = [...$a];
+echo count($c);
+"#);
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_variadic_with_regular_and_no_extra() {
+    let out = compile_and_run(r#"<?php
+function prefix($pre, ...$items) {
+    echo count($items);
+}
+prefix("x");
+"#);
+    assert_eq!(out, "0");
+}

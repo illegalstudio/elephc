@@ -283,6 +283,15 @@ fn infer_local_type(
         ExprKind::StringLiteral(_) => PhpType::Str,
         ExprKind::IntLiteral(_) => PhpType::Int,
         ExprKind::FloatLiteral(_) => PhpType::Float,
+        ExprKind::Variable(name) => {
+            // Check if it's a known parameter — use its type from the signature
+            for (pname, pty) in &sig.params {
+                if pname == name {
+                    return pty.clone();
+                }
+            }
+            PhpType::Int
+        }
         ExprKind::ArrayLiteral(elems) => {
             let elem_ty = if elems.is_empty() {
                 PhpType::Int
@@ -365,6 +374,7 @@ fn infer_local_type(
         ExprKind::Closure { .. } => PhpType::Callable,
         ExprKind::ClosureCall { .. } => PhpType::Int,
         ExprKind::ConstRef(_) => PhpType::Int, // constants resolved at emit time
+        ExprKind::Spread(inner) => infer_local_type(inner, sig),
         _ => PhpType::Int,
     }
 }

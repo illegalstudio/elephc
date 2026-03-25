@@ -108,6 +108,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_array_reduce(emitter);
     arrays::emit_array_walk(emitter);
     arrays::emit_usort(emitter);
+    arrays::emit_array_merge_into(emitter);
 
     // I/O runtime functions
     io::emit_cstr(emitter);

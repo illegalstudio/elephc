@@ -363,9 +363,13 @@ fn parse_function_decl(
     expect_token(tokens, pos, &Token::LParen, "Expected '(' after function name")?;
 
     let mut params = Vec::new();
+    let mut variadic = None;
     while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
-        if !params.is_empty() {
+        if !params.is_empty() || variadic.is_some() {
             expect_token(tokens, pos, &Token::Comma, "Expected ',' between parameters")?;
+        }
+        if variadic.is_some() {
+            return Err(CompileError::new(span, "Variadic parameter must be the last parameter"));
         }
         // Check for & (pass by reference)
         let is_ref = if *pos < tokens.len() && tokens[*pos].0 == Token::Ampersand {
@@ -374,6 +378,18 @@ fn parse_function_decl(
         } else {
             false
         };
+        // Check for ... (variadic)
+        if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
+            *pos += 1;
+            match tokens.get(*pos).map(|(t, _)| t) {
+                Some(Token::Variable(n)) => {
+                    variadic = Some(n.clone());
+                    *pos += 1;
+                }
+                _ => return Err(CompileError::new(span, "Expected variable after '...'")),
+            }
+            continue;
+        }
         match tokens.get(*pos).map(|(t, _)| t) {
             Some(Token::Variable(n)) => {
                 let n = n.clone();
@@ -394,7 +410,7 @@ fn parse_function_decl(
 
     let body = parse_block(tokens, pos)?;
 
-    Ok(Stmt::new(StmtKind::FunctionDecl { name, params, body }, span))
+    Ok(Stmt::new(StmtKind::FunctionDecl { name, params, variadic, body }, span))
 }
 
 fn parse_return(

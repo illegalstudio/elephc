@@ -58,9 +58,11 @@ pub enum ExprKind {
     },
     Closure {
         params: Vec<(String, Option<Expr>, bool)>,
+        variadic: Option<String>,
         body: Vec<Stmt>,
         is_arrow: bool,
     },
+    Spread(Box<Expr>),
     ClosureCall {
         var: String,
         args: Vec<Expr>,
@@ -217,6 +219,7 @@ pub enum StmtKind {
     FunctionDecl {
         name: String,
         params: Vec<(String, Option<Expr>, bool)>,
+        variadic: Option<String>,
         body: Vec<Stmt>,
     },
     Return(Option<Expr>),

@@ -18,6 +18,7 @@ pub(crate) struct FnDecl {
     pub params: Vec<String>,
     pub defaults: Vec<Option<Expr>>,
     pub ref_params: Vec<bool>,
+    pub variadic: Option<String>,
     pub body: Vec<Stmt>,
 }
 
@@ -29,7 +30,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
     };
 
     for stmt in program {
-        if let StmtKind::FunctionDecl { name, params, body } = &stmt.kind {
+        if let StmtKind::FunctionDecl { name, params, variadic, body } = &stmt.kind {
             let param_names: Vec<String> = params.iter().map(|(n, _, _)| n.clone()).collect();
             let defaults: Vec<Option<Expr>> = params.iter().map(|(_, d, _)| d.clone()).collect();
             let ref_flags: Vec<bool> = params.iter().map(|(_, _, r)| *r).collect();
@@ -39,6 +40,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                     params: param_names,
                     defaults,
                     ref_params: ref_flags,
+                    variadic: variadic.clone(),
                     body: body.clone(),
                 },
             );
@@ -415,17 +417,27 @@ impl Checker {
                     CompileError::new(expr.span, &format!("Undefined constant: {}", name))
                 })
             }
-            ExprKind::Closure { params, body, is_arrow: _ } => {
+            ExprKind::Closure { params, variadic, body, is_arrow: _ } => {
                 // Type-check the closure body in its own environment
                 let mut closure_env: TypeEnv = env.clone();
                 // Add params as Int (simple default for now — they'll be refined at call site)
                 for (p, _default, _is_ref) in params {
                     closure_env.insert(p.clone(), PhpType::Int);
                 }
+                if let Some(vp) = variadic {
+                    closure_env.insert(vp.clone(), PhpType::Array(Box::new(PhpType::Int)));
+                }
                 for stmt in body {
                     self.check_stmt(stmt, &mut closure_env)?;
                 }
                 Ok(PhpType::Callable)
+            }
+            ExprKind::Spread(inner) => {
+                let ty = self.infer_type(inner, env)?;
+                match ty {
+                    PhpType::Array(elem_ty) => Ok(*elem_ty),
+                    _ => Err(CompileError::new(expr.span, "Spread operator requires an array")),
+                }
             }
             ExprKind::ClosureCall { var, args } => {
                 let var_ty = env.get(var).cloned().ok_or_else(|| {

@@ -203,6 +203,13 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
             if remaining.len() > 1 && remaining.as_bytes()[1].is_ascii_digit() {
                 return literals::scan_dot_float(cursor);
             }
+            // Check for ... (ellipsis / spread operator)
+            if remaining.starts_with("...") {
+                cursor.advance(); // consume first .
+                cursor.advance(); // consume second .
+                cursor.advance(); // consume third .
+                return Ok(Token::Ellipsis);
+            }
             cursor.advance();
             if cursor.peek() == Some('=') { cursor.advance(); Ok(Token::DotAssign) }
             else { Ok(Token::Dot) }

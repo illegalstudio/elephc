@@ -134,11 +134,11 @@ Proper type system for PHP compatibility.
 - [x] Static variables: `static $counter = 0;`
 - [x] Pass by reference: `function foo(&$x) { }`
 - [x] Default parameter values: `function foo($x = 10) { }`
-- [ ] Variadic functions: `function foo(...$args) { }`
+- [x] Variadic functions: `function foo(...$args) { }`
 - [x] Anonymous functions / closures: `$fn = function($x) { }` (`use` captures not yet supported)
 - [x] Arrow functions: `$fn = fn($x) => $x * 2`
 - [x] Null coalescing: `$x ?? $default` (`??=` not yet supported)
-- [ ] Spread operator: `func(...$args)`, `[...$a, ...$b]`
+- [x] Spread operator: `func(...$args)`, `[...$a, ...$b]`
 - [x] List unpacking: `[$a, $b] = $array;`
 - [x] Heredoc / nowdoc strings
 - [x] Bitwise operators: `&`, `|`, `^`, `~`, `<<`, `>>`

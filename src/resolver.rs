@@ -184,13 +184,14 @@ fn resolve_stmts(
                     stmt.span,
                 ));
             }
-            StmtKind::FunctionDecl { name, params, body } => {
+            StmtKind::FunctionDecl { name, params, variadic, body } => {
                 let body_resolved =
                     resolve_stmts(body.clone(), base_dir, included, include_chain)?;
                 result.push(Stmt::new(
                     StmtKind::FunctionDecl {
                         name: name.clone(),
                         params: params.clone(),
+                        variadic: variadic.clone(),
                         body: body_resolved,
                     },
                     stmt.span,

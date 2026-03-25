@@ -276,7 +276,15 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                                 }
                                 *pos += 1;
                             }
-                            args.push(parse_expr(tokens, pos)?);
+                            // Check for spread operator: ...expr
+                            if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
+                                let spread_span = tokens[*pos].1;
+                                *pos += 1;
+                                let inner = parse_expr(tokens, pos)?;
+                                args.push(Expr::new(ExprKind::Spread(Box::new(inner)), spread_span));
+                            } else {
+                                args.push(parse_expr(tokens, pos)?);
+                            }
                         }
                         if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
                             return Err(CompileError::new(span, "Expected ')' after arguments"));
@@ -325,6 +333,15 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                     if *pos < tokens.len() && tokens[*pos].0 == Token::RBracket {
                         break;
                     }
+                }
+                // Check for spread operator: ...expr
+                if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
+                    let spread_span = tokens[*pos].1;
+                    *pos += 1;
+                    let inner = parse_expr(tokens, pos)?;
+                    elems.push(Expr::new(ExprKind::Spread(Box::new(inner)), spread_span));
+                    first = false;
+                    continue;
                 }
                 let expr = parse_expr(tokens, pos)?;
                 // Check for => (associative array)
@@ -436,12 +453,16 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                 *pos += 1; // consume 'function'
                 *pos += 1; // consume '('
                 let mut params = Vec::new();
+                let mut variadic = None;
                 while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
-                    if !params.is_empty() {
+                    if !params.is_empty() || variadic.is_some() {
                         if tokens[*pos].0 != Token::Comma {
                             return Err(CompileError::new(tokens[*pos].1, "Expected ',' between parameters"));
                         }
                         *pos += 1;
+                    }
+                    if variadic.is_some() {
+                        return Err(CompileError::new(span, "Variadic parameter must be the last parameter"));
                     }
                     let is_ref = if *pos < tokens.len() && tokens[*pos].0 == Token::Ampersand {
                         *pos += 1;
@@ -449,6 +470,18 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                     } else {
                         false
                     };
+                    // Check for ... (variadic)
+                    if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
+                        *pos += 1;
+                        match tokens.get(*pos).map(|(t, _)| t) {
+                            Some(Token::Variable(n)) => {
+                                variadic = Some(n.clone());
+                                *pos += 1;
+                            }
+                            _ => return Err(CompileError::new(span, "Expected variable after '...'")),
+                        }
+                        continue;
+                    }
                     match tokens.get(*pos).map(|(t, _)| t) {
                         Some(Token::Variable(n)) => {
                             let n = n.clone();
@@ -471,7 +504,7 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                 *pos += 1;
                 let body = crate::parser::stmt::parse_block(tokens, pos)?;
                 return Ok(Expr::new(
-                    ExprKind::Closure { params, body, is_arrow: false },
+                    ExprKind::Closure { params, variadic, body, is_arrow: false },
                     span,
                 ));
             }
@@ -485,12 +518,16 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
             }
             *pos += 1; // consume '('
             let mut params = Vec::new();
+            let mut variadic = None;
             while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
-                if !params.is_empty() {
+                if !params.is_empty() || variadic.is_some() {
                     if tokens[*pos].0 != Token::Comma {
                         return Err(CompileError::new(tokens[*pos].1, "Expected ',' between parameters"));
                     }
                     *pos += 1;
+                }
+                if variadic.is_some() {
+                    return Err(CompileError::new(span, "Variadic parameter must be the last parameter"));
                 }
                 let is_ref = if *pos < tokens.len() && tokens[*pos].0 == Token::Ampersand {
                     *pos += 1;
@@ -498,6 +535,18 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                 } else {
                     false
                 };
+                // Check for ... (variadic)
+                if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
+                    *pos += 1;
+                    match tokens.get(*pos).map(|(t, _)| t) {
+                        Some(Token::Variable(n)) => {
+                            variadic = Some(n.clone());
+                            *pos += 1;
+                        }
+                        _ => return Err(CompileError::new(span, "Expected variable after '...'")),
+                    }
+                    continue;
+                }
                 match tokens.get(*pos).map(|(t, _)| t) {
                     Some(Token::Variable(n)) => {
                         let n = n.clone();
@@ -526,7 +575,7 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
             let body_expr = parse_expr(tokens, pos)?;
             let body = vec![Stmt::new(StmtKind::Return(Some(body_expr)), span)];
             Ok(Expr::new(
-                ExprKind::Closure { params, body, is_arrow: true },
+                ExprKind::Closure { params, variadic, body, is_arrow: true },
                 span,
             ))
         }
@@ -544,7 +593,15 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                         }
                         *pos += 1;
                     }
-                    args.push(parse_expr(tokens, pos)?);
+                    // Check for spread operator: ...expr
+                    if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
+                        let spread_span = tokens[*pos].1;
+                        *pos += 1;
+                        let inner = parse_expr(tokens, pos)?;
+                        args.push(Expr::new(ExprKind::Spread(Box::new(inner)), spread_span));
+                    } else {
+                        args.push(parse_expr(tokens, pos)?);
+                    }
                 }
                 if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
                     return Err(CompileError::new(span, "Expected ')' after arguments"));

@@ -65,6 +65,7 @@ pub struct FunctionSig {
     pub defaults: Vec<Option<crate::parser::ast::Expr>>,
     pub return_type: PhpType,
     pub ref_params: Vec<bool>,
+    pub variadic: Option<String>,
 }
 
 #[derive(Debug)]
