@@ -3320,14 +3320,34 @@ fn test_fseek_ftell() {
     let (out, dir) = compile_and_run_in_dir(r#"<?php
 file_put_contents("seek.txt", "abcdefghij");
 $f = fopen("seek.txt", "r");
-fseek($f, 5);
+$result = fseek($f, 5);
+echo $result;
 echo ftell($f);
 $data = fread($f, 5);
 echo $data;
 fclose($f);
 unlink("seek.txt");
 "#);
-    assert_eq!(out, "5fghij");
+    assert_eq!(out, "05fghij");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_fseek_return_value() {
+    let (out, dir) = compile_and_run_in_dir(r#"<?php
+file_put_contents("seek2.txt", "hello world");
+$f = fopen("seek2.txt", "r");
+$r1 = fseek($f, 0);
+echo $r1;
+$r2 = fseek($f, 3, 0);
+echo $r2;
+$r3 = fseek($f, 2, 1);
+echo $r3;
+echo ftell($f);
+fclose($f);
+unlink("seek2.txt");
+"#);
+    assert_eq!(out, "0005");
     let _ = fs::remove_dir_all(&dir);
 }
 

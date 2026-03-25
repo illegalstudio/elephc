@@ -31,5 +31,9 @@ pub fn emit(
     // -- invoke lseek syscall --
     emitter.instruction("mov x16, #199");                                       // syscall 199 = lseek
     emitter.instruction("svc #0x80");                                           // invoke macOS kernel, returns new position in x0
+    // -- map lseek result to PHP fseek convention: 0=success, -1=failure --
+    emitter.instruction("cmp x0, #0");                                          // check if lseek returned an error (negative)
+    emitter.instruction("cset x0, ge");                                         // x0 = 1 if >= 0 (success), 0 if < 0 (failure)
+    emitter.instruction("sub x0, x0, #1");                                      // map: 1 → 0 (success), 0 → -1 (failure)
     Some(PhpType::Int)
 }
