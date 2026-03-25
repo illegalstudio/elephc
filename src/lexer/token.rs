@@ -55,6 +55,9 @@ pub enum Token {
     Fn,             // fn (arrow functions)
     Use,            // use (closure captures — reserved for future)
     Const,          // const
+    PhpEol,
+    PhpOs,
+    DirectorySeparator,
 
     // Operators
     Assign,         // =

@@ -956,3 +956,65 @@ fn test_error_call_user_func_array_wrong_args() {
         "call_user_func_array() takes exactly 2 arguments",
     );
 }
+
+// --- v0.8 system function errors ---
+
+#[test]
+fn test_error_time_wrong_args() {
+    expect_error("<?php time(1);", "time() takes no arguments");
+}
+
+#[test]
+fn test_error_microtime_wrong_args() {
+    expect_error("<?php microtime(1, 2);", "microtime() takes 0 or 1 arguments");
+}
+
+#[test]
+fn test_error_sleep_wrong_args() {
+    expect_error("<?php sleep();", "sleep() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_usleep_wrong_args() {
+    expect_error("<?php usleep();", "usleep() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_getenv_wrong_args() {
+    expect_error("<?php getenv();", "getenv() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_putenv_wrong_args() {
+    expect_error("<?php putenv();", "putenv() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_phpversion_wrong_args() {
+    expect_error("<?php phpversion(1);", "phpversion() takes no arguments");
+}
+
+#[test]
+fn test_error_php_uname_wrong_args() {
+    expect_error("<?php php_uname(1, 2);", "php_uname() takes 0 or 1 arguments");
+}
+
+#[test]
+fn test_error_exec_wrong_args() {
+    expect_error("<?php exec();", "exec() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_shell_exec_wrong_args() {
+    expect_error("<?php shell_exec();", "shell_exec() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_system_wrong_args() {
+    expect_error("<?php system();", "system() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_passthru_wrong_args() {
+    expect_error("<?php passthru();", "passthru() takes exactly 1 argument");
+}

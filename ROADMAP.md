@@ -149,15 +149,15 @@ Proper type system for PHP compatibility.
 
 ## v0.8.x — Date/time, JSON, regex
 
-- [ ] `time()`, `microtime()`
+- [x] `time()`, `microtime()`
 - [ ] `date()`, `mktime()`, `strtotime()`
-- [ ] `sleep()`, `usleep()`
+- [x] `sleep()`, `usleep()`
 - [ ] `json_encode()`, `json_decode()`, `json_last_error()`
 - [ ] `preg_match()`, `preg_match_all()`, `preg_replace()`, `preg_split()`
-- [ ] `exec()`, `shell_exec()`, `system()`, `passthru()`
-- [ ] `getenv()`, `putenv()`, `$_ENV`
-- [ ] `php_uname()`, `phpversion()`
-- [ ] Constants: `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`
+- [x] `exec()`, `shell_exec()`, `system()`, `passthru()`
+- [x] `getenv()`, `putenv()`
+- [x] `php_uname()`, `phpversion()`
+- [x] Constants: `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`
 
 ## v0.9.x — Memory management and runtime improvements
 

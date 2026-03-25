@@ -296,6 +296,9 @@ pub fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
         "fn" => Ok(Token::Fn),
         "use" => Ok(Token::Use),
         "const" => Ok(Token::Const),
+        "PHP_EOL" => Ok(Token::PhpEol),
+        "PHP_OS" => Ok(Token::PhpOs),
+        "DIRECTORY_SEPARATOR" => Ok(Token::DirectorySeparator),
         _ => Ok(Token::Identifier(word)),
     }
 }

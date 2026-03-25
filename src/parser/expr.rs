@@ -202,6 +202,18 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
             *pos += 1;
             Ok(Expr::new(ExprKind::IntLiteral(2), span))
         }
+        Token::PhpEol => {
+            *pos += 1;
+            Ok(Expr::new(ExprKind::StringLiteral("\n".to_string()), span))
+        }
+        Token::PhpOs => {
+            *pos += 1;
+            Ok(Expr::new(ExprKind::StringLiteral("Darwin".to_string()), span))
+        }
+        Token::DirectorySeparator => {
+            *pos += 1;
+            Ok(Expr::new(ExprKind::StringLiteral("/".to_string()), span))
+        }
         Token::PlusPlus => {
             *pos += 1;
             if *pos < tokens.len() {

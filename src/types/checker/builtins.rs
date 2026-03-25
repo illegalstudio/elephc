@@ -1029,6 +1029,89 @@ impl Checker {
                 }
                 Ok(Some(PhpType::Void))
             }
+            // -- System functions --
+            "time" => {
+                if !args.is_empty() {
+                    return Err(CompileError::new(span, "time() takes no arguments"));
+                }
+                Ok(Some(PhpType::Int))
+            }
+            "microtime" => {
+                if args.len() > 1 {
+                    return Err(CompileError::new(span, "microtime() takes 0 or 1 arguments"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                Ok(Some(PhpType::Float))
+            }
+            "sleep" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "sleep() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Int))
+            }
+            "usleep" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "usleep() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Void))
+            }
+            "getenv" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "getenv() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Str))
+            }
+            "putenv" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "putenv() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Bool))
+            }
+            "php_uname" => {
+                if args.len() > 1 {
+                    return Err(CompileError::new(span, "php_uname() takes 0 or 1 arguments"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                Ok(Some(PhpType::Str))
+            }
+            "phpversion" => {
+                if !args.is_empty() {
+                    return Err(CompileError::new(span, "phpversion() takes no arguments"));
+                }
+                Ok(Some(PhpType::Str))
+            }
+            "exec" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "exec() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Str))
+            }
+            "shell_exec" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "shell_exec() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Str))
+            }
+            "system" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "system() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Str))
+            }
+            "passthru" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "passthru() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Void))
+            }
             "define" => {
                 if args.len() != 2 {
                     return Err(CompileError::new(span, "define() takes exactly 2 arguments"));

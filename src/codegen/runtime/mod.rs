@@ -57,6 +57,10 @@ pub fn emit_runtime(emitter: &mut Emitter) {
 
     // System runtime functions
     system::emit_build_argv(emitter);
+    system::emit_time(emitter);
+    system::emit_microtime(emitter);
+    system::emit_getenv(emitter);
+    system::emit_shell_exec(emitter);
 
     // Array runtime functions
     arrays::emit_heap_alloc(emitter);

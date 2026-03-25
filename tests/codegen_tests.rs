@@ -4740,3 +4740,105 @@ fn test_call_user_func_array_string_return() {
     let out = compile_and_run("<?php\nfunction greet($name) { return \"Hello \" . $name; }\necho call_user_func_array(\"greet\", [\"World\"]);\n");
     assert_eq!(out, "Hello World");
 }
+
+// -- v0.8 constants --
+
+#[test]
+fn test_php_eol() {
+    let out = compile_and_run("<?php echo \"a\" . PHP_EOL . \"b\";");
+    assert_eq!(out, "a\nb");
+}
+
+#[test]
+fn test_php_os() {
+    let out = compile_and_run("<?php echo PHP_OS;");
+    assert_eq!(out, "Darwin");
+}
+
+#[test]
+fn test_directory_separator() {
+    let out = compile_and_run("<?php echo DIRECTORY_SEPARATOR;");
+    assert_eq!(out, "/");
+}
+
+// -- v0.8 time / microtime --
+
+#[test]
+fn test_time() {
+    let out = compile_and_run("<?php $t = time(); if ($t > 1000000000) { echo \"ok\"; }");
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_microtime() {
+    let out = compile_and_run("<?php $t = microtime(true); if ($t > 1000000000) { echo \"ok\"; }");
+    assert_eq!(out, "ok");
+}
+
+// -- v0.8 sleep / usleep --
+
+#[test]
+fn test_sleep_zero() {
+    let out = compile_and_run("<?php sleep(0); echo \"ok\";");
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_usleep_zero() {
+    let out = compile_and_run("<?php usleep(0); echo \"ok\";");
+    assert_eq!(out, "ok");
+}
+
+// -- v0.8 getenv --
+
+#[test]
+fn test_getenv_home() {
+    let out = compile_and_run("<?php $home = getenv(\"HOME\"); if (strlen($home) > 0) { echo \"ok\"; }");
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_getenv_nonexistent() {
+    let out = compile_and_run("<?php $missing = getenv(\"ELEPHC_NONEXISTENT_VAR_XYZ\"); echo strlen($missing);");
+    assert_eq!(out, "0");
+}
+
+// -- v0.8 phpversion / php_uname --
+
+#[test]
+fn test_phpversion() {
+    let out = compile_and_run("<?php echo phpversion();");
+    assert_eq!(out, "0.7.1");
+}
+
+#[test]
+fn test_php_uname() {
+    let out = compile_and_run("<?php $os = php_uname(); if (strlen($os) > 0) { echo \"ok\"; }");
+    assert_eq!(out, "ok");
+}
+
+// -- v0.8 exec / shell_exec / system / passthru --
+
+#[test]
+fn test_shell_exec() {
+    let out = compile_and_run("<?php $out = shell_exec(\"echo hello\"); echo trim($out);");
+    assert_eq!(out, "hello");
+}
+
+#[test]
+fn test_exec() {
+    let out = compile_and_run("<?php $out = exec(\"echo test\"); echo trim($out);");
+    assert_eq!(out, "test");
+}
+
+#[test]
+fn test_system() {
+    let out = compile_and_run("<?php system(\"echo hi\");");
+    assert_eq!(out, "hi\n");
+}
+
+#[test]
+fn test_passthru() {
+    let out = compile_and_run("<?php passthru(\"echo bye\");");
+    assert_eq!(out, "bye\n");
+}

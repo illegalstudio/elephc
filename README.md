@@ -153,11 +153,11 @@ if ($x === 3) {
 **Types:** `gettype`, `settype`, `empty`, `unset`, `is_int`, `is_float`, `is_string`, `is_bool`, `is_null`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`, `boolval`, `floatval`
 **I/O:** `fopen`, `fclose`, `fread`, `fwrite`, `fgets`, `feof`, `readline`, `fseek`, `ftell`, `rewind`, `file_get_contents`, `file_put_contents`, `file`, `fgetcsv`, `fputcsv`, `file_exists`, `is_file`, `is_dir`, `is_readable`, `is_writable`, `filesize`, `filemtime`, `copy`, `rename`, `unlink`, `mkdir`, `rmdir`, `scandir`, `glob`, `getcwd`, `chdir`, `tempnam`, `sys_get_temp_dir`
 **Debugging:** `var_dump`, `print_r`
-**System:** `exit`, `die`, `define`
+**System:** `exit`, `die`, `define`, `time`, `microtime`, `sleep`, `usleep`, `getenv`, `putenv`, `php_uname`, `phpversion`, `exec`, `shell_exec`, `system`, `passthru`
 
 ### Constants
 
-`INF`, `NAN`, `PHP_INT_MAX`, `PHP_INT_MIN`, `PHP_FLOAT_MAX`, `M_PI`, `STDIN`, `STDOUT`, `STDERR`
+`INF`, `NAN`, `PHP_INT_MAX`, `PHP_INT_MIN`, `PHP_FLOAT_MAX`, `M_PI`, `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`, `STDIN`, `STDOUT`, `STDERR`
 
 User-defined constants are also supported via `const NAME = value;` and `define("NAME", value);`.
 
@@ -239,13 +239,13 @@ src/
 │   │   ├── math/        # abs, floor, pow, rand, fmod, ...
 │   │   ├── types/       # is_int, gettype, empty, unset, settype, ...
 │   │   ├── io/          # fopen, fclose, fread, fwrite, fgets, file_get_contents, ...
-│   │   └── system/      # exit, die
+│   │   └── system/      # exit, die, time, sleep, getenv, exec, ...
 │   │
 │   └── runtime/         # ARM64 runtime routines (one file per function)
 │       ├── strings/     # itoa, concat, ftoa, strpos, str_replace, ...
 │       ├── arrays/      # heap_alloc, array_new, array_push, sort, ...
 │       ├── io/          # fopen, fclose, fread, fwrite, file_ops, ...
-│       └── system/      # build_argv
+│       └── system/      # build_argv, time, getenv, shell_exec
 │
 └── errors/              # Error formatting with line:col
 ```
@@ -253,7 +253,7 @@ src/
 ## Tests
 
 ```bash
-cargo test                      # all tests (~887)
+cargo test                      # all tests (~914)
 cargo test test_my_feature      # run specific tests
 ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 ```

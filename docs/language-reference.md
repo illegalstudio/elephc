@@ -730,6 +730,18 @@ foreach ($matrix as $row) {
 |---|---|---|
 | `exit()` | `exit($code = 0): void` | Terminate program |
 | `die()` | `die(): void` | Alias for `exit(0)` |
+| `time()` | `time(): int` | Get current Unix timestamp |
+| `microtime()` | `microtime($as_float = false): float` | Get current time with microsecond precision |
+| `sleep()` | `sleep($seconds): int` | Sleep for given seconds |
+| `usleep()` | `usleep($microseconds): void` | Sleep for given microseconds |
+| `getenv()` | `getenv($name): string` | Get environment variable value |
+| `putenv()` | `putenv($assignment): bool` | Set environment variable (format: "KEY=VALUE") |
+| `php_uname()` | `php_uname(): string` | Get OS name (returns "Darwin") |
+| `phpversion()` | `phpversion(): string` | Get elephc version string |
+| `exec()` | `exec($command): string` | Execute command, return output |
+| `shell_exec()` | `shell_exec($command): string` | Execute command via shell, return full output |
+| `system()` | `system($command): string` | Execute command, output to stdout |
+| `passthru()` | `passthru($command): void` | Execute command, pass raw output to stdout |
 
 ### I/O functions
 
@@ -832,6 +844,9 @@ show();
 | `PHP_INT_MIN` | int | -9223372036854775808 |
 | `PHP_FLOAT_MAX` | float | ~1.8e308 |
 | `M_PI` | float | 3.14159265358979... |
+| `PHP_EOL` | string | End of line character (`"\n"`) |
+| `PHP_OS` | string | Operating system name (`"Darwin"`) |
+| `DIRECTORY_SEPARATOR` | string | Directory separator (`"/"`) |
 | `STDIN` | resource | Standard input stream (fd 0) |
 | `STDOUT` | resource | Standard output stream (fd 1) |
 | `STDERR` | resource | Standard error stream (fd 2) |
