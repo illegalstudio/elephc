@@ -56,15 +56,16 @@ jobs:
 
           # Clone tap repo
           git clone https://x-access-token:${TAP_TOKEN}@github.com/illegalstudio/homebrew-tap.git /tmp/homebrew-tap
+          mkdir -p /tmp/homebrew-tap/Formula
 
           # Generate formula
-          cat > /tmp/homebrew-tap/Formula/elephc.rb << FORMULA
+          cat > /tmp/homebrew-tap/Formula/elephc.rb <<EOF
           class Elephc < Formula
             desc "PHP-to-native compiler targeting macOS ARM64"
             homepage "https://github.com/illegalstudio/elephc"
-            url "${URL}"
-            sha256 "${SHA256}"
-            version "${VERSION_NUM}"
+            url "$URL"
+            sha256 "$SHA256"
+            version "$VERSION_NUM"
             license "MIT"
 
             depends_on :macos
@@ -76,11 +77,11 @@ jobs:
 
             test do
               (testpath/"hello.php").write('<?php echo "hello";')
-              system "#{bin}/elephc", "hello.php"
+              system bin/"elephc", "hello.php"
               assert_equal "hello", shell_output("#{testpath}/hello")
             end
           end
-          FORMULA
+          EOF
 
           # Push to tap
           cd /tmp/homebrew-tap
