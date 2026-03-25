@@ -1409,7 +1409,12 @@ fn emit_cast(
                     emitter.instruction("mov x0, #0");                          // load zero integer
                     emitter.instruction("scvtf d0, x0");                        // convert to 0.0 double
                 }
-                PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
+                PhpType::Str => {
+                    // -- parse string as float via libc atof --
+                    emitter.instruction("bl __rt_cstr");                        // null-terminate string (x1=ptr, x2=len → x0=cstr)
+                    emitter.instruction("bl _atof");                            // parse C string as double → d0=result
+                }
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
                     // -- unsupported source type: default to 0.0 --
                     emitter.instruction("mov x0, #0");                          // load zero integer
                     emitter.instruction("scvtf d0, x0");                        // convert to 0.0 double

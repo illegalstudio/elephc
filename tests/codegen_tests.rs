@@ -2120,6 +2120,24 @@ fn test_cast_float_from_int() {
 }
 
 #[test]
+fn test_cast_float_from_string() {
+    let out = compile_and_run("<?php echo (float)'3.14';");
+    assert_eq!(out, "3.14");
+}
+
+#[test]
+fn test_cast_float_from_string_integer() {
+    let out = compile_and_run("<?php echo (float)'42';");
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_cast_float_from_string_non_numeric() {
+    let out = compile_and_run("<?php echo (float)'abc';");
+    assert_eq!(out, "0");
+}
+
+#[test]
 fn test_cast_string_from_int() {
     let out = compile_and_run("<?php echo (string)42;");
     assert_eq!(out, "42");
