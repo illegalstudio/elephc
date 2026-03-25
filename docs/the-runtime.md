@@ -153,7 +153,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 ## Array routines
 
-**Source:** `src/codegen/runtime/arrays/` (45 files)
+**Source:** `src/codegen/runtime/arrays/` (44 files)
 
 ### Core allocation
 
@@ -208,7 +208,7 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 
 ## System routines
 
-**Source:** `src/codegen/runtime/system/`
+**Source:** `src/codegen/runtime/system/` (4 files)
 
 ### `__rt_build_argv` — Build $argv array
 
@@ -220,9 +220,18 @@ At program start, the OS passes `argc` (argument count) in `x0` and `argv` (poin
 2. For each C string pointer in argv: measures the string length (scan for null byte), pushes ptr+len into the array
 3. Returns the array pointer
 
+### Other system routines
+
+| Routine | What it does | Input | Output |
+|---|---|---|---|
+| `__rt_time` | Get current Unix timestamp via `gettimeofday` syscall | — | `x0` = seconds since epoch |
+| `__rt_microtime` | Get current time as float seconds via `gettimeofday` syscall | — | `d0` = seconds.microseconds |
+| `__rt_getenv` | Get environment variable value via libc `getenv()` | `x1`/`x2` = name string | `x1`/`x2` = value string |
+| `__rt_shell_exec` | Execute shell command and capture output via libc `popen()`/`pclose()` | `x1`/`x2` = command string | `x1`/`x2` = output string |
+
 ## I/O routines
 
-**Source:** `src/codegen/runtime/io/` (17 files)
+**Source:** `src/codegen/runtime/io/` (16 files)
 
 These routines handle file and filesystem operations via macOS system calls. PHP strings (pointer + length) must be converted to null-terminated C strings before passing to syscalls — the `__rt_cstr` helper handles this using a dedicated 4KB buffer.
 
@@ -256,11 +265,15 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     strings::emit_itoa(emitter);
     strings::emit_ftoa(emitter);
     strings::emit_concat(emitter);
-    // ... 40+ more string routines ...
+    // ... 44 more string routines ...
     system::emit_build_argv(emitter);
+    system::emit_time(emitter);
+    system::emit_microtime(emitter);
+    system::emit_getenv(emitter);
+    system::emit_shell_exec(emitter);
     arrays::emit_heap_alloc(emitter);
     arrays::emit_array_new(emitter);
-    // ... 30+ more array routines ...
+    // ... 40+ more array routines ...
     io::emit_cstr(emitter);
     io::emit_fopen(emitter);
     // ... 14 more I/O routines ...

@@ -89,19 +89,19 @@ src/
 │   │
 │   ├── builtins/              Built-in function codegen (one file per function)
 │   │   ├── mod.rs             Dispatcher — chains to category modules
-│   │   ├── strings/           strlen, substr, strpos, explode, sprintf, md5, ... (57 files)
-│   │   ├── arrays/            count, array_push, sort, array_map, usort, ... (51 files)
-│   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, ... (14 files)
-│   │   ├── types/             is_*, gettype, empty, unset, settype, ... (16 files)
-│   │   ├── io/                fopen, fwrite, file_get_contents, scandir, ... (36 files)
-│   │   └── system/            exit, define (3 files)
+│   │   ├── strings/           strlen, substr, strpos, explode, sprintf, md5, ... (56 files)
+│   │   ├── arrays/            count, array_push, sort, array_map, usort, ... (50 files)
+│   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, ... (12 files)
+│   │   ├── types/             is_*, gettype, empty, unset, settype, ... (15 files)
+│   │   ├── io/                fopen, fwrite, file_get_contents, scandir, ... (35 files)
+│   │   └── system/            exit, define, time, getenv, exec, shell_exec, ... (14 files)
 │   │
 │   └── runtime/               ARM64 runtime routines (one file per function)
 │       ├── mod.rs             Emits all runtime functions into assembly
-│       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, ... (48 files)
-│       ├── arrays/            heap_alloc, array_new, hash_*, sort, usort, ... (45 files)
-│       ├── io/                fopen, fgets, fread, stat, scandir, ... (17 files)
-│       └── system/            build_argv (2 files)
+│       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, ... (47 files)
+│       ├── arrays/            heap_alloc, array_new, hash_*, sort, usort, ... (44 files)
+│       ├── io/                fopen, fgets, fread, stat, scandir, ... (16 files)
+│       └── system/            build_argv, time, microtime, getenv, shell_exec (4 files)
 │
 └── errors/
     ├── mod.rs                 CompileError, error trait

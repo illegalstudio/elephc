@@ -133,6 +133,7 @@ Each keyword is a distinct token variant (e.g., `Token::If`, `Token::While`, `To
 
 ```
 INF  NAN  PHP_INT_MAX  PHP_INT_MIN  PHP_FLOAT_MAX  M_PI
+PHP_EOL  PHP_OS  DIRECTORY_SEPARATOR
 STDIN  STDOUT  STDERR
 ```
 
