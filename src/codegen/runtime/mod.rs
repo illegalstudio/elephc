@@ -61,6 +61,20 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     system::emit_microtime(emitter);
     system::emit_getenv(emitter);
     system::emit_shell_exec(emitter);
+    system::emit_date(emitter);
+    system::emit_mktime(emitter);
+    system::emit_strtotime(emitter);
+    system::emit_json_encode_bool(emitter);
+    system::emit_json_encode_null(emitter);
+    system::emit_json_encode_str(emitter);
+    system::emit_json_encode_array_int(emitter);
+    system::emit_json_encode_array_str(emitter);
+    system::emit_json_encode_assoc(emitter);
+    system::emit_json_decode(emitter);
+    system::emit_preg_match(emitter);
+    system::emit_preg_match_all(emitter);
+    system::emit_preg_replace(emitter);
+    system::emit_preg_split(emitter);
 
     // Array runtime functions
     arrays::emit_heap_alloc(emitter);
@@ -160,6 +174,10 @@ pub fn emit_runtime_data(
         out.push_str(&val.to_string());
     }
     out.push('\n');
+    // JSON string constants
+    out.push_str(&system::emit_json_data());
+    // Date/time lookup tables (day names, month names)
+    out.push_str(&system::emit_date_data());
     // Emit global variable storage for `global $var` keyword
     let mut sorted_globals: Vec<&String> = global_var_names.iter().collect();
     sorted_globals.sort();

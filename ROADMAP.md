@@ -150,10 +150,10 @@ Proper type system for PHP compatibility.
 ## v0.8.x — Date/time, JSON, regex
 
 - [x] `time()`, `microtime()`
-- [ ] `date()`, `mktime()`, `strtotime()`
+- [x] `date()`, `mktime()`, `strtotime()`
 - [x] `sleep()`, `usleep()`
-- [ ] `json_encode()`, `json_decode()`, `json_last_error()`
-- [ ] `preg_match()`, `preg_match_all()`, `preg_replace()`, `preg_split()`
+- [x] `json_encode()`, `json_decode()`, `json_last_error()`
+- [x] `preg_match()`, `preg_match_all()`, `preg_replace()`, `preg_split()`
 - [x] `exec()`, `shell_exec()`, `system()`, `passthru()`
 - [x] `getenv()`, `putenv()`
 - [x] `php_uname()`, `phpversion()`

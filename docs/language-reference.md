@@ -851,6 +851,16 @@ foreach ($matrix as $row) {
 | `shell_exec()` | `shell_exec($command): string` | Execute command via shell, return full output |
 | `system()` | `system($command): string` | Execute command, output to stdout |
 | `passthru()` | `passthru($command): void` | Execute command, pass raw output to stdout |
+| `date()` | `date($format, $timestamp = 0): string` | Format a Unix timestamp. Format chars: Y, m, d, H, i, s, l, F, D, M, N, j, n, G, g, A, a, U. If timestamp is 0, uses current time. |
+| `mktime()` | `mktime($h, $m, $s, $mon, $day, $yr): int` | Create Unix timestamp from components |
+| `strtotime()` | `strtotime($datetime): int` | Parse "YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS" to timestamp |
+| `json_encode()` | `json_encode($value): string` | Encode value as JSON. Supports int, float, string, bool, null, arrays, assoc arrays. |
+| `json_decode()` | `json_decode($json): string` | Decode a JSON string value (strips quotes, unescapes). Returns string representation. |
+| `json_last_error()` | `json_last_error(): int` | Always returns 0 (JSON_ERROR_NONE) |
+| `preg_match()` | `preg_match($pattern, $subject): int` | Test if regex matches subject. Returns 1 or 0. Uses POSIX extended regex via libc. |
+| `preg_match_all()` | `preg_match_all($pattern, $subject): int` | Count all non-overlapping regex matches |
+| `preg_replace()` | `preg_replace($pattern, $replacement, $subject): string` | Replace all regex matches with replacement string |
+| `preg_split()` | `preg_split($pattern, $subject): array` | Split string by regex pattern, returns string array |
 
 ### I/O functions
 
@@ -1013,6 +1023,15 @@ Both `include 'f';` and `include('f');` syntax are supported.
 **Limitations:**
 - Path must be a string literal (no variables or expressions)
 - Included files must start with `<?php`
+
+### Known limitations in v0.8 features
+
+- `strtotime()` only supports "YYYY-MM-DD" and "YYYY-MM-DD HH:MM:SS" formats. Relative time strings like "next Monday" or "+1 week" are not supported.
+- `json_decode()` returns a string. It strips quotes and unescapes JSON string values, but does not parse JSON objects into associative arrays or JSON arrays into PHP arrays.
+- `json_last_error()` always returns 0 — no actual error tracking is performed.
+- `preg_*` functions use POSIX extended regex (via libc `regcomp`/`regexec`), not PCRE. Lookahead, lookbehind, non-greedy quantifiers, and other PCRE-only features are not supported.
+- `preg_match()` does not support the `$matches` capture parameter.
+- `preg_replace()` does not support backreferences like `$1` in the replacement string.
 
 ## What elephc cannot do (by design)
 

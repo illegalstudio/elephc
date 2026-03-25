@@ -1058,3 +1058,86 @@ fn test_error_spread_non_array() {
         "Spread operator requires an array",
     );
 }
+
+// --- Date/time error tests ---
+
+#[test]
+fn test_error_date_no_args() {
+    expect_error("<?php date();", "date() takes 1 or 2 arguments");
+}
+
+#[test]
+fn test_error_date_too_many_args() {
+    expect_error(
+        r#"<?php date("Y", 0, 0);"#,
+        "date() takes 1 or 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_mktime_wrong_args() {
+    expect_error("<?php mktime(1, 2, 3);", "mktime() takes exactly 6 arguments");
+}
+
+#[test]
+fn test_error_strtotime_no_args() {
+    expect_error("<?php strtotime();", "strtotime() takes exactly 1 argument");
+}
+
+// --- JSON error tests ---
+
+#[test]
+fn test_error_json_encode_no_args() {
+    expect_error("<?php json_encode();", "json_encode() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_json_encode_too_many_args() {
+    expect_error(
+        r#"<?php json_encode("a", "b");"#,
+        "json_encode() takes exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_json_decode_no_args() {
+    expect_error("<?php json_decode();", "json_decode() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_json_last_error_with_args() {
+    expect_error("<?php json_last_error(1);", "json_last_error() takes no arguments");
+}
+
+// --- Regex error tests ---
+
+#[test]
+fn test_error_preg_match_no_args() {
+    expect_error("<?php preg_match();", "preg_match() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_preg_match_one_arg() {
+    expect_error(
+        r#"<?php preg_match("/test/");"#,
+        "preg_match() takes exactly 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_preg_match_all_no_args() {
+    expect_error("<?php preg_match_all();", "preg_match_all() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_preg_replace_wrong_args() {
+    expect_error(
+        r#"<?php preg_replace("/a/", "b");"#,
+        "preg_replace() takes exactly 3 arguments",
+    );
+}
+
+#[test]
+fn test_error_preg_split_no_args() {
+    expect_error("<?php preg_split();", "preg_split() takes exactly 2 arguments");
+}

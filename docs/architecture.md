@@ -94,14 +94,14 @@ src/
 │   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, ... (12 files)
 │   │   ├── types/             is_*, gettype, empty, unset, settype, ... (15 files)
 │   │   ├── io/                fopen, fwrite, file_get_contents, scandir, ... (35 files)
-│   │   └── system/            exit, define, time, getenv, exec, shell_exec, ... (14 files)
+│   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, ... (24 files)
 │   │
 │   └── runtime/               ARM64 runtime routines (one file per function)
 │       ├── mod.rs             Emits all runtime functions into assembly
 │       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, ... (47 files)
 │       ├── arrays/            heap_alloc, array_new, hash_*, sort, usort, ... (45 files)
 │       ├── io/                fopen, fgets, fread, stat, scandir, ... (16 files)
-│       └── system/            build_argv, time, microtime, getenv, shell_exec (4 files)
+│       └── system/            build_argv, time, date, mktime, strtotime, json_encode, json_decode, preg (11 files)
 │
 └── errors/
     ├── mod.rs                 CompileError, error trait

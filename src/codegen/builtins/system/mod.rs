@@ -1,14 +1,24 @@
+mod date;
 mod define;
 mod exec_fn;
 mod exit;
 mod getenv;
+mod json_decode;
+mod json_encode;
+mod json_last_error;
 mod microtime;
+mod mktime;
 mod passthru;
 mod php_uname;
 mod phpversion;
+mod preg_match;
+mod preg_match_all;
+mod preg_replace;
+mod preg_split;
 mod putenv;
 mod shell_exec;
 mod sleep;
+mod strtotime;
 mod system_fn;
 mod time;
 mod usleep;
@@ -41,6 +51,16 @@ pub fn emit(
         "shell_exec" => shell_exec::emit(name, args, emitter, ctx, data),
         "system" => system_fn::emit(name, args, emitter, ctx, data),
         "passthru" => passthru::emit(name, args, emitter, ctx, data),
+        "date" => date::emit(name, args, emitter, ctx, data),
+        "mktime" => mktime::emit(name, args, emitter, ctx, data),
+        "strtotime" => strtotime::emit(name, args, emitter, ctx, data),
+        "json_encode" => json_encode::emit(name, args, emitter, ctx, data),
+        "json_decode" => json_decode::emit(name, args, emitter, ctx, data),
+        "json_last_error" => json_last_error::emit(name, args, emitter, ctx, data),
+        "preg_match" => preg_match::emit(name, args, emitter, ctx, data),
+        "preg_match_all" => preg_match_all::emit(name, args, emitter, ctx, data),
+        "preg_replace" => preg_replace::emit(name, args, emitter, ctx, data),
+        "preg_split" => preg_split::emit(name, args, emitter, ctx, data),
         _ => None,
     }
 }

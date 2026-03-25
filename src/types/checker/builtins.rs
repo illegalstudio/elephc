@@ -1183,6 +1183,79 @@ impl Checker {
                 Ok(Some(PhpType::Bool))
             }
 
+            // -- Date/time functions --
+            "date" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(CompileError::new(span, "date() takes 1 or 2 arguments"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                Ok(Some(PhpType::Str))
+            }
+            "mktime" => {
+                if args.len() != 6 {
+                    return Err(CompileError::new(span, "mktime() takes exactly 6 arguments"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                Ok(Some(PhpType::Int))
+            }
+            "strtotime" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "strtotime() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Int))
+            }
+            // -- JSON functions --
+            "json_encode" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "json_encode() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Str))
+            }
+            "json_decode" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "json_decode() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Str))
+            }
+            "json_last_error" => {
+                if !args.is_empty() {
+                    return Err(CompileError::new(span, "json_last_error() takes no arguments"));
+                }
+                Ok(Some(PhpType::Int))
+            }
+            // -- Regex functions --
+            "preg_match" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "preg_match() takes exactly 2 arguments"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                Ok(Some(PhpType::Int))
+            }
+            "preg_match_all" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "preg_match_all() takes exactly 2 arguments"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                Ok(Some(PhpType::Int))
+            }
+            "preg_replace" => {
+                if args.len() != 3 {
+                    return Err(CompileError::new(span, "preg_replace() takes exactly 3 arguments"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                Ok(Some(PhpType::Str))
+            }
+            "preg_split" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "preg_split() takes exactly 2 arguments"));
+                }
+                for arg in args { self.infer_type(arg, env)?; }
+                Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
+            }
+
             _ => Ok(None),
         }
     }
