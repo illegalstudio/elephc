@@ -89,38 +89,102 @@ pub fn emit(
         // -- clean up stack (3 pushes of 16 bytes each) --
         emitter.instruction("add sp, sp, #48");                                 // drop iter_index + needle + hash_ptr
     } else {
-        // -- indexed array: linear scan (existing logic) --
+        // -- indexed array: linear scan --
+        let elem_ty = match &arr_ty {
+            PhpType::Array(t) => *t.clone(),
+            _ => PhpType::Int,
+        };
+
         emitter.instruction("str x0, [sp, #-16]!");                             // push array pointer
-        emit_expr(&args[0], emitter, ctx, data);
+        let _needle_ty = emit_expr(&args[0], emitter, ctx, data);
 
         let found_label = ctx.next_label("in_array_found");
         let end_label = ctx.next_label("in_array_end");
         let done_label = ctx.next_label("in_array_done");
-
-        // -- set up loop to search array for needle --
-        emitter.instruction("mov x11, x0");                                     // save needle value in x11
-        emitter.instruction("ldr x0, [sp], #16");                               // pop array pointer
-        emitter.instruction("ldr x9, [x0]");                                    // load array length into x9
-        emitter.instruction("add x10, x0, #24");                                // x10 = pointer to data (past 24-byte header)
-        emitter.instruction("mov x12, #0");                                     // initialize loop counter to 0
         let loop_label = ctx.next_label("in_array_loop");
-        emitter.label(&loop_label);
-        // -- compare each element against needle --
-        emitter.instruction("cmp x12, x9");                                     // check if counter reached array length
-        emitter.instruction(&format!("b.ge {}", end_label));                    // exit loop if all elements checked
-        emitter.instruction("ldr x13, [x10, x12, lsl #3]");                     // load element at index x12 (offset = x12 * 8)
-        emitter.instruction("cmp x13, x11");                                    // compare element with needle
-        emitter.instruction(&format!("b.eq {}", found_label));                  // branch to found if element matches
-        emitter.instruction("add x12, x12, #1");                                // increment loop counter
-        emitter.instruction(&format!("b {}", loop_label));                      // jump back to loop start
-        // -- needle found --
-        emitter.label(&found_label);
-        emitter.instruction("mov x0, #1");                                      // set return value to 1 (true)
-        emitter.instruction(&format!("b {}", done_label));                      // jump to done
-        // -- needle not found --
-        emitter.label(&end_label);
-        emitter.instruction("mov x0, #0");                                      // set return value to 0 (false)
-        emitter.label(&done_label);
+
+        match &elem_ty {
+            PhpType::Str => {
+                // -- save needle string (x1=ptr, x2=len) and set up loop --
+                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push needle ptr+len
+                emitter.instruction("ldr x0, [sp, #16]");                       // reload array pointer
+                emitter.instruction("ldr x9, [x0]");                            // load array length
+                emitter.instruction("add x10, x0, #24");                        // x10 = pointer to data region
+                emitter.instruction("mov x12, #0");                             // initialize loop counter
+
+                // Stack layout:
+                //   sp+0:  needle ptr+len (16 bytes)
+                //   sp+16: array pointer (16 bytes)
+
+                emitter.label(&loop_label);
+                // -- check if all elements have been scanned --
+                emitter.instruction("cmp x12, x9");                             // check if counter reached array length
+                emitter.instruction(&format!("b.ge {}", end_label));            // exit loop if all elements checked
+
+                // -- load string element at index x12 (16 bytes per element) --
+                emitter.instruction("lsl x13, x12, #4");                        // x13 = index * 16
+                emitter.instruction("ldr x1, [x10, x13]");                      // x1 = element string pointer
+                emitter.instruction("add x14, x13, #8");                        // x14 = offset to length field
+                emitter.instruction("ldr x2, [x10, x14]");                      // x2 = element string length
+
+                // -- save loop state before calling __rt_str_eq --
+                emitter.instruction("stp x9, x10, [sp, #-16]!");                // push array len + data ptr
+                emitter.instruction("str x12, [sp, #-16]!");                    // push loop counter
+
+                // -- load needle and compare --
+                emitter.instruction("ldp x3, x4, [sp, #32]");                   // reload needle ptr+len from stack
+                emitter.instruction("bl __rt_str_eq");                          // x0 = 1 if strings are equal
+
+                // -- restore loop state --
+                emitter.instruction("ldr x12, [sp], #16");                      // pop loop counter
+                emitter.instruction("ldp x9, x10, [sp], #16");                  // pop array len + data ptr
+
+                emitter.instruction(&format!("cbnz x0, {}", found_label));      // if equal, found
+                emitter.instruction("add x12, x12, #1");                        // increment loop counter
+                emitter.instruction(&format!("b {}", loop_label));              // continue searching
+
+                // -- needle found --
+                emitter.label(&found_label);
+                emitter.instruction("mov x0, #1");                              // return true
+                emitter.instruction(&format!("b {}", done_label));              // jump to cleanup
+
+                // -- needle not found --
+                emitter.label(&end_label);
+                emitter.instruction("mov x0, #0");                              // return false
+
+                emitter.label(&done_label);
+                // -- clean up stack (needle + array pointer) --
+                emitter.instruction("add sp, sp, #32");                         // drop needle + array ptr
+            }
+            _ => {
+                // -- integer/bool needle: simple comparison loop --
+                emitter.instruction("mov x11, x0");                             // save needle value in x11
+                emitter.instruction("ldr x0, [sp], #16");                       // pop array pointer
+                emitter.instruction("ldr x9, [x0]");                            // load array length into x9
+                emitter.instruction("add x10, x0, #24");                        // x10 = pointer to data (past 24-byte header)
+                emitter.instruction("mov x12, #0");                             // initialize loop counter to 0
+
+                emitter.label(&loop_label);
+                // -- compare each element against needle --
+                emitter.instruction("cmp x12, x9");                             // check if counter reached array length
+                emitter.instruction(&format!("b.ge {}", end_label));            // exit loop if all elements checked
+                emitter.instruction("ldr x13, [x10, x12, lsl #3]");             // load element at index x12 (offset = x12 * 8)
+                emitter.instruction("cmp x13, x11");                            // compare element with needle
+                emitter.instruction(&format!("b.eq {}", found_label));          // branch to found if element matches
+                emitter.instruction("add x12, x12, #1");                        // increment loop counter
+                emitter.instruction(&format!("b {}", loop_label));              // jump back to loop start
+
+                // -- needle found --
+                emitter.label(&found_label);
+                emitter.instruction("mov x0, #1");                              // set return value to 1 (true)
+                emitter.instruction(&format!("b {}", done_label));              // jump to done
+
+                // -- needle not found --
+                emitter.label(&end_label);
+                emitter.instruction("mov x0, #0");                              // set return value to 0 (false)
+                emitter.label(&done_label);
+            }
+        }
     }
 
     Some(PhpType::Int)

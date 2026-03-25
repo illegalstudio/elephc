@@ -1236,6 +1236,18 @@ fn test_in_array_not_found() {
 }
 
 #[test]
+fn test_in_array_string_found() {
+    let out = compile_and_run(r#"<?php $a = ["a", "b", "c"]; echo in_array("b", $a);"#);
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_in_array_string_not_found() {
+    let out = compile_and_run(r#"<?php $a = ["a", "b", "c"]; echo in_array("x", $a);"#);
+    assert_eq!(out, "0");
+}
+
+#[test]
 fn test_sort() {
     let out = compile_and_run(r#"<?php $a = [5, 3, 1, 4, 2]; sort($a); foreach ($a as $v) { echo $v; }"#);
     assert_eq!(out, "12345");
