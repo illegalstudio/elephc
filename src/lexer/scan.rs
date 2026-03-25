@@ -33,6 +33,13 @@ pub fn scan_tokens(source: &str) -> Result<Vec<(Token, Span)>, CompileError> {
             // Double-quoted strings may contain interpolation ($var)
             let string_tokens = literals::scan_double_string_interpolated(&mut cursor)?;
             tokens.extend(string_tokens);
+        } else if cursor.remaining().starts_with("<<<") {
+            // Heredoc/nowdoc — may contain interpolation ($var) for heredoc
+            cursor.advance(); // consume first <
+            cursor.advance(); // consume second <
+            cursor.advance(); // consume third <
+            let heredoc_tokens = literals::scan_heredoc(&mut cursor)?;
+            tokens.extend(heredoc_tokens);
         } else {
             let token = scan_token(&mut cursor)?;
             tokens.push((token, span));
@@ -131,22 +138,6 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
         '<' => {
             cursor.advance();
             if cursor.peek() == Some('<') {
-                // Check for heredoc/nowdoc: <<<
-                let remaining = cursor.remaining();
-                if remaining.starts_with("<") && remaining.len() > 1 {
-                    // Could be <<< (heredoc/nowdoc) or << (shift left)
-                    // Check if next TWO chars are <<
-                    if remaining.starts_with("<") {
-                        // Peek ahead: is it <<< ?
-                        let after_first_lt = &remaining[1..];
-                        if after_first_lt.starts_with("<") {
-                            // It's <<<, handle heredoc/nowdoc
-                            cursor.advance(); // consume second <
-                            cursor.advance(); // consume third <
-                            return literals::scan_heredoc(cursor);
-                        }
-                    }
-                }
                 cursor.advance();
                 Ok(Token::LessLess)
             }

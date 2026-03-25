@@ -4731,6 +4731,36 @@ fn test_nowdoc_no_escapes() {
     assert_eq!(out, "Hello\\tWorld");
 }
 
+#[test]
+fn test_heredoc_interpolation() {
+    let out = compile_and_run("<?php\n$name = \"World\";\n$s = <<<EOT\nHello $name\nEOT;\necho $s;\n");
+    assert_eq!(out, "Hello World");
+}
+
+#[test]
+fn test_heredoc_interpolation_multiple_vars() {
+    let out = compile_and_run("<?php\n$first = \"Hello\";\n$second = \"World\";\necho <<<EOT\n$first $second\nEOT;\n");
+    assert_eq!(out, "Hello World");
+}
+
+#[test]
+fn test_heredoc_interpolation_multiline() {
+    let out = compile_and_run("<?php\n$name = \"Alice\";\necho <<<EOT\nHello $name\nWelcome $name\nEOT;\n");
+    assert_eq!(out, "Hello Alice\nWelcome Alice");
+}
+
+#[test]
+fn test_nowdoc_no_interpolation() {
+    let out = compile_and_run("<?php\n$name = \"World\";\necho <<<'EOT'\nHello $name\nEOT;\n");
+    assert_eq!(out, "Hello $name");
+}
+
+#[test]
+fn test_heredoc_escaped_dollar() {
+    let out = compile_and_run("<?php\necho <<<EOT\nPrice is \\$100\nEOT;\n");
+    assert_eq!(out, "Price is $100");
+}
+
 // --- Constants (const / define) ---
 
 #[test]

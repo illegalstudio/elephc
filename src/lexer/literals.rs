@@ -307,9 +307,11 @@ pub fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
 
 /// Scan a heredoc or nowdoc string.
 /// At this point, `<<<` has already been consumed.
-/// Heredoc: `<<<LABEL` or `<<<\"LABEL\"`
-/// Nowdoc: `<<<'LABEL'`
-pub fn scan_heredoc(cursor: &mut Cursor) -> Result<Token, CompileError> {
+/// Heredoc: `<<<LABEL` or `<<<\"LABEL\"` — supports variable interpolation like double-quoted strings
+/// Nowdoc: `<<<'LABEL'` — no interpolation (like single-quoted strings)
+pub fn scan_heredoc(
+    cursor: &mut Cursor,
+) -> Result<Vec<(Token, crate::span::Span)>, CompileError> {
     let span = cursor.span();
 
     // Skip optional whitespace between <<< and identifier
@@ -407,12 +409,15 @@ pub fn scan_heredoc(cursor: &mut Cursor) -> Result<Token, CompileError> {
                     }
                 }
 
-                // For heredoc: process escape sequences
-                if !is_nowdoc {
-                    content = process_heredoc_escapes(&content);
+                // For heredoc: process escape sequences and variable interpolation
+                // For nowdoc: return raw content (no processing)
+                if is_nowdoc {
+                    return Ok(vec![(Token::StringLiteral(content), span)]);
                 }
 
-                return Ok(Token::StringLiteral(content));
+                // Heredoc: process escape sequences and variable interpolation together
+                // (must be done in one pass so \$ is treated as literal $, not interpolation)
+                return Ok(interpolate_heredoc_content(&content, span));
             }
         }
 
@@ -424,27 +429,89 @@ pub fn scan_heredoc(cursor: &mut Cursor) -> Result<Token, CompileError> {
     }
 }
 
-/// Process escape sequences in heredoc content (same as double-quoted strings).
-fn process_heredoc_escapes(s: &str) -> String {
-    let mut result = String::new();
-    let mut chars = s.chars();
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            match chars.next() {
-                Some('n') => result.push('\n'),
-                Some('t') => result.push('\t'),
-                Some('\\') => result.push('\\'),
-                Some('"') => result.push('"'),
-                Some('$') => result.push('$'),
-                Some(c) => {
-                    result.push('\\');
-                    result.push(c);
+/// Interpolate variables and process escape sequences in heredoc content.
+/// Handles both in a single pass so that `\$` produces a literal `$` without triggering
+/// variable interpolation. Scans for `$identifier` patterns and expands them into
+/// concatenation tokens: `Hello $name!` -> `("Hello " . $name . "!")`
+fn interpolate_heredoc_content(
+    content: &str,
+    span: crate::span::Span,
+) -> Vec<(Token, crate::span::Span)> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut has_interpolation = false;
+    let mut chars = content.chars().peekable();
+
+    loop {
+        match chars.peek() {
+            None => break,
+            Some(&'\\') => {
+                chars.next(); // consume backslash
+                match chars.peek() {
+                    Some(&'n') => { chars.next(); current.push('\n'); }
+                    Some(&'t') => { chars.next(); current.push('\t'); }
+                    Some(&'\\') => { chars.next(); current.push('\\'); }
+                    Some(&'"') => { chars.next(); current.push('"'); }
+                    Some(&'$') => { chars.next(); current.push('$'); }
+                    Some(&c) => { chars.next(); current.push('\\'); current.push(c); }
+                    None => current.push('\\'),
                 }
-                None => result.push('\\'),
             }
-        } else {
-            result.push(ch);
+            Some(&'$') => {
+                chars.next(); // consume '$'
+                let mut name = String::new();
+                while let Some(&ch) = chars.peek() {
+                    if ch.is_ascii_alphanumeric() || ch == '_' {
+                        name.push(ch);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                if name.is_empty() {
+                    // Just a literal '$' (no valid variable name follows)
+                    current.push('$');
+                } else {
+                    has_interpolation = true;
+                    // Flush accumulated string
+                    if !current.is_empty() || tokens.is_empty() {
+                        if !tokens.is_empty() {
+                            tokens.push((Token::Dot, span));
+                        }
+                        tokens.push((
+                            Token::StringLiteral(std::mem::take(&mut current)),
+                            span,
+                        ));
+                    }
+                    // Add dot + variable
+                    if !tokens.is_empty() && !matches!(tokens.last(), Some((Token::Dot, _))) {
+                        tokens.push((Token::Dot, span));
+                    }
+                    tokens.push((Token::Variable(name), span));
+                }
+            }
+            Some(&ch) => {
+                current.push(ch);
+                chars.next();
+            }
         }
     }
+
+    if !has_interpolation {
+        // No interpolation — return single StringLiteral
+        return vec![(Token::StringLiteral(current), span)];
+    }
+
+    // Flush remaining string
+    if !current.is_empty() {
+        tokens.push((Token::Dot, span));
+        tokens.push((Token::StringLiteral(current), span));
+    }
+
+    // Wrap in parens so precedence is correct: ("..." . $var . "...")
+    let mut result = vec![(Token::LParen, span)];
+    result.extend(tokens);
+    result.push((Token::RParen, span));
     result
 }
+
