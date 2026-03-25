@@ -3769,6 +3769,26 @@ foreach ($a as $v) { echo $v; }
 }
 
 #[test]
+fn test_range_descending() {
+    let out = compile_and_run(r#"<?php
+$a = range(5, 1);
+echo count($a) . ":";
+foreach ($a as $v) { echo $v; }
+"#);
+    assert_eq!(out, "5:54321");
+}
+
+#[test]
+fn test_range_single_element() {
+    let out = compile_and_run(r#"<?php
+$a = range(3, 3);
+echo count($a) . ":";
+foreach ($a as $v) { echo $v; }
+"#);
+    assert_eq!(out, "1:3");
+}
+
+#[test]
 fn test_array_unique() {
     let out = compile_and_run(r#"<?php
 $a = [1, 2, 2, 3, 3, 3];
