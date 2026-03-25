@@ -42,13 +42,29 @@ elephc is designed to be read. **Every line of Rust that emits ARM64 assembly** 
 
 ## Install
 
+### Homebrew (recommended)
+
 ```bash
-git clone https://github.com/example/elephc.git
+brew install illegalstudio/tap/elephc
+```
+
+### From source
+
+```bash
+git clone https://github.com/illegalstudio/elephc.git
 cd elephc
 cargo build --release
 ```
 
 The binary is at `./target/release/elephc`.
+
+### Manual download
+
+Pre-built binaries are available on the [Releases](https://github.com/illegalstudio/elephc/releases) page. If macOS blocks the binary, run:
+
+```bash
+xattr -cr elephc
+```
 
 ## Usage
 

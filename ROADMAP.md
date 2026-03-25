@@ -191,7 +191,8 @@ Proper type system for PHP compatibility.
 - [ ] Benchmark suite (vs C, vs PHP interpreter)
 - [ ] Full test coverage (>500 tests)
 - [ ] Documentation: language subset spec, architecture guide
-- [ ] CI/CD with release binaries
+- [x] CI/CD with release binaries
+- [ ] Apple notarization for direct downloads (codesign + notarytool)
 - [ ] Performance within 2x of C -O0 on compute benchmarks
 - [ ] Real-world CLI tools compiled as validation
 
