@@ -142,6 +142,34 @@ pub fn scan_variable(cursor: &mut Cursor) -> Result<Token, CompileError> {
 }
 
 pub fn scan_number(cursor: &mut Cursor) -> Result<Token, CompileError> {
+    // Check for hex prefix (0x or 0X)
+    if cursor.peek() == Some('0') {
+        let remaining = cursor.remaining();
+        if remaining.len() > 1 && (remaining.as_bytes()[1] == b'x' || remaining.as_bytes()[1] == b'X')
+        {
+            cursor.advance(); // consume '0'
+            cursor.advance(); // consume 'x' or 'X'
+            let mut hex_str = String::new();
+            while let Some(ch) = cursor.peek() {
+                if ch.is_ascii_hexdigit() {
+                    hex_str.push(ch);
+                    cursor.advance();
+                } else {
+                    break;
+                }
+            }
+            if hex_str.is_empty() {
+                return Err(CompileError::new(
+                    cursor.span(),
+                    "Expected hex digits after '0x'",
+                ));
+            }
+            let value = i64::from_str_radix(&hex_str, 16)
+                .map_err(|_| CompileError::new(cursor.span(), "Invalid hex literal"))?;
+            return Ok(Token::IntLiteral(value));
+        }
+    }
+
     let mut num_str = String::new();
 
     while let Some(ch) = cursor.peek() {

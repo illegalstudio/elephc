@@ -5728,3 +5728,124 @@ fn test_function_exists_builtin_array_push() {
     let out = compile_and_run(r#"<?php echo function_exists("array_push") ? "yes" : "no";"#);
     assert_eq!(out, "yes");
 }
+
+// --- Issue #12: preg_split with \s shorthand ---
+
+#[test]
+fn test_preg_split_backslash_s() {
+    let out = compile_and_run(r#"<?php
+$parts = preg_split("/\s+/", "hello  world");
+echo $parts[1];
+"#);
+    assert_eq!(out, "world");
+}
+
+#[test]
+fn test_preg_split_backslash_d() {
+    let out = compile_and_run(r#"<?php
+$parts = preg_split("/\d+/", "abc123def456ghi");
+echo count($parts) . "|" . $parts[0] . "|" . $parts[1] . "|" . $parts[2];
+"#);
+    assert_eq!(out, "3|abc|def|ghi");
+}
+
+#[test]
+fn test_preg_match_backslash_s() {
+    let out = compile_and_run(r#"<?php echo preg_match("/\s/", "hello world");"#);
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_preg_match_backslash_d() {
+    let out = compile_and_run(r#"<?php echo preg_match("/\d+/", "abc123");"#);
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_preg_match_backslash_w() {
+    let out = compile_and_run(r#"<?php echo preg_match("/^\w+$/", "hello_world");"#);
+    assert_eq!(out, "1");
+}
+
+// --- Issue #14: hex integer literals ---
+
+#[test]
+fn test_hex_literal_0xff() {
+    let out = compile_and_run("<?php echo 0xFF;");
+    assert_eq!(out, "255");
+}
+
+#[test]
+fn test_hex_literal_0x1a() {
+    let out = compile_and_run("<?php echo 0x1A;");
+    assert_eq!(out, "26");
+}
+
+#[test]
+fn test_hex_literal_0x0() {
+    let out = compile_and_run("<?php echo 0x0;");
+    assert_eq!(out, "0");
+}
+
+#[test]
+fn test_hex_literal_uppercase_prefix() {
+    let out = compile_and_run("<?php echo 0XFF;");
+    assert_eq!(out, "255");
+}
+
+#[test]
+fn test_hex_literal_arithmetic() {
+    let out = compile_and_run("<?php echo 0xFF + 1;");
+    assert_eq!(out, "256");
+}
+
+// --- Issue #23: modulo by zero ---
+
+#[test]
+fn test_modulo_normal() {
+    let out = compile_and_run("<?php echo 5 % 1;");
+    assert_eq!(out, "0");
+}
+
+#[test]
+fn test_modulo_by_zero() {
+    let out = compile_and_run("<?php echo 5 % 0;");
+    assert_eq!(out, "0");
+}
+
+#[test]
+fn test_modulo_normal_remainder() {
+    let out = compile_and_run("<?php echo 7 % 3;");
+    assert_eq!(out, "1");
+}
+
+// --- Issue #24: negative array index ---
+
+#[test]
+fn test_negative_array_index_returns_null() {
+    let out = compile_and_run(r#"<?php
+$a = [10, 20, 30];
+$v = $a[-1];
+if (is_null($v)) { echo "null"; } else { echo "not null"; }
+"#);
+    assert_eq!(out, "null");
+}
+
+#[test]
+fn test_array_out_of_bounds_returns_null() {
+    let out = compile_and_run(r#"<?php
+$a = [10, 20, 30];
+$v = $a[5];
+if (is_null($v)) { echo "null"; } else { echo "not null"; }
+"#);
+    assert_eq!(out, "null");
+}
+
+#[test]
+fn test_array_valid_index_still_works() {
+    let out = compile_and_run(r#"<?php
+$a = [10, 20, 30];
+echo $a[0] . "|" . $a[1] . "|" . $a[2];
+"#);
+    assert_eq!(out, "10|20|30");
+}

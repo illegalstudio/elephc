@@ -668,6 +668,16 @@ fn emit_array_access(
         PhpType::Array(t) => *t.clone(),
         _ => PhpType::Int,
     };
+
+    // -- bounds check: negative index or >= array length → null sentinel --
+    let null_label = ctx.next_label("arr_null");
+    let ok_label = ctx.next_label("arr_ok");
+    emitter.instruction(&format!("cmp x0, #0"));                                // check if index is negative
+    emitter.instruction(&format!("b.lt {null_label}"));                         // negative index → null sentinel
+    emitter.instruction("ldr x10, [x9]");                                       // load array length from header (offset 0)
+    emitter.instruction(&format!("cmp x0, x10"));                               // compare index against array length
+    emitter.instruction(&format!("b.ge {null_label}"));                         // index >= length → null sentinel
+
     match &elem_ty {
         PhpType::Int => {
             // -- load integer element: base + 24-byte header + index*8 --
@@ -689,6 +699,16 @@ fn emit_array_access(
         }
         _ => {}
     }
+    emitter.instruction(&format!("b {ok_label}"));                              // skip null sentinel fallback
+
+    // -- null sentinel for out-of-bounds access --
+    emitter.label(&null_label);
+    emitter.instruction("movz x0, #0xFFFE");                                    // load lowest 16 bits of null sentinel
+    emitter.instruction("movk x0, #0xFFFF, lsl #16");                           // insert bits 16-31 of null sentinel
+    emitter.instruction("movk x0, #0xFFFF, lsl #32");                           // insert bits 32-47 of null sentinel
+    emitter.instruction("movk x0, #0x7FFF, lsl #48");                           // insert bits 48-63 of null sentinel
+    emitter.label(&ok_label);
+
     elem_ty
 }
 
@@ -875,9 +895,16 @@ fn emit_binop(
                         emitter.instruction("sdiv x0, x1, x0");                 // signed integer division: left / right
                     }
                     BinOp::Mod => {
-                        // -- integer modulo: a - (a/b) * b --
+                        // -- integer modulo: a - (a/b) * b, with zero-divisor guard --
+                        let skip = ctx.next_label("mod_ok");
+                        let zero = ctx.next_label("mod_zero");
+                        emitter.instruction(&format!("cbz x0, {zero}"));        // if divisor is zero, skip to return 0
                         emitter.instruction("sdiv x2, x1, x0");                 // x2 = left / right (integer division)
                         emitter.instruction("msub x0, x2, x0, x1");             // x0 = left - (left/right)*right
+                        emitter.instruction(&format!("b {skip}"));              // jump past zero-divisor fallback
+                        emitter.label(&zero);
+                        emitter.instruction("mov x0, #0");                      // divisor was zero, return 0
+                        emitter.label(&skip);
                     }
                     _ => unreachable!(),
                 }

@@ -783,3 +783,29 @@ fn test_ref_param_in_function() {
         ]
     );
 }
+
+// --- Hex integer literals ---
+
+#[test]
+fn test_hex_literal_lowercase() {
+    let t = tokens("<?php 0xff;");
+    assert_eq!(t[1], Token::IntLiteral(255));
+}
+
+#[test]
+fn test_hex_literal_uppercase_x() {
+    let t = tokens("<?php 0XFF;");
+    assert_eq!(t[1], Token::IntLiteral(255));
+}
+
+#[test]
+fn test_hex_literal_mixed_case_digits() {
+    let t = tokens("<?php 0x1aB;");
+    assert_eq!(t[1], Token::IntLiteral(427));
+}
+
+#[test]
+fn test_hex_literal_zero() {
+    let t = tokens("<?php 0x0;");
+    assert_eq!(t[1], Token::IntLiteral(0));
+}

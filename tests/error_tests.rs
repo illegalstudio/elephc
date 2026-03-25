@@ -1141,3 +1141,10 @@ fn test_error_preg_replace_wrong_args() {
 fn test_error_preg_split_no_args() {
     expect_error("<?php preg_split();", "preg_split() takes exactly 2 arguments");
 }
+
+// --- Hex literal errors ---
+
+#[test]
+fn test_error_hex_no_digits() {
+    expect_error("<?php echo 0x;", "Expected hex digits after '0x'");
+}

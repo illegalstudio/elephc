@@ -174,6 +174,13 @@ pub fn emit_runtime_data(
         out.push_str(&val.to_string());
     }
     out.push('\n');
+    // PCRE-to-POSIX shorthand replacement strings
+    out.push_str("_pcre_space:\n    .ascii \"[[:space:]]\"\n");
+    out.push_str("_pcre_digit:\n    .ascii \"[[:digit:]]\"\n");
+    out.push_str("_pcre_word:\n    .ascii \"[[:alnum:]_]\"\n");
+    out.push_str("_pcre_nspace:\n    .ascii \"[^[:space:]]\"\n");
+    out.push_str("_pcre_ndigit:\n    .ascii \"[^[:digit:]]\"\n");
+    out.push_str("_pcre_nword:\n    .ascii \"[^[:alnum:]_]\"\n");
     // JSON string constants
     out.push_str(&system::emit_json_data());
     // Date/time lookup tables (day names, month names)
