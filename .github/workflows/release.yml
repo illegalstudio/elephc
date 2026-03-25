@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build macOS ARM64
+    runs-on: macos-14  # Apple Silicon runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run tests
+        run: cargo test
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Strip binary
+        run: strip target/release/elephc
+
+      - name: Get version
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Create tarball
+        run: |
+          cd target/release
+          tar czf elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz elephc
+          shasum -a 256 elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz > elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz.sha256
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            target/release/elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz
+            target/release/elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz.sha256
+
+      - name: Update Homebrew tap
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          VERSION_NUM="${VERSION#v}"
+          TARBALL="elephc-${VERSION}-aarch64-apple-darwin.tar.gz"
+          SHA256=$(cat target/release/${TARBALL}.sha256 | awk '{print $1}')
+          URL="https://github.com/illegalstudio/elephc/releases/download/${VERSION}/${TARBALL}"
+
+          # Clone tap repo
+          git clone https://x-access-token:${TAP_TOKEN}@github.com/illegalstudio/homebrew-tap.git /tmp/homebrew-tap
+
+          # Generate formula
+          cat > /tmp/homebrew-tap/Formula/elephc.rb << FORMULA
+          class Elephc < Formula
+            desc "PHP-to-native compiler targeting macOS ARM64"
+            homepage "https://github.com/illegalstudio/elephc"
+            url "${URL}"
+            sha256 "${SHA256}"
+            version "${VERSION_NUM}"
+            license "MIT"
+
+            depends_on :macos
+            depends_on :arch => :arm64
+
+            def install
+              bin.install "elephc"
+            end
+
+            test do
+              (testpath/"hello.php").write('<?php echo "hello";')
+              system "#{bin}/elephc", "hello.php"
+              assert_equal "hello", shell_output("#{testpath}/hello")
+            end
+          end
+          FORMULA
+
+          # Push to tap
+          cd /tmp/homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/elephc.rb
+          git commit -m "Update elephc to ${VERSION}"
+          git push

@@ -1,8 +1,14 @@
 [package]
 name = "elephc"
-version = "0.1.0"
+version = "0.7.0"
 edition = "2021"
 description = "A PHP-to-native compiler targeting macOS ARM64"
+license = "MIT"
+repository = "https://github.com/illegalstudio/elephc"
+homepage = "https://github.com/illegalstudio/elephc"
+readme = "README.md"
+keywords = ["php", "compiler", "arm64", "native", "macos"]
+categories = ["compilers", "command-line-utilities"]
 
 [[bin]]
 name = "elephc"
