@@ -17,6 +17,7 @@ pub(crate) struct Checker {
 pub(crate) struct FnDecl {
     pub params: Vec<String>,
     pub defaults: Vec<Option<Expr>>,
+    pub ref_params: Vec<bool>,
     pub body: Vec<Stmt>,
 }
 
@@ -29,13 +30,15 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
 
     for stmt in program {
         if let StmtKind::FunctionDecl { name, params, body } = &stmt.kind {
-            let param_names: Vec<String> = params.iter().map(|(n, _)| n.clone()).collect();
-            let defaults: Vec<Option<Expr>> = params.iter().map(|(_, d)| d.clone()).collect();
+            let param_names: Vec<String> = params.iter().map(|(n, _, _)| n.clone()).collect();
+            let defaults: Vec<Option<Expr>> = params.iter().map(|(_, d, _)| d.clone()).collect();
+            let ref_flags: Vec<bool> = params.iter().map(|(_, _, r)| *r).collect();
             checker.fn_decls.insert(
                 name.clone(),
                 FnDecl {
                     params: param_names,
                     defaults,
+                    ref_params: ref_flags,
                     body: body.clone(),
                 },
             );
@@ -220,6 +223,22 @@ impl Checker {
                 }
                 Ok(())
             }
+            StmtKind::Global { vars } => {
+                // global vars are accessible; they reference variables from the outer scope
+                // Mark them in the environment if not already present
+                for var in vars {
+                    if !env.contains_key(var) {
+                        // Default to Int — will be refined by actual usage
+                        env.insert(var.clone(), PhpType::Int);
+                    }
+                }
+                Ok(())
+            }
+            StmtKind::StaticVar { name, init } => {
+                let ty = self.infer_type(init, env)?;
+                env.insert(name.clone(), ty);
+                Ok(())
+            }
             StmtKind::FunctionDecl { .. } => Ok(()),
             StmtKind::Return(expr) => {
                 if let Some(e) = expr { self.infer_type(e, env)?; }
@@ -400,7 +419,7 @@ impl Checker {
                 // Type-check the closure body in its own environment
                 let mut closure_env: TypeEnv = env.clone();
                 // Add params as Int (simple default for now — they'll be refined at call site)
-                for (p, _default) in params {
+                for (p, _default, _is_ref) in params {
                     closure_env.insert(p.clone(), PhpType::Int);
                 }
                 for stmt in body {

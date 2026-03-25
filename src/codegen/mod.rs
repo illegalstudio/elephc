@@ -8,9 +8,9 @@ mod functions;
 mod runtime;
 mod stmt;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::parser::ast::{ExprKind, Program, StmtKind};
+use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 use context::Context;
 use data_section::DataSection;
@@ -27,6 +27,12 @@ pub fn generate(
     // Pre-scan for compile-time constants (const declarations and define() calls)
     let global_constants = collect_constants(program);
 
+    // Pre-scan for global variable names used in `global $var` statements across all functions
+    let all_global_var_names = collect_global_var_names(program);
+
+    // Pre-scan for static variable declarations across all functions
+    let all_static_vars = collect_static_vars(program, global_env);
+
     // Emit user-defined functions before _main
     for (name, sig) in functions {
         let body = program
@@ -37,13 +43,19 @@ pub fn generate(
             })
             .expect("function body not found");
 
-        self::functions::emit_function(&mut emitter, &mut data, name, sig, body, functions, &global_constants);
+        self::functions::emit_function(
+            &mut emitter, &mut data, name, sig, body, functions,
+            &global_constants, &all_global_var_names, &all_static_vars,
+        );
     }
 
     // --- _main function ---
     let mut ctx = Context::new();
     ctx.functions = functions.clone();
     ctx.constants = global_constants.clone();
+    ctx.in_main = true;
+    ctx.all_global_var_names = all_global_var_names.clone();
+    ctx.all_static_vars = all_static_vars.clone();
 
     // Pre-allocate $argc and $argv superglobals
     if !global_env.contains_key("argc") {
@@ -112,7 +124,7 @@ pub fn generate(
     runtime::emit_runtime(&mut emitter);
 
     let data_output = data.emit();
-    let runtime_data = runtime::emit_runtime_data();
+    let runtime_data = runtime::emit_runtime_data(&all_global_var_names, &all_static_vars);
 
     let mut output = emitter.output();
     if !data_output.is_empty() {
@@ -182,6 +194,114 @@ fn collect_constants(program: &Program) -> HashMap<String, (ExprKind, PhpType)> 
         }
     }
     constants
+}
+
+/// Pre-scan for all variable names used in `global $var` statements across all functions.
+fn collect_global_var_names(program: &Program) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for stmt in program {
+        if let StmtKind::FunctionDecl { body, .. } = &stmt.kind {
+            collect_global_vars_in_body(body, &mut names);
+        }
+    }
+    names
+}
+
+fn collect_global_vars_in_body(stmts: &[Stmt], names: &mut HashSet<String>) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::Global { vars } => {
+                for v in vars {
+                    names.insert(v.clone());
+                }
+            }
+            StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+                collect_global_vars_in_body(then_body, names);
+                for (_, body) in elseif_clauses {
+                    collect_global_vars_in_body(body, names);
+                }
+                if let Some(body) = else_body {
+                    collect_global_vars_in_body(body, names);
+                }
+            }
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::For { body, .. }
+            | StmtKind::Foreach { body, .. } => {
+                collect_global_vars_in_body(body, names);
+            }
+            StmtKind::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    collect_global_vars_in_body(body, names);
+                }
+                if let Some(body) = default {
+                    collect_global_vars_in_body(body, names);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Pre-scan for all static variable declarations across all functions.
+fn collect_static_vars(
+    program: &Program,
+    global_env: &TypeEnv,
+) -> HashMap<(String, String), PhpType> {
+    let mut statics = HashMap::new();
+    for stmt in program {
+        if let StmtKind::FunctionDecl { name, body, .. } = &stmt.kind {
+            collect_static_vars_in_body(name, body, &mut statics, global_env);
+        }
+    }
+    statics
+}
+
+fn collect_static_vars_in_body(
+    func_name: &str,
+    stmts: &[Stmt],
+    statics: &mut HashMap<(String, String), PhpType>,
+    global_env: &TypeEnv,
+) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::StaticVar { name, init } => {
+                let ty = match &init.kind {
+                    ExprKind::IntLiteral(_) => PhpType::Int,
+                    ExprKind::FloatLiteral(_) => PhpType::Float,
+                    ExprKind::StringLiteral(_) => PhpType::Str,
+                    ExprKind::BoolLiteral(_) => PhpType::Bool,
+                    _ => PhpType::Int,
+                };
+                statics.insert((func_name.to_string(), name.clone()), ty);
+            }
+            StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+                collect_static_vars_in_body(func_name, then_body, statics, global_env);
+                for (_, body) in elseif_clauses {
+                    collect_static_vars_in_body(func_name, body, statics, global_env);
+                }
+                if let Some(body) = else_body {
+                    collect_static_vars_in_body(func_name, body, statics, global_env);
+                }
+            }
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::For { body, .. }
+            | StmtKind::Foreach { body, .. } => {
+                collect_static_vars_in_body(func_name, body, statics, global_env);
+            }
+            StmtKind::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    collect_static_vars_in_body(func_name, body, statics, global_env);
+                }
+                if let Some(body) = default {
+                    collect_static_vars_in_body(func_name, body, statics, global_env);
+                }
+            }
+            _ => {}
+        }
+    }
+    let _ = global_env;
 }
 
 fn align16(n: usize) -> usize {

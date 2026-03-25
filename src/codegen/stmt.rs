@@ -56,12 +56,45 @@ pub fn emit_stmt(
             emitter.comment(&format!("${} = ...", name));
             let ty = emit_expr(value, emitter, ctx, data);
 
-            let var = ctx.variables.get(name).expect("variable not pre-allocated");
-            let offset = var.stack_offset;
+            // Check if this is a global var in a function (uses global storage)
+            if ctx.global_vars.contains(name) {
+                // -- store to global variable storage --
+                emit_global_store(emitter, ctx, name, &ty);
+            } else if ctx.ref_params.contains(name) {
+                // -- store through reference pointer --
+                let var = ctx.variables.get(name).expect("variable not pre-allocated");
+                let offset = var.stack_offset;
+                emitter.comment(&format!("write through ref ${}", name));
+                emitter.instruction(&format!("ldur x9, [x29, #-{}]", offset));  // load pointer to referenced variable
+                match &ty {
+                    PhpType::Bool | PhpType::Int => {
+                        emitter.instruction("str x0, [x9]");                    // store int/bool through reference pointer
+                    }
+                    PhpType::Float => {
+                        emitter.instruction("str d0, [x9]");                    // store float through reference pointer
+                    }
+                    PhpType::Str => {
+                        emitter.instruction("str x1, [x9]");                    // store string pointer through ref
+                        emitter.instruction("str x2, [x9, #8]");                // store string length through ref
+                    }
+                    _ => {
+                        emitter.instruction("str x0, [x9]");                    // store value through reference pointer
+                    }
+                }
+            } else {
+                let var = ctx.variables.get(name).expect("variable not pre-allocated");
+                let offset = var.stack_offset;
 
-            abi::emit_store(emitter, &ty, offset);
+                abi::emit_store(emitter, &ty, offset);
+
+                // In main scope, also sync to global storage if this var is used globally
+                if ctx.in_main && ctx.all_global_var_names.contains(name) {
+                    emit_global_store(emitter, ctx, name, &ty);
+                }
+            }
 
             // Update variable type if it changed (e.g. int /= produces float)
+            let var = ctx.variables.get(name).expect("variable not pre-allocated");
             if var.ty != ty {
                 ctx.variables.get_mut(name).unwrap().ty = ty;
             }
@@ -674,9 +707,151 @@ pub fn emit_stmt(
             // -- clean up saved array pointer --
             emitter.instruction("add sp, sp, #16");                             // pop saved array pointer
         }
+        StmtKind::Global { vars } => {
+            emitter.blank();
+            emitter.comment("global declaration");
+            for var in vars {
+                ctx.global_vars.insert(var.clone());
+                // Load current value from global storage into local var slot
+                let var_info = ctx.variables.get(var).expect("global var not pre-allocated");
+                let offset = var_info.stack_offset;
+                let ty = var_info.ty.clone();
+                emit_global_load(emitter, ctx, var, &ty);
+                abi::emit_store(emitter, &ty, offset);
+            }
+        }
+        StmtKind::StaticVar { name, init } => {
+            emitter.blank();
+            emitter.comment(&format!("static ${}", name));
+            // Find the function name from the return label
+            let func_name = ctx.return_label.as_ref()
+                .map(|l| l.strip_prefix("_fn_").unwrap_or(l))
+                .map(|l| l.strip_suffix("_epilogue").unwrap_or(l))
+                .unwrap_or("main")
+                .to_string();
+            let init_label = format!("_static_{}_{}_init", func_name, name);
+            let data_label = format!("_static_{}_{}", func_name, name);
+            let skip_label = ctx.next_label("static_skip");
+
+            // -- check if already initialized --
+            emitter.instruction(&format!("adrp x9, {}@PAGE", init_label));      // load page of init flag
+            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", init_label)); // add page offset
+            emitter.instruction("ldr x10, [x9]");                               // load init flag value
+            emitter.instruction(&format!("cbnz x10, {}", skip_label));          // skip init if already done
+
+            // -- first call: evaluate init expression and store --
+            emitter.instruction("mov x10, #1");                                 // set init flag to 1
+            emitter.instruction("str x10, [x9]");                               // write init flag
+            let ty = emit_expr(init, emitter, ctx, data);
+            // Store init value to static storage
+            emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));      // load page of static var storage
+            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); // add page offset
+            match &ty {
+                PhpType::Bool | PhpType::Int => {
+                    emitter.instruction("str x0, [x9]");                        // store initial int/bool value
+                }
+                PhpType::Float => {
+                    emitter.instruction("str d0, [x9]");                        // store initial float value
+                }
+                PhpType::Str => {
+                    emitter.instruction("str x1, [x9]");                        // store initial string pointer
+                    emitter.instruction("str x2, [x9, #8]");                    // store initial string length
+                }
+                _ => {
+                    emitter.instruction("str x0, [x9]");                        // store initial value
+                }
+            }
+            emitter.label(&skip_label);
+
+            // -- load current value from static storage into local variable --
+            emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));      // load page of static var storage
+            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); // add page offset
+            let var_info = ctx.variables.get(name).expect("static var not pre-allocated");
+            let offset = var_info.stack_offset;
+            let var_ty = var_info.ty.clone();
+            match &var_ty {
+                PhpType::Bool | PhpType::Int => {
+                    emitter.instruction("ldr x0, [x9]");                        // load static int/bool value
+                    emitter.instruction(&format!("stur x0, [x29, #-{}]", offset)); // store to local stack slot
+                }
+                PhpType::Float => {
+                    emitter.instruction("ldr d0, [x9]");                        // load static float value
+                    emitter.instruction(&format!("stur d0, [x29, #-{}]", offset)); // store to local stack slot
+                }
+                PhpType::Str => {
+                    emitter.instruction("ldr x1, [x9]");                        // load static string pointer
+                    emitter.instruction("ldr x2, [x9, #8]");                    // load static string length
+                    emitter.instruction(&format!("stur x1, [x29, #-{}]", offset)); // store string ptr to stack
+                    emitter.instruction(&format!("stur x2, [x29, #-{}]", offset - 8)); // store string len to stack
+                }
+                _ => {
+                    emitter.instruction("ldr x0, [x9]");                        // load static value
+                    emitter.instruction(&format!("stur x0, [x29, #-{}]", offset)); // store to local stack slot
+                }
+            }
+
+            // Mark this variable as static so epilogue saves it back
+            ctx.static_vars.insert(name.clone());
+        }
         StmtKind::Include { .. } => {
             // Should have been resolved before codegen
             panic!("Unresolved include statement in codegen");
+        }
+    }
+}
+
+/// Store a value to global variable storage (_gvar_NAME).
+fn emit_global_store(
+    emitter: &mut Emitter,
+    _ctx: &mut Context,
+    name: &str,
+    ty: &PhpType,
+) {
+    let label = format!("_gvar_{}", name);
+    emitter.comment(&format!("store to global ${}", name));
+    emitter.instruction(&format!("adrp x9, {}@PAGE", label));                   // load page of global var storage
+    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label));             // add page offset
+    match ty {
+        PhpType::Bool | PhpType::Int => {
+            emitter.instruction("str x0, [x9]");                                // store int/bool to global storage
+        }
+        PhpType::Float => {
+            emitter.instruction("str d0, [x9]");                                // store float to global storage
+        }
+        PhpType::Str => {
+            emitter.instruction("str x1, [x9]");                                // store string pointer to global storage
+            emitter.instruction("str x2, [x9, #8]");                            // store string length to global storage
+        }
+        _ => {
+            emitter.instruction("str x0, [x9]");                                // store value to global storage
+        }
+    }
+}
+
+/// Load a value from global variable storage (_gvar_NAME) into result registers.
+pub fn emit_global_load(
+    emitter: &mut Emitter,
+    _ctx: &mut Context,
+    name: &str,
+    ty: &PhpType,
+) {
+    let label = format!("_gvar_{}", name);
+    emitter.comment(&format!("load from global ${}", name));
+    emitter.instruction(&format!("adrp x9, {}@PAGE", label));                   // load page of global var storage
+    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label));             // add page offset
+    match ty {
+        PhpType::Bool | PhpType::Int => {
+            emitter.instruction("ldr x0, [x9]");                                // load int/bool from global storage
+        }
+        PhpType::Float => {
+            emitter.instruction("ldr d0, [x9]");                                // load float from global storage
+        }
+        PhpType::Str => {
+            emitter.instruction("ldr x1, [x9]");                                // load string pointer from global storage
+            emitter.instruction("ldr x2, [x9, #8]");                            // load string length from global storage
+        }
+        _ => {
+            emitter.instruction("ldr x0, [x9]");                                // load value from global storage
         }
     }
 }

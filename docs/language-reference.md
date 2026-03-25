@@ -405,12 +405,73 @@ Arrow functions are single-expression closures — the body is implicitly return
 
 **Limitation:** Like closures, arrow functions do not yet capture variables from the enclosing scope.
 
+### Global variables
+
+The `global` keyword allows a function to access and modify variables from the main (top-level) scope:
+
+```php
+<?php
+$x = 10;
+function test() {
+    global $x;
+    echo $x;    // 10
+    $x = 20;
+}
+test();
+echo $x;        // 20
+```
+
+Multiple variables can be declared global in one statement: `global $a, $b;`
+
+### Static variables
+
+Static variables retain their value between function calls:
+
+```php
+<?php
+function counter() {
+    static $n = 0;
+    $n++;
+    echo $n . "\n";
+}
+counter(); // 1
+counter(); // 2
+counter(); // 3
+```
+
+The initial value is evaluated only once, on the first call. Each function has its own independent static variable namespace.
+
+### Pass by reference
+
+Parameters prefixed with `&` receive a reference to the caller's variable, allowing the function to modify it:
+
+```php
+<?php
+function increment(&$val) {
+    $val++;
+}
+$x = 5;
+increment($x);
+echo $x; // 6
+
+function swap(&$a, &$b) {
+    $tmp = $a;
+    $a = $b;
+    $b = $tmp;
+}
+$p = 1;
+$q = 2;
+swap($p, $q);
+echo $p; // 2
+echo $q; // 1
+```
+
+Reference parameters can be mixed with regular parameters: `function foo(&$ref, $val) { }`
+
 ### Limitations
 
-- No pass by reference (`function foo(&$x)` — not supported)
 - No variadic functions (`function foo(...$args)` — not supported)
 - No `use ($var)` captures in closures
-- No `global` keyword
 
 ## Print
 

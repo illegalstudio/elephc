@@ -19,6 +19,8 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
         Token::Require => parse_include(tokens, pos, span, false, true),
         Token::RequireOnce => parse_include(tokens, pos, span, true, true),
         Token::Const => parse_const_decl(tokens, pos, span),
+        Token::Global => parse_global(tokens, pos, span),
+        Token::Static => parse_static_var(tokens, pos, span),
         Token::LBracket => parse_list_unpack(tokens, pos, span),
         Token::Identifier(_) => {
             let expr = parse_expr(tokens, pos)?;
@@ -297,6 +299,54 @@ fn parse_list_unpack(
     Ok(Stmt::new(StmtKind::ListUnpack { vars, value }, span))
 }
 
+fn parse_global(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1; // consume 'global'
+
+    let mut vars = Vec::new();
+    loop {
+        match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Variable(n)) => {
+                vars.push(n.clone());
+                *pos += 1;
+            }
+            _ => return Err(CompileError::new(span, "Expected variable after 'global'")),
+        }
+        if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
+            *pos += 1;
+        } else {
+            break;
+        }
+    }
+
+    expect_semicolon(tokens, pos)?;
+    Ok(Stmt::new(StmtKind::Global { vars }, span))
+}
+
+fn parse_static_var(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1; // consume 'static'
+
+    let name = match tokens.get(*pos).map(|(t, _)| t) {
+        Some(Token::Variable(n)) => n.clone(),
+        _ => return Err(CompileError::new(span, "Expected variable after 'static'")),
+    };
+    *pos += 1;
+
+    expect_token(tokens, pos, &Token::Assign, "Expected '=' after static variable")?;
+
+    let init = parse_expr(tokens, pos)?;
+    expect_semicolon(tokens, pos)?;
+
+    Ok(Stmt::new(StmtKind::StaticVar { name, init }, span))
+}
+
 fn parse_function_decl(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -317,6 +367,13 @@ fn parse_function_decl(
         if !params.is_empty() {
             expect_token(tokens, pos, &Token::Comma, "Expected ',' between parameters")?;
         }
+        // Check for & (pass by reference)
+        let is_ref = if *pos < tokens.len() && tokens[*pos].0 == Token::Ampersand {
+            *pos += 1;
+            true
+        } else {
+            false
+        };
         match tokens.get(*pos).map(|(t, _)| t) {
             Some(Token::Variable(n)) => {
                 let n = n.clone();
@@ -328,7 +385,7 @@ fn parse_function_decl(
                 } else {
                     None
                 };
-                params.push((n, default));
+                params.push((n, default, is_ref));
             }
             _ => return Err(CompileError::new(span, "Expected parameter variable")),
         }

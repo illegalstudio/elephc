@@ -130,9 +130,9 @@ Proper type system for PHP compatibility.
 ## v0.7.x — Advanced language features
 
 - [x] `define()` / `const` constants
-- [ ] `global $var;` keyword
-- [ ] Static variables: `static $counter = 0;`
-- [ ] Pass by reference: `function foo(&$x) { }`
+- [x] `global $var;` keyword
+- [x] Static variables: `static $counter = 0;`
+- [x] Pass by reference: `function foo(&$x) { }`
 - [x] Default parameter values: `function foo($x = 10) { }`
 - [ ] Variadic functions: `function foo(...$args) { }`
 - [x] Anonymous functions / closures: `$fn = function($x) { }` (`use` captures not yet supported)

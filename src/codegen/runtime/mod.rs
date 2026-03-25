@@ -128,7 +128,10 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     io::emit_fputcsv(emitter);
 }
 
-pub fn emit_runtime_data() -> String {
+pub fn emit_runtime_data(
+    global_var_names: &std::collections::HashSet<String>,
+    static_vars: &std::collections::HashMap<(String, String), crate::types::PhpType>,
+) -> String {
     let mut out = String::new();
     out.push_str(".comm _concat_buf, 65536, 3\n");
     out.push_str(".comm _concat_off, 8, 3\n");
@@ -156,5 +159,20 @@ pub fn emit_runtime_data() -> String {
         out.push_str(&val.to_string());
     }
     out.push('\n');
+    // Emit global variable storage for `global $var` keyword
+    let mut sorted_globals: Vec<&String> = global_var_names.iter().collect();
+    sorted_globals.sort();
+    for name in sorted_globals {
+        // 16 bytes per global var (enough for string ptr+len or int/float)
+        out.push_str(&format!(".comm _gvar_{}, 16, 3\n", name));
+    }
+    // Emit static variable storage for `static $var = init;`
+    let mut sorted_statics: Vec<&(String, String)> = static_vars.keys().collect();
+    sorted_statics.sort();
+    for (func_name, var_name) in sorted_statics {
+        // 16 bytes for the value, 8 bytes for the init flag
+        out.push_str(&format!(".comm _static_{}_{}, 16, 3\n", func_name, var_name));
+        out.push_str(&format!(".comm _static_{}_{}_init, 8, 3\n", func_name, var_name));
+    }
     out
 }

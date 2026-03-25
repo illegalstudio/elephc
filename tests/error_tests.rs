@@ -1018,3 +1018,20 @@ fn test_error_system_wrong_args() {
 fn test_error_passthru_wrong_args() {
     expect_error("<?php passthru();", "passthru() takes exactly 1 argument");
 }
+
+// --- Global/Static parse errors ---
+
+#[test]
+fn test_error_global_missing_var() {
+    expect_error("<?php global ;", "Expected variable after 'global'");
+}
+
+#[test]
+fn test_error_static_missing_var() {
+    expect_error("<?php static ;", "Expected variable after 'static'");
+}
+
+#[test]
+fn test_error_static_missing_init() {
+    expect_error("<?php static $x;", "Expected '=' after static variable");
+}

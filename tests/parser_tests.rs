@@ -201,7 +201,7 @@ fn test_function_declaration_parses() {
     let stmts = parse_source("<?php function foo($a, $b) { return $a; }");
     if let StmtKind::FunctionDecl { name, params, body } = &stmts[0].kind {
         assert_eq!(name, "foo");
-        let param_names: Vec<&str> = params.iter().map(|(n, _)| n.as_str()).collect();
+        let param_names: Vec<&str> = params.iter().map(|(n, _, _)| n.as_str()).collect();
         assert_eq!(param_names, &["a", "b"]);
         assert_eq!(body.len(), 1);
     } else {
@@ -472,7 +472,7 @@ fn test_parse_closure() {
     assert_eq!(stmts.len(), 1);
     if let StmtKind::Assign { value, .. } = &stmts[0].kind {
         if let ExprKind::Closure { params, is_arrow, .. } = &value.kind {
-            let param_names: Vec<&str> = params.iter().map(|(n, _)| n.as_str()).collect();
+            let param_names: Vec<&str> = params.iter().map(|(n, _, _)| n.as_str()).collect();
             assert_eq!(param_names, &["x"]);
             assert!(!is_arrow);
         } else {
@@ -489,7 +489,7 @@ fn test_parse_arrow_function() {
     assert_eq!(stmts.len(), 1);
     if let StmtKind::Assign { value, .. } = &stmts[0].kind {
         if let ExprKind::Closure { params, is_arrow, .. } = &value.kind {
-            let param_names: Vec<&str> = params.iter().map(|(n, _)| n.as_str()).collect();
+            let param_names: Vec<&str> = params.iter().map(|(n, _, _)| n.as_str()).collect();
             assert_eq!(param_names, &["x"]);
             assert!(is_arrow);
         } else {
@@ -649,5 +649,89 @@ fn test_list_unpack_three_vars() {
             assert_eq!(vars, &["x".to_string(), "y".to_string(), "z".to_string()]);
         }
         _ => panic!("Expected ListUnpack"),
+    }
+}
+
+// --- Global ---
+
+#[test]
+fn test_parse_global_single() {
+    let stmts = parse_source("<?php global $x;");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::Global { vars } => {
+            assert_eq!(vars, &["x".to_string()]);
+        }
+        _ => panic!("Expected Global"),
+    }
+}
+
+#[test]
+fn test_parse_global_multiple() {
+    let stmts = parse_source("<?php global $a, $b, $c;");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::Global { vars } => {
+            assert_eq!(vars, &["a".to_string(), "b".to_string(), "c".to_string()]);
+        }
+        _ => panic!("Expected Global"),
+    }
+}
+
+// --- Static variable ---
+
+#[test]
+fn test_parse_static_var() {
+    let stmts = parse_source("<?php static $count = 0;");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::StaticVar { name, init } => {
+            assert_eq!(name, "count");
+            assert_eq!(init.kind, ExprKind::IntLiteral(0));
+        }
+        _ => panic!("Expected StaticVar"),
+    }
+}
+
+// --- Pass by reference ---
+
+#[test]
+fn test_parse_ref_param() {
+    let stmts = parse_source("<?php function foo(&$x) { }");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl { name, params, .. } => {
+            assert_eq!(name, "foo");
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].0, "x");
+            assert!(params[0].2, "Expected param to be pass-by-reference");
+        }
+        _ => panic!("Expected FunctionDecl"),
+    }
+}
+
+#[test]
+fn test_parse_mixed_ref_params() {
+    let stmts = parse_source("<?php function foo(&$a, $b, &$c) { }");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl { params, .. } => {
+            assert_eq!(params.len(), 3);
+            assert!(params[0].2, "First param should be ref");
+            assert!(!params[1].2, "Second param should not be ref");
+            assert!(params[2].2, "Third param should be ref");
+        }
+        _ => panic!("Expected FunctionDecl"),
+    }
+}
+
+#[test]
+fn test_parse_non_ref_param() {
+    let stmts = parse_source("<?php function foo($x) { }");
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl { params, .. } => {
+            assert!(!params[0].2, "Normal param should not be ref");
+        }
+        _ => panic!("Expected FunctionDecl"),
     }
 }

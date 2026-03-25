@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::context::Context;
 use super::data_section::DataSection;
@@ -15,10 +15,15 @@ pub fn emit_function(
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
     constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
+    all_global_var_names: &HashSet<String>,
+    all_static_vars: &HashMap<(String, String), PhpType>,
 ) {
     let label = format!("_fn_{}", name);
     let epilogue_label = format!("_fn_{}_epilogue", name);
-    emit_function_with_label(emitter, data, &label, &epilogue_label, sig, body, all_functions, constants);
+    emit_function_with_label(
+        emitter, data, &label, &epilogue_label, sig, body,
+        all_functions, constants, all_global_var_names, all_static_vars,
+    );
 }
 
 pub fn emit_closure(
@@ -31,7 +36,12 @@ pub fn emit_closure(
     constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
 ) {
     let epilogue_label = format!("{}_epilogue", label);
-    emit_function_with_label(emitter, data, label, &epilogue_label, sig, body, all_functions, constants);
+    let empty_globals = HashSet::new();
+    let empty_statics = HashMap::new();
+    emit_function_with_label(
+        emitter, data, label, &epilogue_label, sig, body,
+        all_functions, constants, &empty_globals, &empty_statics,
+    );
 }
 
 fn emit_function_with_label(
@@ -43,15 +53,27 @@ fn emit_function_with_label(
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
     constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
+    all_global_var_names: &HashSet<String>,
+    all_static_vars: &HashMap<(String, String), PhpType>,
 ) {
 
     let mut ctx = Context::new();
     ctx.return_label = Some(epilogue_label.to_string());
     ctx.functions = all_functions.clone();
     ctx.constants = constants.clone();
+    ctx.all_global_var_names = all_global_var_names.clone();
+    ctx.all_static_vars = all_static_vars.clone();
 
-    for (pname, pty) in &sig.params {
-        ctx.alloc_var(pname, pty.clone());
+    // Track ref params
+    for (i, (pname, _pty)) in sig.params.iter().enumerate() {
+        let is_ref = sig.ref_params.get(i).copied().unwrap_or(false);
+        if is_ref {
+            ctx.ref_params.insert(pname.clone());
+            // For ref params, allocate 8 bytes (stores a pointer)
+            ctx.alloc_var(pname, PhpType::Int);
+        } else {
+            ctx.alloc_var(pname, _pty.clone());
+        }
     }
 
     // Pre-allocate stack slots for params with defaults that aren't passed
@@ -75,31 +97,39 @@ fn emit_function_with_label(
     // Strings use two consecutive int registers (ptr + len)
     let mut int_reg_idx = 0usize;
     let mut float_reg_idx = 0usize;
-    for (pname, pty) in &sig.params {
+    for (i, (pname, pty)) in sig.params.iter().enumerate() {
+        let is_ref = sig.ref_params.get(i).copied().unwrap_or(false);
         let var = ctx.variables.get(pname).unwrap();
         let offset = var.stack_offset;
-        match pty {
-            PhpType::Bool | PhpType::Int => {
-                emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
-                emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx, offset)); // save int/bool param
-                int_reg_idx += 1;
-            }
-            PhpType::Float => {
-                emitter.comment(&format!("param ${} from d{}", pname, float_reg_idx));
-                emitter.instruction(&format!("stur d{}, [x29, #-{}]", float_reg_idx, offset)); // save float param
-                float_reg_idx += 1;
-            }
-            PhpType::Str => {
-                emitter.comment(&format!("param ${} from x{},x{}", pname, int_reg_idx, int_reg_idx + 1));
-                emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx, offset)); // save string pointer
-                emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx + 1, offset - 8)); // save string length
-                int_reg_idx += 2;
-            }
-            PhpType::Void => {}
-            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
-                emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
-                emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx, offset)); // save array/callable heap ptr
-                int_reg_idx += 1;
+        if is_ref {
+            // Ref param: store the address (always comes in an integer register)
+            emitter.comment(&format!("param &${} from x{} (ref)", pname, int_reg_idx));
+            emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx, offset)); // save address of referenced variable
+            int_reg_idx += 1;
+        } else {
+            match pty {
+                PhpType::Bool | PhpType::Int => {
+                    emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
+                    emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx, offset)); // save int/bool param
+                    int_reg_idx += 1;
+                }
+                PhpType::Float => {
+                    emitter.comment(&format!("param ${} from d{}", pname, float_reg_idx));
+                    emitter.instruction(&format!("stur d{}, [x29, #-{}]", float_reg_idx, offset)); // save float param
+                    float_reg_idx += 1;
+                }
+                PhpType::Str => {
+                    emitter.comment(&format!("param ${} from x{},x{}", pname, int_reg_idx, int_reg_idx + 1));
+                    emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx, offset)); // save string pointer
+                    emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx + 1, offset - 8)); // save string length
+                    int_reg_idx += 2;
+                }
+                PhpType::Void => {}
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
+                    emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
+                    emitter.instruction(&format!("stur x{}, [x29, #-{}]", int_reg_idx, offset)); // save array/callable heap ptr
+                    int_reg_idx += 1;
+                }
             }
         }
     }
@@ -109,8 +139,43 @@ fn emit_function_with_label(
         stmt::emit_stmt(s, emitter, &mut ctx, data);
     }
 
-    // -- function epilogue: restore and return --
+    // -- function epilogue: save static vars back and restore/return --
     emitter.label(&epilogue_label);
+
+    // Save static vars back to global storage before returning
+    let func_name = label.strip_prefix("_fn_").unwrap_or(label);
+    for static_var in &ctx.static_vars {
+        let data_label = format!("_static_{}_{}", func_name, static_var);
+        let var_info = ctx.variables.get(static_var);
+        if let Some(var) = var_info {
+            let offset = var.stack_offset;
+            let ty = var.ty.clone();
+            emitter.comment(&format!("save static ${} back", static_var));
+            emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));      // load page of static var storage
+            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); // add page offset
+            match &ty {
+                PhpType::Bool | PhpType::Int => {
+                    emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); // load local value
+                    emitter.instruction("str x10, [x9]");                       // save to static storage
+                }
+                PhpType::Float => {
+                    emitter.instruction(&format!("ldur d0, [x29, #-{}]", offset)); // load local float
+                    emitter.instruction("str d0, [x9]");                        // save to static storage
+                }
+                PhpType::Str => {
+                    emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); // load string ptr
+                    emitter.instruction(&format!("ldur x11, [x29, #-{}]", offset - 8)); // load string len
+                    emitter.instruction("str x10, [x9]");                       // save ptr to static storage
+                    emitter.instruction("str x11, [x9, #8]");                   // save len to static storage
+                }
+                _ => {
+                    emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); // load local value
+                    emitter.instruction("str x10, [x9]");                       // save to static storage
+                }
+            }
+        }
+    }
+
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16));  // restore frame ptr & return addr
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
@@ -128,6 +193,21 @@ pub fn collect_local_vars(
             StmtKind::Assign { name, value } => {
                 if !ctx.variables.contains_key(name) {
                     let ty = infer_local_type(value, sig);
+                    ctx.alloc_var(name, ty);
+                }
+            }
+            StmtKind::Global { vars } => {
+                // Allocate local slots for global vars (they'll be loaded from global storage)
+                for name in vars {
+                    if !ctx.variables.contains_key(name) {
+                        ctx.alloc_var(name, PhpType::Int);
+                    }
+                }
+            }
+            StmtKind::StaticVar { name, init } => {
+                // Allocate local slot for the static var
+                if !ctx.variables.contains_key(name) {
+                    let ty = infer_local_type(init, sig);
                     ctx.alloc_var(name, ty);
                 }
             }

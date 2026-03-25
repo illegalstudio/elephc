@@ -443,6 +443,12 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                         }
                         *pos += 1;
                     }
+                    let is_ref = if *pos < tokens.len() && tokens[*pos].0 == Token::Ampersand {
+                        *pos += 1;
+                        true
+                    } else {
+                        false
+                    };
                     match tokens.get(*pos).map(|(t, _)| t) {
                         Some(Token::Variable(n)) => {
                             let n = n.clone();
@@ -454,7 +460,7 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                             } else {
                                 None
                             };
-                            params.push((n, default));
+                            params.push((n, default, is_ref));
                         }
                         _ => return Err(CompileError::new(span, "Expected parameter variable")),
                     }
@@ -486,6 +492,12 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                     }
                     *pos += 1;
                 }
+                let is_ref = if *pos < tokens.len() && tokens[*pos].0 == Token::Ampersand {
+                    *pos += 1;
+                    true
+                } else {
+                    false
+                };
                 match tokens.get(*pos).map(|(t, _)| t) {
                     Some(Token::Variable(n)) => {
                         let n = n.clone();
@@ -497,7 +509,7 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                         } else {
                             None
                         };
-                        params.push((n, default));
+                        params.push((n, default, is_ref));
                     }
                     _ => return Err(CompileError::new(span, "Expected parameter variable")),
                 }

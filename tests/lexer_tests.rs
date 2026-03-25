@@ -628,3 +628,78 @@ fn test_const_string_value() {
         ]
     );
 }
+
+// --- Global keyword ---
+
+#[test]
+fn test_global_keyword() {
+    let t = tokens("<?php global $x;");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Global,
+            Token::Variable("x".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
+fn test_global_multiple() {
+    let t = tokens("<?php global $a, $b;");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Global,
+            Token::Variable("a".into()),
+            Token::Comma,
+            Token::Variable("b".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+// --- Static keyword ---
+
+#[test]
+fn test_static_keyword() {
+    let t = tokens("<?php static $x = 0;");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Static,
+            Token::Variable("x".into()),
+            Token::Assign,
+            Token::IntLiteral(0),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+// --- Reference parameter ---
+
+#[test]
+fn test_ref_param_in_function() {
+    let t = tokens("<?php function foo(&$x) {}");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Function,
+            Token::Identifier("foo".into()),
+            Token::LParen,
+            Token::Ampersand,
+            Token::Variable("x".into()),
+            Token::RParen,
+            Token::LBrace,
+            Token::RBrace,
+            Token::Eof,
+        ]
+    );
+}

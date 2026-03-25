@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::parser::ast::{ExprKind, Stmt};
@@ -23,6 +23,18 @@ pub struct Context {
     pub functions: HashMap<String, FunctionSig>,
     pub deferred_closures: Vec<DeferredClosure>,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
+    /// Variables declared with `global $var` in the current function scope.
+    pub global_vars: HashSet<String>,
+    /// Variables declared with `static $var` in functions — maps "func_var" to type.
+    pub static_vars: HashSet<String>,
+    /// Reference parameters in the current function — stores their address, not value.
+    pub ref_params: HashSet<String>,
+    /// Whether we're in the main scope (not inside a function).
+    pub in_main: bool,
+    /// Set of all variable names that are used globally across the program.
+    pub all_global_var_names: HashSet<String>,
+    /// Static variable declarations: (func_name, var_name) -> type
+    pub all_static_vars: HashMap<(String, String), PhpType>,
 }
 
 pub struct VarInfo {
@@ -45,6 +57,12 @@ impl Context {
             functions: HashMap::new(),
             deferred_closures: Vec::new(),
             constants: HashMap::new(),
+            global_vars: HashSet::new(),
+            static_vars: HashSet::new(),
+            ref_params: HashSet::new(),
+            in_main: false,
+            all_global_var_names: HashSet::new(),
+            all_static_vars: HashMap::new(),
         }
     }
 

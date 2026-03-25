@@ -57,7 +57,7 @@ pub enum ExprKind {
         expr: Box<Expr>,
     },
     Closure {
-        params: Vec<(String, Option<Expr>)>,
+        params: Vec<(String, Option<Expr>, bool)>,
         body: Vec<Stmt>,
         is_arrow: bool,
     },
@@ -216,7 +216,7 @@ pub enum StmtKind {
     ExprStmt(Expr),
     FunctionDecl {
         name: String,
-        params: Vec<(String, Option<Expr>)>,
+        params: Vec<(String, Option<Expr>, bool)>,
         body: Vec<Stmt>,
     },
     Return(Option<Expr>),
@@ -227,6 +227,13 @@ pub enum StmtKind {
     ListUnpack {
         vars: Vec<String>,
         value: Expr,
+    },
+    Global {
+        vars: Vec<String>,
+    },
+    StaticVar {
+        name: String,
+        init: Expr,
     },
 }
 

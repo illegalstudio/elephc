@@ -59,12 +59,43 @@ pub fn emit_expr(
             PhpType::Float
         }
         ExprKind::Variable(name) => {
-            let var = ctx.variables.get(name).expect("undefined variable");
-            let offset = var.stack_offset;
-            let ty = var.ty.clone();
-            emitter.comment(&format!("load ${}", name));
-            abi::emit_load(emitter, &ty, offset);
-            ty
+            if ctx.global_vars.contains(name) || (ctx.in_main && ctx.all_global_var_names.contains(name)) {
+                // Load from global storage
+                let var = ctx.variables.get(name).expect("undefined variable");
+                let ty = var.ty.clone();
+                super::stmt::emit_global_load(emitter, ctx, name, &ty);
+                ty
+            } else if ctx.ref_params.contains(name) {
+                // Load through reference pointer
+                let var = ctx.variables.get(name).expect("undefined variable");
+                let offset = var.stack_offset;
+                let ty = var.ty.clone();
+                emitter.comment(&format!("load ref ${}", name));
+                emitter.instruction(&format!("ldur x9, [x29, #-{}]", offset));  // load pointer to referenced variable
+                match &ty {
+                    PhpType::Bool | PhpType::Int => {
+                        emitter.instruction("ldr x0, [x9]");                    // dereference to get int/bool value
+                    }
+                    PhpType::Float => {
+                        emitter.instruction("ldr d0, [x9]");                    // dereference to get float value
+                    }
+                    PhpType::Str => {
+                        emitter.instruction("ldr x1, [x9]");                    // dereference to get string pointer
+                        emitter.instruction("ldr x2, [x9, #8]");                // dereference to get string length
+                    }
+                    _ => {
+                        emitter.instruction("ldr x0, [x9]");                    // dereference to get value
+                    }
+                }
+                ty
+            } else {
+                let var = ctx.variables.get(name).expect("undefined variable");
+                let offset = var.stack_offset;
+                let ty = var.ty.clone();
+                emitter.comment(&format!("load ${}", name));
+                abi::emit_load(emitter, &ty, offset);
+                ty
+            }
         }
         ExprKind::Negate(inner) => {
             let ty = emit_expr(inner, emitter, ctx, data);
@@ -108,44 +139,126 @@ pub fn emit_expr(
             emit_null_coalesce(value, default, emitter, ctx, data)
         }
         ExprKind::PreIncrement(name) => {
-            let var = ctx.variables.get(name).expect("undefined variable");
-            let offset = var.stack_offset;
-            emitter.comment(&format!("++${}", name));
-            // -- pre-increment: add 1 then return new value --
-            emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));      // load current variable value from stack frame
-            emitter.instruction("add x0, x0, #1");                              // increment the value by 1
-            emitter.instruction(&format!("stur x0, [x29, #-{}]", offset));      // store incremented value back to stack frame
-            PhpType::Int
+            if ctx.global_vars.contains(name) {
+                let var = ctx.variables.get(name).expect("undefined variable");
+                let ty = var.ty.clone();
+                emitter.comment(&format!("++${} (global)", name));
+                super::stmt::emit_global_load(emitter, ctx, name, &ty);
+                emitter.instruction("add x0, x0, #1");                          // increment the value by 1
+                emit_global_store_inline(emitter, name);
+                PhpType::Int
+            } else if ctx.ref_params.contains(name) {
+                let var = ctx.variables.get(name).expect("undefined variable");
+                let offset = var.stack_offset;
+                emitter.comment(&format!("++${} (ref)", name));
+                emitter.instruction(&format!("ldur x9, [x29, #-{}]", offset));  // load ref pointer
+                emitter.instruction("ldr x0, [x9]");                            // dereference
+                emitter.instruction("add x0, x0, #1");                          // increment
+                emitter.instruction("str x0, [x9]");                            // store back through pointer
+                PhpType::Int
+            } else {
+                let var = ctx.variables.get(name).expect("undefined variable");
+                let offset = var.stack_offset;
+                emitter.comment(&format!("++${}", name));
+                // -- pre-increment: add 1 then return new value --
+                emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));  // load current variable value from stack frame
+                emitter.instruction("add x0, x0, #1");                          // increment the value by 1
+                emitter.instruction(&format!("stur x0, [x29, #-{}]", offset));  // store incremented value back to stack frame
+                if ctx.in_main && ctx.all_global_var_names.contains(name) {
+                    emit_global_store_inline(emitter, name);
+                }
+                PhpType::Int
+            }
         }
         ExprKind::PostIncrement(name) => {
-            let var = ctx.variables.get(name).expect("undefined variable");
-            let offset = var.stack_offset;
-            emitter.comment(&format!("${}++", name));
-            // -- post-increment: return old value, then add 1 --
-            emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));      // load current value into x0 (returned to caller)
-            emitter.instruction("add x1, x0, #1");                              // compute incremented value in scratch register
-            emitter.instruction(&format!("stur x1, [x29, #-{}]", offset));      // write new value back; x0 still has old value
-            PhpType::Int
+            if ctx.global_vars.contains(name) {
+                let var = ctx.variables.get(name).expect("undefined variable");
+                let ty = var.ty.clone();
+                emitter.comment(&format!("${}++ (global)", name));
+                super::stmt::emit_global_load(emitter, ctx, name, &ty);
+                emitter.instruction("add x1, x0, #1");                          // compute incremented value
+                // Store new value to global
+                let label = format!("_gvar_{}", name);
+                emitter.instruction(&format!("adrp x9, {}@PAGE", label));       // load page of global var storage
+                emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label)); // add page offset
+                emitter.instruction("str x1, [x9]");                            // store incremented value to global
+                PhpType::Int
+            } else if ctx.ref_params.contains(name) {
+                let var = ctx.variables.get(name).expect("undefined variable");
+                let offset = var.stack_offset;
+                emitter.comment(&format!("${}++ (ref)", name));
+                emitter.instruction(&format!("ldur x9, [x29, #-{}]", offset));  // load ref pointer
+                emitter.instruction("ldr x0, [x9]");                            // dereference
+                emitter.instruction("add x1, x0, #1");                          // compute incremented value
+                emitter.instruction("str x1, [x9]");                            // store back through pointer
+                PhpType::Int
+            } else {
+                let var = ctx.variables.get(name).expect("undefined variable");
+                let offset = var.stack_offset;
+                emitter.comment(&format!("${}++", name));
+                // -- post-increment: return old value, then add 1 --
+                emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));  // load current value into x0 (returned to caller)
+                emitter.instruction("add x1, x0, #1");                          // compute incremented value in scratch register
+                emitter.instruction(&format!("stur x1, [x29, #-{}]", offset));  // write new value back; x0 still has old value
+                if ctx.in_main && ctx.all_global_var_names.contains(name) {
+                    // Save new value (in x1) to global
+                    let label = format!("_gvar_{}", name);
+                    emitter.instruction(&format!("adrp x9, {}@PAGE", label));   // load page of global var storage
+                    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label)); // add page offset
+                    emitter.instruction("str x1, [x9]");                        // store incremented value to global
+                }
+                PhpType::Int
+            }
         }
         ExprKind::PreDecrement(name) => {
-            let var = ctx.variables.get(name).expect("undefined variable");
-            let offset = var.stack_offset;
-            emitter.comment(&format!("--${}", name));
-            // -- pre-decrement: subtract 1 then return new value --
-            emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));      // load current variable value from stack frame
-            emitter.instruction("sub x0, x0, #1");                              // decrement the value by 1
-            emitter.instruction(&format!("stur x0, [x29, #-{}]", offset));      // store decremented value back to stack frame
-            PhpType::Int
+            if ctx.global_vars.contains(name) {
+                let var = ctx.variables.get(name).expect("undefined variable");
+                let ty = var.ty.clone();
+                emitter.comment(&format!("--${} (global)", name));
+                super::stmt::emit_global_load(emitter, ctx, name, &ty);
+                emitter.instruction("sub x0, x0, #1");                          // decrement the value by 1
+                emit_global_store_inline(emitter, name);
+                PhpType::Int
+            } else if ctx.ref_params.contains(name) {
+                let var = ctx.variables.get(name).expect("undefined variable");
+                let offset = var.stack_offset;
+                emitter.comment(&format!("--${} (ref)", name));
+                emitter.instruction(&format!("ldur x9, [x29, #-{}]", offset));  // load ref pointer
+                emitter.instruction("ldr x0, [x9]");                            // dereference
+                emitter.instruction("sub x0, x0, #1");                          // decrement
+                emitter.instruction("str x0, [x9]");                            // store back through pointer
+                PhpType::Int
+            } else {
+                let var = ctx.variables.get(name).expect("undefined variable");
+                let offset = var.stack_offset;
+                emitter.comment(&format!("--${}", name));
+                // -- pre-decrement: subtract 1 then return new value --
+                emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));  // load current variable value from stack frame
+                emitter.instruction("sub x0, x0, #1");                          // decrement the value by 1
+                emitter.instruction(&format!("stur x0, [x29, #-{}]", offset));  // store decremented value back to stack frame
+                PhpType::Int
+            }
         }
         ExprKind::PostDecrement(name) => {
-            let var = ctx.variables.get(name).expect("undefined variable");
-            let offset = var.stack_offset;
-            emitter.comment(&format!("${}--", name));
-            // -- post-decrement: return old value, then subtract 1 --
-            emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));      // load current value into x0 (returned to caller)
-            emitter.instruction("sub x1, x0, #1");                              // compute decremented value in scratch register
-            emitter.instruction(&format!("stur x1, [x29, #-{}]", offset));      // write new value back; x0 still has old value
-            PhpType::Int
+            if ctx.ref_params.contains(name) {
+                let var = ctx.variables.get(name).expect("undefined variable");
+                let offset = var.stack_offset;
+                emitter.comment(&format!("${}-- (ref)", name));
+                emitter.instruction(&format!("ldur x9, [x29, #-{}]", offset));  // load ref pointer
+                emitter.instruction("ldr x0, [x9]");                            // dereference
+                emitter.instruction("sub x1, x0, #1");                          // compute decremented value
+                emitter.instruction("str x1, [x9]");                            // store back through pointer
+                PhpType::Int
+            } else {
+                let var = ctx.variables.get(name).expect("undefined variable");
+                let offset = var.stack_offset;
+                emitter.comment(&format!("${}--", name));
+                // -- post-decrement: return old value, then subtract 1 --
+                emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));  // load current value into x0 (returned to caller)
+                emitter.instruction("sub x1, x0, #1");                          // compute decremented value in scratch register
+                emitter.instruction(&format!("stur x1, [x29, #-{}]", offset));  // write new value back; x0 still has old value
+                PhpType::Int
+            }
         }
         ExprKind::Ternary {
             condition,
@@ -175,7 +288,7 @@ pub fn emit_expr(
             emit_function_call(name, args, emitter, ctx, data)
         }
         ExprKind::Closure { params, body, is_arrow: _ } => {
-            let param_names: Vec<String> = params.iter().map(|(n, _)| n.clone()).collect();
+            let param_names: Vec<String> = params.iter().map(|(n, _, _)| n.clone()).collect();
             emit_closure(&param_names, body, emitter, ctx, data)
         }
         ExprKind::ClosureCall { var, args } => {
@@ -857,23 +970,56 @@ fn emit_function_call(
     let default_refs: Vec<&Expr> = default_exprs.iter().collect();
     all_args.extend(default_refs);
 
+    let ref_params = sig.as_ref().map(|s| s.ref_params.clone()).unwrap_or_default();
+
     let mut arg_types = Vec::new();
-    for arg in &all_args {
-        let ty = emit_expr(arg, emitter, ctx, data);
-        // -- save each evaluated argument on stack --
-        match &ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
-                emitter.instruction("str x0, [sp, #-16]!");                     // push int/bool/array-ptr/callable arg onto stack
+    for (i, arg) in all_args.iter().enumerate() {
+        let is_ref = ref_params.get(i).copied().unwrap_or(false);
+        if is_ref {
+            // For ref params, push the ADDRESS of the variable, not its value
+            if let ExprKind::Variable(var_name) = &arg.kind {
+                if ctx.global_vars.contains(var_name) {
+                    // Address of global variable
+                    let label = format!("_gvar_{}", var_name);
+                    emitter.comment(&format!("ref arg: address of global ${}", var_name));
+                    emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page of global var
+                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); // add page offset
+                } else if ctx.in_main && ctx.all_global_var_names.contains(var_name) {
+                    // In main scope and var is used globally — pass address of local stack slot
+                    // but also sync to global before passing
+                    let var = ctx.variables.get(var_name).expect("undefined variable");
+                    let offset = var.stack_offset;
+                    emitter.comment(&format!("ref arg: address of ${}", var_name));
+                    emitter.instruction(&format!("sub x0, x29, #{}", offset));  // compute address of local variable
+                } else {
+                    let var = ctx.variables.get(var_name).expect("undefined variable");
+                    let offset = var.stack_offset;
+                    emitter.comment(&format!("ref arg: address of ${}", var_name));
+                    emitter.instruction(&format!("sub x0, x29, #{}", offset));  // compute address of local variable
+                }
+            } else {
+                // Not a variable — evaluate and pass value (shouldn't happen in valid PHP)
+                emit_expr(arg, emitter, ctx, data);
             }
-            PhpType::Float => {
-                emitter.instruction("str d0, [sp, #-16]!");                     // push float arg onto stack
+            emitter.instruction("str x0, [sp, #-16]!");                         // push address onto stack
+            arg_types.push(PhpType::Int); // Address is an integer-sized value
+        } else {
+            let ty = emit_expr(arg, emitter, ctx, data);
+            // -- save each evaluated argument on stack --
+            match &ty {
+                PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
+                    emitter.instruction("str x0, [sp, #-16]!");                 // push int/bool/array-ptr/callable arg onto stack
+                }
+                PhpType::Float => {
+                    emitter.instruction("str d0, [sp, #-16]!");                 // push float arg onto stack
+                }
+                PhpType::Str => {
+                    emitter.instruction("stp x1, x2, [sp, #-16]!");             // push string ptr+len arg onto stack
+                }
+                PhpType::Void => {}
             }
-            PhpType::Str => {
-                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push string ptr+len arg onto stack
-            }
-            PhpType::Void => {}
+            arg_types.push(ty);
         }
-        arg_types.push(ty);
     }
 
     // Separate int and float register tracking
@@ -942,10 +1088,12 @@ fn emit_closure(
         .map(|p| (p.clone(), PhpType::Int))
         .collect();
     let defaults: Vec<Option<crate::parser::ast::Expr>> = params.iter().map(|_| None).collect();
+    let ref_params: Vec<bool> = params.iter().map(|_| false).collect();
     let sig = crate::types::FunctionSig {
         params: param_types,
         defaults,
         return_type: PhpType::Int,
+        ref_params,
     };
 
     // -- defer the closure body emission for later --
@@ -1303,6 +1451,14 @@ fn emit_null_coalesce(
 
     // Return the type of the non-null side
     if val_ty == PhpType::Void { def_ty } else { val_ty }
+}
+
+/// Quick helper: store x0 to _gvar_NAME (for pre-increment etc. where value is in x0)
+fn emit_global_store_inline(emitter: &mut Emitter, name: &str) {
+    let label = format!("_gvar_{}", name);
+    emitter.instruction(&format!("adrp x9, {}@PAGE", label));                   // load page of global var storage
+    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label));             // add page offset
+    emitter.instruction("str x0, [x9]");                                        // store value to global storage
 }
 
 fn load_immediate(emitter: &mut Emitter, reg: &str, value: i64) {

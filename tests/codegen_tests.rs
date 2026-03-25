@@ -4851,3 +4851,187 @@ fn test_passthru() {
     let out = compile_and_run("<?php passthru(\"echo bye\");");
     assert_eq!(out, "bye\n");
 }
+
+// --- Global variables ---
+
+#[test]
+fn test_global_read() {
+    let out = compile_and_run(r#"<?php
+$x = 10;
+function test() {
+    global $x;
+    echo $x;
+}
+test();
+"#);
+    assert_eq!(out, "10");
+}
+
+#[test]
+fn test_global_write() {
+    let out = compile_and_run(r#"<?php
+$y = 5;
+function modify() {
+    global $y;
+    $y = 99;
+}
+modify();
+echo $y;
+"#);
+    assert_eq!(out, "99");
+}
+
+#[test]
+fn test_global_read_write() {
+    let out = compile_and_run(r#"<?php
+$x = 10;
+function test() {
+    global $x;
+    echo $x;
+    $x = 20;
+}
+test();
+echo $x;
+"#);
+    assert_eq!(out, "1020");
+}
+
+#[test]
+fn test_global_multiple_vars() {
+    let out = compile_and_run(r#"<?php
+$a = 1;
+$b = 2;
+function sum() {
+    global $a, $b;
+    echo $a + $b;
+}
+sum();
+"#);
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_global_increment() {
+    let out = compile_and_run(r#"<?php
+$counter = 0;
+function inc() {
+    global $counter;
+    $counter++;
+}
+inc();
+inc();
+inc();
+echo $counter;
+"#);
+    assert_eq!(out, "3");
+}
+
+// --- Static variables ---
+
+#[test]
+fn test_static_counter() {
+    let out = compile_and_run(r#"<?php
+function counter() {
+    static $n = 0;
+    $n++;
+    echo $n;
+}
+counter();
+counter();
+counter();
+"#);
+    assert_eq!(out, "123");
+}
+
+#[test]
+fn test_static_preserves_value() {
+    let out = compile_and_run(r#"<?php
+function acc() {
+    static $total = 0;
+    $total = $total + 10;
+    return $total;
+}
+echo acc();
+echo acc();
+echo acc();
+"#);
+    assert_eq!(out, "102030");
+}
+
+#[test]
+fn test_static_separate_functions() {
+    let out = compile_and_run(r#"<?php
+function a() {
+    static $x = 0;
+    $x++;
+    echo $x;
+}
+function b() {
+    static $x = 0;
+    $x = $x + 10;
+    echo $x;
+}
+a();
+b();
+a();
+b();
+"#);
+    assert_eq!(out, "110220");
+}
+
+// --- Pass by reference ---
+
+#[test]
+fn test_ref_increment() {
+    let out = compile_and_run(r#"<?php
+function increment(&$val) {
+    $val++;
+}
+$x = 5;
+increment($x);
+echo $x;
+"#);
+    assert_eq!(out, "6");
+}
+
+#[test]
+fn test_ref_assign() {
+    let out = compile_and_run(r#"<?php
+function set_value(&$v, $new_val) {
+    $v = $new_val;
+}
+$x = 1;
+set_value($x, 42);
+echo $x;
+"#);
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_ref_swap() {
+    let out = compile_and_run(r#"<?php
+function swap(&$a, &$b) {
+    $tmp = $a;
+    $a = $b;
+    $b = $tmp;
+}
+$p = 1;
+$q = 2;
+swap($p, $q);
+echo $p . $q;
+"#);
+    assert_eq!(out, "21");
+}
+
+#[test]
+fn test_ref_mixed_params() {
+    let out = compile_and_run(r#"<?php
+function add_to(&$target, $amount) {
+    $target = $target + $amount;
+}
+$x = 10;
+add_to($x, 5);
+echo $x;
+"#);
+    assert_eq!(out, "15");
+}

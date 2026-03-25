@@ -29,7 +29,9 @@ impl Checker {
             }
             for (i, arg) in args.iter().enumerate() {
                 let arg_ty = self.infer_type(arg, caller_env)?;
-                if arg_ty != sig.params[i].1 {
+                // Skip type check for ref params (the address is passed, not the value)
+                let is_ref = sig.ref_params.get(i).copied().unwrap_or(false);
+                if !is_ref && arg_ty != sig.params[i].1 {
                     return Err(CompileError::new(
                         arg.span,
                         &format!(
@@ -83,6 +85,7 @@ impl Checker {
             params: param_types.clone(),
             defaults: decl.defaults.clone(),
             return_type: PhpType::Int,
+            ref_params: decl.ref_params.clone(),
         };
         self.functions.insert(name.to_string(), provisional_sig);
 
@@ -98,6 +101,7 @@ impl Checker {
             params: param_types,
             defaults: decl.defaults.clone(),
             return_type: return_type.clone(),
+            ref_params: decl.ref_params.clone(),
         };
         self.functions.insert(name.to_string(), sig);
 

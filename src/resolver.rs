@@ -34,7 +34,8 @@ fn has_includes(stmts: &[Stmt]) -> bool {
         | StmtKind::For { body, .. }
         | StmtKind::Foreach { body, .. }
         | StmtKind::FunctionDecl { body, .. } => has_includes(body),
-        StmtKind::ConstDecl { .. } | StmtKind::ListUnpack { .. } => false,
+        StmtKind::ConstDecl { .. } | StmtKind::ListUnpack { .. }
+        | StmtKind::Global { .. } | StmtKind::StaticVar { .. } => false,
         StmtKind::Switch { cases, default, .. } => {
             cases.iter().any(|(_, body)| has_includes(body))
                 || default.as_ref().is_some_and(|b| has_includes(b))
