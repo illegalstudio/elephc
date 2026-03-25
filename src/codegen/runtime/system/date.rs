@@ -1,7 +1,7 @@
 use crate::codegen::emit::Emitter;
 
 /// __rt_date: format a Unix timestamp according to a PHP date format string.
-/// Input:  x0=timestamp (0 = use current time), x1=format_ptr, x2=format_len
+/// Input:  x0=timestamp (-1 = use current time), x1=format_ptr, x2=format_len
 /// Output: x1=result ptr (in concat_buf), x2=result len
 ///
 /// Supports format characters: Y, m, d, H, i, s, l, F, D, M, N, j, n, G, A, a, U, g
@@ -33,8 +33,9 @@ pub fn emit_date(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save format ptr
     emitter.instruction("str x2, [sp, #16]");                                   // save format len
 
-    // -- if timestamp is 0, get current time --
-    emitter.instruction("cbnz x0, __rt_date_have_time");                        // skip if timestamp provided
+    // -- if timestamp is -1, get current time --
+    emitter.instruction("cmn x0, #1");                                          // compare x0 with -1 (cmn adds 1, checks if zero)
+    emitter.instruction("b.ne __rt_date_have_time");                            // skip if timestamp provided (not -1)
     emitter.instruction("mov x0, #0");                                          // NULL argument
     emitter.instruction("bl _time");                                            // time(NULL) → x0=current timestamp
     emitter.instruction("str x0, [sp, #0]");                                    // save current timestamp

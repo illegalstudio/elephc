@@ -30,8 +30,8 @@ pub fn emit(
         emit_expr(&args[0], emitter, ctx, data);
         // x1=format ptr, x2=format len
 
-        // -- use 0 to signal "use current time" --
-        emitter.instruction("mov x0, #0");                                      // timestamp 0 = use current time
+        // -- use -1 to signal "use current time" --
+        emitter.instruction("mov x0, #-1");                                     // timestamp -1 = use current time
     }
 
     // -- call runtime: x0=timestamp, x1=format ptr, x2=format len --

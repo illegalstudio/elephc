@@ -5283,7 +5283,7 @@ fn test_date_full_format() {
 
 #[test]
 fn test_date_time_format() {
-    let out = compile_and_run("<?php echo date(\"H:i:s\", 0);");
+    let out = compile_and_run("<?php echo date(\"H:i:s\", 1700000000);");
     // The exact output depends on the timezone, but it should have the format HH:MM:SS
     let out_trimmed = out.trim();
     assert_eq!(out_trimmed.len(), 8);
@@ -5415,6 +5415,14 @@ fn test_date_full_day_name() {
 fn test_date_full_month_name() {
     let out = compile_and_run("<?php echo date(\"F\", 1700000000);");
     assert_eq!(out, "November");
+}
+
+#[test]
+fn test_date_epoch_zero_timestamp() {
+    // Regression test for GitHub issue #9: date("Y-m-d", 0) should format Unix epoch,
+    // not return the current date. Timestamp 0 = 1970-01-01 00:00:00 UTC.
+    let out = compile_and_run("<?php echo date(\"Y\", 0);");
+    assert_eq!(out, "1970");
 }
 
 // --- JSON functions ---
