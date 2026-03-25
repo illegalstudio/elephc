@@ -209,7 +209,7 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 
 ## System routines
 
-**Source:** `src/codegen/runtime/system/` (4 files)
+**Source:** `src/codegen/runtime/system/` (10 files)
 
 ### `__rt_build_argv` — Build $argv array
 
@@ -221,7 +221,7 @@ At program start, the OS passes `argc` (argument count) in `x0` and `argv` (poin
 2. For each C string pointer in argv: measures the string length (scan for null byte), pushes ptr+len into the array
 3. Returns the array pointer
 
-### Other system routines
+### Core system routines
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
@@ -229,6 +229,45 @@ At program start, the OS passes `argc` (argument count) in `x0` and `argv` (poin
 | `__rt_microtime` | Get current time as float seconds via `gettimeofday` syscall | — | `d0` = seconds.microseconds |
 | `__rt_getenv` | Get environment variable value via libc `getenv()` | `x1`/`x2` = name string | `x1`/`x2` = value string |
 | `__rt_shell_exec` | Execute shell command and capture output via libc `popen()`/`pclose()` | `x1`/`x2` = command string | `x1`/`x2` = output string |
+
+### Date/time routines
+
+**Files:** `system/date.rs`, `system/mktime.rs`, `system/strtotime.rs`
+
+| Routine | What it does | Input | Output |
+|---|---|---|---|
+| `__rt_date` | Format a Unix timestamp using PHP date format characters (Y, m, d, H, i, s, l, F, etc.). Uses `localtime_r()` from libc and static lookup tables (`_day_names`, `_month_names`) for day/month names | `x1`/`x2` = format string, `x0` = timestamp | `x1`/`x2` = formatted string |
+| `__rt_mktime` | Create a Unix timestamp from date components (hour, minute, second, month, day, year). Populates a `tm` struct on the stack and calls libc `mktime()` | `x0`-`x5` = h, m, s, mon, day, year | `x0` = Unix timestamp |
+| `__rt_strtotime` | Parse a date string in "YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS" format to a Unix timestamp. Manually parses the digits, populates a `tm` struct, and calls libc `mktime()` | `x1`/`x2` = date string | `x0` = Unix timestamp |
+
+### JSON routines
+
+**Files:** `system/json_encode.rs`, `system/json_decode.rs`
+
+The `json_encode` implementation uses **type-aware dispatch** — the codegen calls a different runtime routine depending on the compile-time type of the value being encoded:
+
+| Routine | What it does | Input | Output |
+|---|---|---|---|
+| `__rt_json_encode_bool` | Encode bool as `"true"` or `"false"` using static data labels | `x0` = 0 or 1 | `x1`/`x2` = JSON string |
+| `__rt_json_encode_null` | Encode null as `"null"` using a static data label | — | `x1`/`x2` = JSON string |
+| `__rt_json_encode_str` | Encode a string with JSON escaping (quotes, backslashes, control chars) | `x1`/`x2` = input string | `x1`/`x2` = JSON string |
+| `__rt_json_encode_array_int` | Encode an integer array as a JSON array (e.g., `[1,2,3]`) | `x0` = array ptr | `x1`/`x2` = JSON string |
+| `__rt_json_encode_array_str` | Encode a string array as a JSON array with quoted elements | `x0` = array ptr | `x1`/`x2` = JSON string |
+| `__rt_json_encode_assoc` | Encode an associative array as a JSON object (e.g., `{"key":"val"}`) | `x0` = hash ptr | `x1`/`x2` = JSON string |
+| `__rt_json_decode` | Decode a JSON string value — strips surrounding quotes and unescapes JSON escape sequences | `x1`/`x2` = JSON string | `x1`/`x2` = decoded string |
+
+### Regex routines
+
+**File:** `system/preg.rs`
+
+All regex routines use **POSIX extended regular expressions** via libc's `regcomp()`, `regexec()`, and `regfree()`. A shared helper (`__rt_preg_strip_delimiters`) strips PHP-style delimiters (e.g., `/pattern/`) before passing the pattern to the POSIX API.
+
+| Routine | What it does | Input | Output |
+|---|---|---|---|
+| `__rt_preg_match` | Test if a regex matches the subject string. Compiles the pattern, executes once, frees | pattern + subject strings | `x0` = 1 (match) or 0 (no match) |
+| `__rt_preg_match_all` | Count all non-overlapping matches by repeatedly executing the regex with advancing offsets | pattern + subject strings | `x0` = match count |
+| `__rt_preg_replace` | Replace all regex matches with a replacement string. Builds the result incrementally in the concat buffer | pattern + replacement + subject | `x1`/`x2` = result string |
+| `__rt_preg_split` | Split the subject string at regex match boundaries. Returns a string array of the non-matching segments | pattern + subject strings | `x0` = array pointer |
 
 ## I/O routines
 
@@ -272,6 +311,20 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     system::emit_microtime(emitter);
     system::emit_getenv(emitter);
     system::emit_shell_exec(emitter);
+    system::emit_date(emitter);
+    system::emit_mktime(emitter);
+    system::emit_strtotime(emitter);
+    system::emit_json_encode_bool(emitter);
+    system::emit_json_encode_null(emitter);
+    system::emit_json_encode_str(emitter);
+    system::emit_json_encode_array_int(emitter);
+    system::emit_json_encode_array_str(emitter);
+    system::emit_json_encode_assoc(emitter);
+    system::emit_json_decode(emitter);
+    system::emit_preg_match(emitter);
+    system::emit_preg_match_all(emitter);
+    system::emit_preg_replace(emitter);
+    system::emit_preg_split(emitter);
     arrays::emit_heap_alloc(emitter);
     arrays::emit_array_new(emitter);
     // ... 40+ more array routines ...
@@ -308,6 +361,9 @@ Additionally, the runtime emits static data tables:
 - `_fmt_g` — printf format string for float-to-string conversion via `%.14G`
 - `_b64_encode_tbl` — 64-byte Base64 encoding lookup table
 - `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
+- `_json_true`, `_json_false`, `_json_null` — JSON keyword strings used by `__rt_json_encode_bool` and `__rt_json_encode_null`
+- `_day_names` — 7 entries (84 bytes), each 12 bytes: day name padded to 10 chars + 1 length byte + 1 padding byte. Used by `__rt_date` for `l` (full name) and `D` (abbreviated) format characters
+- `_month_names` — 12 entries (144 bytes), same layout as day names. Used by `__rt_date` for `F` (full name) and `M` (abbreviated) format characters
 
 See [Memory Model](memory-model.md) for details on how these buffers work.
 

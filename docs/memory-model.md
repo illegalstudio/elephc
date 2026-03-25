@@ -261,7 +261,13 @@ _float_1: .quad 0x4000000000000000    ; 2.0
 
 These are **read-only** — the program never modifies them. When a string operation needs to work with a literal, it reads from the data section and writes the result to the [string buffer](#the-string-buffer).
 
-The runtime also emits static data tables: a float format string (`_fmt_g`), a Base64 encoding lookup table (`_b64_encode_tbl`, 64 bytes), and a Base64 decoding lookup table (`_b64_decode_tbl`, 256 bytes).
+The runtime also emits static data tables:
+- `_fmt_g` — printf format string for float-to-string conversion (`%.14G`)
+- `_b64_encode_tbl` — 64-byte Base64 encoding lookup table
+- `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
+- `_json_true`, `_json_false`, `_json_null` — JSON keyword strings (4, 5, and 4 bytes) used by `json_encode` for boolean and null values
+- `_day_names` — 84-byte table (7 entries x 12 bytes each) with day names, lengths, and padding. Used by `date()` for day-of-week formatting
+- `_month_names` — 144-byte table (12 entries x 12 bytes each) with month names, lengths, and padding. Used by `date()` for month formatting
 
 ### Global variables
 

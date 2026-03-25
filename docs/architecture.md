@@ -101,7 +101,7 @@ src/
 │       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, ... (47 files)
 │       ├── arrays/            heap_alloc, array_new, hash_*, sort, usort, ... (45 files)
 │       ├── io/                fopen, fgets, fread, stat, scandir, ... (16 files)
-│       └── system/            build_argv, time, date, mktime, strtotime, json_encode, json_decode, preg (11 files)
+│       └── system/            build_argv, time, getenv, shell_exec, date, mktime, strtotime, json_encode, json_decode, preg (10 files)
 │
 └── errors/
     ├── mod.rs                 CompileError, error trait
