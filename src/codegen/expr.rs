@@ -122,9 +122,15 @@ pub fn emit_expr(
             let ty = emit_expr(inner, emitter, ctx, data);
             coerce_null_to_zero(emitter, &ty);
             emitter.comment("logical not");
-            // -- PHP !$x: compare to zero and invert truthiness --
-            emitter.instruction("cmp x0, #0");                                  // test if value is falsy (zero)
-            emitter.instruction("cset x0, eq");                                 // x0=1 if was zero (falsy), x0=0 if truthy
+            if ty == PhpType::Str {
+                // -- PHP !$str: string is falsy if length is zero --
+                emitter.instruction("cmp x2, #0");                              // test if string length is zero (falsy)
+                emitter.instruction("cset x0, eq");                             // x0=1 if empty string (falsy), x0=0 if non-empty
+            } else {
+                // -- PHP !$x: compare to zero and invert truthiness --
+                emitter.instruction("cmp x0, #0");                              // test if value is falsy (zero)
+                emitter.instruction("cset x0, eq");                             // x0=1 if was zero (falsy), x0=0 if truthy
+            }
             PhpType::Bool
         }
         ExprKind::BitNot(inner) => {

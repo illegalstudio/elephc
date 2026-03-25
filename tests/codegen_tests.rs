@@ -5670,3 +5670,61 @@ fn test_preg_replace_case_insensitive() {
     let out = compile_and_run(r#"<?php echo preg_replace("/WORLD/i", "PHP", "hello World");"#);
     assert_eq!(out, "hello PHP");
 }
+
+// -- Issue #25: \0 null byte in strings --
+#[test]
+fn test_null_byte_in_string() {
+    let out = compile_and_run(r#"<?php echo strlen("ab\0cd");"#);
+    assert_eq!(out, "5");
+}
+
+// -- Issue #26: empty string should be falsy --
+#[test]
+fn test_not_empty_string_is_true() {
+    let out = compile_and_run(r#"<?php echo !!"";"#);
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_not_nonempty_string_is_false() {
+    let out = compile_and_run(r#"<?php echo !!"hello";"#);
+    assert_eq!(out, "1");
+}
+
+// -- Issue #27: is_numeric() should work for numeric strings --
+#[test]
+fn test_is_numeric_string_digits() {
+    let out = compile_and_run(r#"<?php if (is_numeric("42")) { echo "yes"; } else { echo "no"; }"#);
+    assert_eq!(out, "yes");
+}
+
+#[test]
+fn test_is_numeric_string_float() {
+    let out = compile_and_run(r#"<?php if (is_numeric("3.14")) { echo "yes"; } else { echo "no"; }"#);
+    assert_eq!(out, "yes");
+}
+
+#[test]
+fn test_is_numeric_string_negative() {
+    let out = compile_and_run(r#"<?php if (is_numeric("-5")) { echo "yes"; } else { echo "no"; }"#);
+    assert_eq!(out, "yes");
+}
+
+#[test]
+fn test_is_numeric_string_not_numeric() {
+    let out = compile_and_run(r#"<?php if (is_numeric("abc")) { echo "yes"; } else { echo "no"; }"#);
+    assert_eq!(out, "no");
+}
+
+// -- Issue #29: function_exists() should recognize builtins --
+#[test]
+fn test_function_exists_builtin() {
+    let out = compile_and_run(r#"<?php echo function_exists("strlen") ? "yes" : "no";"#);
+    assert_eq!(out, "yes");
+}
+
+#[test]
+fn test_function_exists_builtin_array_push() {
+    let out = compile_and_run(r#"<?php echo function_exists("array_push") ? "yes" : "no";"#);
+    assert_eq!(out, "yes");
+}

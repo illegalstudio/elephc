@@ -30,6 +30,7 @@ pub fn scan_double_string_interpolated(
                     Some('\\') => current.push('\\'),
                     Some('"') => current.push('"'),
                     Some('$') => current.push('$'),
+                    Some('0') => current.push('\0'),
                     Some(c) => {
                         current.push('\\');
                         current.push(c);
@@ -453,6 +454,7 @@ fn interpolate_heredoc_content(
                     Some(&'\\') => { chars.next(); current.push('\\'); }
                     Some(&'"') => { chars.next(); current.push('"'); }
                     Some(&'$') => { chars.next(); current.push('$'); }
+                    Some(&'0') => { chars.next(); current.push('\0'); }
                     Some(&c) => { chars.next(); current.push('\\'); current.push(c); }
                     None => current.push('\\'),
                 }
