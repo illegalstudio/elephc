@@ -30,6 +30,8 @@ $x = 42;              // reassignment from null works
 ### Known incompatibilities with PHP
 
 - `$argv[0]` returns the compiled binary path, not the `.php` file path.
+- `strpos()` returns `-1` when the needle is not found, not `false`. Use `strpos($s, "x") !== -1` or `strpos($s, "x") >= 0` instead of `strpos($s, "x") !== false`.
+- `array_search()` returns `-1` when the value is not found, not `false`. Use `array_search($v, $arr) !== -1` or `array_search($v, $arr) >= 0` instead of `array_search($v, $arr) !== false`.
 
 ## Operators
 
@@ -669,7 +671,7 @@ foreach ($matrix as $row) {
 | `strlen()` | `strlen($str): int` | Returns string length |
 | `number_format()` | `number_format($n [, $dec [, $dec_point, $thou_sep]]): string` | Format number with separators |
 | `substr()` | `substr($str, $start [, $len]): string` | Extract substring |
-| `strpos()` | `strpos($hay, $needle): int` | Find first occurrence (-1 if not found) |
+| `strpos()` | `strpos($hay, $needle): int` | Find first occurrence. Returns `-1` if not found (PHP returns `false`) |
 | `strrpos()` | `strrpos($hay, $needle): int` | Find last occurrence (-1 if not found) |
 | `strstr()` | `strstr($hay, $needle): string` | Find first occurrence and return rest |
 | `str_replace()` | `str_replace($search, $replace, $subject): string` | Replace all occurrences |
@@ -738,7 +740,7 @@ foreach ($matrix as $row) {
 | `isset()` | `isset($var): int` | Check if variable is defined (always 1) |
 | **Searching** | | |
 | `array_key_exists()` | `array_key_exists($key, $arr): bool` | Check if key exists in array |
-| `array_search()` | `array_search($needle, $arr): int\|string\|bool` | Search for value, return key or false |
+| `array_search()` | `array_search($needle, $arr): int\|string` | Search for value, return key. Returns `-1` if not found (PHP returns `false`) |
 | **Slicing** | | |
 | `array_slice()` | `array_slice($arr, $offset [, $length]): array` | Extract a slice of the array |
 | `array_splice()` | `array_splice($arr, $offset [, $length]): array` | Remove/replace part of array |
