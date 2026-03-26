@@ -14,6 +14,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     strings::emit_str_eq(emitter);
     strings::emit_number_format(emitter);
     strings::emit_strcopy(emitter);
+    strings::emit_str_persist(emitter);
     strings::emit_strtolower(emitter);
     strings::emit_strtoupper(emitter);
     strings::emit_trim(emitter);
@@ -82,6 +83,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
 
     // Array runtime functions
     arrays::emit_heap_alloc(emitter);
+    arrays::emit_heap_free(emitter);
     arrays::emit_array_new(emitter);
     arrays::emit_array_push_int(emitter);
     arrays::emit_array_push_str(emitter);
@@ -152,14 +154,19 @@ pub fn emit_runtime(emitter: &mut Emitter) {
 pub fn emit_runtime_data(
     global_var_names: &std::collections::HashSet<String>,
     static_vars: &std::collections::HashMap<(String, String), crate::types::PhpType>,
+    heap_size: usize,
 ) -> String {
     let mut out = String::new();
     out.push_str(".comm _concat_buf, 65536, 3\n");
     out.push_str(".comm _concat_off, 8, 3\n");
     out.push_str(".comm _global_argc, 8, 3\n");
     out.push_str(".comm _global_argv, 8, 3\n");
-    out.push_str(".comm _heap_buf, 1048576, 3\n");
+    out.push_str(&format!(".comm _heap_buf, {}, 3\n", heap_size));
     out.push_str(".comm _heap_off, 8, 3\n");
+    out.push_str(".comm _heap_free_list, 8, 3\n");
+    out.push_str(&format!("_heap_max:\n    .quad {}\n", heap_size));
+    out.push_str("_heap_err_msg:\n    .ascii \"Fatal error: heap memory exhausted\\n\"\n");
+    out.push_str("_arr_cap_err_msg:\n    .ascii \"Fatal error: array capacity exceeded\\n\"\n");
     out.push_str(".comm _cstr_buf, 4096, 3\n");
     out.push_str(".comm _cstr_buf2, 4096, 3\n");
     out.push_str(".comm _eof_flags, 256, 3\n");
