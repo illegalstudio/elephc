@@ -44,6 +44,7 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     // -- push name string to array --
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload array pointer
     emitter.instruction("bl __rt_array_push_str");                              // push name to array
+    emitter.instruction("str x0, [sp, #8]");                                   // update array pointer after possible realloc
     emitter.instruction("b __rt_scandir_loop");                                 // continue reading entries
 
     // -- close directory and return --

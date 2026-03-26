@@ -70,6 +70,7 @@ pub fn emit_glob(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_str_persist");                                // copy to heap for persistence
     emitter.instruction("ldr x0, [sp, #104]");                                  // reload array pointer
     emitter.instruction("bl __rt_array_push_str");                              // push path to array
+    emitter.instruction("str x0, [sp, #104]");                                  // update array pointer after possible realloc
 
     // -- advance to next entry --
     emitter.instruction("ldr x11, [sp, #120]");                                 // reload current index

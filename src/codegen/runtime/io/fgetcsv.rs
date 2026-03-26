@@ -109,6 +109,7 @@ pub fn emit_fgetcsv(emitter: &mut Emitter) {
     // -- push field to array --
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload array pointer
     emitter.instruction("bl __rt_array_push_str");                              // push field string to array
+    emitter.instruction("str x0, [sp, #16]");                                   // update array pointer after possible realloc
 
     // -- return array --
     emitter.instruction("ldr x0, [sp, #16]");                                   // return array pointer
@@ -134,6 +135,7 @@ pub fn emit_fgetcsv(emitter: &mut Emitter) {
     // -- push field to array --
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload array pointer
     emitter.instruction("bl __rt_array_push_str");                              // push field string to array
+    emitter.instruction("str x0, [sp, #16]");                                   // update array pointer after possible realloc
 
     // -- restore parsing state and reset for next field --
     emitter.instruction("ldp x1, x3, [sp, #24]");                               // restore scan ptr and end ptr

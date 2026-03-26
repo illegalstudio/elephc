@@ -41,10 +41,13 @@ pub fn emit_file(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_file_scan");                                 // if not newline, continue scanning
 
     // -- found newline: push this line to array --
+    emitter.instruction("str x3, [sp, #24]");                                   // save scan pointer (push_str clobbers x3)
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload array pointer
     emitter.instruction("sub x1, x3, x5");                                      // line start = current pos - line length
     emitter.instruction("mov x2, x5");                                          // line length (including \n)
-    emitter.instruction("bl __rt_array_push_str");                              // push line to array
+    emitter.instruction("bl __rt_array_push_str");                              // push line to array (x0 = possibly new array)
+    emitter.instruction("str x0, [sp, #16]");                                   // update array pointer after possible growth
+    emitter.instruction("ldr x3, [sp, #24]");                                   // restore scan pointer
     emitter.instruction("mov x5, #0");                                          // reset line length for next line
 
     // -- reload scan state and continue --

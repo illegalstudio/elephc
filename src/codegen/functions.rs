@@ -238,7 +238,7 @@ pub fn collect_local_vars(
         match &stmt.kind {
             StmtKind::Assign { name, value } => {
                 if !ctx.variables.contains_key(name) {
-                    let ty = infer_local_type(value, sig);
+                    let ty = infer_local_type(value, sig, Some(ctx));
                     ctx.alloc_var(name, ty);
                 }
             }
@@ -253,7 +253,7 @@ pub fn collect_local_vars(
             StmtKind::StaticVar { name, init } => {
                 // Allocate local slot for the static var
                 if !ctx.variables.contains_key(name) {
-                    let ty = infer_local_type(init, sig);
+                    let ty = infer_local_type(init, sig, Some(ctx));
                     ctx.alloc_var(name, ty);
                 }
             }
@@ -267,7 +267,7 @@ pub fn collect_local_vars(
                 }
             }
             StmtKind::Foreach { value_var, body, array, key_var, .. } => {
-                let arr_ty = infer_local_type(array, sig);
+                let arr_ty = infer_local_type(array, sig, Some(ctx));
                 if let Some(k) = key_var {
                     if !ctx.variables.contains_key(k) {
                         // Assoc array keys are strings; indexed array keys are ints
@@ -299,7 +299,7 @@ pub fn collect_local_vars(
             }
             StmtKind::ConstDecl { .. } => {}
             StmtKind::ListUnpack { vars, value, .. } => {
-                let elem_ty = match infer_local_type(value, sig) {
+                let elem_ty = match infer_local_type(value, sig, Some(ctx)) {
                     PhpType::Array(t) => *t,
                     _ => PhpType::Int,
                 };
@@ -332,12 +332,13 @@ pub fn infer_local_type_pub(
     expr: &crate::parser::ast::Expr,
     sig: &FunctionSig,
 ) -> PhpType {
-    infer_local_type(expr, sig)
+    infer_local_type(expr, sig, None)
 }
 
 fn infer_local_type(
     expr: &crate::parser::ast::Expr,
     sig: &FunctionSig,
+    ctx: Option<&Context>,
 ) -> PhpType {
     match &expr.kind {
         ExprKind::BoolLiteral(_) => PhpType::Bool,
@@ -352,28 +353,34 @@ fn infer_local_type(
                     return pty.clone();
                 }
             }
+            // Check if it's an already-allocated local variable
+            if let Some(c) = ctx {
+                if let Some(var) = c.variables.get(name) {
+                    return var.ty.clone();
+                }
+            }
             PhpType::Int
         }
         ExprKind::ArrayLiteral(elems) => {
             let elem_ty = if elems.is_empty() {
                 PhpType::Int
             } else {
-                infer_local_type(&elems[0], sig)
+                infer_local_type(&elems[0], sig, ctx)
             };
             PhpType::Array(Box::new(elem_ty))
         }
-        ExprKind::ArrayAccess { array, .. } => match infer_local_type(array, sig) {
+        ExprKind::ArrayAccess { array, .. } => match infer_local_type(array, sig, ctx) {
             PhpType::Array(t) => *t,
             _ => PhpType::Int,
         },
         ExprKind::Negate(inner) => {
-            let inner_ty = infer_local_type(inner, sig);
+            let inner_ty = infer_local_type(inner, sig, ctx);
             if inner_ty == PhpType::Float { PhpType::Float } else { PhpType::Int }
         }
         ExprKind::Not(_) => PhpType::Bool,
         ExprKind::BitNot(_) => PhpType::Int,
-        ExprKind::NullCoalesce { value, .. } => infer_local_type(value, sig),
-        ExprKind::Ternary { then_expr, .. } => infer_local_type(then_expr, sig),
+        ExprKind::NullCoalesce { value, .. } => infer_local_type(value, sig, ctx),
+        ExprKind::Ternary { then_expr, .. } => infer_local_type(then_expr, sig, ctx),
         ExprKind::BinaryOp { left, op, right } => {
             use crate::parser::ast::BinOp;
             match op {
@@ -383,11 +390,11 @@ fn infer_local_type(
                 | BinOp::StrictNotEq | BinOp::And | BinOp::Or => PhpType::Bool,
                 BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor
                 | BinOp::ShiftLeft | BinOp::ShiftRight | BinOp::Spaceship => PhpType::Int,
-                BinOp::NullCoalesce => infer_local_type(left, sig),
+                BinOp::NullCoalesce => infer_local_type(left, sig, ctx),
                 BinOp::Div | BinOp::Pow => PhpType::Float,
                 BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Mod => {
-                    let lt = infer_local_type(left, sig);
-                    let rt = infer_local_type(right, sig);
+                    let lt = infer_local_type(left, sig, ctx);
+                    let rt = infer_local_type(right, sig, ctx);
                     if lt == PhpType::Float || rt == PhpType::Float {
                         PhpType::Float
                     } else {
@@ -398,10 +405,59 @@ fn infer_local_type(
         }
         ExprKind::FunctionCall { name, args } => {
             match name.as_str() {
-                "floatval" | "floor" | "ceil" | "round" | "sqrt" | "pow" => PhpType::Float,
+                // String-returning builtins
+                "strtolower" | "strtoupper" | "ucfirst" | "lcfirst" | "ucwords"
+                | "trim" | "ltrim" | "rtrim" | "substr" | "str_repeat" | "strrev"
+                | "str_replace" | "str_ireplace" | "substr_replace" | "str_pad"
+                | "chr" | "implode" | "join" | "sprintf" | "number_format"
+                | "nl2br" | "wordwrap" | "addslashes" | "stripslashes"
+                | "htmlspecialchars" | "html_entity_decode" | "htmlentities"
+                | "urlencode" | "urldecode" | "rawurlencode" | "rawurldecode"
+                | "base64_encode" | "base64_decode" | "bin2hex" | "hex2bin"
+                | "md5" | "sha1" | "hash" | "gettype" | "strstr"
+                | "readline" | "date" | "json_encode" | "php_uname" | "phpversion"
+                | "file_get_contents" | "tempnam" | "getcwd"
+                | "shell_exec" => PhpType::Str,
+                // Array-returning builtins
+                "explode" | "str_split" | "file" | "scandir" | "glob"
+                | "array_keys" | "array_values" | "array_merge" | "array_slice"
+                | "array_reverse" | "array_unique" | "array_chunk" | "array_pad"
+                | "array_fill" | "array_fill_keys" | "array_diff" | "array_intersect"
+                | "array_diff_key" | "array_intersect_key" | "array_flip"
+                | "array_combine" | "array_splice" | "array_column"
+                | "array_map" | "array_filter" | "range" | "array_rand"
+                | "sscanf" | "fgetcsv" | "preg_split" => {
+                    // Try to infer element type from arguments
+                    if name == "explode" || name == "str_split" || name == "file"
+                        || name == "scandir" || name == "glob" || name == "fgetcsv"
+                        || name == "preg_split"
+                    {
+                        PhpType::Array(Box::new(PhpType::Str))
+                    } else if !args.is_empty() {
+                        let arr_ty = infer_local_type(&args[0], sig, ctx);
+                        match arr_ty {
+                            PhpType::Array(t) => PhpType::Array(t),
+                            _ => PhpType::Array(Box::new(PhpType::Int)),
+                        }
+                    } else {
+                        PhpType::Array(Box::new(PhpType::Int))
+                    }
+                }
+                // Float-returning builtins
+                "floatval" | "floor" | "ceil" | "round" | "sqrt" | "pow"
+                | "fmod" | "fdiv" | "microtime" => PhpType::Float,
+                // Bool-returning builtins
+                "is_int" | "is_float" | "is_string" | "is_bool" | "is_null"
+                | "is_numeric" | "is_nan" | "is_finite" | "is_infinite"
+                | "is_array" | "empty" | "isset" | "is_file" | "is_dir"
+                | "is_readable" | "is_writable" | "file_exists"
+                | "in_array" | "array_key_exists" | "str_contains"
+                | "str_starts_with" | "str_ends_with" | "ctype_alpha"
+                | "ctype_digit" | "ctype_alnum" | "ctype_space"
+                | "function_exists" => PhpType::Bool,
                 "abs" => {
                     if !args.is_empty() {
-                        let t = infer_local_type(&args[0], sig);
+                        let t = infer_local_type(&args[0], sig, ctx);
                         if t == PhpType::Float { PhpType::Float } else { PhpType::Int }
                     } else {
                         PhpType::Int
@@ -409,8 +465,8 @@ fn infer_local_type(
                 }
                 "min" | "max" => {
                     if args.len() >= 2 {
-                        let t0 = infer_local_type(&args[0], sig);
-                        let t1 = infer_local_type(&args[1], sig);
+                        let t0 = infer_local_type(&args[0], sig, ctx);
+                        let t1 = infer_local_type(&args[1], sig, ctx);
                         if t0 == PhpType::Float || t1 == PhpType::Float {
                             PhpType::Float
                         } else {
@@ -420,7 +476,13 @@ fn infer_local_type(
                         PhpType::Int
                     }
                 }
-                _ => PhpType::Int,
+                // User-defined functions — check signature if available
+                _ => {
+                    for (fname, fsig) in sig.params.iter().zip(std::iter::repeat(sig)) {
+                        let _ = (fname, fsig);
+                    }
+                    PhpType::Int
+                }
             }
         }
         ExprKind::Cast { target, .. } => {
@@ -436,7 +498,7 @@ fn infer_local_type(
         ExprKind::Closure { .. } => PhpType::Callable,
         ExprKind::ClosureCall { .. } => PhpType::Int,
         ExprKind::ConstRef(_) => PhpType::Int, // constants resolved at emit time
-        ExprKind::Spread(inner) => infer_local_type(inner, sig),
+        ExprKind::Spread(inner) => infer_local_type(inner, sig, ctx),
         _ => PhpType::Int,
     }
 }

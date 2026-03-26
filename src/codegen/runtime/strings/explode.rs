@@ -66,6 +66,7 @@ pub fn emit_explode(emitter: &mut Emitter) {
     emitter.instruction("add x1, x3, x16");                                     // segment ptr = string + segment_start
     emitter.instruction("sub x2, x13, x16");                                    // segment len = scan_pos - segment_start
     emitter.instruction("bl __rt_array_push_str");                              // push segment string to array
+    emitter.instruction("str x0, [sp, #32]");                                   // update array pointer after possible realloc
 
     // -- advance past delimiter, update segment start --
     emitter.instruction("ldp x1, x2, [sp]");                                    // reload delimiter ptr and length
@@ -83,6 +84,7 @@ pub fn emit_explode(emitter: &mut Emitter) {
     emitter.instruction("add x1, x3, x16");                                     // segment ptr = string + segment_start
     emitter.instruction("sub x2, x4, x16");                                     // segment len = string_len - segment_start
     emitter.instruction("bl __rt_array_push_str");                              // push final segment to array
+    emitter.instruction("str x0, [sp, #32]");                                   // update array pointer after possible realloc
 
     // -- return array and restore frame --
     emitter.instruction("ldr x0, [sp, #32]");                                   // return array pointer in x0

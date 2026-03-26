@@ -58,6 +58,7 @@ pub fn emit_build_argv(emitter: &mut Emitter) {
     emitter.label("__rt_build_argv_push");
     emitter.instruction("mov x0, x21");                                         // arg0: array pointer
     emitter.instruction("bl __rt_array_push_str");                              // push string element to array
+    emitter.instruction("mov x21, x0");                                         // update array pointer after possible realloc
 
     // -- increment loop counter and continue --
     emitter.instruction("ldr x22, [sp, #24]");                                  // reload i from stack (may have been clobbered)

@@ -319,11 +319,9 @@ pub fn emit_stmt(
                     emitter.instruction("bl __rt_array_push_int");              // call runtime: append integer to dynamic array
                 }
                 PhpType::Str => {
-                    // -- persist string to heap before pushing to array --
-                    emitter.instruction("str x9, [sp, #-16]!");                 // save array pointer (str_persist clobbers x9)
-                    emitter.instruction("bl __rt_str_persist");                 // copy string to heap, x1=heap_ptr, x2=len
-                    emitter.instruction("ldr x0, [sp], #16");                   // restore array pointer to x0
-                    emitter.instruction("bl __rt_array_push_str");              // call runtime: append string (x1=ptr, x2=len) to array
+                    // -- push string to array (push_str persists to heap internally) --
+                    emitter.instruction("mov x0, x9");                          // move array pointer to x0
+                    emitter.instruction("bl __rt_array_push_str");              // call runtime: persist + append string to array
                 }
                 PhpType::Array(_) | PhpType::AssocArray { .. } => {
                     // -- call runtime to append nested array pointer --
