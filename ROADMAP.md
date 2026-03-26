@@ -193,7 +193,15 @@ Proper type system for PHP compatibility.
 - [ ] Objects as function parameters and return values
 - [ ] Objects stored in arrays
 
-## v0.11.x — Multi-platform and optimizations
+## v0.11.x — Garbage collector
+
+- [ ] Reference counting for strings, arrays, and objects
+- [ ] Automatic free when reference count drops to zero
+- [ ] Cycle detection for circular references (objects referencing each other)
+- [ ] Scope-based cleanup (free temporaries at end of scope/loop iteration)
+- [ ] GC statistics (`--gc-stats` flag: allocations, frees, peak memory)
+
+## v0.12.x — Multi-platform and optimizations
 
 - [ ] Linux x86_64 target
 - [ ] Linux ARM64 target
