@@ -34,6 +34,7 @@ $x = 42;              // reassignment from null works
 - `array_search()` returns `-1` when the value is not found, not `false`. Use `array_search($v, $arr) !== -1` or `array_search($v, $arr) >= 0` instead of `array_search($v, $arr) !== false`.
 - Integer overflow wraps instead of promoting to float. In PHP, `PHP_INT_MAX + 1` returns a float (`9.2233720368548E+18`); in elephc it wraps to `-9223372036854775808` (native 64-bit signed integer behavior). This is by design — runtime overflow detection would require checking the CPU overflow flag after every arithmetic operation, which is incompatible with the ahead-of-time compilation model.
 - Loose comparison (`==`) between different types coerces both sides to integer. PHP has more nuanced type juggling rules (e.g., numeric strings compared as numbers). elephc simplifies this: strings are parsed as integers (empty string and non-numeric strings become `0`).
+- `json_encode()` on associative arrays may not preserve insertion order of keys. PHP arrays maintain insertion order via a linked list; elephc uses an open-addressing hash table where iteration order depends on hash values. The JSON output contains the same key-value pairs but keys may appear in a different order.
 
 ## Operators
 

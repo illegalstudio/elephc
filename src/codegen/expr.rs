@@ -279,12 +279,16 @@ pub fn emit_expr(
             // -- branch based on ternary condition --
             emitter.instruction("cmp x0, #0");                                  // test if condition is falsy
             emitter.instruction(&format!("b.eq {}", else_label));               // jump to else branch if condition was false
-            let ty = emit_expr(then_expr, emitter, ctx, data);
+            let then_ty = emit_expr(then_expr, emitter, ctx, data);
             emitter.instruction(&format!("b {}", end_label));                   // skip else branch after evaluating then-expr
             emitter.label(&else_label);
-            emit_expr(else_expr, emitter, ctx, data);
+            let else_ty = emit_expr(else_expr, emitter, ctx, data);
+            if then_ty != else_ty && then_ty == PhpType::Str {
+                // -- coerce else branch to string to match then-branch type --
+                coerce_to_string(emitter, &else_ty);
+            }
             emitter.label(&end_label);
-            ty
+            then_ty
         }
         ExprKind::Cast { target, expr } => emit_cast(target, expr, emitter, ctx, data),
         ExprKind::FunctionCall { name, args } => {

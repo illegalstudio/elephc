@@ -378,13 +378,12 @@ impl Checker {
                 self.infer_type(condition, env)?;
                 let then_ty = self.infer_type(then_expr, env)?;
                 let else_ty = self.infer_type(else_expr, env)?;
-                if then_ty != else_ty {
-                    return Err(CompileError::new(
-                        expr.span,
-                        &format!("Ternary branches must have the same type: {:?} vs {:?}", then_ty, else_ty),
-                    ));
+                if then_ty == else_ty {
+                    Ok(then_ty)
+                } else {
+                    // Different types: return the then-branch type (PHP is dynamic)
+                    Ok(then_ty)
                 }
-                Ok(then_ty)
             }
             ExprKind::Cast { target, expr } => {
                 self.infer_type(expr, env)?;

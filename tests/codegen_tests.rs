@@ -1032,6 +1032,28 @@ fn test_ternary_in_assignment() {
     assert_eq!(out, "20");
 }
 
+#[test]
+fn test_ternary_mixed_types_str_vs_int() {
+    let out = compile_and_run(
+        "<?php $a = [1]; array_pop($a); $v = array_pop($a); echo is_null($v) ? \"null\" : \"has value\";",
+    );
+    assert_eq!(out, "null");
+}
+
+#[test]
+fn test_ternary_mixed_types_then_branch_str() {
+    let out = compile_and_run("<?php $x = 0; echo $x ? \"yes\" : \"no\";");
+    assert_eq!(out, "no");
+}
+
+#[test]
+fn test_chained_closure_call() {
+    let out = compile_and_run(
+        "<?php $f = function() { return function() { return 99; }; }; echo $f()();",
+    );
+    assert_eq!(out, "99");
+}
+
 // --- do...while ---
 
 #[test]

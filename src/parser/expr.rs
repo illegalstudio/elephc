@@ -33,9 +33,9 @@ fn parse_expr_bp(
         );
     }
 
-    // Postfix call on expression result: $arr[0](args)
-    if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
-        if matches!(lhs.kind, ExprKind::ArrayAccess { .. } | ExprKind::ExprCall { .. }) {
+    // Postfix call on expression result: $arr[0](args), $f()(), etc.
+    while *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
+        if matches!(lhs.kind, ExprKind::ArrayAccess { .. } | ExprKind::ExprCall { .. } | ExprKind::ClosureCall { .. } | ExprKind::FunctionCall { .. }) {
             let call_span = tokens[*pos].1;
             *pos += 1;
             let mut args = Vec::new();
@@ -63,6 +63,8 @@ fn parse_expr_bp(
                 ExprKind::ExprCall { callee: Box::new(lhs), args },
                 call_span,
             );
+        } else {
+            break;
         }
     }
 
