@@ -2987,6 +2987,48 @@ fn test_sprintf_hex() {
 }
 
 #[test]
+fn test_sprintf_zero_padded_int() {
+    let out = compile_and_run(r#"<?php echo sprintf("%05d", 42);"#);
+    assert_eq!(out, "00042");
+}
+
+#[test]
+fn test_sprintf_precision_float() {
+    let out = compile_and_run(r#"<?php echo sprintf("%.2f", 3.14159);"#);
+    assert_eq!(out, "3.14");
+}
+
+#[test]
+fn test_sprintf_width_string() {
+    let out = compile_and_run(r#"<?php echo sprintf("%10s", "hi");"#);
+    assert_eq!(out, "        hi");
+}
+
+#[test]
+fn test_sprintf_left_align_string() {
+    let out = compile_and_run(r#"<?php echo sprintf("%-10s|", "hi");"#);
+    assert_eq!(out, "hi        |");
+}
+
+#[test]
+fn test_sprintf_plus_sign() {
+    let out = compile_and_run(r#"<?php echo sprintf("%+d", 42);"#);
+    assert_eq!(out, "+42");
+}
+
+#[test]
+fn test_sprintf_precision_float_trailing_zeros() {
+    let out = compile_and_run(r#"<?php echo sprintf("%.5f", 1.0);"#);
+    assert_eq!(out, "1.00000");
+}
+
+#[test]
+fn test_sprintf_float_default() {
+    let out = compile_and_run(r#"<?php echo sprintf("%f", 3.14);"#);
+    assert_eq!(out, "3.140000");
+}
+
+#[test]
 fn test_printf() {
     let out = compile_and_run(r#"<?php printf("Hello %s", "World");"#);
     assert_eq!(out, "Hello World");

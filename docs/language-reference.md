@@ -704,7 +704,7 @@ foreach ($matrix as $row) {
 | `wordwrap()` | `wordwrap($str [, $width, $break]): string` | Wrap text at width |
 | `bin2hex()` | `bin2hex($str): string` | Convert binary to hex |
 | `hex2bin()` | `hex2bin($str): string` | Convert hex to binary |
-| `sprintf()` | `sprintf($fmt, ...): string` | Format string (%s, %d, %f, %x, %%) |
+| `sprintf()` | `sprintf($fmt, ...): string` | Format string (%s, %d, %f, %x, %e, %g, %o, %c, %%) with width, precision, padding, alignment, and sign modifiers |
 | `printf()` | `printf($fmt, ...): int` | Format and print |
 | `md5()` | `md5($str): string` | MD5 hash (32-char hex) |
 | `sha1()` | `sha1($str): string` | SHA1 hash (40-char hex) |
