@@ -220,7 +220,11 @@ pub fn emit_stmt(
                 // -- prepare hash_set args --
                 let (val_lo, val_hi) = match &val_ty {
                     PhpType::Int | PhpType::Bool => ("x0", "xzr"),
-                    PhpType::Str => ("x1", "x2"),
+                    PhpType::Str => {
+                        // Persist string value to heap before storing in hash table
+                        emitter.instruction("bl __rt_str_persist");             // copy string to heap, x1=heap_ptr, x2=len
+                        ("x1", "x2")
+                    }
                     PhpType::Float => {
                         emitter.instruction("fmov x9, d0");                     // move float bits to integer register
                         ("x9", "xzr")
