@@ -104,7 +104,7 @@ pub fn emit_fgetcsv(emitter: &mut Emitter) {
     // -- copy field to concat_buf --
     emitter.instruction("mov x1, x4");                                          // field start pointer
     emitter.instruction("mov x2, x5");                                          // field length
-    emitter.instruction("bl __rt_str_persist");                                // copy field to heap
+    emitter.instruction("bl __rt_str_persist");                                 // copy field to heap
 
     // -- push field to array --
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload array pointer
@@ -130,7 +130,7 @@ pub fn emit_fgetcsv(emitter: &mut Emitter) {
     // -- copy field to concat_buf --
     emitter.instruction("mov x1, x4");                                          // field start pointer
     emitter.instruction("mov x2, x5");                                          // field length
-    emitter.instruction("bl __rt_str_persist");                                // copy field to heap
+    emitter.instruction("bl __rt_str_persist");                                 // copy field to heap
 
     // -- push field to array --
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload array pointer
