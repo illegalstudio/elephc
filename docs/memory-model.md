@@ -4,7 +4,7 @@
 
 ---
 
-elephc manages memory without a garbage collector, without `malloc`/`free`, and without any runtime library. Everything is either on the **stack** (automatic, per-function) or in **bump-allocated buffers** (global, never freed).
+elephc manages memory without a garbage collector, without `malloc`/`free`, and without any runtime library. Everything is either on the **stack** (automatic, per-function) or in a **heap buffer** with a free-list allocator.
 
 This page explains where every value lives in memory at runtime.
 
@@ -17,11 +17,12 @@ This page explains where every value lives in memory at runtime.
 ├─────────────────────────────┤
 │         (unused)             │
 ├─────────────────────────────┤
-│       Heap buffer            │  _heap_buf: 1MB, bump-allocated
-│  (arrays, hash tables)       │
+│       Heap buffer            │  _heap_buf: 8MB default (--heap-size)
+│  (arrays, hash tables,       │  Free-list + bump allocator
+│   persisted strings)         │
 ├─────────────────────────────┤
-│     String buffer            │  _concat_buf: 64KB, bump-allocated
-│  (string operation results)  │
+│     String buffer            │  _concat_buf: 64KB, scratch pad
+│  (temporary string results)  │  Reset at each statement
 ├─────────────────────────────┤
 │     I/O buffers              │  _cstr_buf: 4KB × 2, _eof_flags: 256B
 │  (C-string conversion, EOF)  │
@@ -86,59 +87,99 @@ csel x0, xzr, x0, eq      ; if x0 == sentinel, replace with 0
 
 See [ARM64 Instruction Reference](arm64-instructions.md#move-and-immediate) for how `movz`/`movk` work.
 
-## The string buffer
+## The string buffer (scratch pad)
 
 ```asm
-.comm _concat_buf, 65536    ; 64KB buffer
-.comm _concat_off, 8        ; current write offset
+.comm _concat_buf, 65536    ; 64KB scratch buffer
+.comm _concat_off, 8        ; current write offset (reset per statement)
 ```
 
-The string buffer (`_concat_buf`) is a 64KB region used by all string operations — `itoa`, `ftoa`, `concat`, `strtolower`, `str_replace`, etc. It's a **bump allocator**: each operation writes its result at the current offset and advances the offset.
+The string buffer (`_concat_buf`) is a 64KB scratch region used by all string operations — `itoa`, `ftoa`, `concat`, `strtolower`, `str_replace`, etc. Each operation writes its result at the current offset and advances the offset.
+
+**The buffer is reset to offset 0 at the start of every statement.** This means strings in the buffer are temporary — they only live for the duration of one statement's evaluation.
 
 ### How it works
 
+Within a single statement like `echo strtolower("HELLO") . " " . $name;`:
+
 ```
 _concat_buf:
-┌──────────┬──────────┬──────────┬────────────────────┐
-│  "hello" │  "42"    │  "HELLO" │  (free space)      │
-└──────────┴──────────┴──────────┴────────────────────┘
- offset=0    offset=5   offset=7   _concat_off = 12
+┌──────────┬──────────┬──────────────┬──────────────────┐
+│  "hello" │  " "     │  "hello Joe" │  (free space)    │
+└──────────┴──────────┴──────────────┴──────────────────┘
+ offset=0    offset=5   offset=6      _concat_off = 17
 ```
 
-When `__rt_itoa` converts `42` to a string:
-1. Read `_concat_off` (current position, e.g., 5)
-2. Write "42" at position 5-6
-3. Update `_concat_off` to 7
-4. Return pointer to position 5 and length 2
+Each sub-expression writes its result further into the buffer. After the statement completes (echo writes to stdout), the next statement resets `_concat_off` to 0.
+
+### Copy-on-store
+
+When a string result is stored to a variable (e.g., `$x = "a" . "b";`), the codegen calls `__rt_str_persist` which copies the string from the concat buffer to the **heap**. This ensures:
+
+- **Variables always point to heap memory**, never into the scratch buffer
+- **The buffer can safely reset** without invalidating stored values
+- **Hash table keys** are also persisted to heap (via `str_persist`)
 
 ### Implications
 
-- **Strings are never freed.** Once written, they stay in the buffer forever.
-- **64KB limit.** Programs that produce many strings will eventually overflow. This is a known limitation.
-- **String results are temporary.** A string returned by a [runtime routine](the-runtime.md) points into this buffer. If another string operation runs, it writes further into the buffer (it doesn't overwrite earlier results, because the offset only moves forward).
-- **No mutation.** You can't modify a string in place — you always create a new one in the buffer.
+- **No overflow.** Because the buffer resets each statement, only one statement's worth of string operations need to fit in 64KB.
+- **No mutation.** You can't modify a string in place — you always create a new one.
+- **Scratch only.** The buffer is strictly temporary. Anything that needs to survive goes to the heap.
 
 ## The heap
 
 ```asm
-.comm _heap_buf, 1048576    ; 1MB buffer
-.comm _heap_off, 8          ; current allocation offset
+.comm _heap_buf, 8388608    ; 8MB buffer (configurable via --heap-size)
+.comm _heap_off, 8          ; current bump allocation offset
+.comm _heap_free_list, 8    ; head of free block linked list
 ```
 
-The heap (`_heap_buf`) is a 1MB region for dynamically-sized data — currently only arrays. Like the string buffer, it's a bump allocator.
+The heap (`_heap_buf`) is an 8MB region (by default) for dynamically-sized data — arrays, hash tables, and persisted strings. It uses a **free-list + bump hybrid allocator**.
 
 ### How heap allocation works
 
-The runtime routine `__rt_heap_alloc` (see [The Runtime](the-runtime.md)):
+Every allocation has an **8-byte header** storing the block size:
 
 ```
-Request: allocate 200 bytes
-1. Read _heap_off → e.g., 1024
-2. Return pointer to _heap_buf + 1024
-3. Set _heap_off = 1224
+┌──────────┬──────────────────┐
+│ size (8B)│  user data ...   │
+└──────────┴──────────────────┘
+  header     ← pointer returned to caller
 ```
 
-No free, no reuse, no compaction. Memory is allocated and never reclaimed.
+The runtime routine `__rt_heap_alloc`:
+
+1. **Walk the free list** — check each freed block (first-fit). If a block with `size >= requested` is found, unlink it and return it.
+2. **Bump allocate** — if no free block fits, allocate from the end of the heap: write header, advance `_heap_off`, return user pointer.
+3. **Bounds check** — if the bump would exceed `_heap_max`, print a fatal error and exit.
+
+Minimum allocation is 8 bytes (to fit the next pointer when the block is later freed).
+
+### How heap freeing works
+
+The runtime routine `__rt_heap_free`:
+
+1. Read the block header at `user_pointer - 8` to get the size
+2. Insert the block at the head of the free list (LIFO)
+3. Free blocks have layout: `[size:8][next_ptr:8][...unused...]`
+
+The variant `__rt_heap_free_safe` validates that the pointer is within `_heap_buf` range before freeing — safe to call with garbage, null, or `.data` section pointers.
+
+### When memory is freed
+
+- **Variable reassignment**: when a string or array variable is overwritten, the old value is freed via `__rt_heap_free_safe`
+- **`unset()`**: frees the variable's heap allocation before nulling it
+- **Process exit**: all memory is reclaimed by the OS
+
+### Configurable heap size
+
+The default heap is 8MB. For programs that need more (or less), use:
+
+```bash
+elephc --heap-size=16777216 heavy.php    # 16MB heap
+```
+
+The minimum is 64KB.
 
 ## Array layout
 
@@ -179,13 +220,9 @@ Header (24 bytes) │ ptr[0] (8B) │ len[0] (8B) │ ptr[1] (8B) │ len[1] (8B
 
 Access: `base + 24 + (index × 16)` for pointer, `base + 24 + (index × 16) + 8` for length
 
-### Array growth
+### Array capacity
 
-When `array_push` finds that `length == capacity`, it:
-1. Allocates a new, larger buffer (typically 2× capacity)
-2. Copies all existing elements to the new buffer
-3. Updates the header to point to the new data
-4. The old data is abandoned (never freed)
+Arrays are allocated with a fixed capacity. When `array_push` finds that `length >= capacity`, it prints a fatal error and exits. Dynamic array growth (realloc + copy) is a future improvement.
 
 ## Hash table layout (associative arrays)
 
@@ -307,26 +344,36 @@ The naming pattern is `_static_FUNCNAME_VARNAME`. The init flag ensures the init
 | Resource | Size | What happens when full |
 |---|---|---|
 | Stack | OS default (~8MB) | Stack overflow (crash) |
-| String buffer | 64KB | Buffer overflow (undefined behavior) |
-| Heap | 1MB | Heap overflow (undefined behavior) |
+| String buffer | 64KB | Resets each statement — effectively unlimited |
+| Heap | 8MB (configurable) | Fatal error: "heap memory exhausted" |
+| Array capacity | Fixed at creation | Fatal error: "array capacity exceeded" |
 | C-string buffers | 4KB each (×2) | Truncation of file paths |
 | EOF flags | 256 bytes | Max 256 simultaneous file descriptors |
 | Data section | No fixed limit | Grows with number of unique literals |
 
-These limits are acceptable for educational purposes but would need to be addressed for production use:
-- The string buffer could use the heap instead (with proper allocation)
-- The heap could use `mmap` system calls for dynamic growth
-- Both could implement proper bounds checking
+## Memory management strategy
 
-## No garbage collection
+elephc uses a **free-list allocator** — not a garbage collector, but not pure bump-allocation either. Memory is reclaimed in specific situations:
 
-elephc has no garbage collector, no reference counting, no automatic memory management. Memory is allocated and never freed. This works because:
+1. **Variable reassignment** — when `$x = "new value"` overwrites a string or array, the old heap block is freed and returned to the free list for reuse
+2. **`unset($x)`** — explicitly frees the variable's heap allocation
+3. **String buffer reset** — the concat buffer resets at each statement, with strings that need to survive copied to heap via `__rt_str_persist`
+4. **Stack memory** — automatically reclaimed when functions return
+5. **Process exit** — all memory reclaimed by the OS
 
-1. **Stack memory** is automatically reclaimed when functions return
-2. **Program lifetime is short** — CLI tools that run and exit don't need to reclaim memory
-3. **The design is simple** — no GC pauses, no write barriers, no reference cycles to worry about
+### What is NOT freed
 
-The trade-off is clear: long-running programs that produce many strings or arrays will eventually run out of buffer space. This is the biggest limitation of the current [memory model](memory-model.md) and the most obvious area for future improvement.
+- **Array elements** — freeing an array frees the array structure but not strings inside it (shallow free)
+- **Adjacent free blocks** are not coalesced — fragmentation can occur over time
+- **Intermediate allocations** within a single expression — only the final result is persisted
+
+### Performance characteristics
+
+For a loop like `for ($i = 0; $i < 1000; $i++) { $s .= "x"; }`:
+- Each iteration frees the old `$s` and allocates a new one
+- Old blocks go to the free list, new blocks come from bump allocation (growing size)
+- Net heap usage is O(N) for the final string, not O(N²)
+- With 8MB heap, this handles thousands of iterations comfortably
 
 ---
 

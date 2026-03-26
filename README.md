@@ -72,6 +72,9 @@ xattr -cr elephc
 # Compile a PHP file to a native binary
 elephc hello.php
 ./hello
+
+# Custom heap size (default: 8MB)
+elephc --heap-size=16777216 heavy.php
 ```
 
 Or via cargo:
@@ -256,7 +259,7 @@ src/
 ## Tests
 
 ```bash
-cargo test                      # all tests (~1150)
+cargo test                      # all tests (~1156)
 cargo test test_my_feature      # run specific tests
 ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 ```

@@ -98,8 +98,8 @@ src/
 │   │
 │   └── runtime/               ARM64 runtime routines (one file per function)
 │       ├── mod.rs             Emits all runtime functions into assembly
-│       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, ... (52 files)
-│       ├── arrays/            heap_alloc, array_new, hash_*, sort, usort, ... (48 files)
+│       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, str_persist, ... (53 files)
+│       ├── arrays/            heap_alloc, heap_free, array_new, hash_*, sort, usort, ... (49 files)
 │       ├── io/                fopen, fgets, fread, stat, scandir, ... (17 files)
 │       └── system/            build_argv, time, getenv, shell_exec, date, mktime, strtotime, json_encode, json_decode, preg (11 files)
 │
@@ -137,7 +137,7 @@ Offset  Size  Field
 
 ### Heap allocator
 
-1MB bump allocator in BSS (`_heap_buf`). No free, no GC. Simple offset bump via `_heap_off`.
+8MB free-list + bump hybrid allocator in BSS (`_heap_buf`). Each allocation has an 8-byte header storing the block size. When memory is freed (via `__rt_heap_free`), blocks are returned to a singly-linked free list (LIFO). New allocations check the free list first (first-fit), falling back to bump allocation if no suitable block exists. Configurable via `--heap-size=BYTES` (minimum 64KB). Bounds-checked with fatal error on overflow.
 
 ### Hash table header (heap-allocated, for associative arrays)
 
