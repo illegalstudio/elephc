@@ -100,13 +100,23 @@ pub fn emit_stmt(
                 let old_ty = var.ty.clone();
 
                 // -- free old heap value before overwriting --
-                if matches!(&old_ty, PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                if matches!(&old_ty, PhpType::Str) {
                     let needs_save_x0 = !matches!(&ty, PhpType::Str | PhpType::Float);
                     if needs_save_x0 {
                         emitter.instruction("mov x8, x0");                      // save new value in x8 temporarily
                     }
-                    abi::load_at_offset(emitter, "x0", offset);              // load old heap pointer
-                    emitter.instruction("bl __rt_heap_free_safe");              // free if valid heap pointer
+                    abi::load_at_offset(emitter, "x0", offset);                // load old string pointer
+                    emitter.instruction("bl __rt_heap_free_safe");              // free old string if on heap
+                    if needs_save_x0 {
+                        emitter.instruction("mov x0, x8");                      // restore new value
+                    }
+                } else if matches!(&old_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                    let needs_save_x0 = !matches!(&ty, PhpType::Str | PhpType::Float);
+                    if needs_save_x0 {
+                        emitter.instruction("mov x8, x0");                      // save new value in x8 temporarily
+                    }
+                    abi::load_at_offset(emitter, "x0", offset);                // load old array pointer
+                    emitter.instruction("bl __rt_array_free_deep");             // deep free array + string elements
                     if needs_save_x0 {
                         emitter.instruction("mov x0, x8");                      // restore new value
                     }
