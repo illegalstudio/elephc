@@ -6365,3 +6365,51 @@ echo implode(",", $names);
 "#);
     assert_eq!(out, "Alice,Bob");
 }
+
+#[test]
+fn test_round_precision_1() {
+    let out = compile_and_run("<?php echo round(1.55, 1);");
+    assert_eq!(out, "1.6");
+}
+
+#[test]
+fn test_round_precision_2() {
+    let out = compile_and_run("<?php echo round(3.14159, 2);");
+    assert_eq!(out, "3.14");
+}
+
+#[test]
+fn test_rtrim_mask() {
+    let out = compile_and_run(r#"<?php echo rtrim("hello...", ".");"#);
+    assert_eq!(out, "hello");
+}
+
+#[test]
+fn test_ltrim_mask() {
+    let out = compile_and_run(r#"<?php echo ltrim("000123", "0");"#);
+    assert_eq!(out, "123");
+}
+
+#[test]
+fn test_trim_mask() {
+    let out = compile_and_run(r#"<?php echo trim("**hello**", "*");"#);
+    assert_eq!(out, "hello");
+}
+
+#[test]
+fn test_min_three_args() {
+    let out = compile_and_run("<?php echo min(3, 1, 2);");
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_max_three_args() {
+    let out = compile_and_run("<?php echo max(1, 3, 2);");
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_min_five_args() {
+    let out = compile_and_run("<?php echo min(5, 4, 3, 2, 1);");
+    assert_eq!(out, "1");
+}

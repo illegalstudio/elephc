@@ -55,6 +55,9 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     strings::emit_sha1(emitter);
     strings::emit_hash(emitter);
     strings::emit_sscanf(emitter);
+    strings::emit_rtrim_mask(emitter);
+    strings::emit_ltrim_mask(emitter);
+    strings::emit_trim_mask(emitter);
 
     // System runtime functions
     system::emit_build_argv(emitter);

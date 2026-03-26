@@ -78,6 +78,12 @@ impl Checker {
                     if args.len() != 1 {
                         return Err(CompileError::new(span, "chr() takes exactly 1 argument"));
                     }
+                } else if name == "trim" || name == "ltrim" || name == "rtrim" {
+                    if args.is_empty() || args.len() > 2 {
+                        return Err(CompileError::new(
+                            span, &format!("{}() takes 1 or 2 arguments", name),
+                        ));
+                    }
                 } else if args.len() != expected {
                     return Err(CompileError::new(
                         span, &format!("{}() takes exactly {} argument{}", name, expected, if expected > 1 { "s" } else { "" }),
@@ -287,11 +293,19 @@ impl Checker {
                     _ => Ok(Some(PhpType::Int)),
                 }
             }
-            "floor" | "ceil" | "round" | "sqrt" => {
+            "floor" | "ceil" | "sqrt" => {
                 if args.len() != 1 {
                     return Err(CompileError::new(span, &format!("{}() takes exactly 1 argument", name)));
                 }
                 self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Float))
+            }
+            "round" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(CompileError::new(span, "round() takes 1 or 2 arguments"));
+                }
+                self.infer_type(&args[0], env)?;
+                if args.len() == 2 { self.infer_type(&args[1], env)?; }
                 Ok(Some(PhpType::Float))
             }
             "pow" => {
@@ -303,12 +317,15 @@ impl Checker {
                 Ok(Some(PhpType::Float))
             }
             "min" | "max" => {
-                if args.len() != 2 {
-                    return Err(CompileError::new(span, &format!("{}() takes exactly 2 arguments", name)));
+                if args.len() < 2 {
+                    return Err(CompileError::new(span, &format!("{}() requires at least 2 arguments", name)));
                 }
-                let t0 = self.infer_type(&args[0], env)?;
-                let t1 = self.infer_type(&args[1], env)?;
-                if t0 == PhpType::Float || t1 == PhpType::Float {
+                let mut has_float = false;
+                for arg in args {
+                    let t = self.infer_type(arg, env)?;
+                    if t == PhpType::Float { has_float = true; }
+                }
+                if has_float {
                     Ok(Some(PhpType::Float))
                 } else {
                     Ok(Some(PhpType::Int))
