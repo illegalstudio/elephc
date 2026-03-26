@@ -644,7 +644,7 @@ fn emit_array_access(
         // -- check if key was found --
         let not_found = ctx.next_label("hash_miss");
         let done = ctx.next_label("hash_done");
-        emitter.instruction(&format!("cbz x0, {not_found}"));                  // if found=0, jump to not-found handler
+        emitter.instruction(&format!("cbz x0, {not_found}"));                   // if found=0, jump to not-found handler
 
         // -- key found: move result to appropriate registers --
         match &val_ty {
@@ -661,14 +661,14 @@ fn emit_array_access(
                 emitter.instruction("mov x0, x1");                              // move value to x0
             }
         }
-        emitter.instruction(&format!("b {done}"));                             // skip not-found fallback
+        emitter.instruction(&format!("b {done}"));                              // skip not-found fallback
 
         // -- key not found: load null sentinel --
         emitter.label(&not_found);
-        emitter.instruction("movz x0, #0xFFFE");                               // load lowest 16 bits of null sentinel
-        emitter.instruction("movk x0, #0xFFFF, lsl #16");                      // insert bits 16-31 of null sentinel
-        emitter.instruction("movk x0, #0xFFFF, lsl #32");                      // insert bits 32-47 of null sentinel
-        emitter.instruction("movk x0, #0x7FFF, lsl #48");                      // insert bits 48-63 of null sentinel
+        emitter.instruction("movz x0, #0xFFFE");                                // load lowest 16 bits of null sentinel
+        emitter.instruction("movk x0, #0xFFFF, lsl #16");                       // insert bits 16-31 of null sentinel
+        emitter.instruction("movk x0, #0xFFFF, lsl #32");                       // insert bits 32-47 of null sentinel
+        emitter.instruction("movk x0, #0x7FFF, lsl #48");                       // insert bits 48-63 of null sentinel
 
         emitter.label(&done);
         return val_ty;
@@ -825,7 +825,7 @@ fn coerce_to_int_for_loose_cmp(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
         PhpType::Void => {
             // -- null coerces to 0 --
-            emitter.instruction("mov x0, #0");                                      // null is zero for loose comparison
+            emitter.instruction("mov x0, #0");                                  // null is zero for loose comparison
         }
         PhpType::Bool => {
             // Bool is already 0 or 1 in x0 — nothing to do
@@ -835,15 +835,15 @@ fn coerce_to_int_for_loose_cmp(emitter: &mut Emitter, ty: &PhpType) {
         }
         PhpType::Float => {
             // -- truncate float to integer --
-            emitter.instruction("fcvtzs x0, d0");                                   // convert float to signed int (truncate)
+            emitter.instruction("fcvtzs x0, d0");                               // convert float to signed int (truncate)
         }
         PhpType::Str => {
             // -- coerce string to int: empty string → 0, otherwise parse --
-            emitter.instruction("bl __rt_atoi");                                    // runtime: parse string as integer → x0
+            emitter.instruction("bl __rt_atoi");                                // runtime: parse string as integer → x0
         }
         _ => {
             // Arrays, callables — coerce to 0 as fallback
-            emitter.instruction("mov x0, #0");                                      // unsupported type coerces to 0
+            emitter.instruction("mov x0, #0");                                  // unsupported type coerces to 0
         }
     }
 }

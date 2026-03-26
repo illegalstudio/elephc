@@ -160,7 +160,7 @@ fn emit_function_with_label(
                         emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); // load local value
                     } else {
                         emitter.instruction(&format!("sub x8, x29, #{}", offset)); // compute stack address for large offset
-                        emitter.instruction("ldr x10, [x8]");                  // load local value via computed address
+                        emitter.instruction("ldr x10, [x8]");                   // load local value via computed address
                     }
                     emitter.instruction("str x10, [x9]");                       // save to static storage
                 }
@@ -169,7 +169,7 @@ fn emit_function_with_label(
                         emitter.instruction(&format!("ldur d0, [x29, #-{}]", offset)); // load local float
                     } else {
                         emitter.instruction(&format!("sub x8, x29, #{}", offset)); // compute stack address for large offset
-                        emitter.instruction("ldr d0, [x8]");                   // load local float via computed address
+                        emitter.instruction("ldr d0, [x8]");                    // load local float via computed address
                     }
                     emitter.instruction("str d0, [x9]");                        // save to static storage
                 }
@@ -178,14 +178,14 @@ fn emit_function_with_label(
                         emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); // load string ptr
                     } else {
                         emitter.instruction(&format!("sub x8, x29, #{}", offset)); // compute stack address for large offset
-                        emitter.instruction("ldr x10, [x8]");                  // load string ptr via computed address
+                        emitter.instruction("ldr x10, [x8]");                   // load string ptr via computed address
                     }
                     let len_offset = offset - 8;
                     if len_offset <= 255 {
                         emitter.instruction(&format!("ldur x11, [x29, #-{}]", len_offset)); // load string len
                     } else {
                         emitter.instruction(&format!("sub x8, x29, #{}", len_offset)); // compute stack address for large offset
-                        emitter.instruction("ldr x11, [x8]");                  // load string len via computed address
+                        emitter.instruction("ldr x11, [x8]");                   // load string len via computed address
                     }
                     emitter.instruction("str x10, [x9]");                       // save ptr to static storage
                     emitter.instruction("str x11, [x9, #8]");                   // save len to static storage
@@ -195,7 +195,7 @@ fn emit_function_with_label(
                         emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); // load local value
                     } else {
                         emitter.instruction(&format!("sub x8, x29, #{}", offset)); // compute stack address for large offset
-                        emitter.instruction("ldr x10, [x8]");                  // load local value via computed address
+                        emitter.instruction("ldr x10, [x8]");                   // load local value via computed address
                     }
                     emitter.instruction("str x10, [x9]");                       // save to static storage
                 }

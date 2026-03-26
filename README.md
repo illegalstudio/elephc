@@ -140,7 +140,7 @@ if ($x === 3) {
 | Variadic / Spread | `function sum(...$args) { }`, `func(...$arr)`, `[...$a, ...$b]` |
 | Pass by reference | `function inc(&$x) { $x++; }` |
 | Global / Static | `global $var;`, `static $counter = 0;` |
-| Closures / Arrow | `$fn = function($x) { return $x * 2; };`, `fn($x) => $x * 2` |
+| Closures / Arrow | `$fn = function($x) use ($y) { return $x * $y; };`, `fn($x) => $x * 2` |
 | Constants | `const MAX = 100;`, `define("PI", 3.14)` |
 | List unpacking | `[$a, $b] = [1, 2];` |
 | Include/Require | `include 'file.php';`, `require_once 'lib.php';` |
@@ -256,7 +256,7 @@ src/
 ## Tests
 
 ```bash
-cargo test                      # all tests (~1026)
+cargo test                      # all tests (~1150)
 cargo test test_my_feature      # run specific tests
 ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 ```

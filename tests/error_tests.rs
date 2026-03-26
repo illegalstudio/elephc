@@ -197,7 +197,7 @@ fn test_error_ceil_wrong_args() {
 
 #[test]
 fn test_error_round_wrong_args() {
-    expect_error("<?php round();", "round() takes exactly 1 argument");
+    expect_error("<?php round();", "round() takes 1 or 2 arguments");
 }
 
 #[test]
@@ -212,12 +212,12 @@ fn test_error_pow_wrong_args() {
 
 #[test]
 fn test_error_min_wrong_args() {
-    expect_error("<?php min(1);", "min() takes exactly 2 arguments");
+    expect_error("<?php min(1);", "min() requires at least 2 arguments");
 }
 
 #[test]
 fn test_error_max_wrong_args() {
-    expect_error("<?php max(1);", "max() takes exactly 2 arguments");
+    expect_error("<?php max(1);", "max() requires at least 2 arguments");
 }
 
 #[test]
