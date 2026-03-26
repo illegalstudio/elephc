@@ -566,9 +566,37 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                     return Err(CompileError::new(span, "Expected ')' after parameters"));
                 }
                 *pos += 1;
+                // Parse optional `use ($var1, $var2, ...)` capture list
+                let mut captures = Vec::new();
+                if *pos < tokens.len() && tokens[*pos].0 == Token::Use {
+                    *pos += 1; // consume 'use'
+                    if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
+                        return Err(CompileError::new(span, "Expected '(' after 'use'"));
+                    }
+                    *pos += 1; // consume '('
+                    while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
+                        if !captures.is_empty() {
+                            if tokens[*pos].0 != Token::Comma {
+                                return Err(CompileError::new(tokens[*pos].1, "Expected ',' between captured variables"));
+                            }
+                            *pos += 1;
+                        }
+                        match tokens.get(*pos).map(|(t, _)| t) {
+                            Some(Token::Variable(n)) => {
+                                captures.push(n.clone());
+                                *pos += 1;
+                            }
+                            _ => return Err(CompileError::new(span, "Expected variable in use() capture list")),
+                        }
+                    }
+                    if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
+                        return Err(CompileError::new(span, "Expected ')' after use() capture list"));
+                    }
+                    *pos += 1; // consume ')'
+                }
                 let body = crate::parser::stmt::parse_block(tokens, pos)?;
                 return Ok(Expr::new(
-                    ExprKind::Closure { params, variadic, body, is_arrow: false },
+                    ExprKind::Closure { params, variadic, body, is_arrow: false, captures },
                     span,
                 ));
             }
@@ -639,7 +667,7 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
             let body_expr = parse_expr(tokens, pos)?;
             let body = vec![Stmt::new(StmtKind::Return(Some(body_expr)), span)];
             Ok(Expr::new(
-                ExprKind::Closure { params, variadic, body, is_arrow: true },
+                ExprKind::Closure { params, variadic, body, is_arrow: true, captures: vec![] },
                 span,
             ))
         }

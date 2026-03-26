@@ -6413,3 +6413,46 @@ fn test_min_five_args() {
     let out = compile_and_run("<?php echo min(5, 4, 3, 2, 1);");
     assert_eq!(out, "1");
 }
+
+#[test]
+fn test_closure_use_int() {
+    let out = compile_and_run(r#"<?php
+$factor = 3;
+$mul = function($x) use ($factor) { return $x * $factor; };
+echo $mul(5);
+"#);
+    assert_eq!(out, "15");
+}
+
+#[test]
+fn test_closure_use_string() {
+    let out = compile_and_run(r#"<?php
+$greeting = "Hello";
+$greet = function($name) use ($greeting) { return $greeting . " " . $name; };
+echo $greet("World");
+"#);
+    assert_eq!(out, "Hello World");
+}
+
+#[test]
+fn test_closure_use_multiple() {
+    let out = compile_and_run(r#"<?php
+$a = 10;
+$b = 20;
+$sum = function() use ($a, $b) { return $a + $b; };
+echo $sum();
+"#);
+    assert_eq!(out, "30");
+}
+
+#[test]
+fn test_closure_use_no_params() {
+    let out = compile_and_run(r#"<?php
+$name = "World";
+$greet = function() use ($name) {
+    echo "Hello " . $name;
+};
+$greet();
+"#);
+    assert_eq!(out, "Hello World");
+}

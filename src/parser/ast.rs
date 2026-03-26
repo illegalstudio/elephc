@@ -61,6 +61,7 @@ pub enum ExprKind {
         variadic: Option<String>,
         body: Vec<Stmt>,
         is_arrow: bool,
+        captures: Vec<String>,
     },
     Spread(Box<Expr>),
     ClosureCall {

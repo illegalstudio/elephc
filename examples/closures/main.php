@@ -53,3 +53,21 @@ $sum = array_reduce([1, 2, 3, 4, 5], function($carry, $item) {
 echo "Sum of 1..5 = ";
 echo $sum;
 echo "\n";
+
+// Closures capturing variables with use()
+$factor = 3;
+$multiply = function($x) use ($factor) {
+    return $x * $factor;
+};
+echo "multiply(5) with factor=3: ";
+echo $multiply(5);
+echo "\n";
+
+// Multiple captures
+$prefix = "Result";
+$suffix = "!";
+$format = function($val) use ($prefix, $suffix) {
+    return $prefix . ": " . $val . $suffix;
+};
+echo $format("42");
+echo "\n";

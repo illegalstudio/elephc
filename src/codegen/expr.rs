@@ -291,8 +291,8 @@ pub fn emit_expr(
             }
             emit_function_call(name, args, emitter, ctx, data)
         }
-        ExprKind::Closure { params, body, is_arrow: _, variadic: _ } => {
-            emit_closure(params, body, emitter, ctx, data)
+        ExprKind::Closure { params, body, is_arrow: _, variadic: _, captures } => {
+            emit_closure(params, body, captures, emitter, ctx, data)
         }
         ExprKind::ClosureCall { var, args } => {
             emit_closure_call(var, args, emitter, ctx, data)
@@ -1490,22 +1490,42 @@ fn infer_closure_return_type(
 fn emit_closure(
     params: &[(String, Option<Expr>, bool)],
     body: &[crate::parser::ast::Stmt],
+    captures: &[String],
     emitter: &mut Emitter,
     ctx: &mut Context,
     _data: &mut DataSection,
 ) -> PhpType {
     let closure_label = ctx.next_label("closure");
 
-    // -- build a FunctionSig for the closure (params default to Int) --
-    let param_types: Vec<(String, crate::types::PhpType)> = params
+    // -- build capture list with types from enclosing scope --
+    let mut capture_types: Vec<(String, PhpType)> = Vec::new();
+    for cap_name in captures {
+        let ty = ctx.variables.get(cap_name)
+            .map(|v| v.ty.clone())
+            .unwrap_or(PhpType::Int);
+        capture_types.push((cap_name.clone(), ty));
+    }
+
+    // -- build a FunctionSig for the closure --
+    // Regular params come first, then captured vars as hidden params
+    let mut param_types: Vec<(String, crate::types::PhpType)> = params
         .iter()
         .map(|(p, _, _)| (p.clone(), PhpType::Int))
         .collect();
-    let defaults: Vec<Option<crate::parser::ast::Expr>> = params
+    for (cap_name, cap_ty) in &capture_types {
+        param_types.push((cap_name.clone(), cap_ty.clone()));
+    }
+    let mut defaults: Vec<Option<crate::parser::ast::Expr>> = params
         .iter()
         .map(|(_, default, _)| default.clone())
         .collect();
-    let ref_params: Vec<bool> = params.iter().map(|(_, _, is_ref)| *is_ref).collect();
+    for _ in &capture_types {
+        defaults.push(None);
+    }
+    let mut ref_params: Vec<bool> = params.iter().map(|(_, _, is_ref)| *is_ref).collect();
+    for _ in &capture_types {
+        ref_params.push(false);
+    }
     let preliminary_sig = crate::types::FunctionSig {
         params: param_types.clone(),
         defaults: defaults.clone(),
@@ -1529,6 +1549,7 @@ fn emit_closure(
         params: param_names,
         body: body.to_vec(),
         sig,
+        captures: capture_types,
     });
 
     emitter.comment("closure: load function address");
@@ -1549,12 +1570,16 @@ fn emit_closure_call(
 
     // -- build full argument list: passed args + defaults for missing params --
     let sig = ctx.closure_sigs.get(var).cloned();
-    let param_count = sig.as_ref().map(|s| s.params.len()).unwrap_or(args.len());
+    let captures = ctx.closure_captures.get(var).cloned().unwrap_or_default();
+    // param_count excludes hidden capture params — only count user-visible params
+    let visible_param_count = sig.as_ref()
+        .map(|s| s.params.len() - captures.len())
+        .unwrap_or(args.len());
 
     let mut all_args: Vec<&Expr> = args.iter().collect();
     let mut default_exprs: Vec<Expr> = Vec::new();
     if let Some(ref s) = sig {
-        for i in all_args.len()..param_count {
+        for i in all_args.len()..visible_param_count {
             if let Some(Some(default)) = s.defaults.get(i) {
                 default_exprs.push(default.clone());
             }
@@ -1582,6 +1607,54 @@ fn emit_closure_call(
         arg_types.push(ty);
     }
 
+    // -- refine deferred closure sig with actual argument types from call site --
+    // The closure sig defaults params to Int; update with actual types so the
+    // closure body receives parameters using the right register conventions.
+    if let Some(cached_sig) = ctx.closure_sigs.get(var).cloned() {
+        for deferred in &mut ctx.deferred_closures {
+            if deferred.sig.params == cached_sig.params {
+                for (i, ty) in arg_types.iter().enumerate() {
+                    if i < deferred.sig.params.len() {
+                        deferred.sig.params[i].1 = ty.clone();
+                    }
+                }
+                break;
+            }
+        }
+        if let Some(cached) = ctx.closure_sigs.get_mut(var) {
+            for (i, ty) in arg_types.iter().enumerate() {
+                if i < cached.params.len() {
+                    cached.params[i].1 = ty.clone();
+                }
+            }
+        }
+    }
+
+    // -- push captured variable values as hidden arguments --
+    for (cap_name, cap_ty) in &captures {
+        emitter.comment(&format!("push captured ${}", cap_name));
+        let cap_info = ctx.variables.get(cap_name).expect("captured variable not found");
+        let cap_offset = cap_info.stack_offset;
+        match cap_ty {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
+                abi::load_at_offset(emitter, "x0", cap_offset);                 // load captured int/bool/array value
+                emitter.instruction("str x0, [sp, #-16]!");                     // push captured value onto stack
+            }
+            PhpType::Float => {
+                abi::load_at_offset(emitter, "d0", cap_offset);                 // load captured float value
+                emitter.instruction("str d0, [sp, #-16]!");                     // push captured float onto stack
+            }
+            PhpType::Str => {
+                abi::load_at_offset(emitter, "x1", cap_offset);                 // load captured string pointer
+                abi::load_at_offset(emitter, "x2", cap_offset - 8);             // load captured string length
+                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push captured string ptr+len onto stack
+            }
+            PhpType::Void => {}
+        }
+        arg_types.push(cap_ty.clone());
+    }
+    let total_args = all_args.len() + captures.len();
+
     // -- load the closure function address from the variable's stack slot --
     let var_info = ctx.variables.get(var).expect("undefined closure variable");
     let var_offset = var_info.stack_offset;
@@ -1608,7 +1681,7 @@ fn emit_closure_call(
     // Pop closure address first (it's on top of args stack)
     emitter.instruction("ldr x9, [sp], #16");                                   // pop closure function address into x9
 
-    for i in (0..all_args.len()).rev() {
+    for i in (0..total_args).rev() {
         let (ty, start_reg, _is_float) = &assignments[i];
         match ty {
             PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {

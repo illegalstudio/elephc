@@ -388,7 +388,23 @@ $doubled = array_map(function($n) { return $n * 2; }, $nums);
 // $doubled = [2, 4, 6, 8]
 ```
 
-**Limitation:** `use ($var)` captures are not yet supported. Closures cannot access variables from the enclosing scope.
+Closures can capture variables from the enclosing scope with `use`:
+
+```php
+<?php
+$factor = 3;
+$multiply = function($x) use ($factor) {
+    return $x * $factor;
+};
+echo $multiply(5); // 15
+
+$a = 10;
+$b = 20;
+$sum = function() use ($a, $b) { return $a + $b; };
+echo $sum(); // 30
+```
+
+**Limitation:** Closures with `use` captures work for direct calls (`$fn(args)`) but cannot be passed to `array_map`, `array_filter`, etc. — those built-ins call the closure internally without the hidden capture arguments.
 
 ### Arrow functions
 
@@ -407,8 +423,6 @@ usort($nums, fn($a, $b) => $b - $a);
 ```
 
 Arrow functions are single-expression closures — the body is implicitly returned, no `return` keyword needed.
-
-**Limitation:** Like closures, arrow functions do not yet capture variables from the enclosing scope.
 
 ### Global variables
 
@@ -524,7 +538,7 @@ $d = [...$a, 5, 6, ...$b]; // [1, 2, 5, 6, 3, 4]
 
 ### Limitations
 
-- No `use ($var)` captures in closures
+- Closures with `use` captures cannot be passed to `array_map`, `array_filter`, etc. (only direct `$fn()` calls)
 
 ## Print
 

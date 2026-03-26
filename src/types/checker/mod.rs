@@ -422,7 +422,16 @@ impl Checker {
                     CompileError::new(expr.span, &format!("Undefined constant: {}", name))
                 })
             }
-            ExprKind::Closure { params, variadic, body, is_arrow: _ } => {
+            ExprKind::Closure { params, variadic, body, is_arrow: _, captures } => {
+                // Verify captured variables exist in the enclosing scope
+                for cap in captures {
+                    if !env.contains_key(cap) {
+                        return Err(CompileError::new(
+                            expr.span,
+                            &format!("Undefined variable in use(): ${}", cap),
+                        ));
+                    }
+                }
                 // Type-check the closure body in its own environment
                 let mut closure_env: TypeEnv = env.clone();
                 // Add params as Int (simple default for now — they'll be refined at call site)

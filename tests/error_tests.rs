@@ -1161,3 +1161,13 @@ echo test(1);
         "mixed return types",
     );
 }
+
+#[test]
+fn test_error_closure_use_undefined_variable() {
+    expect_error(
+        r#"<?php
+$fn = function() use ($undefined) { echo $undefined; };
+"#,
+        "Undefined variable in use(): $undefined",
+    );
+}

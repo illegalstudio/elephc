@@ -13,6 +13,7 @@ pub struct DeferredClosure {
     pub params: Vec<String>,
     pub body: Vec<Stmt>,
     pub sig: FunctionSig,
+    pub captures: Vec<(String, PhpType)>,
 }
 
 pub struct Context {
@@ -37,6 +38,8 @@ pub struct Context {
     pub all_static_vars: HashMap<(String, String), PhpType>,
     /// Closure signatures keyed by variable name, for resolving defaults at call sites.
     pub closure_sigs: HashMap<String, FunctionSig>,
+    /// Captured variables per closure variable name: maps $fn -> [(capture_name, type)].
+    pub closure_captures: HashMap<String, Vec<(String, PhpType)>>,
 }
 
 pub struct VarInfo {
@@ -66,6 +69,7 @@ impl Context {
             all_global_var_names: HashSet::new(),
             all_static_vars: HashMap::new(),
             closure_sigs: HashMap::new(),
+            closure_captures: HashMap::new(),
         }
     }
 

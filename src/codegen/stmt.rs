@@ -93,10 +93,13 @@ pub fn emit_stmt(
                 }
             }
 
-            // Track closure signatures for default parameter handling at call sites
+            // Track closure signatures and captures for call sites
             if matches!(&value.kind, ExprKind::Closure { .. }) {
                 if let Some(deferred) = ctx.deferred_closures.last() {
                     ctx.closure_sigs.insert(name.clone(), deferred.sig.clone());
+                    if !deferred.captures.is_empty() {
+                        ctx.closure_captures.insert(name.clone(), deferred.captures.clone());
+                    }
                 }
             }
 

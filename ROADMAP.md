@@ -135,7 +135,7 @@ Proper type system for PHP compatibility.
 - [x] Pass by reference: `function foo(&$x) { }`
 - [x] Default parameter values: `function foo($x = 10) { }`
 - [x] Variadic functions: `function foo(...$args) { }`
-- [x] Anonymous functions / closures: `$fn = function($x) { }` (`use` captures not yet supported)
+- [x] Anonymous functions / closures: `$fn = function($x) { }` with `use ($var)` captures
 - [x] Arrow functions: `$fn = fn($x) => $x * 2`
 - [x] Null coalescing: `$x ?? $default` (`??=` not yet supported)
 - [x] Spread operator: `func(...$args)`, `[...$a, ...$b]`
