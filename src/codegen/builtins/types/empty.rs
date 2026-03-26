@@ -46,9 +46,9 @@ pub fn emit(
             emitter.instruction("cmp x0, #0");                                  // compare element count against zero
             emitter.instruction("cset x0, eq");                                 // x0 = 1 if empty array, 0 otherwise
         }
-        PhpType::Callable => {
-            // -- callable is never empty --
-            emitter.instruction("mov x0, #0");                                  // callable is never empty, return false
+        PhpType::Callable | PhpType::Object(_) => {
+            // -- callable/object is never empty --
+            emitter.instruction("mov x0, #0");                                  // callable/object is never empty, return false
         }
     }
     Some(PhpType::Bool)

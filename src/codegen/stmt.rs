@@ -868,6 +868,64 @@ pub fn emit_stmt(
             // Should have been resolved before codegen
             panic!("Unresolved include statement in codegen");
         }
+        // OOP stubs — not yet implemented, skip
+        StmtKind::ClassDecl { .. } => {} // already emitted in pre-scan
+        StmtKind::PropertyAssign { object, property, value } => {
+            emitter.blank();
+            emitter.comment(&format!("->{}  = ...", property));
+
+            // Evaluate value expression first
+            let val_ty = emit_expr(value, emitter, ctx, data);
+
+            // Save value registers to stack
+            match &val_ty {
+                PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
+                | PhpType::Callable | PhpType::Object(_) => {
+                    emitter.instruction("str x0, [sp, #-16]!");                 // save value on stack
+                }
+                PhpType::Float => {
+                    emitter.instruction("str d0, [sp, #-16]!");                 // save float value on stack
+                }
+                PhpType::Str => {
+                    emitter.instruction("stp x1, x2, [sp, #-16]!");             // save string ptr+len on stack
+                }
+                PhpType::Void => {}
+            }
+
+            // Evaluate object expression → x0 = object pointer
+            let obj_ty = emit_expr(object, emitter, ctx, data);
+            let class_name = match &obj_ty {
+                PhpType::Object(cn) => cn.clone(),
+                _ => panic!("property assign on non-object"),
+            };
+            let class_info = ctx.classes.get(&class_name).cloned()
+                .expect(&format!("undefined class: {}", class_name));
+            let prop_idx = class_info.properties.iter().position(|(n, _)| n == property)
+                .expect(&format!("undefined property: {}", property));
+            let offset = 8 + prop_idx * 16;
+
+            // Save object pointer
+            emitter.instruction("mov x9, x0");                                  // save object pointer in x9
+
+            // Pop value from stack and store into property
+            match &val_ty {
+                PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
+                | PhpType::Callable | PhpType::Object(_) => {
+                    emitter.instruction("ldr x10, [sp], #16");                  // pop saved value
+                    emitter.instruction(&format!("str x10, [x9, #{}]", offset)); // store value into property
+                }
+                PhpType::Float => {
+                    emitter.instruction("ldr d0, [sp], #16");                   // pop saved float
+                    emitter.instruction(&format!("str d0, [x9, #{}]", offset)); // store float into property
+                }
+                PhpType::Str => {
+                    emitter.instruction("ldp x1, x2, [sp], #16");               // pop saved string ptr+len
+                    emitter.instruction(&format!("str x1, [x9, #{}]", offset)); // store string pointer into property
+                    emitter.instruction(&format!("str x2, [x9, #{}]", offset + 8)); // store string length into property
+                }
+                PhpType::Void => {}
+            }
+        }
     }
 }
 

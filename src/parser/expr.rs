@@ -33,6 +33,44 @@ fn parse_expr_bp(
         );
     }
 
+    // Postfix property/method access: $obj->prop or $obj->method(args)
+    while *pos < tokens.len() && tokens[*pos].0 == Token::Arrow {
+        let arrow_span = tokens[*pos].1;
+        *pos += 1; // consume ->
+        let member_name = match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Identifier(n)) => { let n = n.clone(); *pos += 1; n }
+            _ => return Err(CompileError::new(arrow_span, "Expected property or method name after '->'")),
+        };
+        // Check if method call: ->method(args)
+        if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
+            *pos += 1;
+            let mut args = Vec::new();
+            while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
+                if !args.is_empty() {
+                    if tokens[*pos].0 != Token::Comma {
+                        return Err(CompileError::new(tokens[*pos].1, "Expected ',' between arguments"));
+                    }
+                    *pos += 1;
+                }
+                args.push(parse_expr(tokens, pos)?);
+            }
+            if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
+                return Err(CompileError::new(arrow_span, "Expected ')' after method arguments"));
+            }
+            *pos += 1;
+            lhs = Expr::new(
+                ExprKind::MethodCall { object: Box::new(lhs), method: member_name, args },
+                arrow_span,
+            );
+        } else {
+            // Property access: ->prop
+            lhs = Expr::new(
+                ExprKind::PropertyAccess { object: Box::new(lhs), property: member_name },
+                arrow_span,
+            );
+        }
+    }
+
     // Postfix call on expression result: $arr[0](args), $f()(), etc.
     while *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
         if matches!(lhs.kind, ExprKind::ArrayAccess { .. } | ExprKind::ExprCall { .. } | ExprKind::ClosureCall { .. } | ExprKind::FunctionCall { .. }) {
@@ -700,10 +738,67 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                 }
                 *pos += 1;
                 Ok(Expr::new(ExprKind::FunctionCall { name, args }, span))
+            } else if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleColon {
+                // Static method call: ClassName::method(args)
+                *pos += 1; // consume ::
+                let method = match tokens.get(*pos).map(|(t, _)| t) {
+                    Some(Token::Identifier(m)) => { let m = m.clone(); *pos += 1; m }
+                    _ => return Err(CompileError::new(span, "Expected method name after '::'")),
+                };
+                if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
+                    return Err(CompileError::new(span, "Expected '(' after static method name"));
+                }
+                *pos += 1;
+                let mut args = Vec::new();
+                while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
+                    if !args.is_empty() {
+                        if tokens[*pos].0 != Token::Comma {
+                            return Err(CompileError::new(tokens[*pos].1, "Expected ',' between arguments"));
+                        }
+                        *pos += 1;
+                    }
+                    args.push(parse_expr(tokens, pos)?);
+                }
+                if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
+                    return Err(CompileError::new(span, "Expected ')' after arguments"));
+                }
+                *pos += 1;
+                Ok(Expr::new(ExprKind::StaticMethodCall { class_name: name, method, args }, span))
             } else {
                 // Bare identifier — treat as constant reference (validated by type checker)
                 Ok(Expr::new(ExprKind::ConstRef(name), span))
             }
+        }
+        Token::New => {
+            *pos += 1; // consume 'new'
+            let class_name = match tokens.get(*pos).map(|(t, _)| t) {
+                Some(Token::Identifier(n)) => { let n = n.clone(); *pos += 1; n }
+                _ => return Err(CompileError::new(span, "Expected class name after 'new'")),
+            };
+            // Parse constructor arguments
+            if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
+                return Err(CompileError::new(span, "Expected '(' after class name"));
+            }
+            *pos += 1;
+            let mut args = Vec::new();
+            while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
+                if !args.is_empty() {
+                    if tokens[*pos].0 != Token::Comma {
+                        return Err(CompileError::new(tokens[*pos].1, "Expected ',' between arguments"));
+                    }
+                    *pos += 1;
+                }
+                args.push(parse_expr(tokens, pos)?);
+            }
+            if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
+                return Err(CompileError::new(span, "Expected ')' after constructor arguments"));
+            }
+            *pos += 1;
+            Ok(Expr::new(ExprKind::NewObject { class_name, args }, span))
+        }
+        Token::This => {
+            *pos += 1;
+            Ok(Expr::new(ExprKind::This, span))
         }
         other => Err(CompileError::new(
             span,

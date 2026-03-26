@@ -97,7 +97,11 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
             if cursor.peek() == Some('?') { cursor.advance(); Ok(Token::QuestionQuestion) }
             else { Ok(Token::Question) }
         }
-        ':' => { cursor.advance(); Ok(Token::Colon) }
+        ':' => {
+            cursor.advance();
+            if cursor.peek() == Some(':') { cursor.advance(); Ok(Token::DoubleColon) }
+            else { Ok(Token::Colon) }
+        }
         '(' => { cursor.advance(); Ok(Token::LParen) }
         ')' => { cursor.advance(); Ok(Token::RParen) }
         '{' => { cursor.advance(); Ok(Token::LBrace) }
@@ -165,6 +169,7 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
         '-' => {
             cursor.advance();
             match cursor.peek() {
+                Some('>') => { cursor.advance(); Ok(Token::Arrow) }
                 Some('-') => { cursor.advance(); Ok(Token::MinusMinus) }
                 Some('=') => { cursor.advance(); Ok(Token::MinusAssign) }
                 _ => Ok(Token::Minus),

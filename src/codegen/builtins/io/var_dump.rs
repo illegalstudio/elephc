@@ -193,6 +193,17 @@ pub fn emit(
             emitter.instruction("mov x16, #4");                                 // syscall write
             emitter.instruction("svc #0x80");                                   // invoke kernel
         }
+        PhpType::Object(class_name) => {
+            // -- print "object(ClassName)\n" --
+            let obj_str = format!("object({})\n", class_name);
+            let (lbl, len) = data.add_string(obj_str.as_bytes());
+            emitter.instruction(&format!("adrp x1, {}@PAGE", lbl));             // load object string page
+            emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", lbl));       // resolve address
+            emitter.instruction(&format!("mov x2, #{}", len));                  // string length
+            emitter.instruction("mov x0, #1");                                  // fd = stdout
+            emitter.instruction("mov x16, #4");                                 // syscall write
+            emitter.instruction("svc #0x80");                                   // invoke kernel
+        }
     }
     Some(PhpType::Void)
 }

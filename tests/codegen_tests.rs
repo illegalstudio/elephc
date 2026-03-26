@@ -70,6 +70,7 @@ fn compile_and_run(source: &str) -> String {
         &resolved,
         &check_result.global_env,
         &check_result.functions,
+        &check_result.classes,
         8_388_608,
     );
 
@@ -123,6 +124,7 @@ fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> String {
         &resolved,
         &check_result.global_env,
         &check_result.functions,
+        &check_result.classes,
         8_388_608,
     );
 
@@ -177,6 +179,7 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
         &resolved,
         &check_result.global_env,
         &check_result.functions,
+        &check_result.classes,
         8_388_608,
     );
 
@@ -239,6 +242,7 @@ fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {
         &resolved,
         &check_result.global_env,
         &check_result.functions,
+        &check_result.classes,
         8_388_608,
     );
 

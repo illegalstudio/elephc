@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::errors::CompileError;
 use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Program, Stmt, StmtKind};
-use crate::types::{CheckResult, FunctionSig, PhpType, TypeEnv};
+use crate::types::{CheckResult, ClassInfo, FunctionSig, PhpType, TypeEnv};
 
 /// Infer a function's return type by scanning its body for Return statements.
 /// This is a syntactic/heuristic check — no full type inference.
@@ -65,6 +65,7 @@ fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             }
         }
         ExprKind::Ternary { then_expr, .. } => infer_expr_type_syntactic(then_expr),
+        ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.clone()),
         _ => PhpType::Int,
     }
 }
@@ -75,6 +76,10 @@ pub(crate) struct Checker {
     pub constants: HashMap<String, PhpType>,
     /// Tracks the return type of closures assigned to variables.
     pub closure_return_types: HashMap<String, PhpType>,
+    /// Class definitions collected during first pass.
+    pub classes: HashMap<String, ClassInfo>,
+    /// Name of the class currently being type-checked (for $this).
+    pub current_class: Option<String>,
 }
 
 #[derive(Clone)]
@@ -92,6 +97,8 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         functions: HashMap::new(),
         constants: HashMap::new(),
         closure_return_types: HashMap::new(),
+        classes: HashMap::new(),
+        current_class: None,
     };
 
     for stmt in program {
@@ -109,6 +116,56 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                     body: body.clone(),
                 },
             );
+        }
+    }
+
+    // First pass: collect class declarations and build ClassInfo
+    for stmt in program {
+        if let StmtKind::ClassDecl { name, properties, methods } = &stmt.kind {
+            let mut prop_types = Vec::new();
+            for prop in properties {
+                let ty = if let Some(default) = &prop.default {
+                    infer_expr_type_syntactic(default)
+                } else {
+                    PhpType::Int // properties without defaults are set by constructor
+                };
+                prop_types.push((prop.name.clone(), ty));
+            }
+            let mut method_sigs = HashMap::new();
+            let mut static_sigs = HashMap::new();
+            for method in methods {
+                let params: Vec<(String, PhpType)> = method.params.iter()
+                    .map(|(n, _, _)| (n.clone(), PhpType::Int))
+                    .collect();
+                let defaults: Vec<Option<Expr>> = method.params.iter()
+                    .map(|(_, d, _)| d.clone())
+                    .collect();
+                let ref_params: Vec<bool> = method.params.iter()
+                    .map(|(_, _, r)| *r)
+                    .collect();
+                let return_type = infer_return_type_syntactic(&method.body);
+                let sig = FunctionSig {
+                    params,
+                    defaults,
+                    return_type,
+                    ref_params,
+                    variadic: method.variadic.clone(),
+                };
+                if method.is_static {
+                    static_sigs.insert(method.name.clone(), sig);
+                } else {
+                    method_sigs.insert(method.name.clone(), sig);
+                }
+            }
+            let defaults: Vec<Option<Expr>> = properties.iter()
+                .map(|p| p.default.clone())
+                .collect();
+            checker.classes.insert(name.clone(), ClassInfo {
+                properties: prop_types,
+                defaults,
+                methods: method_sigs,
+                static_methods: static_sigs,
+            });
         }
     }
 
@@ -145,6 +202,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
     Ok(CheckResult {
         global_env,
         functions: checker.functions,
+        classes: checker.classes,
     })
 }
 
@@ -337,6 +395,47 @@ impl Checker {
             StmtKind::FunctionDecl { .. } => Ok(()),
             StmtKind::Return(expr) => {
                 if let Some(e) = expr { self.infer_type(e, env)?; }
+                Ok(())
+            }
+            StmtKind::ClassDecl { name, methods, .. } => {
+                // Type-check method bodies with $this in scope
+                for method in methods {
+                    if !method.is_static {
+                        let mut method_env: TypeEnv = env.clone();
+                        method_env.insert("this".to_string(), PhpType::Object(name.clone()));
+                        for (pname, _, _) in &method.params {
+                            method_env.insert(pname.clone(), PhpType::Int);
+                        }
+                        self.current_class = Some(name.clone());
+                        for s in &method.body {
+                            self.check_stmt(s, &mut method_env)?;
+                        }
+                        self.current_class = None;
+                    } else {
+                        let mut method_env: TypeEnv = env.clone();
+                        for (pname, _, _) in &method.params {
+                            method_env.insert(pname.clone(), PhpType::Int);
+                        }
+                        for s in &method.body {
+                            self.check_stmt(s, &mut method_env)?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+            StmtKind::PropertyAssign { object, property, value } => {
+                let obj_ty = self.infer_type(object, env)?;
+                if let PhpType::Object(class_name) = &obj_ty {
+                    if let Some(class_info) = self.classes.get(class_name) {
+                        if !class_info.properties.iter().any(|(n, _)| n == property) {
+                            return Err(CompileError::new(
+                                stmt.span,
+                                &format!("Undefined property: {}::{}", class_name, property),
+                            ));
+                        }
+                    }
+                }
+                self.infer_type(value, env)?;
                 Ok(())
             }
         }
@@ -643,6 +742,65 @@ impl Checker {
                         // but handle gracefully
                         if lt == PhpType::Void { Ok(rt) } else { Ok(lt) }
                     }
+                }
+            }
+            ExprKind::NewObject { class_name, args } => {
+                if !self.classes.contains_key(class_name) {
+                    return Err(CompileError::new(
+                        expr.span,
+                        &format!("Undefined class: {}", class_name),
+                    ));
+                }
+                for arg in args {
+                    self.infer_type(arg, env)?;
+                }
+                Ok(PhpType::Object(class_name.clone()))
+            }
+            ExprKind::PropertyAccess { object, property } => {
+                let obj_ty = self.infer_type(object, env)?;
+                if let PhpType::Object(class_name) = &obj_ty {
+                    if let Some(class_info) = self.classes.get(class_name) {
+                        if let Some((_, ty)) = class_info.properties.iter().find(|(n, _)| n == property) {
+                            return Ok(ty.clone());
+                        }
+                        return Err(CompileError::new(
+                            expr.span,
+                            &format!("Undefined property: {}::{}", class_name, property),
+                        ));
+                    }
+                }
+                Ok(PhpType::Int)
+            }
+            ExprKind::MethodCall { object, method, args } => {
+                let obj_ty = self.infer_type(object, env)?;
+                for arg in args {
+                    self.infer_type(arg, env)?;
+                }
+                if let PhpType::Object(class_name) = &obj_ty {
+                    if let Some(class_info) = self.classes.get(class_name) {
+                        if let Some(sig) = class_info.methods.get(method) {
+                            return Ok(sig.return_type.clone());
+                        }
+                    }
+                }
+                Ok(PhpType::Int)
+            }
+            ExprKind::StaticMethodCall { class_name, method, args } => {
+                for arg in args {
+                    self.infer_type(arg, env)?;
+                }
+                if let Some(class_info) = self.classes.get(class_name) {
+                    if let Some(sig) = class_info.static_methods.get(method) {
+                        return Ok(sig.return_type.clone());
+                    }
+                }
+                Ok(PhpType::Int)
+            }
+            ExprKind::This => {
+                if let Some(class_name) = &self.current_class {
+                    Ok(PhpType::Object(class_name.clone()))
+                } else {
+                    Err(CompileError::new(expr.span, "Cannot use $this outside of a class method"))
                 }
             }
         }

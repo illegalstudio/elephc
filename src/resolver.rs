@@ -34,6 +34,9 @@ fn has_includes(stmts: &[Stmt]) -> bool {
         | StmtKind::For { body, .. }
         | StmtKind::Foreach { body, .. }
         | StmtKind::FunctionDecl { body, .. } => has_includes(body),
+        StmtKind::ClassDecl { methods, .. } => {
+            methods.iter().any(|m| has_includes(&m.body))
+        }
         StmtKind::ConstDecl { .. } | StmtKind::ListUnpack { .. }
         | StmtKind::Global { .. } | StmtKind::StaticVar { .. } => false,
         StmtKind::Switch { cases, default, .. } => {
@@ -193,6 +196,25 @@ fn resolve_stmts(
                         params: params.clone(),
                         variadic: variadic.clone(),
                         body: body_resolved,
+                    },
+                    stmt.span,
+                ));
+            }
+            StmtKind::ClassDecl { name, properties, methods } => {
+                let mut methods_resolved = Vec::new();
+                for method in methods {
+                    let body_resolved =
+                        resolve_stmts(method.body.clone(), base_dir, included, include_chain)?;
+                    methods_resolved.push(crate::parser::ast::ClassMethod {
+                        body: body_resolved,
+                        ..method.clone()
+                    });
+                }
+                result.push(Stmt::new(
+                    StmtKind::ClassDecl {
+                        name: name.clone(),
+                        properties: properties.clone(),
+                        methods: methods_resolved,
                     },
                     stmt.span,
                 ));

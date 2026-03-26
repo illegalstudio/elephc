@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::parser::ast::{ExprKind, Stmt};
-use crate::types::{FunctionSig, PhpType};
+use crate::types::{ClassInfo, FunctionSig, PhpType};
 
 static GLOBAL_LABEL_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -40,6 +40,10 @@ pub struct Context {
     pub closure_sigs: HashMap<String, FunctionSig>,
     /// Captured variables per closure variable name: maps $fn -> [(capture_name, type)].
     pub closure_captures: HashMap<String, Vec<(String, PhpType)>>,
+    /// Class definitions for OOP support.
+    pub classes: HashMap<String, ClassInfo>,
+    /// Name of the class currently being compiled (for $this resolution).
+    pub current_class: Option<String>,
 }
 
 pub struct VarInfo {
@@ -70,6 +74,8 @@ impl Context {
             all_static_vars: HashMap::new(),
             closure_sigs: HashMap::new(),
             closure_captures: HashMap::new(),
+            classes: HashMap::new(),
+            current_class: None,
         }
     }
 

@@ -138,6 +138,10 @@ pub fn scan_variable(cursor: &mut Cursor) -> Result<Token, CompileError> {
         return Err(CompileError::new(cursor.span(), "Expected variable name after '$'"));
     }
 
+    if name == "this" {
+        return Ok(Token::This);
+    }
+
     Ok(Token::Variable(name))
 }
 
@@ -327,6 +331,11 @@ pub fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
         "const" => Ok(Token::Const),
         "global" => Ok(Token::Global),
         "static" => Ok(Token::Static),
+        "class" => Ok(Token::Class),
+        "new" => Ok(Token::New),
+        "public" => Ok(Token::Public),
+        "private" => Ok(Token::Private),
+        "readonly" => Ok(Token::ReadOnly),
         "PHP_EOL" => Ok(Token::PhpEol),
         "PHP_OS" => Ok(Token::PhpOs),
         "DIRECTORY_SEPARATOR" => Ok(Token::DirectorySeparator),

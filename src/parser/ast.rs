@@ -73,6 +73,25 @@ pub enum ExprKind {
         args: Vec<Expr>,
     },
     ConstRef(String),
+    NewObject {
+        class_name: String,
+        args: Vec<Expr>,
+    },
+    PropertyAccess {
+        object: Box<Expr>,
+        property: String,
+    },
+    MethodCall {
+        object: Box<Expr>,
+        method: String,
+        args: Vec<Expr>,
+    },
+    StaticMethodCall {
+        class_name: String,
+        method: String,
+        args: Vec<Expr>,
+    },
+    This,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -243,6 +262,16 @@ pub enum StmtKind {
         name: String,
         init: Expr,
     },
+    ClassDecl {
+        name: String,
+        properties: Vec<ClassProperty>,
+        methods: Vec<ClassMethod>,
+    },
+    PropertyAssign {
+        object: Box<Expr>,
+        property: String,
+        value: Expr,
+    },
 }
 
 impl PartialEq for Stmt {
@@ -273,3 +302,47 @@ impl Stmt {
 }
 
 pub type Program = Vec<Stmt>;
+
+// --- OOP ---
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Visibility {
+    Public,
+    Private,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClassProperty {
+    pub name: String,
+    pub visibility: Visibility,
+    pub readonly: bool,
+    pub default: Option<Expr>,
+    #[allow(dead_code)] // Used for error reporting in future phases
+    pub span: Span,
+}
+
+impl PartialEq for ClassProperty {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.visibility == other.visibility
+            && self.readonly == other.readonly
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ClassMethod {
+    pub name: String,
+    pub visibility: Visibility,
+    pub is_static: bool,
+    pub params: Vec<(String, Option<Expr>, bool)>,
+    pub variadic: Option<String>,
+    pub body: Vec<Stmt>,
+    #[allow(dead_code)] // Used for error reporting in future phases
+    pub span: Span,
+}
+
+impl PartialEq for ClassMethod {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.visibility == other.visibility
+            && self.is_static == other.is_static
+    }
+}

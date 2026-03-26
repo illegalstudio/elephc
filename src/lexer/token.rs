@@ -60,6 +60,12 @@ pub enum Token {
     PhpEol,
     PhpOs,
     DirectorySeparator,
+    Class,          // class
+    New,            // new
+    Public,         // public
+    Private,        // private
+    ReadOnly,       // readonly
+    This,           // $this
 
     // Operators
     Assign,         // =
@@ -112,6 +118,10 @@ pub enum Token {
     Tilde,          // ~
     LessLess,       // <<
     GreaterGreater, // >>
+
+    // Object access
+    Arrow,          // ->
+    DoubleColon,    // ::
 
     // Null coalescing
     QuestionQuestion, // ??
