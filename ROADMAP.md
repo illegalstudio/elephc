@@ -194,7 +194,21 @@ Proper type system for PHP compatibility.
 - [ ] Objects as function parameters and return values
 - [ ] Objects stored in arrays
 
-## v0.11.x — Garbage collector
+## v0.11.x — FFI (Foreign Function Interface)
+
+- [ ] `extern function` declarations with C type annotations (`int`, `float`, `string`, `bool`, `void`, `ptr`)
+- [ ] `extern "libname" { }` blocks (auto `-l` linker flag)
+- [ ] `--link` / `-l` and `--link-path` / `-L` CLI flags
+- [ ] `--framework` flag for macOS frameworks
+- [ ] Null-terminated string ↔ length-prefixed string conversion (`__rt_str_to_cstr`, `__rt_cstr_to_str`)
+- [ ] Opaque pointer type (`ptr`) for handles and `void*`
+- [ ] Typed pointers (`ptr<ClassName>`) for C struct access
+- [ ] `extern class` for C struct mapping (flat layout, no methods)
+- [ ] Pointer builtins: `ptr()`, `ptr_null()`, `ptr_is_null()`, `ptr_offset()`, `ptr_cast<T>()`
+- [ ] Callback support: pass elephc functions as C function pointers (`callable` params)
+- [ ] `extern global` for accessing C global variables
+
+## v0.12.x — Garbage collector
 
 - [ ] Reference counting for strings, arrays, and objects
 - [ ] Automatic free when reference count drops to zero
