@@ -229,9 +229,20 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 if !method.is_static {
                     method_env.insert("this".to_string(), PhpType::Object(name.clone()));
                 }
-                // Infer param types from constructor mapping + class info
-                for (pname, _, _) in &method.params {
-                    method_env.insert(pname.clone(), PhpType::Int);
+                // Use param types from ClassInfo sig (updated by MethodCall inference)
+                let method_sig_key = if method.is_static { "static" } else { "instance" };
+                let _ = method_sig_key;
+                let sig_params = if method.is_static {
+                    checker.classes.get(name).and_then(|c| c.static_methods.get(&method.name)).map(|s| s.params.clone())
+                } else {
+                    checker.classes.get(name).and_then(|c| c.methods.get(&method.name)).map(|s| s.params.clone())
+                };
+                for (i, (pname, _, _)) in method.params.iter().enumerate() {
+                    let ty = sig_params.as_ref()
+                        .and_then(|p| p.get(i))
+                        .map(|(_, t)| t.clone())
+                        .unwrap_or(PhpType::Int);
+                    method_env.insert(pname.clone(), ty);
                 }
                 // For __construct: infer param types from property types
                 // This updates both the env (for body type-checking) and the sig
@@ -855,12 +866,20 @@ impl Checker {
             }
             ExprKind::MethodCall { object, method, args } => {
                 let obj_ty = self.infer_type(object, env)?;
+                // Infer arg types and propagate to method sig params
+                let mut arg_types = Vec::new();
                 for arg in args {
-                    self.infer_type(arg, env)?;
+                    arg_types.push(self.infer_type(arg, env)?);
                 }
                 if let PhpType::Object(class_name) = &obj_ty {
-                    if let Some(class_info) = self.classes.get(class_name) {
-                        if let Some(sig) = class_info.methods.get(method) {
+                    // Update method param types from actual arg types
+                    if let Some(class_info) = self.classes.get_mut(class_name) {
+                        if let Some(sig) = class_info.methods.get_mut(method) {
+                            for (i, arg_ty) in arg_types.iter().enumerate() {
+                                if i < sig.params.len() && sig.params[i].1 == PhpType::Int && *arg_ty != PhpType::Int {
+                                    sig.params[i].1 = arg_ty.clone();
+                                }
+                            }
                             return Ok(sig.return_type.clone());
                         }
                     }

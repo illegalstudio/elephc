@@ -745,8 +745,8 @@ fn emit_array_literal(
                     24 + i * 16 + 8
                 ));
             }
-            PhpType::Array(_) | PhpType::AssocArray { .. } => {
-                emitter.instruction(&format!(                                   // store nested array pointer at data offset
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+                emitter.instruction(&format!(                                   // store array/object pointer at data offset
                     "str x0, [x9, #{}]",
                     24 + i * 8
                 ));
@@ -1064,10 +1064,10 @@ fn emit_array_access(
             emitter.instruction("ldr x1, [x9]");                                // load string pointer from element slot
             emitter.instruction("ldr x2, [x9, #8]");                            // load string length from element slot
         }
-        PhpType::Array(_) | PhpType::AssocArray { .. } => {
-            // -- load nested array/hash pointer: base + 24-byte header + index*8 --
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            // -- load array/hash/object pointer: base + 24-byte header + index*8 --
             emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header to reach data
-            emitter.instruction("ldr x0, [x9, x0, lsl #3]");                    // load nested array pointer at index
+            emitter.instruction("ldr x0, [x9, x0, lsl #3]");                    // load pointer at index
         }
         _ => {}
     }
