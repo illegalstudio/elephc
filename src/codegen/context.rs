@@ -35,6 +35,8 @@ pub struct Context {
     pub all_global_var_names: HashSet<String>,
     /// Static variable declarations: (func_name, var_name) -> type
     pub all_static_vars: HashMap<(String, String), PhpType>,
+    /// Closure signatures keyed by variable name, for resolving defaults at call sites.
+    pub closure_sigs: HashMap<String, FunctionSig>,
 }
 
 pub struct VarInfo {
@@ -63,6 +65,7 @@ impl Context {
             in_main: false,
             all_global_var_names: HashSet::new(),
             all_static_vars: HashMap::new(),
+            closure_sigs: HashMap::new(),
         }
     }
 

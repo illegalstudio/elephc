@@ -298,8 +298,7 @@ pub fn emit_expr(
             emit_function_call(name, args, emitter, ctx, data)
         }
         ExprKind::Closure { params, body, is_arrow: _, variadic: _ } => {
-            let param_names: Vec<String> = params.iter().map(|(n, _, _)| n.clone()).collect();
-            emit_closure(&param_names, body, emitter, ctx, data)
+            emit_closure(params, body, emitter, ctx, data)
         }
         ExprKind::ClosureCall { var, args } => {
             emit_closure_call(var, args, emitter, ctx, data)
@@ -1466,7 +1465,7 @@ fn infer_closure_return_type(
 }
 
 fn emit_closure(
-    params: &[String],
+    params: &[(String, Option<Expr>, bool)],
     body: &[crate::parser::ast::Stmt],
     emitter: &mut Emitter,
     ctx: &mut Context,
@@ -1477,10 +1476,13 @@ fn emit_closure(
     // -- build a FunctionSig for the closure (params default to Int) --
     let param_types: Vec<(String, crate::types::PhpType)> = params
         .iter()
-        .map(|p| (p.clone(), PhpType::Int))
+        .map(|(p, _, _)| (p.clone(), PhpType::Int))
         .collect();
-    let defaults: Vec<Option<crate::parser::ast::Expr>> = params.iter().map(|_| None).collect();
-    let ref_params: Vec<bool> = params.iter().map(|_| false).collect();
+    let defaults: Vec<Option<crate::parser::ast::Expr>> = params
+        .iter()
+        .map(|(_, default, _)| default.clone())
+        .collect();
+    let ref_params: Vec<bool> = params.iter().map(|(_, _, is_ref)| *is_ref).collect();
     let preliminary_sig = crate::types::FunctionSig {
         params: param_types.clone(),
         defaults: defaults.clone(),
@@ -1498,9 +1500,10 @@ fn emit_closure(
     };
 
     // -- defer the closure body emission for later --
+    let param_names: Vec<String> = params.iter().map(|(n, _, _)| n.clone()).collect();
     ctx.deferred_closures.push(super::context::DeferredClosure {
         label: closure_label.clone(),
-        params: params.to_vec(),
+        params: param_names,
         body: body.to_vec(),
         sig,
     });
@@ -1521,9 +1524,25 @@ fn emit_closure_call(
 ) -> PhpType {
     emitter.comment(&format!("call ${}()", var));
 
+    // -- build full argument list: passed args + defaults for missing params --
+    let sig = ctx.closure_sigs.get(var).cloned();
+    let param_count = sig.as_ref().map(|s| s.params.len()).unwrap_or(args.len());
+
+    let mut all_args: Vec<&Expr> = args.iter().collect();
+    let mut default_exprs: Vec<Expr> = Vec::new();
+    if let Some(ref s) = sig {
+        for i in all_args.len()..param_count {
+            if let Some(Some(default)) = s.defaults.get(i) {
+                default_exprs.push(default.clone());
+            }
+        }
+    }
+    let default_refs: Vec<&Expr> = default_exprs.iter().collect();
+    all_args.extend(default_refs);
+
     // -- evaluate arguments and push onto stack --
     let mut arg_types = Vec::new();
-    for arg in args {
+    for arg in &all_args {
         let ty = emit_expr(arg, emitter, ctx, data);
         match &ty {
             PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
@@ -1566,7 +1585,7 @@ fn emit_closure_call(
     // Pop closure address first (it's on top of args stack)
     emitter.instruction("ldr x9, [sp], #16");                                   // pop closure function address into x9
 
-    for i in (0..args.len()).rev() {
+    for i in (0..all_args.len()).rev() {
         let (ty, start_reg, _is_float) = &assignments[i];
         match ty {
             PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
@@ -1588,7 +1607,12 @@ fn emit_closure_call(
 
     // -- indirect call through closure function address --
     emitter.instruction("blr x9");                                              // branch to closure via function pointer in x9
-    PhpType::Int
+
+    // -- return the closure's known return type, or default to Int --
+    let ret_ty = ctx.closure_sigs.get(var)
+        .map(|s| s.return_type.clone())
+        .unwrap_or(PhpType::Int);
+    ret_ty
 }
 
 fn emit_expr_call(

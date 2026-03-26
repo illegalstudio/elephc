@@ -132,10 +132,33 @@ impl Checker {
         self.functions.insert(name.to_string(), provisional_sig);
 
         let mut return_type = PhpType::Void;
+        let mut all_return_types: Vec<PhpType> = Vec::new();
         for stmt in &decl.body {
             self.check_stmt(stmt, &mut local_env)?;
             if let Some(rt) = self.find_return_type(stmt, &local_env) {
+                all_return_types.push(rt.clone());
                 return_type = rt;
+            }
+        }
+
+        // Check for mixed return types that would produce incorrect code
+        if all_return_types.len() > 1 {
+            let first = &all_return_types[0];
+            for rt in &all_return_types[1..] {
+                let compatible = first == rt
+                    || (*first == PhpType::Int && *rt == PhpType::Bool)
+                    || (*first == PhpType::Bool && *rt == PhpType::Int)
+                    || (*first == PhpType::Void)
+                    || (*rt == PhpType::Void);
+                if !compatible {
+                    return Err(CompileError::new(
+                        span,
+                        &format!(
+                            "Function '{}' has mixed return types ({:?} and {:?}). All return paths must return the same type",
+                            name, first, rt
+                        ),
+                    ));
+                }
             }
         }
 

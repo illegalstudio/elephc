@@ -1148,3 +1148,16 @@ fn test_error_preg_split_no_args() {
 fn test_error_hex_no_digits() {
     expect_error("<?php echo 0x;", "Expected hex digits after '0x'");
 }
+
+// --- Mixed return type errors ---
+
+#[test]
+fn test_error_mixed_return_types() {
+    expect_error(
+        r#"<?php
+function test($x) { if ($x > 0) { return "positive"; } return 0; }
+echo test(1);
+"#,
+        "mixed return types",
+    );
+}

@@ -237,14 +237,22 @@ pub fn collect_local_vars(
                 }
             }
             StmtKind::Foreach { value_var, body, array, key_var, .. } => {
+                let arr_ty = infer_local_type(array, sig);
                 if let Some(k) = key_var {
                     if !ctx.variables.contains_key(k) {
-                        ctx.alloc_var(k, PhpType::Int);
+                        // Assoc array keys are strings; indexed array keys are ints
+                        let key_ty = if matches!(&arr_ty, PhpType::AssocArray { .. }) {
+                            PhpType::Str
+                        } else {
+                            PhpType::Int
+                        };
+                        ctx.alloc_var(k, key_ty);
                     }
                 }
                 if !ctx.variables.contains_key(value_var) {
-                    let elem_ty = match infer_local_type(array, sig) {
-                        PhpType::Array(t) => *t,
+                    let elem_ty = match &arr_ty {
+                        PhpType::Array(t) => *t.clone(),
+                        PhpType::AssocArray { value, .. } => *value.clone(),
                         _ => PhpType::Int,
                     };
                     ctx.alloc_var(value_var, elem_ty);

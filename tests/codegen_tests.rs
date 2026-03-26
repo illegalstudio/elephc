@@ -6159,3 +6159,55 @@ else echo "small";
 "#);
     assert_eq!(out, "medium");
 }
+
+// --- Bug regression tests ---
+
+#[test]
+fn test_closure_default_param() {
+    let out = compile_and_run(r#"<?php
+$fn = function($x, $y = 10) { return $x + $y; };
+echo $fn(5);
+"#);
+    assert_eq!(out, "15");
+}
+
+#[test]
+fn test_closure_default_param_overridden() {
+    let out = compile_and_run(r#"<?php
+$fn = function($x, $y = 10) { return $x + $y; };
+echo $fn(5, 20);
+"#);
+    assert_eq!(out, "25");
+}
+
+#[test]
+fn test_implode_int_array() {
+    let out = compile_and_run(r#"<?php
+$a = [1, 2, 3];
+echo implode(", ", $a);
+"#);
+    assert_eq!(out, "1, 2, 3");
+}
+
+#[test]
+fn test_implode_chained_array_builtins() {
+    let out = compile_and_run(r#"<?php
+echo implode(",", array_reverse([3, 1, 2]));
+"#);
+    assert_eq!(out, "2,1,3");
+}
+
+#[test]
+fn test_str_replace_in_foreach_assoc_function() {
+    let out = compile_and_run(r#"<?php
+function transform($map, $text) {
+    foreach ($map as $key => $value) {
+        $text = str_replace($key, $value, $text);
+    }
+    return $text;
+}
+$map = ["hello" => "world", "foo" => "bar"];
+echo transform($map, "hello foo");
+"#);
+    assert_eq!(out, "world bar");
+}

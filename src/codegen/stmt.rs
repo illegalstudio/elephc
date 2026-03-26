@@ -4,7 +4,7 @@ use crate::types::PhpType;
 use super::data_section::DataSection;
 use super::emit::Emitter;
 use super::expr::emit_expr;
-use crate::parser::ast::{Stmt, StmtKind};
+use crate::parser::ast::{ExprKind, Stmt, StmtKind};
 
 pub fn emit_stmt(
     stmt: &Stmt,
@@ -90,6 +90,13 @@ pub fn emit_stmt(
                 // In main scope, also sync to global storage if this var is used globally
                 if ctx.in_main && ctx.all_global_var_names.contains(name) {
                     emit_global_store(emitter, ctx, name, &ty);
+                }
+            }
+
+            // Track closure signatures for default parameter handling at call sites
+            if matches!(&value.kind, ExprKind::Closure { .. }) {
+                if let Some(deferred) = ctx.deferred_closures.last() {
+                    ctx.closure_sigs.insert(name.clone(), deferred.sig.clone());
                 }
             }
 
