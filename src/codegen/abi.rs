@@ -66,6 +66,8 @@ pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
             store_at_offset(emitter, "d0", offset);                             // store float to stack
         }
         PhpType::Str => {
+            // Persist string to heap so it survives concat_buf resets
+            emitter.instruction("bl __rt_str_persist");                         // copy string to heap, x1=heap_ptr, x2=len
             // Strings use 16 bytes: pointer at offset, length at offset-8
             store_at_offset(emitter, "x1", offset);                             // store string pointer
             store_at_offset(emitter, "x2", offset - 8);                         // store string length

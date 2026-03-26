@@ -54,6 +54,7 @@ pub fn emit_array_fill_keys(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #8]");                                    // x3 = value_lo = fill value
     emitter.instruction("mov x4, #0");                                          // x4 = value_hi = 0
     emitter.instruction("bl __rt_hash_set");                                    // insert key-value pair
+    emitter.instruction("str x0, [sp, #16]");                                   // update hash table pointer after possible growth
 
     // -- advance loop --
     emitter.instruction("ldr x4, [sp, #24]");                                   // reload i

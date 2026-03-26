@@ -70,6 +70,7 @@ fn compile_and_run(source: &str) -> String {
         &resolved,
         &check_result.global_env,
         &check_result.functions,
+        8_388_608,
     );
 
     let elephc_out = assemble_and_run(&asm, &dir);
@@ -122,6 +123,7 @@ fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> String {
         &resolved,
         &check_result.global_env,
         &check_result.functions,
+        8_388_608,
     );
 
     let elephc_out = assemble_and_run(&asm, &dir);
@@ -175,6 +177,7 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
         &resolved,
         &check_result.global_env,
         &check_result.functions,
+        8_388_608,
     );
 
     let asm_path = dir.join("test.s");
@@ -236,6 +239,7 @@ fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {
         &resolved,
         &check_result.global_env,
         &check_result.functions,
+        8_388_608,
     );
 
     let elephc_out = assemble_and_run(&asm, &dir);
@@ -6455,4 +6459,141 @@ $greet = function() use ($name) {
 $greet();
 "#);
     assert_eq!(out, "Hello World");
+}
+
+// === Memory management regression tests ===
+
+#[test]
+fn test_concat_loop_1000() {
+    // Regression test for issue #21: concat buffer overflow after ~362 iterations
+    let out = compile_and_run(r#"<?php
+$s = "";
+for ($i = 0; $i < 1000; $i++) {
+    $s .= "x";
+}
+echo strlen($s);
+"#);
+    assert_eq!(out, "1000");
+}
+
+#[test]
+fn test_string_function_in_loop() {
+    let out = compile_and_run(r#"<?php
+for ($i = 0; $i < 500; $i++) {
+    $x = strtolower("HELLO WORLD");
+}
+echo $x;
+"#);
+    assert_eq!(out, "hello world");
+}
+
+#[test]
+fn test_hash_table_computed_keys_loop() {
+    // Tests that hash keys survive concat_buf reset (persisted to heap)
+    let out = compile_and_run(r#"<?php
+$h = ["init" => 0];
+for ($i = 0; $i < 10; $i++) {
+    $h["k" . $i] = $i;
+}
+echo $h["k9"];
+"#);
+    assert_eq!(out, "9");
+}
+
+#[test]
+fn test_string_reassignment_loop() {
+    // Tests that old string values are freed on reassignment (free-list reuse)
+    let out = compile_and_run(r#"<?php
+for ($i = 0; $i < 2000; $i++) {
+    $s = str_repeat("a", 100);
+}
+echo strlen($s);
+"#);
+    assert_eq!(out, "100");
+}
+
+#[test]
+fn test_string_variables_survive_statements() {
+    // Tests that string persist works: values survive across statement boundaries
+    let out = compile_and_run(r#"<?php
+$a = "foo" . "bar";
+$b = "baz" . "qux";
+echo $a . $b;
+"#);
+    assert_eq!(out, "foobarbazqux");
+}
+
+#[test]
+fn test_unset_frees_string() {
+    let out = compile_and_run(r#"<?php
+$x = "hello" . " world";
+echo strlen($x);
+unset($x);
+echo is_null($x) ? "1" : "0";
+"#);
+    assert_eq!(out, "111");
+}
+
+#[test]
+fn test_multiple_string_vars_independent() {
+    // Ensure multiple string variables don't interfere after concat_buf reset
+    let out = compile_and_run(r#"<?php
+$a = "hello";
+$b = "world";
+$c = $a . " " . $b;
+$d = strtoupper($a);
+echo $c . "|" . $d;
+"#);
+    assert_eq!(out, "hello world|HELLO");
+}
+
+#[test]
+fn test_str_replace_in_loop() {
+    let out = compile_and_run(r#"<?php
+$result = "";
+for ($i = 0; $i < 100; $i++) {
+    $result = str_replace("x", "y", "xox");
+}
+echo $result;
+"#);
+    assert_eq!(out, "yoy");
+}
+
+#[test]
+fn test_array_dynamic_growth_int() {
+    // Array grows beyond initial capacity via reallocation
+    let out = compile_and_run(r#"<?php
+$arr = [1, 2, 3];
+for ($i = 4; $i <= 100; $i++) {
+    $arr[] = $i;
+}
+echo count($arr) . "|" . $arr[0] . "|" . $arr[99];
+"#);
+    assert_eq!(out, "100|1|100");
+}
+
+#[test]
+fn test_array_dynamic_growth_str() {
+    // String array grows beyond initial capacity
+    let out = compile_and_run(r#"<?php
+$arr = ["first"];
+for ($i = 0; $i < 50; $i++) {
+    $arr[] = "item" . $i;
+}
+echo count($arr) . "|" . $arr[0] . "|" . $arr[50];
+"#);
+    assert_eq!(out, "51|first|item49");
+}
+
+#[test]
+fn test_array_push_function_growth() {
+    // array_push() triggers growth
+    let out = compile_and_run(r#"<?php
+$arr = [10];
+for ($i = 0; $i < 20; $i++) {
+    array_push($arr, $i * 10);
+}
+echo count($arr) . "|" . $arr[20];
+"#);
+    assert_eq!(out, "21|190");
 }

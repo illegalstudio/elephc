@@ -90,6 +90,7 @@ pub fn emit_sscanf(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x5");                                          // matched start
     emitter.instruction("mov x2, x6");                                          // matched length
     emitter.instruction("bl __rt_array_push_str");                              // push to array
+    emitter.instruction("str x0, [sp, #32]");                                   // update array pointer after possible realloc
     emitter.instruction("ldp x1, x2, [sp]");                                    // restore input state
     emitter.instruction("ldp x3, x4, [sp, #16]");                               // restore format state
     emitter.instruction("b __rt_sscanf_loop");                                  // continue
@@ -120,6 +121,7 @@ pub fn emit_sscanf(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x5");                                          // matched start
     emitter.instruction("mov x2, x6");                                          // matched length
     emitter.instruction("bl __rt_array_push_str");                              // push to array
+    emitter.instruction("str x0, [sp, #32]");                                   // update array pointer after possible realloc
     emitter.instruction("ldp x1, x2, [sp]");                                    // restore input state
     emitter.instruction("ldp x3, x4, [sp, #16]");                               // restore format state
     emitter.instruction("b __rt_sscanf_loop");                                  // continue

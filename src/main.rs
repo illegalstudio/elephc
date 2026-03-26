@@ -15,11 +15,38 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: elephc <source.php>");
+        eprintln!("Usage: elephc [--heap-size=BYTES] <source.php>");
         process::exit(1);
     }
 
-    let filename = &args[1];
+    // Parse optional flags
+    let mut heap_size: usize = 8_388_608; // 8MB default
+    let mut filename_arg = None;
+
+    for arg in &args[1..] {
+        if let Some(val) = arg.strip_prefix("--heap-size=") {
+            heap_size = match val.parse::<usize>() {
+                Ok(n) if n >= 65536 => n,
+                _ => {
+                    eprintln!("Invalid --heap-size: must be a number >= 65536");
+                    process::exit(1);
+                }
+            };
+        } else if arg.starts_with("--") {
+            eprintln!("Unknown flag: {}", arg);
+            process::exit(1);
+        } else {
+            filename_arg = Some(arg.as_str());
+        }
+    }
+
+    let filename = match filename_arg {
+        Some(f) => f,
+        None => {
+            eprintln!("Usage: elephc [--heap-size=BYTES] <source.php>");
+            process::exit(1);
+        }
+    };
     let stem = Path::new(filename)
         .file_stem()
         .and_then(|s| s.to_str())
@@ -75,6 +102,7 @@ fn main() {
         &ast,
         &check_result.global_env,
         &check_result.functions,
+        heap_size,
     );
 
     if let Err(e) = fs::write(&asm_path, &asm) {

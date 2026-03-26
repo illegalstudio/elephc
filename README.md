@@ -1,5 +1,8 @@
 # elephc
 
+[![GitHub Downloads](https://img.shields.io/github/downloads/illegalstudio/elephc/total?style=flat-square&logo=github&label=downloads)](https://github.com/illegalstudio/elephc/releases)
+[![License: MIT](https://img.shields.io/github/license/illegalstudio/elephc?style=flat-square)](LICENSE)
+
 A PHP-to-native compiler. Takes a subset of PHP and compiles it directly to **ARM64 assembly**, producing **standalone macOS binaries**. No interpreter, no VM, no runtime dependencies.
 
 > **If you like the idea or find it useful, please star the repo** — it helps others discover it and keeps the project going.
@@ -72,6 +75,9 @@ xattr -cr elephc
 # Compile a PHP file to a native binary
 elephc hello.php
 ./hello
+
+# Custom heap size (default: 8MB)
+elephc --heap-size=16777216 heavy.php
 ```
 
 Or via cargo:
@@ -256,7 +262,7 @@ src/
 ## Tests
 
 ```bash
-cargo test                      # all tests (~1150)
+cargo test                      # all tests (~1156)
 cargo test test_my_feature      # run specific tests
 ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 ```

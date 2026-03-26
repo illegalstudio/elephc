@@ -67,6 +67,7 @@ pub fn emit_array_diff_key(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload value_lo
     emitter.instruction("ldr x4, [sp, #24]");                                   // reload value_hi
     emitter.instruction("bl __rt_hash_set");                                    // insert into result hash table
+    emitter.instruction("str x0, [sp, #48]");                                   // update result hash table pointer after possible growth
 
     emitter.label("__rt_array_diff_key_skip");
     emitter.instruction("add sp, sp, #32");                                     // deallocate temp space

@@ -76,7 +76,7 @@ pub fn emit_tempnam(emitter: &mut Emitter) {
 
     // -- copy result to concat_buf for safe return --
     emitter.label("__rt_tempnam_copy");
-    emitter.instruction("bl __rt_strcopy");                                     // copy to concat_buf, x1=new ptr, x2=len
+    emitter.instruction("bl __rt_str_persist");                                // copy to heap, x1=new ptr, x2=len
 
     // -- restore frame and return --
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address

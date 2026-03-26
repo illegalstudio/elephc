@@ -4,8 +4,70 @@ mod functions;
 use std::collections::HashMap;
 
 use crate::errors::CompileError;
-use crate::parser::ast::{BinOp, Expr, ExprKind, Program, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Program, Stmt, StmtKind};
 use crate::types::{CheckResult, FunctionSig, PhpType, TypeEnv};
+
+/// Infer a function's return type by scanning its body for Return statements.
+/// This is a syntactic/heuristic check — no full type inference.
+/// Used for functions that are never called directly (only used as callbacks).
+fn infer_return_type_syntactic(body: &[Stmt]) -> PhpType {
+    for stmt in body {
+        if let Some(ty) = find_return_type_syntactic(stmt) {
+            return ty;
+        }
+    }
+    PhpType::Int
+}
+
+fn find_return_type_syntactic(stmt: &Stmt) -> Option<PhpType> {
+    match &stmt.kind {
+        StmtKind::Return(Some(expr)) => Some(infer_expr_type_syntactic(expr)),
+        StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+            for s in then_body { if let Some(t) = find_return_type_syntactic(s) { return Some(t); } }
+            for (_, body) in elseif_clauses { for s in body { if let Some(t) = find_return_type_syntactic(s) { return Some(t); } } }
+            if let Some(body) = else_body { for s in body { if let Some(t) = find_return_type_syntactic(s) { return Some(t); } } }
+            None
+        }
+        StmtKind::While { body, .. } | StmtKind::For { body, .. } | StmtKind::Foreach { body, .. } => {
+            for s in body { if let Some(t) = find_return_type_syntactic(s) { return Some(t); } }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
+    match &expr.kind {
+        ExprKind::StringLiteral(_) => PhpType::Str,
+        ExprKind::IntLiteral(_) => PhpType::Int,
+        ExprKind::FloatLiteral(_) => PhpType::Float,
+        ExprKind::BoolLiteral(_) => PhpType::Bool,
+        ExprKind::BinaryOp { op: BinOp::Concat, .. } => PhpType::Str,
+        ExprKind::Cast { target: CastType::String, .. } => PhpType::Str,
+        ExprKind::Cast { target: CastType::Int, .. } => PhpType::Int,
+        ExprKind::Cast { target: CastType::Float, .. } => PhpType::Float,
+        ExprKind::Cast { target: CastType::Bool, .. } => PhpType::Bool,
+        ExprKind::FunctionCall { name, .. } => {
+            match name.as_str() {
+                "substr" | "strtolower" | "strtoupper" | "trim" | "ltrim" | "rtrim"
+                | "str_repeat" | "strrev" | "chr" | "str_replace" | "str_ireplace"
+                | "ucfirst" | "lcfirst" | "ucwords" | "str_pad" | "implode"
+                | "sprintf" | "nl2br" | "wordwrap" | "md5" | "sha1" | "hash"
+                | "substr_replace" | "addslashes" | "stripslashes"
+                | "htmlspecialchars" | "html_entity_decode" | "urlencode" | "urldecode"
+                | "base64_encode" | "base64_decode" | "bin2hex" | "hex2bin"
+                | "number_format" | "date" | "json_encode" | "gettype"
+                | "str_word_count" | "chunk_split" => PhpType::Str,
+                "strlen" | "strpos" | "strrpos" | "ord" | "count" | "intval"
+                | "abs" | "floor" | "ceil" | "round" | "intdiv" | "rand" | "time" => PhpType::Int,
+                "floatval" | "sqrt" | "pow" | "fmod" => PhpType::Float,
+                _ => PhpType::Int,
+            }
+        }
+        ExprKind::Ternary { then_expr, .. } => infer_expr_type_syntactic(then_expr),
+        _ => PhpType::Int,
+    }
+}
 
 pub(crate) struct Checker {
     pub fn_decls: HashMap<String, FnDecl>,
@@ -55,6 +117,29 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
     global_env.insert("argv".to_string(), PhpType::Array(Box::new(PhpType::Str)));
     for stmt in program {
         checker.check_stmt(stmt, &mut global_env)?;
+    }
+
+    // Register provisional signatures for functions that were declared but never
+    // called directly (e.g., used only as string callbacks in array_map).
+    // This ensures their return types are available for callback type inference.
+    let unchecked: Vec<String> = checker.fn_decls.keys()
+        .filter(|name| !checker.functions.contains_key(*name))
+        .cloned()
+        .collect();
+    for name in unchecked {
+        if let Some(decl) = checker.fn_decls.get(&name) {
+            let return_type = infer_return_type_syntactic(&decl.body);
+            let params = decl.params.iter()
+                .map(|p| (p.clone(), PhpType::Int))
+                .collect();
+            checker.functions.insert(name.clone(), FunctionSig {
+                params,
+                defaults: decl.defaults.clone(),
+                return_type,
+                ref_params: decl.ref_params.clone(),
+                variadic: decl.variadic.clone(),
+            });
+        }
     }
 
     Ok(CheckResult {

@@ -12,6 +12,13 @@ pub fn emit_stmt(
     ctx: &mut Context,
     data: &mut DataSection,
 ) {
+    // -- reset concat buffer at the start of each statement --
+    // This is safe because any string that needs to persist beyond the current
+    // statement is copied to heap via __rt_str_persist (in emit_store).
+    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of concat offset
+    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve concat offset address
+    emitter.instruction("str xzr, [x9]");                                       // reset concat buffer offset to 0
+
     match &stmt.kind {
         StmtKind::Echo(expr) => {
             emitter.blank();
@@ -74,7 +81,13 @@ pub fn emit_stmt(
                         emitter.instruction("str d0, [x9]");                    // store float through reference pointer
                     }
                     PhpType::Str => {
-                        emitter.instruction("str x1, [x9]");                    // store string pointer through ref
+                        // -- free old string and persist new one through ref --
+                        emitter.instruction("str x9, [sp, #-16]!");             // save ref pointer (str_persist clobbers x9)
+                        emitter.instruction("ldr x0, [x9]");                    // load old string ptr from ref target
+                        emitter.instruction("bl __rt_heap_free_safe");          // free old string if on heap
+                        emitter.instruction("bl __rt_str_persist");             // persist new string to heap
+                        emitter.instruction("ldr x9, [sp], #16");               // restore ref pointer
+                        emitter.instruction("str x1, [x9]");                    // store heap string pointer through ref
                         emitter.instruction("str x2, [x9, #8]");                // store string length through ref
                     }
                     _ => {
@@ -84,6 +97,23 @@ pub fn emit_stmt(
             } else {
                 let var = ctx.variables.get(name).expect("variable not pre-allocated");
                 let offset = var.stack_offset;
+                let old_ty = var.ty.clone();
+
+                // -- free old heap value before overwriting --
+                if matches!(&old_ty, PhpType::Str) {
+                    let needs_save_x0 = !matches!(&ty, PhpType::Str | PhpType::Float);
+                    if needs_save_x0 {
+                        emitter.instruction("mov x8, x0");                      // save new value in x8 temporarily
+                    }
+                    abi::load_at_offset(emitter, "x0", offset);                // load old string pointer
+                    emitter.instruction("bl __rt_heap_free_safe");              // free old string if on heap
+                    if needs_save_x0 {
+                        emitter.instruction("mov x0, x8");                      // restore new value
+                    }
+                }
+                // Note: arrays/assoc arrays are NOT freed on reassignment because
+                // the pointer may be shared (e.g., $c = $contacts[$i] shares with the
+                // indexed array). Use unset() for explicit deep-free when needed.
 
                 abi::emit_store(emitter, &ty, offset);
 
@@ -193,7 +223,11 @@ pub fn emit_stmt(
                 // -- prepare hash_set args --
                 let (val_lo, val_hi) = match &val_ty {
                     PhpType::Int | PhpType::Bool => ("x0", "xzr"),
-                    PhpType::Str => ("x1", "x2"),
+                    PhpType::Str => {
+                        // Persist string value to heap before storing in hash table
+                        emitter.instruction("bl __rt_str_persist");             // copy string to heap, x1=heap_ptr, x2=len
+                        ("x1", "x2")
+                    }
                     PhpType::Float => {
                         emitter.instruction("fmov x9, d0");                     // move float bits to integer register
                         ("x9", "xzr")
@@ -204,7 +238,14 @@ pub fn emit_stmt(
                 emitter.instruction(&format!("mov x4, {}", val_hi));            // value_hi
                 emitter.instruction("ldp x1, x2, [sp], #16");                   // pop key ptr/len
                 emitter.instruction("ldr x0, [sp], #16");                       // pop hash table pointer
-                emitter.instruction("bl __rt_hash_set");                        // insert/update key-value pair
+                emitter.instruction("bl __rt_hash_set");                        // insert/update key-value pair (x0 = table)
+                // -- update stored table pointer after possible growth --
+                if is_ref {
+                    abi::load_at_offset(emitter, "x9", offset);                 // load ref pointer
+                    emitter.instruction("str x0, [x9]");                        // store new table ptr through ref
+                } else {
+                    abi::store_at_offset(emitter, "x0", offset);                // save possibly-new table pointer
+                }
             } else {
                 // -- indexed array assignment (existing logic) --
                 // -- load array base pointer from local variable slot --
@@ -281,9 +322,9 @@ pub fn emit_stmt(
                     emitter.instruction("bl __rt_array_push_int");              // call runtime: append integer to dynamic array
                 }
                 PhpType::Str => {
-                    // -- call runtime to append string to array --
-                    emitter.instruction("mov x0, x9");                          // move array pointer to x0 (first arg)
-                    emitter.instruction("bl __rt_array_push_str");              // call runtime: append string (x1=ptr, x2=len) to array
+                    // -- push string to array (push_str persists to heap internally) --
+                    emitter.instruction("mov x0, x9");                          // move array pointer to x0
+                    emitter.instruction("bl __rt_array_push_str");              // call runtime: persist + append string to array
                 }
                 PhpType::Array(_) | PhpType::AssocArray { .. } => {
                     // -- call runtime to append nested array pointer --
@@ -292,6 +333,13 @@ pub fn emit_stmt(
                     emitter.instruction("bl __rt_array_push_int");              // append pointer (8 bytes, same as int)
                 }
                 _ => {}
+            }
+            // -- update stored array pointer (may have changed due to reallocation) --
+            if is_ref {
+                abi::load_at_offset(emitter, "x9", offset);                     // load ref pointer
+                emitter.instruction("str x0, [x9]");                            // store new array ptr through ref
+            } else {
+                abi::store_at_offset(emitter, "x0", offset);                    // save possibly-new array pointer
             }
         }
         StmtKind::Foreach {

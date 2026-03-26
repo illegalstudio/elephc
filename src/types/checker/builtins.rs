@@ -961,20 +961,18 @@ impl Checker {
                 }
                 for arg in args { self.infer_type(arg, env)?; }
                 let arr_ty = self.infer_type(&args[1], env)?;
-                // Resolve callback function so codegen emits it
+                // Resolve callback function so codegen emits it with correct param types
                 if let ExprKind::StringLiteral(cb_name) = &args[0].kind {
                     if let PhpType::Array(ref elem_ty) = arr_ty {
-                        let dummy_args = vec![Expr::new(
-                            ExprKind::IntLiteral(0), span,
-                        )];
-                        let mut dummy_env = env.clone();
-                        // Register param type for the callback's parameter
-                        if let Some(decl) = self.fn_decls.get(cb_name).cloned() {
-                            if !decl.params.is_empty() {
-                                dummy_env.insert(decl.params[0].clone(), *elem_ty.clone());
-                            }
-                        }
-                        let _ = self.check_function_call(cb_name, &dummy_args, span, &dummy_env);
+                        // Create a dummy arg matching the actual element type
+                        let dummy_arg = match elem_ty.as_ref() {
+                            PhpType::Str => Expr::new(ExprKind::StringLiteral(String::new()), span),
+                            PhpType::Float => Expr::new(ExprKind::FloatLiteral(0.0), span),
+                            PhpType::Bool => Expr::new(ExprKind::BoolLiteral(false), span),
+                            _ => Expr::new(ExprKind::IntLiteral(0), span),
+                        };
+                        let dummy_args = vec![dummy_arg];
+                        let _ = self.check_function_call(cb_name, &dummy_args, span, env);
                     }
                 }
                 match arr_ty {

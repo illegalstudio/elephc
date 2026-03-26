@@ -36,6 +36,7 @@ pub fn emit_str_split(emitter: &mut Emitter) {
     emitter.instruction("add x1, x1, x4");                                      // x1 = base + current position
     emitter.instruction("mov x2, x5");                                          // x2 = chunk length
     emitter.instruction("bl __rt_array_push_str");                              // push chunk onto array
+    emitter.instruction("str x0, [sp, #24]");                                   // update array pointer after possible realloc
 
     // -- advance position by chunk length --
     emitter.instruction("ldr x4, [sp, #32]");                                   // reload position

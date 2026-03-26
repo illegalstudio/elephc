@@ -55,6 +55,7 @@ pub fn emit_array_column_str(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x3");                                          // string pointer as arg
     emitter.instruction("mov x2, x4");                                          // string length as arg
     emitter.instruction("bl __rt_array_push_str");                              // push string to result array
+    emitter.instruction("str x0, [sp, #32]");                                   // update array pointer after possible realloc
 
     emitter.label("__rt_acs_skip");
     // -- increment index --
