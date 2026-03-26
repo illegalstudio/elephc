@@ -162,11 +162,16 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
-| `__rt_heap_alloc` | Bump-allocate N bytes from heap | `x0` = size | `x0` = pointer |
+| `__rt_heap_alloc` | Free-list + bump allocator with 8-byte header | `x0` = size | `x0` = pointer |
+| `__rt_heap_free` | Return block to free list (bump reset if last block) | `x0` = pointer | — |
+| `__rt_heap_free_safe` | Free only if pointer is in heap range | `x0` = pointer | — |
 | `__rt_array_new` | Create indexed array with header | `x0` = capacity, `x1` = elem_size | `x0` = array ptr |
-| `__rt_array_push_int` | Append int to indexed array | `x0` = array, `x1` = value | — |
-| `__rt_array_push_str` | Append string to indexed array | `x0` = array, `x1`/`x2` = str | — |
+| `__rt_array_grow` | Double array capacity, copy elements, free old | `x0` = array | `x0` = new array |
+| `__rt_array_free_deep` | Free array + all string elements inside | `x0` = array | — |
+| `__rt_array_push_int` | Append int to array (grows if needed) | `x0` = array, `x1` = value | `x0` = array |
+| `__rt_array_push_str` | Persist string + append to array (grows if needed) | `x0` = array, `x1`/`x2` = str | `x0` = array |
 | `__rt_sort_int` | In-place sort (ascending/descending) | `x0` = array | — |
+| `__rt_str_persist` | Copy string from concat_buf to heap (skips .data/heap) | `x1`/`x2` = str | `x1`/`x2` = heap str |
 
 ### Hash table (for associative arrays)
 
@@ -174,7 +179,8 @@ Each routine follows the same pattern — inputs in registers, output in standar
 |---|---|---|---|
 | `__rt_hash_fnv1a` | FNV-1a hash of string | `x1`/`x2` = string | `x0` = hash |
 | `__rt_hash_new` | Create hash table | `x0` = capacity, `x1` = value type | `x0` = hash ptr |
-| `__rt_hash_set` | Insert/update key-value pair | `x0`=hash, `x1`/`x2`=key, `x3`/`x4`=value | — |
+| `__rt_hash_grow` | Double hash table capacity, rehash all entries | `x0` = hash | `x0` = new hash |
+| `__rt_hash_set` | Insert/update (grows at 75% load) | `x0`=hash, `x1`/`x2`=key, `x3`/`x4`=value | `x0` = hash |
 | `__rt_hash_get` | Look up value by key | `x0`=hash, `x1`/`x2`=key | `x0`=found, `x1`=val_lo, `x2`=val_hi |
 | `__rt_hash_iter_next` | Iterate to next entry | `x0`=hash, `x1`=index | `x0`=next_idx, `x1`/`x2`=key, `x3`/`x4`=value |
 | `__rt_hash_count` | Count occupied entries | `x0`=hash | `x0`=count |
@@ -331,8 +337,11 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     system::emit_preg_replace(emitter);
     system::emit_preg_split(emitter);
     arrays::emit_heap_alloc(emitter);
+    arrays::emit_heap_free(emitter);
+    arrays::emit_array_free_deep(emitter);
+    arrays::emit_array_grow(emitter);
     arrays::emit_array_new(emitter);
-    // ... 45+ more array routines ...
+    // ... 47+ more array routines ...
     io::emit_cstr(emitter);
     io::emit_fopen(emitter);
     // ... 15 more I/O routines ...

@@ -89,19 +89,19 @@ src/
 │   │
 │   ├── builtins/              Built-in function codegen (one file per function)
 │   │   ├── mod.rs             Dispatcher — chains to category modules
-│   │   ├── strings/           strlen, substr, strpos, explode, sprintf, md5, ... (57 files)
-│   │   ├── arrays/            count, array_push, sort, array_map, usort, ... (51 files)
-│   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, round, min, max, ... (14 files)
-│   │   ├── types/             is_*, gettype, empty, unset, settype, ... (16 files)
-│   │   ├── io/                fopen, fwrite, file_get_contents, scandir, ... (36 files)
-│   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, ... (25 files)
+│   │   ├── strings/           strlen, substr, strpos, explode, sprintf, md5, ... (56 files)
+│   │   ├── arrays/            count, array_push, sort, array_map, usort, ... (50 files)
+│   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, round, min, max, ... (12 files)
+│   │   ├── types/             is_*, gettype, empty, unset, settype, ... (15 files)
+│   │   ├── io/                fopen, fwrite, file_get_contents, scandir, ... (35 files)
+│   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, ... (24 files)
 │   │
 │   └── runtime/               ARM64 runtime routines (one file per function)
 │       ├── mod.rs             Emits all runtime functions into assembly
-│       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, str_persist, ... (53 files)
-│       ├── arrays/            heap_alloc, heap_free, array_new, hash_*, sort, usort, ... (49 files)
-│       ├── io/                fopen, fgets, fread, stat, scandir, ... (17 files)
-│       └── system/            build_argv, time, getenv, shell_exec, date, mktime, strtotime, json_encode, json_decode, preg (11 files)
+│       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, str_persist, ... (52 files)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, sort, usort, ... (51 files)
+│       ├── io/                fopen, fgets, fread, stat, scandir, ... (16 files)
+│       └── system/            build_argv, time, getenv, shell_exec, date, mktime, strtotime, json_encode, json_decode, preg (10 files)
 │
 └── errors/
     ├── mod.rs                 CompileError, error trait
@@ -164,7 +164,7 @@ Uses FNV-1a hashing with linear probing for collision resolution.
 
 ### String buffer
 
-64KB bump allocator in BSS (`_concat_buf`). Used by `itoa` and `concat` routines. Strings are never freed.
+64KB scratch buffer in BSS (`_concat_buf`). Used by `itoa`, `concat`, `strtolower`, and all string-producing runtime routines. Reset to offset 0 at the start of each statement. Strings that need to persist beyond the current statement are copied to the heap via `__rt_str_persist`.
 
 ### I/O buffers
 
