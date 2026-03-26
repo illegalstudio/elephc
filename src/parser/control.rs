@@ -1,6 +1,6 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
-use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::parse_expr;
 use crate::parser::stmt::{parse_block, parse_body};
 use crate::span::Span;
@@ -227,12 +227,35 @@ pub fn parse_assign_inline(
         }
     }
 
-    if *pos >= tokens.len() || tokens[*pos].0 != Token::Assign {
+    if *pos >= tokens.len() {
         return Err(CompileError::new(span, "Expected '=' after variable name"));
     }
+
+    let compound_op = match &tokens[*pos].0 {
+        Token::PlusAssign => Some(BinOp::Add),
+        Token::MinusAssign => Some(BinOp::Sub),
+        Token::StarAssign => Some(BinOp::Mul),
+        Token::SlashAssign => Some(BinOp::Div),
+        Token::PercentAssign => Some(BinOp::Mod),
+        Token::DotAssign => Some(BinOp::Concat),
+        Token::Assign => None,
+        _ => return Err(CompileError::new(span, "Expected '=' after variable name")),
+    };
     *pos += 1;
 
-    let value = parse_expr(tokens, pos)?;
+    let rhs = parse_expr(tokens, pos)?;
+    let value = if let Some(op) = compound_op {
+        Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(Expr::new(ExprKind::Variable(name.clone()), span)),
+                op,
+                right: Box::new(rhs),
+            },
+            span,
+        )
+    } else {
+        rhs
+    };
     Ok(Stmt::new(StmtKind::Assign { name, value }, span))
 }
 

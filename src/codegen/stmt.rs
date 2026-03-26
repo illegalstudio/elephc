@@ -118,7 +118,7 @@ pub fn emit_stmt(
             emitter.blank();
             emitter.comment("if");
             let cond_ty = emit_expr(condition, emitter, ctx, data);
-            super::expr::coerce_null_to_zero(emitter, &cond_ty);
+            super::expr::coerce_to_truthiness(emitter, ctx, &cond_ty);
             let mut next_label = ctx.next_label("if_else");
             // -- test if condition and branch to else/elseif --
             emitter.instruction("cmp x0, #0");                                  // test if condition result is zero (falsy)
@@ -136,7 +136,7 @@ pub fn emit_stmt(
                 emitter.label(&next_label);
                 emitter.comment("elseif");
                 let cond_ty = emit_expr(cond, emitter, ctx, data);
-                super::expr::coerce_null_to_zero(emitter, &cond_ty);
+                super::expr::coerce_to_truthiness(emitter, ctx, &cond_ty);
                 next_label = ctx.next_label("if_else");
                 // -- test elseif condition and branch to next branch --
                 emitter.instruction("cmp x0, #0");                              // test if elseif condition is zero (falsy)
@@ -238,17 +238,22 @@ pub fn emit_stmt(
             emitter.comment(&format!("${}[] = ...", array));
             let var = ctx.variables.get(array).expect("undefined variable");
             let offset = var.stack_offset;
-            let elem_ty = match &var.ty {
-                PhpType::Array(t) => *t.clone(),
-                _ => PhpType::Int,
-            };
             // -- load array pointer and save it before evaluating the value --
             emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));      // load array heap pointer from stack frame
             emitter.instruction("str x0, [sp, #-16]!");                         // push array pointer onto stack to preserve it
-            // Evaluate value
-            emit_expr(value, emitter, ctx, data);
+            // Evaluate value — use the actual expression type to pick the right push
+            let val_ty = emit_expr(value, emitter, ctx, data);
             emitter.instruction("ldr x9, [sp], #16");                           // pop saved array pointer into x9
-            match &elem_ty {
+            // Upgrade array element type in context if it changed
+            let elem_ty = match &ctx.variables.get(array).unwrap().ty {
+                PhpType::Array(t) => *t.clone(),
+                _ => PhpType::Int,
+            };
+            if elem_ty != val_ty {
+                ctx.variables.get_mut(array).unwrap().ty =
+                    PhpType::Array(Box::new(val_ty.clone()));
+            }
+            match &val_ty {
                 PhpType::Int => {
                     // -- call runtime to append integer to array --
                     emitter.instruction("mov x1, x0");                          // move value to x1 (second arg for runtime call)
@@ -447,7 +452,7 @@ pub fn emit_stmt(
             // -- evaluate do-while condition and loop back if true --
             emitter.label(&loop_cond);
             let cond_ty = emit_expr(condition, emitter, ctx, data);
-            super::expr::coerce_null_to_zero(emitter, &cond_ty);
+            super::expr::coerce_to_truthiness(emitter, ctx, &cond_ty);
             emitter.instruction("cmp x0, #0");                                  // test if do-while condition is zero (falsy)
             emitter.instruction(&format!("b.ne {}", loop_start));               // loop back to start if condition is nonzero (truthy)
             emitter.label(&loop_end);
@@ -460,7 +465,7 @@ pub fn emit_stmt(
             emitter.comment("while");
             emitter.label(&loop_start);
             let cond_ty = emit_expr(condition, emitter, ctx, data);
-            super::expr::coerce_null_to_zero(emitter, &cond_ty);
+            super::expr::coerce_to_truthiness(emitter, ctx, &cond_ty);
             // -- test while condition and exit loop if false --
             emitter.instruction("cmp x0, #0");                                  // test if while condition is zero (falsy)
             emitter.instruction(&format!("b.eq {}", loop_end));                 // exit loop if condition is false
@@ -503,7 +508,7 @@ pub fn emit_stmt(
             // Condition
             if let Some(cond) = condition {
                 let cond_ty = emit_expr(cond, emitter, ctx, data);
-                super::expr::coerce_null_to_zero(emitter, &cond_ty);
+                super::expr::coerce_to_truthiness(emitter, ctx, &cond_ty);
                 // -- test for-loop condition and exit if false --
                 emitter.instruction("cmp x0, #0");                              // test if for-loop condition is zero (falsy)
                 emitter.instruction(&format!("b.eq {}", loop_end));             // exit loop if condition is false

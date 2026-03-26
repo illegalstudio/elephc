@@ -120,17 +120,11 @@ pub fn emit_expr(
         }
         ExprKind::Not(inner) => {
             let ty = emit_expr(inner, emitter, ctx, data);
-            coerce_null_to_zero(emitter, &ty);
             emitter.comment("logical not");
-            if ty == PhpType::Str {
-                // -- PHP !$str: string is falsy if length is zero --
-                emitter.instruction("cmp x2, #0");                              // test if string length is zero (falsy)
-                emitter.instruction("cset x0, eq");                             // x0=1 if empty string (falsy), x0=0 if non-empty
-            } else {
-                // -- PHP !$x: compare to zero and invert truthiness --
-                emitter.instruction("cmp x0, #0");                              // test if value is falsy (zero)
-                emitter.instruction("cset x0, eq");                             // x0=1 if was zero (falsy), x0=0 if truthy
-            }
+            coerce_to_truthiness(emitter, ctx, &ty);
+            // -- PHP !$x: invert truthiness --
+            emitter.instruction("cmp x0, #0");                                  // test if value is falsy (zero)
+            emitter.instruction("cset x0, eq");                                 // x0=1 if was falsy, x0=0 if was truthy
             PhpType::Bool
         }
         ExprKind::BitNot(inner) => {
@@ -275,7 +269,7 @@ pub fn emit_expr(
             let end_label = ctx.next_label("tern_end");
             emitter.comment("ternary");
             let cond_ty = emit_expr(condition, emitter, ctx, data);
-            coerce_null_to_zero(emitter, &cond_ty);
+            coerce_to_truthiness(emitter, ctx, &cond_ty);
             // -- branch based on ternary condition --
             emitter.instruction("cmp x0, #0");                                  // test if condition is falsy
             emitter.instruction(&format!("b.eq {}", else_label));               // jump to else branch if condition was false
@@ -790,6 +784,35 @@ pub fn coerce_null_to_zero(emitter: &mut Emitter, ty: &PhpType) {
     }
 }
 
+/// Coerce any type to a truthiness value in x0 for use in conditions
+/// (if, while, for, ternary, &&, ||). For strings, PHP treats both ""
+/// and "0" as falsy. For other types, x0 already holds the truthiness.
+pub fn coerce_to_truthiness(emitter: &mut Emitter, ctx: &mut Context, ty: &PhpType) {
+    coerce_null_to_zero(emitter, ty);
+    if *ty == PhpType::Str {
+        // -- PHP string truthiness: "" and "0" are falsy, everything else truthy --
+        let falsy_label = ctx.next_label("str_falsy");
+        let truthy_label = ctx.next_label("str_truthy");
+        let done_label = ctx.next_label("str_truth_done");
+        emitter.instruction(&format!("cbz x2, {falsy_label}"));                 // empty string is falsy
+        emitter.instruction("cmp x2, #1");                                      // check if length is 1
+        emitter.instruction(&format!("b.ne {truthy_label}"));                   // length != 1 means truthy
+        emitter.instruction("ldrb w9, [x1]");                                   // load first byte of string
+        emitter.instruction("cmp w9, #48");                                     // compare with ASCII '0'
+        emitter.instruction(&format!("b.eq {falsy_label}"));                    // string "0" is falsy
+        emitter.label(&truthy_label);
+        emitter.instruction("mov x0, #1");                                      // truthy: set x0 = 1
+        emitter.instruction(&format!("b {done_label}"));                        // skip falsy path
+        emitter.label(&falsy_label);
+        emitter.instruction("mov x0, #0");                                      // falsy: set x0 = 0
+        emitter.label(&done_label);
+    } else if *ty == PhpType::Float {
+        // -- float truthiness: 0.0 is falsy --
+        emitter.instruction("fcmp d0, #0.0");                                   // compare float against zero
+        emitter.instruction("cset x0, ne");                                     // x0=1 if nonzero (truthy), 0 if zero
+    }
+}
+
 /// Coerce any type to integer in x0 for loose comparison (==, !=).
 /// PHP loose comparison coerces both sides to a common type.
 /// Simplified: coerce everything to int, then compare.
@@ -837,12 +860,12 @@ fn emit_binop(
         BinOp::And => {
             let end_label = ctx.next_label("and_end");
             let lt = emit_expr(left, emitter, ctx, data);
-            coerce_null_to_zero(emitter, &lt);
+            coerce_to_truthiness(emitter, ctx, &lt);
             // -- short-circuit AND: skip right side if left is falsy --
             emitter.instruction("cmp x0, #0");                                  // test if left operand is falsy
             emitter.instruction(&format!("b.eq {}", end_label));                // short-circuit: left is false so result is 0
             let rt = emit_expr(right, emitter, ctx, data);
-            coerce_null_to_zero(emitter, &rt);
+            coerce_to_truthiness(emitter, ctx, &rt);
             // -- evaluate right operand truthiness --
             emitter.instruction("cmp x0, #0");                                  // test if right operand is falsy
             emitter.instruction("cset x0, ne");                                 // result=1 if right is truthy, 0 if falsy
@@ -852,12 +875,12 @@ fn emit_binop(
         BinOp::Or => {
             let end_label = ctx.next_label("or_end");
             let lt = emit_expr(left, emitter, ctx, data);
-            coerce_null_to_zero(emitter, &lt);
+            coerce_to_truthiness(emitter, ctx, &lt);
             // -- short-circuit OR: skip right side if left is truthy --
             emitter.instruction("cmp x0, #0");                                  // test if left operand is truthy
             emitter.instruction(&format!("b.ne {}", end_label));                // short-circuit: left is true, skip right
             let rt = emit_expr(right, emitter, ctx, data);
-            coerce_null_to_zero(emitter, &rt);
+            coerce_to_truthiness(emitter, ctx, &rt);
             emitter.label(&end_label);
             // -- normalize final value to boolean 0 or 1 --
             emitter.instruction("cmp x0, #0");                                  // test whichever operand survived
@@ -926,10 +949,10 @@ fn emit_binop(
                         emitter.instruction("fdiv d0, d1, d0");                 // float division: left / right
                     }
                     BinOp::Mod => {
-                        // -- float modulo: a - floor(a/b) * b --
+                        // -- float modulo: a - trunc(a/b) * b (C/PHP truncated mod) --
                         emitter.instruction("fdiv d2, d1, d0");                 // d2 = left / right
-                        emitter.instruction("frintm d2, d2");                   // d2 = floor(left / right)
-                        emitter.instruction("fmsub d0, d2, d0, d1");            // d0 = left - floor(l/r)*right
+                        emitter.instruction("frintz d2, d2");                   // d2 = trunc(left / right) toward zero
+                        emitter.instruction("fmsub d0, d2, d0, d1");            // d0 = left - trunc(l/r)*right
                     }
                     _ => unreachable!(),
                 }

@@ -109,15 +109,12 @@ impl Checker {
                 })?;
                 self.infer_type(index, env)?;
                 let val_ty = self.infer_type(value, env)?;
-                if let PhpType::Array(elem_ty) = arr_ty {
-                    if *elem_ty != val_ty {
-                        return Err(CompileError::new(
-                            stmt.span,
-                            &format!(
-                                "Array element type mismatch: expected {:?}, got {:?}",
-                                elem_ty, val_ty
-                            ),
-                        ));
+                if let PhpType::Array(elem_ty) = &arr_ty {
+                    if **elem_ty != val_ty {
+                        // Upgrade array element type when assigning a
+                        // different type (e.g. empty [] defaults to
+                        // Array(Int), first string assign upgrades it)
+                        env.insert(array.clone(), PhpType::Array(Box::new(val_ty)));
                     }
                 }
                 Ok(())
@@ -127,9 +124,12 @@ impl Checker {
                     CompileError::new(stmt.span, &format!("Undefined variable: ${}", array))
                 })?;
                 let val_ty = self.infer_type(value, env)?;
-                if let PhpType::Array(elem_ty) = arr_ty {
-                    if *elem_ty != val_ty {
-                        return Err(CompileError::new(stmt.span, "Array push type mismatch"));
+                if let PhpType::Array(elem_ty) = &arr_ty {
+                    if **elem_ty != val_ty {
+                        // Upgrade array type when pushing a different type
+                        // (e.g. empty [] defaults to Array(Int), first push
+                        // of a string should upgrade to Array(Str))
+                        env.insert(array.clone(), PhpType::Array(Box::new(val_ty)));
                     }
                 }
                 Ok(())

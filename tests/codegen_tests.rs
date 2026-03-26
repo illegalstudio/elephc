@@ -6211,3 +6211,100 @@ echo transform($map, "hello foo");
 "#);
     assert_eq!(out, "world bar");
 }
+
+// --- Bug fix: fmod sign (frintm → frintz) ---
+
+#[test]
+fn test_fmod_negative_dividend() {
+    let out = compile_and_run("<?php echo fmod(-10, 3);");
+    assert_eq!(out, "-1");
+}
+
+#[test]
+fn test_float_modulo_negative() {
+    let out = compile_and_run("<?php echo -10.0 % 3;");
+    assert_eq!(out, "-1");
+}
+
+// --- Bug fix: string "0" is falsy ---
+
+#[test]
+fn test_string_zero_falsy_if() {
+    let out = compile_and_run(r#"<?php
+if ("0") { echo "bad"; } else { echo "good"; }
+"#);
+    assert_eq!(out, "good");
+}
+
+#[test]
+fn test_string_zero_falsy_ternary() {
+    let out = compile_and_run(r#"<?php echo "0" ? "truthy" : "falsy";"#);
+    assert_eq!(out, "falsy");
+}
+
+#[test]
+fn test_string_zero_falsy_not() {
+    let out = compile_and_run(r#"<?php echo !"0" ? "yes" : "no";"#);
+    assert_eq!(out, "yes");
+}
+
+#[test]
+fn test_string_nonempty_truthy() {
+    let out = compile_and_run(r#"<?php echo "hello" ? "yes" : "no";"#);
+    assert_eq!(out, "yes");
+}
+
+#[test]
+fn test_string_empty_falsy() {
+    let out = compile_and_run(r#"<?php echo "" ? "yes" : "no";"#);
+    assert_eq!(out, "no");
+}
+
+// --- Bug fix: compound assignment in for-loop update ---
+
+#[test]
+fn test_for_compound_subtract() {
+    let out = compile_and_run(r#"<?php
+for ($i = 10; $i > 0; $i -= 3) { echo $i . " "; }
+"#);
+    assert_eq!(out, "10 7 4 1 ");
+}
+
+#[test]
+fn test_for_compound_add() {
+    let out = compile_and_run(r#"<?php
+for ($i = 0; $i < 10; $i += 3) { echo $i . " "; }
+"#);
+    assert_eq!(out, "0 3 6 9 ");
+}
+
+#[test]
+fn test_for_compound_multiply() {
+    let out = compile_and_run(r#"<?php
+for ($i = 1; $i < 100; $i *= 2) { echo $i . " "; }
+"#);
+    assert_eq!(out, "1 2 4 8 16 32 64 ");
+}
+
+// --- Bug fix: array push with concat expression ---
+
+#[test]
+fn test_array_push_string_to_empty() {
+    let out = compile_and_run(r#"<?php
+$a = [];
+$a[] = "hello";
+echo $a[0];
+"#);
+    assert_eq!(out, "hello");
+}
+
+#[test]
+fn test_array_push_concat_expr() {
+    let out = compile_and_run(r#"<?php
+$tokens = [];
+$word = "42";
+$tokens[] = "NUM:" . $word;
+echo $tokens[0];
+"#);
+    assert_eq!(out, "NUM:42");
+}

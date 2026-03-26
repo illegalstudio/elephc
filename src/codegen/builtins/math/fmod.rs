@@ -13,7 +13,7 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("fmod()");
-    // -- floating-point modulo: dividend - floor(dividend/divisor) * divisor --
+    // -- floating-point modulo: dividend - trunc(dividend/divisor) * divisor --
     let t0 = emit_expr(&args[0], emitter, ctx, data);
     if t0 != PhpType::Float { emitter.instruction("scvtf d0, x0"); }            // convert dividend to float if int
     emitter.instruction("str d0, [sp, #-16]!");                                 // push dividend onto stack
@@ -21,7 +21,7 @@ pub fn emit(
     if t1 != PhpType::Float { emitter.instruction("scvtf d0, x0"); }            // convert divisor to float if int
     emitter.instruction("ldr d1, [sp], #16");                                   // pop dividend into d1
     emitter.instruction("fdiv d2, d1, d0");                                     // d2 = d1 / d0 (dividend / divisor)
-    emitter.instruction("frintm d2, d2");                                       // d2 = floor(d2) — truncate quotient
+    emitter.instruction("frintz d2, d2");                                       // d2 = trunc(d2) — truncate toward zero
     emitter.instruction("fmsub d0, d2, d0, d1");                                // d0 = d1 - d2*d0 (remainder)
     Some(PhpType::Float)
 }
