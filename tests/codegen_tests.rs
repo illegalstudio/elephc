@@ -6558,3 +6558,42 @@ echo $result;
 "#);
     assert_eq!(out, "yoy");
 }
+
+#[test]
+fn test_array_dynamic_growth_int() {
+    // Array grows beyond initial capacity via reallocation
+    let out = compile_and_run(r#"<?php
+$arr = [1, 2, 3];
+for ($i = 4; $i <= 100; $i++) {
+    $arr[] = $i;
+}
+echo count($arr) . "|" . $arr[0] . "|" . $arr[99];
+"#);
+    assert_eq!(out, "100|1|100");
+}
+
+#[test]
+fn test_array_dynamic_growth_str() {
+    // String array grows beyond initial capacity
+    let out = compile_and_run(r#"<?php
+$arr = ["first"];
+for ($i = 0; $i < 50; $i++) {
+    $arr[] = "item" . $i;
+}
+echo count($arr) . "|" . $arr[0] . "|" . $arr[50];
+"#);
+    assert_eq!(out, "51|first|item49");
+}
+
+#[test]
+fn test_array_push_function_growth() {
+    // array_push() triggers growth
+    let out = compile_and_run(r#"<?php
+$arr = [10];
+for ($i = 0; $i < 20; $i++) {
+    array_push($arr, $i * 10);
+}
+echo count($arr) . "|" . $arr[20];
+"#);
+    assert_eq!(out, "21|190");
+}

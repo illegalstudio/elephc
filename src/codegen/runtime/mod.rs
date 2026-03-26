@@ -84,6 +84,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     // Array runtime functions
     arrays::emit_heap_alloc(emitter);
     arrays::emit_heap_free(emitter);
+    arrays::emit_array_grow(emitter);
     arrays::emit_array_new(emitter);
     arrays::emit_array_push_int(emitter);
     arrays::emit_array_push_str(emitter);

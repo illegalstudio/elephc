@@ -1,8 +1,9 @@
+use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
 // @todo: add support for array_push() with floats, booleans and other types
@@ -27,8 +28,10 @@ pub fn emit(
             emitter.instruction("bl __rt_array_push_int");                      // call runtime: append integer to array
         }
         PhpType::Str => {
-            // -- push string value onto array --
-            emitter.instruction("mov x0, x9");                                  // move array pointer to x0 (first arg, x1/x2 already set)
+            // -- persist string to heap before pushing to array --
+            emitter.instruction("str x9, [sp, #-16]!");                         // save array pointer (str_persist clobbers x9)
+            emitter.instruction("bl __rt_str_persist");                         // copy string to heap, x1=heap_ptr, x2=len
+            emitter.instruction("ldr x0, [sp], #16");                           // restore array pointer to x0
             emitter.instruction("bl __rt_array_push_str");                      // call runtime: append string to array
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
@@ -38,6 +41,14 @@ pub fn emit(
             emitter.instruction("bl __rt_array_push_int");                      // append pointer (8 bytes, same as int)
         }
         _ => {}
+    }
+
+    // -- update stored array pointer (may have changed due to reallocation) --
+    if let ExprKind::Variable(name) = &args[0].kind {
+        if let Some(var) = ctx.variables.get(name) {
+            let offset = var.stack_offset;
+            abi::store_at_offset(emitter, "x0", offset);                        // save possibly-new array pointer
+        }
     }
 
     Some(PhpType::Void)

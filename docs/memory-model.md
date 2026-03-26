@@ -220,9 +220,16 @@ Header (24 bytes) │ ptr[0] (8B) │ len[0] (8B) │ ptr[1] (8B) │ len[1] (8B
 
 Access: `base + 24 + (index × 16)` for pointer, `base + 24 + (index × 16) + 8` for length
 
-### Array capacity
+### Array growth
 
-Arrays are allocated with a fixed capacity. When `array_push` finds that `length >= capacity`, it prints a fatal error and exits. Dynamic array growth (realloc + copy) is a future improvement.
+When `array_push` finds that `length >= capacity`, the array grows automatically:
+
+1. `__rt_array_grow` allocates a new array with **2× capacity** (minimum 8)
+2. Copies the 24-byte header and all elements to the new array
+3. Frees the old array via `__rt_heap_free`
+4. Returns the new array pointer
+
+The caller updates its stored pointer to the new array. This means arrays are truly dynamic — you can push unlimited elements (limited only by heap size).
 
 ## Hash table layout (associative arrays)
 

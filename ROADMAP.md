@@ -173,10 +173,12 @@ Proper type system for PHP compatibility.
 - [x] Array push capacity checking with fatal error message
 - [x] `include` / `require` / `include_once` / `require_once`
 
+- [x] Dynamic array growth (automatic 2x reallocation on push beyond capacity)
+- [x] Persist strings to heap before pushing to arrays
+
 ### Future memory improvements
 - [ ] String deduplication (avoid copying identical strings)
 - [ ] Hash table shrink on delete (currently only grows)
-- [ ] Sized array pre-allocation (when array size is known at compile time)
 - [ ] Deep recursive free for arrays (currently shallow)
 - [ ] Block coalescing in free list (merge adjacent free blocks)
 
