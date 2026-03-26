@@ -194,7 +194,15 @@ Proper type system for PHP compatibility.
 - [ ] Objects as function parameters and return values
 - [ ] Objects stored in arrays
 
-## v0.11.x — FFI (Foreign Function Interface)
+## v0.11.x — Garbage collector
+
+- [ ] Reference counting for strings, arrays, and objects
+- [ ] Automatic free when reference count drops to zero
+- [ ] Cycle detection for circular references (objects referencing each other)
+- [ ] Scope-based cleanup (free temporaries at end of scope/loop iteration)
+- [ ] GC statistics (`--gc-stats` flag: allocations, frees, peak memory)
+
+## v0.12.x — FFI (Foreign Function Interface)
 
 - [ ] `extern function` declarations with C type annotations (`int`, `float`, `string`, `bool`, `void`, `ptr`)
 - [ ] `extern "libname" { }` blocks (auto `-l` linker flag)
@@ -208,15 +216,7 @@ Proper type system for PHP compatibility.
 - [ ] Callback support: pass elephc functions as C function pointers (`callable` params)
 - [ ] `extern global` for accessing C global variables
 
-## v0.12.x — Garbage collector
-
-- [ ] Reference counting for strings, arrays, and objects
-- [ ] Automatic free when reference count drops to zero
-- [ ] Cycle detection for circular references (objects referencing each other)
-- [ ] Scope-based cleanup (free temporaries at end of scope/loop iteration)
-- [ ] GC statistics (`--gc-stats` flag: allocations, frees, peak memory)
-
-## v0.12.x — Multi-platform and optimizations
+## v0.13.x — Multi-platform and optimizations
 
 - [ ] Linux x86_64 target
 - [ ] Linux ARM64 target
