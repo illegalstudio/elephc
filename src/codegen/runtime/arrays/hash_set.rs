@@ -27,9 +27,9 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp, #24]");                                   // save value_lo
     emitter.instruction("str x4, [sp, #32]");                                   // save value_hi
 
-    // -- copy the key to persistent storage via __rt_strcopy --
+    // -- copy the key to persistent storage on heap --
     // x1=ptr, x2=len already set from inputs
-    emitter.instruction("bl __rt_strcopy");                                     // copy key to concat_buf, x1=new_ptr, x2=len
+    emitter.instruction("bl __rt_str_persist");                                 // copy key to heap, x1=new_ptr, x2=len
     emitter.instruction("str x1, [sp, #8]");                                    // update key_ptr to persistent copy
     // x2 (key_len) unchanged
 

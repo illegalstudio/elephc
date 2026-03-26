@@ -42,6 +42,9 @@ pub fn emit_array_map_str(emitter: &mut Emitter) {
     // -- call callback with element as argument --
     emitter.instruction("blr x19");                                             // call callback(element) → string result in x1=ptr, x2=len
 
+    // -- persist string result to heap (concat_buf resets each statement) --
+    emitter.instruction("bl __rt_str_persist");                                 // copy string to heap, x1=heap_ptr, x2=len
+
     // -- store string result (x1=ptr, x2=len) in new array --
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload new array pointer
     emitter.instruction("add x9, x9, #24");                                     // skip header to data region

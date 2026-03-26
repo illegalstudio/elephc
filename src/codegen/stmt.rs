@@ -12,6 +12,13 @@ pub fn emit_stmt(
     ctx: &mut Context,
     data: &mut DataSection,
 ) {
+    // -- reset concat buffer at the start of each statement --
+    // This is safe because any string that needs to persist beyond the current
+    // statement is copied to heap via __rt_str_persist (in emit_store).
+    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of concat offset
+    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve concat offset address
+    emitter.instruction("str xzr, [x9]");                                       // reset concat buffer offset to 0
+
     match &stmt.kind {
         StmtKind::Echo(expr) => {
             emitter.blank();
@@ -84,6 +91,20 @@ pub fn emit_stmt(
             } else {
                 let var = ctx.variables.get(name).expect("variable not pre-allocated");
                 let offset = var.stack_offset;
+                let old_ty = var.ty.clone();
+
+                // -- free old heap value before overwriting --
+                if matches!(&old_ty, PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                    let needs_save_x0 = !matches!(&ty, PhpType::Str | PhpType::Float);
+                    if needs_save_x0 {
+                        emitter.instruction("mov x8, x0");                      // save new value in x8 temporarily
+                    }
+                    abi::load_at_offset(emitter, "x0", offset);              // load old heap pointer
+                    emitter.instruction("bl __rt_heap_free_safe");              // free if valid heap pointer
+                    if needs_save_x0 {
+                        emitter.instruction("mov x0, x8");                      // restore new value
+                    }
+                }
 
                 abi::emit_store(emitter, &ty, offset);
 

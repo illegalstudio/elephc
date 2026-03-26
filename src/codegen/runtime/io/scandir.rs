@@ -39,7 +39,7 @@ pub fn emit_scandir(emitter: &mut Emitter) {
 
     // -- copy name to concat_buf so it persists after next readdir call --
     emitter.instruction("str x0, [sp, #16]");                                   // save dirent pointer (will be clobbered)
-    emitter.instruction("bl __rt_strcopy");                                     // copy string to concat_buf, x1=new ptr, x2=len
+    emitter.instruction("bl __rt_str_persist");                                // copy string to heap, x1=new ptr, x2=len
 
     // -- push name string to array --
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload array pointer

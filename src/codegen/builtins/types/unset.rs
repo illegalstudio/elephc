@@ -16,6 +16,14 @@ pub fn emit(
     if let crate::parser::ast::ExprKind::Variable(name) = &args[0].kind {
         let var = ctx.variables.get(name).expect("undefined variable");
         let offset = var.stack_offset;
+        let old_ty = var.ty.clone();
+
+        // -- free old heap value before unsetting --
+        if matches!(&old_ty, PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            abi::load_at_offset(emitter, "x0", offset);                          // load heap pointer from variable
+            emitter.instruction("bl __rt_heap_free_safe");                      // free if valid heap pointer
+        }
+
         // -- set variable to null sentinel value (0x7FFFFFFFFFFFFFFFE) --
         emitter.instruction("movz x0, #0xFFFE");                                // load null sentinel bits [15:0]
         emitter.instruction("movk x0, #0xFFFF, lsl #16");                       // load null sentinel bits [31:16]
