@@ -159,8 +159,20 @@ Proper type system for PHP compatibility.
 - [x] `php_uname()`, `phpversion()`
 - [x] Constants: `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`
 
-## v0.9.x — Memory management and runtime improvements
+## v0.9.x — Classes and memory improvements
 
+### Basic classes (no inheritance, no polymorphism)
+- [ ] Classes with `public`/`private` properties and optional defaults
+- [ ] Constructor (`__construct`) with arguments
+- [ ] Instance methods with `$this` access
+- [ ] Static methods via `ClassName::method()`
+- [ ] `new` keyword for object instantiation
+- [ ] `->` property access and method calls
+- [ ] `readonly` properties (enforced at compile time)
+- [ ] Objects as function parameters and return values
+- [ ] Objects stored in arrays
+
+### Memory management
 - [ ] Free-list allocator (replace bump allocator with reusable memory)
 - [ ] Scope-based memory reset (free temporaries at end of scope/loop iteration)
 - [ ] Configurable heap size (currently hardcoded 1MB)
@@ -241,6 +253,5 @@ Features that are fundamentally incompatible with a static ahead-of-time compile
 | `extract()` | Creates new variables from array keys at runtime. A static compiler must know all variables before execution — it cannot allocate stack slots on the fly. |
 | `$$var` (variable variables) | Requires a runtime symbol table to resolve variable names dynamically. Incompatible with static stack-based variable allocation. |
 | `eval()` | Requires a full interpreter/compiler at runtime. Fundamentally impossible in an AOT compiler. |
-| Classes / OOP | Out of scope. elephc targets procedural PHP — the subset where the language began. |
 | Generators / `yield` | Requires coroutine suspension and stack switching, which is far beyond the current single-stack execution model. |
 | Exceptions / `try`-`catch` | Requires stack unwinding infrastructure (setjmp/longjmp or DWARF unwinding). May be reconsidered in the future. |
