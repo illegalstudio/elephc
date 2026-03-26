@@ -30,7 +30,11 @@ pub fn emit(
     // -- call runtime --
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload outer array pointer
     emitter.instruction("ldp x1, x2, [sp]");                                    // reload column key
-    emitter.instruction("bl __rt_array_column");                                // extract column → x0=new array
+    if val_ty == PhpType::Str {
+        emitter.instruction("bl __rt_array_column_str");                        // extract string column → x0=new array (elem_size=16)
+    } else {
+        emitter.instruction("bl __rt_array_column");                            // extract column → x0=new array (elem_size=8)
+    }
     emitter.instruction("add sp, sp, #32");                                     // clean up stack
 
     Some(PhpType::Array(Box::new(val_ty)))

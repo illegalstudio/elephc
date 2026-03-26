@@ -92,13 +92,13 @@ pub fn generate(
 
     // -- store $argc in local variable --
     let argc_offset = ctx.variables.get("argc").unwrap().stack_offset;
-    emitter.instruction(&format!("stur x0, [x29, #-{}]", argc_offset));         // $argc = OS argc
+    abi::store_at_offset(&mut emitter, "x0", argc_offset);                        // $argc = OS argc
 
     // -- build $argv array from OS C strings --
     let argv_offset = ctx.variables.get("argv").unwrap().stack_offset;
     emitter.comment("build $argv array from OS argv");
     emitter.instruction("bl __rt_build_argv");                                  // returns array ptr in x0
-    emitter.instruction(&format!("stur x0, [x29, #-{}]", argv_offset));         // $argv = array
+    abi::store_at_offset(&mut emitter, "x0", argv_offset);                      // $argv = array
 
     // -- emit user statements --
     for s in program {

@@ -71,7 +71,7 @@ pub fn emit_expr(
                 let offset = var.stack_offset;
                 let ty = var.ty.clone();
                 emitter.comment(&format!("load ref ${}", name));
-                emitter.instruction(&format!("ldur x9, [x29, #-{}]", offset));  // load pointer to referenced variable
+                abi::load_at_offset(emitter, "x9", offset);                     // load pointer to referenced variable
                 match &ty {
                     PhpType::Bool | PhpType::Int => {
                         emitter.instruction("ldr x0, [x9]");                    // dereference to get int/bool value
@@ -151,7 +151,7 @@ pub fn emit_expr(
                 let var = ctx.variables.get(name).expect("undefined variable");
                 let offset = var.stack_offset;
                 emitter.comment(&format!("++${} (ref)", name));
-                emitter.instruction(&format!("ldur x9, [x29, #-{}]", offset));  // load ref pointer
+                abi::load_at_offset(emitter, "x9", offset);                     // load ref pointer
                 emitter.instruction("ldr x0, [x9]");                            // dereference
                 emitter.instruction("add x0, x0, #1");                          // increment
                 emitter.instruction("str x0, [x9]");                            // store back through pointer
@@ -161,9 +161,9 @@ pub fn emit_expr(
                 let offset = var.stack_offset;
                 emitter.comment(&format!("++${}", name));
                 // -- pre-increment: add 1 then return new value --
-                emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));  // load current variable value from stack frame
+                abi::load_at_offset(emitter, "x0", offset);                     // load current variable value from stack frame
                 emitter.instruction("add x0, x0, #1");                          // increment the value by 1
-                emitter.instruction(&format!("stur x0, [x29, #-{}]", offset));  // store incremented value back to stack frame
+                abi::store_at_offset(emitter, "x0", offset);                    // store incremented value back to stack frame
                 if ctx.in_main && ctx.all_global_var_names.contains(name) {
                     emit_global_store_inline(emitter, name);
                 }
@@ -187,7 +187,7 @@ pub fn emit_expr(
                 let var = ctx.variables.get(name).expect("undefined variable");
                 let offset = var.stack_offset;
                 emitter.comment(&format!("${}++ (ref)", name));
-                emitter.instruction(&format!("ldur x9, [x29, #-{}]", offset));  // load ref pointer
+                abi::load_at_offset(emitter, "x9", offset);                     // load ref pointer
                 emitter.instruction("ldr x0, [x9]");                            // dereference
                 emitter.instruction("add x1, x0, #1");                          // compute incremented value
                 emitter.instruction("str x1, [x9]");                            // store back through pointer
@@ -197,9 +197,9 @@ pub fn emit_expr(
                 let offset = var.stack_offset;
                 emitter.comment(&format!("${}++", name));
                 // -- post-increment: return old value, then add 1 --
-                emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));  // load current value into x0 (returned to caller)
+                abi::load_at_offset(emitter, "x0", offset);                     // load current value into x0 (returned to caller)
                 emitter.instruction("add x1, x0, #1");                          // compute incremented value in scratch register
-                emitter.instruction(&format!("stur x1, [x29, #-{}]", offset));  // write new value back; x0 still has old value
+                abi::store_at_offset(emitter, "x1", offset);                    // write new value back; x0 still has old value
                 if ctx.in_main && ctx.all_global_var_names.contains(name) {
                     // Save new value (in x1) to global
                     let label = format!("_gvar_{}", name);
@@ -223,7 +223,7 @@ pub fn emit_expr(
                 let var = ctx.variables.get(name).expect("undefined variable");
                 let offset = var.stack_offset;
                 emitter.comment(&format!("--${} (ref)", name));
-                emitter.instruction(&format!("ldur x9, [x29, #-{}]", offset));  // load ref pointer
+                abi::load_at_offset(emitter, "x9", offset);                     // load ref pointer
                 emitter.instruction("ldr x0, [x9]");                            // dereference
                 emitter.instruction("sub x0, x0, #1");                          // decrement
                 emitter.instruction("str x0, [x9]");                            // store back through pointer
@@ -233,9 +233,9 @@ pub fn emit_expr(
                 let offset = var.stack_offset;
                 emitter.comment(&format!("--${}", name));
                 // -- pre-decrement: subtract 1 then return new value --
-                emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));  // load current variable value from stack frame
+                abi::load_at_offset(emitter, "x0", offset);                     // load current variable value from stack frame
                 emitter.instruction("sub x0, x0, #1");                          // decrement the value by 1
-                emitter.instruction(&format!("stur x0, [x29, #-{}]", offset));  // store decremented value back to stack frame
+                abi::store_at_offset(emitter, "x0", offset);                    // store decremented value back to stack frame
                 PhpType::Int
             }
         }
@@ -244,7 +244,7 @@ pub fn emit_expr(
                 let var = ctx.variables.get(name).expect("undefined variable");
                 let offset = var.stack_offset;
                 emitter.comment(&format!("${}-- (ref)", name));
-                emitter.instruction(&format!("ldur x9, [x29, #-{}]", offset));  // load ref pointer
+                abi::load_at_offset(emitter, "x9", offset);                     // load ref pointer
                 emitter.instruction("ldr x0, [x9]");                            // dereference
                 emitter.instruction("sub x1, x0, #1");                          // compute decremented value
                 emitter.instruction("str x1, [x9]");                            // store back through pointer
@@ -254,9 +254,9 @@ pub fn emit_expr(
                 let offset = var.stack_offset;
                 emitter.comment(&format!("${}--", name));
                 // -- post-decrement: return old value, then subtract 1 --
-                emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));  // load current value into x0 (returned to caller)
+                abi::load_at_offset(emitter, "x0", offset);                     // load current value into x0 (returned to caller)
                 emitter.instruction("sub x1, x0, #1");                          // compute decremented value in scratch register
-                emitter.instruction(&format!("stur x1, [x29, #-{}]", offset));  // write new value back; x0 still has old value
+                abi::store_at_offset(emitter, "x1", offset);                    // write new value back; x0 still has old value
                 PhpType::Int
             }
         }
@@ -1585,7 +1585,7 @@ fn emit_closure_call(
     // -- load the closure function address from the variable's stack slot --
     let var_info = ctx.variables.get(var).expect("undefined closure variable");
     let var_offset = var_info.stack_offset;
-    emitter.instruction(&format!("ldur x9, [x29, #-{}]", var_offset));          // load closure function address from stack
+    abi::load_at_offset(emitter, "x9", var_offset);                              // load closure function address from stack
 
     // -- save closure address while we pop args into registers --
     emitter.instruction("str x9, [sp, #-16]!");                                 // push closure address temporarily

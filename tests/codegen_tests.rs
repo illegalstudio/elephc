@@ -6308,3 +6308,60 @@ echo $tokens[0];
 "#);
     assert_eq!(out, "NUM:42");
 }
+
+#[test]
+fn test_many_local_vars() {
+    // Issue #22: stur/ldur offset overflow with >32 local variables
+    let mut php = String::from("<?php\nfunction f() {\n");
+    for i in 0..50 {
+        php.push_str(&format!("$v{} = {};\n", i, i));
+    }
+    // Sum some vars to ensure they're stored/loaded correctly
+    php.push_str("echo $v0 + $v49;\n");
+    php.push_str("}\nf();\n");
+    let out = compile_and_run(&php);
+    assert_eq!(out, "49");
+}
+
+#[test]
+fn test_ref_array_assign() {
+    // Issue #32: pass-by-reference array mutation via index assignment
+    let out = compile_and_run(r#"<?php
+function swap(&$a) {
+    $t = $a[0];
+    $a[0] = $a[1];
+    $a[1] = $t;
+}
+$x = [1, 2];
+swap($x);
+echo $x[0];
+echo $x[1];
+"#);
+    assert_eq!(out, "21");
+}
+
+#[test]
+fn test_ref_array_push() {
+    // Issue #32: pass-by-reference array mutation via push
+    let out = compile_and_run(r#"<?php
+function append(&$arr, $val) {
+    $arr[] = $val;
+}
+$x = [10, 20];
+append($x, 30);
+echo count($x);
+echo $x[2];
+"#);
+    assert_eq!(out, "330");
+}
+
+#[test]
+fn test_array_column_string_implode() {
+    // Issue #33: array_column on arrays of assoc arrays with string values + implode
+    let out = compile_and_run(r#"<?php
+$s = [["n" => "Alice"], ["n" => "Bob"]];
+$names = array_column($s, "n");
+echo implode(",", $names);
+"#);
+    assert_eq!(out, "Alice,Bob");
+}

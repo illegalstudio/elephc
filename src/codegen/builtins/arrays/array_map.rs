@@ -1,3 +1,4 @@
+use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -80,7 +81,7 @@ pub fn emit(
         // Callable variable — load from stack slot
         let var = ctx.variables.get(var_name).expect("undefined callback variable");
         let offset = var.stack_offset;
-        emitter.instruction(&format!("ldur x19, [x29, #-{}]", offset));         // load callback address from variable
+        abi::load_at_offset(emitter, "x19", offset);                              // load callback address from variable
     } else {
         // String literal — resolve at compile time
         let func_name = match &args[0].kind {

@@ -65,7 +65,7 @@ pub fn emit_stmt(
                 let var = ctx.variables.get(name).expect("variable not pre-allocated");
                 let offset = var.stack_offset;
                 emitter.comment(&format!("write through ref ${}", name));
-                emitter.instruction(&format!("ldur x9, [x29, #-{}]", offset));  // load pointer to referenced variable
+                abi::load_at_offset(emitter, "x9", offset);                     // load pointer to referenced variable
                 match &ty {
                     PhpType::Bool | PhpType::Int => {
                         emitter.instruction("str x0, [x9]");                    // store int/bool through reference pointer
@@ -165,6 +165,7 @@ pub fn emit_stmt(
             emitter.comment(&format!("${}[...] = ...", array));
             let var = ctx.variables.get(array).expect("undefined variable");
             let offset = var.stack_offset;
+            let is_ref = ctx.ref_params.contains(array);
             let is_assoc = matches!(&var.ty, PhpType::AssocArray { .. });
             let elem_ty = match &var.ty {
                 PhpType::Array(t) => *t.clone(),
@@ -174,7 +175,12 @@ pub fn emit_stmt(
 
             if is_assoc {
                 // -- associative array assignment: $map[$key] = $value --
-                emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));  // load hash table pointer
+                if is_ref {
+                    abi::load_at_offset(emitter, "x9", offset);                 // load ref pointer
+                    emitter.instruction("ldr x0, [x9]");                        // dereference to get hash table pointer
+                } else {
+                    abi::load_at_offset(emitter, "x0", offset);                 // load hash table pointer
+                }
                 emitter.instruction("str x0, [sp, #-16]!");                     // save hash table pointer
                 // Evaluate key (string)
                 emit_expr(index, emitter, ctx, data);
@@ -199,7 +205,12 @@ pub fn emit_stmt(
             } else {
                 // -- indexed array assignment (existing logic) --
                 // -- load array base pointer from local variable slot --
-                emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));  // load array heap pointer from stack frame
+                if is_ref {
+                    abi::load_at_offset(emitter, "x9", offset);                 // load ref pointer
+                    emitter.instruction("ldr x0, [x9]");                        // dereference to get array heap pointer
+                } else {
+                    abi::load_at_offset(emitter, "x0", offset);                 // load array heap pointer from stack frame
+                }
                 emitter.instruction("str x0, [sp, #-16]!");                     // push array pointer onto stack
                 // Evaluate index
                 emit_expr(index, emitter, ctx, data);
@@ -238,8 +249,14 @@ pub fn emit_stmt(
             emitter.comment(&format!("${}[] = ...", array));
             let var = ctx.variables.get(array).expect("undefined variable");
             let offset = var.stack_offset;
+            let is_ref = ctx.ref_params.contains(array);
             // -- load array pointer and save it before evaluating the value --
-            emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));      // load array heap pointer from stack frame
+            if is_ref {
+                abi::load_at_offset(emitter, "x9", offset);                     // load ref pointer
+                emitter.instruction("ldr x0, [x9]");                            // dereference to get array heap pointer
+            } else {
+                abi::load_at_offset(emitter, "x0", offset);                     // load array heap pointer from stack frame
+            }
             emitter.instruction("str x0, [sp, #-16]!");                         // push array pointer onto stack to preserve it
             // Evaluate value — use the actual expression type to pick the right push
             let val_ty = emit_expr(value, emitter, ctx, data);
@@ -314,9 +331,9 @@ pub fn emit_stmt(
                 if let Some(kv) = key_var {
                     let kvar = ctx.variables.get(kv).expect("foreach key var");
                     let k_offset = kvar.stack_offset;
-                    // key is a string: x1=ptr, x2=len
-                    emitter.instruction(&format!("stur x1, [x29, #-{}]", k_offset)); // store key ptr
-                    emitter.instruction(&format!("stur x2, [x29, #-{}]", k_offset - 8)); // store key len
+                    // key is a string: x1=ptr, x2=len (use x10 as scratch to avoid clobbering x9)
+                    abi::store_at_offset_scratch(emitter, "x1", k_offset, "x10"); // store key ptr
+                    abi::store_at_offset_scratch(emitter, "x2", k_offset - 8, "x10"); // store key len
                 }
 
                 // -- store value into $value_var --
@@ -324,14 +341,14 @@ pub fn emit_stmt(
                 let v_offset = val_var_info.stack_offset;
                 match &val_ty {
                     PhpType::Int | PhpType::Bool => {
-                        emitter.instruction(&format!("stur x3, [x29, #-{}]", v_offset)); // store int value
+                        abi::store_at_offset_scratch(emitter, "x3", v_offset, "x10"); // store int value
                     }
                     PhpType::Str => {
-                        emitter.instruction(&format!("stur x3, [x29, #-{}]", v_offset)); // store string ptr
-                        emitter.instruction(&format!("stur x4, [x29, #-{}]", v_offset - 8)); // store string len
+                        abi::store_at_offset_scratch(emitter, "x3", v_offset, "x10"); // store string ptr
+                        abi::store_at_offset_scratch(emitter, "x4", v_offset - 8, "x10"); // store string len
                     }
                     _ => {
-                        emitter.instruction(&format!("stur x3, [x29, #-{}]", v_offset)); // store value
+                        abi::store_at_offset_scratch(emitter, "x3", v_offset, "x10"); // store value
                     }
                 }
 
@@ -373,7 +390,7 @@ pub fn emit_stmt(
                 if let Some(kv) = key_var {
                     let kvar = ctx.variables.get(kv).expect("foreach key var");
                     let k_offset = kvar.stack_offset;
-                    emitter.instruction(&format!("stur x0, [x29, #-{}]", k_offset)); // store index as key
+                    abi::store_at_offset_scratch(emitter, "x0", k_offset, "x10"); // store index as key
                 }
 
                 // -- load element at current index into the loop variable --
@@ -385,7 +402,7 @@ pub fn emit_stmt(
                         // -- load integer element and store into $value_var --
                         emitter.instruction("add x9, x9, #24");                 // skip 24-byte array header to reach data
                         emitter.instruction("ldr x0, [x9, x0, lsl #3]");        // load int at data[index] (8 bytes per element)
-                        emitter.instruction(&format!("stur x0, [x29, #-{}]", val_offset)); // store value into $value_var's stack slot
+                        abi::store_at_offset(emitter, "x0", val_offset);        // store value into $value_var's stack slot
                     }
                     PhpType::Str => {
                         // -- load string element (ptr+len) and store into $value_var --
@@ -394,14 +411,14 @@ pub fn emit_stmt(
                         emitter.instruction("add x9, x9, #24");                 // skip 24-byte array header
                         emitter.instruction("ldr x1, [x9]");                    // load string pointer from slot
                         emitter.instruction("ldr x2, [x9, #8]");                // load string length from slot+8
-                        emitter.instruction(&format!("stur x1, [x29, #-{}]", val_offset)); // store string pointer into $value_var
-                        emitter.instruction(&format!("stur x2, [x29, #-{}]", val_offset - 8)); // store string length into $value_var+8
+                        abi::store_at_offset(emitter, "x1", val_offset);        // store string pointer into $value_var
+                        abi::store_at_offset(emitter, "x2", val_offset - 8);    // store string length into $value_var+8
                     }
                     PhpType::Array(_) | PhpType::AssocArray { .. } => {
                         // -- load nested array pointer and store into $value_var --
                         emitter.instruction("add x9, x9, #24");                 // skip 24-byte array header to reach data
                         emitter.instruction("ldr x0, [x9, x0, lsl #3]");        // load nested array pointer at index
-                        emitter.instruction(&format!("stur x0, [x29, #-{}]", val_offset)); // store pointer into $value_var
+                        abi::store_at_offset(emitter, "x0", val_offset);        // store pointer into $value_var
                     }
                     _ => {}
                 }
@@ -678,9 +695,7 @@ pub fn emit_stmt(
                         emitter.instruction(&format!(                           // load element at index
                             "ldr x0, [x9, #{}]", i * 8
                         ));
-                        emitter.instruction(&format!(                           // store into variable
-                            "stur x0, [x29, #-{}]", offset
-                        ));
+                        abi::store_at_offset(emitter, "x0", offset);            // store into variable
                     }
                     PhpType::Str => {
                         emitter.instruction(&format!(                           // offset to string slot
@@ -688,30 +703,22 @@ pub fn emit_stmt(
                         ));
                         emitter.instruction("ldr x1, [x9]");                    // load string pointer
                         emitter.instruction("ldr x2, [x9, #8]");                // load string length
-                        emitter.instruction(&format!(                           // store string ptr
-                            "stur x1, [x29, #-{}]", offset
-                        ));
-                        emitter.instruction(&format!(                           // store string len
-                            "stur x2, [x29, #-{}]", offset - 8
-                        ));
+                        abi::store_at_offset(emitter, "x1", offset);            // store string ptr
+                        abi::store_at_offset(emitter, "x2", offset - 8);        // store string len
                     }
                     PhpType::Float => {
                         emitter.instruction("add x9, x9, #24");                 // skip 24-byte array header
                         emitter.instruction(&format!(                           // load float at index
                             "ldr d0, [x9, #{}]", i * 8
                         ));
-                        emitter.instruction(&format!(                           // store float into variable
-                            "stur d0, [x29, #-{}]", offset
-                        ));
+                        abi::store_at_offset(emitter, "d0", offset);            // store float into variable
                     }
                     _ => {
                         emitter.instruction("add x9, x9, #24");                 // skip 24-byte array header
                         emitter.instruction(&format!(                           // load element at index
                             "ldr x0, [x9, #{}]", i * 8
                         ));
-                        emitter.instruction(&format!(                           // store into variable
-                            "stur x0, [x29, #-{}]", offset
-                        ));
+                        abi::store_at_offset(emitter, "x0", offset);            // store into variable
                     }
                 }
             }
@@ -781,24 +788,25 @@ pub fn emit_stmt(
             let var_info = ctx.variables.get(name).expect("static var not pre-allocated");
             let offset = var_info.stack_offset;
             let var_ty = var_info.ty.clone();
+            // Note: x9 holds the static storage address, so use x10 as scratch for large offsets
             match &var_ty {
                 PhpType::Bool | PhpType::Int => {
                     emitter.instruction("ldr x0, [x9]");                        // load static int/bool value
-                    emitter.instruction(&format!("stur x0, [x29, #-{}]", offset)); // store to local stack slot
+                    abi::store_at_offset_scratch(emitter, "x0", offset, "x10"); // store to local stack slot
                 }
                 PhpType::Float => {
                     emitter.instruction("ldr d0, [x9]");                        // load static float value
-                    emitter.instruction(&format!("stur d0, [x29, #-{}]", offset)); // store to local stack slot
+                    abi::store_at_offset_scratch(emitter, "d0", offset, "x10"); // store to local stack slot
                 }
                 PhpType::Str => {
                     emitter.instruction("ldr x1, [x9]");                        // load static string pointer
                     emitter.instruction("ldr x2, [x9, #8]");                    // load static string length
-                    emitter.instruction(&format!("stur x1, [x29, #-{}]", offset)); // store string ptr to stack
-                    emitter.instruction(&format!("stur x2, [x29, #-{}]", offset - 8)); // store string len to stack
+                    abi::store_at_offset_scratch(emitter, "x1", offset, "x10"); // store string ptr to stack
+                    abi::store_at_offset_scratch(emitter, "x2", offset - 8, "x10"); // store string len to stack
                 }
                 _ => {
                     emitter.instruction("ldr x0, [x9]");                        // load static value
-                    emitter.instruction(&format!("stur x0, [x29, #-{}]", offset)); // store to local stack slot
+                    abi::store_at_offset_scratch(emitter, "x0", offset, "x10"); // store to local stack slot
                 }
             }
 

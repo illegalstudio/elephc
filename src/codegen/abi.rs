@@ -1,6 +1,54 @@
 use super::emit::Emitter;
 use crate::types::PhpType;
 
+/// Emit a store of `reg` at `[x29, #-offset]`, handling large offsets.
+/// Uses x9 as scratch register for offsets > 255.
+///
+/// For offsets <= 255: single `stur` instruction (9-bit signed immediate).
+/// For offsets 256-4095: `sub x9, x29, #offset` then `str reg, [x9]` (12-bit unsigned immediate).
+pub fn store_at_offset(emitter: &mut Emitter, reg: &str, offset: usize) {
+    store_at_offset_scratch(emitter, reg, offset, "x9");
+}
+
+/// Emit a store of `reg` at `[x29, #-offset]` using a custom scratch register.
+///
+/// For offsets <= 255: single `stur` instruction.
+/// For offsets 256-4095: `sub scratch, x29, #offset` then `str reg, [scratch]`.
+pub fn store_at_offset_scratch(emitter: &mut Emitter, reg: &str, offset: usize, scratch: &str) {
+    if offset <= 255 {
+        emitter.instruction(&format!(
+            "stur {}, [x29, #-{}]", reg, offset
+        ));                                                                     // store via unscaled immediate offset
+    } else {
+        emitter.instruction(&format!("sub {}, x29, #{}", scratch, offset));     // compute stack address for large offset
+        emitter.instruction(&format!("str {}, [{}]", reg, scratch));            // store via computed address
+    }
+}
+
+/// Emit a load into `reg` from `[x29, #-offset]`, handling large offsets.
+/// Uses x9 as scratch register for offsets > 255.
+///
+/// For offsets <= 255: single `ldur` instruction.
+/// For offsets 256-4095: `sub x9, x29, #offset` then `ldr reg, [x9]`.
+pub fn load_at_offset(emitter: &mut Emitter, reg: &str, offset: usize) {
+    load_at_offset_scratch(emitter, reg, offset, "x9");
+}
+
+/// Emit a load into `reg` from `[x29, #-offset]` using a custom scratch register.
+///
+/// For offsets <= 255: single `ldur` instruction.
+/// For offsets 256-4095: `sub scratch, x29, #offset` then `ldr reg, [scratch]`.
+pub fn load_at_offset_scratch(emitter: &mut Emitter, reg: &str, offset: usize, scratch: &str) {
+    if offset <= 255 {
+        emitter.instruction(&format!(
+            "ldur {}, [x29, #-{}]", reg, offset
+        ));                                                                     // load via unscaled immediate offset
+    } else {
+        emitter.instruction(&format!("sub {}, x29, #{}", scratch, offset));     // compute stack address for large offset
+        emitter.instruction(&format!("ldr {}, [{}]", reg, scratch));            // load via computed address
+    }
+}
+
 /// Store the current result registers to a local variable on the stack.
 ///
 /// ARM64 register conventions for each PHP type:
@@ -12,21 +60,21 @@ use crate::types::PhpType;
 pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty {
         PhpType::Bool | PhpType::Int => {
-            emitter.instruction(&format!("stur x0, [x29, #-{}]", offset));      // store int/bool to stack
+            store_at_offset(emitter, "x0", offset);                             // store int/bool to stack
         }
         PhpType::Float => {
-            emitter.instruction(&format!("stur d0, [x29, #-{}]", offset));      // store float to stack
+            store_at_offset(emitter, "d0", offset);                             // store float to stack
         }
         PhpType::Str => {
             // Strings use 16 bytes: pointer at offset, length at offset-8
-            emitter.instruction(&format!("stur x1, [x29, #-{}]", offset));      // store string pointer
-            emitter.instruction(&format!("stur x2, [x29, #-{}]", offset - 8));  // store string length
+            store_at_offset(emitter, "x1", offset);                             // store string pointer
+            store_at_offset(emitter, "x2", offset - 8);                         // store string length
         }
         PhpType::Void => {
-            emitter.instruction(&format!("stur x0, [x29, #-{}]", offset));      // store null sentinel
+            store_at_offset(emitter, "x0", offset);                             // store null sentinel
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
-            emitter.instruction(&format!("stur x0, [x29, #-{}]", offset));      // store array/callable heap pointer
+            store_at_offset(emitter, "x0", offset);                             // store array/callable heap pointer
         }
     }
 }
@@ -37,20 +85,20 @@ pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
 pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty {
         PhpType::Bool | PhpType::Int => {
-            emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));      // load int/bool from stack
+            load_at_offset(emitter, "x0", offset);                              // load int/bool from stack
         }
         PhpType::Float => {
-            emitter.instruction(&format!("ldur d0, [x29, #-{}]", offset));      // load float from stack
+            load_at_offset(emitter, "d0", offset);                              // load float from stack
         }
         PhpType::Str => {
-            emitter.instruction(&format!("ldur x1, [x29, #-{}]", offset));      // load string pointer
-            emitter.instruction(&format!("ldur x2, [x29, #-{}]", offset - 8));  // load string length
+            load_at_offset(emitter, "x1", offset);                              // load string pointer
+            load_at_offset(emitter, "x2", offset - 8);                          // load string length
         }
         PhpType::Void => {
-            emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));      // load null sentinel
+            load_at_offset(emitter, "x0", offset);                              // load null sentinel
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
-            emitter.instruction(&format!("ldur x0, [x29, #-{}]", offset));      // load array/callable heap pointer
+            load_at_offset(emitter, "x0", offset);                              // load array/callable heap pointer
         }
     }
 }

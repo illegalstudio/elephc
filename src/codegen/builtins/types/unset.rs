@@ -1,3 +1,4 @@
+use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -20,7 +21,7 @@ pub fn emit(
         emitter.instruction("movk x0, #0xFFFF, lsl #16");                       // load null sentinel bits [31:16]
         emitter.instruction("movk x0, #0xFFFF, lsl #32");                       // load null sentinel bits [47:32]
         emitter.instruction("movk x0, #0x7FFF, lsl #48");                       // load null sentinel bits [63:48]
-        emitter.instruction(&format!("stur x0, [x29, #-{}]", offset));          // store null sentinel to variable's stack slot
+        abi::store_at_offset(emitter, "x0", offset);                              // store null sentinel to variable's stack slot
         ctx.variables.get_mut(name).unwrap().ty = PhpType::Void;
     }
     Some(PhpType::Void)
