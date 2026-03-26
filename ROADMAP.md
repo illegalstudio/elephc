@@ -172,7 +172,6 @@ Proper type system for PHP compatibility.
 - [x] Heap bounds checking with fatal error message
 - [x] Array push capacity checking with fatal error message
 - [x] `include` / `require` / `include_once` / `require_once`
-
 - [x] Dynamic array growth (automatic 2x reallocation on push beyond capacity)
 - [x] Persist strings to heap before pushing to arrays
 
