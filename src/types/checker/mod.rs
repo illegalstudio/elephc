@@ -335,9 +335,7 @@ impl Checker {
             }
             ExprKind::ArrayLiteral(elems) => {
                 if elems.is_empty() {
-                    return Err(CompileError::new(
-                        expr.span, "Cannot infer type of empty array literal",
-                    ));
+                    return Ok(PhpType::Array(Box::new(PhpType::Int)));
                 }
                 let first_ty = self.infer_type(&elems[0], env)?;
                 for elem in &elems[1..] {

@@ -640,7 +640,13 @@ fn emit_array_access(
         emitter.instruction("mov x2, x4");                                      // key len
         emitter.comment("assoc array access");
         emitter.instruction("bl __rt_hash_get");                                // lookup key → x0=found, x1=val_lo, x2=val_hi
-        // Result is in x1/x2 (for strings) or x1 (for ints)
+
+        // -- check if key was found --
+        let not_found = ctx.next_label("hash_miss");
+        let done = ctx.next_label("hash_done");
+        emitter.instruction(&format!("cbz x0, {not_found}"));                  // if found=0, jump to not-found handler
+
+        // -- key found: move result to appropriate registers --
         match &val_ty {
             PhpType::Int | PhpType::Bool => {
                 emitter.instruction("mov x0, x1");                              // move value to x0
@@ -655,6 +661,16 @@ fn emit_array_access(
                 emitter.instruction("mov x0, x1");                              // move value to x0
             }
         }
+        emitter.instruction(&format!("b {done}"));                             // skip not-found fallback
+
+        // -- key not found: load null sentinel --
+        emitter.label(&not_found);
+        emitter.instruction("movz x0, #0xFFFE");                               // load lowest 16 bits of null sentinel
+        emitter.instruction("movk x0, #0xFFFF, lsl #16");                      // insert bits 16-31 of null sentinel
+        emitter.instruction("movk x0, #0xFFFF, lsl #32");                      // insert bits 32-47 of null sentinel
+        emitter.instruction("movk x0, #0x7FFF, lsl #48");                      // insert bits 48-63 of null sentinel
+
+        emitter.label(&done);
         return val_ty;
     }
 

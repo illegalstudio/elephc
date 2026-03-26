@@ -118,6 +118,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_ksort(emitter);
     arrays::emit_natsort(emitter);
     arrays::emit_array_map(emitter);
+    arrays::emit_array_map_str(emitter);
     arrays::emit_array_filter(emitter);
     arrays::emit_array_reduce(emitter);
     arrays::emit_array_walk(emitter);

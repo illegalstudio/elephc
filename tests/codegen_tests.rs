@@ -5849,3 +5849,54 @@ echo $a[0] . "|" . $a[1] . "|" . $a[2];
 "#);
     assert_eq!(out, "10|20|30");
 }
+
+// -- Issue #20: assoc array missing key should return null, not garbage --
+
+#[test]
+fn test_assoc_array_missing_key_returns_null() {
+    let out = compile_and_run(r#"<?php
+$m = ["a" => 1];
+echo $m["missing"];
+"#);
+    assert_eq!(out, "");
+}
+
+// -- Issue #28: array_map should handle string return values from callbacks --
+
+#[test]
+fn test_array_map_str_callback() {
+    let out = compile_and_run(r#"<?php
+$r = array_map(fn($x) => "v" . $x, [1, 2, 3]);
+echo $r[0];
+"#);
+    assert_eq!(out, "v1");
+}
+
+#[test]
+fn test_array_map_str_callback_all_elements() {
+    let out = compile_and_run(r#"<?php
+$r = array_map(fn($x) => "item" . $x, [1, 2, 3]);
+echo $r[0] . "|" . $r[1] . "|" . $r[2];
+"#);
+    assert_eq!(out, "item1|item2|item3");
+}
+
+// -- Issue #13: empty array literal should be accepted by type checker --
+
+#[test]
+fn test_empty_array_literal() {
+    let out = compile_and_run(r#"<?php
+$a = [];
+$a[] = 1;
+echo count($a);
+"#);
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_empty_array_json_encode() {
+    let out = compile_and_run(r#"<?php
+echo json_encode([]);
+"#);
+    assert_eq!(out, "[]");
+}
