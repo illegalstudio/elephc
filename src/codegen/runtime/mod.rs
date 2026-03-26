@@ -92,6 +92,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_sort_int(emitter, true);
     arrays::emit_hash_fnv1a(emitter);
     arrays::emit_hash_new(emitter);
+    arrays::emit_hash_grow(emitter);
     arrays::emit_hash_set(emitter);
     arrays::emit_hash_get(emitter);
     arrays::emit_hash_iter(emitter);

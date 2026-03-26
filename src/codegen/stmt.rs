@@ -225,7 +225,14 @@ pub fn emit_stmt(
                 emitter.instruction(&format!("mov x4, {}", val_hi));            // value_hi
                 emitter.instruction("ldp x1, x2, [sp], #16");                   // pop key ptr/len
                 emitter.instruction("ldr x0, [sp], #16");                       // pop hash table pointer
-                emitter.instruction("bl __rt_hash_set");                        // insert/update key-value pair
+                emitter.instruction("bl __rt_hash_set");                        // insert/update key-value pair (x0 = table)
+                // -- update stored table pointer after possible growth --
+                if is_ref {
+                    abi::load_at_offset(emitter, "x9", offset);                 // load ref pointer
+                    emitter.instruction("str x0, [x9]");                        // store new table ptr through ref
+                } else {
+                    abi::store_at_offset(emitter, "x0", offset);                // save possibly-new table pointer
+                }
             } else {
                 // -- indexed array assignment (existing logic) --
                 // -- load array base pointer from local variable slot --

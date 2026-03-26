@@ -1,8 +1,9 @@
 use crate::codegen::emit::Emitter;
 
 /// hash_set: insert or update a key-value pair in the hash table.
+/// Grows the table automatically if load factor exceeds 75%.
 /// Input:  x0=hash_table_ptr, x1=key_ptr, x2=key_len, x3=value_lo, x4=value_hi
-/// Output: none (modifies table in place)
+/// Output: x0=hash_table_ptr (may differ if table was reallocated)
 pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_set ---");
@@ -27,8 +28,25 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp, #24]");                                   // save value_lo
     emitter.instruction("str x4, [sp, #32]");                                   // save value_hi
 
+    // -- check load factor: grow if count * 4 >= capacity * 3 (75%) --
+    emitter.instruction("ldr x5, [x0]");                                        // x5 = count
+    emitter.instruction("ldr x6, [x0, #8]");                                    // x6 = capacity
+    emitter.instruction("lsl x7, x5, #2");                                      // x7 = count * 4
+    emitter.instruction("mov x8, #3");                                          // multiplier
+    emitter.instruction("mul x8, x6, x8");                                      // x8 = capacity * 3
+    emitter.instruction("cmp x7, x8");                                          // count*4 >= capacity*3?
+    emitter.instruction("b.lt __rt_hash_set_no_grow");                          // skip growth if under threshold
+
+    // -- grow the hash table --
+    emitter.instruction("bl __rt_hash_grow");                                   // x0 = new table (doubled capacity)
+    emitter.instruction("str x0, [sp, #0]");                                    // update saved table pointer
+
+    emitter.label("__rt_hash_set_no_grow");
+
     // -- copy the key to persistent storage on heap --
-    // x1=ptr, x2=len already set from inputs
+    // reload key args (may have been clobbered by hash_grow)
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload key_ptr
+    emitter.instruction("ldr x2, [sp, #16]");                                   // reload key_len
     emitter.instruction("bl __rt_str_persist");                                 // copy key to heap, x1=new_ptr, x2=len
     emitter.instruction("str x1, [sp, #8]");                                    // update key_ptr to persistent copy
     // x2 (key_len) unchanged
@@ -123,6 +141,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
 
     // -- tear down stack frame and return --
     emitter.label("__rt_hash_set_done");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // return table pointer (may be new after grow)
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
