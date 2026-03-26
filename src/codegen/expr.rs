@@ -300,6 +300,9 @@ pub fn emit_expr(
         ExprKind::ClosureCall { var, args } => {
             emit_closure_call(var, args, emitter, ctx, data)
         }
+        ExprKind::ExprCall { callee, args } => {
+            emit_expr_call(callee, args, emitter, ctx, data)
+        }
         ExprKind::ConstRef(name) => {
             let (value, _ty) = ctx.constants.get(name).expect("undefined constant").clone();
             let synthetic_expr = Expr::new(value, expr.span);
@@ -372,8 +375,8 @@ fn emit_array_literal(
         // -- store element value into array at index i --
         emitter.instruction("ldr x9, [sp]");                                    // peek array pointer from stack (no pop)
         match &ty {
-            PhpType::Int | PhpType::Bool => {
-                emitter.instruction(&format!(                                   // store int/bool element at data offset
+            PhpType::Int | PhpType::Bool | PhpType::Callable => {
+                emitter.instruction(&format!(                                   // store int/bool/callable element at data offset
                     "str x0, [x9, #{}]",
                     24 + i * 8
                 ));
@@ -695,8 +698,8 @@ fn emit_array_access(
     emitter.instruction(&format!("b.ge {null_label}"));                         // index >= length → null sentinel
 
     match &elem_ty {
-        PhpType::Int => {
-            // -- load integer element: base + 24-byte header + index*8 --
+        PhpType::Int | PhpType::Bool | PhpType::Callable => {
+            // -- load integer/bool/callable element: base + 24-byte header + index*8 --
             emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header to reach data
             emitter.instruction("ldr x0, [x9, x0, lsl #3]");                    // load element at x9 + index*8
         }
@@ -1364,6 +1367,19 @@ fn emit_function_call(
         .unwrap_or(PhpType::Void)
 }
 
+/// Infer the return type of a closure by scanning its body for Return statements.
+fn infer_closure_return_type(
+    body: &[crate::parser::ast::Stmt],
+    sig: &crate::types::FunctionSig,
+) -> PhpType {
+    for stmt in body {
+        if let crate::parser::ast::StmtKind::Return(Some(expr)) = &stmt.kind {
+            return super::functions::infer_local_type_pub(expr, sig);
+        }
+    }
+    PhpType::Int
+}
+
 fn emit_closure(
     params: &[String],
     body: &[crate::parser::ast::Stmt],
@@ -1380,10 +1396,18 @@ fn emit_closure(
         .collect();
     let defaults: Vec<Option<crate::parser::ast::Expr>> = params.iter().map(|_| None).collect();
     let ref_params: Vec<bool> = params.iter().map(|_| false).collect();
+    let preliminary_sig = crate::types::FunctionSig {
+        params: param_types.clone(),
+        defaults: defaults.clone(),
+        return_type: PhpType::Int,
+        ref_params: ref_params.clone(),
+        variadic: None,
+    };
+    let return_type = infer_closure_return_type(body, &preliminary_sig);
     let sig = crate::types::FunctionSig {
         params: param_types,
         defaults,
-        return_type: PhpType::Int,
+        return_type,
         ref_params,
         variadic: None,
     };
@@ -1478,6 +1502,84 @@ fn emit_closure_call(
     }
 
     // -- indirect call through closure function address --
+    emitter.instruction("blr x9");                                              // branch to closure via function pointer in x9
+    PhpType::Int
+}
+
+fn emit_expr_call(
+    callee: &Expr,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    emitter.comment("call expression result");
+
+    // -- evaluate arguments and push onto stack --
+    let mut arg_types = Vec::new();
+    for arg in args {
+        let ty = emit_expr(arg, emitter, ctx, data);
+        match &ty {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
+                emitter.instruction("str x0, [sp, #-16]!");                     // push int/bool/array/callable arg onto stack
+            }
+            PhpType::Float => {
+                emitter.instruction("str d0, [sp, #-16]!");                     // push float arg onto stack
+            }
+            PhpType::Str => {
+                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push string ptr+len arg onto stack
+            }
+            PhpType::Void => {}
+        }
+        arg_types.push(ty);
+    }
+
+    // -- evaluate the callee expression to get function address --
+    let _callee_ty = emit_expr(callee, emitter, ctx, data);
+    // Callee is a Callable — function address is in x0
+    emitter.instruction("mov x9, x0");                                          // save closure address to x9
+
+    // -- save closure address while we pop args into registers --
+    emitter.instruction("str x9, [sp, #-16]!");                                 // push closure address temporarily
+
+    // -- pop arguments from stack into ABI registers in reverse order --
+    let mut assignments: Vec<(PhpType, usize, bool)> = Vec::new();
+    let mut int_reg_idx = 0usize;
+    let mut float_reg_idx = 0usize;
+    for ty in &arg_types {
+        if ty.is_float_reg() {
+            assignments.push((ty.clone(), float_reg_idx, true));
+            float_reg_idx += 1;
+        } else {
+            assignments.push((ty.clone(), int_reg_idx, false));
+            int_reg_idx += ty.register_count();
+        }
+    }
+
+    // Pop closure address first (it's on top of args stack)
+    emitter.instruction("ldr x9, [sp], #16");                                   // pop closure function address into x9
+
+    for i in (0..args.len()).rev() {
+        let (ty, start_reg, _is_float) = &assignments[i];
+        match ty {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
+                emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop int/bool/array/callable arg into register
+            }
+            PhpType::Float => {
+                emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); // pop float arg into float register
+            }
+            PhpType::Str => {
+                emitter.instruction(&format!(                                   // pop string ptr+len into consecutive regs
+                    "ldp x{}, x{}, [sp], #16",
+                    start_reg,
+                    start_reg + 1
+                ));
+            }
+            PhpType::Void => {}
+        }
+    }
+
+    // -- indirect call through expression function address --
     emitter.instruction("blr x9");                                              // branch to closure via function pointer in x9
     PhpType::Int
 }

@@ -11,6 +11,8 @@ pub(crate) struct Checker {
     pub fn_decls: HashMap<String, FnDecl>,
     pub functions: HashMap<String, FunctionSig>,
     pub constants: HashMap<String, PhpType>,
+    /// Tracks the return type of closures assigned to variables.
+    pub closure_return_types: HashMap<String, PhpType>,
 }
 
 #[derive(Clone)]
@@ -27,6 +29,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         fn_decls: HashMap::new(),
         functions: HashMap::new(),
         constants: HashMap::new(),
+        closure_return_types: HashMap::new(),
     };
 
     for stmt in program {
@@ -69,6 +72,11 @@ impl Checker {
             }
             StmtKind::Assign { name, value } => {
                 let ty = self.infer_type(value, env)?;
+                // Track closure return types for closure-returning-closure patterns
+                if let ExprKind::Closure { body, .. } = &value.kind {
+                    let ret_ty = self.infer_closure_return_type(body, env);
+                    self.closure_return_types.insert(name.clone(), ret_ty);
+                }
                 if let Some(existing) = env.get(name) {
                     // Allow null (Void) to be assigned to any variable,
                     // Bool and Int are interchangeable, Int and Float are interchangeable
@@ -450,8 +458,21 @@ impl Checker {
                 for arg in args {
                     self.infer_type(arg, env)?;
                 }
-                // We don't know the return type of the closure at the type-checking level,
-                // so we return Int as default. The codegen will handle it correctly.
+                // Use tracked return type if available, otherwise default to Int.
+                let ret_ty = self.closure_return_types.get(var).cloned().unwrap_or(PhpType::Int);
+                Ok(ret_ty)
+            }
+            ExprKind::ExprCall { callee, args } => {
+                let callee_ty = self.infer_type(callee, env)?;
+                if callee_ty != PhpType::Callable {
+                    return Err(CompileError::new(
+                        expr.span,
+                        &format!("Cannot call expression — not a callable (got {:?})", callee_ty),
+                    ));
+                }
+                for arg in args {
+                    self.infer_type(arg, env)?;
+                }
                 Ok(PhpType::Int)
             }
             ExprKind::BinaryOp { left, op, right } => {
@@ -529,5 +550,25 @@ impl Checker {
                 }
             }
         }
+    }
+
+    /// Infer the return type of a closure by scanning its body for Return statements.
+    fn infer_closure_return_type(&self, body: &[Stmt], env: &TypeEnv) -> PhpType {
+        for stmt in body {
+            if let StmtKind::Return(Some(expr)) = &stmt.kind {
+                return match &expr.kind {
+                    ExprKind::Closure { .. } => PhpType::Callable,
+                    ExprKind::StringLiteral(_) => PhpType::Str,
+                    ExprKind::FloatLiteral(_) => PhpType::Float,
+                    ExprKind::BoolLiteral(_) => PhpType::Bool,
+                    ExprKind::Null => PhpType::Void,
+                    ExprKind::Variable(name) => {
+                        env.get(name).cloned().unwrap_or(PhpType::Int)
+                    }
+                    _ => PhpType::Int,
+                };
+            }
+        }
+        PhpType::Int
     }
 }

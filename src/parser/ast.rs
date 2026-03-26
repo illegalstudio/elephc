@@ -67,6 +67,10 @@ pub enum ExprKind {
         var: String,
         args: Vec<Expr>,
     },
+    ExprCall {
+        callee: Box<Expr>,
+        args: Vec<Expr>,
+    },
     ConstRef(String),
 }
 

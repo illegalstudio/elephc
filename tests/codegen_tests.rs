@@ -4504,6 +4504,74 @@ echo $sum;
     assert_eq!(out, "10");
 }
 
+// --- IIFE (Immediately Invoked Function Expression) ---
+
+#[test]
+fn test_iife_basic() {
+    let out = compile_and_run(r#"<?php
+echo (function() { return 42; })();
+"#);
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_iife_with_args() {
+    let out = compile_and_run(r#"<?php
+echo (function($x) { return $x * 3; })(7);
+"#);
+    assert_eq!(out, "21");
+}
+
+#[test]
+fn test_iife_arrow() {
+    let out = compile_and_run(r#"<?php
+echo (fn($x) => $x + 100)(5);
+"#);
+    assert_eq!(out, "105");
+}
+
+// --- Calling closures from array access ---
+
+#[test]
+fn test_closure_from_array_call() {
+    let out = compile_and_run(r#"<?php
+$fns = [function($x) { return $x * 10; }];
+echo $fns[0](5);
+"#);
+    assert_eq!(out, "50");
+}
+
+#[test]
+fn test_closure_from_array_no_args() {
+    let out = compile_and_run(r#"<?php
+$fns = [function() { return 99; }];
+echo $fns[0]();
+"#);
+    assert_eq!(out, "99");
+}
+
+// --- Closure returning closure ---
+
+#[test]
+fn test_closure_returning_closure() {
+    let out = compile_and_run(r#"<?php
+$f = function() { return function() { return 99; }; };
+$g = $f();
+echo $g();
+"#);
+    assert_eq!(out, "99");
+}
+
+#[test]
+fn test_closure_returning_closure_with_args() {
+    let out = compile_and_run(r#"<?php
+$maker = function() { return function($x) { return $x * 3; }; };
+$fn = $maker();
+echo $fn(7);
+"#);
+    assert_eq!(out, "21");
+}
+
 // ===== Feature 1: Default parameter values =====
 
 #[test]

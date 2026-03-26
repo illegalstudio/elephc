@@ -180,6 +180,22 @@ fn emit_function_with_label(
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
     emitter.blank();
+
+    // -- emit any closures deferred during this function's body --
+    while !ctx.deferred_closures.is_empty() {
+        let closures: Vec<_> = ctx.deferred_closures.drain(..).collect();
+        for closure in closures {
+            emit_closure(
+                emitter,
+                data,
+                &closure.label,
+                &closure.sig,
+                &closure.body,
+                all_functions,
+                constants,
+            );
+        }
+    }
 }
 
 /// Pre-scan function body for variable assignments to allocate stack slots.
@@ -271,6 +287,14 @@ pub fn collect_local_vars(
             _ => {}
         }
     }
+}
+
+/// Public wrapper for infer_local_type, used by closure return type inference.
+pub fn infer_local_type_pub(
+    expr: &crate::parser::ast::Expr,
+    sig: &FunctionSig,
+) -> PhpType {
+    infer_local_type(expr, sig)
 }
 
 fn infer_local_type(
