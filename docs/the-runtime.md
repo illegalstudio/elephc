@@ -112,15 +112,18 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_strcopy` | Copy string into concat buffer | `x1`/`x2` | `x1`/`x2` |
 | `__rt_strtolower` | Lowercase conversion | `x1`/`x2` | `x1`/`x2` |
 | `__rt_strtoupper` | Uppercase conversion | `x1`/`x2` | `x1`/`x2` |
-| `__rt_trim` | Strip whitespace | `x1`/`x2` | `x1`/`x2` |
-| `__rt_ltrim` / `__rt_rtrim` | Strip left/right | `x1`/`x2` | `x1`/`x2` |
+| `__rt_trim` | Strip whitespace (no args) or chars in mask | `x1`/`x2` | `x1`/`x2` |
+| `__rt_ltrim` / `__rt_rtrim` | Strip left/right whitespace or mask | `x1`/`x2` | `x1`/`x2` |
+| `__rt_trim_mask` | Strip chars in custom mask from both ends | `x1`/`x2` + mask | `x1`/`x2` |
+| `__rt_ltrim_mask` / `__rt_rtrim_mask` | Strip custom mask from left/right | `x1`/`x2` + mask | `x1`/`x2` |
 | `__rt_strrev` | Reverse string | `x1`/`x2` | `x1`/`x2` |
 | `__rt_strpos` | Find substring | `x1`/`x2` + `x3`/`x4` | `x0` (index or -1) |
 | `__rt_strrpos` | Find last occurrence | `x1`/`x2` + `x3`/`x4` | `x0` |
 | `__rt_str_repeat` | Repeat N times | `x1`/`x2` + `x0` (count) | `x1`/`x2` |
 | `__rt_str_replace` | Replace all occurrences | search + replace + subject | `x1`/`x2` |
 | `__rt_explode` | Split by delimiter | delimiter + string | `x0` (array ptr) |
-| `__rt_implode` | Join with glue | glue + array | `x1`/`x2` |
+| `__rt_implode` | Join string array with glue | glue + array | `x1`/`x2` |
+| `__rt_implode_int` | Join integer array with glue | glue + array | `x1`/`x2` |
 | `__rt_strcmp` | Binary comparison | two strings | `x0` (-1, 0, 1) |
 | `__rt_strcasecmp` | Case-insensitive compare | two strings | `x0` |
 | `__rt_str_starts_with` | Check prefix match | `x1`/`x2` + `x3`/`x4` | `x0` (0 or 1) |
@@ -153,7 +156,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 ## Array routines
 
-**Source:** `src/codegen/runtime/arrays/` (45 files)
+**Source:** `src/codegen/runtime/arrays/` (48 files)
 
 ### Core allocation
 
@@ -197,11 +200,13 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_array_combine` | Combine key array + value array → AssocArray |
 | `__rt_array_fill` / `__rt_array_fill_keys` | Create filled arrays |
 | `__rt_array_chunk` / `__rt_array_pad` | Chunk/pad arrays |
-| `__rt_array_column` | Extract column from array of assoc arrays |
+| `__rt_array_column` | Extract column from array of assoc arrays (int values) |
+| `__rt_array_column_str` | Extract column from array of assoc arrays (string values) |
 | `__rt_range` | Generate integer range array |
 | `__rt_shuffle` / `__rt_array_rand` | Randomize order / pick random |
 | `__rt_asort` / `__rt_ksort` / `__rt_natsort` | Sort preserving keys |
-| `__rt_array_map` | Apply callback to each element, return new array |
+| `__rt_array_map` | Apply callback to each int element, return new array |
+| `__rt_array_map_str` | Apply callback to each string element, return new array |
 | `__rt_array_filter` | Filter elements where callback returns truthy |
 | `__rt_array_reduce` | Reduce array to single value via callback |
 | `__rt_array_walk` | Call callback on each element (side-effects) |
@@ -209,7 +214,7 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 
 ## System routines
 
-**Source:** `src/codegen/runtime/system/` (10 files)
+**Source:** `src/codegen/runtime/system/` (11 files)
 
 ### `__rt_build_argv` — Build $argv array
 
@@ -271,7 +276,7 @@ All regex routines use **POSIX extended regular expressions** via libc's `regcom
 
 ## I/O routines
 
-**Source:** `src/codegen/runtime/io/` (16 files)
+**Source:** `src/codegen/runtime/io/` (17 files)
 
 These routines handle file and filesystem operations via macOS system calls. PHP strings (pointer + length) must be converted to null-terminated C strings before passing to syscalls — the `__rt_cstr` helper handles this using a dedicated 4KB buffer.
 
@@ -305,7 +310,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     strings::emit_itoa(emitter);
     strings::emit_ftoa(emitter);
     strings::emit_concat(emitter);
-    // ... 44 more string routines ...
+    // ... 48 more string routines ...
     system::emit_build_argv(emitter);
     system::emit_time(emitter);
     system::emit_microtime(emitter);
@@ -327,10 +332,10 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     system::emit_preg_split(emitter);
     arrays::emit_heap_alloc(emitter);
     arrays::emit_array_new(emitter);
-    // ... 40+ more array routines ...
+    // ... 45+ more array routines ...
     io::emit_cstr(emitter);
     io::emit_fopen(emitter);
-    // ... 14 more I/O routines ...
+    // ... 15 more I/O routines ...
 }
 ```
 

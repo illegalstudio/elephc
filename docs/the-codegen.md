@@ -316,9 +316,30 @@ Closures (`function($x) { ... }`) and arrow functions (`fn($x) => ...`) are comp
 
 1. **At the closure expression site**: the codegen generates a unique label (e.g., `_closure_1`) and loads its address into `x0` using `adrp` + `add`. The address is then stored in the variable's stack slot as a `Callable` (8-byte function pointer).
 
-2. **The body is deferred**: the closure's parameter list, body statements, and label are pushed onto `ctx.deferred_closures`. This avoids emitting function code in the middle of the current function's instruction stream.
+2. **The body is deferred**: the closure's parameter list, body statements, captured variables, and label are pushed onto `ctx.deferred_closures`. This avoids emitting function code in the middle of the current function's instruction stream.
 
 3. **After `_main`**: all deferred closures are emitted as standalone labeled functions (prologue, body, epilogue), just like user-defined functions.
+
+### `use` captures
+
+Closures can capture variables from the enclosing scope via `use ($var1, $var2)`:
+
+```php
+$greeting = "Hello";
+$fn = function($name) use ($greeting) {
+    echo $greeting . " " . $name;
+};
+```
+
+Arrow functions (`fn($x) => ...`) automatically capture all referenced outer variables — no `use` clause needed.
+
+The AST stores captured variable names in the `captures` field of the `Closure` expression. At the call site, captured variables are passed as **extra arguments** after the explicit arguments:
+
+1. **At the closure expression site**: the captured variable names and types are recorded in `ctx.closure_captures` alongside the deferred closure.
+2. **At the call site** (`$fn("World")`): the codegen looks up the captured variables, evaluates them from the caller's scope, and passes them as additional arguments after the explicit ones.
+3. **In the closure body**: the captured values arrive as extra parameters and are stored in local stack slots, making them accessible like regular local variables.
+
+This means captures are passed **by value** — modifying a captured variable inside the closure does not affect the outer scope (matching PHP semantics).
 
 ### Closure calls
 
@@ -578,20 +599,29 @@ $result = match($x) {
 
 Centralizes register conventions so they're consistent everywhere:
 
+### Large offset addressing
+
+ARM64's `stur`/`ldur` instructions only support 9-bit signed immediates (offsets up to 255). Functions with many local variables can exceed this limit. The ABI module handles this transparently via `store_at_offset()` and `load_at_offset()`:
+
+- **Offsets <= 255**: single `stur`/`ldur` instruction (fast path)
+- **Offsets 256-4095**: two-instruction sequence — `sub x9, x29, #offset` to compute the address in a scratch register, then `str`/`ldr` through that register
+
+This means all codegen that accesses stack variables goes through the ABI helpers rather than emitting `stur`/`ldur` directly, so large stack frames work automatically.
+
 ### `emit_store(emitter, type, offset)`
 
-Stores the current result to a stack variable:
+Stores the current result to a stack variable. Uses `store_at_offset()` internally to handle large offsets:
 
 | Type | What it stores |
 |---|---|
-| `Int` / `Bool` | `stur x0, [x29, #-offset]` |
+| `Int` / `Bool` | `stur x0, [x29, #-offset]` (or 2-insn sequence for large offsets) |
 | `Float` | `stur d0, [x29, #-offset]` |
 | `Str` | `stur x1, [x29, #-offset]` + `stur x2, [x29, #-(offset-8)]` |
 | `Array` | `stur x0, [x29, #-offset]` |
 
 ### `emit_load(emitter, type, offset)`
 
-Loads a stack variable into result registers (inverse of store).
+Loads a stack variable into result registers (inverse of store). Uses `load_at_offset()` internally.
 
 ### `emit_write_stdout(emitter, type)`
 

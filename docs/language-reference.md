@@ -699,9 +699,9 @@ foreach ($matrix as $row) {
 | `ucfirst()` | `ucfirst($str): string` | Uppercase first character |
 | `lcfirst()` | `lcfirst($str): string` | Lowercase first character |
 | `ucwords()` | `ucwords($str): string` | Uppercase first letter of each word |
-| `trim()` | `trim($str): string` | Strip whitespace from both ends |
-| `ltrim()` | `ltrim($str): string` | Strip whitespace from left |
-| `rtrim()` | `rtrim($str): string` | Strip whitespace from right |
+| `trim()` | `trim($str [, $chars]): string` | Strip whitespace (or custom chars) from both ends |
+| `ltrim()` | `ltrim($str [, $chars]): string` | Strip whitespace (or custom chars) from left |
+| `rtrim()` | `rtrim($str [, $chars]): string` | Strip whitespace (or custom chars) from right |
 | `str_repeat()` | `str_repeat($str, $times): string` | Repeat a string |
 | `str_pad()` | `str_pad($str, $len [, $pad, $type]): string` | Pad string to length |
 | `str_split()` | `str_split($str [, $len]): array` | Split into chunks |
@@ -820,11 +820,11 @@ foreach ($matrix as $row) {
 | `abs()` | `abs($val): int\|float` | Absolute value (preserves type) |
 | `floor()` | `floor($val): float` | Round down |
 | `ceil()` | `ceil($val): float` | Round up |
-| `round()` | `round($val): float` | Round to nearest |
+| `round()` | `round($val [, $precision]): float` | Round to nearest (optional decimal places) |
 | `sqrt()` | `sqrt($val): float` | Square root |
 | `pow()` | `pow($base, $exp): float` | Exponentiation |
-| `min()` | `min($a, $b): int\|float` | Minimum of two values |
-| `max()` | `max($a, $b): int\|float` | Maximum of two values |
+| `min()` | `min($a, $b, ...): int\|float` | Minimum of two or more values (variadic) |
+| `max()` | `max($a, $b, ...): int\|float` | Maximum of two or more values (variadic) |
 | `intdiv()` | `intdiv($a, $b): int` | Integer division |
 | `fmod()` | `fmod($a, $b): float` | Float modulo |
 | `fdiv()` | `fdiv($a, $b): float` | Float division (returns INF for /0) |

@@ -63,8 +63,9 @@ Things that have a value:
 | `ArrayAccess { array, index }` | `$arr[0]` | |
 | `Ternary { cond, then, else }` | `$a ? $b : $c` | |
 | `Cast { target, expr }` | `(int)$x` | |
-| `Closure { params, variadic, body, is_arrow }` | `function($x, $y = 0) { ... }` or `fn($x) => ...` | Anonymous function / arrow function. Params is `Vec<(String, Option<Expr>, bool)>` — name, default, is_ref. `variadic` is an optional parameter name that collects remaining args |
+| `Closure { params, variadic, body, is_arrow, captures }` | `function($x) use ($y) { ... }` or `fn($x) => ...` | Anonymous function / arrow function. Params is `Vec<(String, Option<Expr>, bool)>` — name, default, is_ref. `variadic` is an optional parameter name. `captures` is `Vec<String>` — variables captured via `use` clause (arrow functions auto-capture, so `captures` is populated by the parser for both forms) |
 | `ClosureCall { var, args }` | `$fn(1, 2)` | Calling a closure stored in a variable |
+| `ExprCall { callee, args }` | `$arr[0](1, 2)` | Calling the result of an expression (e.g., array access returning a callable) |
 | `Spread(Expr)` | `...$arr` | Spread/unpack operator — expands an array into individual arguments or elements |
 | `ConstRef(String)` | `MAX_RETRIES` | Reference to a user-defined constant |
 
