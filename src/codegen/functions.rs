@@ -17,12 +17,14 @@ pub fn emit_function(
     constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
     all_global_var_names: &HashSet<String>,
     all_static_vars: &HashMap<(String, String), PhpType>,
+    classes: Option<&HashMap<String, ClassInfo>>,
 ) {
     let label = format!("_fn_{}", name);
     let epilogue_label = format!("_fn_{}_epilogue", name);
     emit_function_with_label(
         emitter, data, &label, &epilogue_label, sig, body,
         all_functions, constants, all_global_var_names, all_static_vars,
+        classes,
     );
 }
 
@@ -41,6 +43,7 @@ pub fn emit_closure(
     emit_function_with_label(
         emitter, data, label, &epilogue_label, sig, body,
         all_functions, constants, &empty_globals, &empty_statics,
+        None,
     );
 }
 
@@ -76,11 +79,14 @@ fn emit_function_with_label(
     constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
     all_global_var_names: &HashSet<String>,
     all_static_vars: &HashMap<(String, String), PhpType>,
+    classes: Option<&HashMap<String, ClassInfo>>,
 ) {
+    // Pass classes to regular functions so they can resolve Object types
+    let class_ctx = classes.map(|c| (c, "" as &str));
     emit_function_with_label_and_class(
         emitter, data, label, epilogue_label, sig, body,
         all_functions, constants, all_global_var_names, all_static_vars,
-        None,
+        class_ctx,
     );
 }
 

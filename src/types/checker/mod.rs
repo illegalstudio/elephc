@@ -157,6 +157,25 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                     method_sigs.insert(method.name.clone(), sig);
                 }
             }
+            // Build constructor param → property mapping
+            // Scan __construct body for $this->prop = $param patterns
+            let mut param_to_prop = Vec::new();
+            if let Some(constructor) = methods.iter().find(|m| m.name == "__construct") {
+                // For each constructor param, check if it's directly assigned to a property
+                param_to_prop = constructor.params.iter().map(|(pname, _, _)| {
+                    for stmt in &constructor.body {
+                        if let StmtKind::PropertyAssign { property, value, .. } = &stmt.kind {
+                            if let ExprKind::Variable(vn) = &value.kind {
+                                if vn == pname {
+                                    return Some(property.clone());
+                                }
+                            }
+                        }
+                    }
+                    None
+                }).collect();
+            }
+
             let defaults: Vec<Option<Expr>> = properties.iter()
                 .map(|p| p.default.clone())
                 .collect();
@@ -165,6 +184,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 defaults,
                 methods: method_sigs,
                 static_methods: static_sigs,
+                constructor_param_to_prop: param_to_prop,
             });
         }
     }
@@ -196,6 +216,77 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 ref_params: decl.ref_params.clone(),
                 variadic: decl.variadic.clone(),
             });
+        }
+    }
+
+    // Post-pass: type-check class method bodies NOW that property types
+    // have been updated from new ClassName(args) calls in the main scope.
+    // This ensures methods see correct property types (e.g., Str not Int).
+    for stmt in program {
+        if let StmtKind::ClassDecl { name, methods, .. } = &stmt.kind {
+            for method in methods {
+                let mut method_env: TypeEnv = global_env.clone();
+                if !method.is_static {
+                    method_env.insert("this".to_string(), PhpType::Object(name.clone()));
+                }
+                // Infer param types from constructor mapping + class info
+                for (pname, _, _) in &method.params {
+                    method_env.insert(pname.clone(), PhpType::Int);
+                }
+                // For __construct: infer param types from property types
+                // This updates both the env (for body type-checking) and the sig
+                // (for correct register assignment in codegen prologue)
+                if method.name == "__construct" {
+                    if let Some(ci) = checker.classes.get(name).cloned() {
+                        for (i, (pname, _, _)) in method.params.iter().enumerate() {
+                            if let Some(Some(prop_name)) = ci.constructor_param_to_prop.get(i) {
+                                if let Some((_, ty)) = ci.properties.iter().find(|(n, _)| n == prop_name) {
+                                    method_env.insert(pname.clone(), ty.clone());
+                                    // Also update the sig in ClassInfo
+                                    // (sig.params has user params only, $this added by codegen)
+                                    if let Some(ci_mut) = checker.classes.get_mut(name) {
+                                        if let Some(sig) = ci_mut.methods.get_mut("__construct") {
+                                            if i < sig.params.len() {
+                                                sig.params[i].1 = ty.clone();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                checker.current_class = Some(name.clone());
+                for s in &method.body {
+                    let _ = checker.check_stmt(s, &mut method_env);
+                }
+                checker.current_class = None;
+
+                // Update method return type from full type inference
+                if !method.is_static {
+                    for s in &method.body {
+                        if let Some(ty) = checker.find_return_type(s, &method_env) {
+                            if let Some(ci) = checker.classes.get_mut(name) {
+                                if let Some(sig) = ci.methods.get_mut(&method.name) {
+                                    sig.return_type = ty;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                } else {
+                    for s in &method.body {
+                        if let Some(ty) = checker.find_return_type(s, &method_env) {
+                            if let Some(ci) = checker.classes.get_mut(name) {
+                                if let Some(sig) = ci.static_methods.get_mut(&method.name) {
+                                    sig.return_type = ty;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -397,30 +488,9 @@ impl Checker {
                 if let Some(e) = expr { self.infer_type(e, env)?; }
                 Ok(())
             }
-            StmtKind::ClassDecl { name, methods, .. } => {
-                // Type-check method bodies with $this in scope
-                for method in methods {
-                    if !method.is_static {
-                        let mut method_env: TypeEnv = env.clone();
-                        method_env.insert("this".to_string(), PhpType::Object(name.clone()));
-                        for (pname, _, _) in &method.params {
-                            method_env.insert(pname.clone(), PhpType::Int);
-                        }
-                        self.current_class = Some(name.clone());
-                        for s in &method.body {
-                            self.check_stmt(s, &mut method_env)?;
-                        }
-                        self.current_class = None;
-                    } else {
-                        let mut method_env: TypeEnv = env.clone();
-                        for (pname, _, _) in &method.params {
-                            method_env.insert(pname.clone(), PhpType::Int);
-                        }
-                        for s in &method.body {
-                            self.check_stmt(s, &mut method_env)?;
-                        }
-                    }
-                }
+            StmtKind::ClassDecl { .. } => {
+                // Method bodies are type-checked in a post-pass (after all new ClassName()
+                // calls have updated property types from constructor arg types)
                 Ok(())
             }
             StmtKind::PropertyAssign { object, property, value } => {
@@ -751,8 +821,20 @@ impl Checker {
                         &format!("Undefined class: {}", class_name),
                     ));
                 }
-                for arg in args {
-                    self.infer_type(arg, env)?;
+                // Infer arg types and propagate to property types via constructor mapping
+                let param_to_prop = self.classes.get(class_name)
+                    .map(|c| c.constructor_param_to_prop.clone())
+                    .unwrap_or_default();
+                for (i, arg) in args.iter().enumerate() {
+                    let arg_ty = self.infer_type(arg, env)?;
+                    // If this arg maps to a property, update the property type
+                    if let Some(Some(prop_name)) = param_to_prop.get(i) {
+                        if let Some(class_info) = self.classes.get_mut(class_name) {
+                            if let Some(prop) = class_info.properties.iter_mut().find(|(n, _)| n == prop_name) {
+                                prop.1 = arg_ty;
+                            }
+                        }
+                    }
                 }
                 Ok(PhpType::Object(class_name.clone()))
             }

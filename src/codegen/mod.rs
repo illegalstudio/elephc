@@ -48,6 +48,7 @@ pub fn generate(
         self::functions::emit_function(
             &mut emitter, &mut data, name, sig, body, functions,
             &global_constants, &all_global_var_names, &all_static_vars,
+            Some(classes),
         );
     }
 
@@ -77,7 +78,16 @@ pub fn generate(
                     let mut params: Vec<(String, PhpType)> = vec![
                         ("this".to_string(), PhpType::Object(class_name.clone())),
                     ];
-                    params.extend(method.params.iter().map(|(n, _, _)| (n.clone(), PhpType::Int)));
+                    // Use param types from ClassInfo sig (set by type checker post-pass)
+                    let class_method_sig = classes.get(class_name)
+                        .and_then(|c| c.methods.get(&method.name));
+                    params.extend(method.params.iter().enumerate().map(|(i, (n, _, _))| {
+                        let ty = class_method_sig
+                            .and_then(|s| s.params.get(i))
+                            .map(|(_, t)| t.clone())
+                            .unwrap_or(PhpType::Int);
+                        (n.clone(), ty)
+                    }));
                     let mut defaults: Vec<Option<crate::parser::ast::Expr>> = vec![None]; // $this has no default
                     defaults.extend(method.params.iter().map(|(_, d, _)| d.clone()));
                     let mut ref_params: Vec<bool> = vec![false]; // $this is not a ref

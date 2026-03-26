@@ -77,6 +77,8 @@ pub struct ClassInfo {
     pub defaults: Vec<Option<crate::parser::ast::Expr>>,
     pub methods: HashMap<String, FunctionSig>,
     pub static_methods: HashMap<String, FunctionSig>,
+    /// Maps constructor param index → property name (for type propagation from new ClassName(args))
+    pub constructor_param_to_prop: Vec<Option<String>>,
 }
 
 #[derive(Debug)]
