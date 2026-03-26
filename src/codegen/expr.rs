@@ -321,8 +321,8 @@ fn emit_array_literal(
     data: &mut DataSection,
 ) -> PhpType {
     if elems.is_empty() {
-        // -- allocate empty array with default capacity --
-        emitter.instruction("mov x0, #8");                                      // initial capacity: 8 elements
+        // -- allocate empty array with small initial capacity --
+        emitter.instruction("mov x0, #4");                                      // initial capacity: 4 (grows dynamically)
         emitter.instruction("mov x1, #8");                                      // element size: 8 bytes (int-sized)
         emitter.instruction("bl __rt_array_new");                               // call runtime to heap-allocate array struct
         return PhpType::Array(Box::new(PhpType::Int));
@@ -355,9 +355,9 @@ fn emit_array_literal(
 
     emitter.comment("array literal");
     // -- allocate array and populate elements --
-    emitter.instruction(&format!(                                               // capacity: max of element count or 8
+    emitter.instruction(&format!(                                               // capacity: exact element count (grows if needed)
         "mov x0, #{}",
-        std::cmp::max(elems.len(), 8)
+        elems.len()
     ));
     emitter.instruction(&format!("mov x1, #{}", es));                           // element size in bytes (8=int/ptr, 16=string)
     emitter.instruction("bl __rt_array_new");                                   // call runtime to heap-allocate array struct
@@ -1354,7 +1354,7 @@ fn emit_function_call(
         } else if variadic_args.is_empty() {
             // No variadic args — create an empty array
             emitter.comment("empty variadic array");
-            emitter.instruction("mov x0, #8");                                  // initial capacity: 8 elements
+            emitter.instruction("mov x0, #4");                                  // initial capacity: 4 (grows dynamically)
             emitter.instruction("mov x1, #8");                                  // element size: 8 bytes
             emitter.instruction("bl __rt_array_new");                           // allocate empty array for variadic param
             emitter.instruction("str x0, [sp, #-16]!");                         // push empty variadic array onto stack
@@ -1371,9 +1371,9 @@ fn emit_function_call(
                 PhpType::Str => 16,
                 _ => 8,
             };
-            emitter.instruction(&format!(                                       // capacity: max of element count or 8
+            emitter.instruction(&format!(                                       // capacity: exact element count (grows if needed)
                 "mov x0, #{}",
-                std::cmp::max(n, 8)
+                n
             ));
             emitter.instruction(&format!("mov x1, #{}", es));                   // element size in bytes
             emitter.instruction("bl __rt_array_new");                           // allocate array for variadic args
@@ -1895,7 +1895,7 @@ fn emit_cast(
                 PhpType::Int | PhpType::Bool | PhpType::Callable => {
                     // -- wrap scalar in a new single-element array --
                     emitter.instruction("str x0, [sp, #-16]!");                 // save scalar value during allocation
-                    emitter.instruction("mov x0, #8");                          // initial capacity: 8 elements
+                    emitter.instruction("mov x0, #1");                          // capacity: 1 element (exact fit)
                     emitter.instruction("mov x1, #8");                          // element size: 8 bytes
                     emitter.instruction("bl __rt_array_new");                   // allocate new array struct
                     emitter.instruction("ldr x1, [sp], #16");                   // pop saved scalar value
@@ -1904,7 +1904,7 @@ fn emit_cast(
                 _ => {
                     // For other types, create empty array
                     // -- create empty array for unsupported cast source --
-                    emitter.instruction("mov x0, #8");                          // initial capacity: 8 elements
+                    emitter.instruction("mov x0, #4");                          // capacity: 4 (grows dynamically)
                     emitter.instruction("mov x1, #8");                          // element size: 8 bytes
                     emitter.instruction("bl __rt_array_new");                   // allocate empty array struct
                 }
