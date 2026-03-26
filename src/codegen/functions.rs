@@ -137,6 +137,21 @@ fn emit_function_with_label(
         }
     }
 
+    // -- zero-initialize local variables that may be deep-freed on reassignment --
+    // Without this, the first free-on-reassign would see stale stack values
+    // (left over from a previous function call at the same stack address)
+    // and try to deep-free a random heap pointer.
+    let param_names: std::collections::HashSet<String> =
+        sig.params.iter().map(|(n, _)| n.clone()).collect();
+    for (name, var) in &ctx.variables {
+        if param_names.contains(name) {
+            continue; // Parameters are initialized by register stores above
+        }
+        if matches!(&var.ty, PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            super::abi::store_at_offset(emitter, "xzr", var.stack_offset);       // zero-init to prevent stale ptr free
+        }
+    }
+
     // -- emit function body statements --
     for s in body {
         stmt::emit_stmt(s, emitter, &mut ctx, data);

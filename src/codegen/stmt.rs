@@ -110,17 +110,10 @@ pub fn emit_stmt(
                     if needs_save_x0 {
                         emitter.instruction("mov x0, x8");                      // restore new value
                     }
-                } else if matches!(&old_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
-                    let needs_save_x0 = !matches!(&ty, PhpType::Str | PhpType::Float);
-                    if needs_save_x0 {
-                        emitter.instruction("mov x8, x0");                      // save new value in x8 temporarily
-                    }
-                    abi::load_at_offset(emitter, "x0", offset);                // load old array pointer
-                    emitter.instruction("bl __rt_array_free_deep");             // deep free array + string elements
-                    if needs_save_x0 {
-                        emitter.instruction("mov x0, x8");                      // restore new value
-                    }
                 }
+                // Note: arrays/assoc arrays are NOT freed on reassignment because
+                // the pointer may be shared (e.g., $c = $contacts[$i] shares with the
+                // indexed array). Use unset() for explicit deep-free when needed.
 
                 abi::emit_store(emitter, &ty, offset);
 
