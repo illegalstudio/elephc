@@ -12,6 +12,15 @@ pub fn emit_str_persist(emitter: &mut Emitter) {
     // -- handle zero-length strings (no allocation needed) --
     emitter.instruction("cbz x2, __rt_str_persist_done");                       // empty string, return as-is
 
+    // -- skip if string is NOT in concat_buf (already permanent: .data or heap) --
+    emitter.instruction("adrp x3, _concat_buf@PAGE");                           // load page of concat buffer
+    emitter.instruction("add x3, x3, _concat_buf@PAGEOFF");                     // resolve concat buffer base
+    emitter.instruction("cmp x1, x3");                                          // is ptr below concat_buf?
+    emitter.instruction("b.lo __rt_str_persist_done");                          // yes — already permanent, skip
+    emitter.instruction("add x4, x3, #65536");                                  // x4 = concat_buf + 64KB = concat_buf end
+    emitter.instruction("cmp x1, x4");                                          // is ptr at or beyond concat_buf end?
+    emitter.instruction("b.hs __rt_str_persist_done");                          // yes — already permanent (heap), skip
+
     // -- set up stack frame (we call heap_alloc which may clobber regs) --
     emitter.instruction("sub sp, sp, #32");                                     // allocate 32 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address

@@ -173,13 +173,12 @@ Proper type system for PHP compatibility.
 - [x] Array push capacity checking with fatal error message
 - [x] `include` / `require` / `include_once` / `require_once`
 - [x] Dynamic array growth (automatic 2x reallocation on push beyond capacity)
-- [x] Persist strings to heap before pushing to arrays
-
-### Future memory improvements
-- [ ] String deduplication (avoid copying identical strings)
-- [ ] Hash table shrink on delete (currently only grows)
-- [ ] Deep recursive free for arrays (currently shallow)
-- [ ] Block coalescing in free list (merge adjacent free blocks)
+- [x] Dynamic hash table growth (automatic 2x rehash at 75% load factor)
+- [x] Persist strings to heap before pushing to arrays and hash values
+- [x] String deduplication — `str_persist` skips copy for .data and heap strings (only copies from concat_buf)
+- [x] Block coalescing — bump pointer reset when freeing the last allocated block (O(1), zero fragmentation for `.=` loops)
+- [x] Deep free for arrays via `unset()` (frees string elements + array struct)
+- [x] Zero-init local variables in function prologues (prevents stale pointer frees)
 
 ## v0.10.x — Basic classes
 
