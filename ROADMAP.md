@@ -159,7 +159,28 @@ Proper type system for PHP compatibility.
 - [x] `php_uname()`, `phpversion()`
 - [x] Constants: `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`
 
-## v0.9.x — Classes and memory improvements
+## v0.9.x — Memory management (done)
+
+- [x] Free-list allocator (replace bump allocator with reusable memory)
+- [x] Heap allocation headers (8-byte block size, minimum 8-byte allocation)
+- [x] `__rt_heap_free` / `__rt_heap_free_safe` — return blocks to free list
+- [x] Copy-on-store (`__rt_str_persist`) — strings persisted to heap, concat buffer is scratch-only
+- [x] Concat buffer recycling (reset per statement, no more overflow)
+- [x] Free on reassignment (old string/array freed when variable is overwritten)
+- [x] `unset()` frees heap memory
+- [x] Configurable heap size (`--heap-size=BYTES`, default 8MB)
+- [x] Heap bounds checking with fatal error message
+- [x] Array push capacity checking with fatal error message
+- [x] `include` / `require` / `include_once` / `require_once`
+
+### Future memory improvements
+- [ ] String deduplication (avoid copying identical strings)
+- [ ] Hash table shrink on delete (currently only grows)
+- [ ] Sized array pre-allocation (when array size is known at compile time)
+- [ ] Deep recursive free for arrays (currently shallow)
+- [ ] Block coalescing in free list (merge adjacent free blocks)
+
+## v0.10.x — Basic classes
 
 ### Basic classes (no inheritance, no polymorphism)
 - [ ] Classes with `public`/`private` properties and optional defaults
@@ -172,17 +193,7 @@ Proper type system for PHP compatibility.
 - [ ] Objects as function parameters and return values
 - [ ] Objects stored in arrays
 
-### Memory management
-- [ ] Free-list allocator (replace bump allocator with reusable memory)
-- [ ] Scope-based memory reset (free temporaries at end of scope/loop iteration)
-- [ ] Configurable heap size (currently hardcoded 1MB)
-- [ ] Concat buffer recycling (currently 64KB with silent wraparound)
-- [ ] String deduplication (avoid copying identical strings)
-- [ ] Hash table shrink on delete (currently only grows)
-- [ ] Sized array pre-allocation (when array size is known at compile time, allocate in one block instead of dynamic resize)
-- [x] `include` / `require` / `include_once` / `require_once`
-
-## v0.10.x — Multi-platform and optimizations
+## v0.11.x — Multi-platform and optimizations
 
 - [ ] Linux x86_64 target
 - [ ] Linux ARM64 target

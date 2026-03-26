@@ -20,6 +20,7 @@ pub fn generate(
     program: &Program,
     global_env: &TypeEnv,
     functions: &HashMap<String, FunctionSig>,
+    heap_size: usize,
 ) -> String {
     let mut emitter = Emitter::new();
     let mut data = DataSection::new();
@@ -124,7 +125,7 @@ pub fn generate(
     runtime::emit_runtime(&mut emitter);
 
     let data_output = data.emit();
-    let runtime_data = runtime::emit_runtime_data(&all_global_var_names, &all_static_vars);
+    let runtime_data = runtime::emit_runtime_data(&all_global_var_names, &all_static_vars, heap_size);
 
     let mut output = emitter.output();
     if !data_output.is_empty() {
