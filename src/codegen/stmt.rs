@@ -81,7 +81,13 @@ pub fn emit_stmt(
                         emitter.instruction("str d0, [x9]");                    // store float through reference pointer
                     }
                     PhpType::Str => {
-                        emitter.instruction("str x1, [x9]");                    // store string pointer through ref
+                        // -- free old string and persist new one through ref --
+                        emitter.instruction("str x9, [sp, #-16]!");             // save ref pointer (str_persist clobbers x9)
+                        emitter.instruction("ldr x0, [x9]");                    // load old string ptr from ref target
+                        emitter.instruction("bl __rt_heap_free_safe");          // free old string if on heap
+                        emitter.instruction("bl __rt_str_persist");             // persist new string to heap
+                        emitter.instruction("ldr x9, [sp], #16");               // restore ref pointer
+                        emitter.instruction("str x1, [x9]");                    // store heap string pointer through ref
                         emitter.instruction("str x2, [x9, #8]");                // store string length through ref
                     }
                     _ => {

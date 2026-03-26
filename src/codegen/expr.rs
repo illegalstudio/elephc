@@ -322,8 +322,10 @@ fn emit_array_literal(
 ) -> PhpType {
     if elems.is_empty() {
         // -- allocate empty array with small initial capacity --
+        // Use elem_size=16 so the array can hold both int and string elements
+        // without reallocation when the first push determines the actual type.
         emitter.instruction("mov x0, #4");                                      // initial capacity: 4 (grows dynamically)
-        emitter.instruction("mov x1, #8");                                      // element size: 8 bytes (int-sized)
+        emitter.instruction("mov x1, #16");                                     // element size: 16 bytes (supports int and string)
         emitter.instruction("bl __rt_array_new");                               // call runtime to heap-allocate array struct
         return PhpType::Array(Box::new(PhpType::Int));
     }

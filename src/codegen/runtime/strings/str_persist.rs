@@ -19,8 +19,20 @@ pub fn emit_str_persist(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #0]");                                    // save source pointer
     emitter.instruction("str x2, [sp, #8]");                                    // save string length
 
-    // -- allocate heap memory for the string --
-    emitter.instruction("mov x0, x2");                                          // x0 = bytes needed = string length
+    // -- round up allocation to next power of 2 (min 32) for free-list reuse --
+    // This reduces fragmentation for string .= loops: freed blocks can be
+    // reused by subsequent allocations of similar or smaller size.
+    emitter.instruction("mov x0, #32");                                         // minimum allocation size
+    emitter.instruction("cmp x2, #32");                                         // is length <= 32?
+    emitter.instruction("b.le __rt_str_persist_alloc");                         // yes, use 32
+    // -- round up to next power of 2 --
+    emitter.instruction("sub x0, x2, #1");                                      // x0 = len - 1
+    emitter.instruction("clz x3, x0");                                          // count leading zeros
+    emitter.instruction("mov x0, #1");                                          // start with 1
+    emitter.instruction("mov x4, #64");                                         // 64 - clz = bit position
+    emitter.instruction("sub x4, x4, x3");                                      // x4 = 64 - leading_zeros = ceil(log2)
+    emitter.instruction("lsl x0, x0, x4");                                      // x0 = 1 << ceil(log2(len)) = next power of 2
+    emitter.label("__rt_str_persist_alloc");
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate on heap, x0 = heap pointer
 
     // -- copy bytes from source to heap --
