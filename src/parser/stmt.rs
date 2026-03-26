@@ -451,6 +451,16 @@ pub fn parse_block(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Vec<Stmt
     Ok(stmts)
 }
 
+/// Parse either a braced block `{ ... }` or a single statement (for braceless if/while/for/foreach).
+pub fn parse_body(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Vec<Stmt>, CompileError> {
+    if *pos < tokens.len() && tokens[*pos].0 == Token::LBrace {
+        parse_block(tokens, pos)
+    } else {
+        let stmt = parse_stmt(tokens, pos)?;
+        Ok(vec![stmt])
+    }
+}
+
 fn expect_semicolon(tokens: &[(Token, Span)], pos: &mut usize) -> Result<(), CompileError> {
     if *pos < tokens.len() && tokens[*pos].0 == Token::Semicolon {
         *pos += 1;

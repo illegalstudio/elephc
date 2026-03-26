@@ -2,7 +2,7 @@ use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::parse_expr;
-use crate::parser::stmt::parse_block;
+use crate::parser::stmt::{parse_block, parse_body};
 use crate::span::Span;
 
 /// Parse: if (expr) { stmts } (elseif (expr) { stmts })* (else { stmts })?
@@ -16,7 +16,7 @@ pub fn parse_if(
     expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'if'")?;
     let condition = parse_expr(tokens, pos)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after if condition")?;
-    let then_body = parse_block(tokens, pos)?;
+    let then_body = parse_body(tokens, pos)?;
 
     let mut elseif_clauses = Vec::new();
     let mut else_body = None;
@@ -30,11 +30,11 @@ pub fn parse_if(
             expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'elseif'")?;
             let cond = parse_expr(tokens, pos)?;
             expect_token(tokens, pos, &Token::RParen, "Expected ')' after elseif condition")?;
-            let body = parse_block(tokens, pos)?;
+            let body = parse_body(tokens, pos)?;
             elseif_clauses.push((cond, body));
         } else if tokens[*pos].0 == Token::Else {
             *pos += 1;
-            else_body = Some(parse_block(tokens, pos)?);
+            else_body = Some(parse_body(tokens, pos)?);
             break;
         } else {
             break;
@@ -62,7 +62,7 @@ pub fn parse_while(
     expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'while'")?;
     let condition = parse_expr(tokens, pos)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after while condition")?;
-    let body = parse_block(tokens, pos)?;
+    let body = parse_body(tokens, pos)?;
     Ok(Stmt::new(StmtKind::While { condition, body }, span))
 }
 
@@ -97,7 +97,7 @@ pub fn parse_foreach(
     };
 
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after foreach")?;
-    let body = parse_block(tokens, pos)?;
+    let body = parse_body(tokens, pos)?;
 
     Ok(Stmt::new(
         StmtKind::Foreach {
@@ -160,7 +160,7 @@ pub fn parse_for(
     };
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after for clauses")?;
 
-    let body = parse_block(tokens, pos)?;
+    let body = parse_body(tokens, pos)?;
 
     Ok(Stmt::new(
         StmtKind::For {

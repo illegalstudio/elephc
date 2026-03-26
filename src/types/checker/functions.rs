@@ -84,10 +84,18 @@ impl Checker {
         let mut arg_idx = 0;
         for arg in args {
             let ty = self.infer_type(arg, caller_env)?;
-            if arg_idx < decl.params.len() {
+            if let ExprKind::Spread(_) = &arg.kind {
+                // Spread into non-variadic params: fill all remaining params with element type
+                for i in arg_idx..decl.params.len() {
+                    param_types.push((decl.params[i].clone(), ty.clone()));
+                }
+                arg_idx = decl.params.len();
+            } else if arg_idx < decl.params.len() {
                 param_types.push((decl.params[arg_idx].clone(), ty));
+                arg_idx += 1;
+            } else {
+                arg_idx += 1;
             }
-            arg_idx += 1;
         }
         // Fill in types for params with defaults that aren't explicitly passed
         for i in arg_idx..decl.params.len() {

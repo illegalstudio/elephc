@@ -1088,11 +1088,14 @@ fn emit_function_call(
     let mut regular_args: Vec<&Expr> = Vec::new();
     let mut variadic_args: Vec<&Expr> = Vec::new();
     let mut spread_arg: Option<&Expr> = None;
+    // Track the spread arg's position in the arg list (how many regular args before it)
+    let mut spread_at_index: usize = 0;
 
     for (i, arg) in args.iter().enumerate() {
         if let ExprKind::Spread(inner) = &arg.kind {
             // Spread arg — the inner expr should be an array
             spread_arg = Some(inner.as_ref());
+            spread_at_index = regular_args.len();
         } else if is_variadic && i >= regular_param_count {
             variadic_args.push(arg);
         } else {
@@ -1100,19 +1103,24 @@ fn emit_function_call(
         }
     }
 
+    // Check if the spread is into named params (non-variadic) vs. variadic
+    let spread_into_named = spread_arg.is_some() && !is_variadic;
+
     // Build full argument list: regular args + defaults for missing regular params
     let mut all_args: Vec<&Expr> = regular_args;
     let mut default_exprs: Vec<Expr> = Vec::new();
 
-    if let Some(ref s) = sig {
-        for i in all_args.len()..regular_param_count {
-            if let Some(Some(default)) = s.defaults.get(i) {
-                default_exprs.push(default.clone());
+    if !spread_into_named {
+        if let Some(ref s) = sig {
+            for i in all_args.len()..regular_param_count {
+                if let Some(Some(default)) = s.defaults.get(i) {
+                    default_exprs.push(default.clone());
+                }
             }
         }
+        let default_refs: Vec<&Expr> = default_exprs.iter().collect();
+        all_args.extend(default_refs);
     }
-    let default_refs: Vec<&Expr> = default_exprs.iter().collect();
-    all_args.extend(default_refs);
 
     let ref_params = sig.as_ref().map(|s| s.ref_params.clone()).unwrap_or_default();
 
@@ -1159,6 +1167,69 @@ fn emit_function_call(
                 PhpType::Void => {}
             }
             arg_types.push(ty);
+        }
+    }
+
+    // -- unpack spread into named params (non-variadic function) --
+    if spread_into_named {
+        if let Some(spread_expr) = spread_arg {
+            let remaining = regular_param_count - spread_at_index;
+            emitter.comment(&format!("unpack spread into {} named params", remaining));
+            let _ty = emit_expr(spread_expr, emitter, ctx, data);
+            // Array pointer is in x0
+
+            // Determine element type from function signature
+            let elem_ty = if let Some(ref s) = sig {
+                if spread_at_index < s.params.len() {
+                    s.params[spread_at_index].1.clone()
+                } else {
+                    PhpType::Int
+                }
+            } else {
+                PhpType::Int
+            };
+
+            // -- extract all elements from array, pushing each onto stack --
+            // x0 holds the array pointer; use x9 as base for element access
+            emitter.instruction("mov x9, x0");                                  // save array pointer in x9
+            emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header to reach data
+            for idx in 0..remaining {
+                match &elem_ty {
+                    PhpType::Int | PhpType::Bool => {
+                        emitter.instruction(&format!(                           // load int element at offset index*8
+                            "ldr x0, [x9, #{}]",
+                            idx * 8
+                        ));
+                        emitter.instruction("str x0, [sp, #-16]!");             // push unpacked int arg onto stack
+                    }
+                    PhpType::Float => {
+                        emitter.instruction(&format!(                           // load float element at offset index*8
+                            "ldr d0, [x9, #{}]",
+                            idx * 8
+                        ));
+                        emitter.instruction("str d0, [sp, #-16]!");             // push unpacked float arg onto stack
+                    }
+                    PhpType::Str => {
+                        emitter.instruction(&format!(                           // load string pointer at offset index*16
+                            "ldr x1, [x9, #{}]",
+                            idx * 16
+                        ));
+                        emitter.instruction(&format!(                           // load string length at offset index*16+8
+                            "ldr x2, [x9, #{}]",
+                            idx * 16 + 8
+                        ));
+                        emitter.instruction("stp x1, x2, [sp, #-16]!");         // push unpacked string arg onto stack
+                    }
+                    _ => {
+                        emitter.instruction(&format!(                           // load element at offset index*8
+                            "ldr x0, [x9, #{}]",
+                            idx * 8
+                        ));
+                        emitter.instruction("str x0, [sp, #-16]!");             // push unpacked arg onto stack
+                    }
+                }
+                arg_types.push(elem_ty.clone());
+            }
         }
     }
 
@@ -1242,7 +1313,7 @@ fn emit_function_call(
     }
 
     // Separate int and float register tracking
-    let total_args = all_args.len() + if is_variadic { 1 } else { 0 };
+    let total_args = arg_types.len();
     let mut assignments: Vec<(PhpType, usize, bool)> = Vec::new();
     let mut int_reg_idx = 0usize;
     let mut float_reg_idx = 0usize;
