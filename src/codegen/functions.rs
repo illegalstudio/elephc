@@ -69,8 +69,11 @@ fn emit_function_with_label(
         let is_ref = sig.ref_params.get(i).copied().unwrap_or(false);
         if is_ref {
             ctx.ref_params.insert(pname.clone());
-            // For ref params, allocate 8 bytes (stores a pointer)
+            // For ref params, allocate 8 bytes (stores a pointer to the actual value)
             ctx.alloc_var(pname, PhpType::Int);
+            // Set the variable type to the actual referenced type so loading
+            // dereferences correctly (e.g., string ref loads x1/x2, not x0)
+            ctx.variables.get_mut(pname).unwrap().ty = _pty.clone();
         } else {
             ctx.alloc_var(pname, _pty.clone());
         }
