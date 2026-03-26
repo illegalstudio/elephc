@@ -504,8 +504,11 @@ impl Checker {
                             Ok(PhpType::Int)
                         }
                     }
-                    BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt
-                    | BinOp::LtEq | BinOp::GtEq => {
+                    BinOp::Eq | BinOp::NotEq => {
+                        // Loose comparison accepts any types — coerces at runtime
+                        Ok(PhpType::Bool)
+                    }
+                    BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
                         let lt_ok = matches!(lt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
                         let rt_ok = matches!(rt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
                         if !lt_ok || !rt_ok {

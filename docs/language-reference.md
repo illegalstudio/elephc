@@ -32,6 +32,8 @@ $x = 42;              // reassignment from null works
 - `$argv[0]` returns the compiled binary path, not the `.php` file path.
 - `strpos()` returns `-1` when the needle is not found, not `false`. Use `strpos($s, "x") !== -1` or `strpos($s, "x") >= 0` instead of `strpos($s, "x") !== false`.
 - `array_search()` returns `-1` when the value is not found, not `false`. Use `array_search($v, $arr) !== -1` or `array_search($v, $arr) >= 0` instead of `array_search($v, $arr) !== false`.
+- Integer overflow wraps instead of promoting to float. In PHP, `PHP_INT_MAX + 1` returns a float (`9.2233720368548E+18`); in elephc it wraps to `-9223372036854775808` (native 64-bit signed integer behavior). This is by design — runtime overflow detection would require checking the CPU overflow flag after every arithmetic operation, which is incompatible with the ahead-of-time compilation model.
+- Loose comparison (`==`) between different types coerces both sides to integer. PHP has more nuanced type juggling rules (e.g., numeric strings compared as numbers). elephc simplifies this: strings are parsed as integers (empty string and non-numeric strings become `0`).
 
 ## Operators
 
@@ -51,7 +53,7 @@ $x = 42;              // reassignment from null works
 
 | Operator | Example | Notes |
 |---|---|---|
-| `==` | `$a == $b` | Loose equality (integers only) |
+| `==` | `$a == $b` | Loose equality (cross-type: coerces to int) |
 | `!=` | `$a != $b` | Inequality |
 | `===` | `$a === $b` | Strict equality (type and value) |
 | `!==` | `$a !== $b` | Strict inequality (type or value differs) |

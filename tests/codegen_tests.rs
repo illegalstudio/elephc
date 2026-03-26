@@ -508,6 +508,44 @@ fn test_not_equal() {
     assert_eq!(out, "1");
 }
 
+// --- Loose comparison across types ---
+
+#[test]
+fn test_loose_eq_empty_string_false() {
+    let out = compile_and_run("<?php var_dump(\"\" == false);");
+    assert_eq!(out, "bool(true)\n");
+}
+
+#[test]
+fn test_loose_eq_zero_false() {
+    let out = compile_and_run("<?php var_dump(0 == false);");
+    assert_eq!(out, "bool(true)\n");
+}
+
+#[test]
+fn test_loose_eq_one_true() {
+    let out = compile_and_run("<?php var_dump(1 == true);");
+    assert_eq!(out, "bool(true)\n");
+}
+
+#[test]
+fn test_loose_eq_string_vs_int() {
+    let out = compile_and_run("<?php var_dump(\"0\" == false);");
+    assert_eq!(out, "bool(true)\n");
+}
+
+#[test]
+fn test_loose_neq_empty_string_true() {
+    let out = compile_and_run("<?php var_dump(\"\" != true);");
+    assert_eq!(out, "bool(true)\n");
+}
+
+#[test]
+fn test_loose_eq_null_false() {
+    let out = compile_and_run("<?php var_dump(null == false);");
+    assert_eq!(out, "bool(true)\n");
+}
+
 #[test]
 fn test_less_than() {
     let out = compile_and_run("<?php echo 1 < 2;");

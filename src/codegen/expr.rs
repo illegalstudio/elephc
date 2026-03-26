@@ -787,6 +787,41 @@ pub fn coerce_null_to_zero(emitter: &mut Emitter, ty: &PhpType) {
     }
 }
 
+/// Coerce any type to integer in x0 for loose comparison (==, !=).
+/// PHP loose comparison coerces both sides to a common type.
+/// Simplified: coerce everything to int, then compare.
+///   - Bool → already 0/1 in x0
+///   - Null (Void) → 0
+///   - Int → coerce null sentinel to 0 (via coerce_null_to_zero)
+///   - Float → truncate to int via fcvtzs
+///   - String → 0 (empty string) or parse via atoi
+fn coerce_to_int_for_loose_cmp(emitter: &mut Emitter, ty: &PhpType) {
+    match ty {
+        PhpType::Void => {
+            // -- null coerces to 0 --
+            emitter.instruction("mov x0, #0");                                      // null is zero for loose comparison
+        }
+        PhpType::Bool => {
+            // Bool is already 0 or 1 in x0 — nothing to do
+        }
+        PhpType::Int => {
+            coerce_null_to_zero(emitter, ty);
+        }
+        PhpType::Float => {
+            // -- truncate float to integer --
+            emitter.instruction("fcvtzs x0, d0");                                   // convert float to signed int (truncate)
+        }
+        PhpType::Str => {
+            // -- coerce string to int: empty string → 0, otherwise parse --
+            emitter.instruction("bl __rt_atoi");                                    // runtime: parse string as integer → x0
+        }
+        _ => {
+            // Arrays, callables — coerce to 0 as fallback
+            emitter.instruction("mov x0, #0");                                      // unsupported type coerces to 0
+        }
+    }
+}
+
 fn emit_binop(
     left: &Expr,
     op: &BinOp,
@@ -930,7 +965,55 @@ fn emit_binop(
                 PhpType::Int
             }
         }
-        BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
+        BinOp::Eq | BinOp::NotEq => {
+            let lt = emit_expr(left, emitter, ctx, data);
+            let lt_numeric = matches!(lt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
+            coerce_null_to_zero(emitter, &lt);
+            let use_float = lt == PhpType::Float;
+            // -- save left operand on stack while evaluating right --
+            if use_float {
+                emitter.instruction("str d0, [sp, #-16]!");                     // push left float operand onto stack
+            } else {
+                if !lt_numeric {
+                    // -- coerce non-numeric left to int for loose comparison --
+                    coerce_to_int_for_loose_cmp(emitter, &lt);
+                }
+                emitter.instruction("str x0, [sp, #-16]!");                     // push left integer operand onto stack
+            }
+            let rt = emit_expr(right, emitter, ctx, data);
+            let rt_numeric = matches!(rt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
+            coerce_null_to_zero(emitter, &rt);
+
+            if lt_numeric && rt_numeric && (lt == PhpType::Float || rt == PhpType::Float) {
+                // -- float comparison path (both sides numeric, at least one float) --
+                if rt != PhpType::Float {
+                    emitter.instruction("scvtf d0, x0");                        // promote right int to float for comparison
+                }
+                if lt == PhpType::Float {
+                    emitter.instruction("ldr d1, [sp], #16");                   // pop left float operand from stack
+                } else {
+                    emitter.instruction("ldr x9, [sp], #16");                   // pop left integer operand from stack
+                    emitter.instruction("scvtf d1, x9");                        // promote left int to float for comparison
+                }
+                emitter.instruction("fcmp d1, d0");                             // compare two doubles, setting NZCV flags
+            } else {
+                // -- integer comparison path (cross-type coerced to int) --
+                if !rt_numeric {
+                    coerce_to_int_for_loose_cmp(emitter, &rt);
+                }
+                emitter.instruction("ldr x1, [sp], #16");                       // pop left integer operand from stack
+                emitter.instruction("cmp x1, x0");                              // compare left vs right, setting flags
+            }
+            let cond = match op {
+                BinOp::Eq => "eq",
+                BinOp::NotEq => "ne",
+                _ => unreachable!(),
+            };
+            // -- set boolean result based on comparison flags --
+            emitter.instruction(&format!("cset x0, {}", cond));                 // x0=1 if condition met, 0 otherwise
+            PhpType::Bool
+        }
+        BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
             let lt = emit_expr(left, emitter, ctx, data);
             coerce_null_to_zero(emitter, &lt);
             let use_float = lt == PhpType::Float;
@@ -962,8 +1045,6 @@ fn emit_binop(
                 emitter.instruction("cmp x1, x0");                              // compare left vs right, setting flags
             }
             let cond = match op {
-                BinOp::Eq => "eq",
-                BinOp::NotEq => "ne",
                 BinOp::Lt => "lt",
                 BinOp::Gt => "gt",
                 BinOp::LtEq => "le",
