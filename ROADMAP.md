@@ -180,9 +180,8 @@ Proper type system for PHP compatibility.
 - [x] Deep free for arrays via `unset()` (frees string elements + array struct)
 - [x] Zero-init local variables in function prologues (prevents stale pointer frees)
 
-## v0.10.x — Basic classes
+## v0.10.x — Basic classes (no inheritance, no polymorphism)
 
-### Basic classes (no inheritance, no polymorphism)
 - [ ] Classes with `public`/`private` properties and optional defaults
 - [ ] Constructor (`__construct`) with arguments
 - [ ] Instance methods with `$this` access
