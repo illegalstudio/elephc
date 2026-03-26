@@ -357,8 +357,8 @@ fn emit_new_object(
     for i in 0..num_props {
         let offset = 8 + i * 16;
         emitter.instruction("ldr x9, [sp]");                                    // peek object pointer
-        emitter.instruction(&format!("str xzr, [x9, #{}]", offset));           // zero-init property lo
-        emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8));       // zero-init property hi
+        emitter.instruction(&format!("str xzr, [x9, #{}]", offset));            // zero-init property lo
+        emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8));        // zero-init property hi
     }
 
     // -- set default property values --
@@ -483,17 +483,17 @@ fn emit_property_access(
 
     match &prop_ty {
         PhpType::Str => {
-            emitter.instruction(&format!("ldr x1, [x0, #{}]", offset));        // load string pointer from property
-            emitter.instruction(&format!("ldr x2, [x0, #{}]", offset + 8));    // load string length from property
+            emitter.instruction(&format!("ldr x1, [x0, #{}]", offset));         // load string pointer from property
+            emitter.instruction(&format!("ldr x2, [x0, #{}]", offset + 8));     // load string length from property
         }
         PhpType::Float => {
-            emitter.instruction(&format!("ldr d0, [x0, #{}]", offset));        // load float from property
+            emitter.instruction(&format!("ldr d0, [x0, #{}]", offset));         // load float from property
         }
         PhpType::Bool | PhpType::Int | PhpType::Void => {
-            emitter.instruction(&format!("ldr x0, [x0, #{}]", offset));        // load int/bool from property
+            emitter.instruction(&format!("ldr x0, [x0, #{}]", offset));         // load int/bool from property
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
-            emitter.instruction(&format!("ldr x0, [x0, #{}]", offset));        // load heap pointer from property
+            emitter.instruction(&format!("ldr x0, [x0, #{}]", offset));         // load heap pointer from property
         }
     }
 
