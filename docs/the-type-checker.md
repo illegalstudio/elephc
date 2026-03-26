@@ -37,12 +37,15 @@ pub enum PhpType {
         value: Box<PhpType>,
     },
     Callable,                      // closures and function references
+    Object(String),                // class instance, e.g., Object("Point")
 }
 ```
 
 This is simpler than PHP's runtime types — no union types, no mixed, no nullable syntax. Each variable gets exactly one type for its lifetime. The distinction between `Array` (indexed) and `AssocArray` (key-value) is determined at compile time from the literal syntax (`[1, 2]` vs `["a" => 1]`).
 
 `Callable` is used for anonymous functions (closures) and arrow functions. A callable value is stored as a function pointer (8 bytes) on the stack, and is invoked via an indirect branch (`blr`).
+
+`Object(String)` represents a class instance. The string carries the class name (e.g., `"Point"`). Objects are heap-allocated pointers (8 bytes on the stack).
 
 ## How inference works
 
@@ -178,6 +181,34 @@ global_env.insert("argv", PhpType::Array(Box::new(PhpType::Str)));
 
 These correspond to PHP's `$argc` and `$argv` superglobals.
 
+## Class type checking
+
+When the type checker encounters a `ClassDecl`, it:
+
+1. **Registers the class** in a `classes: HashMap<String, ClassInfo>` map
+2. **Records each property** with its type (inferred from default values or constructor assignments)
+3. **Type-checks each method body** with `$this` bound to `Object(ClassName)`
+4. **Builds `ClassInfo`** containing property types, defaults, method signatures, static method signatures, and constructor-to-property mappings
+
+The `ClassInfo` struct:
+
+```rust
+pub struct ClassInfo {
+    pub properties: Vec<(String, PhpType)>,
+    pub defaults: Vec<Option<Expr>>,
+    pub methods: HashMap<String, FunctionSig>,
+    pub static_methods: HashMap<String, FunctionSig>,
+    pub constructor_param_to_prop: Vec<Option<String>>,
+}
+```
+
+When checking property access (`$obj->prop`), the type checker validates that:
+- The variable is an `Object` type
+- The class has a property with that name
+- The property is accessible (public, or private and accessed via `$this`)
+
+When checking method calls, it verifies the method exists and validates argument count and types against the method's `FunctionSig`.
+
 ## Output: CheckResult
 
 The type checker produces a `CheckResult`:
@@ -186,6 +217,7 @@ The type checker produces a `CheckResult`:
 pub struct CheckResult {
     pub global_env: TypeEnv,                    // variable name → type
     pub functions: HashMap<String, FunctionSig>, // function name → signature
+    pub classes: HashMap<String, ClassInfo>,     // class name → class info
 }
 ```
 

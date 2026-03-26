@@ -68,6 +68,11 @@ Things that have a value:
 | `ExprCall { callee, args }` | `$arr[0](1, 2)` | Calling the result of an expression (e.g., array access returning a callable) |
 | `Spread(Expr)` | `...$arr` | Spread/unpack operator — expands an array into individual arguments or elements |
 | `ConstRef(String)` | `MAX_RETRIES` | Reference to a user-defined constant |
+| `NewObject { class_name, args }` | `new Point(1, 2)` | Object instantiation |
+| `PropertyAccess { object, property }` | `$p->x` | Property access via `->` |
+| `MethodCall { object, method, args }` | `$p->move(1, 2)` | Instance method call |
+| `StaticMethodCall { class_name, method, args }` | `Point::origin()` | Static method call via `::` |
+| `This` | `$this` | Reference to the current object inside a method |
 
 ### Statements (`Stmt`)
 
@@ -94,6 +99,8 @@ Things that do something:
 | `ListUnpack { vars, value }` | `[$a, $b] = [1, 2];` |
 | `Global { vars }` | `global $x, $y;` — declares variables as referencing global storage |
 | `StaticVar { name, init }` | `static $count = 0;` — declares a variable that persists across function calls |
+| `ClassDecl { name, properties, methods }` | `class Point { ... }` |
+| `PropertyAssign { object, property, value }` | `$p->x = 10;` |
 | `ExprStmt(Expr)` | `my_func();` (expression used as statement) |
 
 ### Binary operators (`BinOp`)
@@ -105,6 +112,16 @@ And  Or
 BitAnd  BitOr  BitXor  ShiftLeft  ShiftRight
 NullCoalesce
 ```
+
+### Class-related types
+
+`ClassDecl` uses several supporting types:
+
+| Type | Fields | Description |
+|---|---|---|
+| `Visibility` | `Public`, `Private` | Enum for property/method visibility |
+| `ClassProperty` | `name`, `visibility`, `readonly`, `default`, `span` | A property declaration inside a class |
+| `ClassMethod` | `name`, `visibility`, `is_static`, `params`, `variadic`, `body`, `span` | A method declaration inside a class |
 
 Every AST node carries a `Span` (line + column) from the source, so error messages in later phases can point to the right location.
 
@@ -222,15 +239,24 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `Identifier` (no `(`) | Parse as constant reference → `ConstRef` |
 | `function` + `(` | Parse anonymous function (closure) → `Closure` |
 | `fn` + `(` | Parse arrow function → `Closure` (with `is_arrow = true`) |
+| `new` + `Identifier` | Parse object instantiation → `NewObject` |
+| `$this` | Return `This` node |
 | `...` + expr | Parse spread/unpack → `Spread` |
 
-### Postfix: array access
+### Postfix: array access and member access
 
-After parsing a prefix, the parser checks for `[` to handle array access:
+After parsing a prefix, the parser checks for postfix operators:
+
+- `[` for array access
+- `->` for property access or method call
+- `::` for static method call (when the prefix is an identifier)
 
 ```php
 $arr[0]          →  ArrayAccess { array: Variable("arr"), index: IntLiteral(0) }
 $arr[$i + 1]     →  ArrayAccess { array: Variable("arr"), index: BinaryOp(Add, ...) }
+$p->x            →  PropertyAccess { object: Variable("p"), property: "x" }
+$p->move(1, 2)   →  MethodCall { object: Variable("p"), method: "move", args: [...] }
+Point::origin()  →  StaticMethodCall { class_name: "Point", method: "origin", args: [] }
 ```
 
 ## Statement parsing
@@ -250,6 +276,7 @@ Statement parsing is simpler — it looks at the current token to decide what ki
 | `Foreach` | `Foreach` loop |
 | `Switch` | `Switch` statement with cases and optional default |
 | `Function` | Function declaration with parameters and body |
+| `Class` | Class declaration with properties and methods |
 | `Return` | Return with optional expression |
 | `Break` | Break statement |
 | `Continue` | Continue statement |

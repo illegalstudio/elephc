@@ -103,6 +103,7 @@ src/
 │       ├── io/                fopen, fgets, fread, stat, scandir, ... (16 files)
 │       └── system/            build_argv, time, getenv, shell_exec, date, mktime, strtotime, json_encode, json_decode, preg (10 files)
 │
+│
 └── errors/
     ├── mod.rs                 CompileError, error trait
     └── report.rs              Error formatting
@@ -116,6 +117,7 @@ src/
 | Float result | `d0` | After emit_expr for Float |
 | String result | `x1` (ptr), `x2` (len) | After emit_expr for Str |
 | Array result | `x0` (heap ptr) | After emit_expr for Array/AssocArray |
+| Object result | `x0` (heap ptr) | After emit_expr for Object |
 | Function args (int) | `x0`-`x7` | Int/Bool/Array = 1 reg, Str = 2 regs |
 | Function args (float) | `d0`-`d7` | Separate index from int regs |
 | Frame pointer | `x29` | Saved in prologue |
@@ -161,6 +163,23 @@ Offset  Size  Field
 ```
 
 Uses FNV-1a hashing with linear probing for collision resolution.
+
+### Object layout (heap-allocated)
+
+```
+Offset  Size  Field
+  0      8    class_id  (identifies which class this object belongs to)
+  8     16    prop[0]   (first property — 16 bytes regardless of type)
+ 24     16    prop[1]   (second property)
+ ...    ...   ...
+```
+
+Total size: `8 + (num_properties × 16)`. Properties are stored at fixed offsets determined at compile time. Property access is `base + 8 + (property_index × 16)`.
+
+### Method dispatch
+
+- Instance methods: `bl _method_ClassName_methodName`. The object pointer is passed as the first argument in `x0` (as `$this`).
+- Static methods: `bl _static_ClassName_methodName`. No object pointer is passed.
 
 ### String buffer
 

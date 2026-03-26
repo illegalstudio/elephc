@@ -116,6 +116,7 @@ The full set of tokens elephc recognizes:
 | Token | Example | Carries |
 |---|---|---|
 | `Variable` | `$x`, `$name`, `$argc` | Name without the `$` |
+| `This` | `$this` | Self-reference inside a class method |
 | `Identifier` | `strlen`, `my_func` | The name |
 
 ### Keywords
@@ -125,7 +126,7 @@ echo  if  else  elseif  while  do  for  foreach  as
 break  continue  function  return  include  require
 include_once  require_once  true  false  null  print
 switch  case  default  match  fn  use  const
-global  static
+global  static  class  new  public  private  readonly
 ```
 
 Each keyword is a distinct token variant (e.g., `Token::If`, `Token::While`, `Token::Switch`).
@@ -148,7 +149,7 @@ These are recognized as distinct tokens by the lexer, not as identifiers.
 ==  ===  !=  !==  <  >  <=  >=  <=>
 &&  ||  !
 &  |  ^  ~  <<  >>
-??
+??  ->  ::
 ++  --
 ...
 ```

@@ -118,6 +118,7 @@ Floats are stored as their raw 64-bit IEEE 754 bit patterns (`.quad` directive).
 | `Float` | `d0` |
 | `Str` | `x1` (pointer), `x2` (length) |
 | `Array` | `x0` (heap pointer) |
+| `Object` | `x0` (heap pointer) |
 
 ### Literals
 
@@ -593,6 +594,53 @@ $result = match($x) {
 4. Default arm: evaluate result unconditionally
 5. Result is left in standard registers (`x0`, `d0`, or `x1`/`x2`)
 
+## Class codegen
+
+### Object allocation (`new ClassName(...)`)
+
+When the codegen encounters a `NewObject` expression:
+
+1. **Calculate object size**: `8 + (num_properties × 16)` — 8 bytes for the class ID, 16 bytes per property
+2. **Allocate heap memory**: call `__rt_heap_alloc` with the calculated size
+3. **Zero-initialize**: clear all property slots to zero
+4. **Store class ID**: write the class identifier at offset 0
+5. **Apply defaults**: for properties with default values, evaluate and store them at their fixed offsets
+6. **Call constructor**: if the class has a `__construct` method, pass the new object pointer as `x0` (`$this`) followed by the constructor arguments, then `bl _method_ClassName___construct`
+
+The result is the object pointer in `x0`.
+
+### Property access (`$obj->prop`)
+
+Property access uses fixed offsets computed at compile time:
+
+```asm
+; $obj->prop where prop is property index 1
+ldur x0, [x29, #-offset]            ; load object pointer
+ldur x0, [x0, #24]                  ; load property at 8 + 1 * 16 = 24
+```
+
+For property assignment (`$obj->prop = value`), the value is evaluated first, then stored at the computed offset.
+
+### Method call (`$obj->method(args)`)
+
+1. Evaluate the object expression to get the pointer in `x0`
+2. Push the object pointer onto the stack
+3. Evaluate and push all arguments
+4. Pop arguments into ABI registers, with the object pointer as the first argument (`x0`)
+5. `bl _method_ClassName_methodName`
+6. Result is in the standard registers based on return type
+
+Inside the method body, `$this` is the first parameter and lives in the function's first stack slot.
+
+### Static method call (`ClassName::method(args)`)
+
+Static methods are called like regular functions, but with the label `_static_ClassName_methodName`. No object pointer is passed:
+
+```asm
+bl _static_Point_origin              ; call static method
+; result in x0 (object pointer)
+```
+
 ## The ABI module
 
 **File:** `src/codegen/abi.rs`
@@ -618,6 +666,7 @@ Stores the current result to a stack variable. Uses `store_at_offset()` internal
 | `Float` | `stur d0, [x29, #-offset]` |
 | `Str` | `stur x1, [x29, #-offset]` + `stur x2, [x29, #-(offset-8)]` |
 | `Array` | `stur x0, [x29, #-offset]` |
+| `Object` | `stur x0, [x29, #-offset]` |
 
 ### `emit_load(emitter, type, offset)`
 
