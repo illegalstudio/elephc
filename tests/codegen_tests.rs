@@ -7729,3 +7729,35 @@ echo check(5) . "|" . check(15);
 "#);
     assert_eq!(out, "small|big");
 }
+
+#[test]
+fn test_log_natural() {
+    let out = compile_and_run(r#"<?php
+echo round(log(M_E), 4);
+"#);
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_log_base_10() {
+    let out = compile_and_run(r#"<?php
+echo log(1000, 10);
+"#);
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_log_base_2() {
+    let out = compile_and_run(r#"<?php
+echo log(256, 2);
+"#);
+    assert_eq!(out, "8");
+}
+
+#[test]
+fn test_log_base_custom() {
+    let out = compile_and_run(r#"<?php
+echo round(log(27, 3), 4);
+"#);
+    assert_eq!(out, "3");
+}
