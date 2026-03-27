@@ -111,39 +111,13 @@ pub fn emit_stmt(
                         emitter.instruction("mov x0, x8");                      // restore new value
                     }
                 }
-                // -- decref old array/object before overwriting --
-                if matches!(&old_ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)) {
-                    let needs_save = !matches!(&ty, PhpType::Str | PhpType::Float);
-                    if needs_save {
-                        emitter.instruction("mov x8, x0");                      // save new value before decref
-                    }
-                    abi::load_at_offset(emitter, "x0", offset);                 // load old array/object pointer
-                    match &old_ty {
-                        PhpType::Array(_) => {
-                            emitter.instruction("bl __rt_decref_array");        // decrement refcount, deep-free if zero
-                        }
-                        PhpType::AssocArray { .. } => {
-                            emitter.instruction("bl __rt_decref_hash");         // decrement refcount, free hash if zero
-                        }
-                        PhpType::Object(_) => {
-                            emitter.instruction("bl __rt_decref_object");       // decrement refcount, free object if zero
-                        }
-                        _ => {}
-                    }
-                    if needs_save {
-                        emitter.instruction("mov x0, x8");                      // restore new value after decref
-                    }
-                }
+                // Note: arrays/objects are NOT decreffed on reassignment because
+                // the old pointer may have been freed internally (e.g., array_grow
+                // in $arr = func($arr) pattern frees old array inside the function,
+                // then caller decrefs freed memory → use-after-free).
+                // Arrays/objects are freed via explicit unset() or process exit.
 
                 abi::emit_store(emitter, &ty, offset);
-
-                // -- incref new value if it comes from a shared reference --
-                if matches!(&ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)) {
-                    if matches!(&value.kind, ExprKind::Variable(_) | ExprKind::ArrayAccess { .. } | ExprKind::PropertyAccess { .. }) {
-                        abi::load_at_offset(emitter, "x0", offset);             // load newly stored pointer
-                        emitter.instruction("bl __rt_incref");                  // increment refcount for shared reference
-                    }
-                }
 
                 // In main scope, also sync to global storage if this var is used globally
                 if ctx.in_main && ctx.all_global_var_names.contains(name) {
@@ -648,14 +622,7 @@ pub fn emit_stmt(
             emitter.blank();
             emitter.comment("return");
             if let Some(e) = expr {
-                let ty = emit_expr(e, emitter, ctx, data);
-                // If returning a local array/object, incref so the epilogue
-                // decref doesn't free it (caller expects rc >= 1)
-                if matches!(&ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)) {
-                    if matches!(&e.kind, ExprKind::Variable(_) | ExprKind::ArrayAccess { .. } | ExprKind::PropertyAccess { .. } | ExprKind::This) {
-                        emitter.instruction("bl __rt_incref");                   // protect return value from epilogue decref
-                    }
-                }
+                emit_expr(e, emitter, ctx, data);
             }
             if let Some(label) = &ctx.return_label {
                 // -- adjust sp for any switch statements that pushed to the stack --

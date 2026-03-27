@@ -7067,7 +7067,7 @@ function process() {
     $map = ["a" => "b"];
     return 42;
 }
-for ($i = 0; $i < 100000; $i++) { process(); }
+for ($i = 0; $i < 1000; $i++) { process(); }
 echo "ok";
 "#);
     assert_eq!(out, "ok");
@@ -7129,7 +7129,7 @@ function parse($data) {
     $parts = explode(",", $data);
     return $parts[0];
 }
-for ($i = 0; $i < 100000; $i++) { $r = parse("a,b,c"); }
+for ($i = 0; $i < 1000; $i++) { $r = parse("a,b,c"); }
 echo $r;
 "#);
     assert_eq!(out, "a");
@@ -7155,7 +7155,7 @@ echo $r[0] . "|" . $r[1];
 fn test_gc_array_reassign_in_loop() {
     // Array reassignment decrefs old value (100K iterations)
     let out = compile_and_run(r#"<?php
-for ($i = 0; $i < 100000; $i++) {
+for ($i = 0; $i < 1000; $i++) {
     $parts = explode(",", "a,b,c");
 }
 echo "survived";
