@@ -136,29 +136,15 @@ impl Checker {
         for stmt in &decl.body {
             self.check_stmt(stmt, &mut local_env)?;
             if let Some(rt) = self.find_return_type(stmt, &local_env) {
-                all_return_types.push(rt.clone());
-                return_type = rt;
+                all_return_types.push(rt);
             }
         }
 
-        // Check for mixed return types that would produce incorrect code
-        if all_return_types.len() > 1 {
-            let first = &all_return_types[0];
+        // Pick the widest return type across all branches
+        if !all_return_types.is_empty() {
+            return_type = all_return_types[0].clone();
             for rt in &all_return_types[1..] {
-                let compatible = first == rt
-                    || (*first == PhpType::Int && *rt == PhpType::Bool)
-                    || (*first == PhpType::Bool && *rt == PhpType::Int)
-                    || (*first == PhpType::Void)
-                    || (*rt == PhpType::Void);
-                if !compatible {
-                    return Err(CompileError::new(
-                        span,
-                        &format!(
-                            "Function '{}' has mixed return types ({:?} and {:?}). All return paths must return the same type",
-                            name, first, rt
-                        ),
-                    ));
-                }
+                return_type = Self::wider_type(&return_type, rt);
             }
         }
 
@@ -175,47 +161,64 @@ impl Checker {
     }
 
     pub fn find_return_type(&mut self, stmt: &Stmt, env: &TypeEnv) -> Option<PhpType> {
+        let mut types = Vec::new();
+        self.collect_return_types(stmt, env, &mut types);
+        if types.is_empty() {
+            return None;
+        }
+        // Pick the widest type: Str > Float > Int/Bool/Void
+        let mut widest = types[0].clone();
+        for ty in &types[1..] {
+            widest = Self::wider_type(&widest, ty);
+        }
+        Some(widest)
+    }
+
+    fn collect_return_types(&mut self, stmt: &Stmt, env: &TypeEnv, types: &mut Vec<PhpType>) {
         match &stmt.kind {
-            StmtKind::Return(Some(expr)) => self.infer_type(expr, env).ok(),
-            StmtKind::Return(None) => Some(PhpType::Void),
-            StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
-                for s in then_body {
-                    if let Some(t) = self.find_return_type(s, env) { return Some(t); }
+            StmtKind::Return(Some(expr)) => {
+                if let Ok(ty) = self.infer_type(expr, env) {
+                    types.push(ty);
                 }
+            }
+            StmtKind::Return(None) => {
+                types.push(PhpType::Void);
+            }
+            StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+                for s in then_body { self.collect_return_types(s, env, types); }
                 for (_, body) in elseif_clauses {
-                    for s in body {
-                        if let Some(t) = self.find_return_type(s, env) { return Some(t); }
-                    }
+                    for s in body { self.collect_return_types(s, env, types); }
                 }
                 if let Some(body) = else_body {
-                    for s in body {
-                        if let Some(t) = self.find_return_type(s, env) { return Some(t); }
-                    }
+                    for s in body { self.collect_return_types(s, env, types); }
                 }
-                None
             }
             StmtKind::While { body, .. }
             | StmtKind::DoWhile { body, .. }
-            | StmtKind::For { body, .. } => {
-                for s in body {
-                    if let Some(t) = self.find_return_type(s, env) { return Some(t); }
-                }
-                None
+            | StmtKind::For { body, .. }
+            | StmtKind::Foreach { body, .. } => {
+                for s in body { self.collect_return_types(s, env, types); }
             }
             StmtKind::Switch { cases, default, .. } => {
                 for (_, body) in cases {
-                    for s in body {
-                        if let Some(t) = self.find_return_type(s, env) { return Some(t); }
-                    }
+                    for s in body { self.collect_return_types(s, env, types); }
                 }
                 if let Some(body) = default {
-                    for s in body {
-                        if let Some(t) = self.find_return_type(s, env) { return Some(t); }
-                    }
+                    for s in body { self.collect_return_types(s, env, types); }
                 }
-                None
             }
-            _ => None,
+            _ => {}
+        }
+    }
+
+    fn wider_type(a: &PhpType, b: &PhpType) -> PhpType {
+        // Str is the widest, then Float, then Int/Bool
+        match (a, b) {
+            _ if a == b => a.clone(),
+            (PhpType::Str, _) | (_, PhpType::Str) => PhpType::Str,
+            (PhpType::Float, _) | (_, PhpType::Float) => PhpType::Float,
+            (PhpType::Void, other) | (other, PhpType::Void) => other.clone(),
+            _ => a.clone(),
         }
     }
 }
