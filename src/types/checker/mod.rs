@@ -11,38 +11,55 @@ use crate::types::{CheckResult, ClassInfo, FunctionSig, PhpType, TypeEnv};
 /// This is a syntactic/heuristic check — no full type inference.
 /// Used for functions that are never called directly (only used as callbacks).
 fn infer_return_type_syntactic(body: &[Stmt]) -> PhpType {
+    let mut types = Vec::new();
     for stmt in body {
-        if let Some(ty) = find_return_type_syntactic(stmt) {
-            return ty;
-        }
+        collect_return_types_syntactic(stmt, &mut types);
     }
-    PhpType::Int
+    if types.is_empty() {
+        return PhpType::Int;
+    }
+    // Pick the widest type across all return statements
+    let mut result = types[0].clone();
+    for ty in &types[1..] {
+        result = wider_type_syntactic(&result, ty);
+    }
+    result
 }
 
-fn find_return_type_syntactic(stmt: &Stmt) -> Option<PhpType> {
+fn collect_return_types_syntactic(stmt: &Stmt, types: &mut Vec<PhpType>) {
     match &stmt.kind {
-        StmtKind::Return(Some(expr)) => Some(infer_expr_type_syntactic(expr)),
-        StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
-            for s in then_body { if let Some(t) = find_return_type_syntactic(s) { return Some(t); } }
-            for (_, body) in elseif_clauses { for s in body { if let Some(t) = find_return_type_syntactic(s) { return Some(t); } } }
-            if let Some(body) = else_body { for s in body { if let Some(t) = find_return_type_syntactic(s) { return Some(t); } } }
-            None
+        StmtKind::Return(Some(expr)) => {
+            types.push(infer_expr_type_syntactic(expr));
         }
-        StmtKind::While { body, .. } | StmtKind::For { body, .. } | StmtKind::Foreach { body, .. } => {
-            for s in body { if let Some(t) = find_return_type_syntactic(s) { return Some(t); } }
-            None
+        StmtKind::Return(None) => {
+            types.push(PhpType::Void);
+        }
+        StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+            for s in then_body { collect_return_types_syntactic(s, types); }
+            for (_, body) in elseif_clauses { for s in body { collect_return_types_syntactic(s, types); } }
+            if let Some(body) = else_body { for s in body { collect_return_types_syntactic(s, types); } }
+        }
+        StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. }
+        | StmtKind::For { body, .. }
+        | StmtKind::Foreach { body, .. } => {
+            for s in body { collect_return_types_syntactic(s, types); }
         }
         StmtKind::Switch { cases, default, .. } => {
-            for (_, body) in cases {
-                for s in body { if let Some(t) = find_return_type_syntactic(s) { return Some(t); } }
-            }
-            if let Some(body) = default {
-                for s in body { if let Some(t) = find_return_type_syntactic(s) { return Some(t); } }
-            }
-            None
+            for (_, body) in cases { for s in body { collect_return_types_syntactic(s, types); } }
+            if let Some(body) = default { for s in body { collect_return_types_syntactic(s, types); } }
         }
-        _ => None,
+        _ => {}
     }
+}
+
+fn wider_type_syntactic(a: &PhpType, b: &PhpType) -> PhpType {
+    if a == b { return a.clone(); }
+    if *a == PhpType::Str || *b == PhpType::Str { return PhpType::Str; }
+    if *a == PhpType::Float || *b == PhpType::Float { return PhpType::Float; }
+    if *a == PhpType::Void { return b.clone(); }
+    if *b == PhpType::Void { return a.clone(); }
+    a.clone()
 }
 
 pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {

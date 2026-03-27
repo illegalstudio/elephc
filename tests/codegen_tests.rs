@@ -7956,3 +7956,34 @@ fn test_only_open_tag() {
     let out = compile_and_run("<?php ");
     assert_eq!(out, "");
 }
+
+// --- Syntactic return type inference ---
+
+#[test]
+fn test_callback_return_from_dowhile() {
+    let out = compile_and_run(r#"<?php
+function find_first($arr) {
+    $i = 0;
+    do {
+        if ($arr[$i] > 5) { return $arr[$i]; }
+        $i = $i + 1;
+    } while ($i < count($arr));
+    return 0;
+}
+echo find_first([1, 3, 7, 2]);
+"#);
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_mixed_return_types_widened() {
+    let out = compile_and_run(r#"<?php
+function describe($n) {
+    if ($n > 100) { return "big"; }
+    if ($n < 0) { return "negative"; }
+    return $n;
+}
+echo describe(200);
+"#);
+    assert_eq!(out, "big");
+}
