@@ -293,11 +293,29 @@ impl Checker {
                     _ => Ok(Some(PhpType::Int)),
                 }
             }
-            "floor" | "ceil" | "sqrt" => {
+            "floor" | "ceil" | "sqrt"
+            | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
+            | "sinh" | "cosh" | "tanh"
+            | "log" | "log2" | "log10" | "exp"
+            | "deg2rad" | "rad2deg" => {
                 if args.len() != 1 {
                     return Err(CompileError::new(span, &format!("{}() takes exactly 1 argument", name)));
                 }
                 self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Float))
+            }
+            "atan2" | "hypot" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, &format!("{}() takes exactly 2 arguments", name)));
+                }
+                self.infer_type(&args[0], env)?;
+                self.infer_type(&args[1], env)?;
+                Ok(Some(PhpType::Float))
+            }
+            "pi" => {
+                if !args.is_empty() {
+                    return Err(CompileError::new(span, "pi() takes no arguments"));
+                }
                 Ok(Some(PhpType::Float))
             }
             "round" => {

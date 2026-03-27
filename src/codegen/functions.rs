@@ -527,7 +527,10 @@ fn infer_local_type(
                 }
                 // Float-returning builtins
                 "floatval" | "floor" | "ceil" | "round" | "sqrt" | "pow"
-                | "fmod" | "fdiv" | "microtime" => PhpType::Float,
+                | "fmod" | "fdiv" | "microtime"
+                | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "atan2"
+                | "sinh" | "cosh" | "tanh" | "log" | "log2" | "log10" | "exp"
+                | "hypot" | "pi" | "deg2rad" | "rad2deg" => PhpType::Float,
                 // Bool-returning builtins
                 "is_int" | "is_float" | "is_string" | "is_bool" | "is_null"
                 | "is_numeric" | "is_nan" | "is_finite" | "is_infinite"

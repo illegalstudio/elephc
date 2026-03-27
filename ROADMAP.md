@@ -205,26 +205,26 @@ Proper type system for PHP compatibility.
 - Scope-based cleanup (decref locals at function epilogue) removed: local variables may alias data owned by other structures (e.g., `$t = $arr[$i]` shares the pointer)
 - Full array/object GC requires either ownership tracking or a tracing collector
 
-## v0.12.x — Math coverage (trigonometry, logarithms, constants)
+## v0.12.x — Math coverage (done)
 
 ### Trigonometry
-- [ ] `sin()`, `cos()`, `tan()`
-- [ ] `asin()`, `acos()`, `atan()`, `atan2()`
-- [ ] `deg2rad()`, `rad2deg()`
-- [ ] `sinh()`, `cosh()`, `tanh()`
+- [x] `sin()`, `cos()`, `tan()`
+- [x] `asin()`, `acos()`, `atan()`, `atan2()`
+- [x] `deg2rad()`, `rad2deg()`
+- [x] `sinh()`, `cosh()`, `tanh()`
 
 ### Logarithms and exponentials
-- [ ] `log()` — natural logarithm
-- [ ] `log2()`, `log10()`
-- [ ] `exp()` — e^x
+- [x] `log()` — natural logarithm
+- [x] `log2()`, `log10()`
+- [x] `exp()` — e^x
 
 ### Utility
-- [ ] `hypot()` — sqrt(x² + y²)
-- [ ] `pi()` — alias for M_PI
+- [x] `hypot()` — sqrt(x² + y²)
+- [x] `pi()` — alias for M_PI
 
 ### Constants
-- [ ] `M_E`, `M_SQRT2`, `M_PI_2`, `M_PI_4`, `M_LOG2E`, `M_LOG10E`
-- [ ] `PHP_FLOAT_MIN`, `PHP_FLOAT_EPSILON`
+- [x] `M_E`, `M_SQRT2`, `M_PI_2`, `M_PI_4`, `M_LOG2E`, `M_LOG10E`
+- [x] `PHP_FLOAT_MIN`, `PHP_FLOAT_EPSILON`
 
 ## v0.13.x — FFI (Foreign Function Interface)
 

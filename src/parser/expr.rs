@@ -263,6 +263,38 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
             *pos += 1;
             Ok(Expr::new(ExprKind::FloatLiteral(std::f64::consts::PI), span))
         }
+        Token::ME => {
+            *pos += 1;
+            Ok(Expr::new(ExprKind::FloatLiteral(std::f64::consts::E), span))
+        }
+        Token::MSqrt2 => {
+            *pos += 1;
+            Ok(Expr::new(ExprKind::FloatLiteral(std::f64::consts::SQRT_2), span))
+        }
+        Token::MPi2 => {
+            *pos += 1;
+            Ok(Expr::new(ExprKind::FloatLiteral(std::f64::consts::FRAC_PI_2), span))
+        }
+        Token::MPi4 => {
+            *pos += 1;
+            Ok(Expr::new(ExprKind::FloatLiteral(std::f64::consts::FRAC_PI_4), span))
+        }
+        Token::MLog2e => {
+            *pos += 1;
+            Ok(Expr::new(ExprKind::FloatLiteral(std::f64::consts::LOG2_E), span))
+        }
+        Token::MLog10e => {
+            *pos += 1;
+            Ok(Expr::new(ExprKind::FloatLiteral(std::f64::consts::LOG10_E), span))
+        }
+        Token::PhpFloatMin => {
+            *pos += 1;
+            Ok(Expr::new(ExprKind::FloatLiteral(f64::MIN_POSITIVE), span))
+        }
+        Token::PhpFloatEpsilon => {
+            *pos += 1;
+            Ok(Expr::new(ExprKind::FloatLiteral(f64::EPSILON), span))
+        }
         Token::Stdin => {
             *pos += 1;
             Ok(Expr::new(ExprKind::IntLiteral(0), span))
