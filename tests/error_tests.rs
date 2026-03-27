@@ -1151,15 +1151,65 @@ fn test_error_hex_no_digits() {
 
 // --- Mixed return type errors ---
 
+// Note: mixed return types are now widened (Str > Float > Int) instead of
+// producing an error. The test_return_type_mixed_branches codegen test
+// covers the widening behavior.
+
+// --- Math trig/log error tests ---
+
 #[test]
-fn test_error_mixed_return_types() {
-    expect_error(
-        r#"<?php
-function test($x) { if ($x > 0) { return "positive"; } return 0; }
-echo test(1);
-"#,
-        "mixed return types",
-    );
+fn test_error_sin_no_args() {
+    expect_error("<?php sin();", "sin() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_sin_too_many_args() {
+    expect_error("<?php sin(1, 2);", "sin() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_cos_no_args() {
+    expect_error("<?php cos();", "cos() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_atan2_one_arg() {
+    expect_error("<?php atan2(1);", "atan2() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_atan2_three_args() {
+    expect_error("<?php atan2(1, 2, 3);", "atan2() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_log_no_args() {
+    expect_error("<?php log();", "log() takes 1 or 2 arguments");
+}
+
+#[test]
+fn test_error_log_too_many_args() {
+    expect_error("<?php log(1, 2, 3);", "log() takes 1 or 2 arguments");
+}
+
+#[test]
+fn test_error_hypot_one_arg() {
+    expect_error("<?php hypot(1);", "hypot() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_exp_no_args() {
+    expect_error("<?php exp();", "exp() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_pi_with_arg() {
+    expect_error("<?php pi(1);", "pi() takes no arguments");
+}
+
+#[test]
+fn test_error_deg2rad_no_args() {
+    expect_error("<?php deg2rad();", "deg2rad() takes exactly 1 argument");
 }
 
 #[test]
