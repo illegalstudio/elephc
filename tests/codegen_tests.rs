@@ -2156,6 +2156,18 @@ fn test_intdiv_still_returns_int() {
     assert_eq!(out, "3");
 }
 
+#[test]
+fn test_intdiv_exact() {
+    let out = compile_and_run("<?php echo intdiv(10, 5);");
+    assert_eq!(out, "2");
+}
+
+#[test]
+fn test_intdiv_negative() {
+    let out = compile_and_run("<?php echo intdiv(-7, 2);");
+    assert_eq!(out, "-3");
+}
+
 // --- INF, NAN, is_nan, is_finite, is_infinite ---
 
 #[test]
