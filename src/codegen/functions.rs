@@ -452,6 +452,7 @@ fn infer_local_type(
         }
         ExprKind::ArrayAccess { array, .. } => match infer_local_type(array, sig, ctx) {
             PhpType::Array(t) => *t,
+            PhpType::AssocArray { value, .. } => *value,
             _ => PhpType::Int,
         },
         ExprKind::Negate(inner) => {
