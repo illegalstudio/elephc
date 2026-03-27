@@ -2576,6 +2576,9 @@ fn emit_null_coalesce(
     emitter.instruction("movk x9, #0xFFFF, lsl #16");                           // insert bits 16-31 of null sentinel
     emitter.instruction("movk x9, #0xFFFF, lsl #32");                           // insert bits 32-47 of null sentinel
     emitter.instruction("movk x9, #0x7FFF, lsl #48");                           // insert bits 48-63 of null sentinel
+    if val_ty == PhpType::Float {
+        emitter.instruction("fmov x0, d0");                                     // copy float bits to x0 for null sentinel check
+    }
     let cmp_reg = if val_ty == PhpType::Str { "x1" } else { "x0" };
     emitter.instruction(&format!("cmp {}, x9", cmp_reg));                       // compare value against null sentinel
     emitter.instruction(&format!("b.ne {}", end_label));                        // if not null, skip default and keep value

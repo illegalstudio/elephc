@@ -4937,6 +4937,34 @@ echo $a ?? $b ?? $c;
     assert_eq!(out, "found");
 }
 
+#[test]
+fn test_null_coalesce_float() {
+    let out = compile_and_run(r#"<?php
+$x = 3.14;
+echo $x ?? 0.0;
+"#);
+    assert_eq!(out, "3.14");
+}
+
+#[test]
+fn test_null_coalesce_null_to_float() {
+    let out = compile_and_run(r#"<?php
+$x = null;
+echo $x ?? 2.718;
+"#);
+    assert_eq!(out, "2.718");
+}
+
+#[test]
+fn test_null_coalesce_float_in_calc() {
+    let out = compile_and_run(r#"<?php
+$pi = null;
+$val = $pi ?? 3.14159;
+echo round($val * 2, 4);
+"#);
+    assert_eq!(out, "6.2832");
+}
+
 // ===== Feature 3: Bitwise operators =====
 
 #[test]
