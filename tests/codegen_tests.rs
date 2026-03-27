@@ -6751,6 +6751,51 @@ echo count($arr) . "|" . $arr[20];
     assert_eq!(out, "21|190");
 }
 
+#[test]
+fn test_array_push_float() {
+    let out = compile_and_run(r#"<?php
+$arr = [1.1];
+array_push($arr, 2.2);
+echo count($arr) . "|" . $arr[1];
+"#);
+    assert_eq!(out, "2|2.2");
+}
+
+#[test]
+fn test_array_push_bool() {
+    let out = compile_and_run(r#"<?php
+$arr = [true];
+array_push($arr, false);
+echo count($arr);
+"#);
+    assert_eq!(out, "2");
+}
+
+#[test]
+fn test_array_push_object() {
+    let out = compile_and_run(r#"<?php
+class Item { public $name;
+    public function __construct($n) { $this->name = $n; }
+}
+$items = [new Item("a")];
+array_push($items, new Item("b"));
+echo count($items) . "|" . $items[1]->name;
+"#);
+    assert_eq!(out, "2|b");
+}
+
+#[test]
+fn test_array_push_syntax_float() {
+    // $arr[] = float syntax
+    let out = compile_and_run(r#"<?php
+$arr = [1.0];
+$arr[] = 2.5;
+$arr[] = 3.7;
+echo count($arr) . "|" . $arr[2];
+"#);
+    assert_eq!(out, "3|3.7");
+}
+
 // =============================================================================
 // Class edge cases
 // =============================================================================

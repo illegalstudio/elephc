@@ -346,19 +346,25 @@ pub fn emit_stmt(
                 }
             }
             match &val_ty {
-                PhpType::Int => {
-                    // -- call runtime to append integer to array --
+                PhpType::Int | PhpType::Bool => {
+                    // -- call runtime to append integer/bool to array --
                     emitter.instruction("mov x1, x0");                          // move value to x1 (second arg for runtime call)
                     emitter.instruction("mov x0, x9");                          // move array pointer to x0 (first arg)
                     emitter.instruction("bl __rt_array_push_int");              // call runtime: append integer to dynamic array
+                }
+                PhpType::Float => {
+                    // -- call runtime to append float to array (store as 8-byte int via bit cast) --
+                    emitter.instruction("fmov x1, d0");                         // move float bits to integer register
+                    emitter.instruction("mov x0, x9");                          // move array pointer to x0 (first arg)
+                    emitter.instruction("bl __rt_array_push_int");              // call runtime: append float bits as 8 bytes
                 }
                 PhpType::Str => {
                     // -- push string to array (push_str persists to heap internally) --
                     emitter.instruction("mov x0, x9");                          // move array pointer to x0
                     emitter.instruction("bl __rt_array_push_str");              // call runtime: persist + append string to array
                 }
-                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
-                    // -- call runtime to append nested array/object pointer --
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Callable => {
+                    // -- call runtime to append nested array/object/callable pointer --
                     emitter.instruction("mov x1, x0");                          // move nested array/object pointer to x1
                     emitter.instruction("mov x0, x9");                          // move outer array pointer to x0
                     emitter.instruction("bl __rt_array_push_int");              // append pointer (8 bytes, same as int)
