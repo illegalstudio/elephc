@@ -452,7 +452,7 @@ pub fn emit_stmt(
                 ctx.loop_stack.push(LoopLabels {
                     continue_label: loop_cont.clone(),
                     break_label: loop_end.clone(),
-                    sp_adjust: 0,
+                    sp_adjust: 32,
                 });
 
                 for s in body {
@@ -533,7 +533,7 @@ pub fn emit_stmt(
                 ctx.loop_stack.push(LoopLabels {
                     continue_label: loop_cont.clone(),
                     break_label: loop_end.clone(),
-                    sp_adjust: 0,
+                    sp_adjust: 48,
                 });
 
                 for s in body {

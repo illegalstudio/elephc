@@ -87,11 +87,14 @@ pub fn emit(
     // -- pop saved array pointer --
     emitter.instruction("add sp, sp, #16");                                     // clean up saved array pointer
 
+    let ret_ty = sig.return_type.clone();
+
     // -- load callback address and call via blr --
     emitter.instruction(&format!("adrp x19, {}@PAGE", label));                  // load page address of callback function
     emitter.instruction(&format!("add x19, x19, {}@PAGEOFF", label));           // resolve full address of callback
+    crate::codegen::expr::save_concat_offset_before_nested_call(emitter);
     emitter.instruction("blr x19");                                             // call callback via indirect branch
+    crate::codegen::expr::restore_concat_offset_after_nested_call(emitter, &ret_ty);
 
-    let ret_ty = sig.return_type.clone();
     Some(ret_ty)
 }
