@@ -199,8 +199,7 @@ Proper type system for PHP compatibility.
 - [x] Incref on variable sharing (`$a = $b`), decref on reassignment
 - [x] `unset()` uses decref (safe with shared references)
 - [x] GC statistics (`--gc-stats` flag: allocations, frees printed to stderr)
-- [ ] Cycle detection for circular references (deferred — same limitation as PHP < 5.3)
-- [ ] Scope-based cleanup at function epilogue (deferred — decref-on-reassign is sufficient)
+- [x] Scope-based cleanup at function epilogue (decref all local array/object vars on return)
 
 ## v0.12.x — FFI (Foreign Function Interface)
 
@@ -274,6 +273,25 @@ Proper type system for PHP compatibility.
 - [ ] Proof of concept with one extension (e.g., `mbstring` or `curl`)
 - [ ] `--ext` flag to specify extension libraries at compile time
 - [ ] Documentation: how to bridge a PHP extension
+
+---
+
+## Future ideas
+
+Features that are desirable but not yet planned for a specific version.
+
+| Idea | Notes |
+|---|---|
+| Cycle detection (GC) | Mark-and-sweep for circular object references. Same approach as PHP 5.3 (Bacon & Rajan 2001). Requires runtime type descriptors for iterating object properties. Low priority — most PHP programs don't create cycles. |
+| Inheritance (`extends`) | Requires vtable for method dispatch, property layout chaining, `parent::` calls. Major architectural change to the class system. |
+| Interfaces / abstract classes | Requires interface method tables and compile-time conformance checking. |
+| Traits | Requires method copying/inlining at compile time. |
+| Exceptions (`try`/`catch`) | Requires setjmp/longjmp or DWARF stack unwinding. Complex but possible. |
+| Hash table insertion order | PHP preserves insertion order for associative arrays. Would need a secondary linked list through entries. |
+| Mixed-type associative arrays | Per-entry type tags in hash table entries (currently one type per table). |
+| String indexing (`$str[$i]`) | Requires substr() under the hood — syntactic sugar. |
+| `protected` visibility | Third visibility level between public and private. |
+| Magic methods (`__toString`, `__get`, `__set`) | Implicit method calls on property access / string conversion. |
 
 ---
 

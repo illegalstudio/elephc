@@ -648,7 +648,14 @@ pub fn emit_stmt(
             emitter.blank();
             emitter.comment("return");
             if let Some(e) = expr {
-                emit_expr(e, emitter, ctx, data);
+                let ty = emit_expr(e, emitter, ctx, data);
+                // If returning a local array/object, incref so the epilogue
+                // decref doesn't free it (caller expects rc >= 1)
+                if matches!(&ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)) {
+                    if matches!(&e.kind, ExprKind::Variable(_) | ExprKind::ArrayAccess { .. } | ExprKind::PropertyAccess { .. } | ExprKind::This) {
+                        emitter.instruction("bl __rt_incref");                   // protect return value from epilogue decref
+                    }
+                }
             }
             if let Some(label) = &ctx.return_label {
                 // -- adjust sp for any switch statements that pushed to the stack --

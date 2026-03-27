@@ -272,6 +272,38 @@ fn emit_function_with_label_and_class(
         }
     }
 
+    // -- scope cleanup: decref local array/object variables --
+    // This frees any heap-allocated locals that were not explicitly freed
+    // via reassignment. Params, statics, and globals are excluded.
+    // Save return value registers first (decref calls clobber x0).
+    let has_locals_to_decref = ctx.variables.iter().any(|(name, var)| {
+        !param_names.contains(name)
+            && !ctx.static_vars.contains(name)
+            && !ctx.global_vars.contains(name)
+            && matches!(&var.ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_))
+    });
+    if has_locals_to_decref {
+        emitter.instruction("stp x0, x1, [sp, #-32]!");                         // save return value registers
+        emitter.instruction("stp x2, xzr, [sp, #16]");                          // save x2 (string len if returning str)
+        for (name, var) in &ctx.variables {
+            if param_names.contains(name) { continue; }
+            if ctx.static_vars.contains(name) { continue; }
+            if ctx.global_vars.contains(name) { continue; }
+            let decref_fn = match &var.ty {
+                PhpType::Array(_) => Some("__rt_decref_array"),
+                PhpType::AssocArray { .. } => Some("__rt_decref_hash"),
+                PhpType::Object(_) => Some("__rt_decref_object"),
+                _ => None,
+            };
+            if let Some(fn_name) = decref_fn {
+                super::abi::load_at_offset(emitter, "x0", var.stack_offset);     // load local pointer
+                emitter.instruction(&format!("bl {}", fn_name));                 // decref (frees if rc drops to 0)
+            }
+        }
+        emitter.instruction("ldp x2, xzr, [sp, #16]");                          // restore x2
+        emitter.instruction("ldp x0, x1, [sp], #32");                           // restore return value registers
+    }
+
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16));  // restore frame ptr & return addr
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
