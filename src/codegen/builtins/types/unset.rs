@@ -22,9 +22,15 @@ pub fn emit(
         if matches!(&old_ty, PhpType::Str) {
             abi::load_at_offset(emitter, "x0", offset);                          // load heap pointer from variable
             emitter.instruction("bl __rt_heap_free_safe");                      // free old string if on heap
-        } else if matches!(&old_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        } else if matches!(&old_ty, PhpType::Array(_)) {
             abi::load_at_offset(emitter, "x0", offset);                          // load heap pointer from variable
-            emitter.instruction("bl __rt_array_free_deep");                     // deep free array + string elements
+            emitter.instruction("bl __rt_decref_array");                        // decrement refcount, deep-free if zero
+        } else if matches!(&old_ty, PhpType::AssocArray { .. }) {
+            abi::load_at_offset(emitter, "x0", offset);                          // load heap pointer from variable
+            emitter.instruction("bl __rt_decref_hash");                         // decrement refcount, free hash if zero
+        } else if matches!(&old_ty, PhpType::Object(_)) {
+            abi::load_at_offset(emitter, "x0", offset);                          // load heap pointer from variable
+            emitter.instruction("bl __rt_decref_object");                       // decrement refcount, free object if zero
         }
 
         // -- set variable to null sentinel value (0x7FFFFFFFFFFFFFFFE) --

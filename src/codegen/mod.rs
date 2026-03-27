@@ -22,6 +22,7 @@ pub fn generate(
     functions: &HashMap<String, FunctionSig>,
     classes: &HashMap<String, ClassInfo>,
     heap_size: usize,
+    gc_stats: bool,
 ) -> String {
     let mut emitter = Emitter::new();
     let mut data = DataSection::new();
@@ -168,6 +169,15 @@ pub fn generate(
     emitter.instruction("bl __rt_build_argv");                                  // returns array ptr in x0
     abi::store_at_offset(&mut emitter, "x0", argv_offset);                      // $argv = array
 
+    // -- zero-initialize local variables that may be decref'd on reassignment --
+    let main_skip = std::collections::HashSet::from(["argc".to_string(), "argv".to_string()]);
+    for (name, var) in &ctx.variables {
+        if main_skip.contains(name) { continue; }
+        if matches!(&var.ty, PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)) {
+            abi::store_at_offset(&mut emitter, "xzr", var.stack_offset);        // zero-init to prevent stale ptr free
+        }
+    }
+
     // -- emit user statements --
     for s in program {
         if matches!(&s.kind, StmtKind::FunctionDecl { .. } | StmtKind::ClassDecl { .. }) {
@@ -181,6 +191,46 @@ pub fn generate(
     emitter.comment("epilogue + exit(0)");
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16));  // restore frame pointer & return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
+    // -- GC statistics (printed to stderr if --gc-stats flag was set) --
+    if gc_stats {
+        emitter.comment("gc-stats: print allocation statistics to stderr");
+        let (lbl_a, len_a) = data.add_string(b"GC: allocs=");
+        emitter.instruction(&format!("adrp x1, {}@PAGE", lbl_a));               // load gc stats label page
+        emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", lbl_a));         // resolve address
+        emitter.instruction(&format!("mov x2, #{}", len_a));                    // string length
+        emitter.instruction("mov x0, #2");                                      // fd = stderr
+        emitter.instruction("mov x16, #4");                                     // syscall write
+        emitter.instruction("svc #0x80");                                       // write to stderr
+        emitter.instruction("adrp x9, _gc_allocs@PAGE");                        // load gc_allocs page
+        emitter.instruction("add x9, x9, _gc_allocs@PAGEOFF");                  // resolve address
+        emitter.instruction("ldr x0, [x9]");                                    // load alloc count
+        emitter.instruction("bl __rt_itoa");                                    // convert to string → x1/x2
+        emitter.instruction("mov x0, #2");                                      // fd = stderr
+        emitter.instruction("mov x16, #4");                                     // syscall write
+        emitter.instruction("svc #0x80");                                       // write count
+        let (lbl_f, len_f) = data.add_string(b" frees=");
+        emitter.instruction(&format!("adrp x1, {}@PAGE", lbl_f));               // load frees label page
+        emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", lbl_f));         // resolve address
+        emitter.instruction(&format!("mov x2, #{}", len_f));                    // string length
+        emitter.instruction("mov x0, #2");                                      // fd = stderr
+        emitter.instruction("mov x16, #4");                                     // syscall write
+        emitter.instruction("svc #0x80");                                       // write label
+        emitter.instruction("adrp x9, _gc_frees@PAGE");                         // load gc_frees page
+        emitter.instruction("add x9, x9, _gc_frees@PAGEOFF");                   // resolve address
+        emitter.instruction("ldr x0, [x9]");                                    // load free count
+        emitter.instruction("bl __rt_itoa");                                    // convert to string → x1/x2
+        emitter.instruction("mov x0, #2");                                      // fd = stderr
+        emitter.instruction("mov x16, #4");                                     // syscall write
+        emitter.instruction("svc #0x80");                                       // write count
+        let (lbl_nl, _) = data.add_string(b"\n");
+        emitter.instruction(&format!("adrp x1, {}@PAGE", lbl_nl));              // load newline page
+        emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", lbl_nl));        // resolve address
+        emitter.instruction("mov x2, #1");                                      // newline length
+        emitter.instruction("mov x0, #2");                                      // fd = stderr
+        emitter.instruction("mov x16, #4");                                     // syscall write
+        emitter.instruction("svc #0x80");                                       // write newline
+    }
+
     emitter.instruction("mov x0, #0");                                          // exit code 0
     emitter.instruction("mov x16, #1");                                         // syscall number 1 = exit
     emitter.instruction("svc #0x80");                                           // invoke macOS kernel

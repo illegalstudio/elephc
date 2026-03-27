@@ -72,6 +72,7 @@ fn compile_and_run(source: &str) -> String {
         &check_result.functions,
         &check_result.classes,
         8_388_608,
+        false,
     );
 
     let elephc_out = assemble_and_run(&asm, &dir);
@@ -126,6 +127,7 @@ fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> String {
         &check_result.functions,
         &check_result.classes,
         8_388_608,
+        false,
     );
 
     let elephc_out = assemble_and_run(&asm, &dir);
@@ -181,6 +183,7 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
         &check_result.functions,
         &check_result.classes,
         8_388_608,
+        false,
     );
 
     let asm_path = dir.join("test.s");
@@ -244,6 +247,7 @@ fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {
         &check_result.functions,
         &check_result.classes,
         8_388_608,
+        false,
     );
 
     let elephc_out = assemble_and_run(&asm, &dir);

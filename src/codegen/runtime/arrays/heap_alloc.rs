@@ -25,7 +25,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     // -- walk the free list looking for first-fit block --
     emitter.label("__rt_heap_alloc_fl_loop");
     emitter.instruction("cbz x10, __rt_heap_alloc_bump");                       // no free block found, fall through to bump
-    emitter.instruction("ldr x11, [x10]");                                      // x11 = block size of current free block
+    emitter.instruction("ldr w11, [x10]");                                      // x11 = block size (32-bit, zero-extends)
     emitter.instruction("cmp x11, x0");                                         // does this block fit the request?
     emitter.instruction("b.ge __rt_heap_alloc_fl_found");                       // yes — use this block
 
@@ -38,7 +38,15 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.label("__rt_heap_alloc_fl_found");
     emitter.instruction("ldr x12, [x10, #8]");                                  // x12 = current->next (rest of list)
     emitter.instruction("str x12, [x9]");                                       // prev->next = current->next (unlink current)
+    emitter.instruction("mov w13, #1");                                         // initial refcount = 1
+    emitter.instruction("str w13, [x10, #4]");                                  // reset refcount in reused header
     emitter.instruction("add x0, x10, #8");                                     // return user pointer = header + 8
+    // -- increment gc_allocs counter --
+    emitter.instruction("adrp x12, _gc_allocs@PAGE");                           // load gc_allocs page
+    emitter.instruction("add x12, x12, _gc_allocs@PAGEOFF");                    // resolve address
+    emitter.instruction("ldr x13, [x12]");                                      // load current count
+    emitter.instruction("add x13, x13, #1");                                    // increment
+    emitter.instruction("str x13, [x12]");                                      // store back
     emitter.instruction("ret");                                                 // return to caller
 
     // -- no free block found, bump allocate with header --
@@ -64,11 +72,19 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
 
     // -- write header and bump offset --
     emitter.instruction("add x14, x11, x10");                                   // x14 = buf + offset (header location)
-    emitter.instruction("str x0, [x14]");                                       // write block size to header
+    emitter.instruction("str w0, [x14]");                                       // write block size to header (32-bit)
+    emitter.instruction("mov w15, #1");                                         // initial refcount = 1
+    emitter.instruction("str w15, [x14, #4]");                                  // write refcount to header upper half
     emitter.instruction("add x10, x10, x0");                                    // advance offset by requested size
     emitter.instruction("add x10, x10, #8");                                    // advance offset by header size
     emitter.instruction("str x10, [x9]");                                       // store updated offset to _heap_off
     emitter.instruction("add x0, x14, #8");                                     // return user pointer = header + 8
+    // -- increment gc_allocs counter --
+    emitter.instruction("adrp x12, _gc_allocs@PAGE");                           // load gc_allocs page
+    emitter.instruction("add x12, x12, _gc_allocs@PAGEOFF");                    // resolve address
+    emitter.instruction("ldr x13, [x12]");                                      // load current count
+    emitter.instruction("add x13, x13, #1");                                    // increment
+    emitter.instruction("str x13, [x12]");                                      // store back
     emitter.instruction("ret");                                                 // return to caller
 
     // -- fatal error: heap memory exhausted --

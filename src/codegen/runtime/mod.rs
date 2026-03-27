@@ -134,6 +134,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_array_walk(emitter);
     arrays::emit_usort(emitter);
     arrays::emit_array_merge_into(emitter);
+    arrays::emit_refcount(emitter);
 
     // I/O runtime functions
     io::emit_cstr(emitter);
@@ -170,6 +171,10 @@ pub fn emit_runtime_data(
     out.push_str(&format!("_heap_max:\n    .quad {}\n", heap_size));
     out.push_str("_heap_err_msg:\n    .ascii \"Fatal error: heap memory exhausted\\n\"\n");
     out.push_str("_arr_cap_err_msg:\n    .ascii \"Fatal error: array capacity exceeded\\n\"\n");
+    // GC statistics counters
+    out.push_str(".comm _gc_allocs, 8, 3\n");
+    out.push_str(".comm _gc_frees, 8, 3\n");
+    out.push_str(".comm _gc_peak, 8, 3\n");
     out.push_str(".comm _cstr_buf, 4096, 3\n");
     out.push_str(".comm _cstr_buf2, 4096, 3\n");
     out.push_str(".comm _eof_flags, 256, 3\n");

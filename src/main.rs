@@ -21,6 +21,7 @@ fn main() {
 
     // Parse optional flags
     let mut heap_size: usize = 8_388_608; // 8MB default
+    let mut gc_stats = false;
     let mut filename_arg = None;
 
     for arg in &args[1..] {
@@ -32,6 +33,8 @@ fn main() {
                     process::exit(1);
                 }
             };
+        } else if arg == "--gc-stats" {
+            gc_stats = true;
         } else if arg.starts_with("--") {
             eprintln!("Unknown flag: {}", arg);
             process::exit(1);
@@ -104,6 +107,7 @@ fn main() {
         &check_result.functions,
         &check_result.classes,
         heap_size,
+        gc_stats,
     );
 
     if let Err(e) = fs::write(&asm_path, &asm) {

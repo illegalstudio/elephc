@@ -49,6 +49,7 @@ mod ksort;
 mod natsort;
 mod usort;
 mod array_merge_into;
+mod refcount;
 
 pub use array_column::emit_array_column;
 pub use array_column_str::emit_array_column_str;
@@ -101,3 +102,4 @@ pub use ksort::emit_ksort;
 pub use natsort::emit_natsort;
 pub use usort::emit_usort;
 pub use array_merge_into::emit_array_merge_into;
+pub use refcount::emit_refcount;

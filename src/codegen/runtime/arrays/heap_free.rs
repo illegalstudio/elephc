@@ -20,7 +20,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
 
     // -- compute header address and block end --
     emitter.instruction("sub x9, x0, #8");                                      // x9 = header address (block_size lives here)
-    emitter.instruction("ldr x11, [x9]");                                       // x11 = block size
+    emitter.instruction("ldr w11, [x9]");                                       // x11 = block size (32-bit, zero-extends)
 
     // -- check if this is the last bump-allocated block --
     emitter.instruction("add x12, x0, x11");                                    // x12 = user_ptr + size = block end
@@ -36,7 +36,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     // -- bump reset: block is at end of heap, just shrink the bump pointer --
     emitter.instruction("sub x14, x9, x15");                                    // x14 = header - heap_buf = new offset
     emitter.instruction("str x14, [x13]");                                      // heap_off = header offset (shrink heap)
-    emitter.instruction("ret");                                                 // return — block reclaimed without fragmentation
+    emitter.instruction("b __rt_heap_free_count");                              // go increment gc_frees
 
     // -- otherwise: insert block at head of free list --
     emitter.label("__rt_heap_free_list");
@@ -45,6 +45,14 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("ldr x14, [x10]");                                      // x14 = old head of free list
     emitter.instruction("str x14, [x9, #8]");                                   // block->next = old head (stored after size)
     emitter.instruction("str x9, [x10]");                                       // free_list_head = this block
+
+    // -- increment gc_frees counter --
+    emitter.label("__rt_heap_free_count");
+    emitter.instruction("adrp x10, _gc_frees@PAGE");                            // load gc_frees page
+    emitter.instruction("add x10, x10, _gc_frees@PAGEOFF");                     // resolve address
+    emitter.instruction("ldr x11, [x10]");                                      // load current count
+    emitter.instruction("add x11, x11, #1");                                    // increment
+    emitter.instruction("str x11, [x10]");                                      // store back
 
     emitter.label("__rt_heap_free_done");
     emitter.instruction("ret");                                                 // return to caller

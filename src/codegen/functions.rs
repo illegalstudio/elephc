@@ -198,7 +198,7 @@ fn emit_function_with_label_and_class(
         if param_names.contains(name) {
             continue; // Parameters are initialized by register stores above
         }
-        if matches!(&var.ty, PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        if matches!(&var.ty, PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)) {
             super::abi::store_at_offset(emitter, "xzr", var.stack_offset);       // zero-init to prevent stale ptr free
         }
     }
