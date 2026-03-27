@@ -601,11 +601,24 @@ fn infer_local_type(
         }
         ExprKind::ExprCall { callee, .. } => {
             if let Some(c) = ctx {
-                if let ExprKind::Variable(var_name) = &callee.kind {
-                    if let Some(sig) = c.closure_sigs.get(var_name) {
-                        return sig.return_type.clone();
+                match &callee.kind {
+                    ExprKind::Variable(var_name) => {
+                        if let Some(sig) = c.closure_sigs.get(var_name) {
+                            return sig.return_type.clone();
+                        }
                     }
+                    ExprKind::ArrayAccess { array, .. } => {
+                        if let ExprKind::Variable(arr_name) = &array.kind {
+                            if let Some(sig) = c.closure_sigs.get(arr_name) {
+                                return sig.return_type.clone();
+                            }
+                        }
+                    }
+                    _ => {}
                 }
+            }
+            if let ExprKind::Closure { body, .. } = &callee.kind {
+                return crate::types::checker::infer_return_type_syntactic(body);
             }
             PhpType::Int
         }

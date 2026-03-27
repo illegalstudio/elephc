@@ -2318,10 +2318,23 @@ fn emit_expr_call(
     emitter.instruction("blr x9");                                              // branch to closure via function pointer in x9
 
     // -- return the closure's known return type, or default to Int --
-    if let ExprKind::Variable(var_name) = &callee.kind {
-        if let Some(sig) = ctx.closure_sigs.get(var_name) {
-            return sig.return_type.clone();
+    match &callee.kind {
+        ExprKind::Variable(var_name) => {
+            if let Some(sig) = ctx.closure_sigs.get(var_name) {
+                return sig.return_type.clone();
+            }
         }
+        ExprKind::ArrayAccess { array, .. } => {
+            if let ExprKind::Variable(arr_name) = &array.kind {
+                if let Some(sig) = ctx.closure_sigs.get(arr_name) {
+                    return sig.return_type.clone();
+                }
+            }
+        }
+        ExprKind::Closure { body, .. } => {
+            return crate::types::checker::infer_return_type_syntactic(body);
+        }
+        _ => {}
     }
     PhpType::Int
 }

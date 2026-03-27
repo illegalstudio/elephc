@@ -10,7 +10,7 @@ use crate::types::{CheckResult, ClassInfo, FunctionSig, PhpType, TypeEnv};
 /// Infer a function's return type by scanning its body for Return statements.
 /// This is a syntactic/heuristic check — no full type inference.
 /// Used for functions that are never called directly (only used as callbacks).
-fn infer_return_type_syntactic(body: &[Stmt]) -> PhpType {
+pub fn infer_return_type_syntactic(body: &[Stmt]) -> PhpType {
     let mut types = Vec::new();
     for stmt in body {
         collect_return_types_syntactic(stmt, &mut types);
@@ -816,10 +816,23 @@ impl Checker {
                     self.infer_type(arg, env)?;
                 }
                 // Try to determine return type from closure signature
-                if let ExprKind::Variable(var_name) = &callee.kind {
-                    if let Some(ret_ty) = self.closure_return_types.get(var_name) {
-                        return Ok(ret_ty.clone());
+                match &callee.kind {
+                    ExprKind::Variable(var_name) => {
+                        if let Some(ret_ty) = self.closure_return_types.get(var_name) {
+                            return Ok(ret_ty.clone());
+                        }
                     }
+                    ExprKind::ArrayAccess { array, .. } => {
+                        if let ExprKind::Variable(arr_name) = &array.kind {
+                            if let Some(ret_ty) = self.closure_return_types.get(arr_name) {
+                                return Ok(ret_ty.clone());
+                            }
+                        }
+                    }
+                    ExprKind::Closure { body, .. } => {
+                        return Ok(infer_return_type_syntactic(body));
+                    }
+                    _ => {}
                 }
                 Ok(PhpType::Int) // fallback for unknown callables
             }

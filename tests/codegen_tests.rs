@@ -7943,6 +7943,25 @@ echo $result;
     assert_eq!(out, "test");
 }
 
+// --- IIFE (Immediately Invoked Function Expression) ---
+
+#[test]
+fn test_iife_returns_string() {
+    let out = compile_and_run(r#"<?php
+$result = (function() { return "hello"; })();
+echo $result;
+"#);
+    assert_eq!(out, "hello");
+}
+
+#[test]
+fn test_iife_returns_int() {
+    let out = compile_and_run(r#"<?php
+echo (function($x) { return $x * 2; })(21);
+"#);
+    assert_eq!(out, "42");
+}
+
 // --- Empty input / EOF handling ---
 
 #[test]
