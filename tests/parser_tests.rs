@@ -925,3 +925,33 @@ fn test_parse_chained_access() {
         _ => panic!("Expected Echo"),
     }
 }
+
+#[test]
+fn test_parse_ptr_cast() {
+    let stmts = parse_source("<?php $q = ptr_cast<Point>($p);");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::PtrCast { target_type, expr } => {
+                assert_eq!(target_type, "Point");
+                assert!(matches!(expr.kind, ExprKind::Variable(_)));
+            }
+            _ => panic!("Expected PtrCast"),
+        },
+        _ => panic!("Expected Assign"),
+    }
+}
+
+#[test]
+fn test_parse_ptr_builtins_as_function_calls() {
+    let stmts = parse_source("<?php ptr_null(); ptr($x); ptr_is_null($p); ptr_get($p); ptr_set($p, 1); ptr_offset($p, 8); ptr_sizeof(\"int\");");
+    // All should parse as FunctionCall
+    for stmt in &stmts {
+        match &stmt.kind {
+            StmtKind::ExprStmt(expr) => match &expr.kind {
+                ExprKind::FunctionCall { .. } => {}
+                _ => panic!("Expected FunctionCall, got {:?}", expr.kind),
+            },
+            _ => panic!("Expected ExprStmt"),
+        }
+    }
+}

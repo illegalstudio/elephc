@@ -1291,3 +1291,45 @@ $fn = function() use ($undefined) { echo $undefined; };
         "Undefined variable in use(): $undefined",
     );
 }
+
+// --- Pointer error tests ---
+
+#[test]
+fn test_error_ptr_no_args() {
+    expect_error("<?php ptr();", "ptr() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_ptr_null_with_args() {
+    expect_error("<?php ptr_null(1);", "ptr_null() takes 0 arguments");
+}
+
+#[test]
+fn test_error_ptr_is_null_wrong_args() {
+    expect_error("<?php ptr_is_null();", "ptr_is_null() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_ptr_offset_wrong_args() {
+    expect_error("<?php $p = ptr_null(); ptr_offset($p);", "ptr_offset() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_ptr_get_wrong_args() {
+    expect_error("<?php ptr_get();", "ptr_get() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_ptr_set_wrong_args() {
+    expect_error("<?php ptr_set(ptr_null());", "ptr_set() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_ptr_sizeof_wrong_args() {
+    expect_error("<?php ptr_sizeof();", "ptr_sizeof() takes exactly 1 argument");
+}
+
+#[test]
+fn test_error_ptr_cast_missing_type() {
+    expect_error("<?php ptr_cast<>(ptr_null());", "Expected type name after 'ptr_cast<'");
+}

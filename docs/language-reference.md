@@ -13,6 +13,7 @@ This document describes the PHP subset supported by elephc. Every program listed
 | `float` | Yes | 64-bit double-precision. Literals: `3.14`, `.5`, `1.5e3`, `1.0e-5`. Constants: `INF`, `NAN`. |
 | `array` | Yes | Indexed (`[1, 2, 3]`) and associative (`["key" => "value"]`). Hash table runtime for string keys. |
 | `object` | Yes | Class instances. Heap-allocated, fixed-layout. `new ClassName(...)` |
+| `pointer` | Yes | 64-bit memory address. `ptr($var)`, `ptr_null()`. Echo prints `0x...` hex. |
 | `resource` | No | Not planned. |
 
 ### Null behavior
@@ -961,6 +962,40 @@ print_r($arr);
 //     [1] => 2
 //     [2] => 3
 // )
+```
+
+### Pointer functions
+
+| Function | Signature | Description |
+|---|---|---|
+| `ptr()` | `ptr($var): pointer` | Take address of a variable |
+| `ptr_null()` | `ptr_null(): pointer` | Create a null pointer (`0x0`) |
+| `ptr_is_null()` | `ptr_is_null($p): bool` | Check if pointer is null |
+| `ptr_get()` | `ptr_get($p): int` | Read 8 bytes at pointer address |
+| `ptr_set()` | `ptr_set($p, $val): void` | Write 8 bytes at pointer address |
+| `ptr_offset()` | `ptr_offset($p, $bytes): pointer` | Pointer arithmetic (add byte offset) |
+| `ptr_cast<T>()` | `ptr_cast<Type>($p): pointer` | Change pointer type tag (value unchanged) |
+| `ptr_sizeof()` | `ptr_sizeof("type"): int` | Return byte size of a type |
+
+```php
+<?php
+$x = 42;
+$p = ptr($x);           // take address of $x
+echo $p;                 // prints "0x16f502348" (hex address)
+echo ptr_get($p);        // prints "42"
+ptr_set($p, 99);         // write through pointer
+echo $x;                 // prints "99" — variable was modified
+
+echo ptr_sizeof("int");  // 8
+echo ptr_sizeof("string"); // 16
+
+$null = ptr_null();
+echo ptr_is_null($null); // 1
+
+// Pointer comparison with === and !==
+$a = ptr_null();
+$b = ptr_null();
+echo $a === $b;          // 1 (same address)
 ```
 
 ## Constants
