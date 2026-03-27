@@ -192,13 +192,15 @@ Proper type system for PHP compatibility.
 - [x] Objects as function parameters and return values
 - [x] Objects stored in arrays
 
-## v0.11.x — Garbage collector
+## v0.11.x — Reference-counting garbage collector (done)
 
-- [ ] Reference counting for strings, arrays, and objects
-- [ ] Automatic free when reference count drops to zero
-- [ ] Cycle detection for circular references (objects referencing each other)
-- [ ] Scope-based cleanup (free temporaries at end of scope/loop iteration)
-- [ ] GC statistics (`--gc-stats` flag: allocations, frees, peak memory)
+- [x] Reference counting for arrays and objects (header: `[size:4][refcount:4]`)
+- [x] Automatic free when reference count drops to zero (`__rt_decref_array/hash/object`)
+- [x] Incref on variable sharing (`$a = $b`), decref on reassignment
+- [x] `unset()` uses decref (safe with shared references)
+- [x] GC statistics (`--gc-stats` flag: allocations, frees printed to stderr)
+- [ ] Cycle detection for circular references (deferred — same limitation as PHP < 5.3)
+- [ ] Scope-based cleanup at function epilogue (deferred — decref-on-reassign is sufficient)
 
 ## v0.12.x — FFI (Foreign Function Interface)
 
