@@ -156,7 +156,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 ## Array routines
 
-**Source:** `src/codegen/runtime/arrays/` (48 files)
+**Source:** `src/codegen/runtime/arrays/` (52 files)
 
 ### Core allocation
 
@@ -218,9 +218,20 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_array_walk` | Call callback on each element (side-effects) |
 | `__rt_usort` | Sort array using user comparison callback |
 
+### Reference counting
+
+| Routine | What it does | Input | Output |
+|---|---|---|---|
+| `__rt_incref` | Increment reference count (safe with null/non-heap pointers) | `x0` = user pointer | — |
+| `__rt_decref_array` | Decrement refcount, deep-free indexed array if zero | `x0` = array pointer | — |
+| `__rt_decref_hash` | Decrement refcount, free hash table if zero | `x0` = hash pointer | — |
+| `__rt_decref_object` | Decrement refcount, free object if zero | `x0` = object pointer | — |
+
+Refcounts are stored as a 32-bit value in the upper half of the 8-byte heap header, at `[user_ptr - 4]`. Each heap allocation starts with refcount 1. When a reference is shared (e.g., assigned to another variable or passed to a function), `__rt_incref` bumps it. When the reference goes away, the appropriate `__rt_decref_*` variant decrements and frees the block if it reaches zero.
+
 ## System routines
 
-**Source:** `src/codegen/runtime/system/` (11 files)
+**Source:** `src/codegen/runtime/system/` (10 files)
 
 ### `__rt_build_argv` — Build $argv array
 
@@ -282,7 +293,7 @@ All regex routines use **POSIX extended regular expressions** via libc's `regcom
 
 ## I/O routines
 
-**Source:** `src/codegen/runtime/io/` (17 files)
+**Source:** `src/codegen/runtime/io/` (16 files)
 
 These routines handle file and filesystem operations via macOS system calls. PHP strings (pointer + length) must be converted to null-terminated C strings before passing to syscalls — the `__rt_cstr` helper handles this using a dedicated 4KB buffer.
 

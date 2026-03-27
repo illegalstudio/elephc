@@ -91,7 +91,7 @@ src/
 │   │   ├── mod.rs             Dispatcher — chains to category modules
 │   │   ├── strings/           strlen, substr, strpos, explode, sprintf, md5, ... (56 files)
 │   │   ├── arrays/            count, array_push, sort, array_map, usort, ... (50 files)
-│   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, round, min, max, ... (12 files)
+│   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, round, min, max, sin, cos, ... (30 files)
 │   │   ├── types/             is_*, gettype, empty, unset, settype, ... (15 files)
 │   │   ├── io/                fopen, fwrite, file_get_contents, scandir, ... (35 files)
 │   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, ... (24 files)
@@ -99,7 +99,7 @@ src/
 │   └── runtime/               ARM64 runtime routines (one file per function)
 │       ├── mod.rs             Emits all runtime functions into assembly
 │       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, str_persist, ... (52 files)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, sort, usort, ... (51 files)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, sort, usort, refcount, ... (52 files)
 │       ├── io/                fopen, fgets, fread, stat, scandir, ... (16 files)
 │       └── system/            build_argv, time, getenv, shell_exec, date, mktime, strtotime, json_encode, json_decode, preg (10 files)
 │
@@ -139,7 +139,7 @@ Offset  Size  Field
 
 ### Heap allocator
 
-8MB free-list + bump hybrid allocator in BSS (`_heap_buf`). Each allocation has an 8-byte header storing the block size. When memory is freed (via `__rt_heap_free`), blocks are returned to a singly-linked free list (LIFO). New allocations check the free list first (first-fit), falling back to bump allocation if no suitable block exists. Configurable via `--heap-size=BYTES` (minimum 64KB). Bounds-checked with fatal error on overflow.
+8MB free-list + bump hybrid allocator in BSS (`_heap_buf`). Each allocation has an 8-byte header: `[size:4][refcount:4]` — a 32-bit block size followed by a 32-bit reference count. When memory is freed (via `__rt_heap_free`), blocks are returned to a singly-linked free list (LIFO). New allocations check the free list first (first-fit), falling back to bump allocation if no suitable block exists. Reference counting (`__rt_incref`, `__rt_decref_array`, `__rt_decref_hash`, `__rt_decref_object`) automatically frees heap objects when their reference count reaches zero. Configurable via `--heap-size=BYTES` (minimum 64KB). Bounds-checked with fatal error on overflow.
 
 ### Hash table header (heap-allocated, for associative arrays)
 

@@ -1194,10 +1194,10 @@ fn emit_array_access(
     // -- bounds check: negative index or >= array length → null sentinel --
     let null_label = ctx.next_label("arr_null");
     let ok_label = ctx.next_label("arr_ok");
-    emitter.instruction("cmp x0, #0");                                           // check if index is negative
+    emitter.instruction("cmp x0, #0");                                          // check if index is negative
     emitter.instruction(&format!("b.lt {null_label}"));                         // negative index → null sentinel
     emitter.instruction("ldr x10, [x9]");                                       // load array length from header (offset 0)
-    emitter.instruction("cmp x0, x10");                                          // compare index against array length
+    emitter.instruction("cmp x0, x10");                                         // compare index against array length
     emitter.instruction(&format!("b.ge {null_label}"));                         // index >= length → null sentinel
 
     match &elem_ty {
@@ -2010,9 +2010,9 @@ fn coerce_result_to_type(emitter: &mut Emitter, source_ty: &PhpType, target_ty: 
         && matches!(source_ty, PhpType::Int | PhpType::Bool | PhpType::Void)
     {
         if *source_ty == PhpType::Void {
-            emitter.instruction("mov x0, #0");                                      // null widens to numeric zero before float coercion
+            emitter.instruction("mov x0, #0");                                  // null widens to numeric zero before float coercion
         }
-        emitter.instruction("scvtf d0, x0");                                        // convert integer-like value to float for unified result type
+        emitter.instruction("scvtf d0, x0");                                    // convert integer-like value to float for unified result type
     }
 }
 
