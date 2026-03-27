@@ -21,6 +21,7 @@ pub enum PhpType {
     },
     Callable,
     Object(String),
+    Pointer(Option<String>), // None = opaque ptr, Some("Class") = typed ptr<Class>
 }
 
 impl PhpType {
@@ -36,6 +37,7 @@ impl PhpType {
             PhpType::AssocArray { .. } => 8, // pointer to heap
             PhpType::Callable => 8, // function address
             PhpType::Object(_) => 8, // pointer to heap
+            PhpType::Pointer(_) => 8, // 64-bit address
         }
     }
 
@@ -51,6 +53,7 @@ impl PhpType {
             PhpType::AssocArray { .. } => 1,
             PhpType::Callable => 1,
             PhpType::Object(_) => 1,
+            PhpType::Pointer(_) => 1,
         }
     }
 

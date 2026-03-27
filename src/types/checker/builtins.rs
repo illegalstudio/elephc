@@ -1298,6 +1298,58 @@ impl Checker {
                 Ok(Some(PhpType::Array(Box::new(PhpType::Str))))
             }
 
+            // --- Pointer builtins ---
+            "ptr" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "ptr() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Pointer(None)))
+            }
+            "ptr_null" => {
+                if !args.is_empty() {
+                    return Err(CompileError::new(span, "ptr_null() takes 0 arguments"));
+                }
+                Ok(Some(PhpType::Pointer(None)))
+            }
+            "ptr_is_null" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "ptr_is_null() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Bool))
+            }
+            "ptr_offset" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "ptr_offset() takes exactly 2 arguments"));
+                }
+                self.infer_type(&args[0], env)?;
+                self.infer_type(&args[1], env)?;
+                Ok(Some(PhpType::Pointer(None)))
+            }
+            "ptr_get" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "ptr_get() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Int))
+            }
+            "ptr_set" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "ptr_set() takes exactly 2 arguments"));
+                }
+                self.infer_type(&args[0], env)?;
+                self.infer_type(&args[1], env)?;
+                Ok(Some(PhpType::Void))
+            }
+            "ptr_sizeof" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "ptr_sizeof() takes exactly 1 argument"));
+                }
+                self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Int))
+            }
+
             _ => Ok(None),
         }
     }

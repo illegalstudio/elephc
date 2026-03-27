@@ -89,6 +89,9 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                 | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "atan2"
                 | "sinh" | "cosh" | "tanh" | "log" | "log2" | "log10" | "exp"
                 | "hypot" | "pi" | "deg2rad" | "rad2deg" => PhpType::Float,
+                "ptr" | "ptr_null" | "ptr_offset" => PhpType::Pointer(None),
+                "ptr_is_null" => PhpType::Bool,
+                "ptr_sizeof" | "ptr_get" => PhpType::Int,
                 _ => PhpType::Int,
             }
         }
@@ -112,6 +115,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         }
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.clone()),
         ExprKind::This => PhpType::Object(String::new()),
+        ExprKind::PtrCast { target_type, .. } => PhpType::Pointer(Some(target_type.clone())),
         ExprKind::BinaryOp { left, op, right } => {
             match op {
                 BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Mod => {
@@ -1198,6 +1202,10 @@ impl Checker {
                 } else {
                     Err(CompileError::new(expr.span, "Cannot use $this outside of a class method"))
                 }
+            }
+            ExprKind::PtrCast { target_type, expr: inner } => {
+                self.infer_type(inner, env)?;
+                Ok(PhpType::Pointer(Some(target_type.clone())))
             }
         }
     }
