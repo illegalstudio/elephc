@@ -59,6 +59,12 @@ pub struct LoopLabels {
     pub sp_adjust: usize,
 }
 
+impl Default for Context {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Context {
     pub fn new() -> Self {
         Self {

@@ -87,7 +87,10 @@ fn skip_whitespace_and_comments(cursor: &mut Cursor) {
 }
 
 fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
-    let ch = cursor.peek().unwrap();
+    let ch = match cursor.peek() {
+        Some(c) => c,
+        None => return Ok(Token::Eof),
+    };
 
     match ch {
         ';' => { cursor.advance(); Ok(Token::Semicolon) }

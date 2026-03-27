@@ -7,6 +7,7 @@ use super::stmt;
 use crate::parser::ast::{ExprKind, StmtKind};
 use crate::types::{ClassInfo, FunctionSig, PhpType};
 
+#[allow(clippy::too_many_arguments)]
 pub fn emit_function(
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -47,6 +48,7 @@ pub fn emit_closure(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn emit_method(
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -68,6 +70,7 @@ pub fn emit_method(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_function_with_label(
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -90,6 +93,7 @@ fn emit_function_with_label(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_function_with_label_and_class(
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -124,7 +128,7 @@ fn emit_function_with_label_and_class(
             ctx.alloc_var(pname, PhpType::Int);
             // Set the variable type to the actual referenced type so loading
             // dereferences correctly (e.g., string ref loads x1/x2, not x0)
-            ctx.variables.get_mut(pname).unwrap().ty = _pty.clone();
+            ctx.variables.get_mut(pname).expect("codegen bug: ref param was just allocated but not found").ty = _pty.clone();
         } else {
             ctx.alloc_var(pname, _pty.clone());
         }
@@ -140,7 +144,7 @@ fn emit_function_with_label_and_class(
 
     // -- function prologue: set up stack frame --
     emitter.raw(".align 2");
-    emitter.label(&label);
+    emitter.label(label);
     emitter.comment("prologue");
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for locals
     emitter.instruction(&format!("stp x29, x30, [sp, #{}]", frame_size - 16));  // save caller's frame ptr & return addr
@@ -153,7 +157,7 @@ fn emit_function_with_label_and_class(
     let mut float_reg_idx = 0usize;
     for (i, (pname, pty)) in sig.params.iter().enumerate() {
         let is_ref = sig.ref_params.get(i).copied().unwrap_or(false);
-        let var = ctx.variables.get(pname).unwrap();
+        let var = ctx.variables.get(pname).expect("codegen bug: param was just allocated but not found in variables map");
         let offset = var.stack_offset;
         if is_ref {
             // Ref param: store the address (always comes in an integer register)
@@ -209,7 +213,7 @@ fn emit_function_with_label_and_class(
     }
 
     // -- function epilogue: save static vars back and restore/return --
-    emitter.label(&epilogue_label);
+    emitter.label(epilogue_label);
 
     // Save static vars back to global storage before returning
     let func_name = label.strip_prefix("_fn_").unwrap_or(label);
@@ -416,6 +420,54 @@ pub fn infer_local_type_pub(
     infer_local_type(expr, sig, None)
 }
 
+/// Public wrapper for infer_local_type with codegen context access.
+/// Used by ternary codegen to infer branch types using variable/class info.
+pub fn infer_local_type_with_ctx(
+    expr: &crate::parser::ast::Expr,
+    sig: &FunctionSig,
+    ctx: &Context,
+) -> PhpType {
+    infer_local_type(expr, sig, Some(ctx))
+}
+
+/// Infer an expression type using only the current codegen context.
+/// Useful in expression codegen where stack locals, closures, functions, and
+/// class metadata are available, but the enclosing function signature is not.
+pub fn infer_contextual_type(
+    expr: &crate::parser::ast::Expr,
+    ctx: &Context,
+) -> PhpType {
+    let empty_sig = FunctionSig {
+        params: Vec::new(),
+        defaults: Vec::new(),
+        return_type: PhpType::Void,
+        ref_params: Vec::new(),
+        variadic: None,
+    };
+    infer_local_type(expr, &empty_sig, Some(ctx))
+}
+
+/// Returns the wider of two types for stack slot allocation.
+/// Str (16 bytes) is wider than everything else (8 bytes).
+fn wider_of(a: &PhpType, b: &PhpType) -> PhpType {
+    if a == b {
+        return a.clone();
+    }
+    if *a == PhpType::Str || *b == PhpType::Str {
+        return PhpType::Str;
+    }
+    if *a == PhpType::Float || *b == PhpType::Float {
+        return PhpType::Float;
+    }
+    if matches!(a, PhpType::Array(_)) || matches!(b, PhpType::Array(_)) {
+        return a.clone();
+    }
+    if matches!(a, PhpType::Object(_)) || matches!(b, PhpType::Object(_)) {
+        return a.clone();
+    }
+    a.clone()
+}
+
 fn infer_local_type(
     expr: &crate::parser::ast::Expr,
     sig: &FunctionSig,
@@ -461,8 +513,16 @@ fn infer_local_type(
         }
         ExprKind::Not(_) => PhpType::Bool,
         ExprKind::BitNot(_) => PhpType::Int,
-        ExprKind::NullCoalesce { value, .. } => infer_local_type(value, sig, ctx),
-        ExprKind::Ternary { then_expr, .. } => infer_local_type(then_expr, sig, ctx),
+        ExprKind::NullCoalesce { value, default } => {
+            let left = infer_local_type(value, sig, ctx);
+            let right = infer_local_type(default, sig, ctx);
+            wider_of(&left, &right)
+        }
+        ExprKind::Ternary { then_expr, else_expr, .. } => {
+            let then_ty = infer_local_type(then_expr, sig, ctx);
+            let else_ty = infer_local_type(else_expr, sig, ctx);
+            wider_of(&then_ty, &else_ty)
+        }
         ExprKind::BinaryOp { left, op, right } => {
             use crate::parser::ast::BinOp;
             match op {
@@ -472,7 +532,11 @@ fn infer_local_type(
                 | BinOp::StrictNotEq | BinOp::And | BinOp::Or => PhpType::Bool,
                 BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor
                 | BinOp::ShiftLeft | BinOp::ShiftRight | BinOp::Spaceship => PhpType::Int,
-                BinOp::NullCoalesce => infer_local_type(left, sig, ctx),
+                BinOp::NullCoalesce => {
+                    let lt = infer_local_type(left, sig, ctx);
+                    let rt = infer_local_type(right, sig, ctx);
+                    wider_of(&lt, &rt)
+                }
                 BinOp::Div | BinOp::Pow => PhpType::Float,
                 BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Mod => {
                     let lt = infer_local_type(left, sig, ctx);
@@ -527,7 +591,10 @@ fn infer_local_type(
                 }
                 // Float-returning builtins
                 "floatval" | "floor" | "ceil" | "round" | "sqrt" | "pow"
-                | "fmod" | "fdiv" | "microtime" => PhpType::Float,
+                | "fmod" | "fdiv" | "microtime"
+                | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "atan2"
+                | "sinh" | "cosh" | "tanh" | "log" | "log2" | "log10" | "exp"
+                | "hypot" | "pi" | "deg2rad" | "rad2deg" => PhpType::Float,
                 // Bool-returning builtins
                 "is_int" | "is_float" | "is_string" | "is_bool" | "is_null"
                 | "is_numeric" | "is_nan" | "is_finite" | "is_infinite"
@@ -560,8 +627,10 @@ fn infer_local_type(
                 }
                 // User-defined functions — check signature if available
                 _ => {
-                    for (fname, fsig) in sig.params.iter().zip(std::iter::repeat(sig)) {
-                        let _ = (fname, fsig);
+                    if let Some(c) = ctx {
+                        if let Some(fn_sig) = c.functions.get(name) {
+                            return fn_sig.return_type.clone();
+                        }
                     }
                     PhpType::Int
                 }
@@ -578,7 +647,37 @@ fn infer_local_type(
             }
         }
         ExprKind::Closure { .. } => PhpType::Callable,
-        ExprKind::ClosureCall { .. } => PhpType::Int,
+        ExprKind::ClosureCall { var, .. } => {
+            if let Some(c) = ctx {
+                if let Some(sig) = c.closure_sigs.get(var) {
+                    return sig.return_type.clone();
+                }
+            }
+            PhpType::Int
+        }
+        ExprKind::ExprCall { callee, .. } => {
+            if let Some(c) = ctx {
+                match &callee.kind {
+                    ExprKind::Variable(var_name) => {
+                        if let Some(sig) = c.closure_sigs.get(var_name) {
+                            return sig.return_type.clone();
+                        }
+                    }
+                    ExprKind::ArrayAccess { array, .. } => {
+                        if let ExprKind::Variable(arr_name) = &array.kind {
+                            if let Some(sig) = c.closure_sigs.get(arr_name) {
+                                return sig.return_type.clone();
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let ExprKind::Closure { body, .. } = &callee.kind {
+                return crate::types::checker::infer_return_type_syntactic(body);
+            }
+            PhpType::Int
+        }
         ExprKind::ConstRef(_) => PhpType::Int, // constants resolved at emit time
         ExprKind::Spread(inner) => infer_local_type(inner, sig, ctx),
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.clone()),

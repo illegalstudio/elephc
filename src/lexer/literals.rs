@@ -214,8 +214,8 @@ pub fn scan_number(cursor: &mut Cursor) -> Result<Token, CompileError> {
         if matches!(cursor.peek(), Some('e') | Some('E')) {
             num_str.push('e');
             cursor.advance();
-            if matches!(cursor.peek(), Some('+') | Some('-')) {
-                num_str.push(cursor.peek().unwrap());
+            if let Some(sign @ ('+' | '-')) = cursor.peek() {
+                num_str.push(sign);
                 cursor.advance();
             }
             while let Some(ch) = cursor.peek() {
@@ -258,8 +258,8 @@ pub fn scan_dot_float(cursor: &mut Cursor) -> Result<Token, CompileError> {
     if matches!(cursor.peek(), Some('e') | Some('E')) {
         num_str.push('e');
         cursor.advance();
-        if matches!(cursor.peek(), Some('+') | Some('-')) {
-            num_str.push(cursor.peek().unwrap());
+        if let Some(sign @ ('+' | '-')) = cursor.peek() {
+            num_str.push(sign);
             cursor.advance();
         }
         while let Some(ch) = cursor.peek() {
@@ -314,6 +314,14 @@ pub fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
         "PHP_INT_MIN" => Ok(Token::PhpIntMin),
         "PHP_FLOAT_MAX" => Ok(Token::PhpFloatMax),
         "M_PI" => Ok(Token::MPi),
+        "M_E" => Ok(Token::ME),
+        "M_SQRT2" => Ok(Token::MSqrt2),
+        "M_PI_2" => Ok(Token::MPi2),
+        "M_PI_4" => Ok(Token::MPi4),
+        "M_LOG2E" => Ok(Token::MLog2e),
+        "M_LOG10E" => Ok(Token::MLog10e),
+        "PHP_FLOAT_MIN" => Ok(Token::PhpFloatMin),
+        "PHP_FLOAT_EPSILON" => Ok(Token::PhpFloatEpsilon),
         "print" => Ok(Token::Print),
         "switch" => Ok(Token::Switch),
         "case" => Ok(Token::Case),

@@ -205,21 +205,49 @@ Proper type system for PHP compatibility.
 - Scope-based cleanup (decref locals at function epilogue) removed: local variables may alias data owned by other structures (e.g., `$t = $arr[$i]` shares the pointer)
 - Full array/object GC requires either ownership tracking or a tracing collector
 
-## v0.12.x — FFI (Foreign Function Interface)
+## v0.12.x — Math coverage (done)
+
+### Trigonometry
+- [x] `sin()`, `cos()`, `tan()`
+- [x] `asin()`, `acos()`, `atan()`, `atan2()`
+- [x] `deg2rad()`, `rad2deg()`
+- [x] `sinh()`, `cosh()`, `tanh()`
+
+### Logarithms and exponentials
+- [x] `log()` — natural logarithm
+- [x] `log2()`, `log10()`
+- [x] `exp()` — e^x
+
+### Utility
+- [x] `hypot()` — sqrt(x² + y²)
+- [x] `pi()` — alias for M_PI
+
+### Constants
+- [x] `M_E`, `M_SQRT2`, `M_PI_2`, `M_PI_4`, `M_LOG2E`, `M_LOG10E`
+- [x] `PHP_FLOAT_MIN`, `PHP_FLOAT_EPSILON`
+
+## v0.13.x — Pointers
+
+- [ ] Opaque pointer type (`ptr`) for handles and `void*`
+- [ ] Typed pointers (`ptr<ClassName>`) for C struct access
+- [ ] Pointer builtins: `ptr()`, `ptr_null()`, `ptr_is_null()`, `ptr_offset()`, `ptr_cast<T>()`, `ptr_get()`, `ptr_set()`
+- [ ] `ptr_sizeof()` — returns byte size of a type (`"int"` → 8, `"float"` → 8, class name → computed)
+- [ ] Pointer echo: `echo $ptr` prints hex address (`0x...`)
+- [ ] Pointer comparison: `===`, `!==` between pointer values
+
+## v0.14.x — FFI (Foreign Function Interface)
 
 - [ ] `extern function` declarations with C type annotations (`int`, `float`, `string`, `bool`, `void`, `ptr`)
 - [ ] `extern "libname" { }` blocks (auto `-l` linker flag)
 - [ ] `--link` / `-l` and `--link-path` / `-L` CLI flags
 - [ ] `--framework` flag for macOS frameworks
 - [ ] Null-terminated string ↔ length-prefixed string conversion (`__rt_str_to_cstr`, `__rt_cstr_to_str`)
-- [ ] Opaque pointer type (`ptr`) for handles and `void*`
-- [ ] Typed pointers (`ptr<ClassName>`) for C struct access
 - [ ] `extern class` for C struct mapping (flat layout, no methods)
-- [ ] Pointer builtins: `ptr()`, `ptr_null()`, `ptr_is_null()`, `ptr_offset()`, `ptr_cast<T>()`
 - [ ] Callback support: pass elephc functions as C function pointers (`callable` params)
 - [ ] `extern global` for accessing C global variables
+- [ ] C memory management via extern libc: `malloc()`, `free()`, `memcpy()`, `memset()`
 
-## v0.13.x — Multi-platform and optimizations
+## v0.15.x — Multi-platform and optimizations
 
 - [ ] Linux x86_64 target
 - [ ] Linux ARM64 target

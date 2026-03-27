@@ -139,19 +139,21 @@ The heap (`_heap_buf`) is an 8MB region (by default) for dynamically-sized data 
 
 ### How heap allocation works
 
-Every allocation has an **8-byte header** storing the block size:
+Every allocation has an **8-byte header** split into two 32-bit fields: block size and reference count:
 
 ```
-┌──────────┬──────────────────┐
-│ size (8B)│  user data ...   │
-└──────────┴──────────────────┘
-  header     ← pointer returned to caller
+┌───────────┬────────────┬──────────────────┐
+│ size (4B) │ refcnt (4B)│  user data ...   │
+└───────────┴────────────┴──────────────────┘
+  header (8 bytes total)   ← pointer returned to caller
 ```
+
+The size is stored as a 32-bit value at offset +0, and the reference count as a 32-bit value at offset +4. New allocations start with refcount 1.
 
 The runtime routine `__rt_heap_alloc`:
 
-1. **Walk the free list** — check each freed block (first-fit). If a block with `size >= requested` is found, unlink it and return it.
-2. **Bump allocate** — if no free block fits, allocate from the end of the heap: write header, advance `_heap_off`, return user pointer.
+1. **Walk the free list** — check each freed block (first-fit). If a block with `size >= requested` is found, unlink it, reset its refcount to 1, and return it.
+2. **Bump allocate** — if no free block fits, allocate from the end of the heap: write size and refcount=1 to the header, advance `_heap_off`, return user pointer.
 3. **Bounds check** — if the bump would exceed `_heap_max`, print a fatal error and exit.
 
 Minimum allocation is 8 bytes (to fit the next pointer when the block is later freed).
@@ -160,9 +162,9 @@ Minimum allocation is 8 bytes (to fit the next pointer when the block is later f
 
 The runtime routine `__rt_heap_free`:
 
-1. Read the block header at `user_pointer - 8` to get the size
+1. Read the block size (32-bit) from the header at `user_pointer - 8`
 2. Insert the block at the head of the free list (LIFO)
-3. Free blocks have layout: `[size:8][next_ptr:8][...unused...]`
+3. Free blocks have layout: `[size:4][refcnt:4][next_ptr:8][...unused...]`
 
 The variant `__rt_heap_free_safe` validates that the pointer is within `_heap_buf` range before freeing — safe to call with garbage, null, or `.data` section pointers.
 
@@ -385,13 +387,14 @@ The naming pattern is `_static_FUNCNAME_VARNAME`. The init flag ensures the init
 
 ## Memory management strategy
 
-elephc uses a **free-list allocator** — not a garbage collector, but not pure bump-allocation either. Memory is reclaimed in specific situations:
+elephc uses a **free-list allocator with reference counting** — not a garbage collector, but not pure bump-allocation either. Memory is reclaimed in specific situations:
 
-1. **Variable reassignment** — when `$x = "new value"` overwrites a string or array, the old heap block is freed and returned to the free list for reuse
-2. **`unset($x)`** — explicitly frees the variable's heap allocation
-3. **String buffer reset** — the concat buffer resets at each statement, with strings that need to survive copied to heap via `__rt_str_persist`
-4. **Stack memory** — automatically reclaimed when functions return
-5. **Process exit** — all memory reclaimed by the OS
+1. **Reference counting** — every heap allocation carries a 32-bit refcount (initialized to 1). When a reference is shared, `__rt_incref` increments it. When a reference is dropped, `__rt_decref_array`, `__rt_decref_hash`, or `__rt_decref_object` decrements it and frees the block when it reaches zero
+2. **Variable reassignment** — when `$x = "new value"` overwrites a string or array, the old heap block is freed and returned to the free list for reuse
+3. **`unset($x)`** — explicitly frees the variable's heap allocation
+4. **String buffer reset** — the concat buffer resets at each statement, with strings that need to survive copied to heap via `__rt_str_persist`
+5. **Stack memory** — automatically reclaimed when functions return
+6. **Process exit** — all memory reclaimed by the OS
 
 ### What is NOT freed
 

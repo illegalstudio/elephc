@@ -114,7 +114,7 @@ impl Checker {
                 Ok(Some(PhpType::Str))
             }
             "str_split" => {
-                if args.len() < 1 || args.len() > 2 {
+                if args.is_empty() || args.len() > 2 {
                     return Err(CompileError::new(span, "str_split() takes 1 or 2 arguments"));
                 }
                 for arg in args { self.infer_type(arg, env)?; }
@@ -293,11 +293,38 @@ impl Checker {
                     _ => Ok(Some(PhpType::Int)),
                 }
             }
-            "floor" | "ceil" | "sqrt" => {
+            "floor" | "ceil" | "sqrt"
+            | "sin" | "cos" | "tan" | "asin" | "acos" | "atan"
+            | "sinh" | "cosh" | "tanh"
+            | "log2" | "log10" | "exp"
+            | "deg2rad" | "rad2deg" => {
                 if args.len() != 1 {
                     return Err(CompileError::new(span, &format!("{}() takes exactly 1 argument", name)));
                 }
                 self.infer_type(&args[0], env)?;
+                Ok(Some(PhpType::Float))
+            }
+            "log" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(CompileError::new(span, "log() takes 1 or 2 arguments"));
+                }
+                for arg in args {
+                    self.infer_type(arg, env)?;
+                }
+                Ok(Some(PhpType::Float))
+            }
+            "atan2" | "hypot" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, &format!("{}() takes exactly 2 arguments", name)));
+                }
+                self.infer_type(&args[0], env)?;
+                self.infer_type(&args[1], env)?;
+                Ok(Some(PhpType::Float))
+            }
+            "pi" => {
+                if !args.is_empty() {
+                    return Err(CompileError::new(span, "pi() takes no arguments"));
+                }
                 Ok(Some(PhpType::Float))
             }
             "round" => {
@@ -376,7 +403,7 @@ impl Checker {
                 Ok(Some(PhpType::Float))
             }
             "rand" | "mt_rand" => {
-                if args.len() != 0 && args.len() != 2 {
+                if !args.is_empty() && args.len() != 2 {
                     return Err(CompileError::new(span, &format!("{}() takes 0 or 2 arguments", name)));
                 }
                 for arg in args {
@@ -666,7 +693,7 @@ impl Checker {
                 Ok(Some(PhpType::Str))
             }
             "fgetcsv" => {
-                if args.len() < 1 || args.len() > 3 {
+                if args.is_empty() || args.len() > 3 {
                     return Err(CompileError::new(span, "fgetcsv() takes 1 to 3 arguments"));
                 }
                 for arg in args { self.infer_type(arg, env)?; }

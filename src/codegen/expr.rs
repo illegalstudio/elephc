@@ -4,6 +4,7 @@ use super::data_section::DataSection;
 use super::emit::Emitter;
 use crate::parser::ast::{BinOp, Expr, ExprKind};
 use crate::types::PhpType;
+use crate::types::FunctionSig;
 
 /// Emits code to evaluate an expression.
 /// Returns the type of the result.
@@ -61,13 +62,25 @@ pub fn emit_expr(
         ExprKind::Variable(name) => {
             if ctx.global_vars.contains(name) || (ctx.in_main && ctx.all_global_var_names.contains(name)) {
                 // Load from global storage
-                let var = ctx.variables.get(name).expect("undefined variable");
+                let var = match ctx.variables.get(name) {
+                    Some(v) => v,
+                    None => {
+                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                        return PhpType::Int;
+                    }
+                };
                 let ty = var.ty.clone();
                 super::stmt::emit_global_load(emitter, ctx, name, &ty);
                 ty
             } else if ctx.ref_params.contains(name) {
                 // Load through reference pointer
-                let var = ctx.variables.get(name).expect("undefined variable");
+                let var = match ctx.variables.get(name) {
+                    Some(v) => v,
+                    None => {
+                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                        return PhpType::Int;
+                    }
+                };
                 let offset = var.stack_offset;
                 let ty = var.ty.clone();
                 emitter.comment(&format!("load ref ${}", name));
@@ -89,7 +102,13 @@ pub fn emit_expr(
                 }
                 ty
             } else {
-                let var = ctx.variables.get(name).expect("undefined variable");
+                let var = match ctx.variables.get(name) {
+                    Some(v) => v,
+                    None => {
+                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                        return PhpType::Int;
+                    }
+                };
                 let offset = var.stack_offset;
                 let ty = var.ty.clone();
                 emitter.comment(&format!("load ${}", name));
@@ -140,7 +159,13 @@ pub fn emit_expr(
         }
         ExprKind::PreIncrement(name) => {
             if ctx.global_vars.contains(name) {
-                let var = ctx.variables.get(name).expect("undefined variable");
+                let var = match ctx.variables.get(name) {
+                    Some(v) => v,
+                    None => {
+                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                        return PhpType::Int;
+                    }
+                };
                 let ty = var.ty.clone();
                 emitter.comment(&format!("++${} (global)", name));
                 super::stmt::emit_global_load(emitter, ctx, name, &ty);
@@ -148,7 +173,13 @@ pub fn emit_expr(
                 emit_global_store_inline(emitter, name);
                 PhpType::Int
             } else if ctx.ref_params.contains(name) {
-                let var = ctx.variables.get(name).expect("undefined variable");
+                let var = match ctx.variables.get(name) {
+                    Some(v) => v,
+                    None => {
+                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                        return PhpType::Int;
+                    }
+                };
                 let offset = var.stack_offset;
                 emitter.comment(&format!("++${} (ref)", name));
                 abi::load_at_offset(emitter, "x9", offset);                     // load ref pointer
@@ -157,7 +188,13 @@ pub fn emit_expr(
                 emitter.instruction("str x0, [x9]");                            // store back through pointer
                 PhpType::Int
             } else {
-                let var = ctx.variables.get(name).expect("undefined variable");
+                let var = match ctx.variables.get(name) {
+                    Some(v) => v,
+                    None => {
+                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                        return PhpType::Int;
+                    }
+                };
                 let offset = var.stack_offset;
                 emitter.comment(&format!("++${}", name));
                 // -- pre-increment: add 1 then return new value --
@@ -172,7 +209,13 @@ pub fn emit_expr(
         }
         ExprKind::PostIncrement(name) => {
             if ctx.global_vars.contains(name) {
-                let var = ctx.variables.get(name).expect("undefined variable");
+                let var = match ctx.variables.get(name) {
+                    Some(v) => v,
+                    None => {
+                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                        return PhpType::Int;
+                    }
+                };
                 let ty = var.ty.clone();
                 emitter.comment(&format!("${}++ (global)", name));
                 super::stmt::emit_global_load(emitter, ctx, name, &ty);
@@ -184,7 +227,13 @@ pub fn emit_expr(
                 emitter.instruction("str x1, [x9]");                            // store incremented value to global
                 PhpType::Int
             } else if ctx.ref_params.contains(name) {
-                let var = ctx.variables.get(name).expect("undefined variable");
+                let var = match ctx.variables.get(name) {
+                    Some(v) => v,
+                    None => {
+                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                        return PhpType::Int;
+                    }
+                };
                 let offset = var.stack_offset;
                 emitter.comment(&format!("${}++ (ref)", name));
                 abi::load_at_offset(emitter, "x9", offset);                     // load ref pointer
@@ -193,7 +242,13 @@ pub fn emit_expr(
                 emitter.instruction("str x1, [x9]");                            // store back through pointer
                 PhpType::Int
             } else {
-                let var = ctx.variables.get(name).expect("undefined variable");
+                let var = match ctx.variables.get(name) {
+                    Some(v) => v,
+                    None => {
+                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                        return PhpType::Int;
+                    }
+                };
                 let offset = var.stack_offset;
                 emitter.comment(&format!("${}++", name));
                 // -- post-increment: return old value, then add 1 --
@@ -212,7 +267,13 @@ pub fn emit_expr(
         }
         ExprKind::PreDecrement(name) => {
             if ctx.global_vars.contains(name) {
-                let var = ctx.variables.get(name).expect("undefined variable");
+                let var = match ctx.variables.get(name) {
+                    Some(v) => v,
+                    None => {
+                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                        return PhpType::Int;
+                    }
+                };
                 let ty = var.ty.clone();
                 emitter.comment(&format!("--${} (global)", name));
                 super::stmt::emit_global_load(emitter, ctx, name, &ty);
@@ -220,7 +281,13 @@ pub fn emit_expr(
                 emit_global_store_inline(emitter, name);
                 PhpType::Int
             } else if ctx.ref_params.contains(name) {
-                let var = ctx.variables.get(name).expect("undefined variable");
+                let var = match ctx.variables.get(name) {
+                    Some(v) => v,
+                    None => {
+                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                        return PhpType::Int;
+                    }
+                };
                 let offset = var.stack_offset;
                 emitter.comment(&format!("--${} (ref)", name));
                 abi::load_at_offset(emitter, "x9", offset);                     // load ref pointer
@@ -229,7 +296,13 @@ pub fn emit_expr(
                 emitter.instruction("str x0, [x9]");                            // store back through pointer
                 PhpType::Int
             } else {
-                let var = ctx.variables.get(name).expect("undefined variable");
+                let var = match ctx.variables.get(name) {
+                    Some(v) => v,
+                    None => {
+                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                        return PhpType::Int;
+                    }
+                };
                 let offset = var.stack_offset;
                 emitter.comment(&format!("--${}", name));
                 // -- pre-decrement: subtract 1 then return new value --
@@ -241,7 +314,13 @@ pub fn emit_expr(
         }
         ExprKind::PostDecrement(name) => {
             if ctx.ref_params.contains(name) {
-                let var = ctx.variables.get(name).expect("undefined variable");
+                let var = match ctx.variables.get(name) {
+                    Some(v) => v,
+                    None => {
+                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                        return PhpType::Int;
+                    }
+                };
                 let offset = var.stack_offset;
                 emitter.comment(&format!("${}-- (ref)", name));
                 abi::load_at_offset(emitter, "x9", offset);                     // load ref pointer
@@ -250,7 +329,13 @@ pub fn emit_expr(
                 emitter.instruction("str x1, [x9]");                            // store back through pointer
                 PhpType::Int
             } else {
-                let var = ctx.variables.get(name).expect("undefined variable");
+                let var = match ctx.variables.get(name) {
+                    Some(v) => v,
+                    None => {
+                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                        return PhpType::Int;
+                    }
+                };
                 let offset = var.stack_offset;
                 emitter.comment(&format!("${}--", name));
                 // -- post-decrement: return old value, then subtract 1 --
@@ -273,16 +358,47 @@ pub fn emit_expr(
             // -- branch based on ternary condition --
             emitter.instruction("cmp x0, #0");                                  // test if condition is falsy
             emitter.instruction(&format!("b.eq {}", else_label));               // jump to else branch if condition was false
+            // -- determine result type: widen to the broader type --
+            let dummy_sig = FunctionSig {
+                params: vec![],
+                defaults: vec![],
+                return_type: PhpType::Int,
+                ref_params: vec![],
+                variadic: None,
+            };
+            let then_syn = super::functions::infer_local_type_with_ctx(then_expr, &dummy_sig, ctx);
+            let else_syn = super::functions::infer_local_type_with_ctx(else_expr, &dummy_sig, ctx);
+            let result_ty = if then_syn == else_syn {
+                then_syn
+            } else if then_syn == PhpType::Str || else_syn == PhpType::Str {
+                PhpType::Str
+            } else if then_syn == PhpType::Float || else_syn == PhpType::Float {
+                PhpType::Float
+            } else {
+                then_syn
+            };
             let then_ty = emit_expr(then_expr, emitter, ctx, data);
+            // -- coerce then-branch to result type if needed --
+            if result_ty != then_ty {
+                if result_ty == PhpType::Str {
+                    coerce_to_string(emitter, &then_ty);
+                } else if result_ty == PhpType::Float && then_ty == PhpType::Int {
+                    emitter.instruction("scvtf d0, x0");                        // convert int to float for unified result type
+                }
+            }
             emitter.instruction(&format!("b {}", end_label));                   // skip else branch after evaluating then-expr
             emitter.label(&else_label);
             let else_ty = emit_expr(else_expr, emitter, ctx, data);
-            if then_ty != else_ty && then_ty == PhpType::Str {
-                // -- coerce else branch to string to match then-branch type --
-                coerce_to_string(emitter, &else_ty);
+            // -- coerce else-branch to result type if needed --
+            if result_ty != else_ty {
+                if result_ty == PhpType::Str {
+                    coerce_to_string(emitter, &else_ty);
+                } else if result_ty == PhpType::Float && else_ty == PhpType::Int {
+                    emitter.instruction("scvtf d0, x0");                        // convert int to float for unified result type
+                }
             }
             emitter.label(&end_label);
-            then_ty
+            result_ty
         }
         ExprKind::Cast { target, expr } => emit_cast(target, expr, emitter, ctx, data),
         ExprKind::FunctionCall { name, args } => {
@@ -301,7 +417,13 @@ pub fn emit_expr(
             emit_expr_call(callee, args, emitter, ctx, data)
         }
         ExprKind::ConstRef(name) => {
-            let (value, _ty) = ctx.constants.get(name).expect("undefined constant").clone();
+            let (value, _ty) = match ctx.constants.get(name) {
+                Some(c) => c.clone(),
+                None => {
+                    emitter.comment(&format!("WARNING: undefined constant {}", name));
+                    return PhpType::Int;
+                }
+            };
             let synthetic_expr = Expr::new(value, expr.span);
             emit_expr(&synthetic_expr, emitter, ctx, data)
         }
@@ -325,7 +447,13 @@ pub fn emit_expr(
         }
         ExprKind::This => {
             emitter.comment("$this");
-            let var = ctx.variables.get("this").expect("$this not in scope");
+            let var = match ctx.variables.get("this") {
+                Some(v) => v,
+                None => {
+                    emitter.comment("WARNING: $this used outside class scope");
+                    return PhpType::Int;
+                }
+            };
             let offset = var.stack_offset;
             super::abi::load_at_offset(emitter, "x0", offset);                  // load $this object pointer
             let class_name = ctx.current_class.clone().unwrap_or_default();
@@ -341,8 +469,13 @@ fn emit_new_object(
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> PhpType {
-    let class_info = ctx.classes.get(class_name).cloned()
-        .expect(&format!("undefined class: {}", class_name));
+    let class_info = match ctx.classes.get(class_name).cloned() {
+        Some(c) => c,
+        None => {
+            emitter.comment(&format!("WARNING: undefined class {}", class_name));
+            return PhpType::Int;
+        }
+    };
     let num_props = class_info.properties.len();
     let obj_size = 8 + num_props * 16; // 8 for class_id + 16 per property
 
@@ -467,15 +600,29 @@ fn emit_property_access(
     let obj_ty = emit_expr(object, emitter, ctx, data);
     let class_name = match &obj_ty {
         PhpType::Object(cn) => cn.clone(),
-        _ => panic!("property access on non-object"),
+        _ => {
+            emitter.comment("WARNING: property access on non-object");
+            return PhpType::Int;
+        }
     };
-    let class_info = ctx.classes.get(&class_name).cloned()
-        .expect(&format!("undefined class: {}", class_name));
+    let class_info = match ctx.classes.get(&class_name).cloned() {
+        Some(c) => c,
+        None => {
+            emitter.comment(&format!("WARNING: undefined class {}", class_name));
+            return PhpType::Int;
+        }
+    };
 
-    let (prop_idx, prop_ty) = class_info.properties.iter().enumerate()
+    let (prop_idx, prop_ty) = match class_info.properties.iter().enumerate()
         .find(|(_, (n, _))| n == property)
         .map(|(i, (_, t))| (i, t.clone()))
-        .expect(&format!("undefined property: {}", property));
+    {
+        Some(v) => v,
+        None => {
+            emitter.comment(&format!("WARNING: undefined property {}", property));
+            return PhpType::Int;
+        }
+    };
 
     let offset = 8 + prop_idx * 16;
 
@@ -534,7 +681,10 @@ fn emit_method_call(
     let obj_ty = emit_expr(object, emitter, ctx, data);
     let class_name = match &obj_ty {
         PhpType::Object(cn) => cn.clone(),
-        _ => panic!("method call on non-object"),
+        _ => {
+            emitter.comment("WARNING: method call on non-object");
+            return PhpType::Int;
+        }
     };
     // Push $this onto stack
     emitter.instruction("str x0, [sp, #-16]!");                                 // push $this pointer
@@ -1044,10 +1194,10 @@ fn emit_array_access(
     // -- bounds check: negative index or >= array length → null sentinel --
     let null_label = ctx.next_label("arr_null");
     let ok_label = ctx.next_label("arr_ok");
-    emitter.instruction(&format!("cmp x0, #0"));                                // check if index is negative
+    emitter.instruction("cmp x0, #0");                                          // check if index is negative
     emitter.instruction(&format!("b.lt {null_label}"));                         // negative index → null sentinel
     emitter.instruction("ldr x10, [x9]");                                       // load array length from header (offset 0)
-    emitter.instruction(&format!("cmp x0, x10"));                               // compare index against array length
+    emitter.instruction("cmp x0, x10");                                         // compare index against array length
     emitter.instruction(&format!("b.ge {null_label}"));                         // index >= length → null sentinel
 
     match &elem_ty {
@@ -1226,7 +1376,7 @@ fn emit_binop(
             emitter.instruction("cmp x0, #0");                                  // test if right operand is falsy
             emitter.instruction("cset x0, ne");                                 // result=1 if right is truthy, 0 if falsy
             emitter.label(&end_label);
-            return PhpType::Bool;
+            PhpType::Bool
         }
         BinOp::Or => {
             let end_label = ctx.next_label("or_end");
@@ -1241,7 +1391,7 @@ fn emit_binop(
             // -- normalize final value to boolean 0 or 1 --
             emitter.instruction("cmp x0, #0");                                  // test whichever operand survived
             emitter.instruction("cset x0, ne");                                 // normalize to 1 if truthy, 0 if falsy
-            return PhpType::Bool;
+            PhpType::Bool
         }
         BinOp::Pow => {
             let lt = emit_expr(left, emitter, ctx, data);
@@ -1260,7 +1410,7 @@ fn emit_binop(
             emitter.instruction("fmov d1, d0");                                 // move exponent to d1 (second argument)
             emitter.instruction("ldr d0, [sp], #16");                           // pop base from stack into d0 (first argument)
             emitter.instruction("bl _pow");                                     // call C library pow(base, exponent)
-            return PhpType::Float;
+            PhpType::Float
         }
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
             let lt = emit_expr(left, emitter, ctx, data);
@@ -1438,7 +1588,7 @@ fn emit_binop(
             PhpType::Bool
         }
         BinOp::StrictEq | BinOp::StrictNotEq => {
-            return emit_strict_compare(left, op, right, emitter, ctx, data);
+            emit_strict_compare(left, op, right, emitter, ctx, data)
         }
         BinOp::Concat => {
             let left_ty = emit_expr(left, emitter, ctx, data);
@@ -1523,7 +1673,7 @@ fn emit_binop(
         BinOp::NullCoalesce => {
             // Should not reach here — handled by ExprKind::NullCoalesce
             // But handle gracefully via the same mechanism
-            return emit_null_coalesce(left, right, emitter, ctx, data);
+            emit_null_coalesce(left, right, emitter, ctx, data)
         }
     }
 }
@@ -1602,13 +1752,14 @@ fn emit_function_call(
                     emitter.comment(&format!("ref arg: address of global ${}", var_name));
                     emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page of global var
                     emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); // add page offset
-                } else if ctx.in_main && ctx.all_global_var_names.contains(var_name) {
-                    let var = ctx.variables.get(var_name).expect("undefined variable");
-                    let offset = var.stack_offset;
-                    emitter.comment(&format!("ref arg: address of ${}", var_name));
-                    emitter.instruction(&format!("sub x0, x29, #{}", offset));  // compute address of local variable
                 } else {
-                    let var = ctx.variables.get(var_name).expect("undefined variable");
+                    let var = match ctx.variables.get(var_name) {
+                        Some(v) => v,
+                        None => {
+                            emitter.comment(&format!("WARNING: undefined variable ${}", var_name));
+                            continue;
+                        }
+                    };
                     let offset = var.stack_offset;
                     emitter.comment(&format!("ref arg: address of ${}", var_name));
                     emitter.instruction(&format!("sub x0, x29, #{}", offset));  // compute address of local variable
@@ -1830,17 +1981,111 @@ fn emit_function_call(
         .unwrap_or(PhpType::Void)
 }
 
-/// Infer the return type of a closure by scanning its body for Return statements.
+fn widen_codegen_type(a: &PhpType, b: &PhpType) -> PhpType {
+    if a == b {
+        return a.clone();
+    }
+    if *a == PhpType::Str || *b == PhpType::Str {
+        return PhpType::Str;
+    }
+    if *a == PhpType::Float || *b == PhpType::Float {
+        return PhpType::Float;
+    }
+    if *a == PhpType::Void {
+        return b.clone();
+    }
+    if *b == PhpType::Void {
+        return a.clone();
+    }
+    a.clone()
+}
+
+fn coerce_result_to_type(emitter: &mut Emitter, source_ty: &PhpType, target_ty: &PhpType) {
+    if source_ty == target_ty {
+        return;
+    }
+    if *target_ty == PhpType::Str {
+        coerce_to_string(emitter, source_ty);
+    } else if *target_ty == PhpType::Float
+        && matches!(source_ty, PhpType::Int | PhpType::Bool | PhpType::Void)
+    {
+        if *source_ty == PhpType::Void {
+            emitter.instruction("mov x0, #0");                                  // null widens to numeric zero before float coercion
+        }
+        emitter.instruction("scvtf d0, x0");                                    // convert integer-like value to float for unified result type
+    }
+}
+
+/// Infer the return type of a closure by scanning all nested return statements.
 fn infer_closure_return_type(
     body: &[crate::parser::ast::Stmt],
     sig: &crate::types::FunctionSig,
 ) -> PhpType {
-    for stmt in body {
-        if let crate::parser::ast::StmtKind::Return(Some(expr)) = &stmt.kind {
-            return super::functions::infer_local_type_pub(expr, sig);
+    fn collect_return_types(
+        stmt: &crate::parser::ast::Stmt,
+        sig: &crate::types::FunctionSig,
+        return_types: &mut Vec<PhpType>,
+    ) {
+        use crate::parser::ast::StmtKind;
+
+        match &stmt.kind {
+            StmtKind::Return(Some(expr)) => {
+                return_types.push(super::functions::infer_local_type_pub(expr, sig));
+            }
+            StmtKind::Return(None) => {
+                return_types.push(PhpType::Void);
+            }
+            StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+                for stmt in then_body {
+                    collect_return_types(stmt, sig, return_types);
+                }
+                for (_, body) in elseif_clauses {
+                    for stmt in body {
+                        collect_return_types(stmt, sig, return_types);
+                    }
+                }
+                if let Some(body) = else_body {
+                    for stmt in body {
+                        collect_return_types(stmt, sig, return_types);
+                    }
+                }
+            }
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::For { body, .. }
+            | StmtKind::Foreach { body, .. } => {
+                for stmt in body {
+                    collect_return_types(stmt, sig, return_types);
+                }
+            }
+            StmtKind::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    for stmt in body {
+                        collect_return_types(stmt, sig, return_types);
+                    }
+                }
+                if let Some(body) = default {
+                    for stmt in body {
+                        collect_return_types(stmt, sig, return_types);
+                    }
+                }
+            }
+            _ => {}
         }
     }
-    PhpType::Int
+
+    let mut return_types = Vec::new();
+    for stmt in body {
+        collect_return_types(stmt, sig, &mut return_types);
+    }
+    if return_types.is_empty() {
+        return PhpType::Int;
+    }
+    let mut result = return_types[0].clone();
+    for ty in &return_types[1..] {
+        result = widen_codegen_type(&result, ty);
+    }
+    result
 }
 
 fn emit_closure(
@@ -1879,9 +2124,7 @@ fn emit_closure(
         defaults.push(None);
     }
     let mut ref_params: Vec<bool> = params.iter().map(|(_, _, is_ref)| *is_ref).collect();
-    for _ in &capture_types {
-        ref_params.push(false);
-    }
+    ref_params.extend(std::iter::repeat_n(false, capture_types.len()));
     let preliminary_sig = crate::types::FunctionSig {
         params: param_types.clone(),
         defaults: defaults.clone(),
@@ -1989,7 +2232,13 @@ fn emit_closure_call(
     // -- push captured variable values as hidden arguments --
     for (cap_name, cap_ty) in &captures {
         emitter.comment(&format!("push captured ${}", cap_name));
-        let cap_info = ctx.variables.get(cap_name).expect("captured variable not found");
+        let cap_info = match ctx.variables.get(cap_name) {
+            Some(v) => v,
+            None => {
+                emitter.comment(&format!("WARNING: captured variable ${} not found", cap_name));
+                continue;
+            }
+        };
         let cap_offset = cap_info.stack_offset;
         match cap_ty {
             PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
@@ -2012,7 +2261,13 @@ fn emit_closure_call(
     let total_args = all_args.len() + captures.len();
 
     // -- load the closure function address from the variable's stack slot --
-    let var_info = ctx.variables.get(var).expect("undefined closure variable");
+    let var_info = match ctx.variables.get(var) {
+        Some(v) => v,
+        None => {
+            emitter.comment(&format!("WARNING: undefined closure variable ${}", var));
+            return PhpType::Int;
+        }
+    };
     let var_offset = var_info.stack_offset;
     abi::load_at_offset(emitter, "x9", var_offset);                              // load closure function address from stack
 
@@ -2142,6 +2397,26 @@ fn emit_expr_call(
 
     // -- indirect call through expression function address --
     emitter.instruction("blr x9");                                              // branch to closure via function pointer in x9
+
+    // -- return the closure's known return type, or default to Int --
+    match &callee.kind {
+        ExprKind::Variable(var_name) => {
+            if let Some(sig) = ctx.closure_sigs.get(var_name) {
+                return sig.return_type.clone();
+            }
+        }
+        ExprKind::ArrayAccess { array, .. } => {
+            if let ExprKind::Variable(arr_name) = &array.kind {
+                if let Some(sig) = ctx.closure_sigs.get(arr_name) {
+                    return sig.return_type.clone();
+                }
+            }
+        }
+        ExprKind::Closure { body, .. } => {
+            return crate::types::checker::infer_return_type_syntactic(body);
+        }
+        _ => {}
+    }
     PhpType::Int
 }
 
@@ -2395,22 +2670,33 @@ fn emit_null_coalesce(
         return emit_expr(default, emitter, ctx, data);
     }
 
+    let default_ty = super::functions::infer_contextual_type(default, ctx);
+    let result_ty = widen_codegen_type(&val_ty, &default_ty);
+
     // -- check if value is null sentinel at runtime --
+    let use_value_label = ctx.next_label("nc_keep");
     let end_label = ctx.next_label("nc_end");
     // -- build null sentinel value for comparison --
     emitter.instruction("movz x9, #0xFFFE");                                    // load lowest 16 bits of null sentinel
     emitter.instruction("movk x9, #0xFFFF, lsl #16");                           // insert bits 16-31 of null sentinel
     emitter.instruction("movk x9, #0xFFFF, lsl #32");                           // insert bits 32-47 of null sentinel
     emitter.instruction("movk x9, #0x7FFF, lsl #48");                           // insert bits 48-63 of null sentinel
-    emitter.instruction("cmp x0, x9");                                          // compare value against null sentinel
-    emitter.instruction(&format!("b.ne {}", end_label));                        // if not null, skip default and keep value
+    if val_ty == PhpType::Float {
+        emitter.instruction("fmov x0, d0");                                     // copy float bits to x0 for null sentinel check
+    }
+    let cmp_reg = if val_ty == PhpType::Str { "x1" } else { "x0" };
+    emitter.instruction(&format!("cmp {}, x9", cmp_reg));                       // compare value against null sentinel
+    emitter.instruction(&format!("b.ne {}", use_value_label));                  // if not null, skip default branch and keep value
 
     // -- value is null, evaluate default expression --
-    let def_ty = emit_expr(default, emitter, ctx, data);
+    let default_runtime_ty = emit_expr(default, emitter, ctx, data);
+    coerce_result_to_type(emitter, &default_runtime_ty, &result_ty);
+    emitter.instruction(&format!("b {}", end_label));                           // skip non-null branch after evaluating default
+    emitter.label(&use_value_label);
+    coerce_result_to_type(emitter, &val_ty, &result_ty);
     emitter.label(&end_label);
 
-    // Return the type of the non-null side
-    if val_ty == PhpType::Void { def_ty } else { val_ty }
+    result_ty
 }
 
 /// Quick helper: store x0 to _gvar_NAME (for pre-increment etc. where value is in x0)
@@ -2422,10 +2708,10 @@ fn emit_global_store_inline(emitter: &mut Emitter, name: &str) {
 }
 
 fn load_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
-    if value >= 0 && value <= 65535 {
+    if (0..=65535).contains(&value) {
         // -- small non-negative immediate fits in single MOV --
         emitter.instruction(&format!("mov {}, #{}", reg, value));               // load small immediate value directly
-    } else if value < 0 && value >= -65536 {
+    } else if (-65536..0).contains(&value) {
         // -- small negative immediate fits in single MOV --
         emitter.instruction(&format!("mov {}, #{}", reg, value));               // load small negative immediate directly
     } else {

@@ -10,42 +10,59 @@ use crate::types::{CheckResult, ClassInfo, FunctionSig, PhpType, TypeEnv};
 /// Infer a function's return type by scanning its body for Return statements.
 /// This is a syntactic/heuristic check — no full type inference.
 /// Used for functions that are never called directly (only used as callbacks).
-fn infer_return_type_syntactic(body: &[Stmt]) -> PhpType {
+pub fn infer_return_type_syntactic(body: &[Stmt]) -> PhpType {
+    let mut types = Vec::new();
     for stmt in body {
-        if let Some(ty) = find_return_type_syntactic(stmt) {
-            return ty;
-        }
+        collect_return_types_syntactic(stmt, &mut types);
     }
-    PhpType::Int
+    if types.is_empty() {
+        return PhpType::Int;
+    }
+    // Pick the widest type across all return statements
+    let mut result = types[0].clone();
+    for ty in &types[1..] {
+        result = wider_type_syntactic(&result, ty);
+    }
+    result
 }
 
-fn find_return_type_syntactic(stmt: &Stmt) -> Option<PhpType> {
+fn collect_return_types_syntactic(stmt: &Stmt, types: &mut Vec<PhpType>) {
     match &stmt.kind {
-        StmtKind::Return(Some(expr)) => Some(infer_expr_type_syntactic(expr)),
-        StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
-            for s in then_body { if let Some(t) = find_return_type_syntactic(s) { return Some(t); } }
-            for (_, body) in elseif_clauses { for s in body { if let Some(t) = find_return_type_syntactic(s) { return Some(t); } } }
-            if let Some(body) = else_body { for s in body { if let Some(t) = find_return_type_syntactic(s) { return Some(t); } } }
-            None
+        StmtKind::Return(Some(expr)) => {
+            types.push(infer_expr_type_syntactic(expr));
         }
-        StmtKind::While { body, .. } | StmtKind::For { body, .. } | StmtKind::Foreach { body, .. } => {
-            for s in body { if let Some(t) = find_return_type_syntactic(s) { return Some(t); } }
-            None
+        StmtKind::Return(None) => {
+            types.push(PhpType::Void);
+        }
+        StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+            for s in then_body { collect_return_types_syntactic(s, types); }
+            for (_, body) in elseif_clauses { for s in body { collect_return_types_syntactic(s, types); } }
+            if let Some(body) = else_body { for s in body { collect_return_types_syntactic(s, types); } }
+        }
+        StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. }
+        | StmtKind::For { body, .. }
+        | StmtKind::Foreach { body, .. } => {
+            for s in body { collect_return_types_syntactic(s, types); }
         }
         StmtKind::Switch { cases, default, .. } => {
-            for (_, body) in cases {
-                for s in body { if let Some(t) = find_return_type_syntactic(s) { return Some(t); } }
-            }
-            if let Some(body) = default {
-                for s in body { if let Some(t) = find_return_type_syntactic(s) { return Some(t); } }
-            }
-            None
+            for (_, body) in cases { for s in body { collect_return_types_syntactic(s, types); } }
+            if let Some(body) = default { for s in body { collect_return_types_syntactic(s, types); } }
         }
-        _ => None,
+        _ => {}
     }
 }
 
-fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
+fn wider_type_syntactic(a: &PhpType, b: &PhpType) -> PhpType {
+    if a == b { return a.clone(); }
+    if *a == PhpType::Str || *b == PhpType::Str { return PhpType::Str; }
+    if *a == PhpType::Float || *b == PhpType::Float { return PhpType::Float; }
+    if *a == PhpType::Void { return b.clone(); }
+    if *b == PhpType::Void { return a.clone(); }
+    a.clone()
+}
+
+pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
     match &expr.kind {
         ExprKind::StringLiteral(_) => PhpType::Str,
         ExprKind::IntLiteral(_) => PhpType::Int,
@@ -67,12 +84,32 @@ fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                 | "number_format" | "date" | "json_encode" | "gettype"
                 | "str_word_count" | "chunk_split" => PhpType::Str,
                 "strlen" | "strpos" | "strrpos" | "ord" | "count" | "intval"
-                | "abs" | "floor" | "ceil" | "round" | "intdiv" | "rand" | "time" => PhpType::Int,
-                "floatval" | "sqrt" | "pow" | "fmod" => PhpType::Float,
+                | "abs" | "intdiv" | "rand" | "time" => PhpType::Int,
+                "floatval" | "floor" | "ceil" | "round" | "sqrt" | "pow" | "fmod"
+                | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "atan2"
+                | "sinh" | "cosh" | "tanh" | "log" | "log2" | "log10" | "exp"
+                | "hypot" | "pi" | "deg2rad" | "rad2deg" => PhpType::Float,
                 _ => PhpType::Int,
             }
         }
-        ExprKind::Ternary { then_expr, .. } => infer_expr_type_syntactic(then_expr),
+        ExprKind::NullCoalesce { value, default } => {
+            let left_ty = infer_expr_type_syntactic(value);
+            let right_ty = infer_expr_type_syntactic(default);
+            wider_type_syntactic(&left_ty, &right_ty)
+        }
+        ExprKind::Ternary { then_expr, else_expr, .. } => {
+            let then_ty = infer_expr_type_syntactic(then_expr);
+            let else_ty = infer_expr_type_syntactic(else_expr);
+            if then_ty == else_ty {
+                then_ty
+            } else if then_ty == PhpType::Str || else_ty == PhpType::Str {
+                PhpType::Str
+            } else if then_ty == PhpType::Float || else_ty == PhpType::Float {
+                PhpType::Float
+            } else {
+                then_ty
+            }
+        }
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.clone()),
         ExprKind::This => PhpType::Object(String::new()),
         ExprKind::BinaryOp { left, op, right } => {
@@ -679,12 +716,16 @@ impl Checker {
                 self.infer_type(condition, env)?;
                 let then_ty = self.infer_type(then_expr, env)?;
                 let else_ty = self.infer_type(else_expr, env)?;
-                if then_ty == else_ty {
-                    Ok(then_ty)
+                let result_ty = if then_ty == else_ty {
+                    then_ty
+                } else if then_ty == PhpType::Str || else_ty == PhpType::Str {
+                    PhpType::Str
+                } else if then_ty == PhpType::Float || else_ty == PhpType::Float {
+                    PhpType::Float
                 } else {
-                    // Different types: return the then-branch type (PHP is dynamic)
-                    Ok(then_ty)
-                }
+                    then_ty
+                };
+                Ok(result_ty)
             }
             ExprKind::Cast { target, expr } => {
                 self.infer_type(expr, env)?;
@@ -782,7 +823,26 @@ impl Checker {
                 for arg in args {
                     self.infer_type(arg, env)?;
                 }
-                Ok(PhpType::Int)
+                // Try to determine return type from closure signature
+                match &callee.kind {
+                    ExprKind::Variable(var_name) => {
+                        if let Some(ret_ty) = self.closure_return_types.get(var_name) {
+                            return Ok(ret_ty.clone());
+                        }
+                    }
+                    ExprKind::ArrayAccess { array, .. } => {
+                        if let ExprKind::Variable(arr_name) = &array.kind {
+                            if let Some(ret_ty) = self.closure_return_types.get(arr_name) {
+                                return Ok(ret_ty.clone());
+                            }
+                        }
+                    }
+                    ExprKind::Closure { body, .. } => {
+                        return Ok(infer_return_type_syntactic(body));
+                    }
+                    _ => {}
+                }
+                Ok(PhpType::Int) // fallback for unknown callables
             }
             ExprKind::BinaryOp { left, op, right } => {
                 let lt = self.infer_type(left, env)?;
@@ -951,22 +1011,73 @@ impl Checker {
     }
 
     /// Infer the return type of a closure by scanning its body for Return statements.
-    fn infer_closure_return_type(&self, body: &[Stmt], env: &TypeEnv) -> PhpType {
+    fn infer_closure_return_type(&mut self, body: &[Stmt], env: &TypeEnv) -> PhpType {
+        let mut return_types = Vec::new();
         for stmt in body {
-            if let StmtKind::Return(Some(expr)) = &stmt.kind {
-                return match &expr.kind {
-                    ExprKind::Closure { .. } => PhpType::Callable,
-                    ExprKind::StringLiteral(_) => PhpType::Str,
-                    ExprKind::FloatLiteral(_) => PhpType::Float,
-                    ExprKind::BoolLiteral(_) => PhpType::Bool,
-                    ExprKind::Null => PhpType::Void,
-                    ExprKind::Variable(name) => {
-                        env.get(name).cloned().unwrap_or(PhpType::Int)
-                    }
-                    _ => PhpType::Int,
-                };
-            }
+            self.collect_closure_return_types(stmt, env, &mut return_types);
         }
-        PhpType::Int
+        if return_types.is_empty() {
+            return PhpType::Int;
+        }
+        let mut result = return_types[0].clone();
+        for ty in &return_types[1..] {
+            result = wider_type_syntactic(&result, ty);
+        }
+        result
+    }
+
+    fn collect_closure_return_types(
+        &mut self,
+        stmt: &Stmt,
+        env: &TypeEnv,
+        return_types: &mut Vec<PhpType>,
+    ) {
+        match &stmt.kind {
+            StmtKind::Return(Some(expr)) => {
+                let ty = self
+                    .infer_type(expr, env)
+                    .unwrap_or_else(|_| infer_expr_type_syntactic(expr));
+                return_types.push(ty);
+            }
+            StmtKind::Return(None) => {
+                return_types.push(PhpType::Void);
+            }
+            StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+                for stmt in then_body {
+                    self.collect_closure_return_types(stmt, env, return_types);
+                }
+                for (_, body) in elseif_clauses {
+                    for stmt in body {
+                        self.collect_closure_return_types(stmt, env, return_types);
+                    }
+                }
+                if let Some(body) = else_body {
+                    for stmt in body {
+                        self.collect_closure_return_types(stmt, env, return_types);
+                    }
+                }
+            }
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::For { body, .. }
+            | StmtKind::Foreach { body, .. } => {
+                for stmt in body {
+                    self.collect_closure_return_types(stmt, env, return_types);
+                }
+            }
+            StmtKind::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    for stmt in body {
+                        self.collect_closure_return_types(stmt, env, return_types);
+                    }
+                }
+                if let Some(body) = default {
+                    for stmt in body {
+                        self.collect_closure_return_types(stmt, env, return_types);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 }

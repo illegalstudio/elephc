@@ -1059,6 +1059,133 @@ fn test_ternary_mixed_types_then_branch_str() {
 }
 
 #[test]
+fn test_ternary_int_string() {
+    let out = compile_and_run(
+        r#"<?php
+$x = true;
+echo $x ? 42 : "none";
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_ternary_string_int() {
+    let out = compile_and_run(
+        r#"<?php
+$x = false;
+echo $x ? "yes" : 0;
+"#,
+    );
+    assert_eq!(out, "0");
+}
+
+#[test]
+fn test_ternary_string_string() {
+    let out = compile_and_run(
+        r#"<?php
+$x = true;
+echo $x ? "hello" : "world";
+"#,
+    );
+    assert_eq!(out, "hello");
+}
+
+#[test]
+fn test_ternary_int_int() {
+    let out = compile_and_run(
+        r#"<?php
+$x = true;
+echo $x ? 1 : 0;
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_ternary_mixed_in_concat() {
+    let out = compile_and_run(
+        r#"<?php
+$count = 5;
+echo "Items: " . ($count > 0 ? $count : "none");
+"#,
+    );
+    assert_eq!(out, "Items: 5");
+}
+
+#[test]
+fn test_ternary_float_string() {
+    let out = compile_and_run(
+        r#"<?php
+$x = false;
+echo $x ? 3.14 : "zero";
+"#,
+    );
+    assert_eq!(out, "zero");
+}
+
+#[test]
+fn test_ternary_nested_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+$a = 0;
+echo $a ? "yes" : ($a === 0 ? "zero" : "no");
+"#,
+    );
+    assert_eq!(out, "zero");
+}
+
+#[test]
+fn test_ternary_variable_string() {
+    let out = compile_and_run(
+        r#"<?php
+$name = "Alice";
+$greeting = true ? $name : "nobody";
+echo $greeting;
+"#,
+    );
+    assert_eq!(out, "Alice");
+}
+
+#[test]
+fn test_ternary_function_result() {
+    let out = compile_and_run(
+        r#"<?php
+function get_name() { return "Bob"; }
+echo true ? get_name() : "default";
+"#,
+    );
+    assert_eq!(out, "Bob");
+}
+
+#[test]
+fn test_ternary_variable_int_vs_string() {
+    let out = compile_and_run(
+        r#"<?php
+$count = 5;
+$label = "none";
+echo ($count > 0) ? $count : $label;
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+#[test]
+fn test_ternary_method_call_result() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public $val;
+    public function __construct($v) { $this->val = $v; }
+    public function get() { return $this->val; }
+}
+$b = new Box("hello");
+echo true ? $b->get() : "fallback";
+"#,
+    );
+    assert_eq!(out, "hello");
+}
+
+#[test]
 fn test_chained_closure_call() {
     let out = compile_and_run(
         "<?php $f = function() { return function() { return 99; }; }; echo $f()();",
@@ -2077,6 +2204,18 @@ fn test_division_in_expression() {
 fn test_intdiv_still_returns_int() {
     let out = compile_and_run("<?php echo intdiv(10, 3);");
     assert_eq!(out, "3");
+}
+
+#[test]
+fn test_intdiv_exact() {
+    let out = compile_and_run("<?php echo intdiv(10, 5);");
+    assert_eq!(out, "2");
+}
+
+#[test]
+fn test_intdiv_negative() {
+    let out = compile_and_run("<?php echo intdiv(-7, 2);");
+    assert_eq!(out, "-3");
 }
 
 // --- INF, NAN, is_nan, is_finite, is_infinite ---
@@ -4792,6 +4931,90 @@ echo null ?? "fallback";
     assert_eq!(out, "fallback");
 }
 
+#[test]
+fn test_null_coalesce_string() {
+    let out = compile_and_run(r#"<?php
+$name = "Alice";
+echo $name ?? "default";
+"#);
+    assert_eq!(out, "Alice");
+}
+
+#[test]
+fn test_null_coalesce_null_to_string() {
+    let out = compile_and_run(r#"<?php
+$name = null;
+echo $name ?? "default";
+"#);
+    assert_eq!(out, "default");
+}
+
+#[test]
+fn test_null_coalesce_empty_string() {
+    let out = compile_and_run(r#"<?php
+$val = "";
+echo ($val ?? "fallback") . "|done";
+"#);
+    assert_eq!(out, "|done");
+}
+
+#[test]
+fn test_null_coalesce_int() {
+    let out = compile_and_run(r#"<?php
+$x = 42;
+echo $x ?? 0;
+"#);
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_null_coalesce_null_to_int() {
+    let out = compile_and_run(r#"<?php
+$x = null;
+echo $x ?? 99;
+"#);
+    assert_eq!(out, "99");
+}
+
+#[test]
+fn test_null_coalesce_chain() {
+    let out = compile_and_run(r#"<?php
+$a = null;
+$b = null;
+$c = "found";
+echo $a ?? $b ?? $c;
+"#);
+    assert_eq!(out, "found");
+}
+
+#[test]
+fn test_null_coalesce_float() {
+    let out = compile_and_run(r#"<?php
+$x = 3.14;
+echo $x ?? 0.0;
+"#);
+    assert_eq!(out, "3.14");
+}
+
+#[test]
+fn test_null_coalesce_null_to_float() {
+    let out = compile_and_run(r#"<?php
+$x = null;
+echo $x ?? 2.718;
+"#);
+    assert_eq!(out, "2.718");
+}
+
+#[test]
+fn test_null_coalesce_float_in_calc() {
+    let out = compile_and_run(r#"<?php
+$pi = null;
+$val = $pi ?? 3.14159;
+echo round($val * 2, 4);
+"#);
+    assert_eq!(out, "6.2832");
+}
+
 // ===== Feature 3: Bitwise operators =====
 
 #[test]
@@ -6606,6 +6829,51 @@ echo count($arr) . "|" . $arr[20];
     assert_eq!(out, "21|190");
 }
 
+#[test]
+fn test_array_push_float() {
+    let out = compile_and_run(r#"<?php
+$arr = [1.1];
+array_push($arr, 2.2);
+echo count($arr) . "|" . $arr[1];
+"#);
+    assert_eq!(out, "2|2.2");
+}
+
+#[test]
+fn test_array_push_bool() {
+    let out = compile_and_run(r#"<?php
+$arr = [true];
+array_push($arr, false);
+echo count($arr);
+"#);
+    assert_eq!(out, "2");
+}
+
+#[test]
+fn test_array_push_object() {
+    let out = compile_and_run(r#"<?php
+class Item { public $name;
+    public function __construct($n) { $this->name = $n; }
+}
+$items = [new Item("a")];
+array_push($items, new Item("b"));
+echo count($items) . "|" . $items[1]->name;
+"#);
+    assert_eq!(out, "2|b");
+}
+
+#[test]
+fn test_array_push_syntax_float() {
+    // $arr[] = float syntax
+    let out = compile_and_run(r#"<?php
+$arr = [1.0];
+$arr[] = 2.5;
+$arr[] = 3.7;
+echo count($arr) . "|" . $arr[2];
+"#);
+    assert_eq!(out, "3|3.7");
+}
+
 // =============================================================================
 // Class edge cases
 // =============================================================================
@@ -7433,4 +7701,385 @@ $c = new Circle(10.0);
 echo $c->area();
 "#);
     assert_eq!(out, "314");
+}
+
+// ========================================================================
+// Math functions — trig, inverse trig, hyperbolic, log/exp, utility
+// ========================================================================
+
+#[test]
+fn test_math_trig_basic() {
+    let out = compile_and_run(r#"<?php
+echo round(sin(0.0), 4) . "|" . round(cos(0.0), 4) . "|" . round(tan(0.0), 4);
+"#);
+    assert_eq!(out, "0|1|0");
+}
+
+#[test]
+fn test_math_trig_pi() {
+    let out = compile_and_run(r#"<?php
+echo round(sin(M_PI_2), 4) . "|" . round(cos(M_PI), 1) . "|" . round(tan(M_PI_4), 4);
+"#);
+    assert_eq!(out, "1|-1|1");
+}
+
+#[test]
+fn test_math_inverse_trig() {
+    let out = compile_and_run(r#"<?php
+echo round(asin(1.0), 4) . "|" . round(acos(0.0), 4) . "|" . round(atan(1.0), 4);
+"#);
+    assert_eq!(out, "1.5708|1.5708|0.7854");
+}
+
+#[test]
+fn test_math_atan2() {
+    let out = compile_and_run(r#"<?php
+echo round(atan2(1.0, 0.0), 4);
+"#);
+    assert_eq!(out, "1.5708");
+}
+
+#[test]
+fn test_math_hyperbolic() {
+    let out = compile_and_run(r#"<?php
+echo round(sinh(0.0), 4) . "|" . round(cosh(0.0), 4) . "|" . round(tanh(0.0), 4);
+"#);
+    assert_eq!(out, "0|1|0");
+}
+
+#[test]
+fn test_math_log_exp() {
+    let out = compile_and_run(r#"<?php
+echo round(log(M_E), 4) . "|" . log2(8.0) . "|" . log10(1000.0) . "|" . exp(0.0);
+"#);
+    assert_eq!(out, "1|3|3|1");
+}
+
+#[test]
+fn test_math_hypot() {
+    let out = compile_and_run(r#"<?php
+echo hypot(3.0, 4.0);
+"#);
+    assert_eq!(out, "5");
+}
+
+#[test]
+fn test_math_deg_rad() {
+    let out = compile_and_run(r#"<?php
+echo round(deg2rad(180.0), 4) . "|" . round(rad2deg(M_PI), 1);
+"#);
+    assert_eq!(out, "3.1416|180");
+}
+
+#[test]
+fn test_math_pi_function() {
+    let out = compile_and_run(r#"<?php
+echo round(pi(), 4);
+"#);
+    assert_eq!(out, "3.1416");
+}
+
+#[test]
+fn test_math_constants() {
+    let out = compile_and_run(r#"<?php
+echo round(M_E, 4) . "|" . round(M_SQRT2, 4) . "|" . round(M_PI_2, 4) . "|" . round(M_PI_4, 4);
+"#);
+    assert_eq!(out, "2.7183|1.4142|1.5708|0.7854");
+}
+
+#[test]
+fn test_math_int_coercion() {
+    let out = compile_and_run(r#"<?php
+echo sin(0) . "|" . cos(0) . "|" . log(1) . "|" . exp(0);
+"#);
+    assert_eq!(out, "0|1|0|1");
+}
+
+#[test]
+fn test_math_distance_calculation() {
+    let out = compile_and_run(r#"<?php
+$x1 = 1.0; $y1 = 2.0;
+$x2 = 4.0; $y2 = 6.0;
+$dist = hypot($x2 - $x1, $y2 - $y1);
+echo round($dist, 4);
+"#);
+    assert_eq!(out, "5");
+}
+
+#[test]
+fn test_return_type_from_foreach() {
+    let out = compile_and_run(r#"<?php
+function find($arr, $target) {
+    foreach ($arr as $v) {
+        if ($v === $target) { return "found"; }
+    }
+    return "not found";
+}
+echo find([1, 2, 3], 2);
+"#);
+    assert_eq!(out, "found");
+}
+
+#[test]
+fn test_return_type_mixed_branches() {
+    let out = compile_and_run(r#"<?php
+function describe($n) {
+    if ($n > 0) { return "positive"; }
+    return 0;
+}
+$r = describe(5);
+echo $r;
+"#);
+    assert_eq!(out, "positive");
+}
+
+#[test]
+fn test_return_type_switch_foreach() {
+    let out = compile_and_run(r#"<?php
+function classify($items) {
+    foreach ($items as $item) {
+        switch ($item) {
+            case 0: return "zero";
+            default: return "nonzero";
+        }
+    }
+    return "empty";
+}
+echo classify([0]);
+"#);
+    assert_eq!(out, "zero");
+}
+
+#[test]
+fn test_return_string_from_else() {
+    let out = compile_and_run(r#"<?php
+function check($x) {
+    if ($x > 10) {
+        return "big";
+    } else {
+        return "small";
+    }
+}
+echo check(5) . "|" . check(15);
+"#);
+    assert_eq!(out, "small|big");
+}
+
+#[test]
+fn test_log_natural() {
+    let out = compile_and_run(r#"<?php
+echo round(log(M_E), 4);
+"#);
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_log_base_10() {
+    let out = compile_and_run(r#"<?php
+echo log(1000, 10);
+"#);
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_log_base_2() {
+    let out = compile_and_run(r#"<?php
+echo log(256, 2);
+"#);
+    assert_eq!(out, "8");
+}
+
+#[test]
+fn test_log_base_custom() {
+    let out = compile_and_run(r#"<?php
+echo round(log(27, 3), 4);
+"#);
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_expr_call_returns_string() {
+    let out = compile_and_run(r#"<?php
+$greet = function($name) { return "Hello " . $name; };
+echo $greet("World");
+"#);
+    assert_eq!(out, "Hello World");
+}
+
+#[test]
+fn test_expr_call_returns_float() {
+    let out = compile_and_run(r#"<?php
+$calc = function($x) { return $x * 3.14; };
+echo $calc(2.0);
+"#);
+    assert_eq!(out, "6.28");
+}
+
+#[test]
+fn test_expr_call_returns_int() {
+    let out = compile_and_run(r#"<?php
+$double = function($x) { return $x * 2; };
+echo $double(21);
+"#);
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_expr_call_string_in_concat() {
+    let out = compile_and_run(r#"<?php
+$tag = function($s) { return "<b>" . $s . "</b>"; };
+echo "Result: " . $tag("hello");
+"#);
+    assert_eq!(out, "Result: <b>hello</b>");
+}
+
+#[test]
+fn test_closure_call_returns_string() {
+    let out = compile_and_run(r#"<?php
+$fn = function() { return "test"; };
+$result = $fn();
+echo $result;
+"#);
+    assert_eq!(out, "test");
+}
+
+// --- IIFE (Immediately Invoked Function Expression) ---
+
+#[test]
+fn test_iife_returns_string() {
+    let out = compile_and_run(r#"<?php
+$result = (function() { return "hello"; })();
+echo $result;
+"#);
+    assert_eq!(out, "hello");
+}
+
+#[test]
+fn test_iife_returns_int() {
+    let out = compile_and_run(r#"<?php
+echo (function($x) { return $x * 2; })(21);
+"#);
+    assert_eq!(out, "42");
+}
+
+// --- Empty input / EOF handling ---
+
+#[test]
+fn test_empty_php_file() {
+    let out = compile_and_run("<?php\n");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_only_open_tag() {
+    let out = compile_and_run("<?php ");
+    assert_eq!(out, "");
+}
+
+// --- Syntactic return type inference ---
+
+#[test]
+fn test_callback_return_from_dowhile() {
+    let out = compile_and_run(r#"<?php
+function find_first($arr) {
+    $i = 0;
+    do {
+        if ($arr[$i] > 5) { return $arr[$i]; }
+        $i = $i + 1;
+    } while ($i < count($arr));
+    return 0;
+}
+echo find_first([1, 3, 7, 2]);
+"#);
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_mixed_return_types_widened() {
+    let out = compile_and_run(r#"<?php
+function describe($n) {
+    if ($n > 100) { return "big"; }
+    if ($n < 0) { return "negative"; }
+    return $n;
+}
+echo describe(200);
+"#);
+    assert_eq!(out, "big");
+}
+
+#[test]
+fn test_null_coalesce_allocates_for_string_default() {
+    let out = compile_and_run(r#"<?php
+function test() {
+    $x = null;
+    $result = $x ?? "fallback";
+    echo $result;
+}
+test();
+"#);
+    assert_eq!(out, "fallback");
+}
+
+#[test]
+fn test_null_coalesce_runtime_null_to_string_default() {
+    let out = compile_and_run(r#"<?php
+$x = false ? 1 : null;
+$result = $x ?? "fallback";
+echo $result;
+"#);
+    assert_eq!(out, "fallback");
+}
+
+#[test]
+fn test_closure_return_type_from_nested_branch() {
+    let out = compile_and_run(r#"<?php
+$describe = function($n) {
+    if ($n > 0) {
+        return "positive";
+    }
+    return 0;
+};
+$result = $describe(3);
+echo $result;
+"#);
+    assert_eq!(out, "positive");
+}
+
+#[test]
+fn test_assigned_user_function_call_string_result() {
+    let out = compile_and_run(r#"<?php
+function greet($name) {
+    return "Hello, " . $name;
+}
+function run() {
+    $message = greet("World");
+    echo $message;
+}
+run();
+"#);
+    assert_eq!(out, "Hello, World");
+}
+
+#[test]
+fn test_ternary_allocates_for_wider_type() {
+    let out = compile_and_run(r#"<?php
+function test($flag) {
+    $val = $flag ? 42 : "none";
+    echo $val;
+}
+test(false);
+"#);
+    assert_eq!(out, "none");
+}
+
+#[test]
+fn test_ternary_both_branches_in_function() {
+    let out = compile_and_run(r#"<?php
+function label($n) {
+    $result = $n > 0 ? "positive" : "zero or negative";
+    return $result;
+}
+echo label(5) . "|" . label(-1);
+"#);
+    assert_eq!(out, "positive|zero or negative");
 }

@@ -18,6 +18,27 @@ pub fn emit(
     emitter.instruction("str x0, [sp, #-16]!");                                 // push dividend onto stack
     emit_expr(&args[1], emitter, ctx, data);
     emitter.instruction("ldr x1, [sp], #16");                                   // pop dividend into x1
+
+    // -- division by zero guard --
+    let zero_label = ctx.next_label("intdiv_zero");
+    let done_label = ctx.next_label("intdiv_done");
+    emitter.instruction(&format!("cbz x0, {zero_label}"));                      // if divisor is 0, branch to error
     emitter.instruction("sdiv x0, x1, x0");                                     // x0 = x1 / x0 (signed integer divide)
+    emitter.instruction(&format!("b {done_label}"));                            // skip error path
+
+    // -- fatal error: division by zero --
+    emitter.label(&zero_label);
+    let (err_label, err_len) = data.add_string(b"Fatal error: division by zero\n");
+    emitter.instruction("mov x0, #2");                                          // fd = stderr
+    emitter.instruction(&format!("adrp x1, {}@PAGE", err_label));               // load page of error message
+    emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", err_label));         // resolve error message address
+    emitter.instruction(&format!("mov x2, #{}", err_len));                      // message length
+    emitter.instruction("mov x16, #4");                                         // syscall 4 = sys_write
+    emitter.instruction("svc #0x80");                                           // write error to stderr
+    emitter.instruction("mov x0, #1");                                          // exit code 1
+    emitter.instruction("mov x16, #1");                                         // syscall 1 = sys_exit
+    emitter.instruction("svc #0x80");                                           // terminate process
+
+    emitter.label(&done_label);
     Some(PhpType::Int)
 }
