@@ -809,3 +809,35 @@ fn test_hex_literal_zero() {
     let t = tokens("<?php 0x0;");
     assert_eq!(t[1], Token::IntLiteral(0));
 }
+
+// --- EOF / empty input handling ---
+
+#[test]
+fn test_empty_after_open_tag() {
+    let t = tokens("<?php ");
+    assert_eq!(t, vec![Token::OpenTag, Token::Eof]);
+}
+
+#[test]
+fn test_open_tag_no_trailing_space() {
+    let t = tokens("<?php");
+    assert_eq!(t, vec![Token::OpenTag, Token::Eof]);
+}
+
+#[test]
+fn test_open_tag_newline_only() {
+    let t = tokens("<?php\n");
+    assert_eq!(t, vec![Token::OpenTag, Token::Eof]);
+}
+
+#[test]
+fn test_open_tag_with_comment_no_code() {
+    let t = tokens("<?php // nothing here\n");
+    assert_eq!(t, vec![Token::OpenTag, Token::Eof]);
+}
+
+#[test]
+fn test_open_tag_with_block_comment_no_code() {
+    let t = tokens("<?php /* empty */");
+    assert_eq!(t, vec![Token::OpenTag, Token::Eof]);
+}

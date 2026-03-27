@@ -214,8 +214,8 @@ pub fn scan_number(cursor: &mut Cursor) -> Result<Token, CompileError> {
         if matches!(cursor.peek(), Some('e') | Some('E')) {
             num_str.push('e');
             cursor.advance();
-            if matches!(cursor.peek(), Some('+') | Some('-')) {
-                num_str.push(cursor.peek().unwrap());
+            if let Some(sign @ ('+' | '-')) = cursor.peek() {
+                num_str.push(sign);
                 cursor.advance();
             }
             while let Some(ch) = cursor.peek() {
@@ -258,8 +258,8 @@ pub fn scan_dot_float(cursor: &mut Cursor) -> Result<Token, CompileError> {
     if matches!(cursor.peek(), Some('e') | Some('E')) {
         num_str.push('e');
         cursor.advance();
-        if matches!(cursor.peek(), Some('+') | Some('-')) {
-            num_str.push(cursor.peek().unwrap());
+        if let Some(sign @ ('+' | '-')) = cursor.peek() {
+            num_str.push(sign);
             cursor.advance();
         }
         while let Some(ch) = cursor.peek() {

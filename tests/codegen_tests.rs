@@ -7864,3 +7864,17 @@ echo $result;
 "#);
     assert_eq!(out, "test");
 }
+
+// --- Empty input / EOF handling ---
+
+#[test]
+fn test_empty_php_file() {
+    let out = compile_and_run("<?php\n");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_only_open_tag() {
+    let out = compile_and_run("<?php ");
+    assert_eq!(out, "");
+}
