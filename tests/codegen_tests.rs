@@ -4792,6 +4792,62 @@ echo null ?? "fallback";
     assert_eq!(out, "fallback");
 }
 
+#[test]
+fn test_null_coalesce_string() {
+    let out = compile_and_run(r#"<?php
+$name = "Alice";
+echo $name ?? "default";
+"#);
+    assert_eq!(out, "Alice");
+}
+
+#[test]
+fn test_null_coalesce_null_to_string() {
+    let out = compile_and_run(r#"<?php
+$name = null;
+echo $name ?? "default";
+"#);
+    assert_eq!(out, "default");
+}
+
+#[test]
+fn test_null_coalesce_empty_string() {
+    let out = compile_and_run(r#"<?php
+$val = "";
+echo ($val ?? "fallback") . "|done";
+"#);
+    assert_eq!(out, "|done");
+}
+
+#[test]
+fn test_null_coalesce_int() {
+    let out = compile_and_run(r#"<?php
+$x = 42;
+echo $x ?? 0;
+"#);
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_null_coalesce_null_to_int() {
+    let out = compile_and_run(r#"<?php
+$x = null;
+echo $x ?? 99;
+"#);
+    assert_eq!(out, "99");
+}
+
+#[test]
+fn test_null_coalesce_chain() {
+    let out = compile_and_run(r#"<?php
+$a = null;
+$b = null;
+$c = "found";
+echo $a ?? $b ?? $c;
+"#);
+    assert_eq!(out, "found");
+}
+
 // ===== Feature 3: Bitwise operators =====
 
 #[test]
