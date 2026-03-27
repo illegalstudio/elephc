@@ -5015,6 +5015,18 @@ echo round($val * 2, 4);
     assert_eq!(out, "6.2832");
 }
 
+#[test]
+fn test_null_coalesce_result_survives_nested_function_calls_in_concat() {
+    let out = compile_and_run(r#"<?php
+function fallback_pi($x) {
+    return $x ?? 3.14159;
+}
+
+echo round(fallback_pi(2), 1) . "|" . round(fallback_pi(null), 4);
+"#);
+    assert_eq!(out, "2|3.1416");
+}
+
 // ===== Feature 3: Bitwise operators =====
 
 #[test]
@@ -7166,6 +7178,49 @@ $b->add("hello");
 echo "ok";
 "#);
     assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_class_private_property_via_method() {
+    let out = compile_and_run(r#"<?php
+class Secret {
+    private $value;
+    public function __construct($value) { $this->value = $value; }
+    public function reveal() { return $this->value; }
+}
+$s = new Secret("ok");
+echo $s->reveal();
+"#);
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_class_readonly_property() {
+    let out = compile_and_run(r#"<?php
+class User {
+    public readonly $id;
+    public function __construct($id) { $this->id = $id; }
+    public function id() { return $this->id; }
+}
+$u = new User(7);
+echo $u->id();
+"#);
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_class_static_and_instance() {
+    let out = compile_and_run(r#"<?php
+class Counter {
+    public $n;
+    public function __construct($n) { $this->n = $n; }
+    public function next() { return $this->n + 1; }
+    public static function make($n) { return new Counter($n); }
+}
+$c = Counter::make(4);
+echo $c->next();
+"#);
+    assert_eq!(out, "5");
 }
 
 // === Nested array access tests ===

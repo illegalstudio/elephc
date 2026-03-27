@@ -7,6 +7,14 @@ use crate::types::{FunctionSig, PhpType, TypeEnv};
 use super::Checker;
 
 impl Checker {
+    fn format_fixed_or_range_arity(min_args: usize, max_args: usize) -> String {
+        if min_args == max_args {
+            format!("{}", min_args)
+        } else {
+            format!("{} to {}", min_args, max_args)
+        }
+    }
+
     pub fn check_function_call(
         &mut self,
         name: &str,
@@ -38,8 +46,10 @@ impl Checker {
                     return Err(CompileError::new(
                         span,
                         &format!(
-                            "Function '{}' expects {} to {} arguments, got {}",
-                            name, required, sig.params.len(), effective_arg_count
+                            "Function '{}' expects {} arguments, got {}",
+                            name,
+                            Self::format_fixed_or_range_arity(required, sig.params.len()),
+                            effective_arg_count
                         ),
                     ));
                 }
@@ -73,8 +83,10 @@ impl Checker {
                 return Err(CompileError::new(
                     span,
                     &format!(
-                        "Function '{}' expects {} to {} arguments, got {}",
-                        name, required, decl.params.len(), effective_arg_count
+                        "Function '{}' expects {} arguments, got {}",
+                        name,
+                        Self::format_fixed_or_range_arity(required, decl.params.len()),
+                        effective_arg_count
                     ),
                 ));
             }

@@ -1,8 +1,9 @@
 pub mod checker;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
+use crate::parser::ast::Visibility;
 use crate::parser::ast::Program;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -73,10 +74,15 @@ pub struct FunctionSig {
 
 #[derive(Debug, Clone)]
 pub struct ClassInfo {
+    pub class_id: u64,
     pub properties: Vec<(String, PhpType)>,
     pub defaults: Vec<Option<crate::parser::ast::Expr>>,
+    pub property_visibilities: HashMap<String, Visibility>,
+    pub readonly_properties: HashSet<String>,
     pub methods: HashMap<String, FunctionSig>,
     pub static_methods: HashMap<String, FunctionSig>,
+    pub method_visibilities: HashMap<String, Visibility>,
+    pub static_method_visibilities: HashMap<String, Visibility>,
     /// Maps constructor param index → property name (for type propagation from new ClassName(args))
     pub constructor_param_to_prop: Vec<Option<String>>,
 }
