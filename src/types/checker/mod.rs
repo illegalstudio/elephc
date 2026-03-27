@@ -42,7 +42,6 @@ fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         ExprKind::IntLiteral(_) => PhpType::Int,
         ExprKind::FloatLiteral(_) => PhpType::Float,
         ExprKind::BoolLiteral(_) => PhpType::Bool,
-        ExprKind::BinaryOp { op: BinOp::Concat, .. } => PhpType::Str,
         ExprKind::Cast { target: CastType::String, .. } => PhpType::Str,
         ExprKind::Cast { target: CastType::Int, .. } => PhpType::Int,
         ExprKind::Cast { target: CastType::Float, .. } => PhpType::Float,
@@ -66,6 +65,26 @@ fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         }
         ExprKind::Ternary { then_expr, .. } => infer_expr_type_syntactic(then_expr),
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.clone()),
+        ExprKind::This => PhpType::Object(String::new()),
+        ExprKind::BinaryOp { left, op, right } => {
+            match op {
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Mod => {
+                    let lt = infer_expr_type_syntactic(left);
+                    let rt = infer_expr_type_syntactic(right);
+                    if lt == PhpType::Float || rt == PhpType::Float {
+                        PhpType::Float
+                    } else {
+                        PhpType::Int
+                    }
+                }
+                BinOp::Div | BinOp::Pow => PhpType::Float,
+                BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt
+                | BinOp::LtEq | BinOp::GtEq | BinOp::StrictEq
+                | BinOp::StrictNotEq | BinOp::And | BinOp::Or => PhpType::Bool,
+                BinOp::Concat => PhpType::Str,
+                _ => PhpType::Int,
+            }
+        }
         _ => PhpType::Int,
     }
 }
@@ -271,9 +290,9 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 for s in &method.body {
                     let _ = checker.check_stmt(s, &mut method_env);
                 }
-                checker.current_class = None;
 
                 // Update method return type from full type inference
+                // (must run while current_class is still set so $this resolves)
                 if !method.is_static {
                     for s in &method.body {
                         if let Some(ty) = checker.find_return_type(s, &method_env) {
@@ -297,6 +316,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                         }
                     }
                 }
+                checker.current_class = None;
             }
         }
     }
@@ -506,6 +526,7 @@ impl Checker {
             }
             StmtKind::PropertyAssign { object, property, value } => {
                 let obj_ty = self.infer_type(object, env)?;
+                let val_ty = self.infer_type(value, env)?;
                 if let PhpType::Object(class_name) = &obj_ty {
                     if let Some(class_info) = self.classes.get(class_name) {
                         if !class_info.properties.iter().any(|(n, _)| n == property) {
@@ -515,8 +536,15 @@ impl Checker {
                             ));
                         }
                     }
+                    // Update property type from assigned value (e.g., Object type from $a->next = $b)
+                    if let Some(class_info) = self.classes.get_mut(class_name) {
+                        if let Some(prop) = class_info.properties.iter_mut().find(|(n, _)| n == property) {
+                            if prop.1 == PhpType::Int && val_ty != PhpType::Int {
+                                prop.1 = val_ty;
+                            }
+                        }
+                    }
                 }
-                self.infer_type(value, env)?;
                 Ok(())
             }
         }
@@ -887,11 +915,18 @@ impl Checker {
                 Ok(PhpType::Int)
             }
             ExprKind::StaticMethodCall { class_name, method, args } => {
+                // Infer arg types and propagate to static method sig params
+                let mut arg_types = Vec::new();
                 for arg in args {
-                    self.infer_type(arg, env)?;
+                    arg_types.push(self.infer_type(arg, env)?);
                 }
-                if let Some(class_info) = self.classes.get(class_name) {
-                    if let Some(sig) = class_info.static_methods.get(method) {
+                if let Some(class_info) = self.classes.get_mut(class_name) {
+                    if let Some(sig) = class_info.static_methods.get_mut(method) {
+                        for (i, arg_ty) in arg_types.iter().enumerate() {
+                            if i < sig.params.len() && sig.params[i].1 == PhpType::Int && *arg_ty != PhpType::Int {
+                                sig.params[i].1 = arg_ty.clone();
+                            }
+                        }
                         return Ok(sig.return_type.clone());
                     }
                 }

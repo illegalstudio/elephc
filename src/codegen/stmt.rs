@@ -326,9 +326,9 @@ pub fn emit_stmt(
                     emitter.instruction("mov x0, x9");                          // move array pointer to x0
                     emitter.instruction("bl __rt_array_push_str");              // call runtime: persist + append string to array
                 }
-                PhpType::Array(_) | PhpType::AssocArray { .. } => {
-                    // -- call runtime to append nested array pointer --
-                    emitter.instruction("mov x1, x0");                          // move nested array pointer to x1
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+                    // -- call runtime to append nested array/object pointer --
+                    emitter.instruction("mov x1, x0");                          // move nested array/object pointer to x1
                     emitter.instruction("mov x0, x9");                          // move outer array pointer to x0
                     emitter.instruction("bl __rt_array_push_int");              // append pointer (8 bytes, same as int)
                 }

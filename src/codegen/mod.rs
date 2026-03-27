@@ -58,8 +58,17 @@ pub fn generate(
             for method in methods {
                 let (label, sig) = if method.is_static {
                     let label = format!("_static_{}_{}", class_name, method.name);
-                    let params: Vec<(String, PhpType)> = method.params.iter()
-                        .map(|(n, _, _)| (n.clone(), PhpType::Int))
+                    // Use param types from ClassInfo sig (set by type checker)
+                    let class_static_sig = classes.get(class_name)
+                        .and_then(|c| c.static_methods.get(&method.name));
+                    let params: Vec<(String, PhpType)> = method.params.iter().enumerate()
+                        .map(|(i, (n, _, _))| {
+                            let ty = class_static_sig
+                                .and_then(|s| s.params.get(i))
+                                .map(|(_, t)| t.clone())
+                                .unwrap_or(PhpType::Int);
+                            (n.clone(), ty)
+                        })
                         .collect();
                     let defaults: Vec<Option<crate::parser::ast::Expr>> = method.params.iter()
                         .map(|(_, d, _)| d.clone())

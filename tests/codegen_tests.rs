@@ -6806,3 +6806,92 @@ echo "ok";
 "#);
     assert_eq!(out, "ok");
 }
+
+#[test]
+fn test_class_float_property_via_method() {
+    let out = compile_and_run(r#"<?php
+class Circle {
+    public $radius;
+    public function __construct($r) { $this->radius = $r; }
+    public function area() { return 3.14159 * $this->radius * $this->radius; }
+}
+$c = new Circle(5.0);
+echo $c->area();
+"#);
+    assert_eq!(out, "78.53975");
+}
+
+#[test]
+fn test_class_method_returns_float_property() {
+    let out = compile_and_run(r#"<?php
+class Foo {
+    public $x;
+    public function __construct($v) { $this->x = $v; }
+    public function getX() { return $this->x; }
+}
+$f = new Foo(3.14);
+echo $f->getX();
+"#);
+    assert_eq!(out, "3.14");
+}
+
+#[test]
+fn test_class_chained_property_access() {
+    let out = compile_and_run(r#"<?php
+class Node {
+    public $value;
+    public $next;
+    public function __construct($v) { $this->value = $v; }
+}
+$a = new Node(1);
+$b = new Node(2);
+$a->next = $b;
+echo $a->next->value;
+"#);
+    assert_eq!(out, "2");
+}
+
+#[test]
+fn test_class_array_of_objects_property_access() {
+    let out = compile_and_run(r#"<?php
+class Item {
+    public $name;
+    public $price;
+    public function __construct($n, $p) { $this->name = $n; $this->price = $p; }
+}
+$items = [];
+$items[] = new Item("Apple", 1);
+$items[] = new Item("Banana", 2);
+$total = 0;
+for ($i = 0; $i < count($items); $i++) {
+    $total = $total + $items[$i]->price;
+}
+echo $total;
+"#);
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_class_static_method_string_param() {
+    let out = compile_and_run(r#"<?php
+class Utils {
+    public static function greet($name) { return "Hello " . $name; }
+}
+echo Utils::greet("World");
+"#);
+    assert_eq!(out, "Hello World");
+}
+
+#[test]
+fn test_class_method_returns_this() {
+    let out = compile_and_run(r#"<?php
+class Builder {
+    public $parts = "";
+    public function add($s) { $this->parts = $this->parts . $s; return $this; }
+}
+$b = new Builder();
+$b->add("hello");
+echo "ok";
+"#);
+    assert_eq!(out, "ok");
+}
