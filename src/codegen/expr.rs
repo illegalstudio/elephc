@@ -4,7 +4,7 @@ use super::data_section::DataSection;
 use super::emit::Emitter;
 use crate::parser::ast::{BinOp, Expr, ExprKind};
 use crate::types::PhpType;
-use crate::types::checker::infer_expr_type_syntactic;
+use crate::types::FunctionSig;
 
 /// Emits code to evaluate an expression.
 /// Returns the type of the result.
@@ -359,8 +359,15 @@ pub fn emit_expr(
             emitter.instruction("cmp x0, #0");                                  // test if condition is falsy
             emitter.instruction(&format!("b.eq {}", else_label));               // jump to else branch if condition was false
             // -- determine result type: widen to the broader type --
-            let then_syn = infer_expr_type_syntactic(then_expr);
-            let else_syn = infer_expr_type_syntactic(else_expr);
+            let dummy_sig = FunctionSig {
+                params: vec![],
+                defaults: vec![],
+                return_type: PhpType::Int,
+                ref_params: vec![],
+                variadic: None,
+            };
+            let then_syn = super::functions::infer_local_type_with_ctx(then_expr, &dummy_sig, ctx);
+            let else_syn = super::functions::infer_local_type_with_ctx(else_expr, &dummy_sig, ctx);
             let result_ty = if then_syn == else_syn {
                 then_syn
             } else if then_syn == PhpType::Str || else_syn == PhpType::Str {

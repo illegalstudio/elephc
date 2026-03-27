@@ -1136,6 +1136,56 @@ echo $a ? "yes" : ($a === 0 ? "zero" : "no");
 }
 
 #[test]
+fn test_ternary_variable_string() {
+    let out = compile_and_run(
+        r#"<?php
+$name = "Alice";
+$greeting = true ? $name : "nobody";
+echo $greeting;
+"#,
+    );
+    assert_eq!(out, "Alice");
+}
+
+#[test]
+fn test_ternary_function_result() {
+    let out = compile_and_run(
+        r#"<?php
+function get_name() { return "Bob"; }
+echo true ? get_name() : "default";
+"#,
+    );
+    assert_eq!(out, "Bob");
+}
+
+#[test]
+fn test_ternary_variable_int_vs_string() {
+    let out = compile_and_run(
+        r#"<?php
+$count = 5;
+$label = "none";
+echo ($count > 0) ? $count : $label;
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+#[test]
+fn test_ternary_method_call_result() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public $val;
+    public function __construct($v) { $this->val = $v; }
+    public function get() { return $this->val; }
+}
+$b = new Box("hello");
+echo true ? $b->get() : "fallback";
+"#,
+    );
+    assert_eq!(out, "hello");
+}
+
+#[test]
 fn test_chained_closure_call() {
     let out = compile_and_run(
         "<?php $f = function() { return function() { return 99; }; }; echo $f()();",

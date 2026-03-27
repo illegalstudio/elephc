@@ -416,6 +416,16 @@ pub fn infer_local_type_pub(
     infer_local_type(expr, sig, None)
 }
 
+/// Public wrapper for infer_local_type with codegen context access.
+/// Used by ternary codegen to infer branch types using variable/class info.
+pub fn infer_local_type_with_ctx(
+    expr: &crate::parser::ast::Expr,
+    sig: &FunctionSig,
+    ctx: &Context,
+) -> PhpType {
+    infer_local_type(expr, sig, Some(ctx))
+}
+
 fn infer_local_type(
     expr: &crate::parser::ast::Expr,
     sig: &FunctionSig,
