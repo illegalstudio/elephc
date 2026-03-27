@@ -8006,3 +8006,40 @@ echo describe(200);
 "#);
     assert_eq!(out, "big");
 }
+
+#[test]
+fn test_null_coalesce_allocates_for_string_default() {
+    let out = compile_and_run(r#"<?php
+function test() {
+    $x = null;
+    $result = $x ?? "fallback";
+    echo $result;
+}
+test();
+"#);
+    assert_eq!(out, "fallback");
+}
+
+#[test]
+fn test_ternary_allocates_for_wider_type() {
+    let out = compile_and_run(r#"<?php
+function test($flag) {
+    $val = $flag ? 42 : "none";
+    echo $val;
+}
+test(false);
+"#);
+    assert_eq!(out, "none");
+}
+
+#[test]
+fn test_ternary_both_branches_in_function() {
+    let out = compile_and_run(r#"<?php
+function label($n) {
+    $result = $n > 0 ? "positive" : "zero or negative";
+    return $result;
+}
+echo label(5) . "|" . label(-1);
+"#);
+    assert_eq!(out, "positive|zero or negative");
+}

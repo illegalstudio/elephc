@@ -426,6 +426,27 @@ pub fn infer_local_type_with_ctx(
     infer_local_type(expr, sig, Some(ctx))
 }
 
+/// Returns the wider of two types for stack slot allocation.
+/// Str (16 bytes) is wider than everything else (8 bytes).
+fn wider_of(a: &PhpType, b: &PhpType) -> PhpType {
+    if a == b {
+        return a.clone();
+    }
+    if *a == PhpType::Str || *b == PhpType::Str {
+        return PhpType::Str;
+    }
+    if *a == PhpType::Float || *b == PhpType::Float {
+        return PhpType::Float;
+    }
+    if matches!(a, PhpType::Array(_)) || matches!(b, PhpType::Array(_)) {
+        return a.clone();
+    }
+    if matches!(a, PhpType::Object(_)) || matches!(b, PhpType::Object(_)) {
+        return a.clone();
+    }
+    a.clone()
+}
+
 fn infer_local_type(
     expr: &crate::parser::ast::Expr,
     sig: &FunctionSig,
@@ -471,8 +492,16 @@ fn infer_local_type(
         }
         ExprKind::Not(_) => PhpType::Bool,
         ExprKind::BitNot(_) => PhpType::Int,
-        ExprKind::NullCoalesce { value, .. } => infer_local_type(value, sig, ctx),
-        ExprKind::Ternary { then_expr, .. } => infer_local_type(then_expr, sig, ctx),
+        ExprKind::NullCoalesce { value, default } => {
+            let left = infer_local_type(value, sig, ctx);
+            let right = infer_local_type(default, sig, ctx);
+            wider_of(&left, &right)
+        }
+        ExprKind::Ternary { then_expr, else_expr, .. } => {
+            let then_ty = infer_local_type(then_expr, sig, ctx);
+            let else_ty = infer_local_type(else_expr, sig, ctx);
+            wider_of(&then_ty, &else_ty)
+        }
         ExprKind::BinaryOp { left, op, right } => {
             use crate::parser::ast::BinOp;
             match op {
@@ -482,7 +511,11 @@ fn infer_local_type(
                 | BinOp::StrictNotEq | BinOp::And | BinOp::Or => PhpType::Bool,
                 BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor
                 | BinOp::ShiftLeft | BinOp::ShiftRight | BinOp::Spaceship => PhpType::Int,
-                BinOp::NullCoalesce => infer_local_type(left, sig, ctx),
+                BinOp::NullCoalesce => {
+                    let lt = infer_local_type(left, sig, ctx);
+                    let rt = infer_local_type(right, sig, ctx);
+                    wider_of(&lt, &rt)
+                }
                 BinOp::Div | BinOp::Pow => PhpType::Float,
                 BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Mod => {
                     let lt = infer_local_type(left, sig, ctx);
