@@ -850,14 +850,14 @@ fn emit_assoc_array_literal(
     emitter.instruction("str x0, [sp, #-16]!");                                 // save hash table pointer
 
     let mut val_ty = PhpType::Int;
-    for pair in pairs {
+    for (i, pair) in pairs.iter().enumerate() {
         // -- evaluate key --
         emit_expr(&pair.0, emitter, ctx, data);
         // key is a string → x1/x2
         emitter.instruction("stp x1, x2, [sp, #-16]!");                         // save key ptr/len
         // -- evaluate value --
         let ty = emit_expr(&pair.1, emitter, ctx, data);
-        val_ty = ty.clone();
+        if i == 0 { val_ty = ty.clone(); } // use first value's type (determines hash table convention)
         // -- prepare args for hash_set --
         let (val_lo, val_hi) = match &ty {
             PhpType::Int | PhpType::Bool => ("x0", "xzr"),

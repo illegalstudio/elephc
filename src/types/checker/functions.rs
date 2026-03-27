@@ -202,6 +202,19 @@ impl Checker {
                 }
                 None
             }
+            StmtKind::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    for s in body {
+                        if let Some(t) = self.find_return_type(s, env) { return Some(t); }
+                    }
+                }
+                if let Some(body) = default {
+                    for s in body {
+                        if let Some(t) = self.find_return_type(s, env) { return Some(t); }
+                    }
+                }
+                None
+            }
             _ => None,
         }
     }

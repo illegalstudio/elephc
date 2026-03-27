@@ -406,6 +406,7 @@ pub fn emit_stmt(
                 ctx.loop_stack.push(LoopLabels {
                     continue_label: loop_cont.clone(),
                     break_label: loop_end.clone(),
+                    sp_adjust: 0,
                 });
 
                 for s in body {
@@ -477,6 +478,7 @@ pub fn emit_stmt(
                 ctx.loop_stack.push(LoopLabels {
                     continue_label: loop_cont.clone(),
                     break_label: loop_end.clone(),
+                    sp_adjust: 0,
                 });
 
                 for s in body {
@@ -509,6 +511,7 @@ pub fn emit_stmt(
             ctx.loop_stack.push(LoopLabels {
                 continue_label: loop_cond.clone(),
                 break_label: loop_end.clone(),
+                sp_adjust: 0,
             });
 
             for s in body {
@@ -541,6 +544,7 @@ pub fn emit_stmt(
             ctx.loop_stack.push(LoopLabels {
                 continue_label: loop_start.clone(),
                 break_label: loop_end.clone(),
+                sp_adjust: 0,
             });
 
             for s in body {
@@ -585,6 +589,7 @@ pub fn emit_stmt(
             ctx.loop_stack.push(LoopLabels {
                 continue_label: loop_continue.clone(),
                 break_label: loop_end.clone(),
+                sp_adjust: 0,
             });
 
             // Body
@@ -618,6 +623,11 @@ pub fn emit_stmt(
                 emit_expr(e, emitter, ctx, data);
             }
             if let Some(label) = &ctx.return_label {
+                // -- adjust sp for any switch statements that pushed to the stack --
+                let sp_total: usize = ctx.loop_stack.iter().map(|l| l.sp_adjust).sum();
+                if sp_total > 0 {
+                    emitter.instruction(&format!("add sp, sp, #{}", sp_total)); // pop switch subjects before returning
+                }
                 // -- jump to function epilogue to restore frame and return --
                 emitter.instruction(&format!("b {}", label));                   // branch to function epilogue for stack cleanup and ret
             }
@@ -685,6 +695,7 @@ pub fn emit_stmt(
             ctx.loop_stack.push(LoopLabels {
                 continue_label: switch_end.clone(),
                 break_label: switch_end.clone(),
+                sp_adjust: 16,  // switch pushes subject to stack
             });
 
             for (i, (_, body)) in cases.iter().enumerate() {

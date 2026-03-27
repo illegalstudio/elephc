@@ -54,6 +54,9 @@ pub struct VarInfo {
 pub struct LoopLabels {
     pub continue_label: String,
     pub break_label: String,
+    /// If true, this loop entry is a switch that pushed 16 bytes to the stack.
+    /// Return statements inside need to pop this before jumping to epilogue.
+    pub sp_adjust: usize,
 }
 
 impl Context {

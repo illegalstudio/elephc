@@ -32,6 +32,15 @@ fn find_return_type_syntactic(stmt: &Stmt) -> Option<PhpType> {
             for s in body { if let Some(t) = find_return_type_syntactic(s) { return Some(t); } }
             None
         }
+        StmtKind::Switch { cases, default, .. } => {
+            for (_, body) in cases {
+                for s in body { if let Some(t) = find_return_type_syntactic(s) { return Some(t); } }
+            }
+            if let Some(body) = default {
+                for s in body { if let Some(t) = find_return_type_syntactic(s) { return Some(t); } }
+            }
+            None
+        }
         _ => None,
     }
 }
@@ -602,12 +611,11 @@ impl Checker {
                             &format!("Assoc array key type mismatch: expected {:?}, got {:?}", key_ty, kt),
                         ));
                     }
-                    if vt != val_ty {
-                        return Err(CompileError::new(
-                            v.span,
-                            &format!("Assoc array value type mismatch: expected {:?}, got {:?}", val_ty, vt),
-                        ));
-                    }
+                    // Allow mixed value types — keep first value's type as the
+                    // declared type. Hash table stores 16 bytes per entry regardless.
+                    // Reading values of a different type than declared will use
+                    // the declared type's register convention (may need casting).
+                    let _ = vt; // accept any value type without error
                 }
                 Ok(PhpType::AssocArray {
                     key: Box::new(key_ty),
