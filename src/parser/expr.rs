@@ -670,7 +670,7 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                     span,
                 ));
             }
-            return Err(CompileError::new(span, "Unexpected token: Function"));
+            Err(CompileError::new(span, "Unexpected token: Function"))
         }
         Token::Fn => {
             // Arrow function: fn($x) => expr

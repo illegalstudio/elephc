@@ -1194,10 +1194,10 @@ fn emit_array_access(
     // -- bounds check: negative index or >= array length → null sentinel --
     let null_label = ctx.next_label("arr_null");
     let ok_label = ctx.next_label("arr_ok");
-    emitter.instruction(&format!("cmp x0, #0"));                                // check if index is negative
+    emitter.instruction("cmp x0, #0");                                           // check if index is negative
     emitter.instruction(&format!("b.lt {null_label}"));                         // negative index → null sentinel
     emitter.instruction("ldr x10, [x9]");                                       // load array length from header (offset 0)
-    emitter.instruction(&format!("cmp x0, x10"));                               // compare index against array length
+    emitter.instruction("cmp x0, x10");                                          // compare index against array length
     emitter.instruction(&format!("b.ge {null_label}"));                         // index >= length → null sentinel
 
     match &elem_ty {
@@ -1376,7 +1376,7 @@ fn emit_binop(
             emitter.instruction("cmp x0, #0");                                  // test if right operand is falsy
             emitter.instruction("cset x0, ne");                                 // result=1 if right is truthy, 0 if falsy
             emitter.label(&end_label);
-            return PhpType::Bool;
+            PhpType::Bool
         }
         BinOp::Or => {
             let end_label = ctx.next_label("or_end");
@@ -1391,7 +1391,7 @@ fn emit_binop(
             // -- normalize final value to boolean 0 or 1 --
             emitter.instruction("cmp x0, #0");                                  // test whichever operand survived
             emitter.instruction("cset x0, ne");                                 // normalize to 1 if truthy, 0 if falsy
-            return PhpType::Bool;
+            PhpType::Bool
         }
         BinOp::Pow => {
             let lt = emit_expr(left, emitter, ctx, data);
@@ -1410,7 +1410,7 @@ fn emit_binop(
             emitter.instruction("fmov d1, d0");                                 // move exponent to d1 (second argument)
             emitter.instruction("ldr d0, [sp], #16");                           // pop base from stack into d0 (first argument)
             emitter.instruction("bl _pow");                                     // call C library pow(base, exponent)
-            return PhpType::Float;
+            PhpType::Float
         }
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
             let lt = emit_expr(left, emitter, ctx, data);
@@ -1588,7 +1588,7 @@ fn emit_binop(
             PhpType::Bool
         }
         BinOp::StrictEq | BinOp::StrictNotEq => {
-            return emit_strict_compare(left, op, right, emitter, ctx, data);
+            emit_strict_compare(left, op, right, emitter, ctx, data)
         }
         BinOp::Concat => {
             let left_ty = emit_expr(left, emitter, ctx, data);
@@ -1673,7 +1673,7 @@ fn emit_binop(
         BinOp::NullCoalesce => {
             // Should not reach here — handled by ExprKind::NullCoalesce
             // But handle gracefully via the same mechanism
-            return emit_null_coalesce(left, right, emitter, ctx, data);
+            emit_null_coalesce(left, right, emitter, ctx, data)
         }
     }
 }
@@ -1752,17 +1752,6 @@ fn emit_function_call(
                     emitter.comment(&format!("ref arg: address of global ${}", var_name));
                     emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page of global var
                     emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); // add page offset
-                } else if ctx.in_main && ctx.all_global_var_names.contains(var_name) {
-                    let var = match ctx.variables.get(var_name) {
-                        Some(v) => v,
-                        None => {
-                            emitter.comment(&format!("WARNING: undefined variable ${}", var_name));
-                            continue;
-                        }
-                    };
-                    let offset = var.stack_offset;
-                    emitter.comment(&format!("ref arg: address of ${}", var_name));
-                    emitter.instruction(&format!("sub x0, x29, #{}", offset));  // compute address of local variable
                 } else {
                     let var = match ctx.variables.get(var_name) {
                         Some(v) => v,
@@ -2041,9 +2030,7 @@ fn emit_closure(
         defaults.push(None);
     }
     let mut ref_params: Vec<bool> = params.iter().map(|(_, _, is_ref)| *is_ref).collect();
-    for _ in &capture_types {
-        ref_params.push(false);
-    }
+    ref_params.extend(std::iter::repeat_n(false, capture_types.len()));
     let preliminary_sig = crate::types::FunctionSig {
         params: param_types.clone(),
         defaults: defaults.clone(),
@@ -2620,10 +2607,10 @@ fn emit_global_store_inline(emitter: &mut Emitter, name: &str) {
 }
 
 fn load_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
-    if value >= 0 && value <= 65535 {
+    if (0..=65535).contains(&value) {
         // -- small non-negative immediate fits in single MOV --
         emitter.instruction(&format!("mov {}, #{}", reg, value));               // load small immediate value directly
-    } else if value < 0 && value >= -65536 {
+    } else if (-65536..0).contains(&value) {
         // -- small negative immediate fits in single MOV --
         emitter.instruction(&format!("mov {}, #{}", reg, value));               // load small negative immediate directly
     } else {

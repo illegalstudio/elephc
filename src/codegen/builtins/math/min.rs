@@ -22,7 +22,7 @@ pub fn emit(
     // We need to know upfront if any arg is float so we use a consistent register
     // For simplicity, we'll track float dynamically per pair
 
-    for i in 1..args.len() {
+    for (i, arg) in args.iter().enumerate().skip(1) {
         // -- push current minimum onto stack --
         if any_float {
             if i == 1 && t0 != PhpType::Float {
@@ -33,7 +33,7 @@ pub fn emit(
             emitter.instruction("str x0, [sp, #-16]!");                         // push current min as int
         }
 
-        let ti = emit_expr(&args[i], emitter, ctx, data);
+        let ti = emit_expr(arg, emitter, ctx, data);
 
         if any_float || ti == PhpType::Float {
             // -- float comparison path --

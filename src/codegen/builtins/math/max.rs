@@ -18,7 +18,7 @@ pub fn emit(
     let t0 = emit_expr(&args[0], emitter, ctx, data);
     let mut any_float = t0 == PhpType::Float;
 
-    for i in 1..args.len() {
+    for (i, arg) in args.iter().enumerate().skip(1) {
         // -- push current maximum onto stack --
         if any_float {
             if i == 1 && t0 != PhpType::Float {
@@ -29,7 +29,7 @@ pub fn emit(
             emitter.instruction("str x0, [sp, #-16]!");                         // push current max as int
         }
 
-        let ti = emit_expr(&args[i], emitter, ctx, data);
+        let ti = emit_expr(arg, emitter, ctx, data);
 
         if any_float || ti == PhpType::Float {
             // -- float comparison path --

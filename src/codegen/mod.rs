@@ -44,7 +44,7 @@ pub fn generate(
                 StmtKind::FunctionDecl { name: n, body, .. } if n == name => Some(body),
                 _ => None,
             })
-            .expect(&format!("codegen bug: function '{}' declared in signatures but body not found in AST", name));
+            .unwrap_or_else(|| panic!("codegen bug: function '{}' declared in signatures but body not found in AST", name));
 
         self::functions::emit_function(
             &mut emitter, &mut data, name, sig, body, functions,

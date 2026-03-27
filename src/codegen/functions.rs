@@ -7,6 +7,7 @@ use super::stmt;
 use crate::parser::ast::{ExprKind, StmtKind};
 use crate::types::{ClassInfo, FunctionSig, PhpType};
 
+#[allow(clippy::too_many_arguments)]
 pub fn emit_function(
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -47,6 +48,7 @@ pub fn emit_closure(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn emit_method(
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -68,6 +70,7 @@ pub fn emit_method(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_function_with_label(
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -90,6 +93,7 @@ fn emit_function_with_label(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_function_with_label_and_class(
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -140,7 +144,7 @@ fn emit_function_with_label_and_class(
 
     // -- function prologue: set up stack frame --
     emitter.raw(".align 2");
-    emitter.label(&label);
+    emitter.label(label);
     emitter.comment("prologue");
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for locals
     emitter.instruction(&format!("stp x29, x30, [sp, #{}]", frame_size - 16));  // save caller's frame ptr & return addr
@@ -209,7 +213,7 @@ fn emit_function_with_label_and_class(
     }
 
     // -- function epilogue: save static vars back and restore/return --
-    emitter.label(&epilogue_label);
+    emitter.label(epilogue_label);
 
     // Save static vars back to global storage before returning
     let func_name = label.strip_prefix("_fn_").unwrap_or(label);
