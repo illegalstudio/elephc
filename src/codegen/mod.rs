@@ -44,7 +44,7 @@ pub fn generate(
                 StmtKind::FunctionDecl { name: n, body, .. } if n == name => Some(body),
                 _ => None,
             })
-            .expect("function body not found");
+            .expect(&format!("codegen bug: function '{}' declared in signatures but body not found in AST", name));
 
         self::functions::emit_function(
             &mut emitter, &mut data, name, sig, body, functions,
@@ -160,11 +160,11 @@ pub fn generate(
     emitter.instruction("str x1, [x9]");                                        // store argv pointer (x1 from OS)
 
     // -- store $argc in local variable --
-    let argc_offset = ctx.variables.get("argc").unwrap().stack_offset;
+    let argc_offset = ctx.variables.get("argc").expect("codegen bug: $argc not pre-allocated in main scope").stack_offset;
     abi::store_at_offset(&mut emitter, "x0", argc_offset);                        // $argc = OS argc
 
     // -- build $argv array from OS C strings --
-    let argv_offset = ctx.variables.get("argv").unwrap().stack_offset;
+    let argv_offset = ctx.variables.get("argv").expect("codegen bug: $argv not pre-allocated in main scope").stack_offset;
     emitter.comment("build $argv array from OS argv");
     emitter.instruction("bl __rt_build_argv");                                  // returns array ptr in x0
     abi::store_at_offset(&mut emitter, "x0", argv_offset);                      // $argv = array

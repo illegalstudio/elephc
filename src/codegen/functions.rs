@@ -124,7 +124,7 @@ fn emit_function_with_label_and_class(
             ctx.alloc_var(pname, PhpType::Int);
             // Set the variable type to the actual referenced type so loading
             // dereferences correctly (e.g., string ref loads x1/x2, not x0)
-            ctx.variables.get_mut(pname).unwrap().ty = _pty.clone();
+            ctx.variables.get_mut(pname).expect("codegen bug: ref param was just allocated but not found").ty = _pty.clone();
         } else {
             ctx.alloc_var(pname, _pty.clone());
         }
@@ -153,7 +153,7 @@ fn emit_function_with_label_and_class(
     let mut float_reg_idx = 0usize;
     for (i, (pname, pty)) in sig.params.iter().enumerate() {
         let is_ref = sig.ref_params.get(i).copied().unwrap_or(false);
-        let var = ctx.variables.get(pname).unwrap();
+        let var = ctx.variables.get(pname).expect("codegen bug: param was just allocated but not found in variables map");
         let offset = var.stack_offset;
         if is_ref {
             // Ref param: store the address (always comes in an integer register)

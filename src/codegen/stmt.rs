@@ -69,7 +69,13 @@ pub fn emit_stmt(
                 emit_global_store(emitter, ctx, name, &ty);
             } else if ctx.ref_params.contains(name) {
                 // -- store through reference pointer --
-                let var = ctx.variables.get(name).expect("variable not pre-allocated");
+                let var = match ctx.variables.get(name) {
+                    Some(v) => v,
+                    None => {
+                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                        return;
+                    }
+                };
                 let offset = var.stack_offset;
                 emitter.comment(&format!("write through ref ${}", name));
                 abi::load_at_offset(emitter, "x9", offset);                     // load pointer to referenced variable
@@ -95,7 +101,13 @@ pub fn emit_stmt(
                     }
                 }
             } else {
-                let var = ctx.variables.get(name).expect("variable not pre-allocated");
+                let var = match ctx.variables.get(name) {
+                    Some(v) => v,
+                    None => {
+                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                        return;
+                    }
+                };
                 let offset = var.stack_offset;
                 let old_ty = var.ty.clone();
 
@@ -136,9 +148,10 @@ pub fn emit_stmt(
             }
 
             // Update variable type if it changed (e.g. int /= produces float)
-            let var = ctx.variables.get(name).expect("variable not pre-allocated");
-            if var.ty != ty {
-                ctx.variables.get_mut(name).unwrap().ty = ty;
+            if let Some(var) = ctx.variables.get(name) {
+                if var.ty != ty {
+                    ctx.variables.get_mut(name).expect("variable disappeared between get and get_mut").ty = ty;
+                }
             }
         }
         StmtKind::If {
@@ -198,7 +211,13 @@ pub fn emit_stmt(
         StmtKind::ArrayAssign { array, index, value } => {
             emitter.blank();
             emitter.comment(&format!("${}[...] = ...", array));
-            let var = ctx.variables.get(array).expect("undefined variable");
+            let var = match ctx.variables.get(array) {
+                Some(v) => v,
+                None => {
+                    emitter.comment(&format!("WARNING: undefined variable ${}", array));
+                    return;
+                }
+            };
             let offset = var.stack_offset;
             let is_ref = ctx.ref_params.contains(array);
             let is_assoc = matches!(&var.ty, PhpType::AssocArray { .. });
@@ -293,7 +312,13 @@ pub fn emit_stmt(
         StmtKind::ArrayPush { array, value } => {
             emitter.blank();
             emitter.comment(&format!("${}[] = ...", array));
-            let var = ctx.variables.get(array).expect("undefined variable");
+            let var = match ctx.variables.get(array) {
+                Some(v) => v,
+                None => {
+                    emitter.comment(&format!("WARNING: undefined variable ${}", array));
+                    return;
+                }
+            };
             let offset = var.stack_offset;
             let is_ref = ctx.ref_params.contains(array);
             // -- load array pointer and save it before evaluating the value --
@@ -308,13 +333,17 @@ pub fn emit_stmt(
             let val_ty = emit_expr(value, emitter, ctx, data);
             emitter.instruction("ldr x9, [sp], #16");                           // pop saved array pointer into x9
             // Upgrade array element type in context if it changed
-            let elem_ty = match &ctx.variables.get(array).unwrap().ty {
-                PhpType::Array(t) => *t.clone(),
-                _ => PhpType::Int,
+            let elem_ty = match ctx.variables.get(array) {
+                Some(v) => match &v.ty {
+                    PhpType::Array(t) => *t.clone(),
+                    _ => PhpType::Int,
+                },
+                None => PhpType::Int,
             };
             if elem_ty != val_ty {
-                ctx.variables.get_mut(array).unwrap().ty =
-                    PhpType::Array(Box::new(val_ty.clone()));
+                if let Some(v) = ctx.variables.get_mut(array) {
+                    v.ty = PhpType::Array(Box::new(val_ty.clone()));
+                }
             }
             match &val_ty {
                 PhpType::Int => {
@@ -382,15 +411,24 @@ pub fn emit_stmt(
 
                 // -- store key into $key_var if present --
                 if let Some(kv) = key_var {
-                    let kvar = ctx.variables.get(kv).expect("foreach key var");
-                    let k_offset = kvar.stack_offset;
-                    // key is a string: x1=ptr, x2=len (use x10 as scratch to avoid clobbering x9)
-                    abi::store_at_offset_scratch(emitter, "x1", k_offset, "x10"); // store key ptr
-                    abi::store_at_offset_scratch(emitter, "x2", k_offset - 8, "x10"); // store key len
+                    if let Some(kvar) = ctx.variables.get(kv) {
+                        let k_offset = kvar.stack_offset;
+                        // key is a string: x1=ptr, x2=len (use x10 as scratch to avoid clobbering x9)
+                        abi::store_at_offset_scratch(emitter, "x1", k_offset, "x10"); // store key ptr
+                        abi::store_at_offset_scratch(emitter, "x2", k_offset - 8, "x10"); // store key len
+                    } else {
+                        emitter.comment(&format!("WARNING: undefined foreach key variable ${}", kv));
+                    }
                 }
 
                 // -- store value into $value_var --
-                let val_var_info = ctx.variables.get(value_var).expect("foreach val var");
+                let val_var_info = match ctx.variables.get(value_var) {
+                    Some(v) => v,
+                    None => {
+                        emitter.comment(&format!("WARNING: undefined foreach value variable ${}", value_var));
+                        return;
+                    }
+                };
                 let v_offset = val_var_info.stack_offset;
                 match &val_ty {
                     PhpType::Int | PhpType::Bool => {
@@ -442,14 +480,23 @@ pub fn emit_stmt(
 
                 // -- store index into $key_var if present --
                 if let Some(kv) = key_var {
-                    let kvar = ctx.variables.get(kv).expect("foreach key var");
-                    let k_offset = kvar.stack_offset;
-                    abi::store_at_offset_scratch(emitter, "x0", k_offset, "x10"); // store index as key
+                    if let Some(kvar) = ctx.variables.get(kv) {
+                        let k_offset = kvar.stack_offset;
+                        abi::store_at_offset_scratch(emitter, "x0", k_offset, "x10"); // store index as key
+                    } else {
+                        emitter.comment(&format!("WARNING: undefined foreach key variable ${}", kv));
+                    }
                 }
 
                 // -- load element at current index into the loop variable --
                 emitter.instruction("ldr x9, [sp, #32]");                       // load array pointer from stack (3 slots down)
-                let val_var = ctx.variables.get(value_var).expect("foreach var");
+                let val_var = match ctx.variables.get(value_var) {
+                    Some(v) => v,
+                    None => {
+                        emitter.comment(&format!("WARNING: undefined foreach value variable ${}", value_var));
+                        return;
+                    }
+                };
                 let val_offset = val_var.stack_offset;
                 match &elem_ty {
                     PhpType::Int => {
@@ -611,7 +658,7 @@ pub fn emit_stmt(
             emitter.label(&loop_end);
         }
         StmtKind::Break => {
-            let labels = ctx.loop_stack.last().expect("break outside loop");
+            let labels = ctx.loop_stack.last().expect("codegen bug: break statement outside loop (should have been caught by type checker)");
             // -- break: jump out of the current loop --
             emitter.instruction(&format!("b {}", labels.break_label));          // unconditional branch to loop exit label
         }
@@ -640,7 +687,7 @@ pub fn emit_stmt(
             // result discarded
         }
         StmtKind::Continue => {
-            let labels = ctx.loop_stack.last().expect("continue outside loop");
+            let labels = ctx.loop_stack.last().expect("codegen bug: continue statement outside loop (should have been caught by type checker)");
             // -- continue: jump to next iteration of the current loop --
             emitter.instruction(&format!("b {}", labels.continue_label));       // unconditional branch to loop continue label
         }
@@ -748,7 +795,13 @@ pub fn emit_stmt(
             emitter.instruction("str x0, [sp, #-16]!");                         // push array pointer onto stack
 
             for (i, var_name) in vars.iter().enumerate() {
-                let var = ctx.variables.get(var_name).expect("variable not pre-allocated");
+                let var = match ctx.variables.get(var_name) {
+                    Some(v) => v,
+                    None => {
+                        emitter.comment(&format!("WARNING: undefined variable ${}", var_name));
+                        continue;
+                    }
+                };
                 let offset = var.stack_offset;
 
                 // -- load element at index i from array --
@@ -796,7 +849,13 @@ pub fn emit_stmt(
             for var in vars {
                 ctx.global_vars.insert(var.clone());
                 // Load current value from global storage into local var slot
-                let var_info = ctx.variables.get(var).expect("global var not pre-allocated");
+                let var_info = match ctx.variables.get(var) {
+                    Some(v) => v,
+                    None => {
+                        emitter.comment(&format!("WARNING: global variable ${} not pre-allocated", var));
+                        continue;
+                    }
+                };
                 let offset = var_info.stack_offset;
                 let ty = var_info.ty.clone();
                 emit_global_load(emitter, ctx, var, &ty);
@@ -849,7 +908,13 @@ pub fn emit_stmt(
             // -- load current value from static storage into local variable --
             emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));      // load page of static var storage
             emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); // add page offset
-            let var_info = ctx.variables.get(name).expect("static var not pre-allocated");
+            let var_info = match ctx.variables.get(name) {
+                Some(v) => v,
+                None => {
+                    emitter.comment(&format!("WARNING: static variable ${} not pre-allocated", name));
+                    return;
+                }
+            };
             let offset = var_info.stack_offset;
             let var_ty = var_info.ty.clone();
             // Note: x9 holds the static storage address, so use x10 as scratch for large offsets
@@ -909,12 +974,25 @@ pub fn emit_stmt(
             let obj_ty = emit_expr(object, emitter, ctx, data);
             let class_name = match &obj_ty {
                 PhpType::Object(cn) => cn.clone(),
-                _ => panic!("property assign on non-object"),
+                _ => {
+                    emitter.comment("WARNING: property assign on non-object");
+                    return;
+                }
             };
-            let class_info = ctx.classes.get(&class_name).cloned()
-                .expect(&format!("undefined class: {}", class_name));
-            let prop_idx = class_info.properties.iter().position(|(n, _)| n == property)
-                .expect(&format!("undefined property: {}", property));
+            let class_info = match ctx.classes.get(&class_name).cloned() {
+                Some(c) => c,
+                None => {
+                    emitter.comment(&format!("WARNING: undefined class {}", class_name));
+                    return;
+                }
+            };
+            let prop_idx = match class_info.properties.iter().position(|(n, _)| n == property) {
+                Some(i) => i,
+                None => {
+                    emitter.comment(&format!("WARNING: undefined property {}", property));
+                    return;
+                }
+            };
             let offset = 8 + prop_idx * 16;
 
             // Save object pointer
