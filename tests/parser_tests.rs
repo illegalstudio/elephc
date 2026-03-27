@@ -1,5 +1,5 @@
 use elephc::lexer::tokenize;
-use elephc::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
+use elephc::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind, Visibility};
 use elephc::parser::parse;
 
 fn parse_source(src: &str) -> Vec<Stmt> {
@@ -804,5 +804,124 @@ fn test_parse_spread_in_array_literal() {
             _ => panic!("Expected ArrayLiteral"),
         },
         _ => panic!("Expected Assign"),
+    }
+}
+
+#[test]
+fn test_parse_class_decl() {
+    let stmts = parse_source("<?php class Point { public $x; private $y = 1; public function get() { return $this->x; } public static function origin() { return new Point(); } }");
+    match &stmts[0].kind {
+        StmtKind::ClassDecl { name, properties, methods } => {
+            assert_eq!(name, "Point");
+            assert_eq!(properties.len(), 2);
+            assert_eq!(properties[0].name, "x");
+            assert_eq!(properties[0].visibility, Visibility::Public);
+            assert_eq!(properties[1].name, "y");
+            assert_eq!(properties[1].visibility, Visibility::Private);
+            assert!(properties[1].default.is_some());
+            assert_eq!(methods.len(), 2);
+            assert_eq!(methods[0].name, "get");
+            assert!(!methods[0].is_static);
+            assert_eq!(methods[1].name, "origin");
+            assert!(methods[1].is_static);
+        }
+        _ => panic!("Expected ClassDecl"),
+    }
+}
+
+#[test]
+fn test_parse_new_object() {
+    let stmts = parse_source("<?php $p = new Point(1, 2);");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::NewObject { class_name, args } => {
+                assert_eq!(class_name, "Point");
+                assert_eq!(args.len(), 2);
+            }
+            _ => panic!("Expected NewObject"),
+        },
+        _ => panic!("Expected Assign"),
+    }
+}
+
+#[test]
+fn test_parse_property_access() {
+    let stmts = parse_source("<?php echo $obj->prop;");
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::PropertyAccess { object, property } => {
+                assert_eq!(property, "prop");
+                assert!(matches!(object.kind, ExprKind::Variable(_)));
+            }
+            _ => panic!("Expected PropertyAccess"),
+        },
+        _ => panic!("Expected Echo"),
+    }
+}
+
+#[test]
+fn test_parse_method_call() {
+    let stmts = parse_source("<?php $obj->run(1, 2);");
+    match &stmts[0].kind {
+        StmtKind::ExprStmt(expr) => match &expr.kind {
+            ExprKind::MethodCall { object, method, args } => {
+                assert_eq!(method, "run");
+                assert_eq!(args.len(), 2);
+                assert!(matches!(object.kind, ExprKind::Variable(_)));
+            }
+            _ => panic!("Expected MethodCall"),
+        },
+        _ => panic!("Expected ExprStmt"),
+    }
+}
+
+#[test]
+fn test_parse_static_method_call() {
+    let stmts = parse_source("<?php Factory::make(1);");
+    match &stmts[0].kind {
+        StmtKind::ExprStmt(expr) => match &expr.kind {
+            ExprKind::StaticMethodCall { class_name, method, args } => {
+                assert_eq!(class_name, "Factory");
+                assert_eq!(method, "make");
+                assert_eq!(args.len(), 1);
+            }
+            _ => panic!("Expected StaticMethodCall"),
+        },
+        _ => panic!("Expected ExprStmt"),
+    }
+}
+
+#[test]
+fn test_parse_property_assign() {
+    let stmts = parse_source("<?php $obj->prop = 42;");
+    match &stmts[0].kind {
+        StmtKind::PropertyAssign { object, property, value } => {
+            assert_eq!(property, "prop");
+            assert!(matches!(object.kind, ExprKind::Variable(_)));
+            assert!(matches!(value.kind, ExprKind::IntLiteral(42)));
+        }
+        _ => panic!("Expected PropertyAssign"),
+    }
+}
+
+#[test]
+fn test_parse_chained_access() {
+    let stmts = parse_source("<?php echo $obj->make()->prop;");
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::PropertyAccess { object, property } => {
+                assert_eq!(property, "prop");
+                match &object.kind {
+                    ExprKind::MethodCall { object, method, args } => {
+                        assert_eq!(method, "make");
+                        assert!(args.is_empty());
+                        assert!(matches!(object.kind, ExprKind::Variable(_)));
+                    }
+                    _ => panic!("Expected MethodCall inside chained access"),
+                }
+            }
+            _ => panic!("Expected PropertyAccess"),
+        },
+        _ => panic!("Expected Echo"),
     }
 }

@@ -620,6 +620,34 @@ fn test_pipe_vs_oror() {
     assert!(t.contains(&Token::OrOr));
 }
 
+#[test]
+fn test_lex_class_keyword() {
+    let t = tokens("<?php class Point { public $x; private $y; public readonly $id; } $p = new Point();");
+    assert!(t.contains(&Token::Class));
+    assert!(t.contains(&Token::New));
+    assert!(t.contains(&Token::Public));
+    assert!(t.contains(&Token::Private));
+    assert!(t.contains(&Token::ReadOnly));
+}
+
+#[test]
+fn test_lex_arrow_operator() {
+    let t = tokens("<?php $obj->prop;");
+    assert!(t.contains(&Token::Arrow));
+}
+
+#[test]
+fn test_lex_double_colon() {
+    let t = tokens("<?php Point::origin();");
+    assert!(t.contains(&Token::DoubleColon));
+}
+
+#[test]
+fn test_lex_this() {
+    let t = tokens("<?php $this->value;");
+    assert_eq!(t[1], Token::This);
+}
+
 // --- Spaceship operator ---
 
 #[test]

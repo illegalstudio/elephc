@@ -4,7 +4,7 @@ mod functions;
 use std::collections::HashMap;
 
 use crate::errors::CompileError;
-use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Program, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Program, Stmt, StmtKind, Visibility};
 use crate::types::{CheckResult, ClassInfo, FunctionSig, PhpType, TypeEnv};
 
 /// Infer a function's return type by scanning its body for Return statements.
@@ -145,6 +145,10 @@ pub(crate) struct Checker {
     pub classes: HashMap<String, ClassInfo>,
     /// Name of the class currently being type-checked (for $this).
     pub current_class: Option<String>,
+    /// Name of the current method, when type-checking a class method body.
+    pub current_method: Option<String>,
+    /// Whether the current class method is static.
+    pub current_method_is_static: bool,
 }
 
 #[derive(Clone)]
@@ -164,6 +168,8 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         closure_return_types: HashMap::new(),
         classes: HashMap::new(),
         current_class: None,
+        current_method: None,
+        current_method_is_static: false,
     };
 
     for stmt in program {
@@ -185,9 +191,12 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
     }
 
     // First pass: collect class declarations and build ClassInfo
+    let mut next_class_id = 0u64;
     for stmt in program {
         if let StmtKind::ClassDecl { name, properties, methods } = &stmt.kind {
             let mut prop_types = Vec::new();
+            let mut property_visibilities = HashMap::new();
+            let mut readonly_properties = std::collections::HashSet::new();
             for prop in properties {
                 let ty = if let Some(default) = &prop.default {
                     infer_expr_type_syntactic(default)
@@ -195,9 +204,15 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                     PhpType::Int // properties without defaults are set by constructor
                 };
                 prop_types.push((prop.name.clone(), ty));
+                property_visibilities.insert(prop.name.clone(), prop.visibility.clone());
+                if prop.readonly {
+                    readonly_properties.insert(prop.name.clone());
+                }
             }
             let mut method_sigs = HashMap::new();
             let mut static_sigs = HashMap::new();
+            let mut method_visibilities = HashMap::new();
+            let mut static_method_visibilities = HashMap::new();
             for method in methods {
                 let params: Vec<(String, PhpType)> = method.params.iter()
                     .map(|(n, _, _)| (n.clone(), PhpType::Int))
@@ -218,8 +233,10 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 };
                 if method.is_static {
                     static_sigs.insert(method.name.clone(), sig);
+                    static_method_visibilities.insert(method.name.clone(), method.visibility.clone());
                 } else {
                     method_sigs.insert(method.name.clone(), sig);
+                    method_visibilities.insert(method.name.clone(), method.visibility.clone());
                 }
             }
             // Build constructor param → property mapping
@@ -245,12 +262,18 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 .map(|p| p.default.clone())
                 .collect();
             checker.classes.insert(name.clone(), ClassInfo {
+                class_id: next_class_id,
                 properties: prop_types,
                 defaults,
+                property_visibilities,
+                readonly_properties,
                 methods: method_sigs,
                 static_methods: static_sigs,
+                method_visibilities,
+                static_method_visibilities,
                 constructor_param_to_prop: param_to_prop,
             });
+            next_class_id += 1;
         }
     }
 
@@ -333,8 +356,10 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                     }
                 }
                 checker.current_class = Some(name.clone());
+                checker.current_method = Some(method.name.clone());
+                checker.current_method_is_static = method.is_static;
                 for s in &method.body {
-                    let _ = checker.check_stmt(s, &mut method_env);
+                    checker.check_stmt(s, &mut method_env)?;
                 }
 
                 // Update method return type from full type inference
@@ -363,6 +388,8 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                     }
                 }
                 checker.current_class = None;
+                checker.current_method = None;
+                checker.current_method_is_static = false;
             }
         }
     }
@@ -375,6 +402,55 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
 }
 
 impl Checker {
+    fn can_access_private_member(&self, class_name: &str) -> bool {
+        self.current_class.as_deref() == Some(class_name)
+    }
+
+    fn check_call_arity(
+        &self,
+        kind: &str,
+        name: &str,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+    ) -> Result<(), CompileError> {
+        let effective_arg_count = args.iter()
+            .filter(|a| !matches!(a.kind, ExprKind::Spread(_)))
+            .count();
+        let has_spread = args.iter().any(|a| matches!(a.kind, ExprKind::Spread(_)));
+        if has_spread {
+            return Ok(());
+        }
+
+        let required = sig.defaults.iter().filter(|d| d.is_none()).count();
+        if sig.variadic.is_some() {
+            if effective_arg_count < required {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "{} '{}' expects at least {} arguments, got {}",
+                        kind, name, required, effective_arg_count
+                    ),
+                ));
+            }
+        } else if effective_arg_count < required || effective_arg_count > sig.params.len() {
+            let expected = if required == sig.params.len() {
+                format!("{}", required)
+            } else {
+                format!("{} to {}", required, sig.params.len())
+            };
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "{} '{}' expects {} arguments, got {}",
+                    kind, name, expected, effective_arg_count
+                ),
+            ));
+        }
+
+        Ok(())
+    }
+
     pub fn check_stmt(&mut self, stmt: &Stmt, env: &mut TypeEnv) -> Result<(), CompileError> {
         match &stmt.kind {
             StmtKind::Echo(expr) => {
@@ -581,6 +657,27 @@ impl Checker {
                                 &format!("Undefined property: {}::{}", class_name, property),
                             ));
                         }
+                        if matches!(
+                            class_info.property_visibilities.get(property),
+                            Some(Visibility::Private)
+                        ) && !self.can_access_private_member(class_name) {
+                            return Err(CompileError::new(
+                                stmt.span,
+                                &format!("Cannot access private property: {}::{}", class_name, property),
+                            ));
+                        }
+                        if class_info.readonly_properties.contains(property)
+                            && !(self.current_class.as_deref() == Some(class_name)
+                                && self.current_method.as_deref() == Some("__construct"))
+                        {
+                            return Err(CompileError::new(
+                                stmt.span,
+                                &format!(
+                                    "Cannot assign to readonly property outside constructor: {}::{}",
+                                    class_name, property
+                                ),
+                            ));
+                        }
                     }
                     // Update property type from assigned value (e.g., Object type from $a->next = $b)
                     if let Some(class_info) = self.classes.get_mut(class_name) {
@@ -756,8 +853,7 @@ impl Checker {
             ExprKind::NullCoalesce { value, default } => {
                 let vt = self.infer_type(value, env)?;
                 let dt = self.infer_type(default, env)?;
-                // Result type is the non-null type, prefer left if both non-void
-                if vt == PhpType::Void { Ok(dt) } else { Ok(vt) }
+                Ok(wider_type_syntactic(&vt, &dt))
             }
             ExprKind::ConstRef(name) => {
                 self.constants.get(name).cloned().ok_or_else(|| {
@@ -928,6 +1024,26 @@ impl Checker {
                         &format!("Undefined class: {}", class_name),
                     ));
                 }
+                if let Some(class_info) = self.classes.get(class_name) {
+                    if let Some(sig) = class_info.methods.get("__construct") {
+                        self.check_call_arity(
+                            "Constructor",
+                            &format!("{}::__construct", class_name),
+                            sig,
+                            args,
+                            expr.span,
+                        )?;
+                    } else if !args.is_empty() {
+                        return Err(CompileError::new(
+                            expr.span,
+                            &format!(
+                                "Constructor '{}::__construct' expects 0 arguments, got {}",
+                                class_name,
+                                args.len()
+                            ),
+                        ));
+                    }
+                }
                 // Infer arg types and propagate to property types via constructor mapping
                 let param_to_prop = self.classes.get(class_name)
                     .map(|c| c.constructor_param_to_prop.clone())
@@ -949,6 +1065,15 @@ impl Checker {
                 let obj_ty = self.infer_type(object, env)?;
                 if let PhpType::Object(class_name) = &obj_ty {
                     if let Some(class_info) = self.classes.get(class_name) {
+                        if matches!(
+                            class_info.property_visibilities.get(property),
+                            Some(Visibility::Private)
+                        ) && !self.can_access_private_member(class_name) {
+                            return Err(CompileError::new(
+                                expr.span,
+                                &format!("Cannot access private property: {}::{}", class_name, property),
+                            ));
+                        }
                         if let Some((_, ty)) = class_info.properties.iter().find(|(n, _)| n == property) {
                             return Ok(ty.clone());
                         }
@@ -968,7 +1093,32 @@ impl Checker {
                     arg_types.push(self.infer_type(arg, env)?);
                 }
                 if let PhpType::Object(class_name) = &obj_ty {
-                    // Update method param types from actual arg types
+                    if let Some(class_info) = self.classes.get(class_name) {
+                        if let Some(sig) = class_info.methods.get(method) {
+                            if matches!(
+                                class_info.method_visibilities.get(method),
+                                Some(Visibility::Private)
+                            ) && !self.can_access_private_member(class_name) {
+                                return Err(CompileError::new(
+                                    expr.span,
+                                    &format!("Cannot access private method: {}::{}", class_name, method),
+                                ));
+                            }
+                            self.check_call_arity(
+                                "Method",
+                                &format!("{}::{}", class_name, method),
+                                sig,
+                                args,
+                                expr.span,
+                            )?;
+                        } else {
+                            return Err(CompileError::new(
+                                expr.span,
+                                &format!("Undefined method: {}::{}", class_name, method),
+                            ));
+                        }
+                    }
+
                     if let Some(class_info) = self.classes.get_mut(class_name) {
                         if let Some(sig) = class_info.methods.get_mut(method) {
                             for (i, arg_ty) in arg_types.iter().enumerate() {
@@ -988,6 +1138,42 @@ impl Checker {
                 for arg in args {
                     arg_types.push(self.infer_type(arg, env)?);
                 }
+                if let Some(class_info) = self.classes.get(class_name) {
+                    if let Some(sig) = class_info.static_methods.get(method) {
+                        if matches!(
+                            class_info.static_method_visibilities.get(method),
+                            Some(Visibility::Private)
+                        ) && !self.can_access_private_member(class_name) {
+                            return Err(CompileError::new(
+                                expr.span,
+                                &format!("Cannot access private method: {}::{}", class_name, method),
+                            ));
+                        }
+                        self.check_call_arity(
+                            "Static method",
+                            &format!("{}::{}", class_name, method),
+                            sig,
+                            args,
+                            expr.span,
+                        )?;
+                    } else if class_info.methods.contains_key(method) {
+                        return Err(CompileError::new(
+                            expr.span,
+                            &format!("Cannot call instance method statically: {}::{}", class_name, method),
+                        ));
+                    } else {
+                        return Err(CompileError::new(
+                            expr.span,
+                            &format!("Undefined method: {}::{}", class_name, method),
+                        ));
+                    }
+                } else {
+                    return Err(CompileError::new(
+                        expr.span,
+                        &format!("Undefined class: {}", class_name),
+                    ));
+                }
+
                 if let Some(class_info) = self.classes.get_mut(class_name) {
                     if let Some(sig) = class_info.static_methods.get_mut(method) {
                         for (i, arg_ty) in arg_types.iter().enumerate() {
@@ -1001,6 +1187,12 @@ impl Checker {
                 Ok(PhpType::Int)
             }
             ExprKind::This => {
+                if self.current_method_is_static {
+                    return Err(CompileError::new(
+                        expr.span,
+                        "Cannot use $this inside a static method",
+                    ));
+                }
                 if let Some(class_name) = &self.current_class {
                     Ok(PhpType::Object(class_name.clone()))
                 } else {

@@ -1125,7 +1125,7 @@ class Config {
 
 - `public` properties can be accessed from outside the class via `->`.
 - `private` properties can only be accessed inside the class via `$this->`.
-- `readonly` properties can only be assigned once (in the constructor).
+- `readonly` properties can only be assigned inside `__construct`.
 
 ### Constructor
 

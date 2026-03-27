@@ -1,6 +1,7 @@
 use elephc::lexer::tokenize;
 use elephc::parser::parse;
 use elephc::types;
+use elephc::types::PhpType;
 
 fn check_source(src: &str) -> Result<(), String> {
     let tokens = tokenize(src).map_err(|e| e.message.clone())?;
@@ -155,7 +156,7 @@ fn test_error_undefined_function() {
 fn test_error_wrong_arg_count() {
     expect_error(
         "<?php function f($a) { return $a; } f(1, 2);",
-        "expects 1 to 1 arguments, got 2",
+        "expects 1 arguments, got 2",
     );
 }
 
@@ -243,6 +244,22 @@ fn test_error_is_float_wrong_args() {
 #[test]
 fn test_error_is_int_wrong_args() {
     expect_error("<?php is_int();", "is_int() takes exactly 1 argument");
+}
+
+#[test]
+fn test_null_coalesce_widens_function_return_type_in_checker() {
+    let tokens = tokenize(
+        "<?php function fallback_pi($x) { return $x ?? 3.14159; }",
+    )
+    .expect("tokenize failed");
+    let ast = parse(&tokens).expect("parse failed");
+    let check_result = types::check(&ast).expect("type check failed");
+
+    let sig = check_result
+        .functions
+        .get("fallback_pi")
+        .expect("missing function signature for fallback_pi");
+    assert_eq!(sig.return_type, PhpType::Float);
 }
 
 // --- Include/Require errors ---
@@ -1056,6 +1073,59 @@ fn test_error_spread_non_array() {
     expect_error(
         "<?php $x = 5; $y = [...$x];",
         "Spread operator requires an array",
+    );
+}
+
+#[test]
+fn test_error_undefined_class() {
+    expect_error("<?php $x = new Missing();", "Undefined class: Missing");
+}
+
+#[test]
+fn test_error_undefined_property() {
+    expect_error(
+        "<?php class Box {} $b = new Box(); echo $b->missing;",
+        "Undefined property: Box::missing",
+    );
+}
+
+#[test]
+fn test_error_undefined_method() {
+    expect_error(
+        "<?php class Box {} $b = new Box(); $b->missing();",
+        "Undefined method: Box::missing",
+    );
+}
+
+#[test]
+fn test_error_private_access() {
+    expect_error(
+        "<?php class Secret { private $value = 7; } $s = new Secret(); echo $s->value;",
+        "Cannot access private property: Secret::value",
+    );
+}
+
+#[test]
+fn test_error_readonly_assign() {
+    expect_error(
+        "<?php class User { public readonly $id; public function __construct($id) { $this->id = $id; } } $u = new User(1); $u->id = 2;",
+        "Cannot assign to readonly property outside constructor: User::id",
+    );
+}
+
+#[test]
+fn test_error_static_this() {
+    expect_error(
+        "<?php class Demo { public static function bad() { return $this; } } Demo::bad();",
+        "Cannot use $this inside a static method",
+    );
+}
+
+#[test]
+fn test_error_wrong_constructor_args() {
+    expect_error(
+        "<?php class Point { public function __construct($x) {} } $p = new Point();",
+        "Constructor 'Point::__construct' expects 1 arguments, got 0",
     );
 }
 

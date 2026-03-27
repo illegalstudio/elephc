@@ -484,6 +484,8 @@ fn emit_new_object(
     // -- allocate object on heap --
     emitter.instruction(&format!("mov x0, #{}", obj_size));                     // object size in bytes
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate object → x0 = pointer
+    emitter.instruction(&format!("mov x10, #{}", class_info.class_id));         // load compile-time class id
+    emitter.instruction("str x10, [x0]");                                       // store class id at object header
     emitter.instruction("str x0, [sp, #-16]!");                                 // save object pointer on stack
 
     // -- zero-initialize all property slots --
@@ -579,10 +581,12 @@ fn emit_new_object(
 
         // Load $this into x0 (peek from stack, don't pop)
         emitter.instruction("ldr x0, [sp]");                                    // load $this pointer for constructor
+        save_concat_offset_before_nested_call(emitter);
         emitter.instruction(&format!(                                           // call constructor
             "bl _method_{}___construct",
             class_name
         ));
+        restore_concat_offset_after_nested_call(emitter, &PhpType::Void);
     }
 
     // -- return object pointer --
@@ -728,15 +732,17 @@ fn emit_method_call(
         }
     }
 
-    // Call the method
-    emitter.instruction(&format!("bl _method_{}_{}", class_name, method));      // call instance method
-
-    // Return type
     let class_info = ctx.classes.get(&class_name).cloned();
-    class_info
+    let ret_ty = class_info
         .and_then(|ci| ci.methods.get(method).cloned())
         .map(|sig| sig.return_type)
-        .unwrap_or(PhpType::Int)
+        .unwrap_or(PhpType::Int);
+
+    save_concat_offset_before_nested_call(emitter);
+    emitter.instruction(&format!("bl _method_{}_{}", class_name, method));      // call instance method
+    restore_concat_offset_after_nested_call(emitter, &ret_ty);
+
+    ret_ty
 }
 
 fn emit_static_method_call(
@@ -804,13 +810,17 @@ fn emit_static_method_call(
         }
     }
 
-    emitter.instruction(&format!("bl _static_{}_{}", class_name, method));      // call static method
-
     let class_info = ctx.classes.get(class_name).cloned();
-    class_info
+    let ret_ty = class_info
         .and_then(|ci| ci.static_methods.get(method).cloned())
         .map(|sig| sig.return_type)
-        .unwrap_or(PhpType::Int)
+        .unwrap_or(PhpType::Int);
+
+    save_concat_offset_before_nested_call(emitter);
+    emitter.instruction(&format!("bl _static_{}_{}", class_name, method));      // call static method
+    restore_concat_offset_after_nested_call(emitter, &ret_ty);
+
+    ret_ty
 }
 
 fn emit_array_literal(
@@ -1972,13 +1982,36 @@ fn emit_function_call(
         let _ = is_float;
     }
 
-    // -- call the user-defined PHP function --
-    emitter.instruction(&format!("bl _fn_{}", name));                           // branch-and-link to compiled PHP function
-
-    ctx.functions
+    let ret_ty = ctx.functions
         .get(name)
         .map(|sig| sig.return_type.clone())
-        .unwrap_or(PhpType::Void)
+        .unwrap_or(PhpType::Void);
+
+    save_concat_offset_before_nested_call(emitter);
+    emitter.instruction(&format!("bl _fn_{}", name));                           // branch-and-link to compiled PHP function
+    restore_concat_offset_after_nested_call(emitter, &ret_ty);
+
+    ret_ty
+}
+
+pub(crate) fn save_concat_offset_before_nested_call(emitter: &mut Emitter) {
+    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of caller concat offset
+    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve caller concat offset address
+    emitter.instruction("ldr x10, [x9]");                                       // read caller concat offset before nested call
+    emitter.instruction("str x10, [sp, #-16]!");                                // save caller concat offset across nested call
+}
+
+pub(crate) fn restore_concat_offset_after_nested_call(
+    emitter: &mut Emitter,
+    return_ty: &PhpType,
+) {
+    if *return_ty == PhpType::Str {
+        emitter.instruction("bl __rt_str_persist");                              // persist returned string before restoring caller concat cursor
+    }
+    emitter.instruction("ldr x10, [sp], #16");                                  // pop saved caller concat offset from stack
+    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of caller concat offset
+    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve caller concat offset address
+    emitter.instruction("str x10, [x9]");                                       // restore caller concat offset after nested call
 }
 
 fn widen_codegen_type(a: &PhpType, b: &PhpType) -> PhpType {
@@ -2312,13 +2345,15 @@ fn emit_closure_call(
         }
     }
 
-    // -- indirect call through closure function address --
-    emitter.instruction("blr x9");                                              // branch to closure via function pointer in x9
-
-    // -- return the closure's known return type, or default to Int --
     let ret_ty = ctx.closure_sigs.get(var)
         .map(|s| s.return_type.clone())
         .unwrap_or(PhpType::Int);
+
+    emitter.instruction("mov x19, x9");                                         // preserve closure address across concat-offset save
+    save_concat_offset_before_nested_call(emitter);
+    emitter.instruction("blr x19");                                             // branch to closure via function pointer in x19
+    restore_concat_offset_after_nested_call(emitter, &ret_ty);
+
     ret_ty
 }
 
@@ -2395,29 +2430,37 @@ fn emit_expr_call(
         }
     }
 
-    // -- indirect call through expression function address --
-    emitter.instruction("blr x9");                                              // branch to closure via function pointer in x9
-
-    // -- return the closure's known return type, or default to Int --
-    match &callee.kind {
+    let ret_ty = match &callee.kind {
         ExprKind::Variable(var_name) => {
             if let Some(sig) = ctx.closure_sigs.get(var_name) {
-                return sig.return_type.clone();
+                sig.return_type.clone()
+            } else {
+                PhpType::Int
             }
         }
         ExprKind::ArrayAccess { array, .. } => {
             if let ExprKind::Variable(arr_name) = &array.kind {
                 if let Some(sig) = ctx.closure_sigs.get(arr_name) {
-                    return sig.return_type.clone();
+                    sig.return_type.clone()
+                } else {
+                    PhpType::Int
                 }
+            } else {
+                PhpType::Int
             }
         }
         ExprKind::Closure { body, .. } => {
-            return crate::types::checker::infer_return_type_syntactic(body);
+            crate::types::checker::infer_return_type_syntactic(body)
         }
-        _ => {}
-    }
-    PhpType::Int
+        _ => PhpType::Int,
+    };
+
+    emitter.instruction("mov x19, x9");                                         // preserve closure address across concat-offset save
+    save_concat_offset_before_nested_call(emitter);
+    emitter.instruction("blr x19");                                             // branch to closure via function pointer in x19
+    restore_concat_offset_after_nested_call(emitter, &ret_ty);
+
+    ret_ty
 }
 
 fn emit_cast(

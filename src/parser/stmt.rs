@@ -567,6 +567,12 @@ fn parse_class_decl(
         }
 
         if tokens[*pos].0 == Token::Function {
+            if is_readonly {
+                return Err(CompileError::new(
+                    member_span,
+                    "Readonly methods are not supported",
+                ));
+            }
             // Method declaration
             *pos += 1; // consume 'function'
             let method_name = match tokens.get(*pos).map(|(t, _)| t) {
@@ -623,6 +629,12 @@ fn parse_class_decl(
             });
         } else if let Some(Token::Variable(prop_name)) = tokens.get(*pos).map(|(t, _)| t.clone()) {
             // Property declaration
+            if is_static {
+                return Err(CompileError::new(
+                    member_span,
+                    "Static properties are not supported",
+                ));
+            }
             let prop_name = prop_name.clone();
             *pos += 1;
             let default = if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
