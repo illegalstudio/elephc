@@ -45,7 +45,7 @@ fn find_return_type_syntactic(stmt: &Stmt) -> Option<PhpType> {
     }
 }
 
-fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
+pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
     match &expr.kind {
         ExprKind::StringLiteral(_) => PhpType::Str,
         ExprKind::IntLiteral(_) => PhpType::Int,
@@ -72,7 +72,19 @@ fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                 _ => PhpType::Int,
             }
         }
-        ExprKind::Ternary { then_expr, .. } => infer_expr_type_syntactic(then_expr),
+        ExprKind::Ternary { then_expr, else_expr, .. } => {
+            let then_ty = infer_expr_type_syntactic(then_expr);
+            let else_ty = infer_expr_type_syntactic(else_expr);
+            if then_ty == else_ty {
+                then_ty
+            } else if then_ty == PhpType::Str || else_ty == PhpType::Str {
+                PhpType::Str
+            } else if then_ty == PhpType::Float || else_ty == PhpType::Float {
+                PhpType::Float
+            } else {
+                then_ty
+            }
+        }
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.clone()),
         ExprKind::This => PhpType::Object(String::new()),
         ExprKind::BinaryOp { left, op, right } => {
@@ -679,12 +691,16 @@ impl Checker {
                 self.infer_type(condition, env)?;
                 let then_ty = self.infer_type(then_expr, env)?;
                 let else_ty = self.infer_type(else_expr, env)?;
-                if then_ty == else_ty {
-                    Ok(then_ty)
+                let result_ty = if then_ty == else_ty {
+                    then_ty
+                } else if then_ty == PhpType::Str || else_ty == PhpType::Str {
+                    PhpType::Str
+                } else if then_ty == PhpType::Float || else_ty == PhpType::Float {
+                    PhpType::Float
                 } else {
-                    // Different types: return the then-branch type (PHP is dynamic)
-                    Ok(then_ty)
-                }
+                    then_ty
+                };
+                Ok(result_ty)
             }
             ExprKind::Cast { target, expr } => {
                 self.infer_type(expr, env)?;

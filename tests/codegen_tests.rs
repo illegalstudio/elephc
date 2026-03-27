@@ -1059,6 +1059,83 @@ fn test_ternary_mixed_types_then_branch_str() {
 }
 
 #[test]
+fn test_ternary_int_string() {
+    let out = compile_and_run(
+        r#"<?php
+$x = true;
+echo $x ? 42 : "none";
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_ternary_string_int() {
+    let out = compile_and_run(
+        r#"<?php
+$x = false;
+echo $x ? "yes" : 0;
+"#,
+    );
+    assert_eq!(out, "0");
+}
+
+#[test]
+fn test_ternary_string_string() {
+    let out = compile_and_run(
+        r#"<?php
+$x = true;
+echo $x ? "hello" : "world";
+"#,
+    );
+    assert_eq!(out, "hello");
+}
+
+#[test]
+fn test_ternary_int_int() {
+    let out = compile_and_run(
+        r#"<?php
+$x = true;
+echo $x ? 1 : 0;
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_ternary_mixed_in_concat() {
+    let out = compile_and_run(
+        r#"<?php
+$count = 5;
+echo "Items: " . ($count > 0 ? $count : "none");
+"#,
+    );
+    assert_eq!(out, "Items: 5");
+}
+
+#[test]
+fn test_ternary_float_string() {
+    let out = compile_and_run(
+        r#"<?php
+$x = false;
+echo $x ? 3.14 : "zero";
+"#,
+    );
+    assert_eq!(out, "zero");
+}
+
+#[test]
+fn test_ternary_nested_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+$a = 0;
+echo $a ? "yes" : ($a === 0 ? "zero" : "no");
+"#,
+    );
+    assert_eq!(out, "zero");
+}
+
+#[test]
 fn test_chained_closure_call() {
     let out = compile_and_run(
         "<?php $f = function() { return function() { return 99; }; }; echo $f()();",

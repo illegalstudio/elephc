@@ -4,6 +4,7 @@ use super::data_section::DataSection;
 use super::emit::Emitter;
 use crate::parser::ast::{BinOp, Expr, ExprKind};
 use crate::types::PhpType;
+use crate::types::checker::infer_expr_type_syntactic;
 
 /// Emits code to evaluate an expression.
 /// Returns the type of the result.
@@ -273,16 +274,40 @@ pub fn emit_expr(
             // -- branch based on ternary condition --
             emitter.instruction("cmp x0, #0");                                  // test if condition is falsy
             emitter.instruction(&format!("b.eq {}", else_label));               // jump to else branch if condition was false
+            // -- determine result type: widen to the broader type --
+            let then_syn = infer_expr_type_syntactic(then_expr);
+            let else_syn = infer_expr_type_syntactic(else_expr);
+            let result_ty = if then_syn == else_syn {
+                then_syn
+            } else if then_syn == PhpType::Str || else_syn == PhpType::Str {
+                PhpType::Str
+            } else if then_syn == PhpType::Float || else_syn == PhpType::Float {
+                PhpType::Float
+            } else {
+                then_syn
+            };
             let then_ty = emit_expr(then_expr, emitter, ctx, data);
+            // -- coerce then-branch to result type if needed --
+            if result_ty != then_ty {
+                if result_ty == PhpType::Str {
+                    coerce_to_string(emitter, &then_ty);
+                } else if result_ty == PhpType::Float && then_ty == PhpType::Int {
+                    emitter.instruction("scvtf d0, x0");                        // convert int to float for unified result type
+                }
+            }
             emitter.instruction(&format!("b {}", end_label));                   // skip else branch after evaluating then-expr
             emitter.label(&else_label);
             let else_ty = emit_expr(else_expr, emitter, ctx, data);
-            if then_ty != else_ty && then_ty == PhpType::Str {
-                // -- coerce else branch to string to match then-branch type --
-                coerce_to_string(emitter, &else_ty);
+            // -- coerce else-branch to result type if needed --
+            if result_ty != else_ty {
+                if result_ty == PhpType::Str {
+                    coerce_to_string(emitter, &else_ty);
+                } else if result_ty == PhpType::Float && else_ty == PhpType::Int {
+                    emitter.instruction("scvtf d0, x0");                        // convert int to float for unified result type
+                }
             }
             emitter.label(&end_label);
-            then_ty
+            result_ty
         }
         ExprKind::Cast { target, expr } => emit_cast(target, expr, emitter, ctx, data),
         ExprKind::FunctionCall { name, args } => {
