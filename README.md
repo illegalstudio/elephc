@@ -19,7 +19,7 @@ I made the project as modular as possible. Every function has its own codegen fi
 
 ### What you should not expect
 
-Don't expect to take any existing PHP project and magically compile it. There are no classes here, no Composer. We're roughly at the level of that famous *PHP 4* book where my journey began.
+Don't expect to take any existing PHP project and magically compile it. There's no Composer, no inheritance, no interfaces. We support basic classes with properties, constructors, and methods — roughly at the level of that famous *PHP 4* book where my journey began, plus some PHP 8 features.
 
 ### What you can expect
 
@@ -150,6 +150,9 @@ if ($x === 3) {
 | Constants | `const MAX = 100;`, `define("PI", 3.14)` |
 | List unpacking | `[$a, $b] = [1, 2];` |
 | Include/Require | `include 'file.php';`, `require_once 'lib.php';` |
+| Classes | `class Foo { public $x; public function get() { return $this->x; } }` |
+| New / Property / Method | `$f = new Foo(); $f->x = 1; $f->get();` |
+| Static methods | `Foo::create()` |
 | String interpolation | `"Hello $name"` |
 | Heredoc / Nowdoc | `<<<EOT ... EOT;`, `<<<'EOT' ... EOT;` |
 | Comments | `// ...`, `/* ... */` |
@@ -262,7 +265,7 @@ src/
 ## Tests
 
 ```bash
-cargo test                      # all tests (~1159)
+cargo test                      # all tests (~1191)
 cargo test test_my_feature      # run specific tests
 ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 ```

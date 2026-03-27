@@ -19,7 +19,7 @@ This page explains where every value lives in memory at runtime.
 ├─────────────────────────────┤
 │       Heap buffer            │  _heap_buf: 8MB default (--heap-size)
 │  (arrays, hash tables,       │  Free-list + bump allocator
-│   persisted strings)         │
+│   objects, persisted strings) │
 ├─────────────────────────────┤
 │     String buffer            │  _concat_buf: 64KB, scratch pad
 │  (temporary string results)  │  Reset at each statement
@@ -70,6 +70,7 @@ Variables are allocated stack slots when the [code generator](the-codegen.md) sc
 | `Str` | 16 bytes | 8-byte pointer + 8-byte length |
 | `Array` | 8 bytes | Pointer to heap-allocated header |
 | `Void` (null) | 8 bytes | Sentinel value `0x7FFFFFFFFFFFFFFE` |
+| `Object` | 8 bytes | Pointer to heap-allocated object |
 
 ### The null sentinel
 
@@ -134,7 +135,7 @@ When a string result is stored to a variable (e.g., `$x = "a" . "b";`), the code
 .comm _heap_free_list, 8    ; head of free block linked list
 ```
 
-The heap (`_heap_buf`) is an 8MB region (by default) for dynamically-sized data — arrays, hash tables, and persisted strings. It uses a **free-list + bump hybrid allocator**.
+The heap (`_heap_buf`) is an 8MB region (by default) for dynamically-sized data — arrays, hash tables, objects, and persisted strings. It uses a **free-list + bump hybrid allocator**.
 
 ### How heap allocation works
 
@@ -285,6 +286,30 @@ Entry address: `base + 24 + (slot_index × 40)`
 | Access | O(1) by index | O(1) average by hash |
 | Iteration | Sequential | Scan for occupied slots |
 | Keys | Implicit (0, 1, 2, ...) | Explicit strings |
+
+## Object layout
+
+Objects are heap-allocated with a fixed layout determined at compile time. Each object starts with an 8-byte class identifier, followed by 16 bytes per property:
+
+```
+_heap_buf + offset:
+┌──────────┬──────────────────┬──────────────────┬─────┐
+│ class_id │   prop[0] (16B)  │   prop[1] (16B)  │ ... │
+│ (8 bytes)│                  │                  │     │
+└──────────┴──────────────────┴──────────────────┴─────┘
+ offset+0    offset+8           offset+24          ...
+```
+
+| Field | Size | Description |
+|---|---|---|
+| `class_id` | 8 bytes | Identifies which class this object belongs to |
+| `prop[n]` | 16 bytes | Property value (16 bytes regardless of type, for uniform offsets) |
+
+Total object size: `8 + (num_properties × 16)`
+
+Property access is O(1) — the compiler knows each property's index at compile time and computes the offset as `8 + (index × 16)`. No runtime lookup or hash table is needed.
+
+Unlike arrays, objects are not resizable. The number of properties is fixed by the class declaration. Properties are stored in declaration order.
 
 ## The data section
 

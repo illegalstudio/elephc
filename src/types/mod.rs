@@ -19,6 +19,7 @@ pub enum PhpType {
         value: Box<PhpType>,
     },
     Callable,
+    Object(String),
 }
 
 impl PhpType {
@@ -33,6 +34,7 @@ impl PhpType {
             PhpType::Array(_) => 8, // pointer to heap
             PhpType::AssocArray { .. } => 8, // pointer to heap
             PhpType::Callable => 8, // function address
+            PhpType::Object(_) => 8, // pointer to heap
         }
     }
 
@@ -47,6 +49,7 @@ impl PhpType {
             PhpType::Array(_) => 1,
             PhpType::AssocArray { .. } => 1,
             PhpType::Callable => 1,
+            PhpType::Object(_) => 1,
         }
     }
 
@@ -68,10 +71,21 @@ pub struct FunctionSig {
     pub variadic: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ClassInfo {
+    pub properties: Vec<(String, PhpType)>,
+    pub defaults: Vec<Option<crate::parser::ast::Expr>>,
+    pub methods: HashMap<String, FunctionSig>,
+    pub static_methods: HashMap<String, FunctionSig>,
+    /// Maps constructor param index → property name (for type propagation from new ClassName(args))
+    pub constructor_param_to_prop: Vec<Option<String>>,
+}
+
 #[derive(Debug)]
 pub struct CheckResult {
     pub global_env: TypeEnv,
     pub functions: HashMap<String, FunctionSig>,
+    pub classes: HashMap<String, ClassInfo>,
 }
 
 pub fn check(program: &Program) -> Result<CheckResult, CompileError> {

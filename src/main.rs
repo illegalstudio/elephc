@@ -102,6 +102,7 @@ fn main() {
         &ast,
         &check_result.global_env,
         &check_result.functions,
+        &check_result.classes,
         heap_size,
     );
 

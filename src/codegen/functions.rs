@@ -5,7 +5,7 @@ use super::data_section::DataSection;
 use super::emit::Emitter;
 use super::stmt;
 use crate::parser::ast::{ExprKind, StmtKind};
-use crate::types::{FunctionSig, PhpType};
+use crate::types::{ClassInfo, FunctionSig, PhpType};
 
 pub fn emit_function(
     emitter: &mut Emitter,
@@ -17,12 +17,14 @@ pub fn emit_function(
     constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
     all_global_var_names: &HashSet<String>,
     all_static_vars: &HashMap<(String, String), PhpType>,
+    classes: Option<&HashMap<String, ClassInfo>>,
 ) {
     let label = format!("_fn_{}", name);
     let epilogue_label = format!("_fn_{}_epilogue", name);
     emit_function_with_label(
         emitter, data, &label, &epilogue_label, sig, body,
         all_functions, constants, all_global_var_names, all_static_vars,
+        classes,
     );
 }
 
@@ -41,6 +43,28 @@ pub fn emit_closure(
     emit_function_with_label(
         emitter, data, label, &epilogue_label, sig, body,
         all_functions, constants, &empty_globals, &empty_statics,
+        None,
+    );
+}
+
+pub fn emit_method(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    label: &str,
+    epilogue_label: &str,
+    sig: &FunctionSig,
+    body: &[crate::parser::ast::Stmt],
+    all_functions: &HashMap<String, FunctionSig>,
+    constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
+    classes: &HashMap<String, ClassInfo>,
+    class_name: &str,
+) {
+    let empty_globals = HashSet::new();
+    let empty_statics = HashMap::new();
+    emit_function_with_label_and_class(
+        emitter, data, label, epilogue_label, sig, body,
+        all_functions, constants, &empty_globals, &empty_statics,
+        Some((classes, class_name)),
     );
 }
 
@@ -55,6 +79,29 @@ fn emit_function_with_label(
     constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
     all_global_var_names: &HashSet<String>,
     all_static_vars: &HashMap<(String, String), PhpType>,
+    classes: Option<&HashMap<String, ClassInfo>>,
+) {
+    // Pass classes to regular functions so they can resolve Object types
+    let class_ctx = classes.map(|c| (c, "" as &str));
+    emit_function_with_label_and_class(
+        emitter, data, label, epilogue_label, sig, body,
+        all_functions, constants, all_global_var_names, all_static_vars,
+        class_ctx,
+    );
+}
+
+fn emit_function_with_label_and_class(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    label: &str,
+    epilogue_label: &str,
+    sig: &FunctionSig,
+    body: &[crate::parser::ast::Stmt],
+    all_functions: &HashMap<String, FunctionSig>,
+    constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
+    all_global_var_names: &HashSet<String>,
+    all_static_vars: &HashMap<(String, String), PhpType>,
+    class_context: Option<(&HashMap<String, ClassInfo>, &str)>,
 ) {
 
     let mut ctx = Context::new();
@@ -63,6 +110,10 @@ fn emit_function_with_label(
     ctx.constants = constants.clone();
     ctx.all_global_var_names = all_global_var_names.clone();
     ctx.all_static_vars = all_static_vars.clone();
+    if let Some((classes, class_name)) = class_context {
+        ctx.classes = classes.clone();
+        ctx.current_class = Some(class_name.to_string());
+    }
 
     // Track ref params
     for (i, (pname, _pty)) in sig.params.iter().enumerate() {
@@ -128,9 +179,9 @@ fn emit_function_with_label(
                     int_reg_idx += 2;
                 }
                 PhpType::Void => {}
-                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
                     emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
-                    super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save array/callable heap ptr
+                    super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save array/callable/object heap ptr
                     int_reg_idx += 1;
                 }
             }
@@ -324,7 +375,15 @@ pub fn collect_local_vars(
                     }
                 }
             }
-            StmtKind::ArrayAssign { .. } | StmtKind::ArrayPush { .. } => {}
+            StmtKind::ArrayAssign { .. } | StmtKind::ArrayPush { .. } | StmtKind::ClassDecl { .. } => {}
+            StmtKind::PropertyAssign { value, .. } => {
+                // Just recurse into value to pick up any nested assignments
+                if let ExprKind::Variable(_) = &value.kind {
+                    // nothing to allocate
+                } else {
+                    // Look for nested function calls or closures that might need temp vars
+                }
+            }
             StmtKind::DoWhile { body, .. } | StmtKind::While { body, .. } => {
                 collect_local_vars(body, ctx, sig);
             }
@@ -514,6 +573,51 @@ fn infer_local_type(
         ExprKind::ClosureCall { .. } => PhpType::Int,
         ExprKind::ConstRef(_) => PhpType::Int, // constants resolved at emit time
         ExprKind::Spread(inner) => infer_local_type(inner, sig, ctx),
+        ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.clone()),
+        ExprKind::PropertyAccess { object, property } => {
+            if let Some(c) = ctx {
+                let obj_ty = infer_local_type(object, sig, Some(c));
+                if let PhpType::Object(cn) = &obj_ty {
+                    if let Some(ci) = c.classes.get(cn) {
+                        if let Some((_, ty)) = ci.properties.iter().find(|(n, _)| n == property) {
+                            return ty.clone();
+                        }
+                    }
+                }
+            }
+            PhpType::Int
+        }
+        ExprKind::MethodCall { object, method, .. } => {
+            if let Some(c) = ctx {
+                let obj_ty = infer_local_type(object, sig, Some(c));
+                if let PhpType::Object(cn) = &obj_ty {
+                    if let Some(ci) = c.classes.get(cn) {
+                        if let Some(msig) = ci.methods.get(method) {
+                            return msig.return_type.clone();
+                        }
+                    }
+                }
+            }
+            PhpType::Int
+        }
+        ExprKind::StaticMethodCall { class_name, method, .. } => {
+            if let Some(c) = ctx {
+                if let Some(ci) = c.classes.get(class_name) {
+                    if let Some(msig) = ci.static_methods.get(method) {
+                        return msig.return_type.clone();
+                    }
+                }
+            }
+            PhpType::Int
+        }
+        ExprKind::This => {
+            if let Some(c) = ctx {
+                if let Some(cn) = &c.current_class {
+                    return PhpType::Object(cn.clone());
+                }
+            }
+            PhpType::Object(String::new())
+        }
         _ => PhpType::Int,
     }
 }

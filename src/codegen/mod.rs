@@ -11,7 +11,7 @@ mod stmt;
 use std::collections::{HashMap, HashSet};
 
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
-use crate::types::{FunctionSig, PhpType, TypeEnv};
+use crate::types::{ClassInfo, FunctionSig, PhpType, TypeEnv};
 use context::Context;
 use data_section::DataSection;
 use emit::Emitter;
@@ -20,6 +20,7 @@ pub fn generate(
     program: &Program,
     global_env: &TypeEnv,
     functions: &HashMap<String, FunctionSig>,
+    classes: &HashMap<String, ClassInfo>,
     heap_size: usize,
 ) -> String {
     let mut emitter = Emitter::new();
@@ -47,7 +48,72 @@ pub fn generate(
         self::functions::emit_function(
             &mut emitter, &mut data, name, sig, body, functions,
             &global_constants, &all_global_var_names, &all_static_vars,
+            Some(classes),
         );
+    }
+
+    // Emit class methods
+    for stmt in program {
+        if let StmtKind::ClassDecl { name: class_name, methods, .. } = &stmt.kind {
+            for method in methods {
+                let (label, sig) = if method.is_static {
+                    let label = format!("_static_{}_{}", class_name, method.name);
+                    // Use param types from ClassInfo sig (set by type checker)
+                    let class_static_sig = classes.get(class_name)
+                        .and_then(|c| c.static_methods.get(&method.name));
+                    let params: Vec<(String, PhpType)> = method.params.iter().enumerate()
+                        .map(|(i, (n, _, _))| {
+                            let ty = class_static_sig
+                                .and_then(|s| s.params.get(i))
+                                .map(|(_, t)| t.clone())
+                                .unwrap_or(PhpType::Int);
+                            (n.clone(), ty)
+                        })
+                        .collect();
+                    let defaults: Vec<Option<crate::parser::ast::Expr>> = method.params.iter()
+                        .map(|(_, d, _)| d.clone())
+                        .collect();
+                    let ref_params: Vec<bool> = method.params.iter()
+                        .map(|(_, _, r)| *r)
+                        .collect();
+                    let return_type = classes.get(class_name)
+                        .and_then(|c| c.static_methods.get(&method.name))
+                        .map(|s| s.return_type.clone())
+                        .unwrap_or(PhpType::Int);
+                    (label, FunctionSig { params, defaults, return_type, ref_params, variadic: method.variadic.clone() })
+                } else {
+                    let label = format!("_method_{}_{}", class_name, method.name);
+                    // $this is the first parameter
+                    let mut params: Vec<(String, PhpType)> = vec![
+                        ("this".to_string(), PhpType::Object(class_name.clone())),
+                    ];
+                    // Use param types from ClassInfo sig (set by type checker post-pass)
+                    let class_method_sig = classes.get(class_name)
+                        .and_then(|c| c.methods.get(&method.name));
+                    params.extend(method.params.iter().enumerate().map(|(i, (n, _, _))| {
+                        let ty = class_method_sig
+                            .and_then(|s| s.params.get(i))
+                            .map(|(_, t)| t.clone())
+                            .unwrap_or(PhpType::Int);
+                        (n.clone(), ty)
+                    }));
+                    let mut defaults: Vec<Option<crate::parser::ast::Expr>> = vec![None]; // $this has no default
+                    defaults.extend(method.params.iter().map(|(_, d, _)| d.clone()));
+                    let mut ref_params: Vec<bool> = vec![false]; // $this is not a ref
+                    ref_params.extend(method.params.iter().map(|(_, _, r)| *r));
+                    let return_type = classes.get(class_name)
+                        .and_then(|c| c.methods.get(&method.name))
+                        .map(|s| s.return_type.clone())
+                        .unwrap_or(PhpType::Int);
+                    (label, FunctionSig { params, defaults, return_type, ref_params, variadic: method.variadic.clone() })
+                };
+                let epilogue_label = format!("{}_epilogue", label);
+                self::functions::emit_method(
+                    &mut emitter, &mut data, &label, &epilogue_label, &sig, &method.body,
+                    functions, &global_constants, classes, class_name,
+                );
+            }
+        }
     }
 
     // --- _main function ---
@@ -57,6 +123,7 @@ pub fn generate(
     ctx.in_main = true;
     ctx.all_global_var_names = all_global_var_names.clone();
     ctx.all_static_vars = all_static_vars.clone();
+    ctx.classes = classes.clone();
 
     // Pre-allocate $argc and $argv superglobals
     if !global_env.contains_key("argc") {
@@ -103,7 +170,7 @@ pub fn generate(
 
     // -- emit user statements --
     for s in program {
-        if matches!(&s.kind, StmtKind::FunctionDecl { .. }) {
+        if matches!(&s.kind, StmtKind::FunctionDecl { .. } | StmtKind::ClassDecl { .. }) {
             continue;
         }
         stmt::emit_stmt(s, &mut emitter, &mut ctx, &mut data);

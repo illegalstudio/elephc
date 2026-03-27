@@ -180,17 +180,17 @@ Proper type system for PHP compatibility.
 - [x] Deep free for arrays via `unset()` (frees string elements + array struct)
 - [x] Zero-init local variables in function prologues (prevents stale pointer frees)
 
-## v0.10.x — Basic classes (no inheritance, no polymorphism)
+## v0.10.x — Basic classes (done)
 
-- [ ] Classes with `public`/`private` properties and optional defaults
-- [ ] Constructor (`__construct`) with arguments
-- [ ] Instance methods with `$this` access
-- [ ] Static methods via `ClassName::method()`
-- [ ] `new` keyword for object instantiation
-- [ ] `->` property access and method calls
-- [ ] `readonly` properties (enforced at compile time)
-- [ ] Objects as function parameters and return values
-- [ ] Objects stored in arrays
+- [x] Classes with `public`/`private` properties and optional defaults
+- [x] Constructor (`__construct`) with arguments
+- [x] Instance methods with `$this` access
+- [x] Static methods via `ClassName::method()`
+- [x] `new` keyword for object instantiation
+- [x] `->` property access and method calls
+- [x] `readonly` properties (enforced at compile time)
+- [x] Objects as function parameters and return values
+- [x] Objects stored in arrays
 
 ## v0.11.x — Garbage collector
 

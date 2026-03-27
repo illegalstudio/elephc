@@ -12,7 +12,7 @@ This document describes the PHP subset supported by elephc. Every program listed
 | `bool` | Yes | `true`/`false` as distinct type. `echo false` prints nothing, `echo true` prints `1`. Coerces to 0/1 in arithmetic. |
 | `float` | Yes | 64-bit double-precision. Literals: `3.14`, `.5`, `1.5e3`, `1.0e-5`. Constants: `INF`, `NAN`. |
 | `array` | Yes | Indexed (`[1, 2, 3]`) and associative (`["key" => "value"]`). Hash table runtime for string keys. |
-| `object` | No | Not planned (no OOP support). |
+| `object` | Yes | Class instances. Heap-allocated, fixed-layout. `new ClassName(...)` |
 | `resource` | No | Not planned. |
 
 ### Null behavior
@@ -1052,9 +1052,111 @@ Both `include 'f';` and `include('f');` syntax are supported.
 - `preg_match()` does not support the `$matches` capture parameter.
 - `preg_replace()` does not support backreferences like `$1` in the replacement string.
 
+## Classes
+
+elephc supports basic PHP classes with properties, constructors, instance methods, and static methods.
+
+### Class declaration
+
+```php
+<?php
+class Point {
+    public $x;
+    public $y;
+
+    public function __construct($x, $y) {
+        $this->x = $x;
+        $this->y = $y;
+    }
+
+    public function magnitude() {
+        return sqrt($this->x * $this->x + $this->y * $this->y);
+    }
+
+    public static function origin() {
+        return new Point(0, 0);
+    }
+}
+```
+
+### Properties
+
+Properties are declared with a visibility modifier (`public` or `private`) and an optional default value:
+
+```php
+<?php
+class Config {
+    public $name = "default";
+    public $debug = false;
+    private $secret = "hidden";
+    public readonly $id;
+
+    public function __construct($id) {
+        $this->id = $id;
+    }
+}
+```
+
+- `public` properties can be accessed from outside the class via `->`.
+- `private` properties can only be accessed inside the class via `$this->`.
+- `readonly` properties can only be assigned once (in the constructor).
+
+### Constructor
+
+The `__construct` method is called automatically when creating a new object with `new`. Constructor parameters are passed as arguments to `new`:
+
+```php
+<?php
+$p = new Point(3, 4);
+```
+
+### Instance methods and `$this`
+
+Instance methods receive the object as `$this`. Use `$this->property` to access properties and `$this->method()` to call other methods:
+
+```php
+<?php
+$p = new Point(3, 4);
+echo $p->magnitude();  // 5
+```
+
+### Static methods
+
+Static methods are called on the class itself using `::`, not on an instance:
+
+```php
+<?php
+$origin = Point::origin();
+echo $origin->x;  // 0
+```
+
+Static methods do not have access to `$this`.
+
+### Property access
+
+Use `->` to access properties and call methods on objects:
+
+```php
+<?php
+$p = new Point(3, 4);
+echo $p->x;           // 3
+$p->x = 10;           // assign property
+echo $p->magnitude(); // method call
+```
+
+### Limitations
+
+- No inheritance (`extends`)
+- No interfaces (`implements`)
+- No traits (`use`)
+- No `protected` visibility
+- No abstract or final classes/methods
+- No property type declarations
+- No constructor promotion
+
 ## What elephc cannot do (by design)
 
-- No classes, objects, interfaces, traits, enums
+- No inheritance, interfaces, traits, enums
 - No exceptions (`try`/`catch`/`throw`)
 - No `eval()`
 - No dynamic `include`/`require` (path must be a string literal)

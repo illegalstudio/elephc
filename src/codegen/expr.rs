@@ -311,7 +311,356 @@ pub fn emit_expr(
             // If we reach here, just evaluate the inner expression.
             emit_expr(inner, emitter, ctx, data)
         }
+        ExprKind::NewObject { class_name, args } => {
+            emit_new_object(class_name, args, emitter, ctx, data)
+        }
+        ExprKind::PropertyAccess { object, property } => {
+            emit_property_access(object, property, emitter, ctx, data)
+        }
+        ExprKind::MethodCall { object, method, args } => {
+            emit_method_call(object, method, args, emitter, ctx, data)
+        }
+        ExprKind::StaticMethodCall { class_name, method, args } => {
+            emit_static_method_call(class_name, method, args, emitter, ctx, data)
+        }
+        ExprKind::This => {
+            emitter.comment("$this");
+            let var = ctx.variables.get("this").expect("$this not in scope");
+            let offset = var.stack_offset;
+            super::abi::load_at_offset(emitter, "x0", offset);                  // load $this object pointer
+            let class_name = ctx.current_class.clone().unwrap_or_default();
+            PhpType::Object(class_name)
+        }
     }
+}
+
+fn emit_new_object(
+    class_name: &str,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let class_info = ctx.classes.get(class_name).cloned()
+        .expect(&format!("undefined class: {}", class_name));
+    let num_props = class_info.properties.len();
+    let obj_size = 8 + num_props * 16; // 8 for class_id + 16 per property
+
+    emitter.comment(&format!("new {}()", class_name));
+
+    // -- allocate object on heap --
+    emitter.instruction(&format!("mov x0, #{}", obj_size));                     // object size in bytes
+    emitter.instruction("bl __rt_heap_alloc");                                  // allocate object → x0 = pointer
+    emitter.instruction("str x0, [sp, #-16]!");                                 // save object pointer on stack
+
+    // -- zero-initialize all property slots --
+    for i in 0..num_props {
+        let offset = 8 + i * 16;
+        emitter.instruction("ldr x9, [sp]");                                    // peek object pointer
+        emitter.instruction(&format!("str xzr, [x9, #{}]", offset));            // zero-init property lo
+        emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8));        // zero-init property hi
+    }
+
+    // -- set default property values --
+    for i in 0..num_props {
+        if let Some(default_expr) = &class_info.defaults[i] {
+            let default_expr = default_expr.clone();
+            let offset = 8 + i * 16;
+            let prop_ty = emit_expr(&default_expr, emitter, ctx, data);
+            emitter.instruction("ldr x9, [sp]");                                // peek object pointer
+            match &prop_ty {
+                PhpType::Int | PhpType::Bool | PhpType::Array(_)
+                | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Callable => {
+                    emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
+                }
+                PhpType::Float => {
+                    emitter.instruction(&format!("str d0, [x9, #{}]", offset)); // store float default
+                }
+                PhpType::Str => {
+                    emitter.instruction(&format!("str x1, [x9, #{}]", offset)); // store string pointer
+                    emitter.instruction(&format!("str x2, [x9, #{}]", offset + 8)); // store string length
+                }
+                PhpType::Void => {}
+            }
+        }
+    }
+
+    // -- call __construct if it exists --
+    if class_info.methods.contains_key("__construct") {
+        // Evaluate constructor arguments and push to stack
+        let mut arg_types = Vec::new();
+        for arg in args {
+            let ty = emit_expr(arg, emitter, ctx, data);
+            match &ty {
+                PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
+                | PhpType::Callable | PhpType::Object(_) => {
+                    emitter.instruction("str x0, [sp, #-16]!");                 // push int/object arg onto stack
+                }
+                PhpType::Float => {
+                    emitter.instruction("str d0, [sp, #-16]!");                 // push float arg onto stack
+                }
+                PhpType::Str => {
+                    emitter.instruction("stp x1, x2, [sp, #-16]!");             // push string ptr+len onto stack
+                }
+                PhpType::Void => {}
+            }
+            arg_types.push(ty);
+        }
+
+        // Pop args into registers: x0 = $this, x1+ = user args
+        let total_args = arg_types.len();
+        // Build register assignments: $this goes in x0, user args start at x1
+        let mut int_reg_idx = 1usize; // start at x1 (x0 is $this)
+        let mut float_reg_idx = 0usize;
+        let mut assignments: Vec<(PhpType, usize, bool)> = Vec::new();
+        for ty in &arg_types {
+            if ty.is_float_reg() {
+                assignments.push((ty.clone(), float_reg_idx, true));
+                float_reg_idx += 1;
+            } else {
+                assignments.push((ty.clone(), int_reg_idx, false));
+                int_reg_idx += ty.register_count();
+            }
+        }
+
+        // Pop in reverse order
+        for i in (0..total_args).rev() {
+            let (ty, start_reg, _is_float) = &assignments[i];
+            match ty {
+                PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
+                | PhpType::Callable | PhpType::Object(_) => {
+                    emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop arg into register
+                }
+                PhpType::Float => {
+                    emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); // pop float arg
+                }
+                PhpType::Str => {
+                    emitter.instruction(&format!(                               // pop string ptr+len
+                        "ldp x{}, x{}, [sp], #16",
+                        start_reg, start_reg + 1
+                    ));
+                }
+                PhpType::Void => {}
+            }
+        }
+
+        // Load $this into x0 (peek from stack, don't pop)
+        emitter.instruction("ldr x0, [sp]");                                    // load $this pointer for constructor
+        emitter.instruction(&format!(                                           // call constructor
+            "bl _method_{}___construct",
+            class_name
+        ));
+    }
+
+    // -- return object pointer --
+    emitter.instruction("ldr x0, [sp], #16");                                   // pop object pointer into x0
+    PhpType::Object(class_name.to_string())
+}
+
+fn emit_property_access(
+    object: &Expr,
+    property: &str,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let obj_ty = emit_expr(object, emitter, ctx, data);
+    let class_name = match &obj_ty {
+        PhpType::Object(cn) => cn.clone(),
+        _ => panic!("property access on non-object"),
+    };
+    let class_info = ctx.classes.get(&class_name).cloned()
+        .expect(&format!("undefined class: {}", class_name));
+
+    let (prop_idx, prop_ty) = class_info.properties.iter().enumerate()
+        .find(|(_, (n, _))| n == property)
+        .map(|(i, (_, t))| (i, t.clone()))
+        .expect(&format!("undefined property: {}", property));
+
+    let offset = 8 + prop_idx * 16;
+
+    emitter.comment(&format!("->{}  (offset {})", property, offset));
+
+    match &prop_ty {
+        PhpType::Str => {
+            emitter.instruction(&format!("ldr x1, [x0, #{}]", offset));         // load string pointer from property
+            emitter.instruction(&format!("ldr x2, [x0, #{}]", offset + 8));     // load string length from property
+        }
+        PhpType::Float => {
+            emitter.instruction(&format!("ldr d0, [x0, #{}]", offset));         // load float from property
+        }
+        PhpType::Bool | PhpType::Int | PhpType::Void => {
+            emitter.instruction(&format!("ldr x0, [x0, #{}]", offset));         // load int/bool from property
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
+            emitter.instruction(&format!("ldr x0, [x0, #{}]", offset));         // load heap pointer from property
+        }
+    }
+
+    prop_ty
+}
+
+fn emit_method_call(
+    object: &Expr,
+    method: &str,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    emitter.comment(&format!("->{}()", method));
+
+    // Evaluate all arguments first, push to stack
+    let mut arg_types = Vec::new();
+    for arg in args {
+        let ty = emit_expr(arg, emitter, ctx, data);
+        match &ty {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
+            | PhpType::Callable | PhpType::Object(_) => {
+                emitter.instruction("str x0, [sp, #-16]!");                     // push int/object arg
+            }
+            PhpType::Float => {
+                emitter.instruction("str d0, [sp, #-16]!");                     // push float arg
+            }
+            PhpType::Str => {
+                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push string ptr+len
+            }
+            PhpType::Void => {}
+        }
+        arg_types.push(ty);
+    }
+
+    // Evaluate object expression → x0 = $this
+    let obj_ty = emit_expr(object, emitter, ctx, data);
+    let class_name = match &obj_ty {
+        PhpType::Object(cn) => cn.clone(),
+        _ => panic!("method call on non-object"),
+    };
+    // Push $this onto stack
+    emitter.instruction("str x0, [sp, #-16]!");                                 // push $this pointer
+
+    // Pop $this into x0, then pop args into x1+
+    let total_args = arg_types.len();
+    let mut int_reg_idx = 1usize; // x1+ for user args
+    let mut float_reg_idx = 0usize;
+    let mut assignments: Vec<(PhpType, usize, bool)> = Vec::new();
+    for ty in &arg_types {
+        if ty.is_float_reg() {
+            assignments.push((ty.clone(), float_reg_idx, true));
+            float_reg_idx += 1;
+        } else {
+            assignments.push((ty.clone(), int_reg_idx, false));
+            int_reg_idx += ty.register_count();
+        }
+    }
+
+    // Pop $this first (it was pushed last)
+    emitter.instruction("ldr x0, [sp], #16");                                   // pop $this into x0
+
+    // Pop user args in reverse order
+    for i in (0..total_args).rev() {
+        let (ty, start_reg, _) = &assignments[i];
+        match ty {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
+            | PhpType::Callable | PhpType::Object(_) => {
+                emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop arg into register
+            }
+            PhpType::Float => {
+                emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); // pop float arg
+            }
+            PhpType::Str => {
+                emitter.instruction(&format!(                                   // pop string ptr+len
+                    "ldp x{}, x{}, [sp], #16",
+                    start_reg, start_reg + 1
+                ));
+            }
+            PhpType::Void => {}
+        }
+    }
+
+    // Call the method
+    emitter.instruction(&format!("bl _method_{}_{}", class_name, method));      // call instance method
+
+    // Return type
+    let class_info = ctx.classes.get(&class_name).cloned();
+    class_info
+        .and_then(|ci| ci.methods.get(method).cloned())
+        .map(|sig| sig.return_type)
+        .unwrap_or(PhpType::Int)
+}
+
+fn emit_static_method_call(
+    class_name: &str,
+    method: &str,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    emitter.comment(&format!("{}::{}()", class_name, method));
+
+    // Evaluate args and push to stack
+    let mut arg_types = Vec::new();
+    for arg in args {
+        let ty = emit_expr(arg, emitter, ctx, data);
+        match &ty {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
+            | PhpType::Callable | PhpType::Object(_) => {
+                emitter.instruction("str x0, [sp, #-16]!");                     // push arg onto stack
+            }
+            PhpType::Float => {
+                emitter.instruction("str d0, [sp, #-16]!");                     // push float arg
+            }
+            PhpType::Str => {
+                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push string ptr+len
+            }
+            PhpType::Void => {}
+        }
+        arg_types.push(ty);
+    }
+
+    // Pop args into registers
+    let total_args = arg_types.len();
+    let mut int_reg_idx = 0usize;
+    let mut float_reg_idx = 0usize;
+    let mut assignments: Vec<(PhpType, usize, bool)> = Vec::new();
+    for ty in &arg_types {
+        if ty.is_float_reg() {
+            assignments.push((ty.clone(), float_reg_idx, true));
+            float_reg_idx += 1;
+        } else {
+            assignments.push((ty.clone(), int_reg_idx, false));
+            int_reg_idx += ty.register_count();
+        }
+    }
+
+    for i in (0..total_args).rev() {
+        let (ty, start_reg, _) = &assignments[i];
+        match ty {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
+            | PhpType::Callable | PhpType::Object(_) => {
+                emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop arg into register
+            }
+            PhpType::Float => {
+                emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); // pop float arg
+            }
+            PhpType::Str => {
+                emitter.instruction(&format!(                                   // pop string ptr+len
+                    "ldp x{}, x{}, [sp], #16",
+                    start_reg, start_reg + 1
+                ));
+            }
+            PhpType::Void => {}
+        }
+    }
+
+    emitter.instruction(&format!("bl _static_{}_{}", class_name, method));      // call static method
+
+    let class_info = ctx.classes.get(class_name).cloned();
+    class_info
+        .and_then(|ci| ci.static_methods.get(method).cloned())
+        .map(|sig| sig.return_type)
+        .unwrap_or(PhpType::Int)
 }
 
 fn emit_array_literal(
@@ -396,8 +745,8 @@ fn emit_array_literal(
                     24 + i * 16 + 8
                 ));
             }
-            PhpType::Array(_) | PhpType::AssocArray { .. } => {
-                emitter.instruction(&format!(                                   // store nested array pointer at data offset
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+                emitter.instruction(&format!(                                   // store array/object pointer at data offset
                     "str x0, [x9, #{}]",
                     24 + i * 8
                 ));
@@ -501,14 +850,14 @@ fn emit_assoc_array_literal(
     emitter.instruction("str x0, [sp, #-16]!");                                 // save hash table pointer
 
     let mut val_ty = PhpType::Int;
-    for pair in pairs {
+    for (i, pair) in pairs.iter().enumerate() {
         // -- evaluate key --
         emit_expr(&pair.0, emitter, ctx, data);
         // key is a string → x1/x2
         emitter.instruction("stp x1, x2, [sp, #-16]!");                         // save key ptr/len
         // -- evaluate value --
         let ty = emit_expr(&pair.1, emitter, ctx, data);
-        val_ty = ty.clone();
+        if i == 0 { val_ty = ty.clone(); } // use first value's type (determines hash table convention)
         // -- prepare args for hash_set --
         let (val_lo, val_hi) = match &ty {
             PhpType::Int | PhpType::Bool => ("x0", "xzr"),
@@ -715,10 +1064,10 @@ fn emit_array_access(
             emitter.instruction("ldr x1, [x9]");                                // load string pointer from element slot
             emitter.instruction("ldr x2, [x9, #8]");                            // load string length from element slot
         }
-        PhpType::Array(_) | PhpType::AssocArray { .. } => {
-            // -- load nested array/hash pointer: base + 24-byte header + index*8 --
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            // -- load array/hash/object pointer: base + 24-byte header + index*8 --
             emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header to reach data
-            emitter.instruction("ldr x0, [x9, x0, lsl #3]");                    // load nested array pointer at index
+            emitter.instruction("ldr x0, [x9, x0, lsl #3]");                    // load pointer at index
         }
         _ => {}
     }
@@ -765,7 +1114,7 @@ pub fn coerce_to_string(emitter: &mut Emitter, ty: &PhpType) {
             // -- null coerces to empty string in PHP --
             emitter.instruction("mov x2, #0");                                  // null produces empty string (length = 0)
         }
-        PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {}
+        PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {}
     }
 }
 
@@ -1272,7 +1621,7 @@ fn emit_function_call(
         } else {
             let ty = emit_expr(arg, emitter, ctx, data);
             match &ty {
-                PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
+                PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
                     emitter.instruction("str x0, [sp, #-16]!");                 // push int/bool/array-ptr/callable arg onto stack
                 }
                 PhpType::Float => {
@@ -1448,7 +1797,7 @@ fn emit_function_call(
     for i in (0..total_args).rev() {
         let (ty, start_reg, is_float) = &assignments[i];
         match ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
                 emitter.instruction(&format!(                                   // pop int/bool/array/callable arg into register
                     "ldr x{}, [sp], #16",
                     start_reg
@@ -1600,7 +1949,7 @@ fn emit_closure_call(
     for arg in &all_args {
         let ty = emit_expr(arg, emitter, ctx, data);
         match &ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
                 emitter.instruction("str x0, [sp, #-16]!");                     // push int/bool/array/callable arg onto stack
             }
             PhpType::Float => {
@@ -1643,7 +1992,7 @@ fn emit_closure_call(
         let cap_info = ctx.variables.get(cap_name).expect("captured variable not found");
         let cap_offset = cap_info.stack_offset;
         match cap_ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
                 abi::load_at_offset(emitter, "x0", cap_offset);                 // load captured int/bool/array value
                 emitter.instruction("str x0, [sp, #-16]!");                     // push captured value onto stack
             }
@@ -1691,7 +2040,7 @@ fn emit_closure_call(
     for i in (0..total_args).rev() {
         let (ty, start_reg, _is_float) = &assignments[i];
         match ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
                 emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop int/bool/array/callable arg into register
             }
             PhpType::Float => {
@@ -1732,7 +2081,7 @@ fn emit_expr_call(
     for arg in args {
         let ty = emit_expr(arg, emitter, ctx, data);
         match &ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
                 emitter.instruction("str x0, [sp, #-16]!");                     // push int/bool/array/callable arg onto stack
             }
             PhpType::Float => {
@@ -1774,7 +2123,7 @@ fn emit_expr_call(
     for i in (0..args.len()).rev() {
         let (ty, start_reg, _is_float) = &assignments[i];
         match ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
                 emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop int/bool/array/callable arg into register
             }
             PhpType::Float => {
@@ -1827,7 +2176,7 @@ fn emit_cast(
                     // -- (int)array returns element count --
                     emitter.instruction("ldr x0, [x0]");                        // load array length from header (first field)
                 }
-                PhpType::Callable => {} // callable address already in x0
+                PhpType::Callable | PhpType::Object(_) => {} // callable/object address already in x0
             }
             PhpType::Int
         }
@@ -1848,7 +2197,7 @@ fn emit_cast(
                     emitter.instruction("bl __rt_cstr");                        // null-terminate string (x1=ptr, x2=len → x0=cstr)
                     emitter.instruction("bl _atof");                            // parse C string as double → d0=result
                 }
-                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
                     // -- unsupported source type: default to 0.0 --
                     emitter.instruction("mov x0, #0");                          // load zero integer
                     emitter.instruction("scvtf d0, x0");                        // convert to 0.0 double
@@ -1887,9 +2236,9 @@ fn emit_cast(
                     emitter.instruction("cmp x0, #0");                          // check if array is empty
                     emitter.instruction("cset x0, ne");                         // x0=1 if non-empty, 0 if empty
                 }
-                PhpType::Callable => {
-                    // -- callable is always truthy --
-                    emitter.instruction("cmp x0, #0");                          // test if callable address is zero
+                PhpType::Callable | PhpType::Object(_) => {
+                    // -- callable/object is always truthy --
+                    emitter.instruction("cmp x0, #0");                          // test if callable/object address is zero
                     emitter.instruction("cset x0, ne");                         // x0=1 if nonzero (truthy)
                 }
             }
@@ -1996,9 +2345,9 @@ fn emit_strict_compare(
                     emitter.instruction("eor x0, x0, #1");                      // invert result for !== (XOR with 1)
                 }
             }
-            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable => {
-                // -- strict compare arrays/callables by reference (pointer equality) --
-                emitter.instruction("ldr x1, [sp], #16");                       // pop saved left array/callable pointer
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
+                // -- strict compare arrays/callables/objects by reference (pointer equality) --
+                emitter.instruction("ldr x1, [sp], #16");                       // pop saved left array/callable/object pointer
                 emitter.instruction("cmp x1, x0");                              // compare pointers (reference equality)
                 let cond = if is_eq { "eq" } else { "ne" };
                 emitter.instruction(&format!("cset x0, {}", cond));             // set boolean result from pointer comparison

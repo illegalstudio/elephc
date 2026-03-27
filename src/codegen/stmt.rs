@@ -326,9 +326,9 @@ pub fn emit_stmt(
                     emitter.instruction("mov x0, x9");                          // move array pointer to x0
                     emitter.instruction("bl __rt_array_push_str");              // call runtime: persist + append string to array
                 }
-                PhpType::Array(_) | PhpType::AssocArray { .. } => {
-                    // -- call runtime to append nested array pointer --
-                    emitter.instruction("mov x1, x0");                          // move nested array pointer to x1
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+                    // -- call runtime to append nested array/object pointer --
+                    emitter.instruction("mov x1, x0");                          // move nested array/object pointer to x1
                     emitter.instruction("mov x0, x9");                          // move outer array pointer to x0
                     emitter.instruction("bl __rt_array_push_int");              // append pointer (8 bytes, same as int)
                 }
@@ -406,6 +406,7 @@ pub fn emit_stmt(
                 ctx.loop_stack.push(LoopLabels {
                     continue_label: loop_cont.clone(),
                     break_label: loop_end.clone(),
+                    sp_adjust: 0,
                 });
 
                 for s in body {
@@ -477,6 +478,7 @@ pub fn emit_stmt(
                 ctx.loop_stack.push(LoopLabels {
                     continue_label: loop_cont.clone(),
                     break_label: loop_end.clone(),
+                    sp_adjust: 0,
                 });
 
                 for s in body {
@@ -509,6 +511,7 @@ pub fn emit_stmt(
             ctx.loop_stack.push(LoopLabels {
                 continue_label: loop_cond.clone(),
                 break_label: loop_end.clone(),
+                sp_adjust: 0,
             });
 
             for s in body {
@@ -541,6 +544,7 @@ pub fn emit_stmt(
             ctx.loop_stack.push(LoopLabels {
                 continue_label: loop_start.clone(),
                 break_label: loop_end.clone(),
+                sp_adjust: 0,
             });
 
             for s in body {
@@ -585,6 +589,7 @@ pub fn emit_stmt(
             ctx.loop_stack.push(LoopLabels {
                 continue_label: loop_continue.clone(),
                 break_label: loop_end.clone(),
+                sp_adjust: 0,
             });
 
             // Body
@@ -618,6 +623,11 @@ pub fn emit_stmt(
                 emit_expr(e, emitter, ctx, data);
             }
             if let Some(label) = &ctx.return_label {
+                // -- adjust sp for any switch statements that pushed to the stack --
+                let sp_total: usize = ctx.loop_stack.iter().map(|l| l.sp_adjust).sum();
+                if sp_total > 0 {
+                    emitter.instruction(&format!("add sp, sp, #{}", sp_total)); // pop switch subjects before returning
+                }
                 // -- jump to function epilogue to restore frame and return --
                 emitter.instruction(&format!("b {}", label));                   // branch to function epilogue for stack cleanup and ret
             }
@@ -685,6 +695,7 @@ pub fn emit_stmt(
             ctx.loop_stack.push(LoopLabels {
                 continue_label: switch_end.clone(),
                 break_label: switch_end.clone(),
+                sp_adjust: 16,  // switch pushes subject to stack
             });
 
             for (i, (_, body)) in cases.iter().enumerate() {
@@ -867,6 +878,64 @@ pub fn emit_stmt(
         StmtKind::Include { .. } => {
             // Should have been resolved before codegen
             panic!("Unresolved include statement in codegen");
+        }
+        // OOP stubs — not yet implemented, skip
+        StmtKind::ClassDecl { .. } => {} // already emitted in pre-scan
+        StmtKind::PropertyAssign { object, property, value } => {
+            emitter.blank();
+            emitter.comment(&format!("->{}  = ...", property));
+
+            // Evaluate value expression first
+            let val_ty = emit_expr(value, emitter, ctx, data);
+
+            // Save value registers to stack
+            match &val_ty {
+                PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
+                | PhpType::Callable | PhpType::Object(_) => {
+                    emitter.instruction("str x0, [sp, #-16]!");                 // save value on stack
+                }
+                PhpType::Float => {
+                    emitter.instruction("str d0, [sp, #-16]!");                 // save float value on stack
+                }
+                PhpType::Str => {
+                    emitter.instruction("stp x1, x2, [sp, #-16]!");             // save string ptr+len on stack
+                }
+                PhpType::Void => {}
+            }
+
+            // Evaluate object expression → x0 = object pointer
+            let obj_ty = emit_expr(object, emitter, ctx, data);
+            let class_name = match &obj_ty {
+                PhpType::Object(cn) => cn.clone(),
+                _ => panic!("property assign on non-object"),
+            };
+            let class_info = ctx.classes.get(&class_name).cloned()
+                .expect(&format!("undefined class: {}", class_name));
+            let prop_idx = class_info.properties.iter().position(|(n, _)| n == property)
+                .expect(&format!("undefined property: {}", property));
+            let offset = 8 + prop_idx * 16;
+
+            // Save object pointer
+            emitter.instruction("mov x9, x0");                                  // save object pointer in x9
+
+            // Pop value from stack and store into property
+            match &val_ty {
+                PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
+                | PhpType::Callable | PhpType::Object(_) => {
+                    emitter.instruction("ldr x10, [sp], #16");                  // pop saved value
+                    emitter.instruction(&format!("str x10, [x9, #{}]", offset)); // store value into property
+                }
+                PhpType::Float => {
+                    emitter.instruction("ldr d0, [sp], #16");                   // pop saved float
+                    emitter.instruction(&format!("str d0, [x9, #{}]", offset)); // store float into property
+                }
+                PhpType::Str => {
+                    emitter.instruction("ldp x1, x2, [sp], #16");               // pop saved string ptr+len
+                    emitter.instruction(&format!("str x1, [x9, #{}]", offset)); // store string pointer into property
+                    emitter.instruction(&format!("str x2, [x9, #{}]", offset + 8)); // store string length into property
+                }
+                PhpType::Void => {}
+            }
         }
     }
 }

@@ -22,6 +22,7 @@ pub fn emit(
         PhpType::Void => "NULL",
         PhpType::Array(_) | PhpType::AssocArray { .. } => "array",
         PhpType::Callable => "callable",
+        PhpType::Object(_) => "object",
     };
     // -- load pointer and length of type name string --
     let (label, len) = data.add_string(type_str.as_bytes());
