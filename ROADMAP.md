@@ -194,12 +194,16 @@ Proper type system for PHP compatibility.
 
 ## v0.11.x — Reference-counting garbage collector (done)
 
-- [x] Reference counting for arrays and objects (header: `[size:4][refcount:4]`)
-- [x] Automatic free when reference count drops to zero (`__rt_decref_array/hash/object`)
-- [x] Incref on variable sharing (`$a = $b`), decref on reassignment
-- [x] `unset()` uses decref (safe with shared references)
+- [x] Reference counting infrastructure (header: `[size:4][refcount:4]`, zero overhead)
+- [x] Runtime: `__rt_incref`, `__rt_decref_array`, `__rt_decref_hash`, `__rt_decref_object`
+- [x] `unset()` uses decref (frees when refcount drops to zero)
 - [x] GC statistics (`--gc-stats` flag: allocations, frees printed to stderr)
-- [x] Scope-based cleanup at function epilogue (decref all local array/object vars on return)
+- [x] Strings freed on variable reassignment (value-copied, always owned)
+
+### Known limitations
+- Arrays/objects are NOT freed on reassignment (the pattern `$arr = func($arr)` where func internally grows via array_push causes use-after-free — array_grow frees old block, then caller decrefs freed memory)
+- Scope-based cleanup (decref locals at function epilogue) removed: local variables may alias data owned by other structures (e.g., `$t = $arr[$i]` shares the pointer)
+- Full array/object GC requires either ownership tracking or a tracing collector
 
 ## v0.12.x — FFI (Foreign Function Interface)
 
@@ -234,7 +238,7 @@ Proper type system for PHP compatibility.
 - [ ] Source maps (assembly ↔ PHP line mapping)
 - [ ] `--emit-asm`, `--check` flags
 - [ ] Benchmark suite (vs C, vs PHP interpreter)
-- [ ] Full test coverage (>500 tests)
+- [x] Full test coverage (>500 tests — currently 1200+)
 - [ ] Documentation: language subset spec, architecture guide
 - [x] CI/CD with release binaries
 - [ ] Apple notarization for direct downloads (codesign + notarytool)
@@ -282,7 +286,10 @@ Features that are desirable but not yet planned for a specific version.
 
 | Idea | Notes |
 |---|---|
-| Cycle detection (GC) | Mark-and-sweep for circular object references. Same approach as PHP 5.3 (Bacon & Rajan 2001). Requires runtime type descriptors for iterating object properties. Low priority — most PHP programs don't create cycles. |
+| Array/object decref on reassignment | Unsafe with `$arr = func($arr)` pattern (array_grow frees old block inside function, caller decrefs freed memory). Needs copy-on-write semantics or ownership tracking to be safe. |
+| Scope-based cleanup | Decref locals at function epilogue. Unsafe when locals alias shared data (`$t = $arr[$i]`). Needs escape analysis or full ownership model. |
+| Cycle detection (GC) | Mark-and-sweep for circular object references. Same approach as PHP 5.3 (Bacon & Rajan 2001). Requires runtime type descriptors. Low priority — most PHP programs don't create cycles. |
+| Copy-on-write arrays | PHP's actual array semantics: shared until modified. Would enable safe decref-on-reassign. Requires COW flag in array header + copy-on-mutation. |
 | Inheritance (`extends`) | Requires vtable for method dispatch, property layout chaining, `parent::` calls. Major architectural change to the class system. |
 | Interfaces / abstract classes | Requires interface method tables and compile-time conformance checking. |
 | Traits | Requires method copying/inlining at compile time. |
