@@ -205,7 +205,28 @@ Proper type system for PHP compatibility.
 - Scope-based cleanup (decref locals at function epilogue) removed: local variables may alias data owned by other structures (e.g., `$t = $arr[$i]` shares the pointer)
 - Full array/object GC requires either ownership tracking or a tracing collector
 
-## v0.12.x — FFI (Foreign Function Interface)
+## v0.12.x — Math coverage (trigonometry, logarithms, constants)
+
+### Trigonometry
+- [ ] `sin()`, `cos()`, `tan()`
+- [ ] `asin()`, `acos()`, `atan()`, `atan2()`
+- [ ] `deg2rad()`, `rad2deg()`
+- [ ] `sinh()`, `cosh()`, `tanh()`
+
+### Logarithms and exponentials
+- [ ] `log()` — natural logarithm
+- [ ] `log2()`, `log10()`
+- [ ] `exp()` — e^x
+
+### Utility
+- [ ] `hypot()` — sqrt(x² + y²)
+- [ ] `pi()` — alias for M_PI
+
+### Constants
+- [ ] `M_E`, `M_SQRT2`, `M_PI_2`, `M_PI_4`, `M_LOG2E`, `M_LOG10E`
+- [ ] `PHP_FLOAT_MIN`, `PHP_FLOAT_EPSILON`
+
+## v0.13.x — FFI (Foreign Function Interface)
 
 - [ ] `extern function` declarations with C type annotations (`int`, `float`, `string`, `bool`, `void`, `ptr`)
 - [ ] `extern "libname" { }` blocks (auto `-l` linker flag)
@@ -219,7 +240,7 @@ Proper type system for PHP compatibility.
 - [ ] Callback support: pass elephc functions as C function pointers (`callable` params)
 - [ ] `extern global` for accessing C global variables
 
-## v0.13.x — Multi-platform and optimizations
+## v0.14.x — Multi-platform and optimizations
 
 - [ ] Linux x86_64 target
 - [ ] Linux ARM64 target
