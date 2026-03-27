@@ -15,6 +15,7 @@ pub fn emit(
     emitter.comment("ptr_set() — write value at pointer address");
     // -- evaluate pointer --
     emit_expr(&args[0], emitter, ctx, data);
+    emitter.instruction("bl __rt_ptr_check_nonnull");                            // abort with fatal error on null pointer dereference
     emitter.instruction("str x0, [sp, #-16]!");                                 // save pointer on stack
 
     // -- evaluate value to write --

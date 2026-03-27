@@ -1300,6 +1300,11 @@ fn test_error_ptr_no_args() {
 }
 
 #[test]
+fn test_error_ptr_requires_variable_argument() {
+    expect_error("<?php ptr(1 + 2);", "ptr() argument must be a variable");
+}
+
+#[test]
 fn test_error_ptr_null_with_args() {
     expect_error("<?php ptr_null(1);", "ptr_null() takes 0 arguments");
 }
@@ -1310,8 +1315,23 @@ fn test_error_ptr_is_null_wrong_args() {
 }
 
 #[test]
+fn test_error_ptr_is_null_requires_pointer() {
+    expect_error("<?php ptr_is_null(123);", "ptr_is_null() requires a pointer argument");
+}
+
+#[test]
 fn test_error_ptr_offset_wrong_args() {
     expect_error("<?php $p = ptr_null(); ptr_offset($p);", "ptr_offset() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_ptr_offset_requires_pointer() {
+    expect_error("<?php ptr_offset(123, 8);", "ptr_offset() requires a pointer argument");
+}
+
+#[test]
+fn test_error_ptr_offset_requires_integer_offset() {
+    expect_error("<?php $p = ptr_null(); ptr_offset($p, \"8\");", "ptr_offset() second argument must be integer");
 }
 
 #[test]
@@ -1320,8 +1340,26 @@ fn test_error_ptr_get_wrong_args() {
 }
 
 #[test]
+fn test_error_ptr_get_requires_pointer() {
+    expect_error("<?php ptr_get(123);", "ptr_get() requires a pointer argument");
+}
+
+#[test]
 fn test_error_ptr_set_wrong_args() {
     expect_error("<?php ptr_set(ptr_null());", "ptr_set() takes exactly 2 arguments");
+}
+
+#[test]
+fn test_error_ptr_set_requires_pointer() {
+    expect_error("<?php ptr_set(123, 1);", "ptr_set() requires a pointer argument");
+}
+
+#[test]
+fn test_error_ptr_set_requires_word_value() {
+    expect_error(
+        "<?php $p = ptr_null(); ptr_set($p, \"hello\");",
+        "ptr_set() value must be int, bool, null, or pointer",
+    );
 }
 
 #[test]
@@ -1330,6 +1368,43 @@ fn test_error_ptr_sizeof_wrong_args() {
 }
 
 #[test]
+fn test_error_ptr_sizeof_requires_literal() {
+    expect_error(
+        "<?php $t = \"int\"; ptr_sizeof($t);",
+        "ptr_sizeof() argument must be a string literal",
+    );
+}
+
+#[test]
+fn test_error_ptr_sizeof_unknown_type() {
+    expect_error(
+        "<?php ptr_sizeof(\"NoSuchType\");",
+        "Unknown type for ptr_sizeof(): NoSuchType",
+    );
+}
+
+#[test]
 fn test_error_ptr_cast_missing_type() {
     expect_error("<?php ptr_cast<>(ptr_null());", "Expected type name after 'ptr_cast<'");
+}
+
+#[test]
+fn test_error_ptr_cast_requires_pointer_argument() {
+    expect_error("<?php ptr_cast<int>(123);", "ptr_cast() requires a pointer argument");
+}
+
+#[test]
+fn test_error_ptr_cast_rejects_unknown_target() {
+    expect_error(
+        "<?php $p = ptr_null(); ptr_cast<NoSuchType>($p);",
+        "Unknown ptr_cast target type: NoSuchType",
+    );
+}
+
+#[test]
+fn test_error_pointer_loose_comparison_is_rejected() {
+    expect_error(
+        "<?php $x = 1; $p = ptr($x); $q = ptr($x); echo $p == $q;",
+        "Loose pointer comparison is not supported; use === or !==",
+    );
 }

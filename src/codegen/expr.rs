@@ -2621,6 +2621,7 @@ fn emit_strict_compare(
     let rt_peek = peek_expr_type(right, ctx);
 
     let types_match = match (&lt_peek, &rt_peek) {
+        (Some(PhpType::Pointer(_)), Some(PhpType::Pointer(_))) => true,
         (Some(l), Some(r)) => l == r,
         _ => true, // unknown → assume they might match, use save path
     };
@@ -2644,7 +2645,7 @@ fn emit_strict_compare(
 
         let rt = emit_expr(right, emitter, ctx, data);
 
-        if lt != rt {
+        if lt != rt && !matches!((&lt, &rt), (PhpType::Pointer(_), PhpType::Pointer(_))) {
             // Types turned out different at emit time (unknown peek case)
             // -- type mismatch: strict compare result is predetermined --
             emitter.instruction("add sp, sp, #16");                             // discard saved left operand from stack

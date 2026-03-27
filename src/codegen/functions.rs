@@ -627,7 +627,17 @@ fn infer_local_type(
                     }
                 }
                 // Pointer-returning builtins
-                "ptr" | "ptr_null" | "ptr_offset" => PhpType::Pointer(None),
+                "ptr" | "ptr_null" => PhpType::Pointer(None),
+                "ptr_offset" => {
+                    if let Some(first_arg) = args.first() {
+                        match infer_local_type(first_arg, sig, ctx) {
+                            PhpType::Pointer(tag) => PhpType::Pointer(tag),
+                            _ => PhpType::Pointer(None),
+                        }
+                    } else {
+                        PhpType::Pointer(None)
+                    }
+                }
                 // User-defined functions — check signature if available
                 _ => {
                     if let Some(c) = ctx {

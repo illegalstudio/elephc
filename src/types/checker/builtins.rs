@@ -1303,7 +1303,17 @@ impl Checker {
                 if args.len() != 1 {
                     return Err(CompileError::new(span, "ptr() takes exactly 1 argument"));
                 }
-                self.infer_type(&args[0], env)?;
+                match &args[0].kind {
+                    ExprKind::Variable(_) => {
+                        self.infer_type(&args[0], env)?;
+                    }
+                    _ => {
+                        return Err(CompileError::new(
+                            span,
+                            "ptr() argument must be a variable",
+                        ));
+                    }
+                }
                 Ok(Some(PhpType::Pointer(None)))
             }
             "ptr_null" => {
@@ -1316,37 +1326,63 @@ impl Checker {
                 if args.len() != 1 {
                     return Err(CompileError::new(span, "ptr_is_null() takes exactly 1 argument"));
                 }
-                self.infer_type(&args[0], env)?;
+                let ptr_ty = self.infer_type(&args[0], env)?;
+                self.ensure_pointer_type(&ptr_ty, span, "ptr_is_null()")?;
                 Ok(Some(PhpType::Bool))
             }
             "ptr_offset" => {
                 if args.len() != 2 {
                     return Err(CompileError::new(span, "ptr_offset() takes exactly 2 arguments"));
                 }
-                self.infer_type(&args[0], env)?;
-                self.infer_type(&args[1], env)?;
-                Ok(Some(PhpType::Pointer(None)))
+                let ptr_ty = self.infer_type(&args[0], env)?;
+                self.ensure_pointer_type(&ptr_ty, span, "ptr_offset()")?;
+                let offset_ty = self.infer_type(&args[1], env)?;
+                if offset_ty != PhpType::Int {
+                    return Err(CompileError::new(
+                        span,
+                        "ptr_offset() second argument must be integer",
+                    ));
+                }
+                Ok(Some(ptr_ty))
             }
             "ptr_get" => {
                 if args.len() != 1 {
                     return Err(CompileError::new(span, "ptr_get() takes exactly 1 argument"));
                 }
-                self.infer_type(&args[0], env)?;
+                let ptr_ty = self.infer_type(&args[0], env)?;
+                self.ensure_pointer_type(&ptr_ty, span, "ptr_get()")?;
                 Ok(Some(PhpType::Int))
             }
             "ptr_set" => {
                 if args.len() != 2 {
                     return Err(CompileError::new(span, "ptr_set() takes exactly 2 arguments"));
                 }
-                self.infer_type(&args[0], env)?;
-                self.infer_type(&args[1], env)?;
+                let ptr_ty = self.infer_type(&args[0], env)?;
+                self.ensure_pointer_type(&ptr_ty, span, "ptr_set()")?;
+                let value_ty = self.infer_type(&args[1], env)?;
+                self.ensure_word_pointer_value(&value_ty, span)?;
                 Ok(Some(PhpType::Void))
             }
             "ptr_sizeof" => {
                 if args.len() != 1 {
                     return Err(CompileError::new(span, "ptr_sizeof() takes exactly 1 argument"));
                 }
-                self.infer_type(&args[0], env)?;
+                match &args[0].kind {
+                    ExprKind::StringLiteral(type_name) => {
+                        if self.normalize_pointer_target_type(type_name).is_none() {
+                            return Err(CompileError::new(
+                                span,
+                                &format!("Unknown type for ptr_sizeof(): {}", type_name),
+                            ));
+                        }
+                    }
+                    _ => {
+                        return Err(CompileError::new(
+                            span,
+                            "ptr_sizeof() argument must be a string literal",
+                        ));
+                    }
+                }
                 Ok(Some(PhpType::Int))
             }
 

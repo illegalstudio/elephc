@@ -98,6 +98,60 @@ fn compile_and_run(source: &str) -> String {
     elephc_out
 }
 
+/// Compile a PHP source string and assert the generated binary fails at runtime.
+fn compile_and_run_expect_failure(source: &str) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{:?}_{}", tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
+    let ast = elephc::parser::parse(&tokens).expect("parse failed");
+    let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
+    let check_result = elephc::types::check(&resolved).expect("type check failed");
+    let asm = elephc::codegen::generate(
+        &resolved,
+        &check_result.global_env,
+        &check_result.functions,
+        &check_result.classes,
+        8_388_608,
+        false,
+    );
+
+    let asm_path = dir.join("test.s");
+    let obj_path = dir.join("test.o");
+    let bin_path = dir.join("test");
+
+    fs::write(&asm_path, &asm).unwrap();
+
+    let as_status = Command::new("as")
+        .args(["-arch", "arm64", "-o"])
+        .arg(&obj_path)
+        .arg(&asm_path)
+        .status()
+        .expect("failed to run assembler");
+    assert!(as_status.success(), "assembler failed");
+
+    let ld_status = Command::new("ld")
+        .args(["-arch", "arm64", "-e", "_main", "-o"])
+        .arg(&bin_path)
+        .arg(&obj_path)
+        .args(["-lSystem", "-syslibroot"])
+        .arg(get_sdk_path())
+        .status()
+        .expect("failed to run linker");
+    assert!(ld_status.success(), "linker failed");
+
+    let output = Command::new(&bin_path)
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run compiled binary");
+    assert!(!output.status.success(), "binary unexpectedly succeeded");
+
+    let _ = fs::remove_dir_all(&dir);
+    String::from_utf8(output.stderr).unwrap()
+}
+
 /// Compile a PHP project with multiple files using the library directly.
 fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
@@ -8212,6 +8266,17 @@ echo ptr_get($q);
 }
 
 #[test]
+fn test_ptr_strict_equal_after_cast() {
+    let out = compile_and_run(r#"<?php
+$x = 42;
+$p = ptr($x);
+$q = ptr_cast<int>($p);
+echo $p === $q ? "1" : "0";
+"#);
+    assert_eq!(out, "1");
+}
+
+#[test]
 fn test_ptr_sizeof_int() {
     let out = compile_and_run(r#"<?php
 echo ptr_sizeof("int");
@@ -8296,6 +8361,18 @@ echo gettype($p);
 }
 
 #[test]
+fn test_ptr_empty_null_and_non_null() {
+    let out = compile_and_run(r#"<?php
+$x = 1;
+$p = ptr($x);
+$n = ptr_null();
+echo empty($n) ? "1" : "0";
+echo empty($p) ? "1" : "0";
+"#);
+    assert_eq!(out, "10");
+}
+
+#[test]
 fn test_ptr_in_function() {
     let out = compile_and_run(r#"<?php
 function double_via_ptr($p) {
@@ -8320,4 +8397,13 @@ for ($i = 1; $i <= 10; $i++) {
 echo $sum;
 "#);
     assert_eq!(out, "55");
+}
+
+#[test]
+fn test_ptr_null_dereference_reports_runtime_error() {
+    let err = compile_and_run_expect_failure(r#"<?php
+$p = ptr_null();
+echo ptr_get($p);
+"#);
+    assert!(err.contains("Fatal error: null pointer dereference"));
 }

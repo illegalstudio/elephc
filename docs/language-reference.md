@@ -968,14 +968,14 @@ print_r($arr);
 
 | Function | Signature | Description |
 |---|---|---|
-| `ptr()` | `ptr($var): pointer` | Take address of a variable |
+| `ptr()` | `ptr($var): pointer` | Take the address of a variable lvalue |
 | `ptr_null()` | `ptr_null(): pointer` | Create a null pointer (`0x0`) |
 | `ptr_is_null()` | `ptr_is_null($p): bool` | Check if pointer is null |
-| `ptr_get()` | `ptr_get($p): int` | Read 8 bytes at pointer address |
-| `ptr_set()` | `ptr_set($p, $val): void` | Write 8 bytes at pointer address |
+| `ptr_get()` | `ptr_get($p): int` | Read one 8-byte machine word at pointer address |
+| `ptr_set()` | `ptr_set($p, $val): void` | Write one 8-byte machine word (`int`, `bool`, `null`, or `pointer`) |
 | `ptr_offset()` | `ptr_offset($p, $bytes): pointer` | Pointer arithmetic (add byte offset) |
-| `ptr_cast<T>()` | `ptr_cast<Type>($p): pointer` | Change pointer type tag (value unchanged) |
-| `ptr_sizeof()` | `ptr_sizeof("type"): int` | Return byte size of a type |
+| `ptr_cast<T>()` | `ptr_cast<Type>($p): pointer` | Change pointer type tag (same address, validated target type) |
+| `ptr_sizeof()` | `ptr_sizeof("type"): int` | Return byte size of a known builtin type or declared class |
 
 ```php
 <?php
@@ -997,6 +997,13 @@ $a = ptr_null();
 $b = ptr_null();
 echo $a === $b;          // 1 (same address)
 ```
+
+Notes:
+- `ptr()` only accepts variables. `ptr(1 + 2)` is a compile-time error.
+- `ptr_get()` and `ptr_set()` only accept pointers. Dereferencing `ptr_null()` aborts with `Fatal error: null pointer dereference`.
+- `ptr_set()` currently writes a single 8-byte word. It is intended for `int`, `bool`, `null`, and pointer values.
+- `ptr_cast<T>()` preserves the address and only changes the static pointer tag. `T` must be a known builtin pointee type (`int`, `float`, `bool`, `string`, `ptr`) or a declared class name.
+- Use `===` and `!==` for pointer comparison. Loose comparison with `==` / `!=` is rejected.
 
 ## Constants
 

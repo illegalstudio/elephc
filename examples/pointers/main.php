@@ -56,10 +56,14 @@ echo "gettype(p) = ";
 echo gettype($p);
 echo "\n";
 
-// Pointer casting
+// Pointer casting keeps the same address and only changes the static tag
 $typed = ptr_cast<int>($p);
 echo "Typed ptr: ";
 echo $typed;
+echo "\n";
+
+echo "Same address after cast? ";
+echo $p === $typed ? "yes" : "no";
 echo "\n";
 
 // Modifying variables via pointer in a function

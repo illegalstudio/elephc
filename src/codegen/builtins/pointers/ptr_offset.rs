@@ -14,7 +14,7 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("ptr_offset()");
     // -- evaluate pointer expression --
-    emit_expr(&args[0], emitter, ctx, data);
+    let ptr_ty = emit_expr(&args[0], emitter, ctx, data);
     emitter.instruction("str x0, [sp, #-16]!");                                 // save pointer on stack
 
     // -- evaluate byte offset --
@@ -24,5 +24,8 @@ pub fn emit(
     // -- add offset to pointer --
     emitter.instruction("ldr x0, [sp], #16");                                   // restore pointer
     emitter.instruction("add x0, x0, x1");                                      // x0 = pointer + byte offset
-    Some(PhpType::Pointer(None))
+    Some(match ptr_ty {
+        PhpType::Pointer(tag) => PhpType::Pointer(tag),
+        _ => PhpType::Pointer(None),
+    })
 }
