@@ -964,7 +964,7 @@ pub fn emit_stmt(
             // Save value registers to stack
             match &val_ty {
                 PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
-                | PhpType::Callable | PhpType::Object(_) => {
+                | PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
                     emitter.instruction("str x0, [sp, #-16]!");                 // save value on stack
                 }
                 PhpType::Float => {
@@ -1007,7 +1007,7 @@ pub fn emit_stmt(
             // Pop value from stack and store into property
             match &val_ty {
                 PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
-                | PhpType::Callable | PhpType::Object(_) => {
+                | PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
                     emitter.instruction("ldr x10, [sp], #16");                  // pop saved value
                     emitter.instruction(&format!("str x10, [x9, #{}]", offset)); // store value into property
                 }

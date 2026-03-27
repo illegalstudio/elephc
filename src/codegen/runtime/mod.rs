@@ -1,5 +1,6 @@
 mod arrays;
 mod io;
+mod pointers;
 mod strings;
 mod system;
 
@@ -153,6 +154,9 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     io::emit_tempnam(emitter);
     io::emit_fgetcsv(emitter);
     io::emit_fputcsv(emitter);
+
+    // Pointer runtime functions
+    pointers::emit_ptoa(emitter);
 }
 
 pub fn emit_runtime_data(

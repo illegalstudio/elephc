@@ -183,9 +183,10 @@ fn emit_function_with_label_and_class(
                     int_reg_idx += 2;
                 }
                 PhpType::Void => {}
-                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable
+                | PhpType::Object(_) | PhpType::Pointer(_) => {
                     emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
-                    super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save array/callable/object heap ptr
+                    super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save array/callable/object/pointer param
                     int_reg_idx += 1;
                 }
             }
@@ -603,7 +604,7 @@ fn infer_local_type(
                 | "in_array" | "array_key_exists" | "str_contains"
                 | "str_starts_with" | "str_ends_with" | "ctype_alpha"
                 | "ctype_digit" | "ctype_alnum" | "ctype_space"
-                | "function_exists" => PhpType::Bool,
+                | "function_exists" | "ptr_is_null" => PhpType::Bool,
                 "abs" => {
                     if !args.is_empty() {
                         let t = infer_local_type(&args[0], sig, ctx);
@@ -625,6 +626,8 @@ fn infer_local_type(
                         PhpType::Int
                     }
                 }
+                // Pointer-returning builtins
+                "ptr" | "ptr_null" | "ptr_offset" => PhpType::Pointer(None),
                 // User-defined functions — check signature if available
                 _ => {
                     if let Some(c) = ctx {
@@ -725,6 +728,7 @@ fn infer_local_type(
             }
             PhpType::Object(String::new())
         }
+        ExprKind::PtrCast { target_type, .. } => PhpType::Pointer(Some(target_type.clone())),
         _ => PhpType::Int,
     }
 }
