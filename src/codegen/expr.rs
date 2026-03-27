@@ -1981,17 +1981,111 @@ fn emit_function_call(
         .unwrap_or(PhpType::Void)
 }
 
-/// Infer the return type of a closure by scanning its body for Return statements.
+fn widen_codegen_type(a: &PhpType, b: &PhpType) -> PhpType {
+    if a == b {
+        return a.clone();
+    }
+    if *a == PhpType::Str || *b == PhpType::Str {
+        return PhpType::Str;
+    }
+    if *a == PhpType::Float || *b == PhpType::Float {
+        return PhpType::Float;
+    }
+    if *a == PhpType::Void {
+        return b.clone();
+    }
+    if *b == PhpType::Void {
+        return a.clone();
+    }
+    a.clone()
+}
+
+fn coerce_result_to_type(emitter: &mut Emitter, source_ty: &PhpType, target_ty: &PhpType) {
+    if source_ty == target_ty {
+        return;
+    }
+    if *target_ty == PhpType::Str {
+        coerce_to_string(emitter, source_ty);
+    } else if *target_ty == PhpType::Float
+        && matches!(source_ty, PhpType::Int | PhpType::Bool | PhpType::Void)
+    {
+        if *source_ty == PhpType::Void {
+            emitter.instruction("mov x0, #0");                                      // null widens to numeric zero before float coercion
+        }
+        emitter.instruction("scvtf d0, x0");                                        // convert integer-like value to float for unified result type
+    }
+}
+
+/// Infer the return type of a closure by scanning all nested return statements.
 fn infer_closure_return_type(
     body: &[crate::parser::ast::Stmt],
     sig: &crate::types::FunctionSig,
 ) -> PhpType {
-    for stmt in body {
-        if let crate::parser::ast::StmtKind::Return(Some(expr)) = &stmt.kind {
-            return super::functions::infer_local_type_pub(expr, sig);
+    fn collect_return_types(
+        stmt: &crate::parser::ast::Stmt,
+        sig: &crate::types::FunctionSig,
+        return_types: &mut Vec<PhpType>,
+    ) {
+        use crate::parser::ast::StmtKind;
+
+        match &stmt.kind {
+            StmtKind::Return(Some(expr)) => {
+                return_types.push(super::functions::infer_local_type_pub(expr, sig));
+            }
+            StmtKind::Return(None) => {
+                return_types.push(PhpType::Void);
+            }
+            StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+                for stmt in then_body {
+                    collect_return_types(stmt, sig, return_types);
+                }
+                for (_, body) in elseif_clauses {
+                    for stmt in body {
+                        collect_return_types(stmt, sig, return_types);
+                    }
+                }
+                if let Some(body) = else_body {
+                    for stmt in body {
+                        collect_return_types(stmt, sig, return_types);
+                    }
+                }
+            }
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::For { body, .. }
+            | StmtKind::Foreach { body, .. } => {
+                for stmt in body {
+                    collect_return_types(stmt, sig, return_types);
+                }
+            }
+            StmtKind::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    for stmt in body {
+                        collect_return_types(stmt, sig, return_types);
+                    }
+                }
+                if let Some(body) = default {
+                    for stmt in body {
+                        collect_return_types(stmt, sig, return_types);
+                    }
+                }
+            }
+            _ => {}
         }
     }
-    PhpType::Int
+
+    let mut return_types = Vec::new();
+    for stmt in body {
+        collect_return_types(stmt, sig, &mut return_types);
+    }
+    if return_types.is_empty() {
+        return PhpType::Int;
+    }
+    let mut result = return_types[0].clone();
+    for ty in &return_types[1..] {
+        result = widen_codegen_type(&result, ty);
+    }
+    result
 }
 
 fn emit_closure(
@@ -2576,7 +2670,11 @@ fn emit_null_coalesce(
         return emit_expr(default, emitter, ctx, data);
     }
 
+    let default_ty = super::functions::infer_contextual_type(default, ctx);
+    let result_ty = widen_codegen_type(&val_ty, &default_ty);
+
     // -- check if value is null sentinel at runtime --
+    let use_value_label = ctx.next_label("nc_keep");
     let end_label = ctx.next_label("nc_end");
     // -- build null sentinel value for comparison --
     emitter.instruction("movz x9, #0xFFFE");                                    // load lowest 16 bits of null sentinel
@@ -2588,14 +2686,17 @@ fn emit_null_coalesce(
     }
     let cmp_reg = if val_ty == PhpType::Str { "x1" } else { "x0" };
     emitter.instruction(&format!("cmp {}, x9", cmp_reg));                       // compare value against null sentinel
-    emitter.instruction(&format!("b.ne {}", end_label));                        // if not null, skip default and keep value
+    emitter.instruction(&format!("b.ne {}", use_value_label));                  // if not null, skip default branch and keep value
 
     // -- value is null, evaluate default expression --
-    let def_ty = emit_expr(default, emitter, ctx, data);
+    let default_runtime_ty = emit_expr(default, emitter, ctx, data);
+    coerce_result_to_type(emitter, &default_runtime_ty, &result_ty);
+    emitter.instruction(&format!("b {}", end_label));                           // skip non-null branch after evaluating default
+    emitter.label(&use_value_label);
+    coerce_result_to_type(emitter, &val_ty, &result_ty);
     emitter.label(&end_label);
 
-    // Return the type of the non-null side
-    if val_ty == PhpType::Void { def_ty } else { val_ty }
+    result_ty
 }
 
 /// Quick helper: store x0 to _gvar_NAME (for pre-increment etc. where value is in x0)

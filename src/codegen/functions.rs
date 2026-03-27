@@ -430,6 +430,23 @@ pub fn infer_local_type_with_ctx(
     infer_local_type(expr, sig, Some(ctx))
 }
 
+/// Infer an expression type using only the current codegen context.
+/// Useful in expression codegen where stack locals, closures, functions, and
+/// class metadata are available, but the enclosing function signature is not.
+pub fn infer_contextual_type(
+    expr: &crate::parser::ast::Expr,
+    ctx: &Context,
+) -> PhpType {
+    let empty_sig = FunctionSig {
+        params: Vec::new(),
+        defaults: Vec::new(),
+        return_type: PhpType::Void,
+        ref_params: Vec::new(),
+        variadic: None,
+    };
+    infer_local_type(expr, &empty_sig, Some(ctx))
+}
+
 /// Returns the wider of two types for stack slot allocation.
 /// Str (16 bytes) is wider than everything else (8 bytes).
 fn wider_of(a: &PhpType, b: &PhpType) -> PhpType {
@@ -610,8 +627,10 @@ fn infer_local_type(
                 }
                 // User-defined functions — check signature if available
                 _ => {
-                    for (fname, fsig) in sig.params.iter().zip(std::iter::repeat(sig)) {
-                        let _ = (fname, fsig);
+                    if let Some(c) = ctx {
+                        if let Some(fn_sig) = c.functions.get(name) {
+                            return fn_sig.return_type.clone();
+                        }
                     }
                     PhpType::Int
                 }

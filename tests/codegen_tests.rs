@@ -8021,6 +8021,46 @@ test();
 }
 
 #[test]
+fn test_null_coalesce_runtime_null_to_string_default() {
+    let out = compile_and_run(r#"<?php
+$x = false ? 1 : null;
+$result = $x ?? "fallback";
+echo $result;
+"#);
+    assert_eq!(out, "fallback");
+}
+
+#[test]
+fn test_closure_return_type_from_nested_branch() {
+    let out = compile_and_run(r#"<?php
+$describe = function($n) {
+    if ($n > 0) {
+        return "positive";
+    }
+    return 0;
+};
+$result = $describe(3);
+echo $result;
+"#);
+    assert_eq!(out, "positive");
+}
+
+#[test]
+fn test_assigned_user_function_call_string_result() {
+    let out = compile_and_run(r#"<?php
+function greet($name) {
+    return "Hello, " . $name;
+}
+function run() {
+    $message = greet("World");
+    echo $message;
+}
+run();
+"#);
+    assert_eq!(out, "Hello, World");
+}
+
+#[test]
 fn test_ternary_allocates_for_wider_type() {
     let out = compile_and_run(r#"<?php
 function test($flag) {
