@@ -581,7 +581,24 @@ fn infer_local_type(
             }
         }
         ExprKind::Closure { .. } => PhpType::Callable,
-        ExprKind::ClosureCall { .. } => PhpType::Int,
+        ExprKind::ClosureCall { var, .. } => {
+            if let Some(c) = ctx {
+                if let Some(sig) = c.closure_sigs.get(var) {
+                    return sig.return_type.clone();
+                }
+            }
+            PhpType::Int
+        }
+        ExprKind::ExprCall { callee, .. } => {
+            if let Some(c) = ctx {
+                if let ExprKind::Variable(var_name) = &callee.kind {
+                    if let Some(sig) = c.closure_sigs.get(var_name) {
+                        return sig.return_type.clone();
+                    }
+                }
+            }
+            PhpType::Int
+        }
         ExprKind::ConstRef(_) => PhpType::Int, // constants resolved at emit time
         ExprKind::Spread(inner) => infer_local_type(inner, sig, ctx),
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.clone()),

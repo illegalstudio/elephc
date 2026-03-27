@@ -2167,6 +2167,13 @@ fn emit_expr_call(
 
     // -- indirect call through expression function address --
     emitter.instruction("blr x9");                                              // branch to closure via function pointer in x9
+
+    // -- return the closure's known return type, or default to Int --
+    if let ExprKind::Variable(var_name) = &callee.kind {
+        if let Some(sig) = ctx.closure_sigs.get(var_name) {
+            return sig.return_type.clone();
+        }
+    }
     PhpType::Int
 }
 

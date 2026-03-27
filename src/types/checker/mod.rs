@@ -798,7 +798,13 @@ impl Checker {
                 for arg in args {
                     self.infer_type(arg, env)?;
                 }
-                Ok(PhpType::Int)
+                // Try to determine return type from closure signature
+                if let ExprKind::Variable(var_name) = &callee.kind {
+                    if let Some(ret_ty) = self.closure_return_types.get(var_name) {
+                        return Ok(ret_ty.clone());
+                    }
+                }
+                Ok(PhpType::Int) // fallback for unknown callables
             }
             ExprKind::BinaryOp { left, op, right } => {
                 let lt = self.infer_type(left, env)?;
