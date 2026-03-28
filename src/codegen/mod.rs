@@ -4,6 +4,7 @@ pub mod context;
 mod data_section;
 mod emit;
 mod expr;
+mod ffi;
 mod functions;
 mod runtime;
 mod stmt;
@@ -11,7 +12,7 @@ mod stmt;
 use std::collections::{HashMap, HashSet};
 
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
-use crate::types::{ClassInfo, FunctionSig, PhpType, TypeEnv};
+use crate::types::{ClassInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, PhpType, TypeEnv};
 use context::Context;
 use data_section::DataSection;
 use emit::Emitter;
@@ -21,6 +22,9 @@ pub fn generate(
     global_env: &TypeEnv,
     functions: &HashMap<String, FunctionSig>,
     classes: &HashMap<String, ClassInfo>,
+    extern_functions: &HashMap<String, ExternFunctionSig>,
+    extern_classes: &HashMap<String, ExternClassInfo>,
+    extern_globals: &HashMap<String, PhpType>,
     heap_size: usize,
     gc_stats: bool,
 ) -> String {
@@ -36,8 +40,11 @@ pub fn generate(
     // Pre-scan for static variable declarations across all functions
     let all_static_vars = collect_static_vars(program, global_env);
 
-    // Emit user-defined functions before _main
+    // Emit user-defined functions before _main (skip extern functions)
     for (name, sig) in functions {
+        if extern_functions.contains_key(name) {
+            continue; // extern functions have no body — they're linked from C
+        }
         let body = program
             .iter()
             .find_map(|s| match &s.kind {
@@ -125,6 +132,9 @@ pub fn generate(
     ctx.all_global_var_names = all_global_var_names.clone();
     ctx.all_static_vars = all_static_vars.clone();
     ctx.classes = classes.clone();
+    ctx.extern_functions = extern_functions.clone();
+    ctx.extern_classes = extern_classes.clone();
+    ctx.extern_globals = extern_globals.clone();
 
     // Pre-allocate $argc and $argv superglobals
     if !global_env.contains_key("argc") {

@@ -158,6 +158,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     // Pointer runtime functions
     pointers::emit_ptoa(emitter);
     pointers::emit_ptr_check_nonnull(emitter);
+    pointers::emit_cstr_to_str(emitter);
 }
 
 pub fn emit_runtime_data(

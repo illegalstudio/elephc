@@ -954,6 +954,8 @@ pub fn emit_stmt(
         }
         // OOP stubs — not yet implemented, skip
         StmtKind::ClassDecl { .. } => {} // already emitted in pre-scan
+        StmtKind::ExternFunctionDecl { .. } | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ExternGlobalDecl { .. } => {} // extern decls processed at compile time
         StmtKind::PropertyAssign { object, property, value } => {
             emitter.blank();
             emitter.comment(&format!("->{}  = ...", property));

@@ -23,8 +23,13 @@ fn main() {
     let mut heap_size: usize = 8_388_608; // 8MB default
     let mut gc_stats = false;
     let mut filename_arg = None;
+    let mut extra_link_libs: Vec<String> = Vec::new();
+    let mut extra_link_paths: Vec<String> = Vec::new();
+    let mut extra_frameworks: Vec<String> = Vec::new();
 
-    for arg in &args[1..] {
+    let mut i = 1;
+    while i < args.len() {
+        let arg = &args[i];
         if let Some(val) = arg.strip_prefix("--heap-size=") {
             heap_size = match val.parse::<usize>() {
                 Ok(n) if n >= 65536 => n,
@@ -35,12 +40,41 @@ fn main() {
             };
         } else if arg == "--gc-stats" {
             gc_stats = true;
+        } else if arg == "--link" || arg == "-l" {
+            i += 1;
+            if i < args.len() {
+                extra_link_libs.push(args[i].clone());
+            } else {
+                eprintln!("Missing library name after {}", arg);
+                process::exit(1);
+            }
+        } else if let Some(lib) = arg.strip_prefix("-l") {
+            extra_link_libs.push(lib.to_string());
+        } else if arg == "--link-path" || arg == "-L" {
+            i += 1;
+            if i < args.len() {
+                extra_link_paths.push(args[i].clone());
+            } else {
+                eprintln!("Missing path after {}", arg);
+                process::exit(1);
+            }
+        } else if let Some(path) = arg.strip_prefix("-L") {
+            extra_link_paths.push(path.to_string());
+        } else if arg == "--framework" {
+            i += 1;
+            if i < args.len() {
+                extra_frameworks.push(args[i].clone());
+            } else {
+                eprintln!("Missing framework name after --framework");
+                process::exit(1);
+            }
         } else if arg.starts_with("--") {
             eprintln!("Unknown flag: {}", arg);
             process::exit(1);
         } else {
             filename_arg = Some(arg.as_str());
         }
+        i += 1;
     }
 
     let filename = match filename_arg {
@@ -106,9 +140,19 @@ fn main() {
         &check_result.global_env,
         &check_result.functions,
         &check_result.classes,
+        &check_result.extern_functions,
+        &check_result.extern_classes,
+        &check_result.extern_globals,
         heap_size,
         gc_stats,
     );
+
+    // Merge extern-required libraries with CLI-specified ones
+    for lib in &check_result.required_libraries {
+        if !extra_link_libs.contains(lib) {
+            extra_link_libs.push(lib.clone());
+        }
+    }
 
     if let Err(e) = fs::write(&asm_path, &asm) {
         eprintln!("Error writing '{}': {}", asm_path.display(), e);
@@ -141,17 +185,24 @@ fn main() {
     }
 
     // Link
-    let ld_status = Command::new("ld")
-        .args([
-            "-arch", "arm64",
-            "-e", "_main",
-            "-o",
-        ])
-        .arg(&bin_path)
-        .arg(&obj_path)
-        .args(["-lSystem", "-syslibroot"])
-        .arg(&sdk_path)
-        .status();
+    let mut ld_cmd = Command::new("ld");
+    ld_cmd.args(["-arch", "arm64", "-e", "_main", "-o"]);
+    ld_cmd.arg(&bin_path);
+    ld_cmd.arg(&obj_path);
+    ld_cmd.args(["-lSystem", "-syslibroot"]);
+    ld_cmd.arg(&sdk_path);
+    for lib in &extra_link_libs {
+        if lib != "System" {
+            ld_cmd.arg(format!("-l{}", lib));
+        }
+    }
+    for path in &extra_link_paths {
+        ld_cmd.arg(format!("-L{}", path));
+    }
+    for fw in &extra_frameworks {
+        ld_cmd.args(["-framework", fw]);
+    }
+    let ld_status = ld_cmd.status();
 
     match ld_status {
         Ok(s) if s.success() => {}

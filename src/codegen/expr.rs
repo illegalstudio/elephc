@@ -405,6 +405,9 @@ pub fn emit_expr(
             if let Some(ty) = super::builtins::emit_builtin_call(name, args, emitter, ctx, data) {
                 return ty;
             }
+            if ctx.extern_functions.contains_key(name) {
+                return super::ffi::emit_extern_call(name, args, emitter, ctx, data);
+            }
             emit_function_call(name, args, emitter, ctx, data)
         }
         ExprKind::Closure { params, body, is_arrow: _, variadic: _, captures } => {
