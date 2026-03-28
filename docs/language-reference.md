@@ -63,7 +63,6 @@ $x = 42;              // reassignment from null works
 | `>` | `$a > $b` | Greater than |
 | `<=` | `$a <= $b` | Less than or equal |
 | `>=` | `$a >= $b` | Greater than or equal |
-
 | `<=>` | `$a <=> $b` | Spaceship: returns -1, 0, or 1 |
 
 ### Bitwise
@@ -927,8 +926,6 @@ Callback rules:
 | `call_user_func()` | `call_user_func("name", ...): mixed` | Call a function by name with arguments |
 | `call_user_func_array()` | `call_user_func_array("name", $args): mixed` | Call a function with arguments from an array |
 | `function_exists()` | `function_exists("name"): bool` | Check if a function is defined |
-| `define()` | `define("NAME", value): void` | Define a named constant |
-
 > **Note:** Callback arguments can be string literals containing the function name (e.g., `"double"`), anonymous functions, or arrow functions.
 
 **Not yet supported:** `compact()`, `extract()` (require dynamic variables).
@@ -996,6 +993,7 @@ Callback rules:
 |---|---|---|
 | `exit()` | `exit($code = 0): void` | Terminate program |
 | `die()` | `die($code = 0): void` | Alias for `exit()` |
+| `define()` | `define("NAME", value): void` | Define a named constant |
 | `time()` | `time(): int` | Get current Unix timestamp |
 | `microtime()` | `microtime($as_float = false): float` | Get current time with microsecond precision |
 | `sleep()` | `sleep($seconds): int` | Sleep for given seconds |

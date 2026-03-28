@@ -269,8 +269,8 @@ Proper type system for PHP compatibility.
 - [ ] Source maps (assembly ↔ PHP line mapping)
 - [ ] `--emit-asm`, `--check` flags
 - [ ] Benchmark suite (vs C, vs PHP interpreter)
-- [x] Full test coverage (>500 tests — currently 1200+)
-- [ ] Documentation: language subset spec, architecture guide
+- [x] Full test coverage (>500 tests — currently 1400+)
+- [x] Documentation: language subset spec, architecture guide
 - [x] CI/CD with release binaries
 - [ ] Apple notarization for direct downloads (codesign + notarytool)
 - [ ] Performance within 2x of C -O0 on compute benchmarks

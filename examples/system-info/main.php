@@ -1,7 +1,8 @@
 <?php
 // System information example
 // Demonstrates: PHP_EOL, PHP_OS, DIRECTORY_SEPARATOR, time(), microtime(),
-//               getenv(), phpversion(), php_uname(), shell_exec()
+//               getenv(), phpversion(), php_uname(), exec(), shell_exec(),
+//               system(), passthru()
 
 echo "=== System Info ===" . PHP_EOL;
 echo "OS: " . PHP_OS . PHP_EOL;
@@ -22,8 +23,15 @@ $mt = microtime(true);
 echo "Microtime: " . $mt . PHP_EOL;
 
 echo PHP_EOL . "=== Shell ===" . PHP_EOL;
+$lastLine = trim(exec("printf 'first\\nsecond\\n'"));
+echo "exec() last line: " . $lastLine . PHP_EOL;
 $hostname = trim(shell_exec("hostname"));
 echo "Hostname: " . $hostname . PHP_EOL;
+echo "system() says:" . PHP_EOL;
+$systemLast = trim(system("printf 'system-line\\n'"));
+echo "system() last line: " . $systemLast . PHP_EOL;
+echo "passthru() says:" . PHP_EOL;
+passthru("printf 'passthru-line\\n'");
 
 echo PHP_EOL . "=== Timing ===" . PHP_EOL;
 $start = microtime(true);

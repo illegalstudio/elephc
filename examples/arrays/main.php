@@ -47,6 +47,23 @@ foreach ($squares as $s) {
 }
 echo "\n";
 
+// List unpacking
+[$first, $second] = [$numbers[0], $numbers[1]];
+echo "First two: " . $first . ", " . $second . "\n";
+
+// array_column on associative rows
+$users = [
+    ["name" => "Ada", "score" => 10],
+    ["name" => "Linus", "score" => 12],
+    ["name" => "Grace", "score" => 8],
+];
+$names = array_column($users, "name");
+echo "Names: ";
+foreach ($names as $name) {
+    echo $name . " ";
+}
+echo "\n";
+
 // String array
 $langs = ["PHP", "Rust", "ARM64"];
 echo "Compiled " . $langs[0] . " to " . $langs[2] . " with " . $langs[1] . "\n";
