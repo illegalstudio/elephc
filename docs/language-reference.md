@@ -1,6 +1,6 @@
 # elephc Language Reference
 
-This document describes the PHP subset supported by elephc. Every program listed here is valid PHP and produces identical output when run with `php`.
+This document describes the PHP subset supported by elephc. The language aims to stay PHP-compatible, but elephc also exposes compiler-specific pointer features such as `ptr()` and `ptr_cast<T>()` that are intentionally outside standard PHP syntax.
 
 ## Data Types
 
@@ -14,7 +14,7 @@ This document describes the PHP subset supported by elephc. Every program listed
 | `array` | Yes | Indexed (`[1, 2, 3]`) and associative (`["key" => "value"]`). Hash table runtime for string keys. |
 | `object` | Yes | Class instances. Heap-allocated, fixed-layout. `new ClassName(...)` |
 | `pointer` | Yes | 64-bit memory address. `ptr($var)`, `ptr_null()`. Echo prints `0x...` hex. |
-| `resource` | No | Not planned. |
+| `resource` | No | File handles are currently modeled as integer file descriptors (`int`), not as a separate runtime resource type. |
 
 ### Null behavior
 
@@ -866,7 +866,7 @@ foreach ($matrix as $row) {
 | `is_infinite()` | `is_infinite($val): bool` | Returns true if INF or -INF |
 | `boolval()` | `boolval($val): bool` | Convert to bool |
 | `floatval()` | `floatval($val): float` | Convert to float |
-| `gettype()` | `gettype($val): string` | Returns type name ("integer", "double", "string", "boolean", "NULL", "array") |
+| `gettype()` | `gettype($val): string` | Returns type name (`"integer"`, `"double"`, `"string"`, `"boolean"`, `"NULL"`, `"array"`, `"callable"`, `"object"`, or `"pointer"`) |
 | `empty()` | `empty($val): bool` | Returns true if value is falsy (0, 0.0, "", false, null, empty array) |
 | `unset()` | `unset($var): void` | Sets variable to null |
 | `settype()` | `settype($var, $type): bool` | Changes variable type in place |
@@ -904,7 +904,7 @@ foreach ($matrix as $row) {
 
 | Function | Signature | Description |
 |---|---|---|
-| `fopen()` | `fopen($filename, $mode): resource` | Open a file (modes: r, w, a, r+, w+, a+) |
+| `fopen()` | `fopen($filename, $mode): int` | Open a file and return an integer file descriptor (modes: r, w, a, r+, w+, a+) |
 | `fclose()` | `fclose($handle): bool` | Close a file handle |
 | `fread()` | `fread($handle, $length): string` | Read up to $length bytes |
 | `fwrite()` | `fwrite($handle, $data): int` | Write string to file, returns bytes written |
@@ -1053,9 +1053,9 @@ show();
 | `PHP_EOL` | string | End of line character (`"\n"`) |
 | `PHP_OS` | string | Operating system name (`"Darwin"`) |
 | `DIRECTORY_SEPARATOR` | string | Directory separator (`"/"`) |
-| `STDIN` | resource | Standard input stream (fd 0) |
-| `STDOUT` | resource | Standard output stream (fd 1) |
-| `STDERR` | resource | Standard error stream (fd 2) |
+| `STDIN` | int | Standard input file descriptor (`0`) |
+| `STDOUT` | int | Standard output file descriptor (`1`) |
+| `STDERR` | int | Standard error file descriptor (`2`) |
 
 ## Superglobals
 

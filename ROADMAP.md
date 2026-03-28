@@ -229,7 +229,7 @@ Proper type system for PHP compatibility.
 ## v0.13.x — Pointers
 
 - [x] Opaque pointer type (`ptr`) for handles and `void*`
-- [x] Typed pointers (`ptr<ClassName>`) for C struct access via `ptr_cast<T>()`
+- [x] Typed pointer tags via `ptr_cast<T>()` for annotating raw addresses with a checked pointee type
 - [x] Pointer builtins: `ptr()`, `ptr_null()`, `ptr_is_null()`, `ptr_offset()`, `ptr_cast<T>()`, `ptr_get()`, `ptr_set()`
 - [x] `ptr_sizeof()` — returns byte size of a type (`"int"` → 8, `"float"` → 8, class name → computed)
 - [x] Pointer echo: `echo $ptr` prints hex address (`0x...`)

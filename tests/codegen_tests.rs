@@ -4614,6 +4614,28 @@ foreach ($a as $v) { echo $v; }
 }
 
 #[test]
+fn test_uksort() {
+    let out = compile_and_run(r#"<?php
+function cmp($a, $b) { return $a - $b; }
+$a = [5, 3, 1, 4, 2];
+uksort($a, "cmp");
+foreach ($a as $v) { echo $v; }
+"#);
+    assert_eq!(out, "12345");
+}
+
+#[test]
+fn test_uasort() {
+    let out = compile_and_run(r#"<?php
+function cmp($a, $b) { return $a - $b; }
+$a = [30, 10, 20];
+uasort($a, "cmp");
+foreach ($a as $value) { echo $value . " "; }
+"#);
+    assert_eq!(out, "10 20 30 ");
+}
+
+#[test]
 fn test_call_user_func() {
     let out = compile_and_run(r#"<?php
 function greet($x) { return $x + 100; }

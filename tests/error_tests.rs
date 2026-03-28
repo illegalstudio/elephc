@@ -24,6 +24,15 @@ fn expect_error(src: &str, expected_substr: &str) {
     }
 }
 
+macro_rules! expect_builtin_arity_error {
+    ($test_name:ident, $src:expr, $expected:expr) => {
+        #[test]
+        fn $test_name() {
+            expect_error($src, $expected);
+        }
+    };
+}
+
 // --- Lexer errors ---
 
 #[test]
@@ -245,6 +254,282 @@ fn test_error_is_float_wrong_args() {
 fn test_error_is_int_wrong_args() {
     expect_error("<?php is_int();", "is_int() takes exactly 1 argument");
 }
+
+expect_builtin_arity_error!(
+    test_error_strlen_wrong_args,
+    "<?php strlen();",
+    "strlen() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_intval_wrong_args,
+    "<?php intval();",
+    "intval() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_strrpos_wrong_args,
+    "<?php strrpos(\"abc\");",
+    "strrpos() takes exactly 2 arguments"
+);
+expect_builtin_arity_error!(
+    test_error_strstr_wrong_args,
+    "<?php strstr(\"abc\");",
+    "strstr() takes exactly 2 arguments"
+);
+expect_builtin_arity_error!(
+    test_error_strtolower_wrong_args,
+    "<?php strtolower();",
+    "strtolower() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_strtoupper_wrong_args,
+    "<?php strtoupper();",
+    "strtoupper() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_ucfirst_wrong_args,
+    "<?php ucfirst();",
+    "ucfirst() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_lcfirst_wrong_args,
+    "<?php lcfirst();",
+    "lcfirst() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_trim_wrong_args,
+    "<?php trim(\"x\", \"y\", \"z\");",
+    "trim() takes 1 or 2 arguments"
+);
+expect_builtin_arity_error!(
+    test_error_ltrim_wrong_args,
+    "<?php ltrim(\"x\", \"y\", \"z\");",
+    "ltrim() takes 1 or 2 arguments"
+);
+expect_builtin_arity_error!(
+    test_error_rtrim_wrong_args,
+    "<?php rtrim(\"x\", \"y\", \"z\");",
+    "rtrim() takes 1 or 2 arguments"
+);
+expect_builtin_arity_error!(
+    test_error_str_repeat_wrong_args,
+    "<?php str_repeat(\"x\");",
+    "str_repeat() takes exactly 2 arguments"
+);
+expect_builtin_arity_error!(
+    test_error_strrev_wrong_args,
+    "<?php strrev();",
+    "strrev() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_chr_wrong_args,
+    "<?php chr();",
+    "chr() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_strcmp_wrong_args,
+    "<?php strcmp(\"a\");",
+    "strcmp() takes exactly 2 arguments"
+);
+expect_builtin_arity_error!(
+    test_error_strcasecmp_wrong_args,
+    "<?php strcasecmp(\"a\");",
+    "strcasecmp() takes exactly 2 arguments"
+);
+expect_builtin_arity_error!(
+    test_error_str_contains_wrong_args,
+    "<?php str_contains(\"a\");",
+    "str_contains() takes exactly 2 arguments"
+);
+expect_builtin_arity_error!(
+    test_error_str_starts_with_wrong_args,
+    "<?php str_starts_with(\"a\");",
+    "str_starts_with() takes exactly 2 arguments"
+);
+expect_builtin_arity_error!(
+    test_error_str_ends_with_wrong_args,
+    "<?php str_ends_with(\"a\");",
+    "str_ends_with() takes exactly 2 arguments"
+);
+expect_builtin_arity_error!(
+    test_error_implode_wrong_args,
+    "<?php implode([\"a\"]);",
+    "implode() takes exactly 2 arguments"
+);
+expect_builtin_arity_error!(
+    test_error_ucwords_wrong_args,
+    "<?php ucwords();",
+    "ucwords() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_str_ireplace_wrong_args,
+    "<?php str_ireplace(\"a\", \"b\");",
+    "str_ireplace() takes exactly 3 arguments"
+);
+expect_builtin_arity_error!(
+    test_error_substr_replace_wrong_args,
+    "<?php substr_replace(\"abc\", \"x\");",
+    "substr_replace() takes 3 or 4 arguments"
+);
+expect_builtin_arity_error!(
+    test_error_str_split_wrong_args,
+    "<?php str_split(\"abc\", 1, 2);",
+    "str_split() takes 1 or 2 arguments"
+);
+expect_builtin_arity_error!(
+    test_error_addslashes_wrong_args,
+    "<?php addslashes();",
+    "addslashes() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_stripslashes_wrong_args,
+    "<?php stripslashes();",
+    "stripslashes() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_nl2br_wrong_args,
+    "<?php nl2br();",
+    "nl2br() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_wordwrap_wrong_args,
+    "<?php wordwrap(\"a\", 1, \"-\", true, 5);",
+    "wordwrap() takes 1 to 4 arguments"
+);
+expect_builtin_arity_error!(
+    test_error_bin2hex_wrong_args,
+    "<?php bin2hex();",
+    "bin2hex() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_hex2bin_wrong_args,
+    "<?php hex2bin();",
+    "hex2bin() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_htmlentities_wrong_args,
+    "<?php htmlentities();",
+    "htmlentities() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_html_entity_decode_wrong_args,
+    "<?php html_entity_decode();",
+    "html_entity_decode() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_urldecode_wrong_args,
+    "<?php urldecode();",
+    "urldecode() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_rawurlencode_wrong_args,
+    "<?php rawurlencode();",
+    "rawurlencode() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_rawurldecode_wrong_args,
+    "<?php rawurldecode();",
+    "rawurldecode() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_base64_decode_wrong_args,
+    "<?php base64_decode();",
+    "base64_decode() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_ctype_digit_wrong_args,
+    "<?php ctype_digit();",
+    "ctype_digit() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_ctype_alnum_wrong_args,
+    "<?php ctype_alnum();",
+    "ctype_alnum() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_ctype_space_wrong_args,
+    "<?php ctype_space();",
+    "ctype_space() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_is_bool_wrong_args,
+    "<?php is_bool();",
+    "is_bool() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_boolval_wrong_args,
+    "<?php boolval();",
+    "boolval() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_is_string_wrong_args,
+    "<?php is_string();",
+    "is_string() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_is_numeric_wrong_args,
+    "<?php is_numeric();",
+    "is_numeric() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_fdiv_wrong_args,
+    "<?php fdiv(1);",
+    "fdiv() takes exactly 2 arguments"
+);
+expect_builtin_arity_error!(
+    test_error_mt_rand_wrong_args,
+    "<?php mt_rand(1);",
+    "mt_rand() takes 0 or 2 arguments"
+);
+expect_builtin_arity_error!(
+    test_error_asin_wrong_args,
+    "<?php asin();",
+    "asin() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_acos_wrong_args,
+    "<?php acos();",
+    "acos() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_sinh_wrong_args,
+    "<?php sinh();",
+    "sinh() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_cosh_wrong_args,
+    "<?php cosh();",
+    "cosh() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_tanh_wrong_args,
+    "<?php tanh();",
+    "tanh() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_log2_wrong_args,
+    "<?php log2();",
+    "log2() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_log10_wrong_args,
+    "<?php log10();",
+    "log10() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_rad2deg_wrong_args,
+    "<?php rad2deg();",
+    "rad2deg() takes exactly 1 argument"
+);
+expect_builtin_arity_error!(
+    test_error_exit_wrong_args,
+    "<?php exit(1, 2);",
+    "exit() takes 0 or 1 arguments"
+);
+expect_builtin_arity_error!(
+    test_error_die_wrong_args,
+    "<?php die(1, 2);",
+    "exit() takes 0 or 1 arguments"
+);
 
 #[test]
 fn test_null_coalesce_widens_function_return_type_in_checker() {
