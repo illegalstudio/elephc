@@ -250,7 +250,18 @@ Proper type system for PHP compatibility.
 - [x] C memory management via extern libc: `malloc()`, `free()`, `memcpy()`, `memset()`
 - [x] Native interop validation examples: raw FFI memory + SDL2 window/input/framebuffer/audio demos
 
-## v0.15.x — Multi-platform and optimizations
+## v0.15.x — Memory model hardening
+
+- [ ] Ownership lattice for heap values in codegen (`Owned` / `Borrowed` / `MaybeOwned` / non-heap)
+- [ ] Re-enable epilogue cleanup for locals that are proven to own their heap values
+- [ ] Broader container propagation rules for nested array/hash/object transfers
+- [ ] Focused regressions for aliasing across locals, returns, nested containers, and scope exit
+- [ ] Heap allocator improvements: adjacent-block coalescing and less fragmentation under mixed allocation sizes
+- [ ] Runtime heap verification / debug mode (`double free`, bad refcount, free-list corruption checks)
+- [ ] Uniform runtime heap-kind metadata for arrays / assoc arrays / objects / persisted strings
+- [ ] Evaluate a cycle-collection strategy for circular container/object graphs
+
+## v0.16.x — Multi-platform and optimizations
 
 - [ ] Linux x86_64 target
 - [ ] Linux ARM64 target
@@ -317,10 +328,7 @@ Features that are desirable but not yet planned for a specific version.
 
 | Idea | Notes |
 |---|---|
-| Hash/container ownership beyond indexed slots | Associative array updates and deeper nested container propagation still need stronger retain/release rules to avoid conservative leaks under heavy aliasing. |
 | Copy-on-write arrays | PHP's actual array semantics: shared until modified. Would make reassignment and aliasing both safer and cheaper. Requires COW flag in array header + copy-on-mutation. |
-| Scope-based cleanup | Ordinary locals, globals, statics, by-ref params, and container-backed aliases still need escape analysis or a fuller ownership model. |
-| Cycle detection (GC) | Mark-and-sweep for circular object references. Same approach as PHP 5.3 (Bacon & Rajan 2001). Requires runtime type descriptors. Low priority — most PHP programs don't create cycles. |
 | Inheritance (`extends`) | Requires vtable for method dispatch, property layout chaining, `parent::` calls. Major architectural change to the class system. |
 | Interfaces / abstract classes | Requires interface method tables and compile-time conformance checking. |
 | Traits | Requires method copying/inlining at compile time. |
