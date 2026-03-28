@@ -71,6 +71,9 @@ fn compile_and_run(source: &str) -> String {
         &check_result.global_env,
         &check_result.functions,
         &check_result.classes,
+        &check_result.extern_functions,
+        &check_result.extern_classes,
+        &check_result.extern_globals,
         8_388_608,
         false,
     );
@@ -114,6 +117,9 @@ fn compile_and_run_expect_failure(source: &str) -> String {
         &check_result.global_env,
         &check_result.functions,
         &check_result.classes,
+        &check_result.extern_functions,
+        &check_result.extern_classes,
+        &check_result.extern_globals,
         8_388_608,
         false,
     );
@@ -180,6 +186,9 @@ fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> String {
         &check_result.global_env,
         &check_result.functions,
         &check_result.classes,
+        &check_result.extern_functions,
+        &check_result.extern_classes,
+        &check_result.extern_globals,
         8_388_608,
         false,
     );
@@ -236,6 +245,9 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
         &check_result.global_env,
         &check_result.functions,
         &check_result.classes,
+        &check_result.extern_functions,
+        &check_result.extern_classes,
+        &check_result.extern_globals,
         8_388_608,
         false,
     );
@@ -300,6 +312,9 @@ fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {
         &check_result.global_env,
         &check_result.functions,
         &check_result.classes,
+        &check_result.extern_functions,
+        &check_result.extern_classes,
+        &check_result.extern_globals,
         8_388_608,
         false,
     );
@@ -8428,4 +8443,124 @@ $p = ptr_null();
 echo ptr_get($p);
 "#);
     assert!(err.contains("Fatal error: null pointer dereference"));
+}
+
+// === FFI tests (v0.14) ===
+
+#[test]
+fn test_ffi_extern_abs() {
+    let out = compile_and_run(r#"<?php
+extern function abs(int $n): int;
+echo abs(-42);
+"#);
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_ffi_extern_atoi() {
+    let out = compile_and_run(r#"<?php
+extern function atoi(string $s): int;
+echo atoi("12345");
+"#);
+    assert_eq!(out, "12345");
+}
+
+#[test]
+fn test_ffi_extern_strlen() {
+    let out = compile_and_run(r#"<?php
+extern function strlen(string $s): int;
+echo strlen("hello world");
+"#);
+    assert_eq!(out, "11");
+}
+
+#[test]
+fn test_ffi_extern_getpid() {
+    let out = compile_and_run(r#"<?php
+extern function getpid(): int;
+$pid = getpid();
+echo $pid > 0 ? "yes" : "no";
+"#);
+    assert_eq!(out, "yes");
+}
+
+#[test]
+fn test_ffi_extern_string_return() {
+    let out = compile_and_run(r#"<?php
+extern function getenv(string $name): string;
+$home = getenv("HOME");
+echo strlen($home) > 0 ? "ok" : "empty";
+"#);
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_ffi_extern_block_syntax() {
+    let out = compile_and_run(r#"<?php
+extern "System" {
+    function abs(int $n): int;
+    function atoi(string $s): int;
+}
+echo abs(-7) . "," . atoi("99");
+"#);
+    assert_eq!(out, "7,99");
+}
+
+#[test]
+fn test_ffi_extern_lib_function_syntax() {
+    let out = compile_and_run(r#"<?php
+extern "System" function abs(int $n): int;
+echo abs(-1);
+"#);
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_ffi_extern_void_return() {
+    let out = compile_and_run(r#"<?php
+extern function abs(int $n): int;
+$x = abs(-5);
+echo $x;
+"#);
+    assert_eq!(out, "5");
+}
+
+#[test]
+fn test_ffi_extern_float_arg_and_return() {
+    let out = compile_and_run(r#"<?php
+extern function sqrt(float $x): float;
+echo sqrt(144.0);
+"#);
+    assert_eq!(out, "12");
+}
+
+#[test]
+fn test_ffi_extern_multiple_args() {
+    let out = compile_and_run(r#"<?php
+extern function strtol(string $s, ptr $endptr, int $base): int;
+echo strtol("FF", ptr_null(), 16);
+"#);
+    assert_eq!(out, "255");
+}
+
+#[test]
+fn test_ffi_extern_global() {
+    let out = compile_and_run(r#"<?php
+extern function getpid(): int;
+$pid = getpid();
+echo $pid > 0 ? "ok" : "fail";
+"#);
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_ffi_extern_in_function() {
+    let out = compile_and_run(r#"<?php
+extern function abs(int $n): int;
+function my_abs($x) {
+    return abs($x);
+}
+echo my_abs(-10);
+"#);
+    assert_eq!(out, "10");
 }

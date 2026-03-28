@@ -1693,3 +1693,28 @@ fn test_error_pointer_loose_comparison_is_rejected() {
         "Loose pointer comparison is not supported; use === or !==",
     );
 }
+
+// --- FFI error tests ---
+
+#[test]
+fn test_error_extern_unknown_type() {
+    expect_error("<?php extern function foo(badtype $x): int;", "Unknown C type: badtype");
+}
+
+#[test]
+fn test_error_extern_missing_function() {
+    expect_error("<?php extern badkw;", "Expected 'function', string literal, 'class', or 'global' after 'extern'");
+}
+
+#[test]
+fn test_error_extern_block_empty() {
+    expect_error("<?php extern \"lib\" { }", "Empty extern block");
+}
+
+#[test]
+fn test_error_extern_wrong_arg_count() {
+    expect_error(
+        "<?php extern function abs(int $n): int; abs();",
+        "abs() takes exactly 1 argument",
+    );
+}

@@ -237,14 +237,15 @@ Proper type system for PHP compatibility.
 
 ## v0.14.x — FFI (Foreign Function Interface)
 
-- [ ] `extern function` declarations with C type annotations (`int`, `float`, `string`, `bool`, `void`, `ptr`)
-- [ ] `extern "libname" { }` blocks (auto `-l` linker flag)
-- [ ] `--link` / `-l` and `--link-path` / `-L` CLI flags
-- [ ] `--framework` flag for macOS frameworks
-- [ ] Null-terminated string ↔ length-prefixed string conversion (`__rt_str_to_cstr`, `__rt_cstr_to_str`)
-- [ ] `extern class` for C struct mapping (flat layout, no methods)
+- [x] `extern function` declarations with C type annotations (`int`, `float`, `string`, `bool`, `void`, `ptr`)
+- [x] `extern "libname" { }` blocks (auto `-l` linker flag)
+- [x] `extern "libname" function name(): type;` single-line syntax
+- [x] `--link` / `-l` and `--link-path` / `-L` CLI flags
+- [x] `--framework` flag for macOS frameworks
+- [x] Null-terminated string ↔ length-prefixed string conversion (`__rt_cstr`, `__rt_cstr_to_str`)
+- [x] `extern class` for C struct mapping (parsing + type checking, flat layout)
+- [x] `extern global` for accessing C global variables (parsing + type checking)
 - [ ] Callback support: pass elephc functions as C function pointers (`callable` params)
-- [ ] `extern global` for accessing C global variables
 - [ ] C memory management via extern libc: `malloc()`, `free()`, `memcpy()`, `memset()`
 
 ## v0.15.x — Multi-platform and optimizations

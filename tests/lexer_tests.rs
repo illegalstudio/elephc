@@ -869,3 +869,10 @@ fn test_open_tag_with_block_comment_no_code() {
     let t = tokens("<?php /* empty */");
     assert_eq!(t, vec![Token::OpenTag, Token::Eof]);
 }
+
+#[test]
+fn test_lex_extern_keyword() {
+    let t = tokens("<?php extern function abs(int $n): int;");
+    assert!(t.contains(&Token::Extern));
+    assert!(t.contains(&Token::Function));
+}

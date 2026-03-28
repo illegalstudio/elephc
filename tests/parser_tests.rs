@@ -955,3 +955,76 @@ fn test_parse_ptr_builtins_as_function_calls() {
         }
     }
 }
+
+#[test]
+fn test_parse_extern_function() {
+    let stmts = parse_source("<?php extern function abs(int $n): int;");
+    match &stmts[0].kind {
+        StmtKind::ExternFunctionDecl { name, params, return_type, library } => {
+            assert_eq!(name, "abs");
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].name, "n");
+            assert!(matches!(return_type, elephc::parser::ast::CType::Int));
+            assert!(library.is_none());
+        }
+        _ => panic!("Expected ExternFunctionDecl"),
+    }
+}
+
+#[test]
+fn test_parse_extern_block() {
+    let stmts = parse_source(r#"<?php extern "curl" { function init(): ptr; function cleanup(ptr $h): void; }"#);
+    assert_eq!(stmts.len(), 2);
+    match &stmts[0].kind {
+        StmtKind::ExternFunctionDecl { name, library, .. } => {
+            assert_eq!(name, "init");
+            assert_eq!(library.as_deref(), Some("curl"));
+        }
+        _ => panic!("Expected ExternFunctionDecl"),
+    }
+    match &stmts[1].kind {
+        StmtKind::ExternFunctionDecl { name, library, .. } => {
+            assert_eq!(name, "cleanup");
+            assert_eq!(library.as_deref(), Some("curl"));
+        }
+        _ => panic!("Expected ExternFunctionDecl"),
+    }
+}
+
+#[test]
+fn test_parse_extern_class() {
+    let stmts = parse_source("<?php extern class Point { public int $x; public float $y; }");
+    match &stmts[0].kind {
+        StmtKind::ExternClassDecl { name, fields } => {
+            assert_eq!(name, "Point");
+            assert_eq!(fields.len(), 2);
+            assert_eq!(fields[0].name, "x");
+            assert_eq!(fields[1].name, "y");
+        }
+        _ => panic!("Expected ExternClassDecl"),
+    }
+}
+
+#[test]
+fn test_parse_extern_global() {
+    let stmts = parse_source("<?php extern global int $errno;");
+    match &stmts[0].kind {
+        StmtKind::ExternGlobalDecl { name, c_type } => {
+            assert_eq!(name, "errno");
+            assert!(matches!(c_type, elephc::parser::ast::CType::Int));
+        }
+        _ => panic!("Expected ExternGlobalDecl"),
+    }
+}
+
+#[test]
+fn test_parse_extern_lib_function() {
+    let stmts = parse_source(r#"<?php extern "m" function sin(float $x): float;"#);
+    match &stmts[0].kind {
+        StmtKind::ExternFunctionDecl { name, library, .. } => {
+            assert_eq!(name, "sin");
+            assert_eq!(library.as_deref(), Some("m"));
+        }
+        _ => panic!("Expected ExternFunctionDecl"),
+    }
+}
