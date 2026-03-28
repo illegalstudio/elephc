@@ -60,6 +60,14 @@ impl PhpType {
     pub fn is_float_reg(&self) -> bool {
         matches!(self, PhpType::Float)
     }
+
+    /// Returns true for heap values whose lifetime is tracked with runtime refcounts.
+    pub fn is_refcounted(&self) -> bool {
+        matches!(
+            self,
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+        )
+    }
 }
 
 /// Maps variable names to their resolved types.

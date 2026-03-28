@@ -561,6 +561,7 @@ fn emit_new_object(
         let mut arg_types = Vec::new();
         for arg in args {
             let ty = emit_expr(arg, emitter, ctx, data);
+            retain_borrowed_heap_arg(emitter, arg, &ty);
             match &ty {
                 PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
                 | PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
@@ -726,6 +727,7 @@ fn emit_method_call(
     let mut arg_types = Vec::new();
     for arg in args {
         let ty = emit_expr(arg, emitter, ctx, data);
+        retain_borrowed_heap_arg(emitter, arg, &ty);
         match &ty {
             PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
             | PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
@@ -820,6 +822,7 @@ fn emit_static_method_call(
     let mut arg_types = Vec::new();
     for arg in args {
         let ty = emit_expr(arg, emitter, ctx, data);
+        retain_borrowed_heap_arg(emitter, arg, &ty);
         match &ty {
             PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
             | PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
@@ -1843,6 +1846,7 @@ fn emit_function_call(
             arg_types.push(PhpType::Int);
         } else {
             let ty = emit_expr(arg, emitter, ctx, data);
+            retain_borrowed_heap_arg(emitter, arg, &ty);
             match &ty {
                 PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
                 | PhpType::Pointer(_) => {
@@ -1928,7 +1932,8 @@ fn emit_function_call(
         if let Some(spread_expr) = spread_arg {
             // Spread: ...$arr — pass the array directly as the variadic param
             emitter.comment("spread array as variadic param");
-            let _ty = emit_expr(spread_expr, emitter, ctx, data);
+            let ty = emit_expr(spread_expr, emitter, ctx, data);
+            retain_borrowed_heap_arg(emitter, spread_expr, &ty);
             // Array pointer is in x0
             emitter.instruction("str x0, [sp, #-16]!");                         // push variadic array pointer onto stack
         } else if variadic_args.is_empty() {
@@ -2076,6 +2081,44 @@ pub(crate) fn restore_concat_offset_after_nested_call(
     emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of caller concat offset
     emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve caller concat offset address
     emitter.instruction("str x10, [x9]");                                       // restore caller concat offset after nested call
+}
+
+pub(crate) fn expr_result_may_borrow_heap_value(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(_)
+        | ExprKind::ArrayAccess { .. }
+        | ExprKind::PropertyAccess { .. }
+        | ExprKind::This => true,
+        ExprKind::Spread(inner)
+        | ExprKind::PtrCast { expr: inner, .. }
+        | ExprKind::Cast { expr: inner, .. } => expr_result_may_borrow_heap_value(inner),
+        ExprKind::NullCoalesce { value, default } => {
+            expr_result_may_borrow_heap_value(value) || expr_result_may_borrow_heap_value(default)
+        }
+        ExprKind::Ternary {
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            expr_result_may_borrow_heap_value(then_expr)
+                || expr_result_may_borrow_heap_value(else_expr)
+        }
+        ExprKind::Match { arms, default, .. } => {
+            arms.iter()
+                .any(|(_, expr)| expr_result_may_borrow_heap_value(expr))
+                || default
+                    .as_ref()
+                    .map(|expr| expr_result_may_borrow_heap_value(expr))
+                    .unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
+fn retain_borrowed_heap_arg(emitter: &mut Emitter, expr: &Expr, ty: &PhpType) {
+    if ty.is_refcounted() && expr_result_may_borrow_heap_value(expr) {
+        abi::emit_incref_if_refcounted(emitter, ty);
+    }
 }
 
 fn widen_codegen_type(a: &PhpType, b: &PhpType) -> PhpType {
@@ -2437,6 +2480,7 @@ fn emit_expr_call(
     let mut arg_types = Vec::new();
     for arg in args {
         let ty = emit_expr(arg, emitter, ctx, data);
+        retain_borrowed_heap_arg(emitter, arg, &ty);
         match &ty {
             PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
             | PhpType::Pointer(_) => {

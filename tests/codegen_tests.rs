@@ -7109,6 +7109,53 @@ echo $b->val;
 }
 
 #[test]
+fn test_gc_array_alias_survives_unset() {
+    let out = compile_and_run(r#"<?php
+$a = [10, 20, 30];
+$b = $a;
+unset($a);
+echo $b[0];
+echo $b[1];
+echo $b[2];
+"#);
+    assert_eq!(out, "102030");
+}
+
+#[test]
+fn test_gc_returned_array_alias_survives_caller_unset() {
+    let out = compile_and_run(r#"<?php
+function share($arr) {
+    return $arr;
+}
+
+$a = [7, 8];
+$b = share($a);
+unset($a);
+echo $b[0];
+echo $b[1];
+"#);
+    assert_eq!(out, "78");
+}
+
+#[test]
+fn test_gc_returned_object_alias_survives_caller_unset() {
+    let out = compile_and_run(r#"<?php
+class Box { public $val = 0; }
+
+function share($box) {
+    return $box;
+}
+
+$a = new Box();
+$a->val = 41;
+$b = share($a);
+unset($a);
+echo $b->val;
+"#);
+    assert_eq!(out, "41");
+}
+
+#[test]
 fn test_class_constructor_calls_method() {
     // Constructor calling another method on the same object
     let out = compile_and_run(r#"<?php

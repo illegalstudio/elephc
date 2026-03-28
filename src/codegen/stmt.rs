@@ -1,10 +1,38 @@
 use super::abi;
 use super::context::{Context, LoopLabels};
-use crate::types::PhpType;
 use super::data_section::DataSection;
 use super::emit::Emitter;
-use super::expr::emit_expr;
+use super::expr::{emit_expr, expr_result_may_borrow_heap_value};
 use crate::parser::ast::{ExprKind, Stmt, StmtKind};
+use crate::types::PhpType;
+
+fn retain_borrowed_heap_result(emitter: &mut Emitter, expr: &crate::parser::ast::Expr, ty: &PhpType) {
+    if ty.is_refcounted() && expr_result_may_borrow_heap_value(expr) {
+        abi::emit_incref_if_refcounted(emitter, ty);
+    }
+}
+
+fn release_owned_slot(emitter: &mut Emitter, ty: &PhpType, offset: usize, preserve_x0: bool) {
+    if matches!(ty, PhpType::Str) {
+        if preserve_x0 {
+            emitter.instruction("mov x8, x0");                                      // preserve incoming value while old string is released
+        }
+        abi::load_at_offset(emitter, "x0", offset);                                // load previous string pointer from stack slot
+        emitter.instruction("bl __rt_heap_free_safe");                              // release previous string storage if it lives on the heap
+        if preserve_x0 {
+            emitter.instruction("mov x0, x8");                                      // restore incoming value after string release
+        }
+    } else if ty.is_refcounted() {
+        if preserve_x0 {
+            emitter.instruction("mov x8, x0");                                      // preserve incoming value while old heap slot is decreffed
+        }
+        abi::load_at_offset(emitter, "x0", offset);                                // load previous heap pointer from stack slot
+        abi::emit_decref_if_refcounted(emitter, ty);
+        if preserve_x0 {
+            emitter.instruction("mov x0, x8");                                      // restore incoming value after decref
+        }
+    }
+}
 
 pub fn emit_stmt(
     stmt: &Stmt,
@@ -68,6 +96,7 @@ pub fn emit_stmt(
             } else if ctx.global_vars.contains(name) {
                 // Check if this is a global var in a function (uses global storage)
                 // -- store to global variable storage --
+                retain_borrowed_heap_result(emitter, value, &ty);
                 emit_global_store(emitter, ctx, name, &ty);
             } else if ctx.ref_params.contains(name) {
                 // -- store through reference pointer --
@@ -79,8 +108,21 @@ pub fn emit_stmt(
                     }
                 };
                 let offset = var.stack_offset;
+                let old_ty = var.ty.clone();
+                retain_borrowed_heap_result(emitter, value, &ty);
                 emitter.comment(&format!("write through ref ${}", name));
                 abi::load_at_offset(emitter, "x9", offset);                     // load pointer to referenced variable
+                if old_ty.is_refcounted() {
+                    let needs_save_x0 = !matches!(&ty, PhpType::Str | PhpType::Float);
+                    if needs_save_x0 {
+                        emitter.instruction("mov x8, x0");                      // preserve incoming heap value across decref
+                    }
+                    emitter.instruction("ldr x0, [x9]");                        // load previous heap pointer from ref target
+                    abi::emit_decref_if_refcounted(emitter, &old_ty);
+                    if needs_save_x0 {
+                        emitter.instruction("mov x0, x8");                      // restore incoming value after decref
+                    }
+                }
                 match &ty {
                     PhpType::Bool | PhpType::Int => {
                         emitter.instruction("str x0, [x9]");                    // store int/bool through reference pointer
@@ -113,27 +155,19 @@ pub fn emit_stmt(
                 let offset = var.stack_offset;
                 let old_ty = var.ty.clone();
 
-                // -- free old heap value before overwriting --
-                if matches!(&old_ty, PhpType::Str) {
+                if !ctx.static_vars.contains(name) {
+                    retain_borrowed_heap_result(emitter, value, &ty);
                     let needs_save_x0 = !matches!(&ty, PhpType::Str | PhpType::Float);
-                    if needs_save_x0 {
-                        emitter.instruction("mov x8, x0");                      // save new value in x8 temporarily
-                    }
-                    abi::load_at_offset(emitter, "x0", offset);                // load old string pointer
-                    emitter.instruction("bl __rt_heap_free_safe");              // free old string if on heap
-                    if needs_save_x0 {
-                        emitter.instruction("mov x0, x8");                      // restore new value
-                    }
+                    release_owned_slot(emitter, &old_ty, offset, needs_save_x0);
                 }
-                // Note: arrays/objects are NOT decreffed on reassignment yet.
-                // We currently prefer leaks over dangling pointers because aliases
-                // are not tracked precisely enough for safe decref-on-reassign.
-                // Arrays/objects are still freed via explicit unset() or process exit.
 
                 abi::emit_store(emitter, &ty, offset);
 
                 // In main scope, also sync to global storage if this var is used globally
                 if ctx.in_main && ctx.all_global_var_names.contains(name) {
+                    if ty.is_refcounted() {
+                        abi::emit_incref_if_refcounted(emitter, &ty);           // global storage becomes a second owner alongside the local slot
+                    }
                     emit_global_store(emitter, ctx, name, &ty);
                 }
             }
@@ -676,7 +710,8 @@ pub fn emit_stmt(
             emitter.blank();
             emitter.comment("return");
             if let Some(e) = expr {
-                emit_expr(e, emitter, ctx, data);
+                let ty = emit_expr(e, emitter, ctx, data);
+                retain_borrowed_heap_result(emitter, e, &ty);
             }
             if let Some(label) = &ctx.return_label {
                 // -- adjust sp for any switch statements that pushed to the stack --
@@ -892,6 +927,7 @@ pub fn emit_stmt(
             emitter.instruction("mov x10, #1");                                 // set init flag to 1
             emitter.instruction("str x10, [x9]");                               // write init flag
             let ty = emit_expr(init, emitter, ctx, data);
+            retain_borrowed_heap_result(emitter, init, &ty);
             // Store init value to static storage
             emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));      // load page of static var storage
             emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); // add page offset
@@ -1063,6 +1099,15 @@ fn emit_global_store(
     emitter.comment(&format!("store to global ${}", name));
     emitter.instruction(&format!("adrp x9, {}@PAGE", label));                   // load page of global var storage
     emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label));             // add page offset
+    if matches!(ty, PhpType::Str) {
+        emitter.instruction("ldr x0, [x9]");                                    // load previous string pointer from global slot
+        emitter.instruction("bl __rt_heap_free_safe");                           // release previous string storage before overwrite
+    } else if ty.is_refcounted() {
+        emitter.instruction("mov x8, x0");                                      // preserve incoming heap pointer while old global value is decreffed
+        emitter.instruction("ldr x0, [x9]");                                    // load previous heap pointer from global slot
+        abi::emit_decref_if_refcounted(emitter, ty);
+        emitter.instruction("mov x0, x8");                                      // restore incoming heap pointer for the store
+    }
     match ty {
         PhpType::Bool | PhpType::Int => {
             emitter.instruction("str x0, [x9]");                                // store int/bool to global storage

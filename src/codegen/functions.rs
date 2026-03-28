@@ -277,12 +277,11 @@ fn emit_function_with_label_and_class(
         }
     }
 
-    // Note: scope-based cleanup (decref locals at epilogue) is NOT done here
-    // because local variables may alias data owned by other structures
-    // (e.g., $t = $todos[$i] shares the pointer). Freeing $t would create
-    // dangling pointers. The decref-on-reassign in the assignment handler
-    // already handles the important cases (arrays allocated in loops).
-    // Full scope cleanup requires ownership tracking or full GC.
+    // Note: full scope-based cleanup is still intentionally disabled here.
+    // Some locals and params are filled from borrowed container/object reads
+    // that do not all retain yet, so a blanket epilogue decref would still be
+    // too aggressive. Reassignment/unset/return/call-site ownership transfers
+    // handle the safe cases without destabilizing unrelated code paths.
 
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16));  // restore frame ptr & return addr
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame

@@ -201,9 +201,9 @@ Proper type system for PHP compatibility.
 - [x] Strings freed on variable reassignment (value-copied, always owned)
 
 ### Known limitations
-- Arrays/objects are NOT freed on reassignment (the pattern `$arr = func($arr)` where func internally grows via array_push causes use-after-free — array_grow frees old block, then caller decrefs freed memory)
-- Scope-based cleanup (decref locals at function epilogue) removed: local variables may alias data owned by other structures (e.g., `$t = $arr[$i]` shares the pointer)
-- Full array/object GC requires either ownership tracking or a tracing collector
+- Ordinary local/global reassignment now releases previous arrays/objects safely, but `static` storage and container slots still use conservative leak-prone semantics in some alias-heavy cases
+- Automatic epilogue cleanup is still disabled; general local-scope cleanup needs broader ownership tracking
+- Full array/object GC still needs container-aware ownership tracking or a tracing collector
 
 ## v0.12.x — Math coverage (done)
 
@@ -317,10 +317,10 @@ Features that are desirable but not yet planned for a specific version.
 
 | Idea | Notes |
 |---|---|
-| Array/object decref on reassignment | Unsafe with `$arr = func($arr)` pattern (array_grow frees old block inside function, caller decrefs freed memory). Needs copy-on-write semantics or ownership tracking to be safe. |
-| Scope-based cleanup | Decref locals at function epilogue. Unsafe when locals alias shared data (`$t = $arr[$i]`). Needs escape analysis or full ownership model. |
+| Container-aware heap ownership | Array/object element stores and `static` slots still need stronger retain/release rules to avoid conservative leaks under heavy aliasing. |
+| Copy-on-write arrays | PHP's actual array semantics: shared until modified. Would make reassignment and aliasing both safer and cheaper. Requires COW flag in array header + copy-on-mutation. |
+| Scope-based cleanup | Ordinary locals, globals, statics, by-ref params, and container-backed aliases still need escape analysis or a fuller ownership model. |
 | Cycle detection (GC) | Mark-and-sweep for circular object references. Same approach as PHP 5.3 (Bacon & Rajan 2001). Requires runtime type descriptors. Low priority — most PHP programs don't create cycles. |
-| Copy-on-write arrays | PHP's actual array semantics: shared until modified. Would enable safe decref-on-reassign. Requires COW flag in array header + copy-on-mutation. |
 | Inheritance (`extends`) | Requires vtable for method dispatch, property layout chaining, `parent::` calls. Major architectural change to the class system. |
 | Interfaces / abstract classes | Requires interface method tables and compile-time conformance checking. |
 | Traits | Requires method copying/inlining at compile time. |
