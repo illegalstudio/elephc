@@ -74,6 +74,7 @@ pub enum Token {
     Private,        // private
     ReadOnly,       // readonly
     This,           // $this
+    Extern,         // extern
 
     // Operators
     Assign,         // =

@@ -29,8 +29,14 @@ pub fn parse(tokens: &[(Token, Span)]) -> Result<Program, CompileError> {
         if tokens[pos].0 == Token::Eof {
             break;
         }
-        let s = stmt::parse_stmt(tokens, &mut pos)?;
-        stmts.push(s);
+        // Extern blocks can produce multiple stmts
+        if tokens[pos].0 == Token::Extern {
+            let mut extern_stmts = stmt::parse_extern_stmts(tokens, &mut pos)?;
+            stmts.append(&mut extern_stmts);
+        } else {
+            let s = stmt::parse_stmt(tokens, &mut pos)?;
+            stmts.push(s);
+        }
     }
 
     Ok(stmts)
