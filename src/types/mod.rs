@@ -31,12 +31,12 @@ impl PhpType {
             PhpType::Int => 8,
             PhpType::Float => 8,
             PhpType::Str => 16,
-            PhpType::Void => 8, // null sentinel stored as 8 bytes
-            PhpType::Array(_) => 8, // pointer to heap
+            PhpType::Void => 8,              // null sentinel stored as 8 bytes
+            PhpType::Array(_) => 8,          // pointer to heap
             PhpType::AssocArray { .. } => 8, // pointer to heap
-            PhpType::Callable => 8, // function address
-            PhpType::Object(_) => 8, // pointer to heap
-            PhpType::Pointer(_) => 8, // 64-bit address
+            PhpType::Callable => 8,          // function address
+            PhpType::Object(_) => 8,         // pointer to heap
+            PhpType::Pointer(_) => 8,        // 64-bit address
         }
     }
 
@@ -139,7 +139,12 @@ pub fn ctype_to_php_type(ct: &crate::parser::ast::CType) -> PhpType {
 /// Size in bytes used by a C-facing FFI type.
 pub fn ctype_stack_size(ct: &CType) -> usize {
     match ct {
-        CType::Int | CType::Float | CType::Bool | CType::Ptr | CType::TypedPtr(_) | CType::Callable => 8,
+        CType::Int
+        | CType::Float
+        | CType::Bool
+        | CType::Ptr
+        | CType::TypedPtr(_)
+        | CType::Callable => 8,
         CType::Str => 8, // char*
         CType::Void => 0,
     }

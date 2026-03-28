@@ -113,9 +113,7 @@ fn main() {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("output");
-    let parent = Path::new(filename)
-        .parent()
-        .unwrap_or(Path::new("."));
+    let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
     let asm_path = parent.join(format!("{}.s", stem));
     let obj_path = parent.join(format!("{}.o", stem));
     let bin_path = parent.join(stem);
