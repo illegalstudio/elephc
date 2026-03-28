@@ -2017,7 +2017,7 @@ pub(crate) fn restore_concat_offset_after_nested_call(
     return_ty: &PhpType,
 ) {
     if *return_ty == PhpType::Str {
-        emitter.instruction("bl __rt_str_persist");                              // persist returned string before restoring caller concat cursor
+        emitter.instruction("bl __rt_str_persist");                             // persist returned string before restoring caller concat cursor
     }
     emitter.instruction("ldr x10, [sp], #16");                                  // pop saved caller concat offset from stack
     emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of caller concat offset

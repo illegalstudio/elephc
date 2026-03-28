@@ -3,7 +3,7 @@ use crate::codegen::emit::Emitter;
 /// __rt_json_encode_bool: convert boolean to "true" or "false" JSON string.
 /// Input:  x0 = bool value (0 or 1)
 /// Output: x1 = string ptr, x2 = string len
-pub fn emit_json_encode_bool(emitter: &mut Emitter) {
+pub(crate) fn emit_json_encode_bool(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_bool ---");
     emitter.label("__rt_json_encode_bool");
@@ -26,7 +26,7 @@ pub fn emit_json_encode_bool(emitter: &mut Emitter) {
 
 /// __rt_json_encode_null: produce the "null" JSON string.
 /// Output: x1 = string ptr, x2 = string len
-pub fn emit_json_encode_null(emitter: &mut Emitter) {
+pub(crate) fn emit_json_encode_null(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_null ---");
     emitter.label("__rt_json_encode_null");
@@ -40,7 +40,7 @@ pub fn emit_json_encode_null(emitter: &mut Emitter) {
 /// __rt_json_encode_str: JSON-encode a string (add quotes, escape special chars).
 /// Input:  x1 = string ptr, x2 = string len
 /// Output: x1 = result ptr (in concat_buf), x2 = result len
-pub fn emit_json_encode_str(emitter: &mut Emitter) {
+pub(crate) fn emit_json_encode_str(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_str ---");
     emitter.label("__rt_json_encode_str");
@@ -181,7 +181,7 @@ pub fn emit_json_encode_str(emitter: &mut Emitter) {
 /// __rt_json_encode_array_int: encode an int array as JSON "[1,2,3]".
 /// Input:  x0 = array pointer (header: capacity[8], length[8], then elements[8 each])
 /// Output: x1 = result ptr (in concat_buf), x2 = result len
-pub fn emit_json_encode_array_int(emitter: &mut Emitter) {
+pub(crate) fn emit_json_encode_array_int(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_array_int ---");
     emitter.label("__rt_json_encode_array_int");
@@ -285,7 +285,7 @@ pub fn emit_json_encode_array_int(emitter: &mut Emitter) {
 /// __rt_json_encode_array_str: encode a string array as JSON '["a","b"]'.
 /// Input:  x0 = array pointer (header: cap[8], len[8], then pairs of ptr[8]+len[8])
 /// Output: x1 = result ptr (in concat_buf), x2 = result len
-pub fn emit_json_encode_array_str(emitter: &mut Emitter) {
+pub(crate) fn emit_json_encode_array_str(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_array_str ---");
     emitter.label("__rt_json_encode_array_str");
@@ -439,7 +439,7 @@ pub fn emit_json_encode_array_str(emitter: &mut Emitter) {
 ///
 /// Uses __rt_hash_iter to iterate the hash table entries.
 /// Hash table iter yields: x1=key_ptr, x2=key_len, x3=val_ptr, x4=val_len per entry.
-pub fn emit_json_encode_assoc(emitter: &mut Emitter) {
+pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_assoc ---");
     emitter.label("__rt_json_encode_assoc");
@@ -581,13 +581,4 @@ pub fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
-}
-
-/// Emit JSON string constants for the data section.
-pub fn emit_json_data() -> String {
-    let mut out = String::new();
-    out.push_str("_json_true:\n    .ascii \"true\"\n");
-    out.push_str("_json_false:\n    .ascii \"false\"\n");
-    out.push_str("_json_null:\n    .ascii \"null\"\n");
-    out
 }

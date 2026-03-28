@@ -16,9 +16,7 @@ pub fn store_at_offset(emitter: &mut Emitter, reg: &str, offset: usize) {
 /// For offsets 256-4095: `sub scratch, x29, #offset` then `str reg, [scratch]`.
 pub fn store_at_offset_scratch(emitter: &mut Emitter, reg: &str, offset: usize, scratch: &str) {
     if offset <= 255 {
-        emitter.instruction(&format!(
-            "stur {}, [x29, #-{}]", reg, offset
-        ));                                                                     // store via unscaled immediate offset
+        emitter.instruction(&format!("stur {}, [x29, #-{}]", reg, offset));     // store via unscaled immediate offset
     } else {
         emitter.instruction(&format!("sub {}, x29, #{}", scratch, offset));     // compute stack address for large offset
         emitter.instruction(&format!("str {}, [{}]", reg, scratch));            // store via computed address
@@ -40,9 +38,7 @@ pub fn load_at_offset(emitter: &mut Emitter, reg: &str, offset: usize) {
 /// For offsets 256-4095: `sub scratch, x29, #offset` then `ldr reg, [scratch]`.
 pub fn load_at_offset_scratch(emitter: &mut Emitter, reg: &str, offset: usize, scratch: &str) {
     if offset <= 255 {
-        emitter.instruction(&format!(
-            "ldur {}, [x29, #-{}]", reg, offset
-        ));                                                                     // load via unscaled immediate offset
+        emitter.instruction(&format!("ldur {}, [x29, #-{}]", reg, offset));     // load via unscaled immediate offset
     } else {
         emitter.instruction(&format!("sub {}, x29, #{}", scratch, offset));     // compute stack address for large offset
         emitter.instruction(&format!("ldr {}, [{}]", reg, scratch));            // load via computed address

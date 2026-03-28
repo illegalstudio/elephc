@@ -9,7 +9,7 @@ use crate::codegen::emit::Emitter;
 /// Uses libc _time, _localtime to get struct tm components.
 /// struct tm layout: tm_sec(+0), tm_min(+4), tm_hour(+8), tm_mday(+12),
 ///                   tm_mon(+16), tm_year(+20), tm_wday(+24), tm_yday(+28), tm_isdst(+32)
-pub fn emit_date(emitter: &mut Emitter) {
+pub(crate) fn emit_date(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: date ---");
     emitter.label("__rt_date");
@@ -506,39 +506,4 @@ pub fn emit_date(emitter: &mut Emitter) {
     emitter.instruction("add x9, x9, #1");                                      // advance by 1
     emitter.instruction("str x9, [sp, #32]");                                   // save output position
     emitter.instruction("ret");                                                 // return
-}
-
-/// Emit day and month name lookup tables as data.
-pub fn emit_date_data() -> String {
-    let mut out = String::new();
-    // Day names: 7 entries, each 12 bytes (10 chars + 1 length + 1 padding)
-    // Sunday=0, Monday=1, ..., Saturday=6
-    out.push_str("_day_names:\n");
-    let days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-    for day in &days {
-        let mut padded = day.to_string();
-        while padded.len() < 10 {
-            padded.push('\0');
-        }
-        out.push_str(&format!("    .ascii \"{}\"\n", padded.replace('\0', "\\0")));
-        out.push_str(&format!("    .byte {}\n", day.len()));
-        out.push_str("    .byte 0\n");
-    }
-
-    // Month names: 12 entries, each 12 bytes (10 chars + 1 length + 1 padding)
-    // January=0, ..., December=11
-    out.push_str("_month_names:\n");
-    let months = ["January", "February", "March", "April", "May", "June",
-                  "July", "August", "September", "October", "November", "December"];
-    for month in &months {
-        let mut padded = month.to_string();
-        while padded.len() < 10 {
-            padded.push('\0');
-        }
-        out.push_str(&format!("    .ascii \"{}\"\n", padded.replace('\0', "\\0")));
-        out.push_str(&format!("    .byte {}\n", month.len()));
-        out.push_str("    .byte 0\n");
-    }
-
-    out
 }
