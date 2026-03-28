@@ -143,6 +143,7 @@ fn emit_function_with_label_and_class(
     // (They'll be filled with default values at the call site or by the function prologue)
 
     collect_local_vars(body, &mut ctx, sig);
+    mark_control_flow_epilogue_unsafe(body, &mut ctx, false);
 
     let vars_size = ctx.stack_offset;
     let frame_size = super::align16(vars_size + 16);
@@ -220,6 +221,7 @@ fn emit_function_with_label_and_class(
 
     // -- function epilogue: save static vars back and restore/return --
     emitter.label(epilogue_label);
+    preserve_return_registers(emitter, &sig.return_type);
 
     // Save static vars back to global storage before returning
     let func_name = label.strip_prefix("_fn_").unwrap_or(label);
@@ -282,12 +284,9 @@ fn emit_function_with_label_and_class(
         }
     }
 
-    // Note: full scope-based cleanup is still intentionally disabled here.
-    // Some locals and params are filled from borrowed container/object reads
-    // that do not all retain yet, so a blanket epilogue decref would still be
-    // too aggressive. Reassignment/unset/return/call-site ownership transfers
-    // handle the safe cases without destabilizing unrelated code paths.
+    emit_owned_local_epilogue_cleanup(emitter, &ctx);
 
+    restore_return_registers(emitter, &sig.return_type);
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16));  // restore frame ptr & return addr
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
@@ -306,6 +305,126 @@ fn emit_function_with_label_and_class(
                 all_functions,
                 constants,
             );
+        }
+    }
+}
+
+fn preserve_return_registers(emitter: &mut Emitter, return_ty: &PhpType) {
+    match return_ty {
+        PhpType::Float => {
+            emitter.instruction("str d0, [sp, #-16]!");                         // preserve float return value across epilogue side effects
+        }
+        PhpType::Str => {
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve string return registers across epilogue side effects
+        }
+        _ => {
+            emitter.instruction("str x0, [sp, #-16]!");                         // preserve scalar/heap return value across epilogue side effects
+        }
+    }
+}
+
+fn restore_return_registers(emitter: &mut Emitter, return_ty: &PhpType) {
+    match return_ty {
+        PhpType::Float => {
+            emitter.instruction("ldr d0, [sp], #16");                           // restore float return value after epilogue cleanup
+        }
+        PhpType::Str => {
+            emitter.instruction("ldp x1, x2, [sp], #16");                       // restore string return registers after epilogue cleanup
+        }
+        _ => {
+            emitter.instruction("ldr x0, [sp], #16");                           // restore scalar/heap return value after epilogue cleanup
+        }
+    }
+}
+
+fn emit_owned_local_epilogue_cleanup(emitter: &mut Emitter, ctx: &Context) {
+    for (name, var) in &ctx.variables {
+        if ctx.global_vars.contains(name) || ctx.static_vars.contains(name) || ctx.ref_params.contains(name) {
+            continue;
+        }
+        if !var.epilogue_cleanup_safe || var.ownership != HeapOwnership::Owned {
+            continue;
+        }
+        match &var.ty {
+            PhpType::Str => {
+                emitter.comment(&format!("epilogue cleanup ${}", name));
+                super::abi::load_at_offset(emitter, "x0", var.stack_offset);     // load owned string pointer from local slot
+                emitter.instruction("bl __rt_heap_free_safe");                    // release owned string storage before returning
+            }
+            ty if ty.is_refcounted() => {
+                emitter.comment(&format!("epilogue cleanup ${}", name));
+                super::abi::load_at_offset(emitter, "x0", var.stack_offset);     // load owned heap pointer from local slot
+                super::abi::emit_decref_if_refcounted(emitter, ty);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn mark_control_flow_epilogue_unsafe(
+    stmts: &[crate::parser::ast::Stmt],
+    ctx: &mut Context,
+    in_control_flow: bool,
+) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::Assign { name, .. } => {
+                if in_control_flow {
+                    ctx.disable_epilogue_cleanup(name);
+                }
+            }
+            StmtKind::ListUnpack { vars, .. } => {
+                if in_control_flow {
+                    for var in vars {
+                        ctx.disable_epilogue_cleanup(var);
+                    }
+                }
+            }
+            StmtKind::Global { vars } => {
+                for var in vars {
+                    ctx.disable_epilogue_cleanup(var);
+                }
+            }
+            StmtKind::StaticVar { name, .. } => {
+                ctx.disable_epilogue_cleanup(name);
+            }
+            StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+                mark_control_flow_epilogue_unsafe(then_body, ctx, true);
+                for (_, body) in elseif_clauses {
+                    mark_control_flow_epilogue_unsafe(body, ctx, true);
+                }
+                if let Some(body) = else_body {
+                    mark_control_flow_epilogue_unsafe(body, ctx, true);
+                }
+            }
+            StmtKind::Foreach { body, key_var, value_var, .. } => {
+                ctx.disable_epilogue_cleanup(value_var);
+                if let Some(key_var) = key_var {
+                    ctx.disable_epilogue_cleanup(key_var);
+                }
+                mark_control_flow_epilogue_unsafe(body, ctx, true);
+            }
+            StmtKind::DoWhile { body, .. } | StmtKind::While { body, .. } => {
+                mark_control_flow_epilogue_unsafe(body, ctx, true);
+            }
+            StmtKind::For { init, update, body, .. } => {
+                if let Some(stmt) = init {
+                    mark_control_flow_epilogue_unsafe(&[*stmt.clone()], ctx, true);
+                }
+                if let Some(stmt) = update {
+                    mark_control_flow_epilogue_unsafe(&[*stmt.clone()], ctx, true);
+                }
+                mark_control_flow_epilogue_unsafe(body, ctx, true);
+            }
+            StmtKind::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    mark_control_flow_epilogue_unsafe(body, ctx, true);
+                }
+                if let Some(body) = default {
+                    mark_control_flow_epilogue_unsafe(body, ctx, true);
+                }
+            }
+            _ => {}
         }
     }
 }

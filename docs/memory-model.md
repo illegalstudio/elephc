@@ -424,7 +424,7 @@ elephc uses a **free-list allocator with reference counting** — not a garbage 
 - **Adjacent free blocks** are not coalesced — fragmentation can occur over time
 - **Pointer targets** are not ownership-tracked just because a raw pointer exists; the pointer value itself is only an address
 - **Intermediate scratch strings** in `_concat_buf` are not individually freed — the buffer is simply reset per statement
-- **General function epilogues** still do not blanket-decref all heap locals, because some stack slots are still populated from borrowed container/object reads and nested propagation is not fully proven yet
+- **General function epilogues** do not blanket-decref all heap locals. They now selectively clean up slots proven `Owned`, while locals populated from still-ambiguous borrowed/container paths remain excluded until propagation is broader
 
 ### Performance characteristics
 

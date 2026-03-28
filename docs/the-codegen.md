@@ -105,9 +105,10 @@ Each variable has a `VarInfo`:
 
 ```rust
 pub struct VarInfo {
-    pub ty: PhpType,                 // Int, Float, Str, etc.
-    pub stack_offset: usize,         // offset from frame pointer (x29)
-    pub ownership: HeapOwnership,    // NonHeap / Owned / Borrowed / MaybeOwned
+    pub ty: PhpType,                  // Int, Float, Str, etc.
+    pub stack_offset: usize,          // offset from frame pointer (x29)
+    pub ownership: HeapOwnership,     // NonHeap / Owned / Borrowed / MaybeOwned
+    pub epilogue_cleanup_safe: bool,  // false for locals populated through still-ambiguous control-flow/alias paths
 }
 ```
 
@@ -118,7 +119,7 @@ pub struct VarInfo {
 - `Borrowed` — this slot currently aliases heap storage owned elsewhere
 - `MaybeOwned` — control flow merged heap-backed paths with different ownership states
 
-The lattice is now threaded through the main local-variable paths, but epilogues are still conservative until more aliasing sites are proven safe.
+The lattice is now threaded through the main local-variable paths. Function epilogues re-enable cleanup only for slots classified as `Owned` and still marked `epilogue_cleanup_safe`; locals coming from still-ambiguous control-flow or aliasing paths are intentionally skipped.
 
 ### Label generation
 
@@ -758,7 +759,7 @@ Compiles a user-defined function:
 3. **Emit prologue** — `sub sp`, `stp x29, x30`, `add x29`
 4. **Store parameters** — move from argument registers to stack slots, marking by-value heap params as `Owned` and by-reference params as borrowed aliases of the caller's storage
 5. **Emit body** — all statements
-6. **Emit epilogue** — `ldp x29, x30`, `add sp`, `ret`
+6. **Emit epilogue** — preserve return registers, save static locals back to BSS, clean up only `Owned` + `epilogue_cleanup_safe` heap locals, then `ldp x29, x30`, `add sp`, `ret`
 
 ### Pass by reference
 

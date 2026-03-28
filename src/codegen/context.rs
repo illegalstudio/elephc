@@ -102,6 +102,7 @@ pub struct VarInfo {
     pub ty: PhpType,
     pub stack_offset: usize,
     pub ownership: HeapOwnership,
+    pub epilogue_cleanup_safe: bool,
 }
 
 pub struct LoopLabels {
@@ -154,6 +155,7 @@ impl Context {
                 ty,
                 stack_offset: offset,
                 ownership,
+                epilogue_cleanup_safe: true,
             },
         );
         offset
@@ -162,6 +164,12 @@ impl Context {
     pub fn set_var_ownership(&mut self, name: &str, ownership: HeapOwnership) {
         if let Some(var) = self.variables.get_mut(name) {
             var.ownership = ownership;
+        }
+    }
+
+    pub fn disable_epilogue_cleanup(&mut self, name: &str) {
+        if let Some(var) = self.variables.get_mut(name) {
+            var.epilogue_cleanup_safe = false;
         }
     }
 
