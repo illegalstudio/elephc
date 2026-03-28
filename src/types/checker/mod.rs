@@ -4,8 +4,8 @@ mod functions;
 use std::collections::HashMap;
 
 use crate::errors::CompileError;
-use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Program, Stmt, StmtKind, Visibility};
-use crate::types::{CheckResult, ClassInfo, ExternClassInfo, ExternFieldInfo, ExternFunctionSig, FunctionSig, PhpType, TypeEnv, ctype_to_php_type};
+use crate::parser::ast::{BinOp, CType, CastType, Expr, ExprKind, Program, Stmt, StmtKind, Visibility};
+use crate::types::{CheckResult, ClassInfo, ExternClassInfo, ExternFieldInfo, ExternFunctionSig, FunctionSig, PhpType, TypeEnv, ctype_stack_size, ctype_to_php_type};
 
 /// Infer a function's return type by scanning its body for Return statements.
 /// This is a syntactic/heuristic check — no full type inference.
@@ -307,10 +307,17 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
     for stmt in program {
         match &stmt.kind {
             StmtKind::ExternFunctionDecl { name, params, return_type, library } => {
+                if checker.extern_functions.contains_key(name) || checker.fn_decls.contains_key(name) {
+                    return Err(CompileError::new(
+                        stmt.span,
+                        &format!("Duplicate function declaration: {}", name),
+                    ));
+                }
                 let php_params: Vec<(String, PhpType)> = params.iter()
                     .map(|p| (p.name.clone(), ctype_to_php_type(&p.c_type)))
                     .collect();
                 let php_ret = ctype_to_php_type(return_type);
+                checker.validate_extern_function_decl(name, params, return_type, &php_params, &php_ret, stmt.span)?;
                 // Register as a regular function sig so call-site type checking works
                 let sig = FunctionSig {
                     params: php_params.clone(),
@@ -333,11 +340,25 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 }
             }
             StmtKind::ExternClassDecl { name, fields } => {
+                if checker.extern_classes.contains_key(name) || checker.classes.contains_key(name) {
+                    return Err(CompileError::new(
+                        stmt.span,
+                        &format!("Duplicate class declaration: {}", name),
+                    ));
+                }
                 let mut extern_fields = Vec::new();
                 let mut offset = 0usize;
+                let mut seen_fields = std::collections::HashSet::new();
                 for f in fields {
+                    checker.validate_extern_field_decl(name, f, stmt.span)?;
+                    if !seen_fields.insert(f.name.clone()) {
+                        return Err(CompileError::new(
+                            stmt.span,
+                            &format!("Duplicate extern field: {}::{}", name, f.name),
+                        ));
+                    }
                     let php_type = ctype_to_php_type(&f.c_type);
-                    let size = php_type.stack_size();
+                    let size = ctype_stack_size(&f.c_type);
                     extern_fields.push(ExternFieldInfo {
                         name: f.name.clone(),
                         php_type,
@@ -352,6 +373,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 });
             }
             StmtKind::ExternGlobalDecl { name, c_type } => {
+                checker.validate_extern_global_decl(name, c_type, stmt.span)?;
                 let php_type = ctype_to_php_type(c_type);
                 checker.extern_globals.insert(name.clone(), php_type);
             }
@@ -575,6 +597,242 @@ impl Checker {
                 "ptr_set() value must be int, bool, null, or pointer",
             ))
         }
+    }
+
+    fn validate_extern_function_decl(
+        &self,
+        name: &str,
+        params: &[crate::parser::ast::ExternParam],
+        return_type: &CType,
+        php_params: &[(String, PhpType)],
+        php_ret: &PhpType,
+        span: crate::span::Span,
+    ) -> Result<(), CompileError> {
+        let mut seen = std::collections::HashSet::new();
+        let mut int_regs = 0usize;
+        let mut float_regs = 0usize;
+
+        for (param, (_, php_ty)) in params.iter().zip(php_params.iter()) {
+            if !seen.insert(param.name.clone()) {
+                return Err(CompileError::new(
+                    span,
+                    &format!("Duplicate extern parameter: ${}", param.name),
+                ));
+            }
+            if matches!(param.c_type, CType::Void) {
+                return Err(CompileError::new(
+                    span,
+                    "Extern parameters cannot use type void",
+                ));
+            }
+            match php_ty {
+                PhpType::Float => float_regs += 1,
+                PhpType::Str | PhpType::Int | PhpType::Bool | PhpType::Pointer(_) | PhpType::Callable => {
+                    int_regs += 1;
+                }
+                PhpType::Void | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+                    return Err(CompileError::new(
+                        span,
+                        &format!("Unsupported extern parameter type in {}()", name),
+                    ));
+                }
+            }
+        }
+
+        if int_regs > 8 || float_regs > 8 {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Extern function '{}' exceeds supported ARM64 register ABI limits (max 8 integer and 8 float arguments)",
+                    name
+                ),
+            ));
+        }
+
+        if matches!(return_type, CType::Callable) || matches!(php_ret, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)) {
+            return Err(CompileError::new(
+                span,
+                &format!("Extern function '{}' has an unsupported return type", name),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn validate_extern_field_decl(
+        &self,
+        class_name: &str,
+        field: &crate::parser::ast::ExternField,
+        span: crate::span::Span,
+    ) -> Result<(), CompileError> {
+        if matches!(field.c_type, CType::Void | CType::Callable) {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Extern class '{}' field ${} uses an unsupported type",
+                    class_name, field.name
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_extern_global_decl(
+        &self,
+        name: &str,
+        c_type: &CType,
+        span: crate::span::Span,
+    ) -> Result<(), CompileError> {
+        if name == "argc" || name == "argv" {
+            return Err(CompileError::new(
+                span,
+                &format!("extern global ${} would shadow a reserved superglobal", name),
+            ));
+        }
+        if self.extern_globals.contains_key(name) {
+            return Err(CompileError::new(
+                span,
+                &format!("Duplicate extern global declaration: ${}", name),
+            ));
+        }
+        if matches!(c_type, CType::Void | CType::Callable) {
+            return Err(CompileError::new(
+                span,
+                &format!("Extern global ${} uses an unsupported type", name),
+            ));
+        }
+        Ok(())
+    }
+
+    fn callback_type_is_c_compatible(ty: &PhpType) -> bool {
+        matches!(ty, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Pointer(_) | PhpType::Void)
+    }
+
+    fn register_callback_function(
+        &mut self,
+        callback_name: &str,
+        span: crate::span::Span,
+    ) -> Result<(), CompileError> {
+        let decl = self
+            .fn_decls
+            .get(callback_name)
+            .cloned()
+            .ok_or_else(|| CompileError::new(span, &format!("Undefined callback function: {}", callback_name)))?;
+
+        if decl.variadic.is_some() {
+            return Err(CompileError::new(
+                span,
+                &format!("Callback function '{}' cannot be variadic", callback_name),
+            ));
+        }
+        if decl.defaults.iter().any(|d| d.is_some()) {
+            return Err(CompileError::new(
+                span,
+                &format!("Callback function '{}' cannot use default parameters", callback_name),
+            ));
+        }
+        if decl.ref_params.iter().any(|is_ref| *is_ref) {
+            return Err(CompileError::new(
+                span,
+                &format!("Callback function '{}' cannot use pass-by-reference parameters", callback_name),
+            ));
+        }
+        if let Some(sig) = self.functions.get(callback_name) {
+            if sig.params.iter().any(|(_, ty)| !Self::callback_type_is_c_compatible(ty))
+                || !Self::callback_type_is_c_compatible(&sig.return_type)
+            {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "Callback function '{}' uses unsupported C callback types; only int, float, bool, ptr, and void are supported",
+                        callback_name
+                    ),
+                ));
+            }
+        } else {
+            let return_type = infer_return_type_syntactic(&decl.body);
+            if !Self::callback_type_is_c_compatible(&return_type) {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "Callback function '{}' uses an unsupported return type; only int, float, bool, ptr, and void are supported",
+                        callback_name
+                    ),
+                ));
+            }
+
+            let params: Vec<(String, PhpType)> = decl
+                .params
+                .iter()
+                .map(|name| (name.clone(), PhpType::Int))
+                .collect();
+            self.functions.insert(callback_name.to_string(), FunctionSig {
+                params,
+                defaults: decl.defaults.clone(),
+                return_type,
+                ref_params: decl.ref_params.clone(),
+                variadic: decl.variadic.clone(),
+            });
+        }
+
+        let _ = decl;
+        Ok(())
+    }
+
+    fn check_extern_function_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        span: crate::span::Span,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let extern_sig = self
+            .extern_functions
+            .get(name)
+            .cloned()
+            .ok_or_else(|| CompileError::new(span, &format!("Undefined extern function: {}", name)))?;
+
+        let sig = self
+            .functions
+            .get(name)
+            .cloned()
+            .ok_or_else(|| CompileError::new(span, &format!("Undefined function: {}", name)))?;
+
+        self.check_call_arity("Extern function", name, &sig, args, span)?;
+
+        for (idx, arg) in args.iter().enumerate() {
+            let Some((param_name, expected_ty)) = extern_sig.params.get(idx) else {
+                break;
+            };
+
+            if *expected_ty == PhpType::Callable {
+                match &arg.kind {
+                    ExprKind::StringLiteral(callback_name) => {
+                        self.register_callback_function(callback_name, span)?;
+                    }
+                    _ => {
+                        return Err(CompileError::new(
+                            arg.span,
+                            &format!(
+                                "Extern function '{}' parameter ${} expects a string literal naming a user function",
+                                name, param_name
+                            ),
+                        ));
+                    }
+                }
+                continue;
+            }
+
+            let actual_ty = self.infer_type(arg, env)?;
+            self.require_compatible_arg_type(
+                expected_ty,
+                &actual_ty,
+                arg.span,
+                &format!("Extern function '{}' parameter ${}", name, param_name),
+            )?;
+        }
+
+        Ok(extern_sig.return_type)
     }
 
     fn check_call_arity(
@@ -1009,6 +1267,9 @@ impl Checker {
             ExprKind::FunctionCall { name, args } => {
                 let name = name.clone();
                 let args = args.clone();
+                if self.extern_functions.contains_key(&name) {
+                    return self.check_extern_function_call(&name, &args, expr.span, env);
+                }
                 if let Some(ty) = self.check_builtin(&name, &args, expr.span, env)? {
                     return Ok(ty);
                 }

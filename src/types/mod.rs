@@ -3,8 +3,7 @@ pub mod checker;
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
-use crate::parser::ast::Visibility;
-use crate::parser::ast::Program;
+use crate::parser::ast::{CType, Program, Visibility};
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)] // Callable used in match arms, constructed when closures are added
@@ -117,7 +116,6 @@ pub struct ExternFieldInfo {
 
 /// Convert a parser CType to a PhpType.
 pub fn ctype_to_php_type(ct: &crate::parser::ast::CType) -> PhpType {
-    use crate::parser::ast::CType;
     match ct {
         CType::Int => PhpType::Int,
         CType::Float => PhpType::Float,
@@ -127,6 +125,15 @@ pub fn ctype_to_php_type(ct: &crate::parser::ast::CType) -> PhpType {
         CType::Ptr => PhpType::Pointer(None),
         CType::TypedPtr(name) => PhpType::Pointer(Some(name.clone())),
         CType::Callable => PhpType::Callable,
+    }
+}
+
+/// Size in bytes used by a C-facing FFI type.
+pub fn ctype_stack_size(ct: &CType) -> usize {
+    match ct {
+        CType::Int | CType::Float | CType::Bool | CType::Ptr | CType::TypedPtr(_) | CType::Callable => 8,
+        CType::Str => 8, // char*
+        CType::Void => 0,
     }
 }
 

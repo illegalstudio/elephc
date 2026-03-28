@@ -4,9 +4,44 @@ use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
-use super::Checker;
+use super::{Checker, FnDecl};
 
 impl Checker {
+    pub(crate) fn types_compatible(expected: &PhpType, actual: &PhpType) -> bool {
+        if expected == actual {
+            return true;
+        }
+
+        match (expected, actual) {
+            (PhpType::Float, PhpType::Int | PhpType::Bool | PhpType::Void) => true,
+            (PhpType::Int, PhpType::Bool | PhpType::Void) => true,
+            (PhpType::Bool, PhpType::Int | PhpType::Void) => true,
+            (PhpType::Pointer(_), PhpType::Pointer(_) | PhpType::Void) => true,
+            (PhpType::Callable, PhpType::Callable) => true,
+            _ => false,
+        }
+    }
+
+    pub(crate) fn require_compatible_arg_type(
+        &self,
+        expected: &PhpType,
+        actual: &PhpType,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        if Self::types_compatible(expected, actual) {
+            Ok(())
+        } else {
+            Err(CompileError::new(
+                span,
+                &format!(
+                    "{} expects {:?}, got {:?}",
+                    context, expected, actual
+                ),
+            ))
+        }
+    }
+
     fn format_fixed_or_range_arity(min_args: usize, max_args: usize) -> String {
         if min_args == max_args {
             format!("{}", min_args)
@@ -54,8 +89,21 @@ impl Checker {
                     ));
                 }
             }
+            let mut param_idx = 0usize;
             for arg in args {
-                self.infer_type(arg, caller_env)?;
+                let actual_ty = self.infer_type(arg, caller_env)?;
+                if matches!(arg.kind, ExprKind::Spread(_)) {
+                    continue;
+                }
+                if let Some((param_name, expected_ty)) = sig.params.get(param_idx) {
+                    self.require_compatible_arg_type(
+                        expected_ty,
+                        &actual_ty,
+                        arg.span,
+                        &format!("Function '{}' parameter ${}", name, param_name),
+                    )?;
+                    param_idx += 1;
+                }
             }
             return Ok(sig.return_type);
         }
@@ -127,6 +175,16 @@ impl Checker {
             };
             param_types.push((vp.clone(), PhpType::Array(Box::new(variadic_elem_ty))));
         }
+
+        self.resolve_function_signature(name, &decl, param_types)
+    }
+
+    pub(crate) fn resolve_function_signature(
+        &mut self,
+        name: &str,
+        decl: &FnDecl,
+        param_types: Vec<(String, PhpType)>,
+    ) -> Result<PhpType, CompileError> {
 
         let mut local_env: TypeEnv = HashMap::new();
         for (pname, pty) in &param_types {
