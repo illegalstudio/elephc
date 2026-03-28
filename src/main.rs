@@ -15,7 +15,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: elephc [--heap-size=BYTES] <source.php>");
+        eprintln!("Usage: elephc [--heap-size=BYTES] [--gc-stats] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] <source.php>");
         process::exit(1);
     }
 
@@ -80,7 +80,7 @@ fn main() {
     let filename = match filename_arg {
         Some(f) => f,
         None => {
-            eprintln!("Usage: elephc [--heap-size=BYTES] <source.php>");
+            eprintln!("Usage: elephc [--heap-size=BYTES] [--gc-stats] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] <source.php>");
             process::exit(1);
         }
     };
@@ -191,13 +191,13 @@ fn main() {
     ld_cmd.arg(&obj_path);
     ld_cmd.args(["-lSystem", "-syslibroot"]);
     ld_cmd.arg(&sdk_path);
+    for path in &extra_link_paths {
+        ld_cmd.arg(format!("-L{}", path));
+    }
     for lib in &extra_link_libs {
         if lib != "System" {
             ld_cmd.arg(format!("-l{}", lib));
         }
-    }
-    for path in &extra_link_paths {
-        ld_cmd.arg(format!("-L{}", path));
     }
     for fw in &extra_frameworks {
         ld_cmd.args(["-framework", fw]);
