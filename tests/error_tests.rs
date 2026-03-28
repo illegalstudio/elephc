@@ -1715,6 +1715,70 @@ fn test_error_extern_block_empty() {
 fn test_error_extern_wrong_arg_count() {
     expect_error(
         "<?php extern function abs(int $n): int; abs();",
-        "abs() takes exactly 1 argument",
+        "Extern function 'abs' expects 1 arguments, got 0",
+    );
+}
+
+#[test]
+fn test_error_extern_wrong_arg_type() {
+    expect_error(
+        "<?php extern function strlen(string $s): int; strlen(123);",
+        "Extern function 'strlen' parameter $s expects Str, got Int",
+    );
+}
+
+#[test]
+fn test_error_duplicate_extern_function() {
+    expect_error(
+        "<?php extern function foo(int $x): int; extern function foo(int $y): int;",
+        "Duplicate function declaration: foo",
+    );
+}
+
+#[test]
+fn test_error_extern_global_reserved_name() {
+    expect_error(
+        "<?php extern global int $argc;",
+        "extern global $argc would shadow a reserved superglobal",
+    );
+}
+
+#[test]
+fn test_error_extern_global_void_type() {
+    expect_error(
+        "<?php extern global void $bad;",
+        "Extern global $bad uses an unsupported type",
+    );
+}
+
+#[test]
+fn test_error_extern_callable_requires_literal_function_name() {
+    expect_error(
+        "<?php extern function signal(int $sig, callable $handler): ptr; function on_signal($sig) {} $fn = \"on_signal\"; signal(15, $fn);",
+        "expects a string literal naming a user function",
+    );
+}
+
+#[test]
+fn test_error_extern_callable_requires_defined_function() {
+    expect_error(
+        "<?php extern function signal(int $sig, callable $handler): ptr; signal(15, \"missing_handler\");",
+        "Undefined callback function: missing_handler",
+    );
+}
+
+#[test]
+fn test_error_extern_callable_requires_c_compatible_return_type() {
+    expect_error(
+        "<?php extern function signal(int $sig, callable $handler): ptr; function bad_handler($sig) { return \"oops\"; } signal(15, \"bad_handler\");",
+        "unsupported return type",
+    );
+}
+
+#[test]
+fn test_error_extern_class_void_field() {
+    expect_error(
+        "<?php extern class Bad { void $field; }",
+        "Extern class 'Bad' field $field uses an unsupported type",
     );
 }

@@ -8544,7 +8544,41 @@ echo strtol("FF", ptr_null(), 16);
 }
 
 #[test]
+fn test_ffi_extern_multiple_string_args() {
+    let out = compile_and_run(r#"<?php
+extern function strcmp(string $left, string $right): int;
+echo strcmp("aa", "ab") < 0 ? "ok" : "bad";
+"#);
+    assert_eq!(out, "ok");
+}
+
+#[test]
 fn test_ffi_extern_global() {
+    let out = compile_and_run(r#"<?php
+extern global ptr $environ;
+echo ptr_is_null($environ) ? "fail" : "ok";
+"#);
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_ffi_callback_signal_handler() {
+    let out = compile_and_run(r#"<?php
+extern function signal(int $sig, callable $handler): ptr;
+extern function raise(int $sig): int;
+
+function on_signal($sig) {
+    echo $sig;
+}
+
+signal(15, "on_signal");
+raise(15);
+"#);
+    assert_eq!(out, "15");
+}
+
+#[test]
+fn test_ffi_extern_non_string_global_smoke() {
     let out = compile_and_run(r#"<?php
 extern function getpid(): int;
 $pid = getpid();

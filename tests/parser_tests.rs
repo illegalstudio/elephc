@@ -1028,3 +1028,15 @@ fn test_parse_extern_lib_function() {
         _ => panic!("Expected ExternFunctionDecl"),
     }
 }
+
+#[test]
+fn test_parse_extern_callable_param() {
+    let stmts = parse_source(r#"<?php extern function signal(int $sig, callable $handler): ptr;"#);
+    match &stmts[0].kind {
+        StmtKind::ExternFunctionDecl { params, .. } => {
+            assert_eq!(params.len(), 2);
+            assert!(matches!(params[1].c_type, elephc::parser::ast::CType::Callable));
+        }
+        _ => panic!("Expected ExternFunctionDecl"),
+    }
+}
