@@ -1,6 +1,7 @@
 mod arrays;
 mod io;
 mod math;
+mod pointers;
 mod strings;
 mod system;
 mod types;
@@ -26,4 +27,5 @@ pub fn emit_builtin_call(
         .or_else(|| math::emit(name, args, emitter, ctx, data))
         .or_else(|| types::emit(name, args, emitter, ctx, data))
         .or_else(|| io::emit(name, args, emitter, ctx, data))
+        .or_else(|| pointers::emit(name, args, emitter, ctx, data))
 }

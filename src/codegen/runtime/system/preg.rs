@@ -187,7 +187,7 @@ fn emit_pcre_to_posix(emitter: &mut Emitter) {
 ///   sp+104..111: regexec result
 ///   sp+112..127: padding
 ///   sp+128..143: saved x29, x30
-pub fn emit_preg_match(emitter: &mut Emitter) {
+pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
     emit_strip_delimiters(emitter);
     emit_pcre_to_posix(emitter);
 
@@ -278,7 +278,7 @@ pub fn emit_preg_match(emitter: &mut Emitter) {
 ///   sp+112..119: current position in C string
 ///   sp+128..143: padding
 ///   sp+144..159: saved x29, x30
-pub fn emit_preg_match_all(emitter: &mut Emitter) {
+pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: preg_match_all ---");
     emitter.label("__rt_preg_match_all");
@@ -390,7 +390,7 @@ pub fn emit_preg_match_all(emitter: &mut Emitter) {
 ///   sp+144..191: padding
 ///   sp+192..207: padding
 ///   sp+208..223: saved x29, x30
-pub fn emit_preg_replace(emitter: &mut Emitter) {
+pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: preg_replace ---");
     emitter.label("__rt_preg_replace");
@@ -559,7 +559,7 @@ pub fn emit_preg_replace(emitter: &mut Emitter) {
 ///   sp+120..127: current elephc ptr
 ///   sp+128..191: padding
 ///   sp+192..207: saved x29, x30
-pub fn emit_preg_split(emitter: &mut Emitter) {
+pub(crate) fn emit_preg_split(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: preg_split ---");
     emitter.label("__rt_preg_split");

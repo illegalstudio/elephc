@@ -1,5 +1,6 @@
 mod arrays;
 mod io;
+mod pointers;
 mod strings;
 mod system;
 
@@ -153,6 +154,10 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     io::emit_tempnam(emitter);
     io::emit_fgetcsv(emitter);
     io::emit_fputcsv(emitter);
+
+    // Pointer runtime functions
+    pointers::emit_ptoa(emitter);
+    pointers::emit_ptr_check_nonnull(emitter);
 }
 
 pub fn emit_runtime_data(
@@ -171,6 +176,7 @@ pub fn emit_runtime_data(
     out.push_str(&format!("_heap_max:\n    .quad {}\n", heap_size));
     out.push_str("_heap_err_msg:\n    .ascii \"Fatal error: heap memory exhausted\\n\"\n");
     out.push_str("_arr_cap_err_msg:\n    .ascii \"Fatal error: array capacity exceeded\\n\"\n");
+    out.push_str("_ptr_null_err_msg:\n    .ascii \"Fatal error: null pointer dereference\\n\"\n");
     // GC statistics counters
     out.push_str(".comm _gc_allocs, 8, 3\n");
     out.push_str(".comm _gc_frees, 8, 3\n");

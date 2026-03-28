@@ -16,9 +16,7 @@ pub fn store_at_offset(emitter: &mut Emitter, reg: &str, offset: usize) {
 /// For offsets 256-4095: `sub scratch, x29, #offset` then `str reg, [scratch]`.
 pub fn store_at_offset_scratch(emitter: &mut Emitter, reg: &str, offset: usize, scratch: &str) {
     if offset <= 255 {
-        emitter.instruction(&format!(
-            "stur {}, [x29, #-{}]", reg, offset
-        ));                                                                     // store via unscaled immediate offset
+        emitter.instruction(&format!("stur {}, [x29, #-{}]", reg, offset));     // store via unscaled immediate offset
     } else {
         emitter.instruction(&format!("sub {}, x29, #{}", scratch, offset));     // compute stack address for large offset
         emitter.instruction(&format!("str {}, [{}]", reg, scratch));            // store via computed address
@@ -40,9 +38,7 @@ pub fn load_at_offset(emitter: &mut Emitter, reg: &str, offset: usize) {
 /// For offsets 256-4095: `sub scratch, x29, #offset` then `ldr reg, [scratch]`.
 pub fn load_at_offset_scratch(emitter: &mut Emitter, reg: &str, offset: usize, scratch: &str) {
     if offset <= 255 {
-        emitter.instruction(&format!(
-            "ldur {}, [x29, #-{}]", reg, offset
-        ));                                                                     // load via unscaled immediate offset
+        emitter.instruction(&format!("ldur {}, [x29, #-{}]", reg, offset));     // load via unscaled immediate offset
     } else {
         emitter.instruction(&format!("sub {}, x29, #{}", scratch, offset));     // compute stack address for large offset
         emitter.instruction(&format!("ldr {}, [{}]", reg, scratch));            // load via computed address
@@ -75,8 +71,9 @@ pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
         PhpType::Void => {
             store_at_offset(emitter, "x0", offset);                             // store null sentinel
         }
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
-            store_at_offset(emitter, "x0", offset);                             // store array/callable/object heap pointer
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+        | PhpType::Pointer(_) => {
+            store_at_offset(emitter, "x0", offset);                             // store array/callable/object/pointer value
         }
     }
 }
@@ -99,8 +96,9 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
         PhpType::Void => {
             load_at_offset(emitter, "x0", offset);                              // load null sentinel
         }
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
-            load_at_offset(emitter, "x0", offset);                              // load array/callable/object heap pointer
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+        | PhpType::Pointer(_) => {
+            load_at_offset(emitter, "x0", offset);                              // load array/callable/object/pointer value
         }
     }
 }
@@ -130,6 +128,13 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
         PhpType::Float => {
             // Convert float in d0 to string via snprintf, then write
             emitter.instruction("bl __rt_ftoa");                                // d0 → x1=ptr, x2=len
+            emitter.instruction("mov x0, #1");                                  // fd = stdout
+            emitter.instruction("mov x16, #4");                                 // syscall 4 = write
+            emitter.instruction("svc #0x80");                                   // invoke kernel
+        }
+        PhpType::Pointer(_) => {
+            // Convert pointer address in x0 to hex string, then write
+            emitter.instruction("bl __rt_ptoa");                                // x0 → x1=ptr, x2=len
             emitter.instruction("mov x0, #1");                                  // fd = stdout
             emitter.instruction("mov x16, #4");                                 // syscall 4 = write
             emitter.instruction("svc #0x80");                                   // invoke kernel

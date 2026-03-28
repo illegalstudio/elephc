@@ -1,6 +1,6 @@
 # elephc Language Reference
 
-This document describes the PHP subset supported by elephc. Every program listed here is valid PHP and produces identical output when run with `php`.
+This document describes the PHP subset supported by elephc. The language aims to stay PHP-compatible, but elephc also exposes compiler-specific pointer features such as `ptr()` and `ptr_cast<T>()` that are intentionally outside standard PHP syntax.
 
 ## Data Types
 
@@ -13,7 +13,8 @@ This document describes the PHP subset supported by elephc. Every program listed
 | `float` | Yes | 64-bit double-precision. Literals: `3.14`, `.5`, `1.5e3`, `1.0e-5`. Constants: `INF`, `NAN`. |
 | `array` | Yes | Indexed (`[1, 2, 3]`) and associative (`["key" => "value"]`). Hash table runtime for string keys. |
 | `object` | Yes | Class instances. Heap-allocated, fixed-layout. `new ClassName(...)` |
-| `resource` | No | Not planned. |
+| `pointer` | Yes | 64-bit memory address. `ptr($var)`, `ptr_null()`. Echo prints `0x...` hex. |
+| `resource` | No | File handles are currently modeled as integer file descriptors (`int`), not as a separate runtime resource type. |
 
 ### Null behavior
 
@@ -865,7 +866,7 @@ foreach ($matrix as $row) {
 | `is_infinite()` | `is_infinite($val): bool` | Returns true if INF or -INF |
 | `boolval()` | `boolval($val): bool` | Convert to bool |
 | `floatval()` | `floatval($val): float` | Convert to float |
-| `gettype()` | `gettype($val): string` | Returns type name ("integer", "double", "string", "boolean", "NULL", "array") |
+| `gettype()` | `gettype($val): string` | Returns type name (`"integer"`, `"double"`, `"string"`, `"boolean"`, `"NULL"`, `"array"`, `"callable"`, `"object"`, or `"pointer"`) |
 | `empty()` | `empty($val): bool` | Returns true if value is falsy (0, 0.0, "", false, null, empty array) |
 | `unset()` | `unset($var): void` | Sets variable to null |
 | `settype()` | `settype($var, $type): bool` | Changes variable type in place |
@@ -903,7 +904,7 @@ foreach ($matrix as $row) {
 
 | Function | Signature | Description |
 |---|---|---|
-| `fopen()` | `fopen($filename, $mode): resource` | Open a file (modes: r, w, a, r+, w+, a+) |
+| `fopen()` | `fopen($filename, $mode): int` | Open a file and return an integer file descriptor (modes: r, w, a, r+, w+, a+) |
 | `fclose()` | `fclose($handle): bool` | Close a file handle |
 | `fread()` | `fread($handle, $length): string` | Read up to $length bytes |
 | `fwrite()` | `fwrite($handle, $data): int` | Write string to file, returns bytes written |
@@ -963,6 +964,47 @@ print_r($arr);
 // )
 ```
 
+### Pointer functions
+
+| Function | Signature | Description |
+|---|---|---|
+| `ptr()` | `ptr($var): pointer` | Take the address of a variable lvalue |
+| `ptr_null()` | `ptr_null(): pointer` | Create a null pointer (`0x0`) |
+| `ptr_is_null()` | `ptr_is_null($p): bool` | Check if pointer is null |
+| `ptr_get()` | `ptr_get($p): int` | Read one 8-byte machine word at pointer address |
+| `ptr_set()` | `ptr_set($p, $val): void` | Write one 8-byte machine word (`int`, `bool`, `null`, or `pointer`) |
+| `ptr_offset()` | `ptr_offset($p, $bytes): pointer` | Pointer arithmetic (add byte offset) |
+| `ptr_cast<T>()` | `ptr_cast<Type>($p): pointer` | Change pointer type tag (same address, validated target type) |
+| `ptr_sizeof()` | `ptr_sizeof("type"): int` | Return byte size of a known builtin type or declared class |
+
+```php
+<?php
+$x = 42;
+$p = ptr($x);           // take address of $x
+echo $p;                 // prints "0x16f502348" (hex address)
+echo ptr_get($p);        // prints "42"
+ptr_set($p, 99);         // write through pointer
+echo $x;                 // prints "99" — variable was modified
+
+echo ptr_sizeof("int");  // 8
+echo ptr_sizeof("string"); // 16
+
+$null = ptr_null();
+echo ptr_is_null($null); // 1
+
+// Pointer comparison with === and !==
+$a = ptr_null();
+$b = ptr_null();
+echo $a === $b;          // 1 (same address)
+```
+
+Notes:
+- `ptr()` only accepts variables. `ptr(1 + 2)` is a compile-time error.
+- `ptr_get()` and `ptr_set()` only accept pointers. Dereferencing `ptr_null()` aborts with `Fatal error: null pointer dereference`.
+- `ptr_set()` currently writes a single 8-byte word. It is intended for `int`, `bool`, `null`, and pointer values.
+- `ptr_cast<T>()` preserves the address and only changes the static pointer tag. `T` must be a known builtin pointee type (`int`, `float`, `bool`, `string`, `ptr`) or a declared class name.
+- Use `===` and `!==` for pointer comparison. Loose comparison with `==` / `!=` is rejected.
+
 ## Constants
 
 ### User-defined constants
@@ -1011,9 +1053,9 @@ show();
 | `PHP_EOL` | string | End of line character (`"\n"`) |
 | `PHP_OS` | string | Operating system name (`"Darwin"`) |
 | `DIRECTORY_SEPARATOR` | string | Directory separator (`"/"`) |
-| `STDIN` | resource | Standard input stream (fd 0) |
-| `STDOUT` | resource | Standard output stream (fd 1) |
-| `STDERR` | resource | Standard error stream (fd 2) |
+| `STDIN` | int | Standard input file descriptor (`0`) |
+| `STDOUT` | int | Standard output file descriptor (`1`) |
+| `STDERR` | int | Standard error file descriptor (`2`) |
 
 ## Superglobals
 

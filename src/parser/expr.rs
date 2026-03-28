@@ -744,6 +744,28 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
         Token::Identifier(name) => {
             let name = name.clone();
             *pos += 1;
+            // ptr_cast<T>(expr) — generic pointer cast
+            if name == "ptr_cast" && *pos < tokens.len() && tokens[*pos].0 == Token::Less {
+                *pos += 1; // consume <
+                let target_type = match tokens.get(*pos).map(|(t, _)| t) {
+                    Some(Token::Identifier(t)) => { let t = t.clone(); *pos += 1; t }
+                    _ => return Err(CompileError::new(span, "Expected type name after 'ptr_cast<'")),
+                };
+                if *pos >= tokens.len() || tokens[*pos].0 != Token::Greater {
+                    return Err(CompileError::new(span, "Expected '>' after ptr_cast<T"));
+                }
+                *pos += 1; // consume >
+                if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
+                    return Err(CompileError::new(span, "Expected '(' after ptr_cast<T>"));
+                }
+                *pos += 1; // consume (
+                let expr = parse_expr(tokens, pos)?;
+                if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
+                    return Err(CompileError::new(span, "Expected ')' after ptr_cast argument"));
+                }
+                *pos += 1; // consume )
+                return Ok(Expr::new(ExprKind::PtrCast { target_type, expr: Box::new(expr) }, span));
+            }
             // Function call: name(...)
             if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
                 *pos += 1;

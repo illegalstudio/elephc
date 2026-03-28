@@ -50,6 +50,11 @@ pub fn emit(
             // -- callable/object is never empty --
             emitter.instruction("mov x0, #0");                                  // callable/object is never empty, return false
         }
+        PhpType::Pointer(_) => {
+            // -- pointer is empty only when it is the null pointer --
+            emitter.instruction("cmp x0, #0");                                  // compare pointer value against null
+            emitter.instruction("cset x0, eq");                                 // x0 = 1 if null pointer, 0 otherwise
+        }
     }
     Some(PhpType::Bool)
 }

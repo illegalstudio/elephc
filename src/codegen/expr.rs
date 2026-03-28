@@ -459,6 +459,12 @@ pub fn emit_expr(
             let class_name = ctx.current_class.clone().unwrap_or_default();
             PhpType::Object(class_name)
         }
+        ExprKind::PtrCast { target_type, expr } => {
+            emitter.comment(&format!("ptr_cast<{}>()", target_type));
+            emit_expr(expr, emitter, ctx, data);
+            // Value stays in x0 unchanged — only the type tag changes
+            PhpType::Pointer(Some(target_type.clone()))
+        }
     }
 }
 
@@ -505,7 +511,8 @@ fn emit_new_object(
             emitter.instruction("ldr x9, [sp]");                                // peek object pointer
             match &prop_ty {
                 PhpType::Int | PhpType::Bool | PhpType::Array(_)
-                | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Callable => {
+                | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Callable
+                | PhpType::Pointer(_) => {
                     emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
                 }
                 PhpType::Float => {
@@ -528,7 +535,7 @@ fn emit_new_object(
             let ty = emit_expr(arg, emitter, ctx, data);
             match &ty {
                 PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
-                | PhpType::Callable | PhpType::Object(_) => {
+                | PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
                     emitter.instruction("str x0, [sp, #-16]!");                 // push int/object arg onto stack
                 }
                 PhpType::Float => {
@@ -563,7 +570,7 @@ fn emit_new_object(
             let (ty, start_reg, _is_float) = &assignments[i];
             match ty {
                 PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
-                | PhpType::Callable | PhpType::Object(_) => {
+                | PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
                     emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop arg into register
                 }
                 PhpType::Float => {
@@ -643,7 +650,8 @@ fn emit_property_access(
         PhpType::Bool | PhpType::Int | PhpType::Void => {
             emitter.instruction(&format!("ldr x0, [x0, #{}]", offset));         // load int/bool from property
         }
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+        | PhpType::Pointer(_) => {
             emitter.instruction(&format!("ldr x0, [x0, #{}]", offset));         // load heap pointer from property
         }
     }
@@ -667,7 +675,7 @@ fn emit_method_call(
         let ty = emit_expr(arg, emitter, ctx, data);
         match &ty {
             PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
-            | PhpType::Callable | PhpType::Object(_) => {
+            | PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
                 emitter.instruction("str x0, [sp, #-16]!");                     // push int/object arg
             }
             PhpType::Float => {
@@ -716,7 +724,7 @@ fn emit_method_call(
         let (ty, start_reg, _) = &assignments[i];
         match ty {
             PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
-            | PhpType::Callable | PhpType::Object(_) => {
+            | PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
                 emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop arg into register
             }
             PhpType::Float => {
@@ -761,7 +769,7 @@ fn emit_static_method_call(
         let ty = emit_expr(arg, emitter, ctx, data);
         match &ty {
             PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
-            | PhpType::Callable | PhpType::Object(_) => {
+            | PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
                 emitter.instruction("str x0, [sp, #-16]!");                     // push arg onto stack
             }
             PhpType::Float => {
@@ -794,7 +802,7 @@ fn emit_static_method_call(
         let (ty, start_reg, _) = &assignments[i];
         match ty {
             PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
-            | PhpType::Callable | PhpType::Object(_) => {
+            | PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
                 emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop arg into register
             }
             PhpType::Float => {
@@ -1274,7 +1282,8 @@ pub fn coerce_to_string(emitter: &mut Emitter, ty: &PhpType) {
             // -- null coerces to empty string in PHP --
             emitter.instruction("mov x2, #0");                                  // null produces empty string (length = 0)
         }
-        PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {}
+        PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+        | PhpType::Pointer(_) => {}
     }
 }
 
@@ -1782,7 +1791,8 @@ fn emit_function_call(
         } else {
             let ty = emit_expr(arg, emitter, ctx, data);
             match &ty {
-                PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
+                PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+                | PhpType::Pointer(_) => {
                     emitter.instruction("str x0, [sp, #-16]!");                 // push int/bool/array-ptr/callable arg onto stack
                 }
                 PhpType::Float => {
@@ -1958,7 +1968,8 @@ fn emit_function_call(
     for i in (0..total_args).rev() {
         let (ty, start_reg, is_float) = &assignments[i];
         match ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+            | PhpType::Pointer(_) => {
                 emitter.instruction(&format!(                                   // pop int/bool/array/callable arg into register
                     "ldr x{}, [sp], #16",
                     start_reg
@@ -2006,7 +2017,7 @@ pub(crate) fn restore_concat_offset_after_nested_call(
     return_ty: &PhpType,
 ) {
     if *return_ty == PhpType::Str {
-        emitter.instruction("bl __rt_str_persist");                              // persist returned string before restoring caller concat cursor
+        emitter.instruction("bl __rt_str_persist");                             // persist returned string before restoring caller concat cursor
     }
     emitter.instruction("ldr x10, [sp], #16");                                  // pop saved caller concat offset from stack
     emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of caller concat offset
@@ -2225,7 +2236,8 @@ fn emit_closure_call(
     for arg in &all_args {
         let ty = emit_expr(arg, emitter, ctx, data);
         match &ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+            | PhpType::Pointer(_) => {
                 emitter.instruction("str x0, [sp, #-16]!");                     // push int/bool/array/callable arg onto stack
             }
             PhpType::Float => {
@@ -2274,7 +2286,8 @@ fn emit_closure_call(
         };
         let cap_offset = cap_info.stack_offset;
         match cap_ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+            | PhpType::Pointer(_) => {
                 abi::load_at_offset(emitter, "x0", cap_offset);                 // load captured int/bool/array value
                 emitter.instruction("str x0, [sp, #-16]!");                     // push captured value onto stack
             }
@@ -2328,7 +2341,8 @@ fn emit_closure_call(
     for i in (0..total_args).rev() {
         let (ty, start_reg, _is_float) = &assignments[i];
         match ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+            | PhpType::Pointer(_) => {
                 emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop int/bool/array/callable arg into register
             }
             PhpType::Float => {
@@ -2371,7 +2385,8 @@ fn emit_expr_call(
     for arg in args {
         let ty = emit_expr(arg, emitter, ctx, data);
         match &ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+            | PhpType::Pointer(_) => {
                 emitter.instruction("str x0, [sp, #-16]!");                     // push int/bool/array/callable arg onto stack
             }
             PhpType::Float => {
@@ -2413,7 +2428,8 @@ fn emit_expr_call(
     for i in (0..args.len()).rev() {
         let (ty, start_reg, _is_float) = &assignments[i];
         match ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
+            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+            | PhpType::Pointer(_) => {
                 emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop int/bool/array/callable arg into register
             }
             PhpType::Float => {
@@ -2494,7 +2510,7 @@ fn emit_cast(
                     // -- (int)array returns element count --
                     emitter.instruction("ldr x0, [x0]");                        // load array length from header (first field)
                 }
-                PhpType::Callable | PhpType::Object(_) => {} // callable/object address already in x0
+                PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {} // callable/object/pointer address already in x0
             }
             PhpType::Int
         }
@@ -2515,7 +2531,8 @@ fn emit_cast(
                     emitter.instruction("bl __rt_cstr");                        // null-terminate string (x1=ptr, x2=len → x0=cstr)
                     emitter.instruction("bl _atof");                            // parse C string as double → d0=result
                 }
-                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+                | PhpType::Pointer(_) => {
                     // -- unsupported source type: default to 0.0 --
                     emitter.instruction("mov x0, #0");                          // load zero integer
                     emitter.instruction("scvtf d0, x0");                        // convert to 0.0 double
@@ -2554,8 +2571,8 @@ fn emit_cast(
                     emitter.instruction("cmp x0, #0");                          // check if array is empty
                     emitter.instruction("cset x0, ne");                         // x0=1 if non-empty, 0 if empty
                 }
-                PhpType::Callable | PhpType::Object(_) => {
-                    // -- callable/object is always truthy --
+                PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
+                    // -- callable/object/pointer is always truthy --
                     emitter.instruction("cmp x0, #0");                          // test if callable/object address is zero
                     emitter.instruction("cset x0, ne");                         // x0=1 if nonzero (truthy)
                 }
@@ -2604,6 +2621,7 @@ fn emit_strict_compare(
     let rt_peek = peek_expr_type(right, ctx);
 
     let types_match = match (&lt_peek, &rt_peek) {
+        (Some(PhpType::Pointer(_)), Some(PhpType::Pointer(_))) => true,
         (Some(l), Some(r)) => l == r,
         _ => true, // unknown → assume they might match, use save path
     };
@@ -2627,7 +2645,7 @@ fn emit_strict_compare(
 
         let rt = emit_expr(right, emitter, ctx, data);
 
-        if lt != rt {
+        if lt != rt && !matches!((&lt, &rt), (PhpType::Pointer(_), PhpType::Pointer(_))) {
             // Types turned out different at emit time (unknown peek case)
             // -- type mismatch: strict compare result is predetermined --
             emitter.instruction("add sp, sp, #16");                             // discard saved left operand from stack
@@ -2663,7 +2681,8 @@ fn emit_strict_compare(
                     emitter.instruction("eor x0, x0, #1");                      // invert result for !== (XOR with 1)
                 }
             }
-            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+            | PhpType::Pointer(_) => {
                 // -- strict compare arrays/callables/objects by reference (pointer equality) --
                 emitter.instruction("ldr x1, [sp], #16");                       // pop saved left array/callable/object pointer
                 emitter.instruction("cmp x1, x0");                              // compare pointers (reference equality)

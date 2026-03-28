@@ -89,7 +89,7 @@ cargo run -- hello.php
 
 ## What it compiles
 
-elephc supports a growing subset of PHP. **Every program it compiles is also valid PHP** and produces the same output when run with `php`.
+elephc supports a growing subset of PHP and aims to match PHP behavior for the language features it implements. Most supported programs are ordinary PHP, but elephc also includes compiler-specific pointer builtins such as `ptr()` and `ptr_cast<T>()` that intentionally extend PHP syntax.
 
 ```php
 <?php
@@ -119,6 +119,8 @@ if ($x === 3) {
 | `bool` | `true`, `false` |
 | `null` | `null` |
 | `array` | `[1, 2, 3]`, `["key" => "value"]`, `[[1,2],[3,4]]` (indexed, associative, multi-dimensional) |
+| `object` | `new Foo()`, `$user->name` |
+| `pointer` | `ptr($x)`, `ptr_null()`, `ptr_cast<int>($p)` |
 
 ### Supported constructs
 
@@ -164,6 +166,7 @@ if ($x === 3) {
 **Math:** `abs`, `floor`, `ceil`, `round`, `sqrt`, `pow`, `min`, `max`, `intdiv`, `fmod`, `fdiv`, `rand`, `mt_rand`, `random_int`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `log`, `log2`, `log10`, `exp`, `hypot`, `deg2rad`, `rad2deg`, `pi`, `number_format`
 **Types:** `gettype`, `settype`, `empty`, `unset`, `is_int`, `is_float`, `is_string`, `is_bool`, `is_null`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`, `boolval`, `floatval`
 **I/O:** `fopen`, `fclose`, `fread`, `fwrite`, `fgets`, `feof`, `readline`, `fseek`, `ftell`, `rewind`, `file_get_contents`, `file_put_contents`, `file`, `fgetcsv`, `fputcsv`, `file_exists`, `is_file`, `is_dir`, `is_readable`, `is_writable`, `filesize`, `filemtime`, `copy`, `rename`, `unlink`, `mkdir`, `rmdir`, `scandir`, `glob`, `getcwd`, `chdir`, `tempnam`, `sys_get_temp_dir`
+**Pointers:** `ptr`, `ptr_null`, `ptr_is_null`, `ptr_get`, `ptr_set`, `ptr_offset`, `ptr_cast<T>`, `ptr_sizeof`
 **Debugging:** `var_dump`, `print_r`
 **System:** `exit`, `die`, `define`, `time`, `microtime`, `date`, `mktime`, `strtotime`, `sleep`, `usleep`, `getenv`, `putenv`, `php_uname`, `phpversion`, `exec`, `shell_exec`, `system`, `passthru`, `json_encode`, `json_decode`, `json_last_error`, `preg_match`, `preg_match_all`, `preg_replace`, `preg_split`
 
@@ -188,14 +191,18 @@ cat hello.s
 
 ### Type system
 
-Six types, resolved at compile time:
+The static type system tracks these runtime shapes at compile time:
 
 - **Int** — 64-bit signed integer
 - **Float** — 64-bit double-precision
 - **Str** — pointer + length pair
 - **Bool** — `true`/`false`, coerces to 0/1
 - **Null** — sentinel value, coerces to 0/""
-- **Array** — heap-allocated indexed or associative array (hash table for string keys)
+- **Array** — indexed arrays with inferred element type
+- **AssocArray** — associative arrays with key/value types
+- **Callable** — closures and callable function references
+- **Object** — heap-allocated class instances
+- **Pointer** — raw 64-bit addresses, optionally tagged via `ptr_cast<T>()`
 
 A variable's type is set at first assignment. Compatible types (int/float/bool/null) can be reassigned between each other.
 
@@ -251,12 +258,14 @@ src/
 │   │   ├── math/        # abs, floor, pow, rand, fmod, ...
 │   │   ├── types/       # is_int, gettype, empty, unset, settype, ...
 │   │   ├── io/          # fopen, fclose, fread, fwrite, fgets, file_get_contents, ...
+│   │   ├── pointers/    # ptr, ptr_get, ptr_set, ptr_offset, ptr_sizeof, ...
 │   │   └── system/      # exit, die, time, sleep, getenv, exec, ...
 │   │
 │   └── runtime/         # ARM64 runtime routines (one file per function)
 │       ├── strings/     # itoa, concat, ftoa, strpos, str_replace, ...
 │       ├── arrays/      # heap_alloc, array_new, array_push, sort, ...
 │       ├── io/          # fopen, fclose, fread, fwrite, file_ops, ...
+│       ├── pointers/    # ptoa, ptr_check_nonnull
 │       └── system/      # build_argv, time, getenv, shell_exec
 │
 └── errors/              # Error formatting with line:col
@@ -265,7 +274,7 @@ src/
 ## Tests
 
 ```bash
-cargo test                      # all tests (~1294)
+cargo test                      # all tests (~1360)
 cargo test test_my_feature      # run specific tests
 ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 ```

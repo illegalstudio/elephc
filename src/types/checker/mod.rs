@@ -72,7 +72,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         ExprKind::Cast { target: CastType::Int, .. } => PhpType::Int,
         ExprKind::Cast { target: CastType::Float, .. } => PhpType::Float,
         ExprKind::Cast { target: CastType::Bool, .. } => PhpType::Bool,
-        ExprKind::FunctionCall { name, .. } => {
+        ExprKind::FunctionCall { name, args } => {
             match name.as_str() {
                 "substr" | "strtolower" | "strtoupper" | "trim" | "ltrim" | "rtrim"
                 | "str_repeat" | "strrev" | "chr" | "str_replace" | "str_ireplace"
@@ -89,6 +89,19 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                 | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "atan2"
                 | "sinh" | "cosh" | "tanh" | "log" | "log2" | "log10" | "exp"
                 | "hypot" | "pi" | "deg2rad" | "rad2deg" => PhpType::Float,
+                "ptr" | "ptr_null" => PhpType::Pointer(None),
+                "ptr_offset" => {
+                    if let Some(first_arg) = args.first() {
+                        match infer_expr_type_syntactic(first_arg) {
+                            PhpType::Pointer(tag) => PhpType::Pointer(tag),
+                            _ => PhpType::Pointer(None),
+                        }
+                    } else {
+                        PhpType::Pointer(None)
+                    }
+                }
+                "ptr_is_null" => PhpType::Bool,
+                "ptr_sizeof" | "ptr_get" => PhpType::Int,
                 _ => PhpType::Int,
             }
         }
@@ -112,6 +125,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         }
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.clone()),
         ExprKind::This => PhpType::Object(String::new()),
+        ExprKind::PtrCast { target_type, .. } => PhpType::Pointer(Some(target_type.clone())),
         ExprKind::BinaryOp { left, op, right } => {
             match op {
                 BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Mod => {
@@ -406,6 +420,87 @@ impl Checker {
         self.current_class.as_deref() == Some(class_name)
     }
 
+    fn is_pointer_type(ty: &PhpType) -> bool {
+        matches!(ty, PhpType::Pointer(_))
+    }
+
+    fn pointer_types_compatible(left: &PhpType, right: &PhpType) -> bool {
+        matches!((left, right), (PhpType::Pointer(_), PhpType::Pointer(_)))
+    }
+
+    fn merged_assignment_type(&self, existing: &PhpType, new_ty: &PhpType) -> Option<PhpType> {
+        if existing == new_ty {
+            return Some(existing.clone());
+        }
+        if *new_ty == PhpType::Void {
+            return Some(existing.clone());
+        }
+        if *existing == PhpType::Void {
+            return Some(new_ty.clone());
+        }
+        if matches!(existing, PhpType::Int | PhpType::Bool | PhpType::Float)
+            && matches!(new_ty, PhpType::Int | PhpType::Bool | PhpType::Float)
+        {
+            return Some(existing.clone());
+        }
+        if Self::pointer_types_compatible(existing, new_ty) {
+            return Some(match (existing, new_ty) {
+                (PhpType::Pointer(Some(left)), PhpType::Pointer(Some(right))) if left == right => {
+                    PhpType::Pointer(Some(left.clone()))
+                }
+                (PhpType::Pointer(None), PhpType::Pointer(Some(tag)))
+                | (PhpType::Pointer(Some(tag)), PhpType::Pointer(None)) => {
+                    PhpType::Pointer(Some(tag.clone()))
+                }
+                _ => PhpType::Pointer(None),
+            });
+        }
+        None
+    }
+
+    fn normalize_pointer_target_type(&self, target_type: &str) -> Option<String> {
+        match target_type {
+            "int" | "integer" => Some("int".to_string()),
+            "float" | "double" | "real" => Some("float".to_string()),
+            "bool" | "boolean" => Some("bool".to_string()),
+            "string" => Some("string".to_string()),
+            "ptr" | "pointer" => Some("ptr".to_string()),
+            class_name if self.classes.contains_key(class_name) => Some(class_name.to_string()),
+            _ => None,
+        }
+    }
+
+    fn ensure_pointer_type(
+        &self,
+        ty: &PhpType,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        if Self::is_pointer_type(ty) {
+            Ok(())
+        } else {
+            Err(CompileError::new(
+                span,
+                &format!("{} requires a pointer argument", context),
+            ))
+        }
+    }
+
+    fn ensure_word_pointer_value(
+        &self,
+        ty: &PhpType,
+        span: crate::span::Span,
+    ) -> Result<(), CompileError> {
+        if matches!(ty, PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Pointer(_)) {
+            Ok(())
+        } else {
+            Err(CompileError::new(
+                span,
+                "ptr_set() value must be int, bool, null, or pointer",
+            ))
+        }
+    }
+
     fn check_call_arity(
         &self,
         kind: &str,
@@ -465,14 +560,8 @@ impl Checker {
                     self.closure_return_types.insert(name.clone(), ret_ty);
                 }
                 if let Some(existing) = env.get(name) {
-                    // Allow null (Void) to be assigned to any variable,
-                    // Bool and Int are interchangeable, Int and Float are interchangeable
-                    let compatible = *existing == ty
-                        || ty == PhpType::Void
-                        || *existing == PhpType::Void
-                        || (matches!(*existing, PhpType::Int | PhpType::Bool | PhpType::Float)
-                            && matches!(ty, PhpType::Int | PhpType::Bool | PhpType::Float));
-                    if !compatible {
+                    let merged_ty = self.merged_assignment_type(existing, &ty);
+                    if merged_ty.is_none() {
                         return Err(CompileError::new(
                             stmt.span,
                             &format!(
@@ -481,9 +570,10 @@ impl Checker {
                             ),
                         ));
                     }
-                    // If variable was null and now gets a real type, update it
-                    if *existing == PhpType::Void && ty != PhpType::Void {
-                        env.insert(name.clone(), ty);
+                    if let Some(merged_ty) = merged_ty {
+                        if &merged_ty != existing {
+                            env.insert(name.clone(), merged_ty);
+                        }
                     }
                 } else {
                     env.insert(name.clone(), ty);
@@ -970,6 +1060,12 @@ impl Checker {
                         }
                     }
                     BinOp::Eq | BinOp::NotEq => {
+                        if Self::is_pointer_type(&lt) || Self::is_pointer_type(&rt) {
+                            return Err(CompileError::new(
+                                expr.span,
+                                "Loose pointer comparison is not supported; use === or !==",
+                            ));
+                        }
                         // Loose comparison accepts any types — coerces at runtime
                         Ok(PhpType::Bool)
                     }
@@ -1198,6 +1294,17 @@ impl Checker {
                 } else {
                     Err(CompileError::new(expr.span, "Cannot use $this outside of a class method"))
                 }
+            }
+            ExprKind::PtrCast { target_type, expr: inner } => {
+                let inner_ty = self.infer_type(inner, env)?;
+                self.ensure_pointer_type(&inner_ty, expr.span, "ptr_cast()")?;
+                let normalized = self.normalize_pointer_target_type(target_type).ok_or_else(|| {
+                    CompileError::new(
+                        expr.span,
+                        &format!("Unknown ptr_cast target type: {}", target_type),
+                    )
+                })?;
+                Ok(PhpType::Pointer(Some(normalized)))
             }
         }
     }

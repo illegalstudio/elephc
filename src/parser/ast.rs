@@ -92,6 +92,10 @@ pub enum ExprKind {
         args: Vec<Expr>,
     },
     This,
+    PtrCast {
+        target_type: String,
+        expr: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
