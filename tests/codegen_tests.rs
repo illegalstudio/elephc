@@ -9770,6 +9770,7 @@ echo strlen($home) > 0 ? "ok" : "empty";
 }
 
 #[test]
+#[ignore] // requires SDL2 library installed locally
 fn test_ffi_sdl_init_and_ticks() {
     let out = compile_and_run(
         r#"<?php
@@ -9793,6 +9794,7 @@ SDL_Quit();
 }
 
 #[test]
+#[ignore] // requires SDL2 library installed locally
 fn test_ffi_sdl_window_with_dummy_driver() {
     let out = compile_and_run(
         r#"<?php
@@ -9823,6 +9825,7 @@ SDL_Quit();
 }
 
 #[test]
+#[ignore] // requires SDL2 library installed locally
 fn test_ffi_sdl_keyboard_state_pointer() {
     let out = compile_and_run(
         r#"<?php
