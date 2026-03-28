@@ -1008,6 +1008,7 @@ fn emit_array_literal(
         if i == 0 {
             actual_elem_ty = ty.clone();
         }
+        retain_borrowed_heap_arg(emitter, elem, &ty);
         // -- store element value into array at index i --
         emitter.instruction("ldr x9, [sp]");                                    // peek array pointer from stack (no pop)
         match &ty {
@@ -1073,17 +1074,29 @@ fn emit_array_literal_with_spread(
         if let ExprKind::Spread(inner) = &elem.kind {
             // -- spread: copy all elements from source array into dest array --
             emitter.comment("spread array into dest");
-            let _src_ty = emit_expr(inner, emitter, ctx, data);
+            let src_ty = emit_expr(inner, emitter, ctx, data);
+            if (i == 0 || actual_elem_ty == PhpType::Int)
+                && matches!(&src_ty, PhpType::Array(_))
+            {
+                if let PhpType::Array(inner) = &src_ty {
+                    actual_elem_ty = inner.as_ref().clone();
+                }
+            }
             // x0 = source array pointer
             emitter.instruction("mov x1, x0");                                  // x1 = source array pointer
             emitter.instruction("ldr x0, [sp]");                                // x0 = dest array pointer (peek)
-            emitter.instruction("bl __rt_array_merge_into");                    // append all src elements to dest array
+            if matches!(&src_ty, PhpType::Array(inner) if inner.is_refcounted()) {
+                emitter.instruction("bl __rt_array_merge_into_refcounted");      // append src elements while retaining borrowed heap payloads
+            } else {
+                emitter.instruction("bl __rt_array_merge_into");                 // append all src elements to dest array
+            }
         } else {
             // -- regular element: push single value --
             let ty = emit_expr(elem, emitter, ctx, data);
             if i == 0 || actual_elem_ty == PhpType::Int {
                 actual_elem_ty = ty.clone();
             }
+            retain_borrowed_heap_arg(emitter, elem, &ty);
             emitter.instruction("ldr x9, [sp]");                                // peek dest array pointer from stack
             match &ty {
                 PhpType::Int | PhpType::Bool => {

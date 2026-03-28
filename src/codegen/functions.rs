@@ -133,6 +133,10 @@ fn emit_function_with_label_and_class(
                 _pty.clone(),
                 HeapOwnership::borrowed_alias_for_type(_pty),
             );
+        } else if pname == "this" {
+            ctx.alloc_var(pname, _pty.clone());
+            ctx.set_var_ownership(pname, HeapOwnership::borrowed_alias_for_type(_pty));
+            ctx.disable_epilogue_cleanup(pname);
         } else {
             ctx.alloc_var(pname, _pty.clone());
             ctx.set_var_ownership(pname, HeapOwnership::local_owner_for_type(_pty));

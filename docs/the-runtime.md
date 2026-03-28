@@ -156,7 +156,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 ## Array routines
 
-**Source:** `src/codegen/runtime/arrays/` (56 files)
+**Source:** `src/codegen/runtime/arrays/` (71 files)
 
 ### Core allocation
 
@@ -169,9 +169,12 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_array_grow` | Double array capacity, copy elements, free old | `x0` = array | `x0` = new array |
 | `__rt_array_free_deep` | Free array + all string elements inside | `x0` = array | — |
 | `__rt_array_push_int` | Append int to array (grows if needed) | `x0` = array, `x1` = value | `x0` = array |
+| `__rt_array_push_refcounted` | `incref` borrowed heap payload, then append it as an 8-byte array element | `x0` = array, `x1` = heap ptr | `x0` = array |
 | `__rt_array_push_str` | Persist string + append to array (grows if needed) | `x0` = array, `x1`/`x2` = str | `x0` = array |
 | `__rt_sort_int` | In-place sort (ascending/descending) | `x0` = array | — |
 | `__rt_str_persist` | Copy string from concat_buf to heap (skips .data/heap) | `x1`/`x2` = str | `x1`/`x2` = heap str |
+
+Common copy-producing array/hash routines now also have dedicated `_refcounted` siblings for nested heap-backed payloads. These variants retain borrowed values before pushing or inserting them into freshly allocated arrays/hash tables, covering array literals with spreads plus `array_merge`, `array_chunk`, `array_slice`, `array_reverse`, `array_pad`, `array_unique`, `array_splice`, `array_diff`, `array_intersect`, `array_filter`, `array_fill`, `array_combine`, and `array_fill_keys`.
 
 ### Hash table (for associative arrays)
 

@@ -14,6 +14,8 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("array_slice()");
     let arr_ty = emit_expr(&args[0], emitter, ctx, data);
+    let uses_refcounted_runtime =
+        matches!(&arr_ty, PhpType::Array(inner) if inner.is_refcounted());
     // -- save array pointer, evaluate offset --
     emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer onto stack
     emit_expr(&args[1], emitter, ctx, data);
@@ -32,7 +34,11 @@ pub fn emit(
         emitter.instruction("mov x2, #-1");                                     // length = -1 signals "until end of array"
     }
     // -- call runtime to extract slice --
-    emitter.instruction("bl __rt_array_slice");                                 // call runtime: slice array → x0=new array
+    emitter.instruction(if uses_refcounted_runtime {
+        "bl __rt_array_slice_refcounted"
+    } else {
+        "bl __rt_array_slice"
+    }); // call runtime: slice array → x0=new array
 
     match arr_ty {
         PhpType::Array(inner) => Some(PhpType::Array(inner)),

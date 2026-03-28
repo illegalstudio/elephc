@@ -20,7 +20,11 @@ pub fn emit(
     // -- call runtime to merge two arrays --
     emitter.instruction("mov x1, x0");                                          // move second array pointer to x1
     emitter.instruction("ldr x0, [sp], #16");                                   // pop first array pointer into x0
-    emitter.instruction("bl __rt_array_merge");                                 // call runtime: merge arrays → x0=new array
+    if matches!(&arr_ty, PhpType::Array(inner) if inner.is_refcounted()) {
+        emitter.instruction("bl __rt_array_merge_refcounted");                  // merge arrays while retaining borrowed heap elements
+    } else {
+        emitter.instruction("bl __rt_array_merge");                             // call runtime: merge arrays → x0=new array
+    }
 
     match arr_ty {
         PhpType::Array(inner) => Some(PhpType::Array(inner)),
