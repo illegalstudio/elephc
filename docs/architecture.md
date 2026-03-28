@@ -180,7 +180,7 @@ The runtime reserves a fixed set of global symbols in `emit_runtime_data()`:
 
 ### Heap allocator
 
-8MB free-list + bump hybrid allocator in BSS (`_heap_buf`). Each allocation has an 8-byte header: `[size:4][refcount:4]` — a 32-bit block size followed by a 32-bit reference count. When memory is freed (via `__rt_heap_free`), blocks are returned to a singly-linked free list (LIFO). New allocations check the free list first (first-fit), falling back to bump allocation if no suitable block exists. Reference counting (`__rt_incref`, `__rt_decref_array`, `__rt_decref_hash`, `__rt_decref_object`) automatically frees heap objects when their reference count reaches zero. Codegen now treats reassignment of ordinary locals/globals, by-value call arguments, borrowed heap returns, indexed array writes, object property writes, and `static` slot writes as ownership transfer points: borrowed arrays/objects are retained before a new owner is created, and overwritten owners are decreffed before replacement. Full epilogue cleanup is still conservative because some locals are populated from borrowed container/object reads, and associative-array/hash updates still need deeper container-aware ownership tracking. Configurable via `--heap-size=BYTES` (minimum 64KB). Bounds-checked with fatal error on overflow.
+8MB free-list + bump hybrid allocator in BSS (`_heap_buf`). Each allocation has an 8-byte header: `[size:4][refcount:4]` — a 32-bit block size followed by a 32-bit reference count. When memory is freed (via `__rt_heap_free`), blocks are returned to a singly-linked free list (LIFO). New allocations check the free list first (first-fit), falling back to bump allocation if no suitable block exists. Reference counting (`__rt_incref`, `__rt_decref_array`, `__rt_decref_hash`, `__rt_decref_object`) automatically frees heap objects when their reference count reaches zero. Codegen now treats reassignment of ordinary locals/globals, by-value call arguments, borrowed heap returns, indexed array writes, associative-array/hash writes, object property writes, and `static` slot writes as ownership transfer points: borrowed arrays/objects are retained before a new owner is created, overwritten owners are decreffed before replacement, and hash destruction now deep-frees owned keys plus heap-backed string/array/hash/object values based on the table's runtime value tag. Full epilogue cleanup is still conservative because some locals are populated from borrowed container/object reads, and deeper nested container propagation still needs broader ownership tracking. Configurable via `--heap-size=BYTES` (minimum 64KB). Bounds-checked with fatal error on overflow.
 
 ### Hash table header (heap-allocated, for associative arrays)
 
@@ -188,7 +188,7 @@ The runtime reserves a fixed set of global symbols in `emit_runtime_data()`:
 Offset  Size  Field
   0      8    count       (number of occupied entries)
   8      8    capacity    (number of slots)
- 16      8    value_type  (0=int, 1=str, 2=float, 3=bool)
+ 16      8    value_type  (0=int, 1=str, 2=float, 3=bool, 4=array, 5=assoc, 6=object)
  24      ...  entries     (each entry is 40 bytes)
 ```
 

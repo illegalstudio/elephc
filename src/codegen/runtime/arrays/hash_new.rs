@@ -1,7 +1,8 @@
 use crate::codegen::emit::Emitter;
 
 /// hash_new: create a new hash table on the heap.
-/// Input:  x0=initial_capacity, x1=value_type_tag (0=int, 1=str, 2=float, 3=bool)
+/// Input:  x0=initial_capacity, x1=value_type_tag
+///         (0=int, 1=str, 2=float, 3=bool, 4=array, 5=assoc, 6=object)
 /// Output: x0=pointer to hash table
 /// Layout: [count:8][capacity:8][value_type:8][entries...] where each entry is 40 bytes:
 ///         [occupied:8][key_ptr:8][key_len:8][value_lo:8][value_hi:8]

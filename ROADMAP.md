@@ -201,9 +201,9 @@ Proper type system for PHP compatibility.
 - [x] Strings freed on variable reassignment (value-copied, always owned)
 
 ### Known limitations
-- Ordinary local/global reassignment now releases previous arrays/objects safely, and indexed array writes / object property writes / `static` slots now retain borrowed heap values consistently
+- Ordinary local/global reassignment now releases previous arrays/objects safely, and indexed array writes / associative-array writes / object property writes / `static` slots now retain borrowed heap values consistently
 - Automatic epilogue cleanup is still disabled; general local-scope cleanup needs broader ownership tracking
-- Associative array updates and some deeper container cases still need fuller ownership tracking or a tracing collector
+- Deeper container propagation and general scope-exit cleanup still need fuller ownership tracking or a tracing collector
 
 ## v0.12.x — Math coverage (done)
 

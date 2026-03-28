@@ -3,8 +3,8 @@ use super::context::Context;
 use super::data_section::DataSection;
 use super::emit::Emitter;
 use crate::parser::ast::{BinOp, Expr, ExprKind};
-use crate::types::PhpType;
 use crate::types::FunctionSig;
+use crate::types::PhpType;
 
 /// Emits code to evaluate an expression.
 /// Returns the type of the result.
@@ -20,7 +20,8 @@ pub fn emit_expr(
         ExprKind::BoolLiteral(b) => {
             emitter.comment(&format!("bool {}", b));
             // -- load boolean as integer 0 or 1 --
-            emitter.instruction(&format!(                                       // store boolean: true=1, false=0
+            emitter.instruction(&format!(
+                // store boolean: true=1, false=0
                 "mov x0, #{}",
                 if *b { 1 } else { 0 }
             ));
@@ -29,10 +30,10 @@ pub fn emit_expr(
         ExprKind::Null => {
             emitter.comment("null");
             // -- load null sentinel value (0x7FFF_FFFF_FFFF_FFFE) into x0 --
-            emitter.instruction("movz x0, #0xFFFE");                            // load lowest 16 bits of null sentinel
-            emitter.instruction("movk x0, #0xFFFF, lsl #16");                   // insert bits 16-31 of null sentinel
-            emitter.instruction("movk x0, #0xFFFF, lsl #32");                   // insert bits 32-47 of null sentinel
-            emitter.instruction("movk x0, #0x7FFF, lsl #48");                   // insert bits 48-63, completing 0x7FFFFFFFFFFFFFFE
+            emitter.instruction("movz x0, #0xFFFE"); // load lowest 16 bits of null sentinel
+            emitter.instruction("movk x0, #0xFFFF, lsl #16"); // insert bits 16-31 of null sentinel
+            emitter.instruction("movk x0, #0xFFFF, lsl #32"); // insert bits 32-47 of null sentinel
+            emitter.instruction("movk x0, #0x7FFF, lsl #48"); // insert bits 48-63, completing 0x7FFFFFFFFFFFFFFE
             PhpType::Void
         }
         ExprKind::StringLiteral(s) => {
@@ -40,9 +41,9 @@ pub fn emit_expr(
             let (label, len) = data.add_string(bytes);
             emitter.comment(&format!("load string \"{}\"", s.escape_default()));
             // -- load string pointer into x1 and length into x2 --
-            emitter.instruction(&format!("adrp x1, {}@PAGE", label));           // load page base address of string data
-            emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", label));     // add page offset to get exact string pointer
-            emitter.instruction(&format!("mov x2, #{}", len));                  // load string byte length into x2
+            emitter.instruction(&format!("adrp x1, {}@PAGE", label)); // load page base address of string data
+            emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", label)); // add page offset to get exact string pointer
+            emitter.instruction(&format!("mov x2, #{}", len)); // load string byte length into x2
             PhpType::Str
         }
         ExprKind::IntLiteral(n) => {
@@ -54,9 +55,9 @@ pub fn emit_expr(
             emitter.comment(&format!("load float {}", f));
             let label = data.add_float(*f);
             // -- load float constant from data section into d0 --
-            emitter.instruction(&format!("adrp x9, {}@PAGE", label));           // load page base of float constant
-            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label));     // add offset to get exact float address
-            emitter.instruction("ldr d0, [x9]");                                // load 64-bit double from memory into float reg
+            emitter.instruction(&format!("adrp x9, {}@PAGE", label)); // load page base of float constant
+            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label)); // add offset to get exact float address
+            emitter.instruction("ldr d0, [x9]"); // load 64-bit double from memory into float reg
             PhpType::Float
         }
         ExprKind::Variable(name) => {
@@ -64,28 +65,36 @@ pub fn emit_expr(
                 emitter.comment(&format!("load extern global ${}", name));
                 match &ty {
                     PhpType::Bool | PhpType::Int | PhpType::Pointer(_) | PhpType::Callable => {
-                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name));   // load page of extern global GOT entry
+                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); // load page of extern global GOT entry
                         emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); // resolve extern global address
-                        emitter.instruction("ldr x0, [x9]");                            // load extern integer/pointer value
+                        emitter.instruction("ldr x0, [x9]"); // load extern integer/pointer value
                     }
                     PhpType::Float => {
-                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name));   // load page of extern global GOT entry
+                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); // load page of extern global GOT entry
                         emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); // resolve extern global address
-                        emitter.instruction("ldr d0, [x9]");                            // load extern float value
+                        emitter.instruction("ldr d0, [x9]"); // load extern float value
                     }
                     PhpType::Str => {
-                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name));   // load page of extern global GOT entry
+                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); // load page of extern global GOT entry
                         emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); // resolve extern global address
-                        emitter.instruction("ldr x0, [x9]");                            // load char* from extern global
-                        emitter.instruction("bl __rt_cstr_to_str");                     // convert C string to elephc string
+                        emitter.instruction("ldr x0, [x9]"); // load char* from extern global
+                        emitter.instruction("bl __rt_cstr_to_str"); // convert C string to elephc string
                     }
-                    PhpType::Void | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
-                        emitter.comment(&format!("WARNING: unsupported extern global type for ${}", name));
+                    PhpType::Void
+                    | PhpType::Array(_)
+                    | PhpType::AssocArray { .. }
+                    | PhpType::Object(_) => {
+                        emitter.comment(&format!(
+                            "WARNING: unsupported extern global type for ${}",
+                            name
+                        ));
                         return PhpType::Int;
                     }
                 }
                 ty
-            } else if ctx.global_vars.contains(name) || (ctx.in_main && ctx.all_global_var_names.contains(name)) {
+            } else if ctx.global_vars.contains(name)
+                || (ctx.in_main && ctx.all_global_var_names.contains(name))
+            {
                 // Load from global storage
                 let var = match ctx.variables.get(name) {
                     Some(v) => v,
@@ -109,20 +118,20 @@ pub fn emit_expr(
                 let offset = var.stack_offset;
                 let ty = var.ty.clone();
                 emitter.comment(&format!("load ref ${}", name));
-                abi::load_at_offset(emitter, "x9", offset);                     // load pointer to referenced variable
+                abi::load_at_offset(emitter, "x9", offset); // load pointer to referenced variable
                 match &ty {
                     PhpType::Bool | PhpType::Int => {
-                        emitter.instruction("ldr x0, [x9]");                    // dereference to get int/bool value
+                        emitter.instruction("ldr x0, [x9]"); // dereference to get int/bool value
                     }
                     PhpType::Float => {
-                        emitter.instruction("ldr d0, [x9]");                    // dereference to get float value
+                        emitter.instruction("ldr d0, [x9]"); // dereference to get float value
                     }
                     PhpType::Str => {
-                        emitter.instruction("ldr x1, [x9]");                    // dereference to get string pointer
-                        emitter.instruction("ldr x2, [x9, #8]");                // dereference to get string length
+                        emitter.instruction("ldr x1, [x9]"); // dereference to get string pointer
+                        emitter.instruction("ldr x2, [x9, #8]"); // dereference to get string length
                     }
                     _ => {
-                        emitter.instruction("ldr x0, [x9]");                    // dereference to get value
+                        emitter.instruction("ldr x0, [x9]"); // dereference to get value
                     }
                 }
                 ty
@@ -146,19 +155,21 @@ pub fn emit_expr(
             emitter.comment("negate");
             if ty == PhpType::Float {
                 // -- negate floating-point value --
-                emitter.instruction("fneg d0, d0");                             // flip the sign bit of double-precision float
+                emitter.instruction("fneg d0, d0"); // flip the sign bit of double-precision float
                 PhpType::Float
             } else {
                 // -- negate integer value --
-                emitter.instruction("neg x0, x0");                              // two's complement negation of 64-bit integer
+                emitter.instruction("neg x0, x0"); // two's complement negation of 64-bit integer
                 PhpType::Int
             }
         }
         ExprKind::ArrayLiteral(elems) => emit_array_literal(elems, emitter, ctx, data),
         ExprKind::ArrayLiteralAssoc(pairs) => emit_assoc_array_literal(pairs, emitter, ctx, data),
-        ExprKind::Match { subject, arms, default } => {
-            emit_match_expr(subject, arms, default, emitter, ctx, data)
-        }
+        ExprKind::Match {
+            subject,
+            arms,
+            default,
+        } => emit_match_expr(subject, arms, default, emitter, ctx, data),
         ExprKind::ArrayAccess { array, index } => {
             emit_array_access(array, index, emitter, ctx, data)
         }
@@ -167,8 +178,8 @@ pub fn emit_expr(
             emitter.comment("logical not");
             coerce_to_truthiness(emitter, ctx, &ty);
             // -- PHP !$x: invert truthiness --
-            emitter.instruction("cmp x0, #0");                                  // test if value is falsy (zero)
-            emitter.instruction("cset x0, eq");                                 // x0=1 if was falsy, x0=0 if was truthy
+            emitter.instruction("cmp x0, #0"); // test if value is falsy (zero)
+            emitter.instruction("cset x0, eq"); // x0=1 if was falsy, x0=0 if was truthy
             PhpType::Bool
         }
         ExprKind::BitNot(inner) => {
@@ -176,7 +187,7 @@ pub fn emit_expr(
             coerce_null_to_zero(emitter, &ty);
             emitter.comment("bitwise not");
             // -- PHP ~$x: invert all bits --
-            emitter.instruction("mvn x0, x0");                                  // bitwise complement of all 64 bits
+            emitter.instruction("mvn x0, x0"); // bitwise complement of all 64 bits
             PhpType::Int
         }
         ExprKind::NullCoalesce { value, default } => {
@@ -194,7 +205,7 @@ pub fn emit_expr(
                 let ty = var.ty.clone();
                 emitter.comment(&format!("++${} (global)", name));
                 super::stmt::emit_global_load(emitter, ctx, name, &ty);
-                emitter.instruction("add x0, x0, #1");                          // increment the value by 1
+                emitter.instruction("add x0, x0, #1"); // increment the value by 1
                 emit_global_store_inline(emitter, name);
                 PhpType::Int
             } else if ctx.ref_params.contains(name) {
@@ -207,10 +218,10 @@ pub fn emit_expr(
                 };
                 let offset = var.stack_offset;
                 emitter.comment(&format!("++${} (ref)", name));
-                abi::load_at_offset(emitter, "x9", offset);                     // load ref pointer
-                emitter.instruction("ldr x0, [x9]");                            // dereference
-                emitter.instruction("add x0, x0, #1");                          // increment
-                emitter.instruction("str x0, [x9]");                            // store back through pointer
+                abi::load_at_offset(emitter, "x9", offset); // load ref pointer
+                emitter.instruction("ldr x0, [x9]"); // dereference
+                emitter.instruction("add x0, x0, #1"); // increment
+                emitter.instruction("str x0, [x9]"); // store back through pointer
                 PhpType::Int
             } else {
                 let var = match ctx.variables.get(name) {
@@ -223,9 +234,9 @@ pub fn emit_expr(
                 let offset = var.stack_offset;
                 emitter.comment(&format!("++${}", name));
                 // -- pre-increment: add 1 then return new value --
-                abi::load_at_offset(emitter, "x0", offset);                     // load current variable value from stack frame
-                emitter.instruction("add x0, x0, #1");                          // increment the value by 1
-                abi::store_at_offset(emitter, "x0", offset);                    // store incremented value back to stack frame
+                abi::load_at_offset(emitter, "x0", offset); // load current variable value from stack frame
+                emitter.instruction("add x0, x0, #1"); // increment the value by 1
+                abi::store_at_offset(emitter, "x0", offset); // store incremented value back to stack frame
                 if ctx.in_main && ctx.all_global_var_names.contains(name) {
                     emit_global_store_inline(emitter, name);
                 }
@@ -244,12 +255,12 @@ pub fn emit_expr(
                 let ty = var.ty.clone();
                 emitter.comment(&format!("${}++ (global)", name));
                 super::stmt::emit_global_load(emitter, ctx, name, &ty);
-                emitter.instruction("add x1, x0, #1");                          // compute incremented value
-                // Store new value to global
+                emitter.instruction("add x1, x0, #1"); // compute incremented value
+                                                       // Store new value to global
                 let label = format!("_gvar_{}", name);
-                emitter.instruction(&format!("adrp x9, {}@PAGE", label));       // load page of global var storage
+                emitter.instruction(&format!("adrp x9, {}@PAGE", label)); // load page of global var storage
                 emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label)); // add page offset
-                emitter.instruction("str x1, [x9]");                            // store incremented value to global
+                emitter.instruction("str x1, [x9]"); // store incremented value to global
                 PhpType::Int
             } else if ctx.ref_params.contains(name) {
                 let var = match ctx.variables.get(name) {
@@ -261,10 +272,10 @@ pub fn emit_expr(
                 };
                 let offset = var.stack_offset;
                 emitter.comment(&format!("${}++ (ref)", name));
-                abi::load_at_offset(emitter, "x9", offset);                     // load ref pointer
-                emitter.instruction("ldr x0, [x9]");                            // dereference
-                emitter.instruction("add x1, x0, #1");                          // compute incremented value
-                emitter.instruction("str x1, [x9]");                            // store back through pointer
+                abi::load_at_offset(emitter, "x9", offset); // load ref pointer
+                emitter.instruction("ldr x0, [x9]"); // dereference
+                emitter.instruction("add x1, x0, #1"); // compute incremented value
+                emitter.instruction("str x1, [x9]"); // store back through pointer
                 PhpType::Int
             } else {
                 let var = match ctx.variables.get(name) {
@@ -277,15 +288,15 @@ pub fn emit_expr(
                 let offset = var.stack_offset;
                 emitter.comment(&format!("${}++", name));
                 // -- post-increment: return old value, then add 1 --
-                abi::load_at_offset(emitter, "x0", offset);                     // load current value into x0 (returned to caller)
-                emitter.instruction("add x1, x0, #1");                          // compute incremented value in scratch register
-                abi::store_at_offset(emitter, "x1", offset);                    // write new value back; x0 still has old value
+                abi::load_at_offset(emitter, "x0", offset); // load current value into x0 (returned to caller)
+                emitter.instruction("add x1, x0, #1"); // compute incremented value in scratch register
+                abi::store_at_offset(emitter, "x1", offset); // write new value back; x0 still has old value
                 if ctx.in_main && ctx.all_global_var_names.contains(name) {
                     // Save new value (in x1) to global
                     let label = format!("_gvar_{}", name);
-                    emitter.instruction(&format!("adrp x9, {}@PAGE", label));   // load page of global var storage
+                    emitter.instruction(&format!("adrp x9, {}@PAGE", label)); // load page of global var storage
                     emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label)); // add page offset
-                    emitter.instruction("str x1, [x9]");                        // store incremented value to global
+                    emitter.instruction("str x1, [x9]"); // store incremented value to global
                 }
                 PhpType::Int
             }
@@ -302,7 +313,7 @@ pub fn emit_expr(
                 let ty = var.ty.clone();
                 emitter.comment(&format!("--${} (global)", name));
                 super::stmt::emit_global_load(emitter, ctx, name, &ty);
-                emitter.instruction("sub x0, x0, #1");                          // decrement the value by 1
+                emitter.instruction("sub x0, x0, #1"); // decrement the value by 1
                 emit_global_store_inline(emitter, name);
                 PhpType::Int
             } else if ctx.ref_params.contains(name) {
@@ -315,10 +326,10 @@ pub fn emit_expr(
                 };
                 let offset = var.stack_offset;
                 emitter.comment(&format!("--${} (ref)", name));
-                abi::load_at_offset(emitter, "x9", offset);                     // load ref pointer
-                emitter.instruction("ldr x0, [x9]");                            // dereference
-                emitter.instruction("sub x0, x0, #1");                          // decrement
-                emitter.instruction("str x0, [x9]");                            // store back through pointer
+                abi::load_at_offset(emitter, "x9", offset); // load ref pointer
+                emitter.instruction("ldr x0, [x9]"); // dereference
+                emitter.instruction("sub x0, x0, #1"); // decrement
+                emitter.instruction("str x0, [x9]"); // store back through pointer
                 PhpType::Int
             } else {
                 let var = match ctx.variables.get(name) {
@@ -331,9 +342,9 @@ pub fn emit_expr(
                 let offset = var.stack_offset;
                 emitter.comment(&format!("--${}", name));
                 // -- pre-decrement: subtract 1 then return new value --
-                abi::load_at_offset(emitter, "x0", offset);                     // load current variable value from stack frame
-                emitter.instruction("sub x0, x0, #1");                          // decrement the value by 1
-                abi::store_at_offset(emitter, "x0", offset);                    // store decremented value back to stack frame
+                abi::load_at_offset(emitter, "x0", offset); // load current variable value from stack frame
+                emitter.instruction("sub x0, x0, #1"); // decrement the value by 1
+                abi::store_at_offset(emitter, "x0", offset); // store decremented value back to stack frame
                 PhpType::Int
             }
         }
@@ -348,10 +359,10 @@ pub fn emit_expr(
                 };
                 let offset = var.stack_offset;
                 emitter.comment(&format!("${}-- (ref)", name));
-                abi::load_at_offset(emitter, "x9", offset);                     // load ref pointer
-                emitter.instruction("ldr x0, [x9]");                            // dereference
-                emitter.instruction("sub x1, x0, #1");                          // compute decremented value
-                emitter.instruction("str x1, [x9]");                            // store back through pointer
+                abi::load_at_offset(emitter, "x9", offset); // load ref pointer
+                emitter.instruction("ldr x0, [x9]"); // dereference
+                emitter.instruction("sub x1, x0, #1"); // compute decremented value
+                emitter.instruction("str x1, [x9]"); // store back through pointer
                 PhpType::Int
             } else {
                 let var = match ctx.variables.get(name) {
@@ -364,9 +375,9 @@ pub fn emit_expr(
                 let offset = var.stack_offset;
                 emitter.comment(&format!("${}--", name));
                 // -- post-decrement: return old value, then subtract 1 --
-                abi::load_at_offset(emitter, "x0", offset);                     // load current value into x0 (returned to caller)
-                emitter.instruction("sub x1, x0, #1");                          // compute decremented value in scratch register
-                abi::store_at_offset(emitter, "x1", offset);                    // write new value back; x0 still has old value
+                abi::load_at_offset(emitter, "x0", offset); // load current value into x0 (returned to caller)
+                emitter.instruction("sub x1, x0, #1"); // compute decremented value in scratch register
+                abi::store_at_offset(emitter, "x1", offset); // write new value back; x0 still has old value
                 PhpType::Int
             }
         }
@@ -381,9 +392,9 @@ pub fn emit_expr(
             let cond_ty = emit_expr(condition, emitter, ctx, data);
             coerce_to_truthiness(emitter, ctx, &cond_ty);
             // -- branch based on ternary condition --
-            emitter.instruction("cmp x0, #0");                                  // test if condition is falsy
-            emitter.instruction(&format!("b.eq {}", else_label));               // jump to else branch if condition was false
-            // -- determine result type: widen to the broader type --
+            emitter.instruction("cmp x0, #0"); // test if condition is falsy
+            emitter.instruction(&format!("b.eq {}", else_label)); // jump to else branch if condition was false
+                                                                  // -- determine result type: widen to the broader type --
             let dummy_sig = FunctionSig {
                 params: vec![],
                 defaults: vec![],
@@ -408,10 +419,10 @@ pub fn emit_expr(
                 if result_ty == PhpType::Str {
                     coerce_to_string(emitter, &then_ty);
                 } else if result_ty == PhpType::Float && then_ty == PhpType::Int {
-                    emitter.instruction("scvtf d0, x0");                        // convert int to float for unified result type
+                    emitter.instruction("scvtf d0, x0"); // convert int to float for unified result type
                 }
             }
-            emitter.instruction(&format!("b {}", end_label));                   // skip else branch after evaluating then-expr
+            emitter.instruction(&format!("b {}", end_label)); // skip else branch after evaluating then-expr
             emitter.label(&else_label);
             let else_ty = emit_expr(else_expr, emitter, ctx, data);
             // -- coerce else-branch to result type if needed --
@@ -419,7 +430,7 @@ pub fn emit_expr(
                 if result_ty == PhpType::Str {
                     coerce_to_string(emitter, &else_ty);
                 } else if result_ty == PhpType::Float && else_ty == PhpType::Int {
-                    emitter.instruction("scvtf d0, x0");                        // convert int to float for unified result type
+                    emitter.instruction("scvtf d0, x0"); // convert int to float for unified result type
                 }
             }
             emitter.label(&end_label);
@@ -435,15 +446,15 @@ pub fn emit_expr(
             }
             emit_function_call(name, args, emitter, ctx, data)
         }
-        ExprKind::Closure { params, body, is_arrow: _, variadic: _, captures } => {
-            emit_closure(params, body, captures, emitter, ctx, data)
-        }
-        ExprKind::ClosureCall { var, args } => {
-            emit_closure_call(var, args, emitter, ctx, data)
-        }
-        ExprKind::ExprCall { callee, args } => {
-            emit_expr_call(callee, args, emitter, ctx, data)
-        }
+        ExprKind::Closure {
+            params,
+            body,
+            is_arrow: _,
+            variadic: _,
+            captures,
+        } => emit_closure(params, body, captures, emitter, ctx, data),
+        ExprKind::ClosureCall { var, args } => emit_closure_call(var, args, emitter, ctx, data),
+        ExprKind::ExprCall { callee, args } => emit_expr_call(callee, args, emitter, ctx, data),
         ExprKind::ConstRef(name) => {
             let (value, _ty) = match ctx.constants.get(name) {
                 Some(c) => c.clone(),
@@ -467,12 +478,16 @@ pub fn emit_expr(
         ExprKind::PropertyAccess { object, property } => {
             emit_property_access(object, property, emitter, ctx, data)
         }
-        ExprKind::MethodCall { object, method, args } => {
-            emit_method_call(object, method, args, emitter, ctx, data)
-        }
-        ExprKind::StaticMethodCall { class_name, method, args } => {
-            emit_static_method_call(class_name, method, args, emitter, ctx, data)
-        }
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+        } => emit_method_call(object, method, args, emitter, ctx, data),
+        ExprKind::StaticMethodCall {
+            class_name,
+            method,
+            args,
+        } => emit_static_method_call(class_name, method, args, emitter, ctx, data),
         ExprKind::This => {
             emitter.comment("$this");
             let var = match ctx.variables.get("this") {
@@ -483,7 +498,7 @@ pub fn emit_expr(
                 }
             };
             let offset = var.stack_offset;
-            super::abi::load_at_offset(emitter, "x0", offset);                  // load $this object pointer
+            super::abi::load_at_offset(emitter, "x0", offset); // load $this object pointer
             let class_name = ctx.current_class.clone().unwrap_or_default();
             PhpType::Object(class_name)
         }
@@ -516,18 +531,18 @@ fn emit_new_object(
     emitter.comment(&format!("new {}()", class_name));
 
     // -- allocate object on heap --
-    emitter.instruction(&format!("mov x0, #{}", obj_size));                     // object size in bytes
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate object → x0 = pointer
-    emitter.instruction(&format!("mov x10, #{}", class_info.class_id));         // load compile-time class id
-    emitter.instruction("str x10, [x0]");                                       // store class id at object header
-    emitter.instruction("str x0, [sp, #-16]!");                                 // save object pointer on stack
+    emitter.instruction(&format!("mov x0, #{}", obj_size)); // object size in bytes
+    emitter.instruction("bl __rt_heap_alloc"); // allocate object → x0 = pointer
+    emitter.instruction(&format!("mov x10, #{}", class_info.class_id)); // load compile-time class id
+    emitter.instruction("str x10, [x0]"); // store class id at object header
+    emitter.instruction("str x0, [sp, #-16]!"); // save object pointer on stack
 
     // -- zero-initialize all property slots --
     for i in 0..num_props {
         let offset = 8 + i * 16;
-        emitter.instruction("ldr x9, [sp]");                                    // peek object pointer
-        emitter.instruction(&format!("str xzr, [x9, #{}]", offset));            // zero-init property lo
-        emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8));        // zero-init property hi
+        emitter.instruction("ldr x9, [sp]"); // peek object pointer
+        emitter.instruction(&format!("str xzr, [x9, #{}]", offset)); // zero-init property lo
+        emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8)); // zero-init property hi
     }
 
     // -- set default property values --
@@ -536,10 +551,14 @@ fn emit_new_object(
             let default_expr = default_expr.clone();
             let offset = 8 + i * 16;
             let prop_ty = emit_expr(&default_expr, emitter, ctx, data);
-            emitter.instruction("ldr x9, [sp]");                                // peek object pointer
+            emitter.instruction("ldr x9, [sp]"); // peek object pointer
             match &prop_ty {
-                PhpType::Int | PhpType::Bool | PhpType::Array(_)
-                | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Callable
+                PhpType::Int
+                | PhpType::Bool
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Object(_)
+                | PhpType::Callable
                 | PhpType::Pointer(_) => {
                     emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
                 }
@@ -548,7 +567,8 @@ fn emit_new_object(
                 }
                 PhpType::Str => {
                     emitter.instruction(&format!("str x1, [x9, #{}]", offset)); // store string pointer
-                    emitter.instruction(&format!("str x2, [x9, #{}]", offset + 8)); // store string length
+                    emitter.instruction(&format!("str x2, [x9, #{}]", offset + 8));
+                    // store string length
                 }
                 PhpType::Void => {}
             }
@@ -563,15 +583,20 @@ fn emit_new_object(
             let ty = emit_expr(arg, emitter, ctx, data);
             retain_borrowed_heap_arg(emitter, arg, &ty);
             match &ty {
-                PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
-                | PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
-                    emitter.instruction("str x0, [sp, #-16]!");                 // push int/object arg onto stack
+                PhpType::Bool
+                | PhpType::Int
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Callable
+                | PhpType::Object(_)
+                | PhpType::Pointer(_) => {
+                    emitter.instruction("str x0, [sp, #-16]!"); // push int/object arg onto stack
                 }
                 PhpType::Float => {
-                    emitter.instruction("str d0, [sp, #-16]!");                 // push float arg onto stack
+                    emitter.instruction("str d0, [sp, #-16]!"); // push float arg onto stack
                 }
                 PhpType::Str => {
-                    emitter.instruction("stp x1, x2, [sp, #-16]!");             // push string ptr+len onto stack
+                    emitter.instruction("stp x1, x2, [sp, #-16]!"); // push string ptr+len onto stack
                 }
                 PhpType::Void => {}
             }
@@ -598,17 +623,26 @@ fn emit_new_object(
         for i in (0..total_args).rev() {
             let (ty, start_reg, _is_float) = &assignments[i];
             match ty {
-                PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
-                | PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
-                    emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop arg into register
+                PhpType::Bool
+                | PhpType::Int
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Callable
+                | PhpType::Object(_)
+                | PhpType::Pointer(_) => {
+                    emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg));
+                    // pop arg into register
                 }
                 PhpType::Float => {
-                    emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); // pop float arg
+                    emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg));
+                    // pop float arg
                 }
                 PhpType::Str => {
-                    emitter.instruction(&format!(                               // pop string ptr+len
+                    emitter.instruction(&format!(
+                        // pop string ptr+len
                         "ldp x{}, x{}, [sp], #16",
-                        start_reg, start_reg + 1
+                        start_reg,
+                        start_reg + 1
                     ));
                 }
                 PhpType::Void => {}
@@ -616,9 +650,10 @@ fn emit_new_object(
         }
 
         // Load $this into x0 (peek from stack, don't pop)
-        emitter.instruction("ldr x0, [sp]");                                    // load $this pointer for constructor
+        emitter.instruction("ldr x0, [sp]"); // load $this pointer for constructor
         save_concat_offset_before_nested_call(emitter);
-        emitter.instruction(&format!(                                           // call constructor
+        emitter.instruction(&format!(
+            // call constructor
             "bl _method_{}___construct",
             class_name
         ));
@@ -626,7 +661,7 @@ fn emit_new_object(
     }
 
     // -- return object pointer --
-    emitter.instruction("ldr x0, [sp], #16");                                   // pop object pointer into x0
+    emitter.instruction("ldr x0, [sp], #16"); // pop object pointer into x0
     PhpType::Object(class_name.to_string())
 }
 
@@ -648,7 +683,10 @@ fn emit_property_access(
                 }
             };
 
-            let (prop_idx, prop_ty) = match class_info.properties.iter().enumerate()
+            let (prop_idx, prop_ty) = match class_info
+                .properties
+                .iter()
+                .enumerate()
                 .find(|(_, (n, _))| n == property)
                 .map(|(i, (_, t))| (i, t.clone()))
             {
@@ -670,7 +708,11 @@ fn emit_property_access(
                 }
             };
 
-            let field = match class_info.fields.iter().find(|field| field.name == property) {
+            let field = match class_info
+                .fields
+                .iter()
+                .find(|field| field.name == property)
+            {
                 Some(field) => field.clone(),
                 None => {
                     emitter.comment(&format!("WARNING: undefined extern field {}", property));
@@ -687,26 +729,32 @@ fn emit_property_access(
     };
 
     if needs_deref {
-        emitter.instruction("bl __rt_ptr_check_nonnull");                           // abort with fatal error on null pointer dereference
-        emitter.comment(&format!("->{} via ptr<{}> (offset {})", property, class_name, offset));
+        emitter.instruction("bl __rt_ptr_check_nonnull"); // abort with fatal error on null pointer dereference
+        emitter.comment(&format!(
+            "->{} via ptr<{}> (offset {})",
+            property, class_name, offset
+        ));
     } else {
         emitter.comment(&format!("->{}  (offset {})", property, offset));
     }
 
     match &prop_ty {
         PhpType::Str => {
-            emitter.instruction(&format!("ldr x1, [x0, #{}]", offset));         // load string pointer from property
-            emitter.instruction(&format!("ldr x2, [x0, #{}]", offset + 8));     // load string length from property
+            emitter.instruction(&format!("ldr x1, [x0, #{}]", offset)); // load string pointer from property
+            emitter.instruction(&format!("ldr x2, [x0, #{}]", offset + 8)); // load string length from property
         }
         PhpType::Float => {
-            emitter.instruction(&format!("ldr d0, [x0, #{}]", offset));         // load float from property
+            emitter.instruction(&format!("ldr d0, [x0, #{}]", offset)); // load float from property
         }
         PhpType::Bool | PhpType::Int | PhpType::Void => {
-            emitter.instruction(&format!("ldr x0, [x0, #{}]", offset));         // load int/bool from property
+            emitter.instruction(&format!("ldr x0, [x0, #{}]", offset)); // load int/bool from property
         }
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+        PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Callable
+        | PhpType::Object(_)
         | PhpType::Pointer(_) => {
-            emitter.instruction(&format!("ldr x0, [x0, #{}]", offset));         // load heap pointer from property
+            emitter.instruction(&format!("ldr x0, [x0, #{}]", offset)); // load heap pointer from property
         }
     }
 
@@ -729,15 +777,20 @@ fn emit_method_call(
         let ty = emit_expr(arg, emitter, ctx, data);
         retain_borrowed_heap_arg(emitter, arg, &ty);
         match &ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
-            | PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
-                emitter.instruction("str x0, [sp, #-16]!");                     // push int/object arg
+            PhpType::Bool
+            | PhpType::Int
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Callable
+            | PhpType::Object(_)
+            | PhpType::Pointer(_) => {
+                emitter.instruction("str x0, [sp, #-16]!"); // push int/object arg
             }
             PhpType::Float => {
-                emitter.instruction("str d0, [sp, #-16]!");                     // push float arg
+                emitter.instruction("str d0, [sp, #-16]!"); // push float arg
             }
             PhpType::Str => {
-                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push string ptr+len
+                emitter.instruction("stp x1, x2, [sp, #-16]!"); // push string ptr+len
             }
             PhpType::Void => {}
         }
@@ -754,7 +807,7 @@ fn emit_method_call(
         }
     };
     // Push $this onto stack
-    emitter.instruction("str x0, [sp, #-16]!");                                 // push $this pointer
+    emitter.instruction("str x0, [sp, #-16]!"); // push $this pointer
 
     // Pop $this into x0, then pop args into x1+
     let total_args = arg_types.len();
@@ -772,23 +825,30 @@ fn emit_method_call(
     }
 
     // Pop $this first (it was pushed last)
-    emitter.instruction("ldr x0, [sp], #16");                                   // pop $this into x0
+    emitter.instruction("ldr x0, [sp], #16"); // pop $this into x0
 
     // Pop user args in reverse order
     for i in (0..total_args).rev() {
         let (ty, start_reg, _) = &assignments[i];
         match ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
-            | PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
+            PhpType::Bool
+            | PhpType::Int
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Callable
+            | PhpType::Object(_)
+            | PhpType::Pointer(_) => {
                 emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop arg into register
             }
             PhpType::Float => {
                 emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); // pop float arg
             }
             PhpType::Str => {
-                emitter.instruction(&format!(                                   // pop string ptr+len
+                emitter.instruction(&format!(
+                    // pop string ptr+len
                     "ldp x{}, x{}, [sp], #16",
-                    start_reg, start_reg + 1
+                    start_reg,
+                    start_reg + 1
                 ));
             }
             PhpType::Void => {}
@@ -802,7 +862,7 @@ fn emit_method_call(
         .unwrap_or(PhpType::Int);
 
     save_concat_offset_before_nested_call(emitter);
-    emitter.instruction(&format!("bl _method_{}_{}", class_name, method));      // call instance method
+    emitter.instruction(&format!("bl _method_{}_{}", class_name, method)); // call instance method
     restore_concat_offset_after_nested_call(emitter, &ret_ty);
 
     ret_ty
@@ -824,15 +884,20 @@ fn emit_static_method_call(
         let ty = emit_expr(arg, emitter, ctx, data);
         retain_borrowed_heap_arg(emitter, arg, &ty);
         match &ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
-            | PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
-                emitter.instruction("str x0, [sp, #-16]!");                     // push arg onto stack
+            PhpType::Bool
+            | PhpType::Int
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Callable
+            | PhpType::Object(_)
+            | PhpType::Pointer(_) => {
+                emitter.instruction("str x0, [sp, #-16]!"); // push arg onto stack
             }
             PhpType::Float => {
-                emitter.instruction("str d0, [sp, #-16]!");                     // push float arg
+                emitter.instruction("str d0, [sp, #-16]!"); // push float arg
             }
             PhpType::Str => {
-                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push string ptr+len
+                emitter.instruction("stp x1, x2, [sp, #-16]!"); // push string ptr+len
             }
             PhpType::Void => {}
         }
@@ -857,17 +922,24 @@ fn emit_static_method_call(
     for i in (0..total_args).rev() {
         let (ty, start_reg, _) = &assignments[i];
         match ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
-            | PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
+            PhpType::Bool
+            | PhpType::Int
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Callable
+            | PhpType::Object(_)
+            | PhpType::Pointer(_) => {
                 emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop arg into register
             }
             PhpType::Float => {
                 emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); // pop float arg
             }
             PhpType::Str => {
-                emitter.instruction(&format!(                                   // pop string ptr+len
+                emitter.instruction(&format!(
+                    // pop string ptr+len
                     "ldp x{}, x{}, [sp], #16",
-                    start_reg, start_reg + 1
+                    start_reg,
+                    start_reg + 1
                 ));
             }
             PhpType::Void => {}
@@ -881,7 +953,7 @@ fn emit_static_method_call(
         .unwrap_or(PhpType::Int);
 
     save_concat_offset_before_nested_call(emitter);
-    emitter.instruction(&format!("bl _static_{}_{}", class_name, method));      // call static method
+    emitter.instruction(&format!("bl _static_{}_{}", class_name, method)); // call static method
     restore_concat_offset_after_nested_call(emitter, &ret_ty);
 
     ret_ty
@@ -897,9 +969,9 @@ fn emit_array_literal(
         // -- allocate empty array with small initial capacity --
         // Use elem_size=16 so the array can hold both int and string elements
         // without reallocation when the first push determines the actual type.
-        emitter.instruction("mov x0, #4");                                      // initial capacity: 4 (grows dynamically)
-        emitter.instruction("mov x1, #16");                                     // element size: 16 bytes (supports int and string)
-        emitter.instruction("bl __rt_array_new");                               // call runtime to heap-allocate array struct
+        emitter.instruction("mov x0, #4"); // initial capacity: 4 (grows dynamically)
+        emitter.instruction("mov x1, #16"); // element size: 16 bytes (supports int and string)
+        emitter.instruction("bl __rt_array_new"); // call runtime to heap-allocate array struct
         return PhpType::Array(Box::new(PhpType::Int));
     }
 
@@ -930,13 +1002,14 @@ fn emit_array_literal(
 
     emitter.comment("array literal");
     // -- allocate array and populate elements --
-    emitter.instruction(&format!(                                               // capacity: exact element count (grows if needed)
+    emitter.instruction(&format!(
+        // capacity: exact element count (grows if needed)
         "mov x0, #{}",
         elems.len()
     ));
-    emitter.instruction(&format!("mov x1, #{}", es));                           // element size in bytes (8=int/ptr, 16=string)
-    emitter.instruction("bl __rt_array_new");                                   // call runtime to heap-allocate array struct
-    emitter.instruction("str x0, [sp, #-16]!");                                 // save array pointer on stack while filling
+    emitter.instruction(&format!("mov x1, #{}", es)); // element size in bytes (8=int/ptr, 16=string)
+    emitter.instruction("bl __rt_array_new"); // call runtime to heap-allocate array struct
+    emitter.instruction("str x0, [sp, #-16]!"); // save array pointer on stack while filling
 
     let mut actual_elem_ty = PhpType::Int;
     for (i, elem) in elems.iter().enumerate() {
@@ -945,32 +1018,37 @@ fn emit_array_literal(
             actual_elem_ty = ty.clone();
         }
         // -- store element value into array at index i --
-        emitter.instruction("ldr x9, [sp]");                                    // peek array pointer from stack (no pop)
+        emitter.instruction("ldr x9, [sp]"); // peek array pointer from stack (no pop)
         match &ty {
             PhpType::Int | PhpType::Bool | PhpType::Callable => {
-                emitter.instruction(&format!(                                   // store int/bool/callable element at data offset
+                emitter.instruction(&format!(
+                    // store int/bool/callable element at data offset
                     "str x0, [x9, #{}]",
                     24 + i * 8
                 ));
             }
             PhpType::Float => {
-                emitter.instruction(&format!(                                   // store float element at data offset
+                emitter.instruction(&format!(
+                    // store float element at data offset
                     "str d0, [x9, #{}]",
                     24 + i * 8
                 ));
             }
             PhpType::Str => {
-                emitter.instruction(&format!(                                   // store string pointer at data offset
+                emitter.instruction(&format!(
+                    // store string pointer at data offset
                     "str x1, [x9, #{}]",
                     24 + i * 16
                 ));
-                emitter.instruction(&format!(                                   // store string length right after pointer
+                emitter.instruction(&format!(
+                    // store string length right after pointer
                     "str x2, [x9, #{}]",
                     24 + i * 16 + 8
                 ));
             }
             PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
-                emitter.instruction(&format!(                                   // store array/object pointer at data offset
+                emitter.instruction(&format!(
+                    // store array/object pointer at data offset
                     "str x0, [x9, #{}]",
                     24 + i * 8
                 ));
@@ -978,12 +1056,12 @@ fn emit_array_literal(
             _ => {}
         }
         // -- update array length after adding element --
-        emitter.instruction(&format!("mov x10, #{}", i + 1));                   // new length after adding this element
-        emitter.instruction("str x10, [x9]");                                   // write updated length to array header
+        emitter.instruction(&format!("mov x10, #{}", i + 1)); // new length after adding this element
+        emitter.instruction("str x10, [x9]"); // write updated length to array header
     }
 
     // -- return array pointer --
-    emitter.instruction("ldr x0, [sp], #16");                                   // pop array pointer from stack into x0
+    emitter.instruction("ldr x0, [sp], #16"); // pop array pointer from stack into x0
     PhpType::Array(Box::new(actual_elem_ty))
 }
 
@@ -998,10 +1076,10 @@ fn emit_array_literal_with_spread(
     emitter.comment("array literal with spread");
 
     // -- allocate a new array with generous capacity --
-    emitter.instruction("mov x0, #16");                                         // initial capacity: 16 elements
-    emitter.instruction("mov x1, #8");                                          // element size: 8 bytes (int-sized)
-    emitter.instruction("bl __rt_array_new");                                   // allocate destination array
-    emitter.instruction("str x0, [sp, #-16]!");                                 // save dest array pointer on stack
+    emitter.instruction("mov x0, #16"); // initial capacity: 16 elements
+    emitter.instruction("mov x1, #8"); // element size: 8 bytes (int-sized)
+    emitter.instruction("bl __rt_array_new"); // allocate destination array
+    emitter.instruction("str x0, [sp, #-16]!"); // save dest array pointer on stack
 
     let mut actual_elem_ty = PhpType::Int;
 
@@ -1011,40 +1089,40 @@ fn emit_array_literal_with_spread(
             emitter.comment("spread array into dest");
             let _src_ty = emit_expr(inner, emitter, ctx, data);
             // x0 = source array pointer
-            emitter.instruction("mov x1, x0");                                  // x1 = source array pointer
-            emitter.instruction("ldr x0, [sp]");                                // x0 = dest array pointer (peek)
-            emitter.instruction("bl __rt_array_merge_into");                    // append all src elements to dest array
+            emitter.instruction("mov x1, x0"); // x1 = source array pointer
+            emitter.instruction("ldr x0, [sp]"); // x0 = dest array pointer (peek)
+            emitter.instruction("bl __rt_array_merge_into"); // append all src elements to dest array
         } else {
             // -- regular element: push single value --
             let ty = emit_expr(elem, emitter, ctx, data);
             if i == 0 || actual_elem_ty == PhpType::Int {
                 actual_elem_ty = ty.clone();
             }
-            emitter.instruction("ldr x9, [sp]");                                // peek dest array pointer from stack
+            emitter.instruction("ldr x9, [sp]"); // peek dest array pointer from stack
             match &ty {
                 PhpType::Int | PhpType::Bool => {
                     // -- push int element using runtime push --
-                    emitter.instruction("mov x1, x0");                          // x1 = value to push
-                    emitter.instruction("mov x0, x9");                          // x0 = array pointer
-                    emitter.instruction("bl __rt_array_push_int");              // push value onto array
+                    emitter.instruction("mov x1, x0"); // x1 = value to push
+                    emitter.instruction("mov x0, x9"); // x0 = array pointer
+                    emitter.instruction("bl __rt_array_push_int"); // push value onto array
                 }
                 PhpType::Float => {
                     // -- push float element --
-                    emitter.instruction("fmov x1, d0");                         // move float bits to int register
-                    emitter.instruction("mov x0, x9");                          // x0 = array pointer
-                    emitter.instruction("bl __rt_array_push_int");              // push value onto array
+                    emitter.instruction("fmov x1, d0"); // move float bits to int register
+                    emitter.instruction("mov x0, x9"); // x0 = array pointer
+                    emitter.instruction("bl __rt_array_push_int"); // push value onto array
                 }
                 _ => {
-                    emitter.instruction("mov x1, x0");                          // x1 = value to push
-                    emitter.instruction("mov x0, x9");                          // x0 = array pointer
-                    emitter.instruction("bl __rt_array_push_int");              // push value onto array
+                    emitter.instruction("mov x1, x0"); // x1 = value to push
+                    emitter.instruction("mov x0, x9"); // x0 = array pointer
+                    emitter.instruction("bl __rt_array_push_int"); // push value onto array
                 }
             }
         }
     }
 
     // -- return array pointer --
-    emitter.instruction("ldr x0, [sp], #16");                                   // pop dest array pointer from stack into x0
+    emitter.instruction("ldr x0, [sp], #16"); // pop dest array pointer from stack into x0
     PhpType::Array(Box::new(actual_elem_ty))
 }
 
@@ -1056,56 +1134,64 @@ fn emit_assoc_array_literal(
 ) -> PhpType {
     emitter.comment("assoc array literal");
 
-    // -- determine value type from first pair --
-    let value_type_tag = match &pairs[0].1.kind {
-        ExprKind::StringLiteral(_) => 1,
-        ExprKind::FloatLiteral(_) => 2,
-        ExprKind::BoolLiteral(_) => 3,
-        _ => 0, // int
+    // -- determine runtime value tag from the first pair's inferred value type --
+    let first_value_ty = super::functions::infer_contextual_type(&pairs[0].1, ctx);
+    let value_type_tag = match &first_value_ty {
+        PhpType::Str => 1,
+        PhpType::Float => 2,
+        PhpType::Bool => 3,
+        PhpType::Array(_) => 4,
+        PhpType::AssocArray { .. } => 5,
+        PhpType::Object(_) => 6,
+        _ => 0, // int and other plain scalar/pointer cases
     };
 
     // -- create hash table --
-    emitter.instruction(&format!(                                               // initial capacity: max of pair count*2 or 16
+    emitter.instruction(&format!(
+        // initial capacity: max of pair count*2 or 16
         "mov x0, #{}",
         std::cmp::max(pairs.len() * 2, 16)
     ));
-    emitter.instruction(&format!("mov x1, #{}", value_type_tag));               // value type tag
-    emitter.instruction("bl __rt_hash_new");                                    // create hash table → x0=ptr
-    emitter.instruction("str x0, [sp, #-16]!");                                 // save hash table pointer
+    emitter.instruction(&format!("mov x1, #{}", value_type_tag)); // value type tag
+    emitter.instruction("bl __rt_hash_new"); // create hash table → x0=ptr
+    emitter.instruction("str x0, [sp, #-16]!"); // save hash table pointer
 
     let mut val_ty = PhpType::Int;
     for (i, pair) in pairs.iter().enumerate() {
         // -- evaluate key --
         emit_expr(&pair.0, emitter, ctx, data);
         // key is a string → x1/x2
-        emitter.instruction("stp x1, x2, [sp, #-16]!");                         // save key ptr/len
-        // -- evaluate value --
+        emitter.instruction("stp x1, x2, [sp, #-16]!"); // save key ptr/len
+                                                        // -- evaluate value --
         let ty = emit_expr(&pair.1, emitter, ctx, data);
-        if i == 0 { val_ty = ty.clone(); } // use first value's type (determines hash table convention)
-        // -- prepare args for hash_set --
+        retain_borrowed_heap_arg(emitter, &pair.1, &ty);
+        if i == 0 {
+            val_ty = ty.clone();
+        } // use first value's type (determines hash table convention)
+          // -- prepare args for hash_set --
         let (val_lo, val_hi) = match &ty {
             PhpType::Int | PhpType::Bool => ("x0", "xzr"),
             PhpType::Str => {
                 // Persist string value to heap before storing in hash table
-                emitter.instruction("bl __rt_str_persist");                     // copy string to heap, x1=heap_ptr, x2=len
+                emitter.instruction("bl __rt_str_persist"); // copy string to heap, x1=heap_ptr, x2=len
                 ("x1", "x2")
             }
             PhpType::Float => {
-                emitter.instruction("fmov x9, d0");                             // move float bits to integer register
+                emitter.instruction("fmov x9, d0"); // move float bits to integer register
                 ("x9", "xzr")
             }
             _ => ("x0", "xzr"),
         };
-        emitter.instruction(&format!("mov x3, {}", val_lo));                    // value_lo
-        emitter.instruction(&format!("mov x4, {}", val_hi));                    // value_hi
-        emitter.instruction("ldp x1, x2, [sp], #16");                           // pop key ptr/len
-        emitter.instruction("ldr x0, [sp]");                                    // peek hash table pointer
-        emitter.instruction("bl __rt_hash_set");                                // insert key-value pair (x0 = table, may be new)
-        emitter.instruction("str x0, [sp]");                                    // update stored table pointer after possible growth
+        emitter.instruction(&format!("mov x3, {}", val_lo)); // value_lo
+        emitter.instruction(&format!("mov x4, {}", val_hi)); // value_hi
+        emitter.instruction("ldp x1, x2, [sp], #16"); // pop key ptr/len
+        emitter.instruction("ldr x0, [sp]"); // peek hash table pointer
+        emitter.instruction("bl __rt_hash_set"); // insert key-value pair (x0 = table, may be new)
+        emitter.instruction("str x0, [sp]"); // update stored table pointer after possible growth
     }
 
     // -- return hash table pointer --
-    emitter.instruction("ldr x0, [sp], #16");                                   // pop hash table pointer into x0
+    emitter.instruction("ldr x0, [sp], #16"); // pop hash table pointer into x0
 
     let key_ty = match &pairs[0].0.kind {
         ExprKind::IntLiteral(_) => PhpType::Int,
@@ -1131,13 +1217,13 @@ fn emit_match_expr(
     // -- save subject value --
     match &subj_ty {
         PhpType::Str => {
-            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // save string subject
+            emitter.instruction("stp x1, x2, [sp, #-16]!"); // save string subject
         }
         PhpType::Float => {
-            emitter.instruction("str d0, [sp, #-16]!");                         // save float subject
+            emitter.instruction("str d0, [sp, #-16]!"); // save float subject
         }
         _ => {
-            emitter.instruction("str x0, [sp, #-16]!");                         // save int/bool subject
+            emitter.instruction("str x0, [sp, #-16]!"); // save int/bool subject
         }
     }
 
@@ -1155,32 +1241,32 @@ fn emit_match_expr(
             match &subj_ty {
                 PhpType::Str => {
                     // pattern result in x1/x2, subject on stack
-                    emitter.instruction("mov x3, x1");                          // move pattern ptr to x3
-                    emitter.instruction("mov x4, x2");                          // move pattern len to x4
-                    emitter.instruction("ldp x1, x2, [sp]");                    // peek subject string
-                    emitter.instruction("bl __rt_str_eq");                      // compare strings → x0=1 if equal
+                    emitter.instruction("mov x3, x1"); // move pattern ptr to x3
+                    emitter.instruction("mov x4, x2"); // move pattern len to x4
+                    emitter.instruction("ldp x1, x2, [sp]"); // peek subject string
+                    emitter.instruction("bl __rt_str_eq"); // compare strings → x0=1 if equal
                 }
                 PhpType::Float => {
-                    emitter.instruction("ldr d1, [sp]");                        // peek subject float
-                    emitter.instruction("fcmp d1, d0");                         // compare floats
-                    emitter.instruction("cset x0, eq");                         // x0=1 if equal
+                    emitter.instruction("ldr d1, [sp]"); // peek subject float
+                    emitter.instruction("fcmp d1, d0"); // compare floats
+                    emitter.instruction("cset x0, eq"); // x0=1 if equal
                 }
                 _ => {
-                    emitter.instruction("ldr x9, [sp]");                        // peek subject int/bool
-                    emitter.instruction("cmp x9, x0");                          // compare integers
-                    emitter.instruction("cset x0, eq");                         // x0=1 if equal
+                    emitter.instruction("ldr x9, [sp]"); // peek subject int/bool
+                    emitter.instruction("cmp x9, x0"); // compare integers
+                    emitter.instruction("cset x0, eq"); // x0=1 if equal
                 }
             }
-            emitter.instruction(&format!("cbnz x0, {}", arm_label));            // if matched, jump to arm body
+            emitter.instruction(&format!("cbnz x0, {}", arm_label)); // if matched, jump to arm body
             if i == patterns.len() - 1 {
-                emitter.instruction(&format!("b {}", next_arm));                // no pattern matched → try next arm
+                emitter.instruction(&format!("b {}", next_arm)); // no pattern matched → try next arm
             }
             let _ = pat_ty;
         }
 
         emitter.label(&arm_label);
         result_ty = emit_expr(result, emitter, ctx, data);
-        emitter.instruction(&format!("b {}", end_label));                       // jump to end after evaluating arm
+        emitter.instruction(&format!("b {}", end_label)); // jump to end after evaluating arm
 
         emitter.label(&next_arm);
     }
@@ -1192,7 +1278,7 @@ fn emit_match_expr(
 
     emitter.label(&end_label);
     // -- pop saved subject --
-    emitter.instruction("add sp, sp, #16");                                     // deallocate subject save slot
+    emitter.instruction("add sp, sp, #16"); // deallocate subject save slot
 
     result_ty
 }
@@ -1210,45 +1296,45 @@ fn emit_array_access(
     if let PhpType::AssocArray { value, .. } = &arr_ty {
         let val_ty = *value.clone();
         // -- save hash table pointer, evaluate key expression --
-        emitter.instruction("str x0, [sp, #-16]!");                             // push hash table pointer
+        emitter.instruction("str x0, [sp, #-16]!"); // push hash table pointer
         let _key_ty = emit_expr(index, emitter, ctx, data);
         // key is in x1/x2 (string)
-        emitter.instruction("mov x3, x1");                                      // move key ptr to x3 (temp)
-        emitter.instruction("mov x4, x2");                                      // move key len to x4 (temp)
-        emitter.instruction("ldr x0, [sp], #16");                               // pop hash table pointer
-        emitter.instruction("mov x1, x3");                                      // key ptr
-        emitter.instruction("mov x2, x4");                                      // key len
+        emitter.instruction("mov x3, x1"); // move key ptr to x3 (temp)
+        emitter.instruction("mov x4, x2"); // move key len to x4 (temp)
+        emitter.instruction("ldr x0, [sp], #16"); // pop hash table pointer
+        emitter.instruction("mov x1, x3"); // key ptr
+        emitter.instruction("mov x2, x4"); // key len
         emitter.comment("assoc array access");
-        emitter.instruction("bl __rt_hash_get");                                // lookup key → x0=found, x1=val_lo, x2=val_hi
+        emitter.instruction("bl __rt_hash_get"); // lookup key → x0=found, x1=val_lo, x2=val_hi
 
         // -- check if key was found --
         let not_found = ctx.next_label("hash_miss");
         let done = ctx.next_label("hash_done");
-        emitter.instruction(&format!("cbz x0, {not_found}"));                   // if found=0, jump to not-found handler
+        emitter.instruction(&format!("cbz x0, {not_found}")); // if found=0, jump to not-found handler
 
         // -- key found: move result to appropriate registers --
         match &val_ty {
             PhpType::Int | PhpType::Bool => {
-                emitter.instruction("mov x0, x1");                              // move value to x0
+                emitter.instruction("mov x0, x1"); // move value to x0
             }
             PhpType::Str => {
                 // x1=ptr, x2=len already set by hash_get
             }
             PhpType::Float => {
-                emitter.instruction("fmov d0, x1");                             // move bits to float register
+                emitter.instruction("fmov d0, x1"); // move bits to float register
             }
             _ => {
-                emitter.instruction("mov x0, x1");                              // move value to x0
+                emitter.instruction("mov x0, x1"); // move value to x0
             }
         }
-        emitter.instruction(&format!("b {done}"));                              // skip not-found fallback
+        emitter.instruction(&format!("b {done}")); // skip not-found fallback
 
         // -- key not found: load null sentinel --
         emitter.label(&not_found);
-        emitter.instruction("movz x0, #0xFFFE");                                // load lowest 16 bits of null sentinel
-        emitter.instruction("movk x0, #0xFFFF, lsl #16");                       // insert bits 16-31 of null sentinel
-        emitter.instruction("movk x0, #0xFFFF, lsl #32");                       // insert bits 32-47 of null sentinel
-        emitter.instruction("movk x0, #0x7FFF, lsl #48");                       // insert bits 48-63 of null sentinel
+        emitter.instruction("movz x0, #0xFFFE"); // load lowest 16 bits of null sentinel
+        emitter.instruction("movk x0, #0xFFFF, lsl #16"); // insert bits 16-31 of null sentinel
+        emitter.instruction("movk x0, #0xFFFF, lsl #32"); // insert bits 32-47 of null sentinel
+        emitter.instruction("movk x0, #0x7FFF, lsl #48"); // insert bits 48-63 of null sentinel
 
         emitter.label(&done);
         return val_ty;
@@ -1256,9 +1342,9 @@ fn emit_array_access(
 
     // -- indexed array access (existing code) --
     // -- save array pointer, evaluate index expression --
-    emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer while evaluating index
+    emitter.instruction("str x0, [sp, #-16]!"); // push array pointer while evaluating index
     emit_expr(index, emitter, ctx, data);
-    emitter.instruction("ldr x9, [sp], #16");                                   // pop array pointer into scratch register x9
+    emitter.instruction("ldr x9, [sp], #16"); // pop array pointer into scratch register x9
     emitter.comment("array access");
     let elem_ty = match &arr_ty {
         PhpType::Array(t) => *t.clone(),
@@ -1268,41 +1354,41 @@ fn emit_array_access(
     // -- bounds check: negative index or >= array length → null sentinel --
     let null_label = ctx.next_label("arr_null");
     let ok_label = ctx.next_label("arr_ok");
-    emitter.instruction("cmp x0, #0");                                          // check if index is negative
-    emitter.instruction(&format!("b.lt {null_label}"));                         // negative index → null sentinel
-    emitter.instruction("ldr x10, [x9]");                                       // load array length from header (offset 0)
-    emitter.instruction("cmp x0, x10");                                         // compare index against array length
-    emitter.instruction(&format!("b.ge {null_label}"));                         // index >= length → null sentinel
+    emitter.instruction("cmp x0, #0"); // check if index is negative
+    emitter.instruction(&format!("b.lt {null_label}")); // negative index → null sentinel
+    emitter.instruction("ldr x10, [x9]"); // load array length from header (offset 0)
+    emitter.instruction("cmp x0, x10"); // compare index against array length
+    emitter.instruction(&format!("b.ge {null_label}")); // index >= length → null sentinel
 
     match &elem_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             // -- load integer/bool/callable element: base + 24-byte header + index*8 --
-            emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header to reach data
-            emitter.instruction("ldr x0, [x9, x0, lsl #3]");                    // load element at x9 + index*8
+            emitter.instruction("add x9, x9, #24"); // skip 24-byte array header to reach data
+            emitter.instruction("ldr x0, [x9, x0, lsl #3]"); // load element at x9 + index*8
         }
         PhpType::Str => {
             // -- load string element: base + 24-byte header + index*16 --
-            emitter.instruction("lsl x0, x0, #4");                              // multiply index by 16 (string = ptr+len pair)
-            emitter.instruction("add x9, x9, x0");                              // add scaled index offset to array base
-            emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header to reach data
-            emitter.instruction("ldr x1, [x9]");                                // load string pointer from element slot
-            emitter.instruction("ldr x2, [x9, #8]");                            // load string length from element slot
+            emitter.instruction("lsl x0, x0, #4"); // multiply index by 16 (string = ptr+len pair)
+            emitter.instruction("add x9, x9, x0"); // add scaled index offset to array base
+            emitter.instruction("add x9, x9, #24"); // skip 24-byte array header to reach data
+            emitter.instruction("ldr x1, [x9]"); // load string pointer from element slot
+            emitter.instruction("ldr x2, [x9, #8]"); // load string length from element slot
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
             // -- load array/hash/object pointer: base + 24-byte header + index*8 --
-            emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header to reach data
-            emitter.instruction("ldr x0, [x9, x0, lsl #3]");                    // load pointer at index
+            emitter.instruction("add x9, x9, #24"); // skip 24-byte array header to reach data
+            emitter.instruction("ldr x0, [x9, x0, lsl #3]"); // load pointer at index
         }
         _ => {}
     }
-    emitter.instruction(&format!("b {ok_label}"));                              // skip null sentinel fallback
+    emitter.instruction(&format!("b {ok_label}")); // skip null sentinel fallback
 
     // -- null sentinel for out-of-bounds access --
     emitter.label(&null_label);
-    emitter.instruction("movz x0, #0xFFFE");                                    // load lowest 16 bits of null sentinel
-    emitter.instruction("movk x0, #0xFFFF, lsl #16");                           // insert bits 16-31 of null sentinel
-    emitter.instruction("movk x0, #0xFFFF, lsl #32");                           // insert bits 32-47 of null sentinel
-    emitter.instruction("movk x0, #0x7FFF, lsl #48");                           // insert bits 48-63 of null sentinel
+    emitter.instruction("movz x0, #0xFFFE"); // load lowest 16 bits of null sentinel
+    emitter.instruction("movk x0, #0xFFFF, lsl #16"); // insert bits 16-31 of null sentinel
+    emitter.instruction("movk x0, #0xFFFF, lsl #32"); // insert bits 32-47 of null sentinel
+    emitter.instruction("movk x0, #0x7FFF, lsl #48"); // insert bits 48-63 of null sentinel
     emitter.label(&ok_label);
 
     elem_ty
@@ -1315,11 +1401,11 @@ pub fn coerce_to_string(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
         PhpType::Int => {
             // -- convert integer in x0 to string in x1/x2 --
-            emitter.instruction("bl __rt_itoa");                                // runtime: integer-to-ASCII string conversion
+            emitter.instruction("bl __rt_itoa"); // runtime: integer-to-ASCII string conversion
         }
         PhpType::Float => {
             // -- convert float in d0 to string in x1/x2 --
-            emitter.instruction("bl __rt_ftoa");                                // runtime: float-to-ASCII string conversion
+            emitter.instruction("bl __rt_ftoa"); // runtime: float-to-ASCII string conversion
         }
         PhpType::Bool => {
             // true → "1" (via itoa), false → "" (len=0)
@@ -1327,18 +1413,22 @@ pub fn coerce_to_string(emitter: &mut Emitter, ty: &PhpType) {
             // Use conditional: itoa always works but false should produce ""
             // Simplest: if 0, mov x2,#0; if 1, call itoa
             // -- convert bool to string: true="1", false="" --
-            emitter.instruction("cbz x0, 1f");                                  // if false (zero), skip to empty string path
-            emitter.instruction("bl __rt_itoa");                                // convert true (1) to string "1"
-            emitter.instruction("b 2f");                                        // skip over the empty-string fallback
+            emitter.instruction("cbz x0, 1f"); // if false (zero), skip to empty string path
+            emitter.instruction("bl __rt_itoa"); // convert true (1) to string "1"
+            emitter.instruction("b 2f"); // skip over the empty-string fallback
             emitter.raw("1:");
-            emitter.instruction("mov x2, #0");                                  // false produces empty string (length = 0)
+            emitter.instruction("mov x2, #0"); // false produces empty string (length = 0)
             emitter.raw("2:");
         }
         PhpType::Void => {
             // -- null coerces to empty string in PHP --
-            emitter.instruction("mov x2, #0");                                  // null produces empty string (length = 0)
+            emitter.instruction("mov x2, #0"); // null produces empty string (length = 0)
         }
-        PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+        PhpType::Str
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Callable
+        | PhpType::Object(_)
         | PhpType::Pointer(_) => {}
     }
 }
@@ -1349,19 +1439,19 @@ pub fn coerce_to_string(emitter: &mut Emitter, ty: &PhpType) {
 pub fn coerce_null_to_zero(emitter: &mut Emitter, ty: &PhpType) {
     if *ty == PhpType::Void {
         // -- compile-time null: just load zero --
-        emitter.instruction("mov x0, #0");                                      // null is zero in arithmetic/comparison context
+        emitter.instruction("mov x0, #0"); // null is zero in arithmetic/comparison context
     } else if *ty == PhpType::Bool {
         // Bool is already 0/1 in x0, compatible with Int arithmetic
     } else if *ty == PhpType::Float {
         // Float is already in d0, no null sentinel to check
     } else if *ty == PhpType::Int {
         // -- runtime null check: compare x0 against sentinel value --
-        emitter.instruction("movz x9, #0xFFFE");                                // build null sentinel in x9: bits 0-15
-        emitter.instruction("movk x9, #0xFFFF, lsl #16");                       // null sentinel bits 16-31
-        emitter.instruction("movk x9, #0xFFFF, lsl #32");                       // null sentinel bits 32-47
-        emitter.instruction("movk x9, #0x7FFF, lsl #48");                       // null sentinel bits 48-63, completing value
-        emitter.instruction("cmp x0, x9");                                      // compare value against null sentinel
-        emitter.instruction("csel x0, xzr, x0, eq");                            // if x0 == sentinel, replace with zero
+        emitter.instruction("movz x9, #0xFFFE"); // build null sentinel in x9: bits 0-15
+        emitter.instruction("movk x9, #0xFFFF, lsl #16"); // null sentinel bits 16-31
+        emitter.instruction("movk x9, #0xFFFF, lsl #32"); // null sentinel bits 32-47
+        emitter.instruction("movk x9, #0x7FFF, lsl #48"); // null sentinel bits 48-63, completing value
+        emitter.instruction("cmp x0, x9"); // compare value against null sentinel
+        emitter.instruction("csel x0, xzr, x0, eq"); // if x0 == sentinel, replace with zero
     }
 }
 
@@ -1375,22 +1465,22 @@ pub fn coerce_to_truthiness(emitter: &mut Emitter, ctx: &mut Context, ty: &PhpTy
         let falsy_label = ctx.next_label("str_falsy");
         let truthy_label = ctx.next_label("str_truthy");
         let done_label = ctx.next_label("str_truth_done");
-        emitter.instruction(&format!("cbz x2, {falsy_label}"));                 // empty string is falsy
-        emitter.instruction("cmp x2, #1");                                      // check if length is 1
-        emitter.instruction(&format!("b.ne {truthy_label}"));                   // length != 1 means truthy
-        emitter.instruction("ldrb w9, [x1]");                                   // load first byte of string
-        emitter.instruction("cmp w9, #48");                                     // compare with ASCII '0'
-        emitter.instruction(&format!("b.eq {falsy_label}"));                    // string "0" is falsy
+        emitter.instruction(&format!("cbz x2, {falsy_label}")); // empty string is falsy
+        emitter.instruction("cmp x2, #1"); // check if length is 1
+        emitter.instruction(&format!("b.ne {truthy_label}")); // length != 1 means truthy
+        emitter.instruction("ldrb w9, [x1]"); // load first byte of string
+        emitter.instruction("cmp w9, #48"); // compare with ASCII '0'
+        emitter.instruction(&format!("b.eq {falsy_label}")); // string "0" is falsy
         emitter.label(&truthy_label);
-        emitter.instruction("mov x0, #1");                                      // truthy: set x0 = 1
-        emitter.instruction(&format!("b {done_label}"));                        // skip falsy path
+        emitter.instruction("mov x0, #1"); // truthy: set x0 = 1
+        emitter.instruction(&format!("b {done_label}")); // skip falsy path
         emitter.label(&falsy_label);
-        emitter.instruction("mov x0, #0");                                      // falsy: set x0 = 0
+        emitter.instruction("mov x0, #0"); // falsy: set x0 = 0
         emitter.label(&done_label);
     } else if *ty == PhpType::Float {
         // -- float truthiness: 0.0 is falsy --
-        emitter.instruction("fcmp d0, #0.0");                                   // compare float against zero
-        emitter.instruction("cset x0, ne");                                     // x0=1 if nonzero (truthy), 0 if zero
+        emitter.instruction("fcmp d0, #0.0"); // compare float against zero
+        emitter.instruction("cset x0, ne"); // x0=1 if nonzero (truthy), 0 if zero
     }
 }
 
@@ -1406,7 +1496,7 @@ fn coerce_to_int_for_loose_cmp(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
         PhpType::Void => {
             // -- null coerces to 0 --
-            emitter.instruction("mov x0, #0");                                  // null is zero for loose comparison
+            emitter.instruction("mov x0, #0"); // null is zero for loose comparison
         }
         PhpType::Bool => {
             // Bool is already 0 or 1 in x0 — nothing to do
@@ -1416,15 +1506,15 @@ fn coerce_to_int_for_loose_cmp(emitter: &mut Emitter, ty: &PhpType) {
         }
         PhpType::Float => {
             // -- truncate float to integer --
-            emitter.instruction("fcvtzs x0, d0");                               // convert float to signed int (truncate)
+            emitter.instruction("fcvtzs x0, d0"); // convert float to signed int (truncate)
         }
         PhpType::Str => {
             // -- coerce string to int: empty string → 0, otherwise parse --
-            emitter.instruction("bl __rt_atoi");                                // runtime: parse string as integer → x0
+            emitter.instruction("bl __rt_atoi"); // runtime: parse string as integer → x0
         }
         _ => {
             // Arrays, callables — coerce to 0 as fallback
-            emitter.instruction("mov x0, #0");                                  // unsupported type coerces to 0
+            emitter.instruction("mov x0, #0"); // unsupported type coerces to 0
         }
     }
 }
@@ -1443,13 +1533,13 @@ fn emit_binop(
             let lt = emit_expr(left, emitter, ctx, data);
             coerce_to_truthiness(emitter, ctx, &lt);
             // -- short-circuit AND: skip right side if left is falsy --
-            emitter.instruction("cmp x0, #0");                                  // test if left operand is falsy
-            emitter.instruction(&format!("b.eq {}", end_label));                // short-circuit: left is false so result is 0
+            emitter.instruction("cmp x0, #0"); // test if left operand is falsy
+            emitter.instruction(&format!("b.eq {}", end_label)); // short-circuit: left is false so result is 0
             let rt = emit_expr(right, emitter, ctx, data);
             coerce_to_truthiness(emitter, ctx, &rt);
             // -- evaluate right operand truthiness --
-            emitter.instruction("cmp x0, #0");                                  // test if right operand is falsy
-            emitter.instruction("cset x0, ne");                                 // result=1 if right is truthy, 0 if falsy
+            emitter.instruction("cmp x0, #0"); // test if right operand is falsy
+            emitter.instruction("cset x0, ne"); // result=1 if right is truthy, 0 if falsy
             emitter.label(&end_label);
             PhpType::Bool
         }
@@ -1458,14 +1548,14 @@ fn emit_binop(
             let lt = emit_expr(left, emitter, ctx, data);
             coerce_to_truthiness(emitter, ctx, &lt);
             // -- short-circuit OR: skip right side if left is truthy --
-            emitter.instruction("cmp x0, #0");                                  // test if left operand is truthy
-            emitter.instruction(&format!("b.ne {}", end_label));                // short-circuit: left is true, skip right
+            emitter.instruction("cmp x0, #0"); // test if left operand is truthy
+            emitter.instruction(&format!("b.ne {}", end_label)); // short-circuit: left is true, skip right
             let rt = emit_expr(right, emitter, ctx, data);
             coerce_to_truthiness(emitter, ctx, &rt);
             emitter.label(&end_label);
             // -- normalize final value to boolean 0 or 1 --
-            emitter.instruction("cmp x0, #0");                                  // test whichever operand survived
-            emitter.instruction("cset x0, ne");                                 // normalize to 1 if truthy, 0 if falsy
+            emitter.instruction("cmp x0, #0"); // test whichever operand survived
+            emitter.instruction("cset x0, ne"); // normalize to 1 if truthy, 0 if falsy
             PhpType::Bool
         }
         BinOp::Pow => {
@@ -1473,18 +1563,18 @@ fn emit_binop(
             coerce_null_to_zero(emitter, &lt);
             // -- exponentiation: convert to floats and call libm pow() --
             if lt != PhpType::Float {
-                emitter.instruction("scvtf d0, x0");                            // convert integer base to double-precision float
+                emitter.instruction("scvtf d0, x0"); // convert integer base to double-precision float
             }
-            emitter.instruction("str d0, [sp, #-16]!");                         // save base on stack while evaluating exponent
+            emitter.instruction("str d0, [sp, #-16]!"); // save base on stack while evaluating exponent
             let rt = emit_expr(right, emitter, ctx, data);
             coerce_null_to_zero(emitter, &rt);
             if rt != PhpType::Float {
-                emitter.instruction("scvtf d0, x0");                            // convert integer exponent to double float
+                emitter.instruction("scvtf d0, x0"); // convert integer exponent to double float
             }
             // -- arrange arguments for pow(base, exp) --
-            emitter.instruction("fmov d1, d0");                                 // move exponent to d1 (second argument)
-            emitter.instruction("ldr d0, [sp], #16");                           // pop base from stack into d0 (first argument)
-            emitter.instruction("bl _pow");                                     // call C library pow(base, exponent)
+            emitter.instruction("fmov d1, d0"); // move exponent to d1 (second argument)
+            emitter.instruction("ldr d0, [sp], #16"); // pop base from stack into d0 (first argument)
+            emitter.instruction("bl _pow"); // call C library pow(base, exponent)
             PhpType::Float
         }
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
@@ -1493,9 +1583,9 @@ fn emit_binop(
             let use_float = lt == PhpType::Float;
             // -- save left operand on stack while evaluating right --
             if use_float {
-                emitter.instruction("str d0, [sp, #-16]!");                     // push left float operand onto stack
+                emitter.instruction("str d0, [sp, #-16]!"); // push left float operand onto stack
             } else {
-                emitter.instruction("str x0, [sp, #-16]!");                     // push left integer operand onto stack
+                emitter.instruction("str x0, [sp, #-16]!"); // push left integer operand onto stack
             }
             let rt = emit_expr(right, emitter, ctx, data);
             coerce_null_to_zero(emitter, &rt);
@@ -1504,67 +1594,67 @@ fn emit_binop(
             if lt == PhpType::Float || rt == PhpType::Float || *op == BinOp::Div {
                 // -- float arithmetic path --
                 if rt != PhpType::Float {
-                    emitter.instruction("scvtf d0, x0");                        // promote right int operand to float
+                    emitter.instruction("scvtf d0, x0"); // promote right int operand to float
                 }
                 // d0 = right operand (as float)
-                emitter.instruction("str d0, [sp, #-16]!");                     // save right float operand on stack
+                emitter.instruction("str d0, [sp, #-16]!"); // save right float operand on stack
                 if lt == PhpType::Float {
-                    emitter.instruction("ldr d1, [sp, #16]");                   // load left operand (was already float)
+                    emitter.instruction("ldr d1, [sp, #16]"); // load left operand (was already float)
                 } else {
-                    emitter.instruction("ldr x9, [sp, #16]");                   // load left operand (was integer)
-                    emitter.instruction("scvtf d1, x9");                        // promote left integer operand to float
+                    emitter.instruction("ldr x9, [sp, #16]"); // load left operand (was integer)
+                    emitter.instruction("scvtf d1, x9"); // promote left integer operand to float
                 }
-                emitter.instruction("ldr d0, [sp], #16");                       // pop right operand back into d0
-                // d1 = left, d0 = right
+                emitter.instruction("ldr d0, [sp], #16"); // pop right operand back into d0
+                                                          // d1 = left, d0 = right
                 match op {
                     BinOp::Add => {
-                        emitter.instruction("fadd d0, d1, d0");                 // float addition: left + right
+                        emitter.instruction("fadd d0, d1, d0"); // float addition: left + right
                     }
                     BinOp::Sub => {
-                        emitter.instruction("fsub d0, d1, d0");                 // float subtraction: left - right
+                        emitter.instruction("fsub d0, d1, d0"); // float subtraction: left - right
                     }
                     BinOp::Mul => {
-                        emitter.instruction("fmul d0, d1, d0");                 // float multiplication: left * right
+                        emitter.instruction("fmul d0, d1, d0"); // float multiplication: left * right
                     }
                     BinOp::Div => {
-                        emitter.instruction("fdiv d0, d1, d0");                 // float division: left / right
+                        emitter.instruction("fdiv d0, d1, d0"); // float division: left / right
                     }
                     BinOp::Mod => {
                         // -- float modulo: a - trunc(a/b) * b (C/PHP truncated mod) --
-                        emitter.instruction("fdiv d2, d1, d0");                 // d2 = left / right
-                        emitter.instruction("frintz d2, d2");                   // d2 = trunc(left / right) toward zero
-                        emitter.instruction("fmsub d0, d2, d0, d1");            // d0 = left - trunc(l/r)*right
+                        emitter.instruction("fdiv d2, d1, d0"); // d2 = left / right
+                        emitter.instruction("frintz d2, d2"); // d2 = trunc(left / right) toward zero
+                        emitter.instruction("fmsub d0, d2, d0, d1"); // d0 = left - trunc(l/r)*right
                     }
                     _ => unreachable!(),
                 }
-                emitter.instruction("add sp, sp, #16");                         // discard left operand's stack slot
+                emitter.instruction("add sp, sp, #16"); // discard left operand's stack slot
                 PhpType::Float
             } else {
                 // -- integer arithmetic path --
-                emitter.instruction("ldr x1, [sp], #16");                       // pop left integer operand into x1
+                emitter.instruction("ldr x1, [sp], #16"); // pop left integer operand into x1
                 match op {
                     BinOp::Add => {
-                        emitter.instruction("add x0, x1, x0");                  // integer addition: left + right
+                        emitter.instruction("add x0, x1, x0"); // integer addition: left + right
                     }
                     BinOp::Sub => {
-                        emitter.instruction("sub x0, x1, x0");                  // integer subtraction: left - right
+                        emitter.instruction("sub x0, x1, x0"); // integer subtraction: left - right
                     }
                     BinOp::Mul => {
-                        emitter.instruction("mul x0, x1, x0");                  // integer multiplication: left * right
+                        emitter.instruction("mul x0, x1, x0"); // integer multiplication: left * right
                     }
                     BinOp::Div => {
-                        emitter.instruction("sdiv x0, x1, x0");                 // signed integer division: left / right
+                        emitter.instruction("sdiv x0, x1, x0"); // signed integer division: left / right
                     }
                     BinOp::Mod => {
                         // -- integer modulo: a - (a/b) * b, with zero-divisor guard --
                         let skip = ctx.next_label("mod_ok");
                         let zero = ctx.next_label("mod_zero");
-                        emitter.instruction(&format!("cbz x0, {zero}"));        // if divisor is zero, skip to return 0
-                        emitter.instruction("sdiv x2, x1, x0");                 // x2 = left / right (integer division)
-                        emitter.instruction("msub x0, x2, x0, x1");             // x0 = left - (left/right)*right
-                        emitter.instruction(&format!("b {skip}"));              // jump past zero-divisor fallback
+                        emitter.instruction(&format!("cbz x0, {zero}")); // if divisor is zero, skip to return 0
+                        emitter.instruction("sdiv x2, x1, x0"); // x2 = left / right (integer division)
+                        emitter.instruction("msub x0, x2, x0, x1"); // x0 = left - (left/right)*right
+                        emitter.instruction(&format!("b {skip}")); // jump past zero-divisor fallback
                         emitter.label(&zero);
-                        emitter.instruction("mov x0, #0");                      // divisor was zero, return 0
+                        emitter.instruction("mov x0, #0"); // divisor was zero, return 0
                         emitter.label(&skip);
                     }
                     _ => unreachable!(),
@@ -1574,42 +1664,48 @@ fn emit_binop(
         }
         BinOp::Eq | BinOp::NotEq => {
             let lt = emit_expr(left, emitter, ctx, data);
-            let lt_numeric = matches!(lt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
+            let lt_numeric = matches!(
+                lt,
+                PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
+            );
             coerce_null_to_zero(emitter, &lt);
             let use_float = lt == PhpType::Float;
             // -- save left operand on stack while evaluating right --
             if use_float {
-                emitter.instruction("str d0, [sp, #-16]!");                     // push left float operand onto stack
+                emitter.instruction("str d0, [sp, #-16]!"); // push left float operand onto stack
             } else {
                 if !lt_numeric {
                     // -- coerce non-numeric left to int for loose comparison --
                     coerce_to_int_for_loose_cmp(emitter, &lt);
                 }
-                emitter.instruction("str x0, [sp, #-16]!");                     // push left integer operand onto stack
+                emitter.instruction("str x0, [sp, #-16]!"); // push left integer operand onto stack
             }
             let rt = emit_expr(right, emitter, ctx, data);
-            let rt_numeric = matches!(rt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
+            let rt_numeric = matches!(
+                rt,
+                PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
+            );
             coerce_null_to_zero(emitter, &rt);
 
             if lt_numeric && rt_numeric && (lt == PhpType::Float || rt == PhpType::Float) {
                 // -- float comparison path (both sides numeric, at least one float) --
                 if rt != PhpType::Float {
-                    emitter.instruction("scvtf d0, x0");                        // promote right int to float for comparison
+                    emitter.instruction("scvtf d0, x0"); // promote right int to float for comparison
                 }
                 if lt == PhpType::Float {
-                    emitter.instruction("ldr d1, [sp], #16");                   // pop left float operand from stack
+                    emitter.instruction("ldr d1, [sp], #16"); // pop left float operand from stack
                 } else {
-                    emitter.instruction("ldr x9, [sp], #16");                   // pop left integer operand from stack
-                    emitter.instruction("scvtf d1, x9");                        // promote left int to float for comparison
+                    emitter.instruction("ldr x9, [sp], #16"); // pop left integer operand from stack
+                    emitter.instruction("scvtf d1, x9"); // promote left int to float for comparison
                 }
-                emitter.instruction("fcmp d1, d0");                             // compare two doubles, setting NZCV flags
+                emitter.instruction("fcmp d1, d0"); // compare two doubles, setting NZCV flags
             } else {
                 // -- integer comparison path (cross-type coerced to int) --
                 if !rt_numeric {
                     coerce_to_int_for_loose_cmp(emitter, &rt);
                 }
-                emitter.instruction("ldr x1, [sp], #16");                       // pop left integer operand from stack
-                emitter.instruction("cmp x1, x0");                              // compare left vs right, setting flags
+                emitter.instruction("ldr x1, [sp], #16"); // pop left integer operand from stack
+                emitter.instruction("cmp x1, x0"); // compare left vs right, setting flags
             }
             let cond = match op {
                 BinOp::Eq => "eq",
@@ -1617,7 +1713,7 @@ fn emit_binop(
                 _ => unreachable!(),
             };
             // -- set boolean result based on comparison flags --
-            emitter.instruction(&format!("cset x0, {}", cond));                 // x0=1 if condition met, 0 otherwise
+            emitter.instruction(&format!("cset x0, {}", cond)); // x0=1 if condition met, 0 otherwise
             PhpType::Bool
         }
         BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
@@ -1626,9 +1722,9 @@ fn emit_binop(
             let use_float = lt == PhpType::Float;
             // -- save left operand on stack while evaluating right --
             if use_float {
-                emitter.instruction("str d0, [sp, #-16]!");                     // push left float operand onto stack
+                emitter.instruction("str d0, [sp, #-16]!"); // push left float operand onto stack
             } else {
-                emitter.instruction("str x0, [sp, #-16]!");                     // push left integer operand onto stack
+                emitter.instruction("str x0, [sp, #-16]!"); // push left integer operand onto stack
             }
             let rt = emit_expr(right, emitter, ctx, data);
             coerce_null_to_zero(emitter, &rt);
@@ -1636,20 +1732,20 @@ fn emit_binop(
             if lt == PhpType::Float || rt == PhpType::Float {
                 // -- float comparison path --
                 if rt != PhpType::Float {
-                    emitter.instruction("scvtf d0, x0");                        // promote right int to float for comparison
+                    emitter.instruction("scvtf d0, x0"); // promote right int to float for comparison
                 }
                 if lt == PhpType::Float {
-                    emitter.instruction("ldr d1, [sp], #16");                   // pop left float operand from stack
+                    emitter.instruction("ldr d1, [sp], #16"); // pop left float operand from stack
                 } else {
-                    emitter.instruction("ldr x9, [sp], #16");                   // pop left integer operand from stack
-                    emitter.instruction("scvtf d1, x9");                        // promote left int to float for comparison
+                    emitter.instruction("ldr x9, [sp], #16"); // pop left integer operand from stack
+                    emitter.instruction("scvtf d1, x9"); // promote left int to float for comparison
                 }
                 // d1 = left, d0 = right
-                emitter.instruction("fcmp d1, d0");                             // compare two doubles, setting NZCV flags
+                emitter.instruction("fcmp d1, d0"); // compare two doubles, setting NZCV flags
             } else {
                 // -- integer comparison path --
-                emitter.instruction("ldr x1, [sp], #16");                       // pop left integer operand from stack
-                emitter.instruction("cmp x1, x0");                              // compare left vs right, setting flags
+                emitter.instruction("ldr x1, [sp], #16"); // pop left integer operand from stack
+                emitter.instruction("cmp x1, x0"); // compare left vs right, setting flags
             }
             let cond = match op {
                 BinOp::Lt => "lt",
@@ -1659,7 +1755,7 @@ fn emit_binop(
                 _ => unreachable!(),
             };
             // -- set boolean result based on comparison flags --
-            emitter.instruction(&format!("cset x0, {}", cond));                 // x0=1 if condition met, 0 otherwise
+            emitter.instruction(&format!("cset x0, {}", cond)); // x0=1 if condition met, 0 otherwise
             PhpType::Bool
         }
         BinOp::StrictEq | BinOp::StrictNotEq => {
@@ -1669,41 +1765,40 @@ fn emit_binop(
             let left_ty = emit_expr(left, emitter, ctx, data);
             coerce_to_string(emitter, &left_ty);
             // -- save left string while evaluating right operand --
-            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // push left string ptr+len onto stack
+            emitter.instruction("stp x1, x2, [sp, #-16]!"); // push left string ptr+len onto stack
             let right_ty = emit_expr(right, emitter, ctx, data);
             coerce_to_string(emitter, &right_ty);
             // -- set up concat(left_ptr, left_len, right_ptr, right_len) --
-            emitter.instruction("mov x3, x1");                                  // move right string pointer to 3rd arg
-            emitter.instruction("mov x4, x2");                                  // move right string length to 4th arg
-            emitter.instruction("ldp x1, x2, [sp], #16");                       // pop left string ptr/len into 1st/2nd args
-            emitter.instruction("bl __rt_concat");                              // call runtime to concatenate two strings
+            emitter.instruction("mov x3, x1"); // move right string pointer to 3rd arg
+            emitter.instruction("mov x4, x2"); // move right string length to 4th arg
+            emitter.instruction("ldp x1, x2, [sp], #16"); // pop left string ptr/len into 1st/2nd args
+            emitter.instruction("bl __rt_concat"); // call runtime to concatenate two strings
             PhpType::Str
         }
-        BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor
-        | BinOp::ShiftLeft | BinOp::ShiftRight => {
+        BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight => {
             let lt = emit_expr(left, emitter, ctx, data);
             coerce_null_to_zero(emitter, &lt);
             // -- save left operand on stack while evaluating right --
-            emitter.instruction("str x0, [sp, #-16]!");                         // push left integer operand onto stack
+            emitter.instruction("str x0, [sp, #-16]!"); // push left integer operand onto stack
             let rt = emit_expr(right, emitter, ctx, data);
             coerce_null_to_zero(emitter, &rt);
             // -- pop left operand and apply bitwise operation --
-            emitter.instruction("ldr x1, [sp], #16");                           // pop left integer operand into x1
+            emitter.instruction("ldr x1, [sp], #16"); // pop left integer operand into x1
             match op {
                 BinOp::BitAnd => {
-                    emitter.instruction("and x0, x1, x0");                      // bitwise AND: left & right
+                    emitter.instruction("and x0, x1, x0"); // bitwise AND: left & right
                 }
                 BinOp::BitOr => {
-                    emitter.instruction("orr x0, x1, x0");                      // bitwise OR: left | right
+                    emitter.instruction("orr x0, x1, x0"); // bitwise OR: left | right
                 }
                 BinOp::BitXor => {
-                    emitter.instruction("eor x0, x1, x0");                      // bitwise XOR: left ^ right
+                    emitter.instruction("eor x0, x1, x0"); // bitwise XOR: left ^ right
                 }
                 BinOp::ShiftLeft => {
-                    emitter.instruction("lsl x0, x1, x0");                      // left shift: left << right
+                    emitter.instruction("lsl x0, x1, x0"); // left shift: left << right
                 }
                 BinOp::ShiftRight => {
-                    emitter.instruction("asr x0, x1, x0");                      // arithmetic right shift: left >> right
+                    emitter.instruction("asr x0, x1, x0"); // arithmetic right shift: left >> right
                 }
                 _ => unreachable!(),
             }
@@ -1715,9 +1810,9 @@ fn emit_binop(
             let use_float = lt == PhpType::Float;
             // -- save left operand on stack while evaluating right --
             if use_float {
-                emitter.instruction("str d0, [sp, #-16]!");                     // push left float operand onto stack
+                emitter.instruction("str d0, [sp, #-16]!"); // push left float operand onto stack
             } else {
-                emitter.instruction("str x0, [sp, #-16]!");                     // push left integer operand onto stack
+                emitter.instruction("str x0, [sp, #-16]!"); // push left integer operand onto stack
             }
             let rt = emit_expr(right, emitter, ctx, data);
             coerce_null_to_zero(emitter, &rt);
@@ -1725,24 +1820,24 @@ fn emit_binop(
             if lt == PhpType::Float || rt == PhpType::Float {
                 // -- float spaceship comparison --
                 if rt != PhpType::Float {
-                    emitter.instruction("scvtf d0, x0");                        // promote right int to float
+                    emitter.instruction("scvtf d0, x0"); // promote right int to float
                 }
                 if lt == PhpType::Float {
-                    emitter.instruction("ldr d1, [sp], #16");                   // pop left float
+                    emitter.instruction("ldr d1, [sp], #16"); // pop left float
                 } else {
-                    emitter.instruction("ldr x9, [sp], #16");                   // pop left int
-                    emitter.instruction("scvtf d1, x9");                        // promote left int to float
+                    emitter.instruction("ldr x9, [sp], #16"); // pop left int
+                    emitter.instruction("scvtf d1, x9"); // promote left int to float
                 }
                 // d1 = left, d0 = right
-                emitter.instruction("fcmp d1, d0");                             // compare left vs right floats
+                emitter.instruction("fcmp d1, d0"); // compare left vs right floats
             } else {
                 // -- integer spaceship comparison --
-                emitter.instruction("ldr x1, [sp], #16");                       // pop left integer
-                emitter.instruction("cmp x1, x0");                              // compare left vs right integers
+                emitter.instruction("ldr x1, [sp], #16"); // pop left integer
+                emitter.instruction("cmp x1, x0"); // compare left vs right integers
             }
             // -- produce -1, 0, or 1 based on comparison flags --
-            emitter.instruction("cset x0, gt");                                 // x0=1 if left > right
-            emitter.instruction("csinv x0, x0, xzr, ge");                       // x0=-1 if left < right (invert zero → all-ones)
+            emitter.instruction("cset x0, gt"); // x0=1 if left > right
+            emitter.instruction("csinv x0, x0, xzr, ge"); // x0=-1 if left < right (invert zero → all-ones)
             PhpType::Int
         }
         BinOp::NullCoalesce => {
@@ -1769,7 +1864,9 @@ fn emit_function_call(
     // Determine how many regular (non-variadic) params the function has
     let regular_param_count = if is_variadic {
         // The last param in sig.params is the variadic array param — don't count it
-        sig.as_ref().map(|s| s.params.len().saturating_sub(1)).unwrap_or(0)
+        sig.as_ref()
+            .map(|s| s.params.len().saturating_sub(1))
+            .unwrap_or(0)
     } else {
         sig.as_ref().map(|s| s.params.len()).unwrap_or(args.len())
     };
@@ -1813,7 +1910,10 @@ fn emit_function_call(
         all_args.extend(default_refs);
     }
 
-    let ref_params = sig.as_ref().map(|s| s.ref_params.clone()).unwrap_or_default();
+    let ref_params = sig
+        .as_ref()
+        .map(|s| s.ref_params.clone())
+        .unwrap_or_default();
 
     // -- evaluate and push regular args onto stack --
     let mut arg_types = Vec::new();
@@ -1825,8 +1925,9 @@ fn emit_function_call(
                 if ctx.global_vars.contains(var_name) {
                     let label = format!("_gvar_{}", var_name);
                     emitter.comment(&format!("ref arg: address of global ${}", var_name));
-                    emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page of global var
-                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); // add page offset
+                    emitter.instruction(&format!("adrp x0, {}@PAGE", label)); // load page of global var
+                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label));
+                // add page offset
                 } else {
                     let var = match ctx.variables.get(var_name) {
                         Some(v) => v,
@@ -1837,26 +1938,31 @@ fn emit_function_call(
                     };
                     let offset = var.stack_offset;
                     emitter.comment(&format!("ref arg: address of ${}", var_name));
-                    emitter.instruction(&format!("sub x0, x29, #{}", offset));  // compute address of local variable
+                    emitter.instruction(&format!("sub x0, x29, #{}", offset)); // compute address of local variable
                 }
             } else {
                 emit_expr(arg, emitter, ctx, data);
             }
-            emitter.instruction("str x0, [sp, #-16]!");                         // push address onto stack
+            emitter.instruction("str x0, [sp, #-16]!"); // push address onto stack
             arg_types.push(PhpType::Int);
         } else {
             let ty = emit_expr(arg, emitter, ctx, data);
             retain_borrowed_heap_arg(emitter, arg, &ty);
             match &ty {
-                PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+                PhpType::Bool
+                | PhpType::Int
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Callable
+                | PhpType::Object(_)
                 | PhpType::Pointer(_) => {
-                    emitter.instruction("str x0, [sp, #-16]!");                 // push int/bool/array-ptr/callable arg onto stack
+                    emitter.instruction("str x0, [sp, #-16]!"); // push int/bool/array-ptr/callable arg onto stack
                 }
                 PhpType::Float => {
-                    emitter.instruction("str d0, [sp, #-16]!");                 // push float arg onto stack
+                    emitter.instruction("str d0, [sp, #-16]!"); // push float arg onto stack
                 }
                 PhpType::Str => {
-                    emitter.instruction("stp x1, x2, [sp, #-16]!");             // push string ptr+len arg onto stack
+                    emitter.instruction("stp x1, x2, [sp, #-16]!"); // push string ptr+len arg onto stack
                 }
                 PhpType::Void => {}
             }
@@ -1885,41 +1991,46 @@ fn emit_function_call(
 
             // -- extract all elements from array, pushing each onto stack --
             // x0 holds the array pointer; use x9 as base for element access
-            emitter.instruction("mov x9, x0");                                  // save array pointer in x9
-            emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header to reach data
+            emitter.instruction("mov x9, x0"); // save array pointer in x9
+            emitter.instruction("add x9, x9, #24"); // skip 24-byte array header to reach data
             for idx in 0..remaining {
                 match &elem_ty {
                     PhpType::Int | PhpType::Bool => {
-                        emitter.instruction(&format!(                           // load int element at offset index*8
+                        emitter.instruction(&format!(
+                            // load int element at offset index*8
                             "ldr x0, [x9, #{}]",
                             idx * 8
                         ));
-                        emitter.instruction("str x0, [sp, #-16]!");             // push unpacked int arg onto stack
+                        emitter.instruction("str x0, [sp, #-16]!"); // push unpacked int arg onto stack
                     }
                     PhpType::Float => {
-                        emitter.instruction(&format!(                           // load float element at offset index*8
+                        emitter.instruction(&format!(
+                            // load float element at offset index*8
                             "ldr d0, [x9, #{}]",
                             idx * 8
                         ));
-                        emitter.instruction("str d0, [sp, #-16]!");             // push unpacked float arg onto stack
+                        emitter.instruction("str d0, [sp, #-16]!"); // push unpacked float arg onto stack
                     }
                     PhpType::Str => {
-                        emitter.instruction(&format!(                           // load string pointer at offset index*16
+                        emitter.instruction(&format!(
+                            // load string pointer at offset index*16
                             "ldr x1, [x9, #{}]",
                             idx * 16
                         ));
-                        emitter.instruction(&format!(                           // load string length at offset index*16+8
+                        emitter.instruction(&format!(
+                            // load string length at offset index*16+8
                             "ldr x2, [x9, #{}]",
                             idx * 16 + 8
                         ));
-                        emitter.instruction("stp x1, x2, [sp, #-16]!");         // push unpacked string arg onto stack
+                        emitter.instruction("stp x1, x2, [sp, #-16]!"); // push unpacked string arg onto stack
                     }
                     _ => {
-                        emitter.instruction(&format!(                           // load element at offset index*8
+                        emitter.instruction(&format!(
+                            // load element at offset index*8
                             "ldr x0, [x9, #{}]",
                             idx * 8
                         ));
-                        emitter.instruction("str x0, [sp, #-16]!");             // push unpacked arg onto stack
+                        emitter.instruction("str x0, [sp, #-16]!"); // push unpacked arg onto stack
                     }
                 }
                 arg_types.push(elem_ty.clone());
@@ -1935,14 +2046,14 @@ fn emit_function_call(
             let ty = emit_expr(spread_expr, emitter, ctx, data);
             retain_borrowed_heap_arg(emitter, spread_expr, &ty);
             // Array pointer is in x0
-            emitter.instruction("str x0, [sp, #-16]!");                         // push variadic array pointer onto stack
+            emitter.instruction("str x0, [sp, #-16]!"); // push variadic array pointer onto stack
         } else if variadic_args.is_empty() {
             // No variadic args — create an empty array
             emitter.comment("empty variadic array");
-            emitter.instruction("mov x0, #4");                                  // initial capacity: 4 (grows dynamically)
-            emitter.instruction("mov x1, #8");                                  // element size: 8 bytes
-            emitter.instruction("bl __rt_array_new");                           // allocate empty array for variadic param
-            emitter.instruction("str x0, [sp, #-16]!");                         // push empty variadic array onto stack
+            emitter.instruction("mov x0, #4"); // initial capacity: 4 (grows dynamically)
+            emitter.instruction("mov x1, #8"); // element size: 8 bytes
+            emitter.instruction("bl __rt_array_new"); // allocate empty array for variadic param
+            emitter.instruction("str x0, [sp, #-16]!"); // push empty variadic array onto stack
         } else {
             // Build array from variadic args
             let n = variadic_args.len();
@@ -1956,42 +2067,48 @@ fn emit_function_call(
                 PhpType::Str => 16,
                 _ => 8,
             };
-            emitter.instruction(&format!(                                       // capacity: exact element count (grows if needed)
+            emitter.instruction(&format!(
+                // capacity: exact element count (grows if needed)
                 "mov x0, #{}",
                 n
             ));
-            emitter.instruction(&format!("mov x1, #{}", es));                   // element size in bytes
-            emitter.instruction("bl __rt_array_new");                           // allocate array for variadic args
-            emitter.instruction("str x0, [sp, #-16]!");                         // save variadic array pointer on stack
+            emitter.instruction(&format!("mov x1, #{}", es)); // element size in bytes
+            emitter.instruction("bl __rt_array_new"); // allocate array for variadic args
+            emitter.instruction("str x0, [sp, #-16]!"); // save variadic array pointer on stack
 
             for (i, varg) in variadic_args.iter().enumerate() {
                 let ty = emit_expr(varg, emitter, ctx, data);
-                emitter.instruction("ldr x9, [sp]");                            // peek variadic array pointer from stack
+                emitter.instruction("ldr x9, [sp]"); // peek variadic array pointer from stack
                 match &ty {
                     PhpType::Int | PhpType::Bool => {
-                        emitter.instruction(&format!(                           // store int element at data offset
+                        emitter.instruction(&format!(
+                            // store int element at data offset
                             "str x0, [x9, #{}]",
                             24 + i * 8
                         ));
                     }
                     PhpType::Float => {
-                        emitter.instruction(&format!(                           // store float element at data offset
+                        emitter.instruction(&format!(
+                            // store float element at data offset
                             "str d0, [x9, #{}]",
                             24 + i * 8
                         ));
                     }
                     PhpType::Str => {
-                        emitter.instruction(&format!(                           // store string pointer at data offset
+                        emitter.instruction(&format!(
+                            // store string pointer at data offset
                             "str x1, [x9, #{}]",
                             24 + i * 16
                         ));
-                        emitter.instruction(&format!(                           // store string length right after pointer
+                        emitter.instruction(&format!(
+                            // store string length right after pointer
                             "str x2, [x9, #{}]",
                             24 + i * 16 + 8
                         ));
                     }
                     PhpType::Array(_) | PhpType::AssocArray { .. } => {
-                        emitter.instruction(&format!(                           // store nested array pointer at data offset
+                        emitter.instruction(&format!(
+                            // store nested array pointer at data offset
                             "str x0, [x9, #{}]",
                             24 + i * 8
                         ));
@@ -1999,8 +2116,8 @@ fn emit_function_call(
                     _ => {}
                 }
                 // -- update array length --
-                emitter.instruction(&format!("mov x10, #{}", i + 1));           // new length after adding this element
-                emitter.instruction("str x10, [x9]");                           // write updated length to array header
+                emitter.instruction(&format!("mov x10, #{}", i + 1)); // new length after adding this element
+                emitter.instruction("str x10, [x9]"); // write updated length to array header
             }
             // Array pointer is already on the stack (pushed earlier)
         }
@@ -2026,21 +2143,29 @@ fn emit_function_call(
     for i in (0..total_args).rev() {
         let (ty, start_reg, is_float) = &assignments[i];
         match ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+            PhpType::Bool
+            | PhpType::Int
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Callable
+            | PhpType::Object(_)
             | PhpType::Pointer(_) => {
-                emitter.instruction(&format!(                                   // pop int/bool/array/callable arg into register
+                emitter.instruction(&format!(
+                    // pop int/bool/array/callable arg into register
                     "ldr x{}, [sp], #16",
                     start_reg
                 ));
             }
             PhpType::Float => {
-                emitter.instruction(&format!(                                   // pop float arg into float register
+                emitter.instruction(&format!(
+                    // pop float arg into float register
                     "ldr d{}, [sp], #16",
                     start_reg
                 ));
             }
             PhpType::Str => {
-                emitter.instruction(&format!(                                   // pop string ptr+len into consecutive regs
+                emitter.instruction(&format!(
+                    // pop string ptr+len into consecutive regs
                     "ldp x{}, x{}, [sp], #16",
                     start_reg,
                     start_reg + 1
@@ -2051,36 +2176,34 @@ fn emit_function_call(
         let _ = is_float;
     }
 
-    let ret_ty = ctx.functions
+    let ret_ty = ctx
+        .functions
         .get(name)
         .map(|sig| sig.return_type.clone())
         .unwrap_or(PhpType::Void);
 
     save_concat_offset_before_nested_call(emitter);
-    emitter.instruction(&format!("bl _fn_{}", name));                           // branch-and-link to compiled PHP function
+    emitter.instruction(&format!("bl _fn_{}", name)); // branch-and-link to compiled PHP function
     restore_concat_offset_after_nested_call(emitter, &ret_ty);
 
     ret_ty
 }
 
 pub(crate) fn save_concat_offset_before_nested_call(emitter: &mut Emitter) {
-    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of caller concat offset
-    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve caller concat offset address
-    emitter.instruction("ldr x10, [x9]");                                       // read caller concat offset before nested call
-    emitter.instruction("str x10, [sp, #-16]!");                                // save caller concat offset across nested call
+    emitter.instruction("adrp x9, _concat_off@PAGE"); // load page of caller concat offset
+    emitter.instruction("add x9, x9, _concat_off@PAGEOFF"); // resolve caller concat offset address
+    emitter.instruction("ldr x10, [x9]"); // read caller concat offset before nested call
+    emitter.instruction("str x10, [sp, #-16]!"); // save caller concat offset across nested call
 }
 
-pub(crate) fn restore_concat_offset_after_nested_call(
-    emitter: &mut Emitter,
-    return_ty: &PhpType,
-) {
+pub(crate) fn restore_concat_offset_after_nested_call(emitter: &mut Emitter, return_ty: &PhpType) {
     if *return_ty == PhpType::Str {
-        emitter.instruction("bl __rt_str_persist");                             // persist returned string before restoring caller concat cursor
+        emitter.instruction("bl __rt_str_persist"); // persist returned string before restoring caller concat cursor
     }
-    emitter.instruction("ldr x10, [sp], #16");                                  // pop saved caller concat offset from stack
-    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of caller concat offset
-    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve caller concat offset address
-    emitter.instruction("str x10, [x9]");                                       // restore caller concat offset after nested call
+    emitter.instruction("ldr x10, [sp], #16"); // pop saved caller concat offset from stack
+    emitter.instruction("adrp x9, _concat_off@PAGE"); // load page of caller concat offset
+    emitter.instruction("add x9, x9, _concat_off@PAGEOFF"); // resolve caller concat offset address
+    emitter.instruction("str x10, [x9]"); // restore caller concat offset after nested call
 }
 
 pub(crate) fn expr_result_may_borrow_heap_value(expr: &Expr) -> bool {
@@ -2150,9 +2273,9 @@ fn coerce_result_to_type(emitter: &mut Emitter, source_ty: &PhpType, target_ty: 
         && matches!(source_ty, PhpType::Int | PhpType::Bool | PhpType::Void)
     {
         if *source_ty == PhpType::Void {
-            emitter.instruction("mov x0, #0");                                  // null widens to numeric zero before float coercion
+            emitter.instruction("mov x0, #0"); // null widens to numeric zero before float coercion
         }
-        emitter.instruction("scvtf d0, x0");                                    // convert integer-like value to float for unified result type
+        emitter.instruction("scvtf d0, x0"); // convert integer-like value to float for unified result type
     }
 }
 
@@ -2175,7 +2298,12 @@ fn infer_closure_return_type(
             StmtKind::Return(None) => {
                 return_types.push(PhpType::Void);
             }
-            StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
                 for stmt in then_body {
                     collect_return_types(stmt, sig, return_types);
                 }
@@ -2241,7 +2369,9 @@ fn emit_closure(
     // -- build capture list with types from enclosing scope --
     let mut capture_types: Vec<(String, PhpType)> = Vec::new();
     for cap_name in captures {
-        let ty = ctx.variables.get(cap_name)
+        let ty = ctx
+            .variables
+            .get(cap_name)
             .map(|v| v.ty.clone())
             .unwrap_or(PhpType::Int);
         capture_types.push((cap_name.clone(), ty));
@@ -2293,8 +2423,8 @@ fn emit_closure(
 
     emitter.comment("closure: load function address");
     // -- load closure function address into x0 --
-    emitter.instruction(&format!("adrp x0, {}@PAGE", closure_label));           // load page base of closure function
-    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", closure_label));     // add page offset to get exact closure address
+    emitter.instruction(&format!("adrp x0, {}@PAGE", closure_label)); // load page base of closure function
+    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", closure_label)); // add page offset to get exact closure address
     PhpType::Callable
 }
 
@@ -2311,7 +2441,8 @@ fn emit_closure_call(
     let sig = ctx.closure_sigs.get(var).cloned();
     let captures = ctx.closure_captures.get(var).cloned().unwrap_or_default();
     // param_count excludes hidden capture params — only count user-visible params
-    let visible_param_count = sig.as_ref()
+    let visible_param_count = sig
+        .as_ref()
         .map(|s| s.params.len() - captures.len())
         .unwrap_or(args.len());
 
@@ -2332,15 +2463,20 @@ fn emit_closure_call(
     for arg in &all_args {
         let ty = emit_expr(arg, emitter, ctx, data);
         match &ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+            PhpType::Bool
+            | PhpType::Int
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Callable
+            | PhpType::Object(_)
             | PhpType::Pointer(_) => {
-                emitter.instruction("str x0, [sp, #-16]!");                     // push int/bool/array/callable arg onto stack
+                emitter.instruction("str x0, [sp, #-16]!"); // push int/bool/array/callable arg onto stack
             }
             PhpType::Float => {
-                emitter.instruction("str d0, [sp, #-16]!");                     // push float arg onto stack
+                emitter.instruction("str d0, [sp, #-16]!"); // push float arg onto stack
             }
             PhpType::Str => {
-                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push string ptr+len arg onto stack
+                emitter.instruction("stp x1, x2, [sp, #-16]!"); // push string ptr+len arg onto stack
             }
             PhpType::Void => {}
         }
@@ -2376,25 +2512,33 @@ fn emit_closure_call(
         let cap_info = match ctx.variables.get(cap_name) {
             Some(v) => v,
             None => {
-                emitter.comment(&format!("WARNING: captured variable ${} not found", cap_name));
+                emitter.comment(&format!(
+                    "WARNING: captured variable ${} not found",
+                    cap_name
+                ));
                 continue;
             }
         };
         let cap_offset = cap_info.stack_offset;
         match cap_ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+            PhpType::Bool
+            | PhpType::Int
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Callable
+            | PhpType::Object(_)
             | PhpType::Pointer(_) => {
-                abi::load_at_offset(emitter, "x0", cap_offset);                 // load captured int/bool/array value
-                emitter.instruction("str x0, [sp, #-16]!");                     // push captured value onto stack
+                abi::load_at_offset(emitter, "x0", cap_offset); // load captured int/bool/array value
+                emitter.instruction("str x0, [sp, #-16]!"); // push captured value onto stack
             }
             PhpType::Float => {
-                abi::load_at_offset(emitter, "d0", cap_offset);                 // load captured float value
-                emitter.instruction("str d0, [sp, #-16]!");                     // push captured float onto stack
+                abi::load_at_offset(emitter, "d0", cap_offset); // load captured float value
+                emitter.instruction("str d0, [sp, #-16]!"); // push captured float onto stack
             }
             PhpType::Str => {
-                abi::load_at_offset(emitter, "x1", cap_offset);                 // load captured string pointer
-                abi::load_at_offset(emitter, "x2", cap_offset - 8);             // load captured string length
-                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push captured string ptr+len onto stack
+                abi::load_at_offset(emitter, "x1", cap_offset); // load captured string pointer
+                abi::load_at_offset(emitter, "x2", cap_offset - 8); // load captured string length
+                emitter.instruction("stp x1, x2, [sp, #-16]!"); // push captured string ptr+len onto stack
             }
             PhpType::Void => {}
         }
@@ -2411,10 +2555,10 @@ fn emit_closure_call(
         }
     };
     let var_offset = var_info.stack_offset;
-    abi::load_at_offset(emitter, "x9", var_offset);                              // load closure function address from stack
+    abi::load_at_offset(emitter, "x9", var_offset); // load closure function address from stack
 
     // -- save closure address while we pop args into registers --
-    emitter.instruction("str x9, [sp, #-16]!");                                 // push closure address temporarily
+    emitter.instruction("str x9, [sp, #-16]!"); // push closure address temporarily
 
     // -- pop arguments from stack into ABI registers in reverse order --
     // Separate int and float register tracking
@@ -2432,12 +2576,17 @@ fn emit_closure_call(
     }
 
     // Pop closure address first (it's on top of args stack)
-    emitter.instruction("ldr x9, [sp], #16");                                   // pop closure function address into x9
+    emitter.instruction("ldr x9, [sp], #16"); // pop closure function address into x9
 
     for i in (0..total_args).rev() {
         let (ty, start_reg, _is_float) = &assignments[i];
         match ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+            PhpType::Bool
+            | PhpType::Int
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Callable
+            | PhpType::Object(_)
             | PhpType::Pointer(_) => {
                 emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop int/bool/array/callable arg into register
             }
@@ -2445,7 +2594,8 @@ fn emit_closure_call(
                 emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); // pop float arg into float register
             }
             PhpType::Str => {
-                emitter.instruction(&format!(                                   // pop string ptr+len into consecutive regs
+                emitter.instruction(&format!(
+                    // pop string ptr+len into consecutive regs
                     "ldp x{}, x{}, [sp], #16",
                     start_reg,
                     start_reg + 1
@@ -2455,13 +2605,15 @@ fn emit_closure_call(
         }
     }
 
-    let ret_ty = ctx.closure_sigs.get(var)
+    let ret_ty = ctx
+        .closure_sigs
+        .get(var)
         .map(|s| s.return_type.clone())
         .unwrap_or(PhpType::Int);
 
-    emitter.instruction("mov x19, x9");                                         // preserve closure address across concat-offset save
+    emitter.instruction("mov x19, x9"); // preserve closure address across concat-offset save
     save_concat_offset_before_nested_call(emitter);
-    emitter.instruction("blr x19");                                             // branch to closure via function pointer in x19
+    emitter.instruction("blr x19"); // branch to closure via function pointer in x19
     restore_concat_offset_after_nested_call(emitter, &ret_ty);
 
     ret_ty
@@ -2482,15 +2634,20 @@ fn emit_expr_call(
         let ty = emit_expr(arg, emitter, ctx, data);
         retain_borrowed_heap_arg(emitter, arg, &ty);
         match &ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+            PhpType::Bool
+            | PhpType::Int
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Callable
+            | PhpType::Object(_)
             | PhpType::Pointer(_) => {
-                emitter.instruction("str x0, [sp, #-16]!");                     // push int/bool/array/callable arg onto stack
+                emitter.instruction("str x0, [sp, #-16]!"); // push int/bool/array/callable arg onto stack
             }
             PhpType::Float => {
-                emitter.instruction("str d0, [sp, #-16]!");                     // push float arg onto stack
+                emitter.instruction("str d0, [sp, #-16]!"); // push float arg onto stack
             }
             PhpType::Str => {
-                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push string ptr+len arg onto stack
+                emitter.instruction("stp x1, x2, [sp, #-16]!"); // push string ptr+len arg onto stack
             }
             PhpType::Void => {}
         }
@@ -2500,10 +2657,10 @@ fn emit_expr_call(
     // -- evaluate the callee expression to get function address --
     let _callee_ty = emit_expr(callee, emitter, ctx, data);
     // Callee is a Callable — function address is in x0
-    emitter.instruction("mov x9, x0");                                          // save closure address to x9
+    emitter.instruction("mov x9, x0"); // save closure address to x9
 
     // -- save closure address while we pop args into registers --
-    emitter.instruction("str x9, [sp, #-16]!");                                 // push closure address temporarily
+    emitter.instruction("str x9, [sp, #-16]!"); // push closure address temporarily
 
     // -- pop arguments from stack into ABI registers in reverse order --
     let mut assignments: Vec<(PhpType, usize, bool)> = Vec::new();
@@ -2520,12 +2677,17 @@ fn emit_expr_call(
     }
 
     // Pop closure address first (it's on top of args stack)
-    emitter.instruction("ldr x9, [sp], #16");                                   // pop closure function address into x9
+    emitter.instruction("ldr x9, [sp], #16"); // pop closure function address into x9
 
     for i in (0..args.len()).rev() {
         let (ty, start_reg, _is_float) = &assignments[i];
         match ty {
-            PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+            PhpType::Bool
+            | PhpType::Int
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Callable
+            | PhpType::Object(_)
             | PhpType::Pointer(_) => {
                 emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop int/bool/array/callable arg into register
             }
@@ -2533,7 +2695,8 @@ fn emit_expr_call(
                 emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); // pop float arg into float register
             }
             PhpType::Str => {
-                emitter.instruction(&format!(                                   // pop string ptr+len into consecutive regs
+                emitter.instruction(&format!(
+                    // pop string ptr+len into consecutive regs
                     "ldp x{}, x{}, [sp], #16",
                     start_reg,
                     start_reg + 1
@@ -2562,15 +2725,13 @@ fn emit_expr_call(
                 PhpType::Int
             }
         }
-        ExprKind::Closure { body, .. } => {
-            crate::types::checker::infer_return_type_syntactic(body)
-        }
+        ExprKind::Closure { body, .. } => crate::types::checker::infer_return_type_syntactic(body),
         _ => PhpType::Int,
     };
 
-    emitter.instruction("mov x19, x9");                                         // preserve closure address across concat-offset save
+    emitter.instruction("mov x19, x9"); // preserve closure address across concat-offset save
     save_concat_offset_before_nested_call(emitter);
-    emitter.instruction("blr x19");                                             // branch to closure via function pointer in x19
+    emitter.instruction("blr x19"); // branch to closure via function pointer in x19
     restore_concat_offset_after_nested_call(emitter, &ret_ty);
 
     ret_ty
@@ -2592,20 +2753,20 @@ fn emit_cast(
                 PhpType::Int => {}
                 PhpType::Float => {
                     // -- truncate float to integer --
-                    emitter.instruction("fcvtzs x0, d0");                       // convert double to signed 64-bit int (toward zero)
+                    emitter.instruction("fcvtzs x0, d0"); // convert double to signed 64-bit int (toward zero)
                 }
                 PhpType::Bool => {} // already 0/1 in x0
                 PhpType::Void => {
                     // -- (int)null === 0 in PHP --
-                    emitter.instruction("mov x0, #0");                          // null casts to integer zero
+                    emitter.instruction("mov x0, #0"); // null casts to integer zero
                 }
                 PhpType::Str => {
                     // -- parse string as integer --
-                    emitter.instruction("bl __rt_atoi");                        // runtime: ASCII string to integer conversion
+                    emitter.instruction("bl __rt_atoi"); // runtime: ASCII string to integer conversion
                 }
                 PhpType::Array(_) | PhpType::AssocArray { .. } => {
                     // -- (int)array returns element count --
-                    emitter.instruction("ldr x0, [x0]");                        // load array length from header (first field)
+                    emitter.instruction("ldr x0, [x0]"); // load array length from header (first field)
                 }
                 PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {} // callable/object/pointer address already in x0
             }
@@ -2616,23 +2777,26 @@ fn emit_cast(
                 PhpType::Float => {}
                 PhpType::Int | PhpType::Bool => {
                     // -- convert integer/bool to double-precision float --
-                    emitter.instruction("scvtf d0, x0");                        // signed int to double conversion
+                    emitter.instruction("scvtf d0, x0"); // signed int to double conversion
                 }
                 PhpType::Void => {
                     // -- (float)null === 0.0 in PHP --
-                    emitter.instruction("mov x0, #0");                          // load zero integer
-                    emitter.instruction("scvtf d0, x0");                        // convert to 0.0 double
+                    emitter.instruction("mov x0, #0"); // load zero integer
+                    emitter.instruction("scvtf d0, x0"); // convert to 0.0 double
                 }
                 PhpType::Str => {
                     // -- parse string as float via libc atof --
-                    emitter.instruction("bl __rt_cstr");                        // null-terminate string (x1=ptr, x2=len → x0=cstr)
-                    emitter.instruction("bl _atof");                            // parse C string as double → d0=result
+                    emitter.instruction("bl __rt_cstr"); // null-terminate string (x1=ptr, x2=len → x0=cstr)
+                    emitter.instruction("bl _atof"); // parse C string as double → d0=result
                 }
-                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+                PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Callable
+                | PhpType::Object(_)
                 | PhpType::Pointer(_) => {
                     // -- unsupported source type: default to 0.0 --
-                    emitter.instruction("mov x0, #0");                          // load zero integer
-                    emitter.instruction("scvtf d0, x0");                        // convert to 0.0 double
+                    emitter.instruction("mov x0, #0"); // load zero integer
+                    emitter.instruction("scvtf d0, x0"); // convert to 0.0 double
                 }
             }
             PhpType::Float
@@ -2647,31 +2811,31 @@ fn emit_cast(
                 PhpType::Int | PhpType::Void => {
                     coerce_null_to_zero(emitter, &src_ty);
                     // -- convert int/null to boolean --
-                    emitter.instruction("cmp x0, #0");                          // test if value is zero
-                    emitter.instruction("cset x0, ne");                         // x0=1 if nonzero (truthy), 0 if zero (falsy)
+                    emitter.instruction("cmp x0, #0"); // test if value is zero
+                    emitter.instruction("cset x0, ne"); // x0=1 if nonzero (truthy), 0 if zero (falsy)
                 }
                 PhpType::Float => {
                     // -- convert float to boolean --
-                    emitter.instruction("fcmp d0, #0.0");                       // compare float against zero
-                    emitter.instruction("cset x0, ne");                         // x0=1 if nonzero, 0 if zero
+                    emitter.instruction("fcmp d0, #0.0"); // compare float against zero
+                    emitter.instruction("cset x0, ne"); // x0=1 if nonzero, 0 if zero
                 }
                 PhpType::Str => {
                     // empty string or "0" → false, everything else → true
                     // -- convert string to boolean --
-                    emitter.instruction("cmp x2, #0");                          // check if string length is zero
-                    emitter.instruction("cset x0, ne");                         // x0=1 if non-empty, 0 if empty
+                    emitter.instruction("cmp x2, #0"); // check if string length is zero
+                    emitter.instruction("cset x0, ne"); // x0=1 if non-empty, 0 if empty
                 }
                 PhpType::Array(_) | PhpType::AssocArray { .. } => {
                     // empty array → false
                     // -- convert array to boolean based on element count --
-                    emitter.instruction("ldr x0, [x0]");                        // load array length from header
-                    emitter.instruction("cmp x0, #0");                          // check if array is empty
-                    emitter.instruction("cset x0, ne");                         // x0=1 if non-empty, 0 if empty
+                    emitter.instruction("ldr x0, [x0]"); // load array length from header
+                    emitter.instruction("cmp x0, #0"); // check if array is empty
+                    emitter.instruction("cset x0, ne"); // x0=1 if non-empty, 0 if empty
                 }
                 PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
                     // -- callable/object/pointer is always truthy --
-                    emitter.instruction("cmp x0, #0");                          // test if callable/object address is zero
-                    emitter.instruction("cset x0, ne");                         // x0=1 if nonzero (truthy)
+                    emitter.instruction("cmp x0, #0"); // test if callable/object address is zero
+                    emitter.instruction("cset x0, ne"); // x0=1 if nonzero (truthy)
                 }
             }
             PhpType::Bool
@@ -2679,22 +2843,24 @@ fn emit_cast(
         CastType::Array => {
             // Wrap scalar in single-element array
             match &src_ty {
-                PhpType::Array(_) | PhpType::AssocArray { .. } => { return src_ty; }
+                PhpType::Array(_) | PhpType::AssocArray { .. } => {
+                    return src_ty;
+                }
                 PhpType::Int | PhpType::Bool | PhpType::Callable => {
                     // -- wrap scalar in a new single-element array --
-                    emitter.instruction("str x0, [sp, #-16]!");                 // save scalar value during allocation
-                    emitter.instruction("mov x0, #1");                          // capacity: 1 element (exact fit)
-                    emitter.instruction("mov x1, #8");                          // element size: 8 bytes
-                    emitter.instruction("bl __rt_array_new");                   // allocate new array struct
-                    emitter.instruction("ldr x1, [sp], #16");                   // pop saved scalar value
-                    emitter.instruction("bl __rt_array_push_int");              // push scalar as first element
+                    emitter.instruction("str x0, [sp, #-16]!"); // save scalar value during allocation
+                    emitter.instruction("mov x0, #1"); // capacity: 1 element (exact fit)
+                    emitter.instruction("mov x1, #8"); // element size: 8 bytes
+                    emitter.instruction("bl __rt_array_new"); // allocate new array struct
+                    emitter.instruction("ldr x1, [sp], #16"); // pop saved scalar value
+                    emitter.instruction("bl __rt_array_push_int"); // push scalar as first element
                 }
                 _ => {
                     // For other types, create empty array
                     // -- create empty array for unsupported cast source --
-                    emitter.instruction("mov x0, #4");                          // capacity: 4 (grows dynamically)
-                    emitter.instruction("mov x1, #8");                          // element size: 8 bytes
-                    emitter.instruction("bl __rt_array_new");                   // allocate empty array struct
+                    emitter.instruction("mov x0, #4"); // capacity: 4 (grows dynamically)
+                    emitter.instruction("mov x1, #8"); // element size: 8 bytes
+                    emitter.instruction("bl __rt_array_new"); // allocate empty array struct
                 }
             }
             PhpType::Array(Box::new(PhpType::Int))
@@ -2730,13 +2896,13 @@ fn emit_strict_compare(
         // -- save left operand for strict comparison --
         match &lt {
             PhpType::Float => {
-                emitter.instruction("str d0, [sp, #-16]!");                     // push left float for later comparison
+                emitter.instruction("str d0, [sp, #-16]!"); // push left float for later comparison
             }
             PhpType::Str => {
-                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push left string ptr+len for comparison
+                emitter.instruction("stp x1, x2, [sp, #-16]!"); // push left string ptr+len for comparison
             }
             _ => {
-                emitter.instruction("str x0, [sp, #-16]!");                     // push left int/bool/null for comparison
+                emitter.instruction("str x0, [sp, #-16]!"); // push left int/bool/null for comparison
             }
         }
 
@@ -2745,8 +2911,9 @@ fn emit_strict_compare(
         if lt != rt && !matches!((&lt, &rt), (PhpType::Pointer(_), PhpType::Pointer(_))) {
             // Types turned out different at emit time (unknown peek case)
             // -- type mismatch: strict compare result is predetermined --
-            emitter.instruction("add sp, sp, #16");                             // discard saved left operand from stack
-            emitter.instruction(&format!(                                       // === yields false, !== yields true
+            emitter.instruction("add sp, sp, #16"); // discard saved left operand from stack
+            emitter.instruction(&format!(
+                // === yields false, !== yields true
                 "mov x0, #{}",
                 if is_eq { 0 } else { 1 }
             ));
@@ -2756,42 +2923,46 @@ fn emit_strict_compare(
         match &lt {
             PhpType::Int | PhpType::Bool | PhpType::Void => {
                 // -- strict compare integers/bools/nulls by value --
-                emitter.instruction("ldr x1, [sp], #16");                       // pop saved left operand from stack
-                emitter.instruction("cmp x1, x0");                              // compare left vs right values
+                emitter.instruction("ldr x1, [sp], #16"); // pop saved left operand from stack
+                emitter.instruction("cmp x1, x0"); // compare left vs right values
                 let cond = if is_eq { "eq" } else { "ne" };
-                emitter.instruction(&format!("cset x0, {}", cond));             // set boolean result from comparison
+                emitter.instruction(&format!("cset x0, {}", cond)); // set boolean result from comparison
             }
             PhpType::Float => {
                 // -- strict compare floats --
-                emitter.instruction("ldr d1, [sp], #16");                       // pop saved left float operand
-                emitter.instruction("fcmp d1, d0");                             // compare two doubles, setting NZCV flags
+                emitter.instruction("ldr d1, [sp], #16"); // pop saved left float operand
+                emitter.instruction("fcmp d1, d0"); // compare two doubles, setting NZCV flags
                 let cond = if is_eq { "eq" } else { "ne" };
-                emitter.instruction(&format!("cset x0, {}", cond));             // set boolean result from float comparison
+                emitter.instruction(&format!("cset x0, {}", cond)); // set boolean result from float comparison
             }
             PhpType::Str => {
                 // -- strict compare strings by content --
-                emitter.instruction("mov x3, x1");                              // move right string pointer to 3rd arg
-                emitter.instruction("mov x4, x2");                              // move right string length to 4th arg
-                emitter.instruction("ldp x1, x2, [sp], #16");                   // pop left string ptr/len into 1st/2nd args
-                emitter.instruction("bl __rt_str_eq");                          // runtime: byte-by-byte string comparison
+                emitter.instruction("mov x3, x1"); // move right string pointer to 3rd arg
+                emitter.instruction("mov x4, x2"); // move right string length to 4th arg
+                emitter.instruction("ldp x1, x2, [sp], #16"); // pop left string ptr/len into 1st/2nd args
+                emitter.instruction("bl __rt_str_eq"); // runtime: byte-by-byte string comparison
                 if !is_eq {
-                    emitter.instruction("eor x0, x0, #1");                      // invert result for !== (XOR with 1)
+                    emitter.instruction("eor x0, x0, #1"); // invert result for !== (XOR with 1)
                 }
             }
-            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+            PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Callable
+            | PhpType::Object(_)
             | PhpType::Pointer(_) => {
                 // -- strict compare arrays/callables/objects by reference (pointer equality) --
-                emitter.instruction("ldr x1, [sp], #16");                       // pop saved left array/callable/object pointer
-                emitter.instruction("cmp x1, x0");                              // compare pointers (reference equality)
+                emitter.instruction("ldr x1, [sp], #16"); // pop saved left array/callable/object pointer
+                emitter.instruction("cmp x1, x0"); // compare pointers (reference equality)
                 let cond = if is_eq { "eq" } else { "ne" };
-                emitter.instruction(&format!("cset x0, {}", cond));             // set boolean result from pointer comparison
+                emitter.instruction(&format!("cset x0, {}", cond)); // set boolean result from pointer comparison
             }
         }
     } else {
         // Types known to differ: evaluate right for side effects, emit constant
         emit_expr(right, emitter, ctx, data);
         // -- types differ at compile time: strict result is predetermined --
-        emitter.instruction(&format!(                                           // === always false, !== always true
+        emitter.instruction(&format!(
+            // === always false, !== always true
             "mov x0, #{}",
             if is_eq { 0 } else { 1 }
         ));
@@ -2836,21 +3007,21 @@ fn emit_null_coalesce(
     let use_value_label = ctx.next_label("nc_keep");
     let end_label = ctx.next_label("nc_end");
     // -- build null sentinel value for comparison --
-    emitter.instruction("movz x9, #0xFFFE");                                    // load lowest 16 bits of null sentinel
-    emitter.instruction("movk x9, #0xFFFF, lsl #16");                           // insert bits 16-31 of null sentinel
-    emitter.instruction("movk x9, #0xFFFF, lsl #32");                           // insert bits 32-47 of null sentinel
-    emitter.instruction("movk x9, #0x7FFF, lsl #48");                           // insert bits 48-63 of null sentinel
+    emitter.instruction("movz x9, #0xFFFE"); // load lowest 16 bits of null sentinel
+    emitter.instruction("movk x9, #0xFFFF, lsl #16"); // insert bits 16-31 of null sentinel
+    emitter.instruction("movk x9, #0xFFFF, lsl #32"); // insert bits 32-47 of null sentinel
+    emitter.instruction("movk x9, #0x7FFF, lsl #48"); // insert bits 48-63 of null sentinel
     if val_ty == PhpType::Float {
-        emitter.instruction("fmov x0, d0");                                     // copy float bits to x0 for null sentinel check
+        emitter.instruction("fmov x0, d0"); // copy float bits to x0 for null sentinel check
     }
     let cmp_reg = if val_ty == PhpType::Str { "x1" } else { "x0" };
-    emitter.instruction(&format!("cmp {}, x9", cmp_reg));                       // compare value against null sentinel
-    emitter.instruction(&format!("b.ne {}", use_value_label));                  // if not null, skip default branch and keep value
+    emitter.instruction(&format!("cmp {}, x9", cmp_reg)); // compare value against null sentinel
+    emitter.instruction(&format!("b.ne {}", use_value_label)); // if not null, skip default branch and keep value
 
     // -- value is null, evaluate default expression --
     let default_runtime_ty = emit_expr(default, emitter, ctx, data);
     coerce_result_to_type(emitter, &default_runtime_ty, &result_ty);
-    emitter.instruction(&format!("b {}", end_label));                           // skip non-null branch after evaluating default
+    emitter.instruction(&format!("b {}", end_label)); // skip non-null branch after evaluating default
     emitter.label(&use_value_label);
     coerce_result_to_type(emitter, &val_ty, &result_ty);
     emitter.label(&end_label);
@@ -2861,42 +3032,46 @@ fn emit_null_coalesce(
 /// Quick helper: store x0 to _gvar_NAME (for pre-increment etc. where value is in x0)
 fn emit_global_store_inline(emitter: &mut Emitter, name: &str) {
     let label = format!("_gvar_{}", name);
-    emitter.instruction(&format!("adrp x9, {}@PAGE", label));                   // load page of global var storage
-    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label));             // add page offset
-    emitter.instruction("str x0, [x9]");                                        // store value to global storage
+    emitter.instruction(&format!("adrp x9, {}@PAGE", label)); // load page of global var storage
+    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label)); // add page offset
+    emitter.instruction("str x0, [x9]"); // store value to global storage
 }
 
 fn load_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
     if (0..=65535).contains(&value) {
         // -- small non-negative immediate fits in single MOV --
-        emitter.instruction(&format!("mov {}, #{}", reg, value));               // load small immediate value directly
+        emitter.instruction(&format!("mov {}, #{}", reg, value)); // load small immediate value directly
     } else if (-65536..0).contains(&value) {
         // -- small negative immediate fits in single MOV --
-        emitter.instruction(&format!("mov {}, #{}", reg, value));               // load small negative immediate directly
+        emitter.instruction(&format!("mov {}, #{}", reg, value)); // load small negative immediate directly
     } else {
         // -- large immediate: build 64-bit value in 16-bit chunks --
         let uval = value as u64;
-        emitter.instruction(&format!(                                           // load bits 0-15 and zero upper bits
+        emitter.instruction(&format!(
+            // load bits 0-15 and zero upper bits
             "movz {}, #0x{:x}",
             reg,
             uval & 0xFFFF
         ));
         if (uval >> 16) & 0xFFFF != 0 {
-            emitter.instruction(&format!(                                       // insert bits 16-31 keeping other bits
+            emitter.instruction(&format!(
+                // insert bits 16-31 keeping other bits
                 "movk {}, #0x{:x}, lsl #16",
                 reg,
                 (uval >> 16) & 0xFFFF
             ));
         }
         if (uval >> 32) & 0xFFFF != 0 {
-            emitter.instruction(&format!(                                       // insert bits 32-47 keeping other bits
+            emitter.instruction(&format!(
+                // insert bits 32-47 keeping other bits
                 "movk {}, #0x{:x}, lsl #32",
                 reg,
                 (uval >> 32) & 0xFFFF
             ));
         }
         if (uval >> 48) & 0xFFFF != 0 {
-            emitter.instruction(&format!(                                       // insert bits 48-63 keeping other bits
+            emitter.instruction(&format!(
+                // insert bits 48-63 keeping other bits
                 "movk {}, #0x{:x}, lsl #48",
                 reg,
                 (uval >> 48) & 0xFFFF

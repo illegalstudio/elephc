@@ -96,9 +96,11 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_hash_new(emitter);
     arrays::emit_hash_grow(emitter);
     arrays::emit_hash_set(emitter);
+    arrays::emit_hash_insert_owned(emitter);
     arrays::emit_hash_get(emitter);
     arrays::emit_hash_iter(emitter);
     arrays::emit_hash_count(emitter);
+    arrays::emit_hash_free_deep(emitter);
     arrays::emit_array_key_exists(emitter);
     arrays::emit_array_search(emitter);
     arrays::emit_array_reverse(emitter);
@@ -192,7 +194,10 @@ pub fn emit_runtime_data(
     // Base64 decode lookup table (256 bytes, maps ASCII value to 6-bit value)
     out.push_str("_b64_decode_tbl:\n");
     let mut decode_tbl = vec![0u8; 256];
-    for (i, &c) in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".iter().enumerate() {
+    for (i, &c) in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+        .iter()
+        .enumerate()
+    {
         decode_tbl[c as usize] = i as u8;
     }
     out.push_str("    .byte ");
@@ -226,8 +231,14 @@ pub fn emit_runtime_data(
     sorted_statics.sort();
     for (func_name, var_name) in sorted_statics {
         // 16 bytes for the value, 8 bytes for the init flag
-        out.push_str(&format!(".comm _static_{}_{}, 16, 3\n", func_name, var_name));
-        out.push_str(&format!(".comm _static_{}_{}_init, 8, 3\n", func_name, var_name));
+        out.push_str(&format!(
+            ".comm _static_{}_{}, 16, 3\n",
+            func_name, var_name
+        ));
+        out.push_str(&format!(
+            ".comm _static_{}_{}_init, 8, 3\n",
+            func_name, var_name
+        ));
     }
     out
 }
