@@ -5789,6 +5789,23 @@ echo sum(1, 2, 3, 4, 5);
 }
 
 #[test]
+fn test_variadic_multiple_calls_same_function() {
+    let out = compile_and_run(r#"<?php
+function sum(...$nums) {
+    $total = 0;
+    foreach ($nums as $n) {
+        $total += $n;
+    }
+    return $total;
+}
+echo sum(1, 2, 3);
+echo ":";
+echo sum(10, 20, 30, 40, 50);
+"#);
+    assert_eq!(out, "6:150");
+}
+
+#[test]
 fn test_variadic_empty() {
     let out = compile_and_run(r#"<?php
 function sum(...$nums) {

@@ -89,21 +89,43 @@ impl Checker {
                     ));
                 }
             }
+            let regular_param_count = if sig.variadic.is_some() {
+                sig.params.len().saturating_sub(1)
+            } else {
+                sig.params.len()
+            };
+            let variadic_elem_ty = sig.variadic.as_ref().and_then(|_| {
+                sig.params.last().and_then(|(_, ty)| match ty {
+                    PhpType::Array(elem) => Some((**elem).clone()),
+                    _ => None,
+                })
+            });
             let mut param_idx = 0usize;
             for arg in args {
                 let actual_ty = self.infer_type(arg, caller_env)?;
                 if matches!(arg.kind, ExprKind::Spread(_)) {
                     continue;
                 }
-                if let Some((param_name, expected_ty)) = sig.params.get(param_idx) {
+                if param_idx < regular_param_count {
+                    if let Some((param_name, expected_ty)) = sig.params.get(param_idx) {
+                        self.require_compatible_arg_type(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("Function '{}' parameter ${}", name, param_name),
+                        )?;
+                    }
+                } else if let (Some(vname), Some(expected_ty)) =
+                    (sig.variadic.as_ref(), variadic_elem_ty.as_ref())
+                {
                     self.require_compatible_arg_type(
                         expected_ty,
                         &actual_ty,
                         arg.span,
-                        &format!("Function '{}' parameter ${}", name, param_name),
+                        &format!("Function '{}' variadic parameter ${}", name, vname),
                     )?;
-                    param_idx += 1;
                 }
+                param_idx += 1;
             }
             return Ok(sig.return_type);
         }
