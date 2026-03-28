@@ -90,11 +90,55 @@ pub struct ClassInfo {
     pub constructor_param_to_prop: Vec<Option<String>>,
 }
 
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // Fields read by codegen via pattern matching
+pub struct ExternFunctionSig {
+    pub name: String,
+    pub params: Vec<(String, PhpType)>,
+    pub return_type: PhpType,
+    pub library: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // Fields used in extern class codegen
+pub struct ExternClassInfo {
+    pub name: String,
+    pub fields: Vec<ExternFieldInfo>,
+    pub total_size: usize,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // Fields used in extern class codegen
+pub struct ExternFieldInfo {
+    pub name: String,
+    pub php_type: PhpType,
+    pub offset: usize,
+}
+
+/// Convert a parser CType to a PhpType.
+pub fn ctype_to_php_type(ct: &crate::parser::ast::CType) -> PhpType {
+    use crate::parser::ast::CType;
+    match ct {
+        CType::Int => PhpType::Int,
+        CType::Float => PhpType::Float,
+        CType::Str => PhpType::Str,
+        CType::Bool => PhpType::Bool,
+        CType::Void => PhpType::Void,
+        CType::Ptr => PhpType::Pointer(None),
+        CType::TypedPtr(name) => PhpType::Pointer(Some(name.clone())),
+        CType::Callable => PhpType::Callable,
+    }
+}
+
 #[derive(Debug)]
 pub struct CheckResult {
     pub global_env: TypeEnv,
     pub functions: HashMap<String, FunctionSig>,
     pub classes: HashMap<String, ClassInfo>,
+    pub extern_functions: HashMap<String, ExternFunctionSig>,
+    pub extern_classes: HashMap<String, ExternClassInfo>,
+    pub extern_globals: HashMap<String, PhpType>,
+    pub required_libraries: Vec<String>,
 }
 
 pub fn check(program: &Program) -> Result<CheckResult, CompileError> {

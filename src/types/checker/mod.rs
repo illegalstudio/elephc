@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::errors::CompileError;
 use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Program, Stmt, StmtKind, Visibility};
-use crate::types::{CheckResult, ClassInfo, FunctionSig, PhpType, TypeEnv};
+use crate::types::{CheckResult, ClassInfo, ExternClassInfo, ExternFieldInfo, ExternFunctionSig, FunctionSig, PhpType, TypeEnv, ctype_to_php_type};
 
 /// Infer a function's return type by scanning its body for Return statements.
 /// This is a syntactic/heuristic check — no full type inference.
@@ -163,6 +163,14 @@ pub(crate) struct Checker {
     pub current_method: Option<String>,
     /// Whether the current class method is static.
     pub current_method_is_static: bool,
+    /// Extern function declarations.
+    pub extern_functions: HashMap<String, ExternFunctionSig>,
+    /// Extern class (C struct) declarations.
+    pub extern_classes: HashMap<String, ExternClassInfo>,
+    /// Extern global variable declarations.
+    pub extern_globals: HashMap<String, PhpType>,
+    /// Libraries required by extern blocks.
+    pub required_libraries: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -184,6 +192,10 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         current_class: None,
         current_method: None,
         current_method_is_static: false,
+        extern_functions: HashMap::new(),
+        extern_classes: HashMap::new(),
+        extern_globals: HashMap::new(),
+        required_libraries: Vec::new(),
     };
 
     for stmt in program {
@@ -291,9 +303,69 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         }
     }
 
+    // Pre-scan: collect extern declarations
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::ExternFunctionDecl { name, params, return_type, library } => {
+                let php_params: Vec<(String, PhpType)> = params.iter()
+                    .map(|p| (p.name.clone(), ctype_to_php_type(&p.c_type)))
+                    .collect();
+                let php_ret = ctype_to_php_type(return_type);
+                // Register as a regular function sig so call-site type checking works
+                let sig = FunctionSig {
+                    params: php_params.clone(),
+                    defaults: params.iter().map(|_| None).collect(),
+                    return_type: php_ret.clone(),
+                    ref_params: params.iter().map(|_| false).collect(),
+                    variadic: None,
+                };
+                checker.functions.insert(name.clone(), sig);
+                checker.extern_functions.insert(name.clone(), ExternFunctionSig {
+                    name: name.clone(),
+                    params: php_params,
+                    return_type: php_ret,
+                    library: library.clone(),
+                });
+                if let Some(lib) = library {
+                    if !checker.required_libraries.contains(lib) {
+                        checker.required_libraries.push(lib.clone());
+                    }
+                }
+            }
+            StmtKind::ExternClassDecl { name, fields } => {
+                let mut extern_fields = Vec::new();
+                let mut offset = 0usize;
+                for f in fields {
+                    let php_type = ctype_to_php_type(&f.c_type);
+                    let size = php_type.stack_size();
+                    extern_fields.push(ExternFieldInfo {
+                        name: f.name.clone(),
+                        php_type,
+                        offset,
+                    });
+                    offset += size;
+                }
+                checker.extern_classes.insert(name.clone(), ExternClassInfo {
+                    name: name.clone(),
+                    total_size: offset,
+                    fields: extern_fields,
+                });
+            }
+            StmtKind::ExternGlobalDecl { name, c_type } => {
+                let php_type = ctype_to_php_type(c_type);
+                checker.extern_globals.insert(name.clone(), php_type);
+            }
+            _ => {}
+        }
+    }
+
     let mut global_env: TypeEnv = HashMap::new();
     global_env.insert("argc".to_string(), PhpType::Int);
     global_env.insert("argv".to_string(), PhpType::Array(Box::new(PhpType::Str)));
+    // Add extern globals to the global environment
+    for (name, ty) in &checker.extern_globals {
+        global_env.insert(name.clone(), ty.clone());
+    }
     for stmt in program {
         checker.check_stmt(stmt, &mut global_env)?;
     }
@@ -412,6 +484,10 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         global_env,
         functions: checker.functions,
         classes: checker.classes,
+        extern_functions: checker.extern_functions,
+        extern_classes: checker.extern_classes,
+        extern_globals: checker.extern_globals,
+        required_libraries: checker.required_libraries,
     })
 }
 
@@ -734,6 +810,11 @@ impl Checker {
             StmtKind::ClassDecl { .. } => {
                 // Method bodies are type-checked in a post-pass (after all new ClassName()
                 // calls have updated property types from constructor arg types)
+                Ok(())
+            }
+            StmtKind::ExternFunctionDecl { .. } | StmtKind::ExternClassDecl { .. }
+            | StmtKind::ExternGlobalDecl { .. } => {
+                // Extern declarations are processed in the pre-scan pass
                 Ok(())
             }
             StmtKind::PropertyAssign { object, property, value } => {
