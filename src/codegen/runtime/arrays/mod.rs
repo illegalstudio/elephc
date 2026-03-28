@@ -1,5 +1,6 @@
 mod array_chunk;
 mod array_column;
+mod array_column_ref;
 mod array_column_str;
 mod array_combine;
 mod array_diff;
@@ -55,6 +56,7 @@ mod usort;
 
 pub use array_chunk::emit_array_chunk;
 pub use array_column::emit_array_column;
+pub use array_column_ref::emit_array_column_ref;
 pub use array_column_str::emit_array_column_str;
 pub use array_combine::emit_array_combine;
 pub use array_diff::emit_array_diff;

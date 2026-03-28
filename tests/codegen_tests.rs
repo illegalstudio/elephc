@@ -4630,6 +4630,21 @@ echo count($c);
 }
 
 #[test]
+fn test_gc_array_diff_key_borrowed_array_survives_source_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$src = ["keep" => [1, 2], "drop" => [3, 4]];
+$mask = ["drop" => 1];
+$filtered = array_diff_key($src, $mask);
+unset($src);
+$saved = $filtered["keep"];
+echo $saved[1];
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+#[test]
 fn test_array_intersect_key() {
     let out = compile_and_run(
         r#"<?php
@@ -4640,6 +4655,21 @@ echo count($c);
 "#,
     );
     assert_eq!(out, "1");
+}
+
+#[test]
+fn test_gc_array_intersect_key_borrowed_array_survives_source_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$src = ["keep" => [5, 6], "drop" => [7, 8]];
+$mask = ["keep" => 1];
+$filtered = array_intersect_key($src, $mask);
+unset($src);
+$saved = $filtered["keep"];
+echo $saved[0] . "|" . $saved[1];
+"#,
+    );
+    assert_eq!(out, "5|6");
 }
 
 #[test]
@@ -4807,6 +4837,20 @@ echo $vals[0] + $vals[1] + $vals[2];
     assert_eq!(out, "60");
 }
 
+#[test]
+fn test_gc_assoc_array_values_borrowed_array_survives_source_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$map = ["nums" => [7, 8, 9]];
+$vals = array_values($map);
+unset($map);
+$saved = $vals[0];
+echo $saved[1];
+"#,
+    );
+    assert_eq!(out, "8");
+}
+
 // --- Phase 14: Multi-dimensional arrays ---
 
 #[test]
@@ -4894,6 +4938,24 @@ echo count($names);
 "#,
     );
     assert_eq!(out, "3");
+}
+
+#[test]
+fn test_gc_array_column_borrowed_array_survives_source_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$rows = [
+    ["nums" => [4, 5]],
+    ["nums" => [6, 7]],
+];
+$cols = array_column($rows, "nums");
+unset($rows);
+$first = $cols[0];
+$second = $cols[1];
+echo $first[1] . "|" . $second[0];
+"#,
+    );
+    assert_eq!(out, "5|6");
 }
 
 // --- Callback-based array functions ---

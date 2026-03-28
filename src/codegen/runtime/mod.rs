@@ -123,6 +123,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_array_fill_keys(emitter);
     arrays::emit_array_chunk(emitter);
     arrays::emit_array_column(emitter);
+    arrays::emit_array_column_ref(emitter);
     arrays::emit_array_column_str(emitter);
     arrays::emit_array_splice(emitter);
     arrays::emit_array_diff_key(emitter);
