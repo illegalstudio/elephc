@@ -478,6 +478,11 @@ expect_builtin_arity_error!(
     "mt_rand() takes 0 or 2 arguments"
 );
 expect_builtin_arity_error!(
+    test_error_rand_wrong_args,
+    "<?php rand(1);",
+    "rand() takes 0 or 2 arguments"
+);
+expect_builtin_arity_error!(
     test_error_asin_wrong_args,
     "<?php asin();",
     "asin() takes exactly 1 argument"
@@ -643,6 +648,16 @@ fn test_error_str_replace_wrong_args() {
 #[test]
 fn test_error_sprintf_no_args() {
     expect_error("<?php sprintf();", "sprintf() requires at least 1 argument");
+}
+
+#[test]
+fn test_error_printf_no_args() {
+    expect_error("<?php printf();", "printf() requires at least 1 argument");
+}
+
+#[test]
+fn test_error_ord_wrong_args() {
+    expect_error("<?php ord();", "ord() takes exactly 1 argument");
 }
 
 #[test]
@@ -1126,6 +1141,11 @@ fn test_error_array_fill_keys_wrong_args() {
         "<?php array_fill_keys();",
         "array_fill_keys() takes exactly 2 arguments",
     );
+}
+
+#[test]
+fn test_error_count_wrong_args() {
+    expect_error("<?php count();", "count() takes exactly 1 argument");
 }
 
 #[test]

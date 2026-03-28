@@ -238,6 +238,21 @@ fn test_keyword_for() {
 }
 
 #[test]
+fn test_keyword_do() {
+    assert_eq!(tokens("<?php do")[1], Token::Do);
+}
+
+#[test]
+fn test_keyword_foreach() {
+    assert_eq!(tokens("<?php foreach")[1], Token::Foreach);
+}
+
+#[test]
+fn test_keyword_as() {
+    assert_eq!(tokens("<?php as")[1], Token::As);
+}
+
+#[test]
 fn test_keyword_break() {
     assert_eq!(tokens("<?php break")[1], Token::Break);
 }
@@ -437,6 +452,28 @@ fn test_m_pi_token() {
     assert_eq!(t[1], Token::MPi);
 }
 
+#[test]
+fn test_additional_numeric_constant_tokens() {
+    let t = tokens(
+        "<?php PHP_INT_MIN PHP_FLOAT_MAX PHP_FLOAT_MIN PHP_FLOAT_EPSILON M_E M_SQRT2 M_PI_2 M_PI_4 M_LOG2E M_LOG10E",
+    );
+    assert_eq!(
+        t[1..11],
+        [
+            Token::PhpIntMin,
+            Token::PhpFloatMax,
+            Token::PhpFloatMin,
+            Token::PhpFloatEpsilon,
+            Token::ME,
+            Token::MSqrt2,
+            Token::MPi2,
+            Token::MPi4,
+            Token::MLog2e,
+            Token::MLog10e,
+        ]
+    );
+}
+
 // --- INF / NAN ---
 
 #[test]
@@ -495,6 +532,15 @@ fn test_dot_operator_not_float() {
 fn test_print_keyword() {
     let t = tokens("<?php print \"hello\";");
     assert_eq!(t[1], Token::Print);
+}
+
+#[test]
+fn test_runtime_constant_tokens() {
+    let t = tokens("<?php PHP_EOL PHP_OS DIRECTORY_SEPARATOR");
+    assert_eq!(
+        t[1..4],
+        [Token::PhpEol, Token::PhpOs, Token::DirectorySeparator]
+    );
 }
 
 // --- STDIN / STDOUT / STDERR ---

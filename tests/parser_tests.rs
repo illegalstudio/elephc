@@ -178,6 +178,12 @@ fn test_while_parses() {
 }
 
 #[test]
+fn test_do_while_parses() {
+    let stmts = parse_source("<?php do { echo \"loop\"; } while (1);");
+    assert!(matches!(&stmts[0].kind, StmtKind::DoWhile { .. }));
+}
+
+#[test]
 fn test_for_parses() {
     let stmts = parse_source("<?php for ($i = 0; $i < 10; $i++) { echo $i; }");
     assert!(matches!(&stmts[0].kind, StmtKind::For { .. }));
@@ -482,6 +488,27 @@ fn test_parse_foreach_key_value() {
     } else {
         panic!("expected Foreach");
     }
+}
+
+#[test]
+fn test_parse_foreach_value_only() {
+    let stmts = parse_source("<?php foreach ($a as $value) {}");
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Foreach {
+        key_var, value_var, ..
+    } = &stmts[0].kind
+    {
+        assert_eq!(key_var, &None);
+        assert_eq!(value_var, "value");
+    } else {
+        panic!("expected Foreach");
+    }
+}
+
+#[test]
+fn test_print_parses_as_echo_statement() {
+    let stmts = parse_source("<?php print \"hello\";");
+    assert_eq!(stmts, vec![Stmt::echo(Expr::string_lit("hello"))]);
 }
 
 #[test]
