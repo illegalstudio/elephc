@@ -11,6 +11,31 @@ use std::fs;
 use std::path::Path;
 use std::process::{self, Command};
 
+fn macos_sdk_path() -> String {
+    Command::new("xcrun")
+        .args(["--show-sdk-path"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
+fn macos_sdk_version() -> String {
+    match Command::new("xcrun")
+        .args(["--sdk", "macosx", "--show-sdk-version"])
+        .output()
+    {
+        Ok(output) => {
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if version.is_empty() {
+                "15.0".to_string()
+            } else {
+                version
+            }
+        }
+        Err(_) => "15.0".to_string(),
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -160,11 +185,8 @@ fn main() {
     }
 
     // Assemble
-    let sdk_path = Command::new("xcrun")
-        .args(["--show-sdk-path"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default();
+    let sdk_path = macos_sdk_path();
+    let sdk_version = macos_sdk_version();
 
     let as_status = Command::new("as")
         .args(["-arch", "arm64", "-o"])
@@ -191,6 +213,7 @@ fn main() {
     ld_cmd.arg(&obj_path);
     ld_cmd.args(["-lSystem", "-syslibroot"]);
     ld_cmd.arg(&sdk_path);
+    ld_cmd.args(["-platform_version", "macos", &sdk_version, &sdk_version]);
     for path in &extra_link_paths {
         ld_cmd.arg(format!("-L{}", path));
     }

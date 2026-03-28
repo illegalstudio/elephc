@@ -638,6 +638,7 @@ fn infer_local_type(
                         PhpType::Pointer(None)
                     }
                 }
+                "ptr_get" | "ptr_read8" | "ptr_read32" | "ptr_sizeof" => PhpType::Int,
                 // User-defined functions — check signature if available
                 _ => {
                     if let Some(c) = ctx {
@@ -701,6 +702,13 @@ fn infer_local_type(
                     if let Some(ci) = c.classes.get(cn) {
                         if let Some((_, ty)) = ci.properties.iter().find(|(n, _)| n == property) {
                             return ty.clone();
+                        }
+                    }
+                }
+                if let PhpType::Pointer(Some(cn)) = &obj_ty {
+                    if let Some(ci) = c.extern_classes.get(cn) {
+                        if let Some(field) = ci.fields.iter().find(|field| field.name == *property) {
+                            return field.php_type.clone();
                         }
                     }
                 }

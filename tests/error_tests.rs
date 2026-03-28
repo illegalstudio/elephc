@@ -1630,6 +1630,16 @@ fn test_error_ptr_get_requires_pointer() {
 }
 
 #[test]
+fn test_error_ptr_read8_requires_pointer() {
+    expect_error("<?php ptr_read8(123);", "ptr_read8() requires a pointer argument");
+}
+
+#[test]
+fn test_error_ptr_read32_requires_pointer() {
+    expect_error("<?php ptr_read32(123);", "ptr_read32() requires a pointer argument");
+}
+
+#[test]
 fn test_error_ptr_set_wrong_args() {
     expect_error("<?php ptr_set(ptr_null());", "ptr_set() takes exactly 2 arguments");
 }
@@ -1644,6 +1654,22 @@ fn test_error_ptr_set_requires_word_value() {
     expect_error(
         "<?php $p = ptr_null(); ptr_set($p, \"hello\");",
         "ptr_set() value must be int, bool, null, or pointer",
+    );
+}
+
+#[test]
+fn test_error_ptr_write8_requires_int_value() {
+    expect_error(
+        "<?php $p = ptr_null(); ptr_write8($p, \"hello\");",
+        "ptr_write8() value must be int",
+    );
+}
+
+#[test]
+fn test_error_ptr_write32_requires_int_value() {
+    expect_error(
+        "<?php $p = ptr_null(); ptr_write32($p, \"hello\");",
+        "ptr_write32() value must be int",
     );
 }
 

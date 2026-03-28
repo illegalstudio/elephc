@@ -125,11 +125,10 @@ pub fn emit_stmt(
                         emitter.instruction("mov x0, x8");                      // restore new value
                     }
                 }
-                // Note: arrays/objects are NOT decreffed on reassignment because
-                // the old pointer may have been freed internally (e.g., array_grow
-                // in $arr = func($arr) pattern frees old array inside the function,
-                // then caller decrefs freed memory → use-after-free).
-                // Arrays/objects are freed via explicit unset() or process exit.
+                // Note: arrays/objects are NOT decreffed on reassignment yet.
+                // We currently prefer leaks over dangling pointers because aliases
+                // are not tracked precisely enough for safe decref-on-reassign.
+                // Arrays/objects are still freed via explicit unset() or process exit.
 
                 abi::emit_store(emitter, &ty, offset);
 
@@ -982,28 +981,51 @@ pub fn emit_stmt(
 
             // Evaluate object expression → x0 = object pointer
             let obj_ty = emit_expr(object, emitter, ctx, data);
-            let class_name = match &obj_ty {
-                PhpType::Object(cn) => cn.clone(),
+            let (class_name, offset, needs_deref) = match &obj_ty {
+                PhpType::Object(class_name) => {
+                    let class_info = match ctx.classes.get(class_name).cloned() {
+                        Some(c) => c,
+                        None => {
+                            emitter.comment(&format!("WARNING: undefined class {}", class_name));
+                            return;
+                        }
+                    };
+                    let prop_idx = match class_info.properties.iter().position(|(n, _)| n == property) {
+                        Some(i) => i,
+                        None => {
+                            emitter.comment(&format!("WARNING: undefined property {}", property));
+                            return;
+                        }
+                    };
+                    (class_name.clone(), 8 + prop_idx * 16, false)
+                }
+                PhpType::Pointer(Some(class_name)) if ctx.extern_classes.contains_key(class_name) => {
+                    let class_info = match ctx.extern_classes.get(class_name).cloned() {
+                        Some(c) => c,
+                        None => {
+                            emitter.comment(&format!("WARNING: undefined extern class {}", class_name));
+                            return;
+                        }
+                    };
+                    let field = match class_info.fields.iter().find(|field| field.name == *property) {
+                        Some(field) => field.clone(),
+                        None => {
+                            emitter.comment(&format!("WARNING: undefined extern field {}", property));
+                            return;
+                        }
+                    };
+                    (class_name.clone(), field.offset, true)
+                }
                 _ => {
                     emitter.comment("WARNING: property assign on non-object");
                     return;
                 }
             };
-            let class_info = match ctx.classes.get(&class_name).cloned() {
-                Some(c) => c,
-                None => {
-                    emitter.comment(&format!("WARNING: undefined class {}", class_name));
-                    return;
-                }
-            };
-            let prop_idx = match class_info.properties.iter().position(|(n, _)| n == property) {
-                Some(i) => i,
-                None => {
-                    emitter.comment(&format!("WARNING: undefined property {}", property));
-                    return;
-                }
-            };
-            let offset = 8 + prop_idx * 16;
+
+            if needs_deref {
+                emitter.instruction("bl __rt_ptr_check_nonnull");                       // abort with fatal error on null pointer dereference
+                emitter.comment(&format!("store extern field {}::{} at offset {}", class_name, property, offset));
+            }
 
             // Save object pointer
             emitter.instruction("mov x9, x0");                                  // save object pointer in x9

@@ -2,7 +2,10 @@ use crate::codegen::emit::Emitter;
 
 /// array_grow: double the capacity of an array, copying all elements.
 /// Allocates a new array with 2x capacity, copies header + elements,
-/// frees the old array, returns the new pointer.
+/// and returns the new pointer without freeing the old array.
+///
+/// This intentionally prefers leaking over use-after-free: callers may still
+/// hold aliases to the previous storage after a growth-triggering mutation.
 /// Input:  x0 = old array pointer
 /// Output: x0 = new array pointer (with doubled capacity)
 pub fn emit_array_grow(emitter: &mut Emitter) {
@@ -60,18 +63,14 @@ pub fn emit_array_grow(emitter: &mut Emitter) {
 
     // -- byte-copy loop --
     emitter.label("__rt_array_grow_copy");
-    emitter.instruction("cbz x3, __rt_array_grow_free");                        // all bytes copied
+    emitter.instruction("cbz x3, __rt_array_grow_done");                        // all bytes copied
     emitter.instruction("ldrb w4, [x1], #1");                                   // load byte from old, advance
     emitter.instruction("strb w4, [x2], #1");                                   // store byte to new, advance
     emitter.instruction("sub x3, x3, #1");                                      // decrement remaining
     emitter.instruction("b __rt_array_grow_copy");                              // continue copying
 
-    // -- free old array --
-    emitter.label("__rt_array_grow_free");
-    emitter.instruction("ldr x0, [sp, #0]");                                    // x0 = old array pointer
-    emitter.instruction("bl __rt_heap_free");                                   // free old array
-
     // -- return new array pointer --
+    emitter.label("__rt_array_grow_done");
     emitter.instruction("ldr x0, [sp, #24]");                                   // x0 = new array pointer
 
     // -- restore frame and return --

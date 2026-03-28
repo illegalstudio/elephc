@@ -1353,6 +1353,22 @@ impl Checker {
                 self.ensure_pointer_type(&ptr_ty, span, "ptr_get()")?;
                 Ok(Some(PhpType::Int))
             }
+            "ptr_read8" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "ptr_read8() takes exactly 1 argument"));
+                }
+                let ptr_ty = self.infer_type(&args[0], env)?;
+                self.ensure_pointer_type(&ptr_ty, span, "ptr_read8()")?;
+                Ok(Some(PhpType::Int))
+            }
+            "ptr_read32" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "ptr_read32() takes exactly 1 argument"));
+                }
+                let ptr_ty = self.infer_type(&args[0], env)?;
+                self.ensure_pointer_type(&ptr_ty, span, "ptr_read32()")?;
+                Ok(Some(PhpType::Int))
+            }
             "ptr_set" => {
                 if args.len() != 2 {
                     return Err(CompileError::new(span, "ptr_set() takes exactly 2 arguments"));
@@ -1361,6 +1377,30 @@ impl Checker {
                 self.ensure_pointer_type(&ptr_ty, span, "ptr_set()")?;
                 let value_ty = self.infer_type(&args[1], env)?;
                 self.ensure_word_pointer_value(&value_ty, span)?;
+                Ok(Some(PhpType::Void))
+            }
+            "ptr_write8" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "ptr_write8() takes exactly 2 arguments"));
+                }
+                let ptr_ty = self.infer_type(&args[0], env)?;
+                self.ensure_pointer_type(&ptr_ty, span, "ptr_write8()")?;
+                let value_ty = self.infer_type(&args[1], env)?;
+                if value_ty != PhpType::Int {
+                    return Err(CompileError::new(span, "ptr_write8() value must be int"));
+                }
+                Ok(Some(PhpType::Void))
+            }
+            "ptr_write32" => {
+                if args.len() != 2 {
+                    return Err(CompileError::new(span, "ptr_write32() takes exactly 2 arguments"));
+                }
+                let ptr_ty = self.infer_type(&args[0], env)?;
+                self.ensure_pointer_type(&ptr_ty, span, "ptr_write32()")?;
+                let value_ty = self.infer_type(&args[1], env)?;
+                if value_ty != PhpType::Int {
+                    return Err(CompileError::new(span, "ptr_write32() value must be int"));
+                }
                 Ok(Some(PhpType::Void))
             }
             "ptr_sizeof" => {

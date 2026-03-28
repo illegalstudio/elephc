@@ -94,7 +94,7 @@ src/
 │   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, round, min, max, sin, cos, ... (32 files)
 │   │   ├── types/             is_*, gettype, empty, unset, settype, ... (16 files)
 │   │   ├── io/                fopen, fwrite, file_get_contents, scandir, ... (36 files)
-│   │   ├── pointers/          ptr, ptr_get, ptr_set, ptr_offset, ptr_sizeof, ... (8 files)
+│   │   ├── pointers/          ptr, ptr_get, ptr_set, ptr_read8, ptr_write8, ptr_offset, ... (12 files)
 │   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, ... (25 files)
 │   │
 │   └── runtime/               ARM64 runtime routines (one file per function)
@@ -103,7 +103,7 @@ src/
 │       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, sort, usort, refcount, ... (53 files)
 │       ├── io/                fopen, fgets, fread, stat, scandir, ... (17 files)
 │       ├── system/            build_argv, time, getenv, shell_exec, date, mktime, strtotime, json_encode, json_decode, preg (14 files)
-│       └── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str (4 files)
+│       └── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ... (5 files)
 │
 │
 └── errors/
@@ -147,6 +147,7 @@ Extern calls differ from ordinary elephc function calls in three important ways:
 1. Codegen dispatches extern functions before built-ins, so an `extern function strlen(...)` declaration really calls C `strlen`, not the elephc builtin.
 2. `string` arguments are converted with `__rt_str_to_cstr`, which allocates an owned null-terminated copy on the elephc heap before calling C.
 3. `string` return values are converted with `__rt_cstr_to_str`, which copies bytes back into an owned elephc string.
+4. `extern class` layouts are available to pointer-oriented codegen too, so `ptr_sizeof("StructName")` and `ptr_cast<StructName>($p)->field` use the same checked layout metadata recorded by the type checker.
 
 `callable` FFI parameters pass a user-defined elephc function by address. The function name is provided as a string literal at the call site, and codegen loads the address of the compiled `_fn_<name>` symbol before branching into C.
 

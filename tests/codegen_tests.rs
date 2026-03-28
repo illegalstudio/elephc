@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 
 static TEST_ID: AtomicU64 = AtomicU64::new(0);
 static SDK_PATH: OnceLock<String> = OnceLock::new();
+static SDK_VERSION: OnceLock<String> = OnceLock::new();
 
 fn get_sdk_path() -> &'static str {
     SDK_PATH.get_or_init(|| {
@@ -17,8 +18,73 @@ fn get_sdk_path() -> &'static str {
     })
 }
 
+fn get_sdk_version() -> &'static str {
+    SDK_VERSION.get_or_init(|| {
+        match Command::new("xcrun")
+            .args(["--sdk", "macosx", "--show-sdk-version"])
+            .output()
+        {
+            Ok(output) => {
+                let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if version.is_empty() {
+                    "15.0".to_string()
+                } else {
+                    version
+                }
+            }
+            Err(_) => "15.0".to_string(),
+        }
+    })
+}
+
 /// Compile ASM string to binary via as + ld, then run it and return stdout.
-fn assemble_and_run(asm: &str, dir: &Path) -> String {
+fn default_link_paths() -> Vec<String> {
+    let mut paths = Vec::new();
+    for candidate in ["/opt/homebrew/lib", "/usr/local/lib"] {
+        if std::path::Path::new(candidate).exists() {
+            paths.push(candidate.to_string());
+        }
+    }
+    paths
+}
+
+fn link_binary(
+    obj_path: &Path,
+    bin_path: &Path,
+    extra_link_libs: &[String],
+    extra_link_paths: &[String],
+    extra_frameworks: &[String],
+) {
+    let mut ld_cmd = Command::new("ld");
+    ld_cmd.args(["-arch", "arm64", "-e", "_main", "-o"]);
+    ld_cmd.arg(bin_path);
+    ld_cmd.arg(obj_path);
+    ld_cmd.args(["-lSystem", "-syslibroot"]);
+    ld_cmd.arg(get_sdk_path());
+    ld_cmd.args(["-platform_version", "macos", get_sdk_version(), get_sdk_version()]);
+    for path in extra_link_paths {
+        ld_cmd.arg(format!("-L{}", path));
+    }
+    for lib in extra_link_libs {
+        if lib != "System" {
+            ld_cmd.arg(format!("-l{}", lib));
+        }
+    }
+    for framework in extra_frameworks {
+        ld_cmd.args(["-framework", framework]);
+    }
+
+    let ld_status = ld_cmd.status().expect("failed to run linker");
+    assert!(ld_status.success(), "linker failed");
+}
+
+fn assemble_and_run(
+    asm: &str,
+    dir: &Path,
+    extra_link_libs: &[String],
+    extra_link_paths: &[String],
+    extra_frameworks: &[String],
+) -> String {
     let asm_path = dir.join("test.s");
     let obj_path = dir.join("test.o");
     let bin_path = dir.join("test");
@@ -33,15 +99,13 @@ fn assemble_and_run(asm: &str, dir: &Path) -> String {
         .expect("failed to run assembler");
     assert!(as_status.success(), "assembler failed");
 
-    let ld_status = Command::new("ld")
-        .args(["-arch", "arm64", "-e", "_main", "-o"])
-        .arg(&bin_path)
-        .arg(&obj_path)
-        .args(["-lSystem", "-syslibroot"])
-        .arg(get_sdk_path())
-        .status()
-        .expect("failed to run linker");
-    assert!(ld_status.success(), "linker failed");
+    link_binary(
+        &obj_path,
+        &bin_path,
+        extra_link_libs,
+        extra_link_paths,
+        extra_frameworks,
+    );
 
     let output = Command::new(&bin_path)
         .current_dir(dir)
@@ -58,7 +122,8 @@ fn assemble_and_run(asm: &str, dir: &Path) -> String {
 fn compile_and_run(source: &str) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
-    let dir = std::env::temp_dir().join(format!("elephc_test_{:?}_{}", tid, id));
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
     // Compile in-process using library
@@ -78,7 +143,13 @@ fn compile_and_run(source: &str) -> String {
         false,
     );
 
-    let elephc_out = assemble_and_run(&asm, &dir);
+    let elephc_out = assemble_and_run(
+        &asm,
+        &dir,
+        &check_result.required_libraries,
+        &default_link_paths(),
+        &[],
+    );
 
     // PHP cross-check (opt-in via ELEPHC_PHP_CHECK=1)
     if std::env::var("ELEPHC_PHP_CHECK").is_ok() {
@@ -105,7 +176,8 @@ fn compile_and_run(source: &str) -> String {
 fn compile_and_run_expect_failure(source: &str) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
-    let dir = std::env::temp_dir().join(format!("elephc_test_{:?}_{}", tid, id));
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
@@ -138,15 +210,13 @@ fn compile_and_run_expect_failure(source: &str) -> String {
         .expect("failed to run assembler");
     assert!(as_status.success(), "assembler failed");
 
-    let ld_status = Command::new("ld")
-        .args(["-arch", "arm64", "-e", "_main", "-o"])
-        .arg(&bin_path)
-        .arg(&obj_path)
-        .args(["-lSystem", "-syslibroot"])
-        .arg(get_sdk_path())
-        .status()
-        .expect("failed to run linker");
-    assert!(ld_status.success(), "linker failed");
+    link_binary(
+        &obj_path,
+        &bin_path,
+        &check_result.required_libraries,
+        &default_link_paths(),
+        &[],
+    );
 
     let output = Command::new(&bin_path)
         .current_dir(&dir)
@@ -162,7 +232,8 @@ fn compile_and_run_expect_failure(source: &str) -> String {
 fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
-    let dir = std::env::temp_dir().join(format!("elephc_test_{:?}_{}", tid, id));
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
     for (path, content) in files {
@@ -193,7 +264,13 @@ fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> String {
         false,
     );
 
-    let elephc_out = assemble_and_run(&asm, &dir);
+    let elephc_out = assemble_and_run(
+        &asm,
+        &dir,
+        &check_result.required_libraries,
+        &default_link_paths(),
+        &[],
+    );
     let _ = fs::remove_dir_all(&dir);
     elephc_out
 }
@@ -202,7 +279,8 @@ fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> String {
 fn compile_files_fails(files: &[(&str, &str)], main_file: &str) -> bool {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
-    let dir = std::env::temp_dir().join(format!("elephc_test_{:?}_{}", tid, id));
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
     for (path, content) in files {
@@ -233,7 +311,8 @@ fn compile_files_fails(files: &[(&str, &str)], main_file: &str) -> bool {
 fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
-    let dir = std::env::temp_dir().join(format!("elephc_test_{:?}_{}", tid, id));
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
@@ -266,15 +345,13 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
         .expect("failed to run assembler");
     assert!(as_status.success(), "assembler failed");
 
-    let ld_status = Command::new("ld")
-        .args(["-arch", "arm64", "-e", "_main", "-o"])
-        .arg(&bin_path)
-        .arg(&obj_path)
-        .args(["-lSystem", "-syslibroot"])
-        .arg(get_sdk_path())
-        .status()
-        .expect("failed to run linker");
-    assert!(ld_status.success(), "linker failed");
+    link_binary(
+        &obj_path,
+        &bin_path,
+        &check_result.required_libraries,
+        &default_link_paths(),
+        &[],
+    );
 
     use std::io::Write;
     let mut child = Command::new(&bin_path)
@@ -300,7 +377,8 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
 fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
-    let dir = std::env::temp_dir().join(format!("elephc_test_{:?}_{}", tid, id));
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
@@ -319,7 +397,13 @@ fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {
         false,
     );
 
-    let elephc_out = assemble_and_run(&asm, &dir);
+    let elephc_out = assemble_and_run(
+        &asm,
+        &dir,
+        &check_result.required_libraries,
+        &default_link_paths(),
+        &[],
+    );
     (elephc_out, dir)
 }
 
@@ -6933,6 +7017,25 @@ echo count($arr) . "|" . $arr[20];
 }
 
 #[test]
+fn test_array_reassign_after_function_growth() {
+    let out = compile_and_run(r#"<?php
+function grow($arr) {
+    for ($i = 0; $i < 32; $i++) {
+        array_push($arr, $i);
+    }
+    return $arr;
+}
+
+$arr = [100];
+for ($j = 0; $j < 20; $j++) {
+    $arr = grow($arr);
+}
+echo count($arr) > 100 ? "ok" : "bad";
+"#);
+    assert_eq!(out, "ok");
+}
+
+#[test]
 fn test_array_push_float() {
     let out = compile_and_run(r#"<?php
 $arr = [1.1];
@@ -8359,6 +8462,18 @@ echo ptr_sizeof("Point");
 }
 
 #[test]
+fn test_ptr_sizeof_extern_class() {
+    let out = compile_and_run(r#"<?php
+extern class Point {
+    public int $x;
+    public int $y;
+}
+echo ptr_sizeof("Point");
+"#);
+    assert_eq!(out, "16");
+}
+
+#[test]
 fn test_ptr_strict_equal() {
     let out = compile_and_run(r#"<?php
 $a = ptr_null();
@@ -8437,6 +8552,34 @@ echo $sum;
 }
 
 #[test]
+fn test_ptr_read8_and_write8() {
+    let out = compile_and_run(r#"<?php
+extern function malloc(int $size): ptr;
+extern function free(ptr $p): void;
+
+$buf = malloc(1);
+ptr_write8($buf, 255);
+echo ptr_read8($buf);
+free($buf);
+"#);
+    assert_eq!(out, "255");
+}
+
+#[test]
+fn test_ptr_read32_and_write32() {
+    let out = compile_and_run(r#"<?php
+extern function malloc(int $size): ptr;
+extern function free(ptr $p): void;
+
+$buf = malloc(4);
+ptr_write32($buf, 305419896);
+echo ptr_read32($buf);
+free($buf);
+"#);
+    assert_eq!(out, "305419896");
+}
+
+#[test]
 fn test_ptr_null_dereference_reports_runtime_error() {
     let err = compile_and_run_expect_failure(r#"<?php
 $p = ptr_null();
@@ -8475,6 +8618,60 @@ echo strlen("hello world");
 }
 
 #[test]
+fn test_ffi_malloc_and_free() {
+    let out = compile_and_run(r#"<?php
+extern "System" {
+    function malloc(int $size): ptr;
+    function free(ptr $p): void;
+}
+
+$buf = malloc(16);
+echo ptr_is_null($buf) ? "null" : "ok";
+free($buf);
+"#);
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_ffi_memset_fills_raw_buffer() {
+    let out = compile_and_run(r#"<?php
+extern "System" {
+    function malloc(int $size): ptr;
+    function free(ptr $p): void;
+    function memset(ptr $dest, int $byte, int $count): ptr;
+}
+
+$buf = malloc(4);
+memset($buf, 65, 4);
+echo ptr_read8($buf);
+echo ",";
+echo ptr_read8(ptr_offset($buf, 3));
+free($buf);
+"#);
+    assert_eq!(out, "65,65");
+}
+
+#[test]
+fn test_ffi_memcpy_copies_raw_buffer() {
+    let out = compile_and_run(r#"<?php
+extern "System" {
+    function malloc(int $size): ptr;
+    function free(ptr $p): void;
+    function memcpy(ptr $dest, ptr $src, int $count): ptr;
+}
+
+$src = malloc(4);
+$dst = malloc(4);
+ptr_write32($src, 305419896);
+memcpy($dst, $src, 4);
+echo ptr_read32($dst);
+free($dst);
+free($src);
+"#);
+    assert_eq!(out, "305419896");
+}
+
+#[test]
 fn test_ffi_extern_getpid() {
     let out = compile_and_run(r#"<?php
 extern function getpid(): int;
@@ -8490,6 +8687,81 @@ fn test_ffi_extern_string_return() {
 extern function getenv(string $name): string;
 $home = getenv("HOME");
 echo strlen($home) > 0 ? "ok" : "empty";
+"#);
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_ffi_sdl_init_and_ticks() {
+    let out = compile_and_run(r#"<?php
+extern "SDL2" {
+    function SDL_Init(int $flags): int;
+    function SDL_Quit(): void;
+    function SDL_GetTicks(): int;
+    function SDL_Delay(int $ms): void;
+}
+
+$SDL_INIT_VIDEO = 32;
+echo SDL_Init($SDL_INIT_VIDEO) === 0 ? "init|" : "fail|";
+$before = SDL_GetTicks();
+SDL_Delay(10);
+$after = SDL_GetTicks();
+echo $after >= $before ? "ticks" : "bad";
+SDL_Quit();
+"#);
+    assert_eq!(out, "init|ticks");
+}
+
+#[test]
+fn test_ffi_sdl_window_with_dummy_driver() {
+    let out = compile_and_run(r#"<?php
+putenv("SDL_VIDEODRIVER=dummy");
+
+extern "SDL2" {
+    function SDL_Init(int $flags): int;
+    function SDL_Quit(): void;
+    function SDL_CreateWindow(string $title, int $x, int $y, int $w, int $h, int $flags): ptr;
+    function SDL_DestroyWindow(ptr $window): void;
+}
+
+$SDL_INIT_VIDEO = 32;
+if (SDL_Init($SDL_INIT_VIDEO) != 0) {
+    echo "init fail";
+    exit(1);
+}
+
+$window = SDL_CreateWindow("test", 0, 0, 64, 64, 0);
+echo ptr_is_null($window) ? "null" : "ok";
+if (!ptr_is_null($window)) {
+    SDL_DestroyWindow($window);
+}
+SDL_Quit();
+"#);
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_ffi_sdl_keyboard_state_pointer() {
+    let out = compile_and_run(r#"<?php
+putenv("SDL_VIDEODRIVER=dummy");
+
+extern "SDL2" {
+    function SDL_Init(int $flags): int;
+    function SDL_Quit(): void;
+    function SDL_PumpEvents(): void;
+    function SDL_GetKeyboardState(ptr $numkeys): ptr;
+}
+
+$SDL_INIT_VIDEO = 32;
+if (SDL_Init($SDL_INIT_VIDEO) != 0) {
+    echo "init fail";
+    exit(1);
+}
+
+SDL_PumpEvents();
+$keys = SDL_GetKeyboardState(ptr_null());
+echo ptr_is_null($keys) ? "null" : "ok";
+SDL_Quit();
 "#);
     assert_eq!(out, "ok");
 }

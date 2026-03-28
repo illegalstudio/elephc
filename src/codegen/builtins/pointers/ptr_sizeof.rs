@@ -25,6 +25,8 @@ pub fn emit(
                 if let Some(class_info) = ctx.classes.get(class_name) {
                     // Object layout: [class_id:8] + [prop:16] * num_properties
                     8 + class_info.properties.len() * 16
+                } else if let Some(class_info) = ctx.extern_classes.get(class_name) {
+                    class_info.total_size
                 } else {
                     0 // unknown type
                 }

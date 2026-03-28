@@ -101,7 +101,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                     }
                 }
                 "ptr_is_null" => PhpType::Bool,
-                "ptr_sizeof" | "ptr_get" => PhpType::Int,
+                "ptr_sizeof" | "ptr_get" | "ptr_read8" | "ptr_read32" => PhpType::Int,
                 _ => PhpType::Int,
             }
         }
@@ -564,8 +564,21 @@ impl Checker {
             "string" => Some("string".to_string()),
             "ptr" | "pointer" => Some("ptr".to_string()),
             class_name if self.classes.contains_key(class_name) => Some(class_name.to_string()),
+            class_name if self.extern_classes.contains_key(class_name) => Some(class_name.to_string()),
             _ => None,
         }
+    }
+
+    fn extern_field_type(&self, class_name: &str, field_name: &str) -> Option<PhpType> {
+        self.extern_classes
+            .get(class_name)
+            .and_then(|class_info| {
+                class_info
+                    .fields
+                    .iter()
+                    .find(|field| field.name == field_name)
+                    .map(|field| field.php_type.clone())
+            })
     }
 
     fn ensure_pointer_type(
@@ -1112,9 +1125,27 @@ impl Checker {
                     if let Some(class_info) = self.classes.get_mut(class_name) {
                         if let Some(prop) = class_info.properties.iter_mut().find(|(n, _)| n == property) {
                             if prop.1 == PhpType::Int && val_ty != PhpType::Int {
-                                prop.1 = val_ty;
+                                prop.1 = val_ty.clone();
                             }
                         }
+                    }
+                }
+                if let PhpType::Pointer(Some(class_name)) = &obj_ty {
+                    if let Some(field_ty) = self.extern_field_type(class_name, property) {
+                        if field_ty == PhpType::Int && val_ty != PhpType::Int {
+                            return Err(CompileError::new(
+                                stmt.span,
+                                &format!(
+                                    "Type error: cannot assign {:?} to extern field {}::{} of type {:?}",
+                                    val_ty, class_name, property, field_ty
+                                ),
+                            ));
+                        }
+                    } else if self.extern_classes.contains_key(class_name) {
+                        return Err(CompileError::new(
+                            stmt.span,
+                            &format!("Undefined extern field: {}::{}", class_name, property),
+                        ));
                     }
                 }
                 Ok(())
@@ -1521,7 +1552,21 @@ impl Checker {
                         ));
                     }
                 }
-                Ok(PhpType::Int)
+                if let PhpType::Pointer(Some(class_name)) = &obj_ty {
+                    if let Some(field_ty) = self.extern_field_type(class_name, property) {
+                        return Ok(field_ty);
+                    }
+                    if self.extern_classes.contains_key(class_name) {
+                        return Err(CompileError::new(
+                            expr.span,
+                            &format!("Undefined extern field: {}::{}", class_name, property),
+                        ));
+                    }
+                }
+                Err(CompileError::new(
+                    expr.span,
+                    "Property access requires an object or typed extern pointer",
+                ))
             }
             ExprKind::MethodCall { object, method, args } => {
                 let obj_ty = self.infer_type(object, env)?;

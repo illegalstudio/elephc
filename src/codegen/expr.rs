@@ -637,35 +637,60 @@ fn emit_property_access(
     data: &mut DataSection,
 ) -> PhpType {
     let obj_ty = emit_expr(object, emitter, ctx, data);
-    let class_name = match &obj_ty {
-        PhpType::Object(cn) => cn.clone(),
+    let (class_name, prop_ty, offset, needs_deref) = match &obj_ty {
+        PhpType::Object(class_name) => {
+            let class_info = match ctx.classes.get(class_name).cloned() {
+                Some(c) => c,
+                None => {
+                    emitter.comment(&format!("WARNING: undefined class {}", class_name));
+                    return PhpType::Int;
+                }
+            };
+
+            let (prop_idx, prop_ty) = match class_info.properties.iter().enumerate()
+                .find(|(_, (n, _))| n == property)
+                .map(|(i, (_, t))| (i, t.clone()))
+            {
+                Some(v) => v,
+                None => {
+                    emitter.comment(&format!("WARNING: undefined property {}", property));
+                    return PhpType::Int;
+                }
+            };
+
+            (class_name.clone(), prop_ty, 8 + prop_idx * 16, false)
+        }
+        PhpType::Pointer(Some(class_name)) if ctx.extern_classes.contains_key(class_name) => {
+            let class_info = match ctx.extern_classes.get(class_name).cloned() {
+                Some(c) => c,
+                None => {
+                    emitter.comment(&format!("WARNING: undefined extern class {}", class_name));
+                    return PhpType::Int;
+                }
+            };
+
+            let field = match class_info.fields.iter().find(|field| field.name == property) {
+                Some(field) => field.clone(),
+                None => {
+                    emitter.comment(&format!("WARNING: undefined extern field {}", property));
+                    return PhpType::Int;
+                }
+            };
+
+            (class_name.clone(), field.php_type, field.offset, true)
+        }
         _ => {
             emitter.comment("WARNING: property access on non-object");
             return PhpType::Int;
         }
     };
-    let class_info = match ctx.classes.get(&class_name).cloned() {
-        Some(c) => c,
-        None => {
-            emitter.comment(&format!("WARNING: undefined class {}", class_name));
-            return PhpType::Int;
-        }
-    };
 
-    let (prop_idx, prop_ty) = match class_info.properties.iter().enumerate()
-        .find(|(_, (n, _))| n == property)
-        .map(|(i, (_, t))| (i, t.clone()))
-    {
-        Some(v) => v,
-        None => {
-            emitter.comment(&format!("WARNING: undefined property {}", property));
-            return PhpType::Int;
-        }
-    };
-
-    let offset = 8 + prop_idx * 16;
-
-    emitter.comment(&format!("->{}  (offset {})", property, offset));
+    if needs_deref {
+        emitter.instruction("bl __rt_ptr_check_nonnull");                           // abort with fatal error on null pointer dereference
+        emitter.comment(&format!("->{} via ptr<{}> (offset {})", property, class_name, offset));
+    } else {
+        emitter.comment(&format!("->{}  (offset {})", property, offset));
+    }
 
     match &prop_ty {
         PhpType::Str => {
