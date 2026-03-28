@@ -201,9 +201,9 @@ Proper type system for PHP compatibility.
 - [x] Strings freed on variable reassignment (value-copied, always owned)
 
 ### Known limitations
-- Ordinary local/global reassignment now releases previous arrays/objects safely, but `static` storage and container slots still use conservative leak-prone semantics in some alias-heavy cases
+- Ordinary local/global reassignment now releases previous arrays/objects safely, and indexed array writes / object property writes / `static` slots now retain borrowed heap values consistently
 - Automatic epilogue cleanup is still disabled; general local-scope cleanup needs broader ownership tracking
-- Full array/object GC still needs container-aware ownership tracking or a tracing collector
+- Associative array updates and some deeper container cases still need fuller ownership tracking or a tracing collector
 
 ## v0.12.x — Math coverage (done)
 
@@ -317,7 +317,7 @@ Features that are desirable but not yet planned for a specific version.
 
 | Idea | Notes |
 |---|---|
-| Container-aware heap ownership | Array/object element stores and `static` slots still need stronger retain/release rules to avoid conservative leaks under heavy aliasing. |
+| Hash/container ownership beyond indexed slots | Associative array updates and deeper nested container propagation still need stronger retain/release rules to avoid conservative leaks under heavy aliasing. |
 | Copy-on-write arrays | PHP's actual array semantics: shared until modified. Would make reassignment and aliasing both safer and cheaper. Requires COW flag in array header + copy-on-mutation. |
 | Scope-based cleanup | Ordinary locals, globals, statics, by-ref params, and container-backed aliases still need escape analysis or a fuller ownership model. |
 | Cycle detection (GC) | Mark-and-sweep for circular object references. Same approach as PHP 5.3 (Bacon & Rajan 2001). Requires runtime type descriptors. Low priority — most PHP programs don't create cycles. |

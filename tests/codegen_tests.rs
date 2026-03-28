@@ -7156,6 +7156,61 @@ echo $b->val;
 }
 
 #[test]
+fn test_gc_array_push_borrowed_array_survives_unset() {
+    let out = compile_and_run(r#"<?php
+$inner = [9];
+$outer = [];
+$outer[] = $inner;
+unset($inner);
+echo $outer[0][0];
+"#);
+    assert_eq!(out, "9");
+}
+
+#[test]
+fn test_gc_array_assign_borrowed_array_survives_unset() {
+    let out = compile_and_run(r#"<?php
+$inner = [4];
+$outer = [[1], [2]];
+$outer[1] = $inner;
+unset($inner);
+echo $outer[1][0];
+"#);
+    assert_eq!(out, "4");
+}
+
+#[test]
+fn test_gc_property_assign_borrowed_array_survives_unset() {
+    let out = compile_and_run(r#"<?php
+class Holder { public $value; }
+
+$inner = [7];
+$h = new Holder();
+$h->value = $inner;
+unset($inner);
+$saved = $h->value;
+echo $saved[0];
+"#);
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_gc_static_assign_borrowed_array_survives_unset() {
+    let out = compile_and_run(r#"<?php
+function hold_once() {
+    static $saved = [];
+    $tmp = [5];
+    $saved = $tmp;
+    unset($tmp);
+    echo $saved[0];
+}
+
+hold_once();
+"#);
+    assert_eq!(out, "5");
+}
+
+#[test]
 fn test_class_constructor_calls_method() {
     // Constructor calling another method on the same object
     let out = compile_and_run(r#"<?php
