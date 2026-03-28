@@ -34,10 +34,7 @@ impl Checker {
         } else {
             Err(CompileError::new(
                 span,
-                &format!(
-                    "{} expects {:?}, got {:?}",
-                    context, expected, actual
-                ),
+                &format!("{} expects {:?}, got {:?}", context, expected, actual),
             ))
         }
     }
@@ -58,7 +55,10 @@ impl Checker {
         caller_env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         // Count non-spread arguments for arity checking
-        let effective_arg_count = args.iter().filter(|a| !matches!(a.kind, ExprKind::Spread(_))).count();
+        let effective_arg_count = args
+            .iter()
+            .filter(|a| !matches!(a.kind, ExprKind::Spread(_)))
+            .count();
         let has_spread = args.iter().any(|a| matches!(a.kind, ExprKind::Spread(_)));
 
         // Already resolved or being resolved (recursive)?
@@ -191,7 +191,8 @@ impl Checker {
         if let Some(ref vp) = decl.variadic {
             // Infer variadic element type from excess args
             let variadic_elem_ty = if args.len() > decl.params.len() {
-                self.infer_type(&args[decl.params.len()], caller_env).unwrap_or(PhpType::Int)
+                self.infer_type(&args[decl.params.len()], caller_env)
+                    .unwrap_or(PhpType::Int)
             } else {
                 PhpType::Int
             };
@@ -207,7 +208,6 @@ impl Checker {
         decl: &FnDecl,
         param_types: Vec<(String, PhpType)>,
     ) -> Result<PhpType, CompileError> {
-
         let mut local_env: TypeEnv = HashMap::new();
         for (pname, pty) in &param_types {
             local_env.insert(pname.clone(), pty.clone());
@@ -276,27 +276,44 @@ impl Checker {
             StmtKind::Return(None) => {
                 types.push(PhpType::Void);
             }
-            StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
-                for s in then_body { self.collect_return_types(s, env, types); }
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                for s in then_body {
+                    self.collect_return_types(s, env, types);
+                }
                 for (_, body) in elseif_clauses {
-                    for s in body { self.collect_return_types(s, env, types); }
+                    for s in body {
+                        self.collect_return_types(s, env, types);
+                    }
                 }
                 if let Some(body) = else_body {
-                    for s in body { self.collect_return_types(s, env, types); }
+                    for s in body {
+                        self.collect_return_types(s, env, types);
+                    }
                 }
             }
             StmtKind::While { body, .. }
             | StmtKind::DoWhile { body, .. }
             | StmtKind::For { body, .. }
             | StmtKind::Foreach { body, .. } => {
-                for s in body { self.collect_return_types(s, env, types); }
+                for s in body {
+                    self.collect_return_types(s, env, types);
+                }
             }
             StmtKind::Switch { cases, default, .. } => {
                 for (_, body) in cases {
-                    for s in body { self.collect_return_types(s, env, types); }
+                    for s in body {
+                        self.collect_return_types(s, env, types);
+                    }
                 }
                 if let Some(body) = default {
-                    for s in body { self.collect_return_types(s, env, types); }
+                    for s in body {
+                        self.collect_return_types(s, env, types);
+                    }
                 }
             }
             _ => {}

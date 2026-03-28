@@ -6,7 +6,11 @@ use super::expr::{emit_expr, expr_result_may_borrow_heap_value};
 use crate::parser::ast::{ExprKind, Stmt, StmtKind};
 use crate::types::PhpType;
 
-fn retain_borrowed_heap_result(emitter: &mut Emitter, expr: &crate::parser::ast::Expr, ty: &PhpType) {
+fn retain_borrowed_heap_result(
+    emitter: &mut Emitter,
+    expr: &crate::parser::ast::Expr,
+    ty: &PhpType,
+) {
     if ty.is_refcounted() && expr_result_may_borrow_heap_value(expr) {
         abi::emit_incref_if_refcounted(emitter, ty);
     }
@@ -15,21 +19,21 @@ fn retain_borrowed_heap_result(emitter: &mut Emitter, expr: &crate::parser::ast:
 fn release_owned_slot(emitter: &mut Emitter, ty: &PhpType, offset: usize, preserve_x0: bool) {
     if matches!(ty, PhpType::Str) {
         if preserve_x0 {
-            emitter.instruction("mov x8, x0");                                      // preserve incoming value while old string is released
+            emitter.instruction("mov x8, x0"); // preserve incoming value while old string is released
         }
-        abi::load_at_offset(emitter, "x0", offset);                                // load previous string pointer from stack slot
-        emitter.instruction("bl __rt_heap_free_safe");                              // release previous string storage if it lives on the heap
+        abi::load_at_offset(emitter, "x0", offset); // load previous string pointer from stack slot
+        emitter.instruction("bl __rt_heap_free_safe"); // release previous string storage if it lives on the heap
         if preserve_x0 {
-            emitter.instruction("mov x0, x8");                                      // restore incoming value after string release
+            emitter.instruction("mov x0, x8"); // restore incoming value after string release
         }
     } else if ty.is_refcounted() {
         if preserve_x0 {
-            emitter.instruction("mov x8, x0");                                      // preserve incoming value while old heap slot is decreffed
+            emitter.instruction("mov x8, x0"); // preserve incoming value while old heap slot is decreffed
         }
-        abi::load_at_offset(emitter, "x0", offset);                                // load previous heap pointer from stack slot
+        abi::load_at_offset(emitter, "x0", offset); // load previous heap pointer from stack slot
         abi::emit_decref_if_refcounted(emitter, ty);
         if preserve_x0 {
-            emitter.instruction("mov x0, x8");                                      // restore incoming value after decref
+            emitter.instruction("mov x0, x8"); // restore incoming value after decref
         }
     }
 }
@@ -50,52 +54,47 @@ fn static_storage_label(ctx: &Context, name: &str) -> String {
 fn emit_static_store(emitter: &mut Emitter, ctx: &Context, name: &str, ty: &PhpType) {
     let data_label = static_storage_label(ctx, name);
     emitter.comment(&format!("store to static ${}", name));
-    emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));               // load page of static variable storage
-    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label));         // resolve static storage address
+    emitter.instruction(&format!("adrp x9, {}@PAGE", data_label)); // load page of static variable storage
+    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); // resolve static storage address
     if matches!(ty, PhpType::Str) {
-        emitter.instruction("stp x1, x2, [sp, #-16]!");                          // preserve incoming string value across old-slot release
-        emitter.instruction("ldr x0, [x9]");                                     // load previous string pointer from static slot
-        emitter.instruction("bl __rt_heap_free_safe");                           // release previous string storage before overwrite
-        emitter.instruction("ldp x1, x2, [sp], #16");                            // restore incoming string value after release
-        emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));           // reload page of static variable storage after call clobbers scratch regs
-        emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label));     // resolve static storage address again
+        emitter.instruction("stp x1, x2, [sp, #-16]!"); // preserve incoming string value across old-slot release
+        emitter.instruction("ldr x0, [x9]"); // load previous string pointer from static slot
+        emitter.instruction("bl __rt_heap_free_safe"); // release previous string storage before overwrite
+        emitter.instruction("ldp x1, x2, [sp], #16"); // restore incoming string value after release
+        emitter.instruction(&format!("adrp x9, {}@PAGE", data_label)); // reload page of static variable storage after call clobbers scratch regs
+        emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); // resolve static storage address again
     } else if ty.is_refcounted() {
-        emitter.instruction("str x0, [sp, #-16]!");                              // preserve incoming heap pointer across old-slot decref
-        emitter.instruction("ldr x0, [x9]");                                     // load previous heap pointer from static slot
+        emitter.instruction("str x0, [sp, #-16]!"); // preserve incoming heap pointer across old-slot decref
+        emitter.instruction("ldr x0, [x9]"); // load previous heap pointer from static slot
         abi::emit_decref_if_refcounted(emitter, ty);
-        emitter.instruction("ldr x0, [sp], #16");                                // restore incoming heap pointer for the store
-        emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));           // reload page of static variable storage after call clobbers scratch regs
-        emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label));     // resolve static storage address again
+        emitter.instruction("ldr x0, [sp], #16"); // restore incoming heap pointer for the store
+        emitter.instruction(&format!("adrp x9, {}@PAGE", data_label)); // reload page of static variable storage after call clobbers scratch regs
+        emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); // resolve static storage address again
     }
     match ty {
         PhpType::Bool | PhpType::Int => {
-            emitter.instruction("str x0, [x9]");                                 // store int/bool to static storage
+            emitter.instruction("str x0, [x9]"); // store int/bool to static storage
         }
         PhpType::Float => {
-            emitter.instruction("str d0, [x9]");                                 // store float to static storage
+            emitter.instruction("str d0, [x9]"); // store float to static storage
         }
         PhpType::Str => {
-            emitter.instruction("str x1, [x9]");                                 // store string pointer to static storage
-            emitter.instruction("str x2, [x9, #8]");                             // store string length to static storage
+            emitter.instruction("str x1, [x9]"); // store string pointer to static storage
+            emitter.instruction("str x2, [x9, #8]"); // store string length to static storage
         }
         _ => {
-            emitter.instruction("str x0, [x9]");                                 // store heap/pointer value to static storage
+            emitter.instruction("str x0, [x9]"); // store heap/pointer value to static storage
         }
     }
 }
 
-pub fn emit_stmt(
-    stmt: &Stmt,
-    emitter: &mut Emitter,
-    ctx: &mut Context,
-    data: &mut DataSection,
-) {
+pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &mut DataSection) {
     // -- reset concat buffer at the start of each statement --
     // This is safe because any string that needs to persist beyond the current
     // statement is copied to heap via __rt_str_persist (in emit_store).
-    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of concat offset
-    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve concat offset address
-    emitter.instruction("str xzr, [x9]");                                       // reset concat buffer offset to 0
+    emitter.instruction("adrp x9, _concat_off@PAGE"); // load page of concat offset
+    emitter.instruction("add x9, x9, _concat_off@PAGEOFF"); // resolve concat offset address
+    emitter.instruction("str xzr, [x9]"); // reset concat buffer offset to 0
 
     match &stmt.kind {
         StmtKind::Echo(expr) => {
@@ -110,7 +109,7 @@ pub fn emit_stmt(
                     // echo false → nothing, echo true → "1"
                     let skip_label = ctx.next_label("echo_skip_false");
                     // -- skip echo if boolean value is false --
-                    emitter.instruction(&format!("cbz x0, {}", skip_label));    // branch to skip label if x0 is zero (false)
+                    emitter.instruction(&format!("cbz x0, {}", skip_label)); // branch to skip label if x0 is zero (false)
                     abi::emit_write_stdout(emitter, &ty);
                     emitter.label(&skip_label);
                 }
@@ -118,13 +117,13 @@ pub fn emit_stmt(
                     // Runtime null check
                     let skip_label = ctx.next_label("echo_skip_null");
                     // -- build the null sentinel value 0x7FFFFFFFFFFFFFFFE in x9 --
-                    emitter.instruction("movz x9, #0xFFFE");                    // load lowest 16 bits of null sentinel into x9
-                    emitter.instruction("movk x9, #0xFFFF, lsl #16");           // insert bits 16-31 of null sentinel
-                    emitter.instruction("movk x9, #0xFFFF, lsl #32");           // insert bits 32-47 of null sentinel
-                    emitter.instruction("movk x9, #0x7FFF, lsl #48");           // insert bits 48-63 of null sentinel
-                    // -- compare value against null sentinel and skip echo if null --
-                    emitter.instruction("cmp x0, x9");                          // compare integer value against null sentinel
-                    emitter.instruction(&format!("b.eq {}", skip_label));       // skip echo if value is the null sentinel
+                    emitter.instruction("movz x9, #0xFFFE"); // load lowest 16 bits of null sentinel into x9
+                    emitter.instruction("movk x9, #0xFFFF, lsl #16"); // insert bits 16-31 of null sentinel
+                    emitter.instruction("movk x9, #0xFFFF, lsl #32"); // insert bits 32-47 of null sentinel
+                    emitter.instruction("movk x9, #0x7FFF, lsl #48"); // insert bits 48-63 of null sentinel
+                                                                      // -- compare value against null sentinel and skip echo if null --
+                    emitter.instruction("cmp x0, x9"); // compare integer value against null sentinel
+                    emitter.instruction(&format!("b.eq {}", skip_label)); // skip echo if value is the null sentinel
                     abi::emit_write_stdout(emitter, &ty);
                     emitter.label(&skip_label);
                 }
@@ -161,37 +160,37 @@ pub fn emit_stmt(
                 let old_ty = var.ty.clone();
                 retain_borrowed_heap_result(emitter, value, &ty);
                 emitter.comment(&format!("write through ref ${}", name));
-                abi::load_at_offset(emitter, "x9", offset);                     // load pointer to referenced variable
+                abi::load_at_offset(emitter, "x9", offset); // load pointer to referenced variable
                 if old_ty.is_refcounted() {
                     let needs_save_x0 = !matches!(&ty, PhpType::Str | PhpType::Float);
                     if needs_save_x0 {
-                        emitter.instruction("mov x8, x0");                      // preserve incoming heap value across decref
+                        emitter.instruction("mov x8, x0"); // preserve incoming heap value across decref
                     }
-                    emitter.instruction("ldr x0, [x9]");                        // load previous heap pointer from ref target
+                    emitter.instruction("ldr x0, [x9]"); // load previous heap pointer from ref target
                     abi::emit_decref_if_refcounted(emitter, &old_ty);
                     if needs_save_x0 {
-                        emitter.instruction("mov x0, x8");                      // restore incoming value after decref
+                        emitter.instruction("mov x0, x8"); // restore incoming value after decref
                     }
                 }
                 match &ty {
                     PhpType::Bool | PhpType::Int => {
-                        emitter.instruction("str x0, [x9]");                    // store int/bool through reference pointer
+                        emitter.instruction("str x0, [x9]"); // store int/bool through reference pointer
                     }
                     PhpType::Float => {
-                        emitter.instruction("str d0, [x9]");                    // store float through reference pointer
+                        emitter.instruction("str d0, [x9]"); // store float through reference pointer
                     }
                     PhpType::Str => {
                         // -- free old string and persist new one through ref --
-                        emitter.instruction("str x9, [sp, #-16]!");             // save ref pointer (str_persist clobbers x9)
-                        emitter.instruction("ldr x0, [x9]");                    // load old string ptr from ref target
-                        emitter.instruction("bl __rt_heap_free_safe");          // free old string if on heap
-                        emitter.instruction("bl __rt_str_persist");             // persist new string to heap
-                        emitter.instruction("ldr x9, [sp], #16");               // restore ref pointer
-                        emitter.instruction("str x1, [x9]");                    // store heap string pointer through ref
-                        emitter.instruction("str x2, [x9, #8]");                // store string length through ref
+                        emitter.instruction("str x9, [sp, #-16]!"); // save ref pointer (str_persist clobbers x9)
+                        emitter.instruction("ldr x0, [x9]"); // load old string ptr from ref target
+                        emitter.instruction("bl __rt_heap_free_safe"); // free old string if on heap
+                        emitter.instruction("bl __rt_str_persist"); // persist new string to heap
+                        emitter.instruction("ldr x9, [sp], #16"); // restore ref pointer
+                        emitter.instruction("str x1, [x9]"); // store heap string pointer through ref
+                        emitter.instruction("str x2, [x9, #8]"); // store string length through ref
                     }
                     _ => {
-                        emitter.instruction("str x0, [x9]");                    // store value through reference pointer
+                        emitter.instruction("str x0, [x9]"); // store value through reference pointer
                     }
                 }
             } else {
@@ -219,7 +218,7 @@ pub fn emit_stmt(
                 // In main scope, also sync to global storage if this var is used globally
                 if ctx.in_main && ctx.all_global_var_names.contains(name) {
                     if ty.is_refcounted() {
-                        abi::emit_incref_if_refcounted(emitter, &ty);           // global storage becomes a second owner alongside the local slot
+                        abi::emit_incref_if_refcounted(emitter, &ty); // global storage becomes a second owner alongside the local slot
                     }
                     emit_global_store(emitter, ctx, name, &ty);
                 }
@@ -230,7 +229,8 @@ pub fn emit_stmt(
                 if let Some(deferred) = ctx.deferred_closures.last() {
                     ctx.closure_sigs.insert(name.clone(), deferred.sig.clone());
                     if !deferred.captures.is_empty() {
-                        ctx.closure_captures.insert(name.clone(), deferred.captures.clone());
+                        ctx.closure_captures
+                            .insert(name.clone(), deferred.captures.clone());
                     }
                 }
             }
@@ -238,7 +238,10 @@ pub fn emit_stmt(
             // Update variable type if it changed (e.g. int /= produces float)
             if let Some(var) = ctx.variables.get(name) {
                 if var.ty != ty {
-                    ctx.variables.get_mut(name).expect("variable disappeared between get and get_mut").ty = ty;
+                    ctx.variables
+                        .get_mut(name)
+                        .expect("variable disappeared between get and get_mut")
+                        .ty = ty;
                 }
             }
         }
@@ -257,15 +260,15 @@ pub fn emit_stmt(
             super::expr::coerce_to_truthiness(emitter, ctx, &cond_ty);
             let mut next_label = ctx.next_label("if_else");
             // -- test if condition and branch to else/elseif --
-            emitter.instruction("cmp x0, #0");                                  // test if condition result is zero (falsy)
-            emitter.instruction(&format!("b.eq {}", next_label));               // branch to else/elseif if condition is false
+            emitter.instruction("cmp x0, #0"); // test if condition result is zero (falsy)
+            emitter.instruction(&format!("b.eq {}", next_label)); // branch to else/elseif if condition is false
 
             // then body
             for s in then_body {
                 emit_stmt(s, emitter, ctx, data);
             }
             // -- skip remaining branches after then-body executes --
-            emitter.instruction(&format!("b {}", end_label));                   // unconditional jump past all else/elseif branches
+            emitter.instruction(&format!("b {}", end_label)); // unconditional jump past all else/elseif branches
 
             // elseif clauses
             for (cond, body) in elseif_clauses {
@@ -275,14 +278,14 @@ pub fn emit_stmt(
                 super::expr::coerce_to_truthiness(emitter, ctx, &cond_ty);
                 next_label = ctx.next_label("if_else");
                 // -- test elseif condition and branch to next branch --
-                emitter.instruction("cmp x0, #0");                              // test if elseif condition is zero (falsy)
-                emitter.instruction(&format!("b.eq {}", next_label));           // branch to next elseif/else if condition is false
+                emitter.instruction("cmp x0, #0"); // test if elseif condition is zero (falsy)
+                emitter.instruction(&format!("b.eq {}", next_label)); // branch to next elseif/else if condition is false
 
                 for s in body {
                     emit_stmt(s, emitter, ctx, data);
                 }
                 // -- skip remaining branches after elseif-body executes --
-                emitter.instruction(&format!("b {}", end_label));               // unconditional jump past remaining branches
+                emitter.instruction(&format!("b {}", end_label)); // unconditional jump past remaining branches
             }
 
             // else body (or fall-through label)
@@ -296,7 +299,11 @@ pub fn emit_stmt(
 
             emitter.label(&end_label);
         }
-        StmtKind::ArrayAssign { array, index, value } => {
+        StmtKind::ArrayAssign {
+            array,
+            index,
+            value,
+        } => {
             emitter.blank();
             emitter.comment(&format!("${}[...] = ...", array));
             let var = match ctx.variables.get(array) {
@@ -318,16 +325,16 @@ pub fn emit_stmt(
             if is_assoc {
                 // -- associative array assignment: $map[$key] = $value --
                 if is_ref {
-                    abi::load_at_offset(emitter, "x9", offset);                 // load ref pointer
-                    emitter.instruction("ldr x0, [x9]");                        // dereference to get hash table pointer
+                    abi::load_at_offset(emitter, "x9", offset); // load ref pointer
+                    emitter.instruction("ldr x0, [x9]"); // dereference to get hash table pointer
                 } else {
-                    abi::load_at_offset(emitter, "x0", offset);                 // load hash table pointer
+                    abi::load_at_offset(emitter, "x0", offset); // load hash table pointer
                 }
-                emitter.instruction("str x0, [sp, #-16]!");                     // save hash table pointer
-                // Evaluate key (string)
+                emitter.instruction("str x0, [sp, #-16]!"); // save hash table pointer
+                                                            // Evaluate key (string)
                 emit_expr(index, emitter, ctx, data);
-                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // save key ptr/len
-                // Evaluate value
+                emitter.instruction("stp x1, x2, [sp, #-16]!"); // save key ptr/len
+                                                                // Evaluate value
                 let val_ty = emit_expr(value, emitter, ctx, data);
                 retain_borrowed_heap_result(emitter, value, &val_ty);
                 // -- prepare hash_set args --
@@ -335,93 +342,93 @@ pub fn emit_stmt(
                     PhpType::Int | PhpType::Bool => ("x0", "xzr"),
                     PhpType::Str => {
                         // Persist string value to heap before storing in hash table
-                        emitter.instruction("bl __rt_str_persist");             // copy string to heap, x1=heap_ptr, x2=len
+                        emitter.instruction("bl __rt_str_persist"); // copy string to heap, x1=heap_ptr, x2=len
                         ("x1", "x2")
                     }
                     PhpType::Float => {
-                        emitter.instruction("fmov x9, d0");                     // move float bits to integer register
+                        emitter.instruction("fmov x9, d0"); // move float bits to integer register
                         ("x9", "xzr")
                     }
                     _ => ("x0", "xzr"),
                 };
-                emitter.instruction(&format!("mov x3, {}", val_lo));            // value_lo
-                emitter.instruction(&format!("mov x4, {}", val_hi));            // value_hi
-                emitter.instruction("ldp x1, x2, [sp], #16");                   // pop key ptr/len
-                emitter.instruction("ldr x0, [sp], #16");                       // pop hash table pointer
-                emitter.instruction("bl __rt_hash_set");                        // insert/update key-value pair (x0 = table)
-                // -- update stored table pointer after possible growth --
+                emitter.instruction(&format!("mov x3, {}", val_lo)); // value_lo
+                emitter.instruction(&format!("mov x4, {}", val_hi)); // value_hi
+                emitter.instruction("ldp x1, x2, [sp], #16"); // pop key ptr/len
+                emitter.instruction("ldr x0, [sp], #16"); // pop hash table pointer
+                emitter.instruction("bl __rt_hash_set"); // insert/update key-value pair (x0 = table)
+                                                         // -- update stored table pointer after possible growth --
                 if is_ref {
-                    abi::load_at_offset(emitter, "x9", offset);                 // load ref pointer
-                    emitter.instruction("str x0, [x9]");                        // store new table ptr through ref
+                    abi::load_at_offset(emitter, "x9", offset); // load ref pointer
+                    emitter.instruction("str x0, [x9]"); // store new table ptr through ref
                 } else {
-                    abi::store_at_offset(emitter, "x0", offset);                // save possibly-new table pointer
+                    abi::store_at_offset(emitter, "x0", offset); // save possibly-new table pointer
                 }
             } else {
                 // -- indexed array assignment (existing logic) --
                 // -- load array base pointer from local variable slot --
                 if is_ref {
-                    abi::load_at_offset(emitter, "x9", offset);                 // load ref pointer
-                    emitter.instruction("ldr x0, [x9]");                        // dereference to get array heap pointer
+                    abi::load_at_offset(emitter, "x9", offset); // load ref pointer
+                    emitter.instruction("ldr x0, [x9]"); // dereference to get array heap pointer
                 } else {
-                    abi::load_at_offset(emitter, "x0", offset);                 // load array heap pointer from stack frame
+                    abi::load_at_offset(emitter, "x0", offset); // load array heap pointer from stack frame
                 }
-                emitter.instruction("str x0, [sp, #-16]!");                     // push array pointer onto stack
-                // Evaluate index
+                emitter.instruction("str x0, [sp, #-16]!"); // push array pointer onto stack
+                                                            // Evaluate index
                 emit_expr(index, emitter, ctx, data);
-                emitter.instruction("str x0, [sp, #-16]!");                     // push computed index onto stack
-                // Evaluate value
+                emitter.instruction("str x0, [sp, #-16]!"); // push computed index onto stack
+                                                            // Evaluate value
                 let val_ty = emit_expr(value, emitter, ctx, data);
                 retain_borrowed_heap_result(emitter, value, &val_ty);
                 // -- pop saved index and array pointer back into registers --
-                emitter.instruction("ldr x9, [sp], #16");                       // pop index value from stack into x9
-                emitter.instruction("ldr x10, [sp], #16");                      // pop array pointer from stack into x10
+                emitter.instruction("ldr x9, [sp], #16"); // pop index value from stack into x9
+                emitter.instruction("ldr x10, [sp], #16"); // pop array pointer from stack into x10
                 match &elem_ty {
                     PhpType::Int => {
                         // -- store integer value at array[index] --
-                        emitter.instruction("add x10, x10, #24");               // skip 24-byte array header
-                        emitter.instruction("str x0, [x10, x9, lsl #3]");       // store int at data[index]
+                        emitter.instruction("add x10, x10, #24"); // skip 24-byte array header
+                        emitter.instruction("str x0, [x10, x9, lsl #3]"); // store int at data[index]
                     }
                     PhpType::Str => {
                         // -- store string (ptr+len pair) at array[index] --
-                        emitter.instruction("lsl x9, x9, #4");                  // multiply index by 16
-                        emitter.instruction("add x10, x10, x9");                // offset into array data region
-                        emitter.instruction("add x10, x10, #24");               // skip 24-byte array header
-                        emitter.instruction("str x1, [x10]");                   // store string pointer at slot
-                        emitter.instruction("str x2, [x10, #8]");               // store string length at slot+8
+                        emitter.instruction("lsl x9, x9, #4"); // multiply index by 16
+                        emitter.instruction("add x10, x10, x9"); // offset into array data region
+                        emitter.instruction("add x10, x10, #24"); // skip 24-byte array header
+                        emitter.instruction("str x1, [x10]"); // store string pointer at slot
+                        emitter.instruction("str x2, [x10, #8]"); // store string length at slot+8
                     }
                     PhpType::Array(_) | PhpType::AssocArray { .. } => {
                         // -- store nested array pointer at array[index] --
-                        emitter.instruction("ldr x11, [x10]");                   // load current array length
-                        emitter.instruction("cmp x9, x11");                      // check whether this write overwrites an existing slot
+                        emitter.instruction("ldr x11, [x10]"); // load current array length
+                        emitter.instruction("cmp x9, x11"); // check whether this write overwrites an existing slot
                         let skip_release = ctx.next_label("array_assign_skip_release");
-                        emitter.instruction(&format!("b.hs {}", skip_release));   // skip release for writes past current length
-                        emitter.instruction("stp x0, x9, [sp, #-16]!");          // preserve new nested pointer and index across decref call
-                        emitter.instruction("str x10, [sp, #-16]!");             // preserve array pointer across decref call
-                        emitter.instruction("add x12, x10, #24");                // compute base of array data region
-                        emitter.instruction("ldr x0, [x12, x9, lsl #3]");        // load previous nested pointer from slot
+                        emitter.instruction(&format!("b.hs {}", skip_release)); // skip release for writes past current length
+                        emitter.instruction("stp x0, x9, [sp, #-16]!"); // preserve new nested pointer and index across decref call
+                        emitter.instruction("str x10, [sp, #-16]!"); // preserve array pointer across decref call
+                        emitter.instruction("add x12, x10, #24"); // compute base of array data region
+                        emitter.instruction("ldr x0, [x12, x9, lsl #3]"); // load previous nested pointer from slot
                         abi::emit_decref_if_refcounted(emitter, &elem_ty);
-                        emitter.instruction("ldr x10, [sp], #16");               // restore array pointer after decref
-                        emitter.instruction("ldp x0, x9, [sp], #16");            // restore new nested pointer and index after decref
+                        emitter.instruction("ldr x10, [sp], #16"); // restore array pointer after decref
+                        emitter.instruction("ldp x0, x9, [sp], #16"); // restore new nested pointer and index after decref
                         emitter.label(&skip_release);
-                        emitter.instruction("add x12, x10, #24");                // compute base of array data region
-                        emitter.instruction("str x0, [x12, x9, lsl #3]");       // store pointer at data[index]
+                        emitter.instruction("add x12, x10, #24"); // compute base of array data region
+                        emitter.instruction("str x0, [x12, x9, lsl #3]"); // store pointer at data[index]
                     }
                     PhpType::Object(_) => {
                         // -- store object pointer at array[index] --
-                        emitter.instruction("ldr x11, [x10]");                   // load current array length
-                        emitter.instruction("cmp x9, x11");                      // check whether this write overwrites an existing slot
+                        emitter.instruction("ldr x11, [x10]"); // load current array length
+                        emitter.instruction("cmp x9, x11"); // check whether this write overwrites an existing slot
                         let skip_release = ctx.next_label("array_assign_skip_release");
-                        emitter.instruction(&format!("b.hs {}", skip_release));   // skip release for writes past current length
-                        emitter.instruction("stp x0, x9, [sp, #-16]!");          // preserve new object pointer and index across decref call
-                        emitter.instruction("str x10, [sp, #-16]!");             // preserve array pointer across decref call
-                        emitter.instruction("add x12, x10, #24");                // compute base of array data region
-                        emitter.instruction("ldr x0, [x12, x9, lsl #3]");        // load previous object pointer from slot
+                        emitter.instruction(&format!("b.hs {}", skip_release)); // skip release for writes past current length
+                        emitter.instruction("stp x0, x9, [sp, #-16]!"); // preserve new object pointer and index across decref call
+                        emitter.instruction("str x10, [sp, #-16]!"); // preserve array pointer across decref call
+                        emitter.instruction("add x12, x10, #24"); // compute base of array data region
+                        emitter.instruction("ldr x0, [x12, x9, lsl #3]"); // load previous object pointer from slot
                         abi::emit_decref_if_refcounted(emitter, &elem_ty);
-                        emitter.instruction("ldr x10, [sp], #16");               // restore array pointer after decref
-                        emitter.instruction("ldp x0, x9, [sp], #16");            // restore new object pointer and index after decref
+                        emitter.instruction("ldr x10, [sp], #16"); // restore array pointer after decref
+                        emitter.instruction("ldp x0, x9, [sp], #16"); // restore new object pointer and index after decref
                         emitter.label(&skip_release);
-                        emitter.instruction("add x12, x10, #24");                // compute base of array data region
-                        emitter.instruction("str x0, [x12, x9, lsl #3]");       // store pointer at data[index]
+                        emitter.instruction("add x12, x10, #24"); // compute base of array data region
+                        emitter.instruction("str x0, [x12, x9, lsl #3]"); // store pointer at data[index]
                     }
                     _ => {}
                 }
@@ -442,17 +449,17 @@ pub fn emit_stmt(
             let is_ref = ctx.ref_params.contains(array);
             // -- load array pointer and save it before evaluating the value --
             if is_ref {
-                abi::load_at_offset(emitter, "x9", offset);                     // load ref pointer
-                emitter.instruction("ldr x0, [x9]");                            // dereference to get array heap pointer
+                abi::load_at_offset(emitter, "x9", offset); // load ref pointer
+                emitter.instruction("ldr x0, [x9]"); // dereference to get array heap pointer
             } else {
-                abi::load_at_offset(emitter, "x0", offset);                     // load array heap pointer from stack frame
+                abi::load_at_offset(emitter, "x0", offset); // load array heap pointer from stack frame
             }
-            emitter.instruction("str x0, [sp, #-16]!");                         // push array pointer onto stack to preserve it
-            // Evaluate value — use the actual expression type to pick the right push
+            emitter.instruction("str x0, [sp, #-16]!"); // push array pointer onto stack to preserve it
+                                                        // Evaluate value — use the actual expression type to pick the right push
             let val_ty = emit_expr(value, emitter, ctx, data);
             retain_borrowed_heap_result(emitter, value, &val_ty);
-            emitter.instruction("ldr x9, [sp], #16");                           // pop saved array pointer into x9
-            // Upgrade array element type in context if it changed
+            emitter.instruction("ldr x9, [sp], #16"); // pop saved array pointer into x9
+                                                      // Upgrade array element type in context if it changed
             let elem_ty = match ctx.variables.get(array) {
                 Some(v) => match &v.ty {
                     PhpType::Array(t) => *t.clone(),
@@ -468,35 +475,38 @@ pub fn emit_stmt(
             match &val_ty {
                 PhpType::Int | PhpType::Bool => {
                     // -- call runtime to append integer/bool to array --
-                    emitter.instruction("mov x1, x0");                          // move value to x1 (second arg for runtime call)
-                    emitter.instruction("mov x0, x9");                          // move array pointer to x0 (first arg)
-                    emitter.instruction("bl __rt_array_push_int");              // call runtime: append integer to dynamic array
+                    emitter.instruction("mov x1, x0"); // move value to x1 (second arg for runtime call)
+                    emitter.instruction("mov x0, x9"); // move array pointer to x0 (first arg)
+                    emitter.instruction("bl __rt_array_push_int"); // call runtime: append integer to dynamic array
                 }
                 PhpType::Float => {
                     // -- call runtime to append float to array (store as 8-byte int via bit cast) --
-                    emitter.instruction("fmov x1, d0");                         // move float bits to integer register
-                    emitter.instruction("mov x0, x9");                          // move array pointer to x0 (first arg)
-                    emitter.instruction("bl __rt_array_push_int");              // call runtime: append float bits as 8 bytes
+                    emitter.instruction("fmov x1, d0"); // move float bits to integer register
+                    emitter.instruction("mov x0, x9"); // move array pointer to x0 (first arg)
+                    emitter.instruction("bl __rt_array_push_int"); // call runtime: append float bits as 8 bytes
                 }
                 PhpType::Str => {
                     // -- push string to array (push_str persists to heap internally) --
-                    emitter.instruction("mov x0, x9");                          // move array pointer to x0
-                    emitter.instruction("bl __rt_array_push_str");              // call runtime: persist + append string to array
+                    emitter.instruction("mov x0, x9"); // move array pointer to x0
+                    emitter.instruction("bl __rt_array_push_str"); // call runtime: persist + append string to array
                 }
-                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Callable => {
+                PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Object(_)
+                | PhpType::Callable => {
                     // -- call runtime to append nested array/object/callable pointer --
-                    emitter.instruction("mov x1, x0");                          // move nested array/object pointer to x1
-                    emitter.instruction("mov x0, x9");                          // move outer array pointer to x0
-                    emitter.instruction("bl __rt_array_push_int");              // append pointer (8 bytes, same as int)
+                    emitter.instruction("mov x1, x0"); // move nested array/object pointer to x1
+                    emitter.instruction("mov x0, x9"); // move outer array pointer to x0
+                    emitter.instruction("bl __rt_array_push_int"); // append pointer (8 bytes, same as int)
                 }
                 _ => {}
             }
             // -- update stored array pointer (may have changed due to reallocation) --
             if is_ref {
-                abi::load_at_offset(emitter, "x9", offset);                     // load ref pointer
-                emitter.instruction("str x0, [x9]");                            // store new array ptr through ref
+                abi::load_at_offset(emitter, "x9", offset); // load ref pointer
+                emitter.instruction("str x0, [x9]"); // store new array ptr through ref
             } else {
-                abi::store_at_offset(emitter, "x0", offset);                    // save possibly-new array pointer
+                abi::store_at_offset(emitter, "x0", offset); // save possibly-new array pointer
             }
         }
         StmtKind::Foreach {
@@ -519,21 +529,21 @@ pub fn emit_stmt(
                 // -- foreach over associative array using hash iterator --
                 let val_ty = *value.clone();
                 // Stack: [hash_ptr:16][iter_index:16]
-                emitter.instruction("str x0, [sp, #-16]!");                     // push hash table pointer
-                emitter.instruction("str xzr, [sp, #-16]!");                    // push initial iterator index (0)
+                emitter.instruction("str x0, [sp, #-16]!"); // push hash table pointer
+                emitter.instruction("str xzr, [sp, #-16]!"); // push initial iterator index (0)
 
                 emitter.label(&loop_start);
                 // -- call hash_iter_next to get next entry --
-                emitter.instruction("ldr x0, [sp, #16]");                       // load hash table pointer
-                emitter.instruction("ldr x1, [sp]");                            // load current iterator index
-                emitter.instruction("bl __rt_hash_iter_next");                  // x0=next_idx(-1=done), x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi
+                emitter.instruction("ldr x0, [sp, #16]"); // load hash table pointer
+                emitter.instruction("ldr x1, [sp]"); // load current iterator index
+                emitter.instruction("bl __rt_hash_iter_next"); // x0=next_idx(-1=done), x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi
 
                 // -- check if iteration is done --
-                emitter.instruction("cmn x0, #1");                              // compare x0 with -1 (end of iteration)
-                emitter.instruction(&format!("b.eq {}", loop_end));             // exit if done
+                emitter.instruction("cmn x0, #1"); // compare x0 with -1 (end of iteration)
+                emitter.instruction(&format!("b.eq {}", loop_end)); // exit if done
 
                 // -- save updated index --
-                emitter.instruction("str x0, [sp]");                            // store new iterator index
+                emitter.instruction("str x0, [sp]"); // store new iterator index
 
                 // -- store key into $key_var if present --
                 if let Some(kv) = key_var {
@@ -541,9 +551,11 @@ pub fn emit_stmt(
                         let k_offset = kvar.stack_offset;
                         // key is a string: x1=ptr, x2=len (use x10 as scratch to avoid clobbering x9)
                         abi::store_at_offset_scratch(emitter, "x1", k_offset, "x10"); // store key ptr
-                        abi::store_at_offset_scratch(emitter, "x2", k_offset - 8, "x10"); // store key len
+                        abi::store_at_offset_scratch(emitter, "x2", k_offset - 8, "x10");
+                    // store key len
                     } else {
-                        emitter.comment(&format!("WARNING: undefined foreach key variable ${}", kv));
+                        emitter
+                            .comment(&format!("WARNING: undefined foreach key variable ${}", kv));
                     }
                 }
 
@@ -551,21 +563,27 @@ pub fn emit_stmt(
                 let val_var_info = match ctx.variables.get(value_var) {
                     Some(v) => v,
                     None => {
-                        emitter.comment(&format!("WARNING: undefined foreach value variable ${}", value_var));
+                        emitter.comment(&format!(
+                            "WARNING: undefined foreach value variable ${}",
+                            value_var
+                        ));
                         return;
                     }
                 };
                 let v_offset = val_var_info.stack_offset;
                 match &val_ty {
                     PhpType::Int | PhpType::Bool => {
-                        abi::store_at_offset_scratch(emitter, "x3", v_offset, "x10"); // store int value
+                        abi::store_at_offset_scratch(emitter, "x3", v_offset, "x10");
+                        // store int value
                     }
                     PhpType::Str => {
                         abi::store_at_offset_scratch(emitter, "x3", v_offset, "x10"); // store string ptr
-                        abi::store_at_offset_scratch(emitter, "x4", v_offset - 8, "x10"); // store string len
+                        abi::store_at_offset_scratch(emitter, "x4", v_offset - 8, "x10");
+                        // store string len
                     }
                     _ => {
-                        abi::store_at_offset_scratch(emitter, "x3", v_offset, "x10"); // store value
+                        abi::store_at_offset_scratch(emitter, "x3", v_offset, "x10");
+                        // store value
                     }
                 }
 
@@ -582,9 +600,9 @@ pub fn emit_stmt(
                 ctx.loop_stack.pop();
 
                 emitter.label(&loop_cont);
-                emitter.instruction(&format!("b {}", loop_start));              // jump back to iterator
+                emitter.instruction(&format!("b {}", loop_start)); // jump back to iterator
                 emitter.label(&loop_end);
-                emitter.instruction("add sp, sp, #32");                         // pop iter_index + hash_ptr
+                emitter.instruction("add sp, sp, #32"); // pop iter_index + hash_ptr
             } else {
                 // -- foreach over indexed array (existing logic) --
                 let elem_ty = match &arr_ty {
@@ -592,34 +610,39 @@ pub fn emit_stmt(
                     _ => PhpType::Int,
                 };
                 // -- save array metadata on stack for iteration --
-                emitter.instruction("str x0, [sp, #-16]!");                     // push array pointer onto stack
-                emitter.instruction("ldr x9, [x0]");                            // load array length from first field of array struct
-                emitter.instruction("str x9, [sp, #-16]!");                     // push array length onto stack
-                emitter.instruction("str xzr, [sp, #-16]!");                    // push initial loop index (0) onto stack
+                emitter.instruction("str x0, [sp, #-16]!"); // push array pointer onto stack
+                emitter.instruction("ldr x9, [x0]"); // load array length from first field of array struct
+                emitter.instruction("str x9, [sp, #-16]!"); // push array length onto stack
+                emitter.instruction("str xzr, [sp, #-16]!"); // push initial loop index (0) onto stack
 
                 emitter.label(&loop_start);
                 // -- load loop index and array length, check bounds --
-                emitter.instruction("ldr x0, [sp]");                            // load current loop index from top of stack
-                emitter.instruction("ldr x1, [sp, #16]");                       // load array length from stack (2 slots down)
-                emitter.instruction("cmp x0, x1");                              // compare index against array length
-                emitter.instruction(&format!("b.ge {}", loop_end));             // exit loop if index >= length
+                emitter.instruction("ldr x0, [sp]"); // load current loop index from top of stack
+                emitter.instruction("ldr x1, [sp, #16]"); // load array length from stack (2 slots down)
+                emitter.instruction("cmp x0, x1"); // compare index against array length
+                emitter.instruction(&format!("b.ge {}", loop_end)); // exit loop if index >= length
 
                 // -- store index into $key_var if present --
                 if let Some(kv) = key_var {
                     if let Some(kvar) = ctx.variables.get(kv) {
                         let k_offset = kvar.stack_offset;
-                        abi::store_at_offset_scratch(emitter, "x0", k_offset, "x10"); // store index as key
+                        abi::store_at_offset_scratch(emitter, "x0", k_offset, "x10");
+                    // store index as key
                     } else {
-                        emitter.comment(&format!("WARNING: undefined foreach key variable ${}", kv));
+                        emitter
+                            .comment(&format!("WARNING: undefined foreach key variable ${}", kv));
                     }
                 }
 
                 // -- load element at current index into the loop variable --
-                emitter.instruction("ldr x9, [sp, #32]");                       // load array pointer from stack (3 slots down)
+                emitter.instruction("ldr x9, [sp, #32]"); // load array pointer from stack (3 slots down)
                 let val_var = match ctx.variables.get(value_var) {
                     Some(v) => v,
                     None => {
-                        emitter.comment(&format!("WARNING: undefined foreach value variable ${}", value_var));
+                        emitter.comment(&format!(
+                            "WARNING: undefined foreach value variable ${}",
+                            value_var
+                        ));
                         return;
                     }
                 };
@@ -627,25 +650,25 @@ pub fn emit_stmt(
                 match &elem_ty {
                     PhpType::Int => {
                         // -- load integer element and store into $value_var --
-                        emitter.instruction("add x9, x9, #24");                 // skip 24-byte array header to reach data
-                        emitter.instruction("ldr x0, [x9, x0, lsl #3]");        // load int at data[index] (8 bytes per element)
-                        abi::store_at_offset(emitter, "x0", val_offset);        // store value into $value_var's stack slot
+                        emitter.instruction("add x9, x9, #24"); // skip 24-byte array header to reach data
+                        emitter.instruction("ldr x0, [x9, x0, lsl #3]"); // load int at data[index] (8 bytes per element)
+                        abi::store_at_offset(emitter, "x0", val_offset); // store value into $value_var's stack slot
                     }
                     PhpType::Str => {
                         // -- load string element (ptr+len) and store into $value_var --
-                        emitter.instruction("lsl x10, x0, #4");                 // multiply index by 16 (string slot size)
-                        emitter.instruction("add x9, x9, x10");                 // offset to the string slot in data region
-                        emitter.instruction("add x9, x9, #24");                 // skip 24-byte array header
-                        emitter.instruction("ldr x1, [x9]");                    // load string pointer from slot
-                        emitter.instruction("ldr x2, [x9, #8]");                // load string length from slot+8
-                        abi::store_at_offset(emitter, "x1", val_offset);        // store string pointer into $value_var
-                        abi::store_at_offset(emitter, "x2", val_offset - 8);    // store string length into $value_var+8
+                        emitter.instruction("lsl x10, x0, #4"); // multiply index by 16 (string slot size)
+                        emitter.instruction("add x9, x9, x10"); // offset to the string slot in data region
+                        emitter.instruction("add x9, x9, #24"); // skip 24-byte array header
+                        emitter.instruction("ldr x1, [x9]"); // load string pointer from slot
+                        emitter.instruction("ldr x2, [x9, #8]"); // load string length from slot+8
+                        abi::store_at_offset(emitter, "x1", val_offset); // store string pointer into $value_var
+                        abi::store_at_offset(emitter, "x2", val_offset - 8); // store string length into $value_var+8
                     }
                     PhpType::Array(_) | PhpType::AssocArray { .. } => {
                         // -- load nested array pointer and store into $value_var --
-                        emitter.instruction("add x9, x9, #24");                 // skip 24-byte array header to reach data
-                        emitter.instruction("ldr x0, [x9, x0, lsl #3]");        // load nested array pointer at index
-                        abi::store_at_offset(emitter, "x0", val_offset);        // store pointer into $value_var
+                        emitter.instruction("add x9, x9, #24"); // skip 24-byte array header to reach data
+                        emitter.instruction("ldr x0, [x9, x0, lsl #3]"); // load nested array pointer at index
+                        abi::store_at_offset(emitter, "x0", val_offset); // store pointer into $value_var
                     }
                     _ => {}
                 }
@@ -664,14 +687,14 @@ pub fn emit_stmt(
 
                 // -- increment loop index and jump back to condition check --
                 emitter.label(&loop_cont);
-                emitter.instruction("ldr x0, [sp]");                            // load current loop index from stack
-                emitter.instruction("add x0, x0, #1");                          // increment index by 1
-                emitter.instruction("str x0, [sp]");                            // write updated index back to stack
-                emitter.instruction(&format!("b {}", loop_start));              // jump back to loop condition check
+                emitter.instruction("ldr x0, [sp]"); // load current loop index from stack
+                emitter.instruction("add x0, x0, #1"); // increment index by 1
+                emitter.instruction("str x0, [sp]"); // write updated index back to stack
+                emitter.instruction(&format!("b {}", loop_start)); // jump back to loop condition check
 
                 emitter.label(&loop_end);
                 // -- clean up the 3 stack slots (index, length, array ptr) --
-                emitter.instruction("add sp, sp, #48");                         // deallocate 48 bytes (3 x 16-byte slots) from stack
+                emitter.instruction("add sp, sp, #48"); // deallocate 48 bytes (3 x 16-byte slots) from stack
             }
         }
         StmtKind::DoWhile { body, condition } => {
@@ -699,8 +722,8 @@ pub fn emit_stmt(
             emitter.label(&loop_cond);
             let cond_ty = emit_expr(condition, emitter, ctx, data);
             super::expr::coerce_to_truthiness(emitter, ctx, &cond_ty);
-            emitter.instruction("cmp x0, #0");                                  // test if do-while condition is zero (falsy)
-            emitter.instruction(&format!("b.ne {}", loop_start));               // loop back to start if condition is nonzero (truthy)
+            emitter.instruction("cmp x0, #0"); // test if do-while condition is zero (falsy)
+            emitter.instruction(&format!("b.ne {}", loop_start)); // loop back to start if condition is nonzero (truthy)
             emitter.label(&loop_end);
         }
         StmtKind::While { condition, body } => {
@@ -713,8 +736,8 @@ pub fn emit_stmt(
             let cond_ty = emit_expr(condition, emitter, ctx, data);
             super::expr::coerce_to_truthiness(emitter, ctx, &cond_ty);
             // -- test while condition and exit loop if false --
-            emitter.instruction("cmp x0, #0");                                  // test if while condition is zero (falsy)
-            emitter.instruction(&format!("b.eq {}", loop_end));                 // exit loop if condition is false
+            emitter.instruction("cmp x0, #0"); // test if while condition is zero (falsy)
+            emitter.instruction(&format!("b.eq {}", loop_end)); // exit loop if condition is false
 
             ctx.loop_stack.push(LoopLabels {
                 continue_label: loop_start.clone(),
@@ -729,7 +752,7 @@ pub fn emit_stmt(
             ctx.loop_stack.pop();
 
             // -- jump back to re-evaluate the while condition --
-            emitter.instruction(&format!("b {}", loop_start));                  // unconditional branch back to loop start
+            emitter.instruction(&format!("b {}", loop_start)); // unconditional branch back to loop start
             emitter.label(&loop_end);
         }
         StmtKind::For {
@@ -757,8 +780,8 @@ pub fn emit_stmt(
                 let cond_ty = emit_expr(cond, emitter, ctx, data);
                 super::expr::coerce_to_truthiness(emitter, ctx, &cond_ty);
                 // -- test for-loop condition and exit if false --
-                emitter.instruction("cmp x0, #0");                              // test if for-loop condition is zero (falsy)
-                emitter.instruction(&format!("b.eq {}", loop_end));             // exit loop if condition is false
+                emitter.instruction("cmp x0, #0"); // test if for-loop condition is zero (falsy)
+                emitter.instruction(&format!("b.eq {}", loop_end)); // exit loop if condition is false
             }
 
             ctx.loop_stack.push(LoopLabels {
@@ -780,13 +803,13 @@ pub fn emit_stmt(
                 emit_stmt(s, emitter, ctx, data);
             }
             // -- jump back to re-evaluate the for-loop condition --
-            emitter.instruction(&format!("b {}", loop_start));                  // unconditional branch back to loop start
+            emitter.instruction(&format!("b {}", loop_start)); // unconditional branch back to loop start
             emitter.label(&loop_end);
         }
         StmtKind::Break => {
             let labels = ctx.loop_stack.last().expect("codegen bug: break statement outside loop (should have been caught by type checker)");
             // -- break: jump out of the current loop --
-            emitter.instruction(&format!("b {}", labels.break_label));          // unconditional branch to loop exit label
+            emitter.instruction(&format!("b {}", labels.break_label)); // unconditional branch to loop exit label
         }
         StmtKind::FunctionDecl { .. } => {
             // Emitted separately in codegen/mod.rs
@@ -805,7 +828,7 @@ pub fn emit_stmt(
                     emitter.instruction(&format!("add sp, sp, #{}", sp_total)); // pop switch subjects before returning
                 }
                 // -- jump to function epilogue to restore frame and return --
-                emitter.instruction(&format!("b {}", label));                   // branch to function epilogue for stack cleanup and ret
+                emitter.instruction(&format!("b {}", label)); // branch to function epilogue for stack cleanup and ret
             }
         }
         StmtKind::ExprStmt(expr) => {
@@ -816,9 +839,13 @@ pub fn emit_stmt(
         StmtKind::Continue => {
             let labels = ctx.loop_stack.last().expect("codegen bug: continue statement outside loop (should have been caught by type checker)");
             // -- continue: jump to next iteration of the current loop --
-            emitter.instruction(&format!("b {}", labels.continue_label));       // unconditional branch to loop continue label
+            emitter.instruction(&format!("b {}", labels.continue_label)); // unconditional branch to loop continue label
         }
-        StmtKind::Switch { subject, cases, default } => {
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => {
             let switch_end = ctx.next_label("switch_end");
             emitter.blank();
             emitter.comment("switch");
@@ -827,10 +854,10 @@ pub fn emit_stmt(
             let subj_ty = emit_expr(subject, emitter, ctx, data);
             match &subj_ty {
                 PhpType::Str => {
-                    emitter.instruction("stp x1, x2, [sp, #-16]!");             // save string subject
+                    emitter.instruction("stp x1, x2, [sp, #-16]!"); // save string subject
                 }
                 _ => {
-                    emitter.instruction("str x0, [sp, #-16]!");                 // save int/bool subject
+                    emitter.instruction("str x0, [sp, #-16]!"); // save int/bool subject
                 }
             }
 
@@ -842,18 +869,18 @@ pub fn emit_stmt(
                     let val_ty = emit_expr(val, emitter, ctx, data);
                     match &subj_ty {
                         PhpType::Str => {
-                            emitter.instruction("mov x3, x1");                  // pattern ptr
-                            emitter.instruction("mov x4, x2");                  // pattern len
-                            emitter.instruction("ldp x1, x2, [sp]");            // peek subject string
-                            emitter.instruction("bl __rt_str_eq");              // compare → x0=1 if equal
+                            emitter.instruction("mov x3, x1"); // pattern ptr
+                            emitter.instruction("mov x4, x2"); // pattern len
+                            emitter.instruction("ldp x1, x2, [sp]"); // peek subject string
+                            emitter.instruction("bl __rt_str_eq"); // compare → x0=1 if equal
                         }
                         _ => {
-                            emitter.instruction("ldr x9, [sp]");                // peek subject
-                            emitter.instruction("cmp x9, x0");                  // compare
-                            emitter.instruction("cset x0, eq");                 // x0=1 if equal
+                            emitter.instruction("ldr x9, [sp]"); // peek subject
+                            emitter.instruction("cmp x9, x0"); // compare
+                            emitter.instruction("cset x0, eq"); // x0=1 if equal
                         }
                     }
-                    emitter.instruction(&format!("cbnz x0, {}", body_label));   // jump to case body if match
+                    emitter.instruction(&format!("cbnz x0, {}", body_label)); // jump to case body if match
                     let _ = val_ty;
                 }
                 body_labels.push(body_label);
@@ -862,16 +889,16 @@ pub fn emit_stmt(
             // -- no case matched: jump to default or end --
             let default_label = ctx.next_label("switch_default");
             if default.is_some() {
-                emitter.instruction(&format!("b {}", default_label));           // jump to default case
+                emitter.instruction(&format!("b {}", default_label)); // jump to default case
             } else {
-                emitter.instruction(&format!("b {}", switch_end));              // jump to end (no default)
+                emitter.instruction(&format!("b {}", switch_end)); // jump to end (no default)
             }
 
             // -- emit case bodies (fall-through semantics) --
             ctx.loop_stack.push(LoopLabels {
                 continue_label: switch_end.clone(),
                 break_label: switch_end.clone(),
-                sp_adjust: 16,  // switch pushes subject to stack
+                sp_adjust: 16, // switch pushes subject to stack
             });
 
             for (i, (_, body)) in cases.iter().enumerate() {
@@ -893,7 +920,7 @@ pub fn emit_stmt(
             ctx.loop_stack.pop();
             emitter.label(&switch_end);
             // -- clean up saved subject --
-            emitter.instruction("add sp, sp, #16");                             // pop saved subject
+            emitter.instruction("add sp, sp, #16"); // pop saved subject
         }
         StmtKind::ConstDecl { name, value } => {
             // Store constant value in context for later ConstRef resolution
@@ -919,7 +946,7 @@ pub fn emit_stmt(
             };
 
             // -- save array pointer on stack --
-            emitter.instruction("str x0, [sp, #-16]!");                         // push array pointer onto stack
+            emitter.instruction("str x0, [sp, #-16]!"); // push array pointer onto stack
 
             for (i, var_name) in vars.iter().enumerate() {
                 let var = match ctx.variables.get(var_name) {
@@ -932,43 +959,51 @@ pub fn emit_stmt(
                 let offset = var.stack_offset;
 
                 // -- load element at index i from array --
-                emitter.instruction("ldr x9, [sp]");                            // peek array pointer from stack
+                emitter.instruction("ldr x9, [sp]"); // peek array pointer from stack
                 match &elem_ty {
                     PhpType::Int | PhpType::Bool => {
-                        emitter.instruction("add x9, x9, #24");                 // skip 24-byte array header
-                        emitter.instruction(&format!(                           // load element at index
-                            "ldr x0, [x9, #{}]", i * 8
+                        emitter.instruction("add x9, x9, #24"); // skip 24-byte array header
+                        emitter.instruction(&format!(
+                            // load element at index
+                            "ldr x0, [x9, #{}]",
+                            i * 8
                         ));
-                        abi::store_at_offset(emitter, "x0", offset);            // store into variable
+                        abi::store_at_offset(emitter, "x0", offset); // store into variable
                     }
                     PhpType::Str => {
-                        emitter.instruction(&format!(                           // offset to string slot
-                            "add x9, x9, #{}", 24 + i * 16
+                        emitter.instruction(&format!(
+                            // offset to string slot
+                            "add x9, x9, #{}",
+                            24 + i * 16
                         ));
-                        emitter.instruction("ldr x1, [x9]");                    // load string pointer
-                        emitter.instruction("ldr x2, [x9, #8]");                // load string length
-                        abi::store_at_offset(emitter, "x1", offset);            // store string ptr
-                        abi::store_at_offset(emitter, "x2", offset - 8);        // store string len
+                        emitter.instruction("ldr x1, [x9]"); // load string pointer
+                        emitter.instruction("ldr x2, [x9, #8]"); // load string length
+                        abi::store_at_offset(emitter, "x1", offset); // store string ptr
+                        abi::store_at_offset(emitter, "x2", offset - 8); // store string len
                     }
                     PhpType::Float => {
-                        emitter.instruction("add x9, x9, #24");                 // skip 24-byte array header
-                        emitter.instruction(&format!(                           // load float at index
-                            "ldr d0, [x9, #{}]", i * 8
+                        emitter.instruction("add x9, x9, #24"); // skip 24-byte array header
+                        emitter.instruction(&format!(
+                            // load float at index
+                            "ldr d0, [x9, #{}]",
+                            i * 8
                         ));
-                        abi::store_at_offset(emitter, "d0", offset);            // store float into variable
+                        abi::store_at_offset(emitter, "d0", offset); // store float into variable
                     }
                     _ => {
-                        emitter.instruction("add x9, x9, #24");                 // skip 24-byte array header
-                        emitter.instruction(&format!(                           // load element at index
-                            "ldr x0, [x9, #{}]", i * 8
+                        emitter.instruction("add x9, x9, #24"); // skip 24-byte array header
+                        emitter.instruction(&format!(
+                            // load element at index
+                            "ldr x0, [x9, #{}]",
+                            i * 8
                         ));
-                        abi::store_at_offset(emitter, "x0", offset);            // store into variable
+                        abi::store_at_offset(emitter, "x0", offset); // store into variable
                     }
                 }
             }
 
             // -- clean up saved array pointer --
-            emitter.instruction("add sp, sp, #16");                             // pop saved array pointer
+            emitter.instruction("add sp, sp, #16"); // pop saved array pointer
         }
         StmtKind::Global { vars } => {
             emitter.blank();
@@ -979,7 +1014,10 @@ pub fn emit_stmt(
                 let var_info = match ctx.variables.get(var) {
                     Some(v) => v,
                     None => {
-                        emitter.comment(&format!("WARNING: global variable ${} not pre-allocated", var));
+                        emitter.comment(&format!(
+                            "WARNING: global variable ${} not pre-allocated",
+                            var
+                        ));
                         continue;
                     }
                 };
@@ -998,43 +1036,46 @@ pub fn emit_stmt(
             let skip_label = ctx.next_label("static_skip");
 
             // -- check if already initialized --
-            emitter.instruction(&format!("adrp x9, {}@PAGE", init_label));      // load page of init flag
+            emitter.instruction(&format!("adrp x9, {}@PAGE", init_label)); // load page of init flag
             emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", init_label)); // add page offset
-            emitter.instruction("ldr x10, [x9]");                               // load init flag value
-            emitter.instruction(&format!("cbnz x10, {}", skip_label));          // skip init if already done
+            emitter.instruction("ldr x10, [x9]"); // load init flag value
+            emitter.instruction(&format!("cbnz x10, {}", skip_label)); // skip init if already done
 
             // -- first call: evaluate init expression and store --
-            emitter.instruction("mov x10, #1");                                 // set init flag to 1
-            emitter.instruction("str x10, [x9]");                               // write init flag
+            emitter.instruction("mov x10, #1"); // set init flag to 1
+            emitter.instruction("str x10, [x9]"); // write init flag
             let ty = emit_expr(init, emitter, ctx, data);
             retain_borrowed_heap_result(emitter, init, &ty);
             // Store init value to static storage
-            emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));      // load page of static var storage
+            emitter.instruction(&format!("adrp x9, {}@PAGE", data_label)); // load page of static var storage
             emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); // add page offset
             match &ty {
                 PhpType::Bool | PhpType::Int => {
-                    emitter.instruction("str x0, [x9]");                        // store initial int/bool value
+                    emitter.instruction("str x0, [x9]"); // store initial int/bool value
                 }
                 PhpType::Float => {
-                    emitter.instruction("str d0, [x9]");                        // store initial float value
+                    emitter.instruction("str d0, [x9]"); // store initial float value
                 }
                 PhpType::Str => {
-                    emitter.instruction("str x1, [x9]");                        // store initial string pointer
-                    emitter.instruction("str x2, [x9, #8]");                    // store initial string length
+                    emitter.instruction("str x1, [x9]"); // store initial string pointer
+                    emitter.instruction("str x2, [x9, #8]"); // store initial string length
                 }
                 _ => {
-                    emitter.instruction("str x0, [x9]");                        // store initial value
+                    emitter.instruction("str x0, [x9]"); // store initial value
                 }
             }
             emitter.label(&skip_label);
 
             // -- load current value from static storage into local variable --
-            emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));      // load page of static var storage
+            emitter.instruction(&format!("adrp x9, {}@PAGE", data_label)); // load page of static var storage
             emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); // add page offset
             let var_info = match ctx.variables.get(name) {
                 Some(v) => v,
                 None => {
-                    emitter.comment(&format!("WARNING: static variable ${} not pre-allocated", name));
+                    emitter.comment(&format!(
+                        "WARNING: static variable ${} not pre-allocated",
+                        name
+                    ));
                     return;
                 }
             };
@@ -1043,21 +1084,22 @@ pub fn emit_stmt(
             // Note: x9 holds the static storage address, so use x10 as scratch for large offsets
             match &var_ty {
                 PhpType::Bool | PhpType::Int => {
-                    emitter.instruction("ldr x0, [x9]");                        // load static int/bool value
+                    emitter.instruction("ldr x0, [x9]"); // load static int/bool value
                     abi::store_at_offset_scratch(emitter, "x0", offset, "x10"); // store to local stack slot
                 }
                 PhpType::Float => {
-                    emitter.instruction("ldr d0, [x9]");                        // load static float value
+                    emitter.instruction("ldr d0, [x9]"); // load static float value
                     abi::store_at_offset_scratch(emitter, "d0", offset, "x10"); // store to local stack slot
                 }
                 PhpType::Str => {
-                    emitter.instruction("ldr x1, [x9]");                        // load static string pointer
-                    emitter.instruction("ldr x2, [x9, #8]");                    // load static string length
+                    emitter.instruction("ldr x1, [x9]"); // load static string pointer
+                    emitter.instruction("ldr x2, [x9, #8]"); // load static string length
                     abi::store_at_offset_scratch(emitter, "x1", offset, "x10"); // store string ptr to stack
-                    abi::store_at_offset_scratch(emitter, "x2", offset - 8, "x10"); // store string len to stack
+                    abi::store_at_offset_scratch(emitter, "x2", offset - 8, "x10");
+                    // store string len to stack
                 }
                 _ => {
-                    emitter.instruction("ldr x0, [x9]");                        // load static value
+                    emitter.instruction("ldr x0, [x9]"); // load static value
                     abi::store_at_offset_scratch(emitter, "x0", offset, "x10"); // store to local stack slot
                 }
             }
@@ -1071,9 +1113,14 @@ pub fn emit_stmt(
         }
         // OOP stubs — not yet implemented, skip
         StmtKind::ClassDecl { .. } => {} // already emitted in pre-scan
-        StmtKind::ExternFunctionDecl { .. } | StmtKind::ExternClassDecl { .. }
+        StmtKind::ExternFunctionDecl { .. }
+        | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. } => {} // extern decls processed at compile time
-        StmtKind::PropertyAssign { object, property, value } => {
+        StmtKind::PropertyAssign {
+            object,
+            property,
+            value,
+        } => {
             emitter.blank();
             emitter.comment(&format!("->{}  = ...", property));
 
@@ -1083,15 +1130,20 @@ pub fn emit_stmt(
 
             // Save value registers to stack
             match &val_ty {
-                PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
-                | PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
-                    emitter.instruction("str x0, [sp, #-16]!");                 // save value on stack
+                PhpType::Bool
+                | PhpType::Int
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Callable
+                | PhpType::Object(_)
+                | PhpType::Pointer(_) => {
+                    emitter.instruction("str x0, [sp, #-16]!"); // save value on stack
                 }
                 PhpType::Float => {
-                    emitter.instruction("str d0, [sp, #-16]!");                 // save float value on stack
+                    emitter.instruction("str d0, [sp, #-16]!"); // save float value on stack
                 }
                 PhpType::Str => {
-                    emitter.instruction("stp x1, x2, [sp, #-16]!");             // save string ptr+len on stack
+                    emitter.instruction("stp x1, x2, [sp, #-16]!"); // save string ptr+len on stack
                 }
                 PhpType::Void => {}
             }
@@ -1107,7 +1159,12 @@ pub fn emit_stmt(
                             return;
                         }
                     };
-                    let (prop_idx, prop_ty) = match class_info.properties.iter().enumerate().find(|(_, (n, _))| n == property) {
+                    let (prop_idx, prop_ty) = match class_info
+                        .properties
+                        .iter()
+                        .enumerate()
+                        .find(|(_, (n, _))| n == property)
+                    {
                         Some((i, (_, ty))) => (i, ty.clone()),
                         None => {
                             emitter.comment(&format!("WARNING: undefined property {}", property));
@@ -1116,18 +1173,28 @@ pub fn emit_stmt(
                     };
                     (class_name.clone(), 8 + prop_idx * 16, prop_ty, false)
                 }
-                PhpType::Pointer(Some(class_name)) if ctx.extern_classes.contains_key(class_name) => {
+                PhpType::Pointer(Some(class_name))
+                    if ctx.extern_classes.contains_key(class_name) =>
+                {
                     let class_info = match ctx.extern_classes.get(class_name).cloned() {
                         Some(c) => c,
                         None => {
-                            emitter.comment(&format!("WARNING: undefined extern class {}", class_name));
+                            emitter.comment(&format!(
+                                "WARNING: undefined extern class {}",
+                                class_name
+                            ));
                             return;
                         }
                     };
-                    let field = match class_info.fields.iter().find(|field| field.name == *property) {
+                    let field = match class_info
+                        .fields
+                        .iter()
+                        .find(|field| field.name == *property)
+                    {
                         Some(field) => field.clone(),
                         None => {
-                            emitter.comment(&format!("WARNING: undefined extern field {}", property));
+                            emitter
+                                .comment(&format!("WARNING: undefined extern field {}", property));
                             return;
                         }
                     };
@@ -1140,41 +1207,51 @@ pub fn emit_stmt(
             };
 
             if needs_deref {
-                emitter.instruction("bl __rt_ptr_check_nonnull");                       // abort with fatal error on null pointer dereference
-                emitter.comment(&format!("store extern field {}::{} at offset {}", class_name, property, offset));
+                emitter.instruction("bl __rt_ptr_check_nonnull"); // abort with fatal error on null pointer dereference
+                emitter.comment(&format!(
+                    "store extern field {}::{} at offset {}",
+                    class_name, property, offset
+                ));
             }
 
             // Save object pointer
-            emitter.instruction("mov x9, x0");                                  // save object pointer in x9
+            emitter.instruction("mov x9, x0"); // save object pointer in x9
             if !needs_deref {
                 if matches!(prop_ty, PhpType::Str) {
-                    emitter.instruction("str x9, [sp, #-16]!");                  // preserve object pointer across string release call
+                    emitter.instruction("str x9, [sp, #-16]!"); // preserve object pointer across string release call
                     emitter.instruction(&format!("ldr x0, [x9, #{}]", offset)); // load previous string pointer from property slot
-                    emitter.instruction("bl __rt_heap_free_safe");               // release previous string storage before overwrite
-                    emitter.instruction("ldr x9, [sp], #16");                    // restore object pointer after string release
+                    emitter.instruction("bl __rt_heap_free_safe"); // release previous string storage before overwrite
+                    emitter.instruction("ldr x9, [sp], #16"); // restore object pointer after string release
                 } else if prop_ty.is_refcounted() {
-                    emitter.instruction("str x9, [sp, #-16]!");                  // preserve object pointer across decref call
+                    emitter.instruction("str x9, [sp, #-16]!"); // preserve object pointer across decref call
                     emitter.instruction(&format!("ldr x0, [x9, #{}]", offset)); // load previous heap pointer from property slot
                     abi::emit_decref_if_refcounted(emitter, &prop_ty);
-                    emitter.instruction("ldr x9, [sp], #16");                    // restore object pointer after decref
+                    emitter.instruction("ldr x9, [sp], #16"); // restore object pointer after decref
                 }
             }
 
             // Pop value from stack and store into property
             match &val_ty {
-                PhpType::Bool | PhpType::Int | PhpType::Array(_) | PhpType::AssocArray { .. }
-                | PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
-                    emitter.instruction("ldr x10, [sp], #16");                  // pop saved value
-                    emitter.instruction(&format!("str x10, [x9, #{}]", offset)); // store value into property
+                PhpType::Bool
+                | PhpType::Int
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Callable
+                | PhpType::Object(_)
+                | PhpType::Pointer(_) => {
+                    emitter.instruction("ldr x10, [sp], #16"); // pop saved value
+                    emitter.instruction(&format!("str x10, [x9, #{}]", offset));
+                    // store value into property
                 }
                 PhpType::Float => {
-                    emitter.instruction("ldr d0, [sp], #16");                   // pop saved float
+                    emitter.instruction("ldr d0, [sp], #16"); // pop saved float
                     emitter.instruction(&format!("str d0, [x9, #{}]", offset)); // store float into property
                 }
                 PhpType::Str => {
-                    emitter.instruction("ldp x1, x2, [sp], #16");               // pop saved string ptr+len
+                    emitter.instruction("ldp x1, x2, [sp], #16"); // pop saved string ptr+len
                     emitter.instruction(&format!("str x1, [x9, #{}]", offset)); // store string pointer into property
-                    emitter.instruction(&format!("str x2, [x9, #{}]", offset + 8)); // store string length into property
+                    emitter.instruction(&format!("str x2, [x9, #{}]", offset + 8));
+                    // store string length into property
                 }
                 PhpType::Void => {}
             }
@@ -1183,126 +1260,114 @@ pub fn emit_stmt(
 }
 
 /// Store a value to global variable storage (_gvar_NAME).
-fn emit_global_store(
-    emitter: &mut Emitter,
-    _ctx: &mut Context,
-    name: &str,
-    ty: &PhpType,
-) {
+fn emit_global_store(emitter: &mut Emitter, _ctx: &mut Context, name: &str, ty: &PhpType) {
     let label = format!("_gvar_{}", name);
     emitter.comment(&format!("store to global ${}", name));
-    emitter.instruction(&format!("adrp x9, {}@PAGE", label));                   // load page of global var storage
-    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label));             // add page offset
+    emitter.instruction(&format!("adrp x9, {}@PAGE", label)); // load page of global var storage
+    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label)); // add page offset
     if matches!(ty, PhpType::Str) {
-        emitter.instruction("stp x1, x2, [sp, #-16]!");                          // preserve incoming string value across old-slot release
-        emitter.instruction("ldr x0, [x9]");                                    // load previous string pointer from global slot
-        emitter.instruction("bl __rt_heap_free_safe");                           // release previous string storage before overwrite
-        emitter.instruction("ldp x1, x2, [sp], #16");                            // restore incoming string value after release
-        emitter.instruction(&format!("adrp x9, {}@PAGE", label));                // reload page of global var storage after call clobbers scratch regs
-        emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label));          // resolve global storage address again
+        emitter.instruction("stp x1, x2, [sp, #-16]!"); // preserve incoming string value across old-slot release
+        emitter.instruction("ldr x0, [x9]"); // load previous string pointer from global slot
+        emitter.instruction("bl __rt_heap_free_safe"); // release previous string storage before overwrite
+        emitter.instruction("ldp x1, x2, [sp], #16"); // restore incoming string value after release
+        emitter.instruction(&format!("adrp x9, {}@PAGE", label)); // reload page of global var storage after call clobbers scratch regs
+        emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label)); // resolve global storage address again
     } else if ty.is_refcounted() {
-        emitter.instruction("str x0, [sp, #-16]!");                              // preserve incoming heap pointer across old-slot decref
-        emitter.instruction("ldr x0, [x9]");                                    // load previous heap pointer from global slot
+        emitter.instruction("str x0, [sp, #-16]!"); // preserve incoming heap pointer across old-slot decref
+        emitter.instruction("ldr x0, [x9]"); // load previous heap pointer from global slot
         abi::emit_decref_if_refcounted(emitter, ty);
-        emitter.instruction("ldr x0, [sp], #16");                                // restore incoming heap pointer for the store
-        emitter.instruction(&format!("adrp x9, {}@PAGE", label));                // reload page of global var storage after call clobbers scratch regs
-        emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label));          // resolve global storage address again
+        emitter.instruction("ldr x0, [sp], #16"); // restore incoming heap pointer for the store
+        emitter.instruction(&format!("adrp x9, {}@PAGE", label)); // reload page of global var storage after call clobbers scratch regs
+        emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label)); // resolve global storage address again
     }
     match ty {
         PhpType::Bool | PhpType::Int => {
-            emitter.instruction("str x0, [x9]");                                // store int/bool to global storage
+            emitter.instruction("str x0, [x9]"); // store int/bool to global storage
         }
         PhpType::Float => {
-            emitter.instruction("str d0, [x9]");                                // store float to global storage
+            emitter.instruction("str d0, [x9]"); // store float to global storage
         }
         PhpType::Str => {
-            emitter.instruction("str x1, [x9]");                                // store string pointer to global storage
-            emitter.instruction("str x2, [x9, #8]");                            // store string length to global storage
+            emitter.instruction("str x1, [x9]"); // store string pointer to global storage
+            emitter.instruction("str x2, [x9, #8]"); // store string length to global storage
         }
         _ => {
-            emitter.instruction("str x0, [x9]");                                // store value to global storage
+            emitter.instruction("str x0, [x9]"); // store value to global storage
         }
     }
 }
 
 /// Load a value from global variable storage (_gvar_NAME) into result registers.
-pub fn emit_global_load(
-    emitter: &mut Emitter,
-    ctx: &mut Context,
-    name: &str,
-    ty: &PhpType,
-) {
+pub fn emit_global_load(emitter: &mut Emitter, ctx: &mut Context, name: &str, ty: &PhpType) {
     if ctx.extern_globals.contains_key(name) {
         emit_extern_global_load(emitter, name, ty);
         return;
     }
     let label = format!("_gvar_{}", name);
     emitter.comment(&format!("load from global ${}", name));
-    emitter.instruction(&format!("adrp x9, {}@PAGE", label));                   // load page of global var storage
-    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label));             // add page offset
+    emitter.instruction(&format!("adrp x9, {}@PAGE", label)); // load page of global var storage
+    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label)); // add page offset
     match ty {
         PhpType::Bool | PhpType::Int => {
-            emitter.instruction("ldr x0, [x9]");                                // load int/bool from global storage
+            emitter.instruction("ldr x0, [x9]"); // load int/bool from global storage
         }
         PhpType::Float => {
-            emitter.instruction("ldr d0, [x9]");                                // load float from global storage
+            emitter.instruction("ldr d0, [x9]"); // load float from global storage
         }
         PhpType::Str => {
-            emitter.instruction("ldr x1, [x9]");                                // load string pointer from global storage
-            emitter.instruction("ldr x2, [x9, #8]");                            // load string length from global storage
+            emitter.instruction("ldr x1, [x9]"); // load string pointer from global storage
+            emitter.instruction("ldr x2, [x9, #8]"); // load string length from global storage
         }
         _ => {
-            emitter.instruction("ldr x0, [x9]");                                // load value from global storage
+            emitter.instruction("ldr x0, [x9]"); // load value from global storage
         }
     }
 }
 
-fn emit_extern_global_store(
-    emitter: &mut Emitter,
-    name: &str,
-    ty: &PhpType,
-) {
+fn emit_extern_global_store(emitter: &mut Emitter, name: &str, ty: &PhpType) {
     emitter.comment(&format!("store to extern global ${}", name));
-    emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name));                 // load page of extern global GOT entry
-    emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name));         // resolve extern global address
+    emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); // load page of extern global GOT entry
+    emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); // resolve extern global address
     match ty {
         PhpType::Bool | PhpType::Int | PhpType::Pointer(_) | PhpType::Callable => {
-            emitter.instruction("str x0, [x9]");                                  // store integer/pointer into extern global
+            emitter.instruction("str x0, [x9]"); // store integer/pointer into extern global
         }
         PhpType::Float => {
-            emitter.instruction("str d0, [x9]");                                  // store float into extern global
+            emitter.instruction("str d0, [x9]"); // store float into extern global
         }
         PhpType::Str => {
-            emitter.instruction("bl __rt_str_to_cstr");                           // allocate null-terminated copy for C global
-            emitter.instruction("str x0, [x9]");                                  // store char* into extern global
+            emitter.instruction("bl __rt_str_to_cstr"); // allocate null-terminated copy for C global
+            emitter.instruction("str x0, [x9]"); // store char* into extern global
         }
         PhpType::Void | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
-            emitter.comment(&format!("WARNING: unsupported extern global store for ${}", name));
+            emitter.comment(&format!(
+                "WARNING: unsupported extern global store for ${}",
+                name
+            ));
         }
     }
 }
 
-pub fn emit_extern_global_load(
-    emitter: &mut Emitter,
-    name: &str,
-    ty: &PhpType,
-) {
+pub fn emit_extern_global_load(emitter: &mut Emitter, name: &str, ty: &PhpType) {
     emitter.comment(&format!("load from extern global ${}", name));
-    emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name));                 // load page of extern global GOT entry
-    emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name));         // resolve extern global address
+    emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); // load page of extern global GOT entry
+    emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); // resolve extern global address
     match ty {
         PhpType::Bool | PhpType::Int | PhpType::Pointer(_) | PhpType::Callable => {
-            emitter.instruction("ldr x0, [x9]");                                  // load integer/pointer from extern global
+            emitter.instruction("ldr x0, [x9]"); // load integer/pointer from extern global
         }
         PhpType::Float => {
-            emitter.instruction("ldr d0, [x9]");                                  // load float from extern global
+            emitter.instruction("ldr d0, [x9]"); // load float from extern global
         }
         PhpType::Str => {
-            emitter.instruction("ldr x0, [x9]");                                  // load char* from extern global
-            emitter.instruction("bl __rt_cstr_to_str");                           // convert C string to elephc string
+            emitter.instruction("ldr x0, [x9]"); // load char* from extern global
+            emitter.instruction("bl __rt_cstr_to_str"); // convert C string to elephc string
         }
         PhpType::Void | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
-            emitter.comment(&format!("WARNING: unsupported extern global load for ${}", name));
+            emitter.comment(&format!(
+                "WARNING: unsupported extern global load for ${}",
+                name
+            ));
         }
     }
 }
