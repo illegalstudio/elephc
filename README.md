@@ -78,6 +78,9 @@ elephc hello.php
 
 # Custom heap size (default: 8MB)
 elephc --heap-size=16777216 heavy.php
+
+# Link extra native libraries or frameworks for FFI
+elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 ```
 
 Or via cargo:
@@ -86,6 +89,35 @@ Or via cargo:
 cargo run -- hello.php
 ./hello
 ```
+
+## FFI
+
+elephc can call native C functions directly through `extern` declarations.
+
+```php
+<?php
+extern function atoi(string $s): int;
+extern function signal(int $sig, callable $handler): ptr;
+extern function raise(int $sig): int;
+extern global ptr $environ;
+
+function on_signal($sig) {
+    echo "signal = " . $sig . "\n";
+}
+
+echo atoi("999") . "\n";
+echo ptr_is_null($environ) ? "missing\n" : "ok\n";
+signal(15, "on_signal");
+raise(15);
+```
+
+Notes:
+
+- `extern function`, `extern "lib" { ... }`, `extern global`, and `extern class` are supported.
+- `string` arguments are copied to owned null-terminated C strings before the call.
+- `string` return values are copied back into owned elephc strings.
+- `callable` parameters pass a user-defined elephc function by string name, for example `"on_signal"`.
+- Callback functions must stay C-compatible: use `int`, `float`, `bool`, `ptr`, or `void`-shaped values. String callbacks are not supported yet.
 
 ## What it compiles
 

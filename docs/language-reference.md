@@ -680,6 +680,88 @@ foreach ($matrix as $row) {
 - No array union operator (`+`)
 - Arrays are homogeneous: all elements must be the same type
 
+## FFI
+
+elephc supports direct calls into C libraries through `extern` declarations.
+
+### Extern functions
+
+```php
+<?php
+extern function atoi(string $s): int;
+extern function signal(int $sig, callable $handler): ptr;
+extern function raise(int $sig): int;
+```
+
+Supported FFI types:
+
+| FFI type | C shape | Notes |
+|---|---|---|
+| `int` | integer / long | Passed in integer registers |
+| `float` | `double` | Passed in floating-point registers |
+| `string` | `char *` | Copied to an owned null-terminated string before the C call |
+| `bool` | integer `0` / `1` | Passed as an integer register |
+| `void` | no value | Valid only as a return type |
+| `ptr` | `void *` | Opaque pointer |
+| `ptr<Name>` | typed pointer | Still ABI-compatible with a raw pointer |
+| `callable` | function pointer | Pass a user-defined elephc function by string name |
+
+### Extern blocks
+
+```php
+<?php
+extern "System" {
+    function getenv(string $name): string;
+    function strlen(string $s): int;
+}
+```
+
+Libraries declared in an `extern "lib"` block are added automatically to the linker command as `-l<lib>`.
+
+### Extern globals
+
+```php
+<?php
+extern global ptr $environ;
+echo ptr_is_null($environ) ? "missing" : "ok";
+```
+
+`extern global` reads and writes the actual C symbol, not an elephc-managed shadow copy.
+
+### Extern classes
+
+```php
+<?php
+extern class Point {
+    public int $x;
+    public int $y;
+}
+```
+
+Extern classes describe flat C struct layouts for FFI type checking. Field sizes follow the declared C-facing types, so `string` fields are treated as a single pointer-sized `char *`.
+
+### Callback functions
+
+```php
+<?php
+extern function signal(int $sig, callable $handler): ptr;
+extern function raise(int $sig): int;
+
+function on_signal($sig) {
+    echo $sig;
+}
+
+signal(15, "on_signal");
+raise(15);
+```
+
+Callback rules:
+
+- Pass callbacks by string name, for example `"on_signal"`.
+- Callback functions cannot be variadic, cannot use default values, and cannot use pass-by-reference parameters.
+- Only C-compatible callback shapes are supported today: `int`, `float`, `bool`, `ptr`, and `void`.
+- String callback parameters and string callback return values are not supported.
+
 ## Built-in Functions
 
 ### String functions

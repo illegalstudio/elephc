@@ -242,10 +242,10 @@ Proper type system for PHP compatibility.
 - [x] `extern "libname" function name(): type;` single-line syntax
 - [x] `--link` / `-l` and `--link-path` / `-L` CLI flags
 - [x] `--framework` flag for macOS frameworks
-- [x] Null-terminated string ↔ length-prefixed string conversion (`__rt_cstr`, `__rt_cstr_to_str`)
+- [x] Owned null-terminated string ↔ length-prefixed string conversion (`__rt_str_to_cstr`, `__rt_cstr_to_str`)
 - [x] `extern class` for C struct mapping (parsing + type checking, flat layout)
-- [x] `extern global` for accessing C global variables (parsing + type checking)
-- [ ] Callback support: pass elephc functions as C function pointers (`callable` params)
+- [x] `extern global` for accessing C global variables
+- [x] Callback support: pass elephc functions as C function pointers (`callable` params)
 - [ ] C memory management via extern libc: `malloc()`, `free()`, `memcpy()`, `memset()`
 
 ## v0.15.x — Multi-platform and optimizations

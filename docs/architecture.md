@@ -103,7 +103,7 @@ src/
 │       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, sort, usort, refcount, ... (53 files)
 │       ├── io/                fopen, fgets, fread, stat, scandir, ... (17 files)
 │       ├── system/            build_argv, time, getenv, shell_exec, date, mktime, strtotime, json_encode, json_decode, preg (14 files)
-│       └── pointers/          ptoa, ptr_check_nonnull (3 files)
+│       └── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str (4 files)
 │
 │
 └── errors/
@@ -128,6 +128,28 @@ src/
 | Stack locals | `[x29, #-offset]` | Negative offsets from frame pointer |
 | Null sentinel | `0x7FFFFFFFFFFFFFFE` | Distinguished from real integers |
 
+## FFI pipeline
+
+FFI declarations are parsed into dedicated AST nodes:
+
+- `StmtKind::ExternFunctionDecl`
+- `StmtKind::ExternClassDecl`
+- `StmtKind::ExternGlobalDecl`
+
+During type checking, extern declarations are registered in dedicated maps that are carried into codegen:
+
+- `extern_functions`: extern signatures exposed through the C ABI
+- `extern_classes`: flat C struct layout metadata
+- `extern_globals`: native global symbols loaded through the linker
+
+Extern calls differ from ordinary elephc function calls in three important ways:
+
+1. Codegen dispatches extern functions before built-ins, so an `extern function strlen(...)` declaration really calls C `strlen`, not the elephc builtin.
+2. `string` arguments are converted with `__rt_str_to_cstr`, which allocates an owned null-terminated copy on the elephc heap before calling C.
+3. `string` return values are converted with `__rt_cstr_to_str`, which copies bytes back into an owned elephc string.
+
+`callable` FFI parameters pass a user-defined elephc function by address. The function name is provided as a string literal at the call site, and codegen loads the address of the compiled `_fn_<name>` symbol before branching into C.
+
 ## Runtime memory layout
 
 ### Array header (heap-allocated)
@@ -151,7 +173,7 @@ The runtime reserves a fixed set of global symbols in `emit_runtime_data()`:
 | Heap allocator | `_heap_buf`, `_heap_off`, `_heap_free_list`, `_heap_max` | Heap storage plus allocator metadata |
 | Runtime diagnostics | `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` | Fatal error messages for heap, array, and pointer failures |
 | GC statistics | `_gc_allocs`, `_gc_frees`, `_gc_peak` | Allocation/free counters emitted for runtime tracking |
-| I/O scratch | `_cstr_buf`, `_cstr_buf2`, `_eof_flags` | Null-terminated conversion buffers and EOF bookkeeping |
+| I/O scratch | `_cstr_buf`, `_cstr_buf2`, `_eof_flags` | Syscall-oriented C-string scratch buffers and EOF bookkeeping |
 | String/regex tables | `_fmt_g`, `_b64_encode_tbl`, `_b64_decode_tbl`, `_pcre_*` | Formatting and lookup tables for runtime helpers |
 | JSON/date tables | `_json_true`, `_json_false`, `_json_null`, `_day_names`, `_month_names` | Static data used by JSON and date routines |
 
@@ -205,4 +227,4 @@ Total size: `8 + (num_properties × 16)`. Properties are stored at fixed offsets
 
 ### I/O buffers
 
-Two 4KB C-string conversion buffers (`_cstr_buf`, `_cstr_buf2`) for converting PHP strings (ptr+len) to null-terminated C strings before syscalls. Plus a 256-byte EOF flag array (`_eof_flags`) tracking end-of-file state per file descriptor.
+Two 4KB C-string conversion buffers (`_cstr_buf`, `_cstr_buf2`) are still used by low-level I/O helpers and syscalls. FFI string calls do not use these scratch buffers anymore; they allocate owned C strings through `__rt_str_to_cstr` so multiple string arguments remain valid across the same native call. A 256-byte EOF flag array (`_eof_flags`) tracks end-of-file state per file descriptor.
