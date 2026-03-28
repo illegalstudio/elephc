@@ -81,7 +81,7 @@ pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
 /// Retain the current value in x0 if it is runtime-refcounted.
 pub fn emit_incref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
     if ty.is_refcounted() {
-        emitter.instruction("bl __rt_incref");                                     // retain shared heap value before creating a new owner
+        emitter.instruction("bl __rt_incref");                                  // retain shared heap value before creating a new owner
     }
 }
 
@@ -89,13 +89,13 @@ pub fn emit_incref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
 pub fn emit_decref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
         PhpType::Array(_) => {
-            emitter.instruction("bl __rt_decref_array");                           // release indexed array reference
+            emitter.instruction("bl __rt_decref_array");                        // release indexed array reference
         }
         PhpType::AssocArray { .. } => {
-            emitter.instruction("bl __rt_decref_hash");                            // release associative array reference
+            emitter.instruction("bl __rt_decref_hash");                         // release associative array reference
         }
         PhpType::Object(_) => {
-            emitter.instruction("bl __rt_decref_object");                          // release object reference
+            emitter.instruction("bl __rt_decref_object");                       // release object reference
         }
         _ => {}
     }

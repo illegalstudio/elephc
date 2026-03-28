@@ -15,6 +15,6 @@ pub fn emit(
     emitter.comment("ptr_read8() — read one byte at pointer address");
     emit_expr(&args[0], emitter, ctx, data);
     emitter.instruction("bl __rt_ptr_check_nonnull");                           // abort with fatal error on null pointer dereference
-    emitter.instruction("ldrb w0, [x0]");                                        // load one unsigned byte and zero-extend to x0
+    emitter.instruction("ldrb w0, [x0]");                                       // load one unsigned byte and zero-extend to x0
     Some(PhpType::Int)
 }

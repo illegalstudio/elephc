@@ -17,8 +17,8 @@ pub fn emit(
     emitter.instruction("bl __rt_ptr_check_nonnull");                           // abort with fatal error on null pointer dereference
     emitter.instruction("str x0, [sp, #-16]!");                                 // save target pointer while value is evaluated
     emit_expr(&args[1], emitter, ctx, data);
-    emitter.instruction("mov w1, w0");                                           // keep the low 32 bits of the integer value
+    emitter.instruction("mov w1, w0");                                          // keep the low 32 bits of the integer value
     emitter.instruction("ldr x0, [sp], #16");                                   // restore target pointer
-    emitter.instruction("str w1, [x0]");                                         // store one 32-bit word at the pointer address
+    emitter.instruction("str w1, [x0]");                                        // store one 32-bit word at the pointer address
     Some(PhpType::Void)
 }
