@@ -63,8 +63,10 @@ pub fn emit_stmt(
             emitter.comment(&format!("${} = ...", name));
             let ty = emit_expr(value, emitter, ctx, data);
 
-            // Check if this is a global var in a function (uses global storage)
-            if ctx.global_vars.contains(name) {
+            if ctx.extern_globals.contains_key(name) {
+                emit_extern_global_store(emitter, name, &ty);
+            } else if ctx.global_vars.contains(name) {
+                // Check if this is a global var in a function (uses global storage)
                 // -- store to global variable storage --
                 emit_global_store(emitter, ctx, name, &ty);
             } else if ctx.ref_params.contains(name) {
@@ -1059,10 +1061,14 @@ fn emit_global_store(
 /// Load a value from global variable storage (_gvar_NAME) into result registers.
 pub fn emit_global_load(
     emitter: &mut Emitter,
-    _ctx: &mut Context,
+    ctx: &mut Context,
     name: &str,
     ty: &PhpType,
 ) {
+    if ctx.extern_globals.contains_key(name) {
+        emit_extern_global_load(emitter, name, ty);
+        return;
+    }
     let label = format!("_gvar_{}", name);
     emitter.comment(&format!("load from global ${}", name));
     emitter.instruction(&format!("adrp x9, {}@PAGE", label));                   // load page of global var storage
@@ -1080,6 +1086,56 @@ pub fn emit_global_load(
         }
         _ => {
             emitter.instruction("ldr x0, [x9]");                                // load value from global storage
+        }
+    }
+}
+
+fn emit_extern_global_store(
+    emitter: &mut Emitter,
+    name: &str,
+    ty: &PhpType,
+) {
+    emitter.comment(&format!("store to extern global ${}", name));
+    emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name));                 // load page of extern global GOT entry
+    emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name));         // resolve extern global address
+    match ty {
+        PhpType::Bool | PhpType::Int | PhpType::Pointer(_) | PhpType::Callable => {
+            emitter.instruction("str x0, [x9]");                                  // store integer/pointer into extern global
+        }
+        PhpType::Float => {
+            emitter.instruction("str d0, [x9]");                                  // store float into extern global
+        }
+        PhpType::Str => {
+            emitter.instruction("bl __rt_str_to_cstr");                           // allocate null-terminated copy for C global
+            emitter.instruction("str x0, [x9]");                                  // store char* into extern global
+        }
+        PhpType::Void | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            emitter.comment(&format!("WARNING: unsupported extern global store for ${}", name));
+        }
+    }
+}
+
+pub fn emit_extern_global_load(
+    emitter: &mut Emitter,
+    name: &str,
+    ty: &PhpType,
+) {
+    emitter.comment(&format!("load from extern global ${}", name));
+    emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name));                 // load page of extern global GOT entry
+    emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name));         // resolve extern global address
+    match ty {
+        PhpType::Bool | PhpType::Int | PhpType::Pointer(_) | PhpType::Callable => {
+            emitter.instruction("ldr x0, [x9]");                                  // load integer/pointer from extern global
+        }
+        PhpType::Float => {
+            emitter.instruction("ldr d0, [x9]");                                  // load float from extern global
+        }
+        PhpType::Str => {
+            emitter.instruction("ldr x0, [x9]");                                  // load char* from extern global
+            emitter.instruction("bl __rt_cstr_to_str");                           // convert C string to elephc string
+        }
+        PhpType::Void | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            emitter.comment(&format!("WARNING: unsupported extern global load for ${}", name));
         }
     }
 }

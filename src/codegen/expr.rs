@@ -60,7 +60,32 @@ pub fn emit_expr(
             PhpType::Float
         }
         ExprKind::Variable(name) => {
-            if ctx.global_vars.contains(name) || (ctx.in_main && ctx.all_global_var_names.contains(name)) {
+            if let Some(ty) = ctx.extern_globals.get(name).cloned() {
+                emitter.comment(&format!("load extern global ${}", name));
+                match &ty {
+                    PhpType::Bool | PhpType::Int | PhpType::Pointer(_) | PhpType::Callable => {
+                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name));   // load page of extern global GOT entry
+                        emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); // resolve extern global address
+                        emitter.instruction("ldr x0, [x9]");                            // load extern integer/pointer value
+                    }
+                    PhpType::Float => {
+                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name));   // load page of extern global GOT entry
+                        emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); // resolve extern global address
+                        emitter.instruction("ldr d0, [x9]");                            // load extern float value
+                    }
+                    PhpType::Str => {
+                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name));   // load page of extern global GOT entry
+                        emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); // resolve extern global address
+                        emitter.instruction("ldr x0, [x9]");                            // load char* from extern global
+                        emitter.instruction("bl __rt_cstr_to_str");                     // convert C string to elephc string
+                    }
+                    PhpType::Void | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+                        emitter.comment(&format!("WARNING: unsupported extern global type for ${}", name));
+                        return PhpType::Int;
+                    }
+                }
+                ty
+            } else if ctx.global_vars.contains(name) || (ctx.in_main && ctx.all_global_var_names.contains(name)) {
                 // Load from global storage
                 let var = match ctx.variables.get(name) {
                     Some(v) => v,
@@ -402,11 +427,11 @@ pub fn emit_expr(
         }
         ExprKind::Cast { target, expr } => emit_cast(target, expr, emitter, ctx, data),
         ExprKind::FunctionCall { name, args } => {
-            if let Some(ty) = super::builtins::emit_builtin_call(name, args, emitter, ctx, data) {
-                return ty;
-            }
             if ctx.extern_functions.contains_key(name) {
                 return super::ffi::emit_extern_call(name, args, emitter, ctx, data);
+            }
+            if let Some(ty) = super::builtins::emit_builtin_call(name, args, emitter, ctx, data) {
+                return ty;
             }
             emit_function_call(name, args, emitter, ctx, data)
         }
