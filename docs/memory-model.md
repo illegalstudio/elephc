@@ -178,7 +178,7 @@ The runtime routine `__rt_heap_free`:
 
 1. Read the block size (32-bit) from the header at `user_pointer - 8`
 2. Insert the block at the head of the free list (LIFO)
-3. Free blocks have layout: `[size:4][refcnt:4][next_ptr:8][...unused...]`
+3. Free blocks reuse the same 8-byte header, then store the free-list pointer immediately after it: `[size:4][refcnt:4][next_ptr:8][...unused...]`. At the assembly level this is often described as `[size:8][next_ptr:8][...unused...]` because `__rt_heap_free` links the block through the 8-byte word at `header + 8`.
 
 The variant `__rt_heap_free_safe` validates that the pointer is within `_heap_buf` range before freeing — safe to call with garbage, null, or `.data` section pointers.
 
@@ -266,7 +266,7 @@ Associative arrays use a separate heap-allocated structure — an open-addressin
 |---|---|---|
 | `count` | 8 bytes | Number of occupied entries |
 | `capacity` | 8 bytes | Total number of slots |
-| `val_type` | 8 bytes | Value type tag (0=int, 1=str, 2=float, 3=bool) |
+| `val_type` | 8 bytes | Value type tag (0=int, 1=str, 2=float, 3=bool, 4=array, 5=assoc, 6=object) |
 
 ### Entries (40 bytes each)
 

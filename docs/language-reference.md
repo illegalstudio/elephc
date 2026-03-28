@@ -655,7 +655,7 @@ foreach ($map as $key => $value) {
 }
 ```
 
-Associative arrays use a hash table runtime for string keys. Keys are always strings; values must all be the same type.
+Associative arrays use a hash table runtime. Keys follow the type inferred from the first key expression (commonly strings, but integer keys are also accepted when used consistently). The static `AssocArray` value type is inferred from the first value expression; later values are not re-checked for full PHP-style heterogeneity.
 
 ### Multi-dimensional arrays
 
@@ -876,7 +876,7 @@ Callback rules:
 | `isset()` | `isset($var): int` | Check if variable is defined (always 1) |
 | **Searching** | | |
 | `array_key_exists()` | `array_key_exists($key, $arr): bool` | Check if key exists in array |
-| `array_search()` | `array_search($needle, $arr): int\|string` | Search for value, return key. Returns `-1` if not found (PHP returns `false`) |
+| `array_search()` | `array_search($needle, $arr): int` | Search for value, return key. Returns `-1` if not found (PHP returns `false`) |
 | **Slicing** | | |
 | `array_slice()` | `array_slice($arr, $offset [, $length]): array` | Extract a slice of the array |
 | `array_splice()` | `array_splice($arr, $offset [, $length]): array` | Remove/replace part of array |
@@ -995,7 +995,7 @@ Callback rules:
 | `die()` | `die($code = 0): void` | Alias for `exit()` |
 | `define()` | `define("NAME", value): void` | Define a named constant |
 | `time()` | `time(): int` | Get current Unix timestamp |
-| `microtime()` | `microtime($as_float = false): float` | Get current time with microsecond precision |
+| `microtime()` | `microtime($as_float = false): float` | Get current time with microsecond precision. elephc currently always returns a float, even when PHP would return a string for `false`. |
 | `sleep()` | `sleep($seconds): int` | Sleep for given seconds |
 | `usleep()` | `usleep($microseconds): void` | Sleep for given microseconds |
 | `getenv()` | `getenv($name): string` | Get environment variable value |

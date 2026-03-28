@@ -154,6 +154,10 @@ The CPU executes instructions sequentially unless a **branch** changes the flow:
 | `b.gt label` | Branch if greater than | For `>` |
 | `b.le label` | Branch if less or equal | For `<=` |
 | `b.ge label` | Branch if greater or equal | For `>=` |
+| `b.lo label` | Branch if lower (unsigned) | Heap / pointer lower-bound checks |
+| `b.hs label` | Branch if higher or same (unsigned) | Heap / pointer upper-bound checks |
+| `b.hi label` | Branch if higher (unsigned) | Unsigned range checks |
+| `b.ls label` | Branch if lower or same (unsigned) | Unsigned range checks |
 | `cbz x0, label` | Branch if x0 is zero | `if` conditions (falsy check) |
 | `cbnz x0, label` | Branch if x0 is not zero | Loop conditions |
 | `bl label` | Branch with link (function call) | Saves return address in x30 |
@@ -177,6 +181,8 @@ b.le _end_if_1           ; if $x <= 0, skip the body
 ; ... emit "positive" ...
 _end_if_1:
 ```
+
+For local stack slots, elephc usually emits `ldur` / `stur` (or computes the address with `sub` first) rather than raw `ldr` / `str` with negative immediates. The simplified examples in this page focus on the control-flow shape rather than the exact helper sequence.
 
 See [ARM64 Instruction Reference](arm64-instructions.md) for every instruction elephc uses, and [The Code Generator](the-codegen.md) for how each PHP construct maps to assembly.
 

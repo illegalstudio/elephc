@@ -233,6 +233,10 @@ pub struct CheckResult {
     pub global_env: TypeEnv,                    // variable name → type
     pub functions: HashMap<String, FunctionSig>, // function name → signature
     pub classes: HashMap<String, ClassInfo>,     // class name → class info
+    pub extern_functions: HashMap<String, ExternFunctionSig>,
+    pub extern_classes: HashMap<String, ExternClassInfo>,
+    pub extern_globals: HashMap<String, PhpType>,
+    pub required_libraries: Vec<String>,
 }
 ```
 
@@ -240,6 +244,7 @@ This is passed to the [code generator](the-codegen.md), which uses it to:
 - Allocate the right amount of stack space per variable
 - Choose the correct registers and instructions
 - Emit proper type coercions
+- Carry FFI declarations and linker requirements into codegen
 
 ## Error examples
 

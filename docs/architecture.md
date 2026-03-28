@@ -87,7 +87,7 @@ src/
 │   ├── data_section.rs        String/float literal .data section
 │   ├── emit.rs                Assembly text buffer
 │   │
-│   ├── builtins/              Built-in function codegen (one file per function)
+│   ├── builtins/              Built-in function codegen (one file per language function)
 │   │   ├── mod.rs             Dispatcher — chains to category modules
 │   │   ├── strings/           strlen, substr, strpos, explode, sprintf, md5, ... (57 files)
 │   │   ├── arrays/            count, array_push, sort, array_map, usort, ... (51 files)
@@ -97,10 +97,10 @@ src/
 │   │   ├── pointers/          ptr, ptr_get, ptr_set, ptr_read8, ptr_write8, ptr_offset, ... (12 files)
 │   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, ... (25 files)
 │   │
-│   └── runtime/               ARM64 runtime routines (one file per function)
+│   └── runtime/               ARM64 runtime routines (one file per language/runtime helper)
 │       ├── mod.rs             Emits all runtime functions into assembly
 │       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, str_persist, ... (53 files)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, sort, usort, refcount, ... (53 files)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, sort, usort, refcount, ... (56 files)
 │       ├── io/                fopen, fgets, fread, stat, scandir, ... (17 files)
 │       ├── system/            build_argv, time, getenv, shell_exec, date, mktime, strtotime, json_encode, json_decode, preg (14 files)
 │       └── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ... (5 files)
@@ -142,7 +142,7 @@ During type checking, extern declarations are registered in dedicated maps that 
 - `extern_classes`: flat C struct layout metadata
 - `extern_globals`: native global symbols loaded through the linker
 
-Extern calls differ from ordinary elephc function calls in three important ways:
+Extern calls differ from ordinary elephc function calls in four important ways:
 
 1. Codegen dispatches extern functions before built-ins, so an `extern function strlen(...)` declaration really calls C `strlen`, not the elephc builtin.
 2. `string` arguments are converted with `__rt_str_to_cstr`, which allocates an owned null-terminated copy on the elephc heap before calling C.
