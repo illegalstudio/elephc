@@ -19,7 +19,7 @@ A token is a categorized piece of text. The lexer doesn't care about structure (
 ```
 OpenTag         "<?php"
 Variable("x")   "$x"
-Equals           "="
+Assign           "="
 IntLiteral(42)   "42"
 Plus             "+"
 Variable("y")   "$y"
@@ -134,7 +134,8 @@ Each keyword is a distinct token variant (e.g., `Token::If`, `Token::While`, `To
 ### Constants (keyword tokens)
 
 ```
-INF  NAN  PHP_INT_MAX  PHP_INT_MIN  PHP_FLOAT_MAX  M_PI
+INF  NAN  PHP_INT_MAX  PHP_INT_MIN  PHP_FLOAT_MAX  PHP_FLOAT_MIN  PHP_FLOAT_EPSILON
+M_PI  M_E  M_SQRT2  M_PI_2  M_PI_4  M_LOG2E  M_LOG10E
 PHP_EOL  PHP_OS  DIRECTORY_SEPARATOR
 STDIN  STDOUT  STDERR
 ```

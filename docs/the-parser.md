@@ -73,6 +73,7 @@ Things that have a value:
 | `MethodCall { object, method, args }` | `$p->move(1, 2)` | Instance method call |
 | `StaticMethodCall { class_name, method, args }` | `Point::origin()` | Static method call via `::` |
 | `This` | `$this` | Reference to the current object inside a method |
+| `PtrCast { target_type, expr }` | `ptr_cast<int>($p)` | Pointer-tag cast parsed specially after `ptr_cast<T>` |
 
 ### Statements (`Stmt`)
 
@@ -242,6 +243,7 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `new` + `Identifier` | Parse object instantiation → `NewObject` |
 | `$this` | Return `This` node |
 | `...` + expr | Parse spread/unpack → `Spread` |
+| `ptr_cast` + `<Type>` + `(` | Parse pointer cast syntax → `PtrCast` |
 
 ### Postfix: array access and member access
 

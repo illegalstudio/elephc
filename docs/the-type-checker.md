@@ -38,6 +38,7 @@ pub enum PhpType {
     },
     Callable,                      // closures and function references
     Object(String),                // class instance, e.g., Object("Point")
+    Pointer(Option<String>),       // opaque ptr or typed ptr<Class>
 }
 ```
 
@@ -46,6 +47,8 @@ This is simpler than PHP's runtime types — no union types, no mixed, no nullab
 `Callable` is used for anonymous functions (closures) and arrow functions. A callable value is stored as a function pointer (8 bytes) on the stack, and is invoked via an indirect branch (`blr`).
 
 `Object(String)` represents a class instance. The string carries the class name (e.g., `"Point"`). Objects are heap-allocated pointers (8 bytes on the stack).
+
+`Pointer(Option<String>)` represents a raw 64-bit address. `Pointer(None)` is an opaque pointer, while `Pointer(Some("Point"))` is a pointer tagged with a checked pointee type. The tag affects static checking, but the runtime value is still just an address in `x0`.
 
 ## How inference works
 
@@ -73,6 +76,9 @@ The first assignment determines a variable's type. After that, reassignment is o
 | `Int` | `Str` | **No** — compile error |
 | `Void` | anything | Yes (null can become any type) |
 | anything | `Void` | Yes (any variable can become null) |
+| `Pointer(None)` | `Pointer(Some("T"))` | Yes (merged to the more specific pointer tag) |
+| `Pointer(Some("A"))` | `Pointer(Some("B"))` | Yes, but merged to opaque `Pointer(None)` if tags differ |
+| `Pointer(*)` | `Int` / `Str` / `Array` | **No** — compile error |
 
 This means elephc rejects code that PHP would allow:
 
@@ -134,6 +140,10 @@ count($arr: Array) → Int
 abs($val: Int|Float) → Int|Float
 floor($val: Float) → Float
 rand($min?: Int, $max?: Int) → Int
+ptr($var: lvalue) → Pointer(None)
+ptr_get($ptr: Pointer) → Int
+ptr_set($ptr: Pointer, $value: Int|Bool|Void|Pointer) → Void
+ptr_cast<T>($ptr: Pointer) → Pointer(Some(T))
 ```
 
 The type checker validates:
@@ -194,10 +204,15 @@ The `ClassInfo` struct:
 
 ```rust
 pub struct ClassInfo {
+    pub class_id: u64,
     pub properties: Vec<(String, PhpType)>,
     pub defaults: Vec<Option<Expr>>,
+    pub property_visibilities: HashMap<String, Visibility>,
+    pub readonly_properties: HashSet<String>,
     pub methods: HashMap<String, FunctionSig>,
     pub static_methods: HashMap<String, FunctionSig>,
+    pub method_visibilities: HashMap<String, Visibility>,
+    pub static_method_visibilities: HashMap<String, Visibility>,
     pub constructor_param_to_prop: Vec<Option<String>>,
 }
 ```
@@ -237,10 +252,10 @@ strlen(42);
 // Error: strlen() expects string, got Int
 
 unknown_func();
-// Error: Call to undefined function unknown_func()
+// Error: Undefined function: unknown_func
 
 substr("hello");
-// Error: substr() expects at least 2 arguments, got 1
+// Error: substr() takes 2 or 3 arguments
 ```
 
 Each error includes the exact line and column, thanks to the `Span` carried through from the [lexer](the-lexer.md).

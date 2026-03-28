@@ -4,7 +4,7 @@
 
 ---
 
-**Source:** `src/codegen/runtime/` — `mod.rs`, `strings/`, `arrays/`, `io/`, `system/`
+**Source:** `src/codegen/runtime/` — `mod.rs`, `strings/`, `arrays/`, `io/`, `system/`, `pointers/`
 
 The runtime is a collection of **hand-written assembly routines** that handle operations too complex for inline code generation. When the [code generator](the-codegen.md) needs to convert an integer to a string or concatenate two strings, it emits a `bl __rt_itoa` or `bl __rt_concat` — a call to a runtime routine.
 
@@ -156,7 +156,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 ## Array routines
 
-**Source:** `src/codegen/runtime/arrays/` (52 files)
+**Source:** `src/codegen/runtime/arrays/` (53 files)
 
 ### Core allocation
 
@@ -231,7 +231,7 @@ Refcounts are stored as a 32-bit value in the upper half of the 8-byte heap head
 
 ## System routines
 
-**Source:** `src/codegen/runtime/system/` (10 files)
+**Source:** `src/codegen/runtime/system/` (14 files)
 
 ### `__rt_build_argv` — Build $argv array
 
@@ -282,7 +282,7 @@ The `json_encode` implementation uses **type-aware dispatch** — the codegen ca
 
 **File:** `system/preg.rs`
 
-All regex routines use **POSIX extended regular expressions** via libc's `regcomp()`, `regexec()`, and `regfree()`. A shared helper (`__rt_preg_strip_delimiters`) strips PHP-style delimiters (e.g., `/pattern/`) before passing the pattern to the POSIX API.
+All regex routines use **POSIX extended regular expressions** via libc's `regcomp()`, `regexec()`, and `regfree()`. Shared helpers (`__rt_preg_strip` and `__rt_pcre_to_posix`) strip PHP-style delimiters and translate common PCRE shorthands before passing the pattern to the POSIX API.
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
@@ -293,9 +293,9 @@ All regex routines use **POSIX extended regular expressions** via libc's `regcom
 
 ## I/O routines
 
-**Source:** `src/codegen/runtime/io/` (16 files)
+**Source:** `src/codegen/runtime/io/` (17 files)
 
-These routines handle file and filesystem operations via macOS system calls. PHP strings (pointer + length) must be converted to null-terminated C strings before passing to syscalls — the `__rt_cstr` helper handles this using a dedicated 4KB buffer.
+These routines handle file and filesystem operations via macOS system calls. PHP strings (pointer + length) must be converted to null-terminated C strings before passing to syscalls — `__rt_cstr` handles the primary buffer and also emits `__rt_cstr2` for routines that need a second simultaneous C string.
 
 | Routine | What it does |
 |---|---|
@@ -308,13 +308,24 @@ These routines handle file and filesystem operations via macOS system calls. PHP
 | `__rt_file_put_contents` | Write string to file (create/truncate) |
 | `__rt_file` | Read file into array of lines |
 | `__rt_stat` | Get file metadata (size, timestamps) |
-| `__rt_fs` | Filesystem operations (mkdir, rmdir, unlink, rename, copy, chmod) |
+| `__rt_fs` | Filesystem operations (mkdir, rmdir, unlink, chdir, rename, copy) |
 | `__rt_getcwd` | Get current working directory |
 | `__rt_scandir` | List directory contents into array |
 | `__rt_glob` | Pattern-match filenames |
 | `__rt_tempnam` | Create temporary filename |
 | `__rt_fgetcsv` | Parse CSV line from file |
 | `__rt_fputcsv` | Write CSV line to file |
+
+## Pointer routines
+
+**Source:** `src/codegen/runtime/pointers/` (3 files)
+
+These helpers support the compiler-specific pointer builtins.
+
+| Routine | What it does | Input | Output |
+|---|---|---|---|
+| `__rt_ptoa` | Format a pointer value as a hexadecimal string with `0x` prefix | `x0` = pointer/address | `x1`/`x2` = formatted string |
+| `__rt_ptr_check_nonnull` | Abort with `Fatal error: null pointer dereference` if the pointer is null | `x0` = pointer/address | `x0` unchanged on success |
 
 ## How routines are emitted
 
@@ -356,6 +367,8 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     io::emit_cstr(emitter);
     io::emit_fopen(emitter);
     // ... 15 more I/O routines ...
+    pointers::emit_ptoa(emitter);
+    pointers::emit_ptr_check_nonnull(emitter);
 }
 ```
 
@@ -370,8 +383,12 @@ The runtime also declares global buffers using `.comm` and static data tables:
 .comm _concat_off, 8         ; current offset into string buffer
 .comm _global_argc, 8        ; saved argc from OS
 .comm _global_argv, 8        ; saved argv pointer from OS
-.comm _heap_buf, 1048576     ; 1MB heap
+.comm _heap_buf, 8388608     ; 8MB heap by default (--heap-size overrides)
 .comm _heap_off, 8           ; current heap offset
+.comm _heap_free_list, 8     ; head of free-list allocator
+.comm _gc_allocs, 8          ; allocation counter
+.comm _gc_frees, 8           ; free counter
+.comm _gc_peak, 8            ; high-water mark counter
 .comm _cstr_buf, 4096        ; 4KB C-string conversion buffer
 .comm _cstr_buf2, 4096       ; 4KB second C-string buffer
 .comm _eof_flags, 256        ; EOF flag per file descriptor
@@ -386,6 +403,8 @@ Additionally, the runtime emits static data tables:
 - `_fmt_g` — printf format string for float-to-string conversion via `%.14G`
 - `_b64_encode_tbl` — 64-byte Base64 encoding lookup table
 - `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
+- `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` — fatal runtime error strings
+- `_pcre_space`, `_pcre_digit`, `_pcre_word`, `_pcre_nspace`, `_pcre_ndigit`, `_pcre_nword` — PCRE shorthand replacement strings for regex translation
 - `_json_true`, `_json_false`, `_json_null` — JSON keyword strings used by `__rt_json_encode_bool` and `__rt_json_encode_null`
 - `_day_names` — 7 entries (84 bytes), each 12 bytes: day name padded to 10 chars + 1 length byte + 1 padding byte. Used by `__rt_date` for `l` (full name) and `D` (abbreviated) format characters
 - `_month_names` — 12 entries (144 bytes), same layout as day names. Used by `__rt_date` for `F` (full name) and `M` (abbreviated) format characters

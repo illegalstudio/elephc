@@ -27,13 +27,13 @@ The lexer reads the source character by character and produces a sequence of tok
 ```
 OpenTag          <?php
 Variable("x")   $x
-Equals           =
+Assign           =
 IntLiteral(10)   10
 Semicolon        ;
 If               if
 LParen           (
 Variable("x")   $x
-Gt               >
+Greater          >
 IntLiteral(5)    5
 RParen           )
 LBrace           {
@@ -174,7 +174,7 @@ The `.o` file is deleted after linking. The result is a standalone executable.
 big
 ```
 
-The binary runs directly on the CPU. No PHP, no interpreter, no runtime. The kernel loads the Mach-O file into memory, jumps to `_main`, and the CPU executes the instructions we generated.
+The binary runs directly on the CPU. There is no PHP interpreter or VM at runtime. The kernel loads the Mach-O file into memory, jumps to `_main`, and the CPU executes the instructions we generated. The binary still contains elephc's emitted helper routines and links `libSystem` for OS/libc services.
 
 ## The complete flow
 
@@ -182,7 +182,7 @@ The binary runs directly on the CPU. No PHP, no interpreter, no runtime. The ker
 "<?php $x = 10; if ($x > 5) { echo \"big\\n\"; }"
                     │
                     ▼ Lexer
-    [OpenTag, Variable("x"), Equals, IntLiteral(10), ...]
+    [OpenTag, Variable("x"), Assign, IntLiteral(10), ...]
                     │
                     ▼ Parser
     [Assign{x, 10}, If{Gt(Var(x), 5), [Echo("big\n")]}]

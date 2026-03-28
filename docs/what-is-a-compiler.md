@@ -31,7 +31,7 @@ elephc is a compiler. It takes PHP source code and produces a **native ARM64 bin
 hello.php → elephc → hello (Mach-O binary) → runs directly on CPU
 ```
 
-The resulting binary has no dependencies on PHP, no runtime library, nothing. It talks directly to the macOS kernel via system calls.
+The resulting binary has no dependency on PHP and no interpreter or VM. It includes elephc's emitted helper routines and links `libSystem` for OS and libc services.
 
 ## The phases of compilation
 
@@ -41,7 +41,7 @@ Every compiler, no matter how simple or complex, follows a similar pipeline. Eac
 Source text    "if ($x > 0) { echo $x; }"
      │
      ▼
-Tokens         [If, LParen, Variable("x"), Gt, Int(0), RParen, LBrace, Echo, Variable("x"), ...]
+Tokens         [If, LParen, Variable("x"), Greater, Int(0), RParen, LBrace, Echo, Variable("x"), ...]
      │
      ▼
 AST            If { condition: BinaryOp(Gt, Var("x"), Int(0)), body: [Echo(Var("x"))] }

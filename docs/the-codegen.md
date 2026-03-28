@@ -69,8 +69,18 @@ pub struct Context {
     pub loop_stack: Vec<LoopLabels>,          // for break/continue
     pub return_label: Option<String>,         // for early returns
     pub functions: HashMap<String, FunctionSig>,
-    pub deferred_closures: Vec<DeferredClosure>, // closures emitted after _main
+    pub deferred_closures: Vec<DeferredClosure>, // closures emitted after current function
     pub constants: HashMap<String, (ExprKind, PhpType)>, // compile-time constants
+    pub global_vars: HashSet<String>,         // globals active in current scope
+    pub static_vars: HashSet<String>,         // statics active in current scope
+    pub ref_params: HashSet<String>,          // pass-by-reference params
+    pub in_main: bool,                        // whether we're compiling top-level code
+    pub all_global_var_names: HashSet<String>,
+    pub all_static_vars: HashMap<(String, String), PhpType>,
+    pub closure_sigs: HashMap<String, FunctionSig>,
+    pub closure_captures: HashMap<String, Vec<(String, PhpType)>>,
+    pub classes: HashMap<String, ClassInfo>,
+    pub current_class: Option<String>,
 }
 ```
 
@@ -114,11 +124,12 @@ Floats are stored as their raw 64-bit IEEE 754 bit patterns (`.quad` directive).
 
 | Type | Result location |
 |---|---|
-| `Int` / `Bool` | `x0` |
+| `Int` / `Bool` / `Void` | `x0` |
 | `Float` | `d0` |
 | `Str` | `x1` (pointer), `x2` (length) |
-| `Array` | `x0` (heap pointer) |
+| `Array` / `AssocArray` | `x0` (heap pointer) |
 | `Object` | `x0` (heap pointer) |
+| `Callable` / `Pointer` | `x0` |
 
 ### Literals
 
@@ -297,6 +308,15 @@ echo MAX;
 ```
 
 Constants declared with `const` or `define()` are resolved at compile time. When the codegen encounters a `ConstRef`, it looks up the constant's value and emits it as a literal — `mov x0, #100` for an integer, or loads a string label from the data section. No runtime lookup is needed.
+
+### Pointer values and casts
+
+Pointer expressions are carried in `x0` as plain 64-bit addresses:
+
+- `ptr($var)` computes the address of a stack or global slot and returns it in `x0`
+- `ptr_null()` loads the zero address
+- `ptr_cast<T>($p)` only changes the static type tag seen by the checker, so codegen emits the inner expression and leaves the address unchanged
+- Pointer printing routes through `__rt_ptoa`, which formats the address as a `0x...` string before writing
 
 ### Function calls
 
@@ -682,7 +702,8 @@ Emits code to print a value to stdout:
 | `Int` | `bl __rt_itoa` → then write |
 | `Float` | `bl __rt_ftoa` → then write |
 | `Bool` | `true` prints "1", `false` prints nothing |
-| `Void`/`Array` | Prints nothing |
+| `Pointer` | `bl __rt_ptoa` → then write |
+| `Void`/`Array`/`AssocArray`/`Callable`/`Object` | Prints nothing |
 
 ## Function codegen
 

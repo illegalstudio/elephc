@@ -89,19 +89,21 @@ src/
 │   │
 │   ├── builtins/              Built-in function codegen (one file per function)
 │   │   ├── mod.rs             Dispatcher — chains to category modules
-│   │   ├── strings/           strlen, substr, strpos, explode, sprintf, md5, ... (56 files)
-│   │   ├── arrays/            count, array_push, sort, array_map, usort, ... (50 files)
-│   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, round, min, max, sin, cos, ... (30 files)
-│   │   ├── types/             is_*, gettype, empty, unset, settype, ... (15 files)
-│   │   ├── io/                fopen, fwrite, file_get_contents, scandir, ... (35 files)
-│   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, ... (24 files)
+│   │   ├── strings/           strlen, substr, strpos, explode, sprintf, md5, ... (57 files)
+│   │   ├── arrays/            count, array_push, sort, array_map, usort, ... (51 files)
+│   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, round, min, max, sin, cos, ... (32 files)
+│   │   ├── types/             is_*, gettype, empty, unset, settype, ... (16 files)
+│   │   ├── io/                fopen, fwrite, file_get_contents, scandir, ... (36 files)
+│   │   ├── pointers/          ptr, ptr_get, ptr_set, ptr_offset, ptr_sizeof, ... (8 files)
+│   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, ... (25 files)
 │   │
 │   └── runtime/               ARM64 runtime routines (one file per function)
 │       ├── mod.rs             Emits all runtime functions into assembly
-│       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, str_persist, ... (52 files)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, sort, usort, refcount, ... (52 files)
-│       ├── io/                fopen, fgets, fread, stat, scandir, ... (16 files)
-│       └── system/            build_argv, time, getenv, shell_exec, date, mktime, strtotime, json_encode, json_decode, preg (10 files)
+│       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, str_persist, ... (53 files)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, sort, usort, refcount, ... (53 files)
+│       ├── io/                fopen, fgets, fread, stat, scandir, ... (17 files)
+│       ├── system/            build_argv, time, getenv, shell_exec, date, mktime, strtotime, json_encode, json_decode, preg (14 files)
+│       └── pointers/          ptoa, ptr_check_nonnull (3 files)
 │
 │
 └── errors/
@@ -113,12 +115,13 @@ src/
 
 | What | Register | Notes |
 |---|---|---|
-| Integer result | `x0` | After emit_expr for Int/Bool |
+| Integer result | `x0` | After emit_expr for Int/Bool/Void |
 | Float result | `d0` | After emit_expr for Float |
 | String result | `x1` (ptr), `x2` (len) | After emit_expr for Str |
 | Array result | `x0` (heap ptr) | After emit_expr for Array/AssocArray |
 | Object result | `x0` (heap ptr) | After emit_expr for Object |
-| Function args (int) | `x0`-`x7` | Int/Bool/Array = 1 reg, Str = 2 regs |
+| Pointer / Callable result | `x0` | Raw address or function pointer |
+| Function args (int) | `x0`-`x7` | Int/Bool/Array/Object/Pointer/Callable = 1 reg, Str = 2 regs |
 | Function args (float) | `d0`-`d7` | Separate index from int regs |
 | Frame pointer | `x29` | Saved in prologue |
 | Link register | `x30` | Saved in prologue |
@@ -136,6 +139,21 @@ Offset  Size  Field
  16      8    elem_size (8 for Int, 16 for Str)
  24      ...  elements  (contiguous)
 ```
+
+### Runtime BSS and data symbols
+
+The runtime reserves a fixed set of global symbols in `emit_runtime_data()`:
+
+| Symbol group | Symbols | Purpose |
+|---|---|---|
+| String scratch | `_concat_buf`, `_concat_off` | Temporary string results for expression evaluation |
+| CLI globals | `_global_argc`, `_global_argv` | Saved OS argument state used to build `$argv` |
+| Heap allocator | `_heap_buf`, `_heap_off`, `_heap_free_list`, `_heap_max` | Heap storage plus allocator metadata |
+| Runtime diagnostics | `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` | Fatal error messages for heap, array, and pointer failures |
+| GC statistics | `_gc_allocs`, `_gc_frees`, `_gc_peak` | Allocation/free counters emitted for runtime tracking |
+| I/O scratch | `_cstr_buf`, `_cstr_buf2`, `_eof_flags` | Null-terminated conversion buffers and EOF bookkeeping |
+| String/regex tables | `_fmt_g`, `_b64_encode_tbl`, `_b64_decode_tbl`, `_pcre_*` | Formatting and lookup tables for runtime helpers |
+| JSON/date tables | `_json_true`, `_json_false`, `_json_null`, `_day_names`, `_month_names` | Static data used by JSON and date routines |
 
 ### Heap allocator
 

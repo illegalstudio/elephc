@@ -751,7 +751,7 @@ foreach ($matrix as $row) {
 | `array_push()` | `array_push($arr, $val): void` | Add element to end |
 | `array_pop()` | `array_pop($arr): mixed` | Remove and return last element |
 | `in_array()` | `in_array($needle, $arr): int` | Search for value (returns 0/1) |
-| `array_keys()` | `array_keys($arr): array` | Returns [0, 1, 2, ...] |
+| `array_keys()` | `array_keys($arr): array` | Returns the array keys (ints for indexed arrays, strings for associative arrays) |
 | `array_values()` | `array_values($arr): array` | Returns copy of values |
 | `sort()` | `sort($arr): void` | Sort ascending (in-place) |
 | `rsort()` | `rsort($arr): void` | Sort descending (in-place) |
@@ -793,7 +793,7 @@ foreach ($matrix as $row) {
 | `natcasesort()` | `natcasesort($arr): void` | Case-insensitive natural order sort |
 | **Random** | | |
 | `shuffle()` | `shuffle($arr): void` | Randomly shuffle array (in-place) |
-| `array_rand()` | `array_rand($arr [, $num]): int\|array` | Pick random key(s) |
+| `array_rand()` | `array_rand($arr): int` | Pick one random key |
 | **Multi-dimensional** | | |
 | `array_column()` | `array_column($arr, $column_key): array` | Extract column from array of assoc arrays |
 | **Callback-based** | | |
@@ -802,8 +802,8 @@ foreach ($matrix as $row) {
 | `array_reduce()` | `array_reduce($arr, "callback", $init): mixed` | Reduce array to single value via callback |
 | `array_walk()` | `array_walk($arr, "callback"): void` | Call callback on each element (side-effects) |
 | `usort()` | `usort($arr, "callback"): void` | Sort array using user comparison function |
-| `uksort()` | `uksort($arr, "callback"): void` | Sort by keys using user comparison function |
-| `uasort()` | `uasort($arr, "callback"): void` | Sort by values using user comparison, maintain keys |
+| `uksort()` | `uksort($arr, "callback"): void` | Sort array with a user comparison callback (currently routed through the same runtime sort path as `usort`) |
+| `uasort()` | `uasort($arr, "callback"): void` | Sort array with a user comparison callback (currently routed through the same runtime sort path as `usort`) |
 | **Function handling** | | |
 | `call_user_func()` | `call_user_func("name", ...): mixed` | Call a function by name with arguments |
 | `call_user_func_array()` | `call_user_func_array("name", $args): mixed` | Call a function with arguments from an array |
@@ -876,20 +876,20 @@ foreach ($matrix as $row) {
 | Function | Signature | Description |
 |---|---|---|
 | `exit()` | `exit($code = 0): void` | Terminate program |
-| `die()` | `die(): void` | Alias for `exit(0)` |
+| `die()` | `die($code = 0): void` | Alias for `exit()` |
 | `time()` | `time(): int` | Get current Unix timestamp |
 | `microtime()` | `microtime($as_float = false): float` | Get current time with microsecond precision |
 | `sleep()` | `sleep($seconds): int` | Sleep for given seconds |
 | `usleep()` | `usleep($microseconds): void` | Sleep for given microseconds |
 | `getenv()` | `getenv($name): string` | Get environment variable value |
 | `putenv()` | `putenv($assignment): bool` | Set environment variable (format: "KEY=VALUE") |
-| `php_uname()` | `php_uname(): string` | Get OS name (returns "Darwin") |
+| `php_uname()` | `php_uname([$mode]): string` | Get OS name (returns `"Darwin"`; optional mode argument is accepted) |
 | `phpversion()` | `phpversion(): string` | Get elephc version string |
 | `exec()` | `exec($command): string` | Execute command, return output |
 | `shell_exec()` | `shell_exec($command): string` | Execute command via shell, return full output |
 | `system()` | `system($command): string` | Execute command, output to stdout |
 | `passthru()` | `passthru($command): void` | Execute command, pass raw output to stdout |
-| `date()` | `date($format, $timestamp = 0): string` | Format a Unix timestamp. Format chars: Y, m, d, H, i, s, l, F, D, M, N, j, n, G, g, A, a, U. If timestamp is 0, uses current time. |
+| `date()` | `date($format [, $timestamp]): string` | Format a Unix timestamp. Format chars: Y, m, d, H, i, s, l, F, D, M, N, j, n, G, g, A, a, U. If the timestamp is omitted, uses current time. |
 | `mktime()` | `mktime($h, $m, $s, $mon, $day, $yr): int` | Create Unix timestamp from components |
 | `strtotime()` | `strtotime($datetime): int` | Parse "YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS" to timestamp |
 | `json_encode()` | `json_encode($value): string` | Encode value as JSON. Supports int, float, string, bool, null, arrays, assoc arrays. |
@@ -911,7 +911,7 @@ foreach ($matrix as $row) {
 | `fgets()` | `fgets($handle): string` | Read a line from file or STDIN |
 | `feof()` | `feof($handle): bool` | Check if end-of-file reached |
 | `readline()` | `readline([$prompt]): string` | Read a line from STDIN |
-| `fseek()` | `fseek($handle, $offset): int` | Seek to position in file |
+| `fseek()` | `fseek($handle, $offset [, $whence]): int` | Seek to position in file |
 | `ftell()` | `ftell($handle): int` | Get current position in file |
 | `rewind()` | `rewind($handle): bool` | Seek to beginning of file |
 | `fgetcsv()` | `fgetcsv($handle [, $sep]): array` | Read a CSV line into array |

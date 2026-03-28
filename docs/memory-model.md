@@ -4,11 +4,11 @@
 
 ---
 
-elephc manages memory without a garbage collector, without `malloc`/`free`, and without any runtime library. Everything is either on the **stack** (automatic, per-function) or in a **heap buffer** with a free-list allocator.
+elephc manages memory without a garbage collector and without calling `malloc`/`free` for PHP values. Storage lives on the **stack** (automatic, per-function), in fixed BSS regions, or in a compiler-managed **heap buffer** with a free-list allocator. The final binary still links `libSystem` for OS and libc services.
 
 This page explains where every value lives in memory at runtime.
 
-## The four memory regions
+## Runtime memory regions
 
 ```
 ┌─────────────────────────────┐  High addresses
@@ -26,6 +26,10 @@ This page explains where every value lives in memory at runtime.
 ├─────────────────────────────┤
 │     I/O buffers              │  _cstr_buf: 4KB × 2, _eof_flags: 256B
 │  (C-string conversion, EOF)  │
+├─────────────────────────────┤
+│   Runtime metadata (BSS)     │  _concat_off, _global_argc/_argv,
+│  (heap state, counters,      │  _heap_off, _heap_free_list,
+│   globals, static storage)   │  _gc_allocs/_frees/_peak, ...
 ├─────────────────────────────┤
 │       Data section           │  String literals, float constants
 │  (.data — read-only)         │
@@ -69,8 +73,11 @@ Variables are allocated stack slots when the [code generator](the-codegen.md) sc
 | `Bool` | 8 bytes | 0 or 1 (stored as 64-bit for alignment) |
 | `Str` | 16 bytes | 8-byte pointer + 8-byte length |
 | `Array` | 8 bytes | Pointer to heap-allocated header |
+| `AssocArray` | 8 bytes | Pointer to heap-allocated hash table |
 | `Void` (null) | 8 bytes | Sentinel value `0x7FFFFFFFFFFFFFFE` |
 | `Object` | 8 bytes | Pointer to heap-allocated object |
+| `Callable` | 8 bytes | Function pointer |
+| `Pointer` | 8 bytes | Raw 64-bit address |
 
 ### The null sentinel
 
@@ -87,6 +94,10 @@ csel x0, xzr, x0, eq      ; if x0 == sentinel, replace with 0
 ```
 
 See [ARM64 Instruction Reference](arm64-instructions.md#move-and-immediate) for how `movz`/`movk` work.
+
+### Pointer values
+
+Pointers are stored as raw 64-bit addresses. An opaque pointer and a typed `ptr<T>` value have the same runtime representation; the type tag only exists in the checker. Null pointers use address `0x0`, and dereference helpers explicitly trap on null via `__rt_ptr_check_nonnull`.
 
 ## The string buffer (scratch pad)
 
@@ -133,6 +144,9 @@ When a string result is stored to a variable (e.g., `$x = "a" . "b";`), the code
 .comm _heap_buf, 8388608    ; 8MB buffer (configurable via --heap-size)
 .comm _heap_off, 8          ; current bump allocation offset
 .comm _heap_free_list, 8    ; head of free block linked list
+.comm _gc_allocs, 8         ; allocation counter
+.comm _gc_frees, 8          ; free counter
+.comm _gc_peak, 8           ; heap high-water mark
 ```
 
 The heap (`_heap_buf`) is an 8MB region (by default) for dynamically-sized data — arrays, hash tables, objects, and persisted strings. It uses a **free-list + bump hybrid allocator**.
@@ -336,6 +350,8 @@ The runtime also emits static data tables:
 - `_fmt_g` — printf format string for float-to-string conversion (`%.14G`)
 - `_b64_encode_tbl` — 64-byte Base64 encoding lookup table
 - `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
+- `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` — fatal runtime error strings
+- `_pcre_space`, `_pcre_digit`, `_pcre_word`, `_pcre_nspace`, `_pcre_ndigit`, `_pcre_nword` — regex shorthand replacement strings used by the POSIX regex bridge
 - `_json_true`, `_json_false`, `_json_null` — JSON keyword strings (4, 5, and 4 bytes) used by `json_encode` for boolean and null values
 - `_day_names` — 84-byte table (7 entries x 12 bytes each) with day names, lengths, and padding. Used by `date()` for day-of-week formatting
 - `_month_names` — 144-byte table (12 entries x 12 bytes each) with month names, lengths, and padding. Used by `date()` for month formatting
@@ -380,8 +396,12 @@ The naming pattern is `_static_FUNCNAME_VARNAME`. The init flag ensures the init
 | Stack | OS default (~8MB) | Stack overflow (crash) |
 | String buffer | 64KB | Resets each statement — effectively unlimited |
 | Heap | 8MB (configurable) | Fatal error: "heap memory exhausted" |
-| Array capacity | Fixed at creation | Fatal error: "array capacity exceeded" |
-| C-string buffers | 4KB each (×2) | Truncation of file paths |
+| Heap metadata | `_heap_off`, `_heap_free_list`, `_gc_*` = 40 bytes total | Fixed-size bookkeeping, not user-visible |
+| CLI globals | `_global_argc`, `_global_argv` = 16 bytes total | Fixed-size bookkeeping |
+| User globals | 16 bytes per `global $var` slot | Grows with number of referenced globals |
+| Static vars | 24 bytes per `static $var` (`16 + 8 init flag`) | Grows with number of declared static locals |
+| Array capacity | Fixed at creation until grow/re-hash logic runs | Fatal error: "array capacity exceeded" if a hard limit is hit |
+| C-string buffers | 4KB each (×2) | Long converted paths/strings are truncated to buffer size |
 | EOF flags | 256 bytes | Max 256 simultaneous file descriptors |
 | Data section | No fixed limit | Grows with number of unique literals |
 
@@ -398,9 +418,9 @@ elephc uses a **free-list allocator with reference counting** — not a garbage 
 
 ### What is NOT freed
 
-- **Array elements** — freeing an array frees the array structure but not strings inside it (shallow free)
 - **Adjacent free blocks** are not coalesced — fragmentation can occur over time
-- **Intermediate allocations** within a single expression — only the final result is persisted
+- **Pointer targets** are not ownership-tracked just because a raw pointer exists; the pointer value itself is only an address
+- **Intermediate scratch strings** in `_concat_buf` are not individually freed — the buffer is simply reset per statement
 
 ### Performance characteristics
 
