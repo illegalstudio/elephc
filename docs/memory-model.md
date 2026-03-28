@@ -66,6 +66,8 @@ Each function has a stack frame. The [code generator](the-codegen.md) calculates
 
 Variables are allocated stack slots when the [code generator](the-codegen.md) scans the function body (`collect_local_vars`). The allocation is determined at compile time — there's no dynamic stack growth.
 
+For heap-backed values, stack slots also carry compile-time ownership metadata in codegen: `Owned`, `Borrowed`, `MaybeOwned`, or `NonHeap`. This metadata is not stored in the generated binary; it only guides when codegen must retain a borrowed heap value before storing it into a new owner, and which local aliases must not be blindly decreffed yet.
+
 | Type | Stack space | Stored as |
 |---|---|---|
 | `Int` | 8 bytes | Signed 64-bit value |
@@ -410,17 +412,19 @@ The naming pattern is `_static_FUNCNAME_VARNAME`. The init flag ensures the init
 elephc uses a **free-list allocator with reference counting** — not a garbage collector, but not pure bump-allocation either. Memory is reclaimed in specific situations:
 
 1. **Reference counting** — every heap allocation carries a 32-bit refcount (initialized to 1). When a reference is shared, `__rt_incref` increments it. When a reference is dropped, `__rt_decref_array`, `__rt_decref_hash`, or `__rt_decref_object` decrements it and frees the block when it reaches zero
-2. **Variable reassignment** — when `$x = "new value"` overwrites a string or array, the old heap block is freed and returned to the free list for reuse
-3. **`unset($x)`** — explicitly frees the variable's heap allocation
-4. **String buffer reset** — the concat buffer resets at each statement, with strings that need to survive copied to heap via `__rt_str_persist`
-5. **Stack memory** — automatically reclaimed when functions return
-6. **Process exit** — all memory reclaimed by the OS
+2. **Codegen ownership tracking** — locals, globals, statics, `foreach` variables, `list(...)` targets, and call arguments are classified as owned or borrowed at compile time so new owners retain borrowed heap values before storing them
+3. **Variable reassignment** — when `$x = "new value"` overwrites a string or array, the old heap block is freed and returned to the free list for reuse
+4. **`unset($x)`** — explicitly frees the variable's heap allocation
+5. **String buffer reset** — the concat buffer resets at each statement, with strings that need to survive copied to heap via `__rt_str_persist`
+6. **Stack memory** — automatically reclaimed when functions return
+7. **Process exit** — all memory reclaimed by the OS
 
 ### What is NOT freed
 
 - **Adjacent free blocks** are not coalesced — fragmentation can occur over time
 - **Pointer targets** are not ownership-tracked just because a raw pointer exists; the pointer value itself is only an address
 - **Intermediate scratch strings** in `_concat_buf` are not individually freed — the buffer is simply reset per statement
+- **General function epilogues** still do not blanket-decref all heap locals, because some stack slots are still populated from borrowed container/object reads and nested propagation is not fully proven yet
 
 ### Performance characteristics
 

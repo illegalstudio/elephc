@@ -1,4 +1,4 @@
-use crate::codegen::context::Context;
+use crate::codegen::context::{Context, HeapOwnership};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::parser::ast::Expr;
@@ -50,7 +50,11 @@ pub fn emit(
                 _ => old_ty.clone(),
             };
             crate::codegen::abi::emit_store(emitter, &new_ty, offset);
-            ctx.variables.get_mut(vname).unwrap().ty = new_ty;
+            ctx.update_var_type_and_ownership(
+                vname,
+                new_ty.clone(),
+                HeapOwnership::local_owner_for_type(&new_ty),
+            );
         }
     }
     // -- settype() always returns true --

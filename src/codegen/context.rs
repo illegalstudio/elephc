@@ -6,6 +6,52 @@ use crate::types::{ClassInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, P
 
 static GLOBAL_LABEL_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeapOwnership {
+    NonHeap,
+    Owned,
+    Borrowed,
+    MaybeOwned,
+}
+
+impl HeapOwnership {
+    pub fn for_type(ty: &PhpType) -> Self {
+        if ty.is_refcounted() || matches!(ty, PhpType::Str) {
+            HeapOwnership::MaybeOwned
+        } else {
+            HeapOwnership::NonHeap
+        }
+    }
+
+    pub fn local_owner_for_type(ty: &PhpType) -> Self {
+        if ty.is_refcounted() || matches!(ty, PhpType::Str) {
+            HeapOwnership::Owned
+        } else {
+            HeapOwnership::NonHeap
+        }
+    }
+
+    pub fn borrowed_alias_for_type(ty: &PhpType) -> Self {
+        if ty.is_refcounted() || matches!(ty, PhpType::Str) {
+            HeapOwnership::Borrowed
+        } else {
+            HeapOwnership::NonHeap
+        }
+    }
+
+    pub fn merge(self, other: Self) -> Self {
+        use HeapOwnership::*;
+        match (self, other) {
+            (NonHeap, NonHeap) => NonHeap,
+            (Owned, Owned) => Owned,
+            (Borrowed, Borrowed) => Borrowed,
+            (MaybeOwned, _) | (_, MaybeOwned) => MaybeOwned,
+            (Owned, Borrowed) | (Borrowed, Owned) => MaybeOwned,
+            (NonHeap, x) | (x, NonHeap) => x,
+        }
+    }
+}
+
 /// A closure body to be emitted after the current function.
 #[allow(dead_code)]
 pub struct DeferredClosure {
@@ -55,6 +101,7 @@ pub struct Context {
 pub struct VarInfo {
     pub ty: PhpType,
     pub stack_offset: usize,
+    pub ownership: HeapOwnership,
 }
 
 pub struct LoopLabels {
@@ -100,18 +147,81 @@ impl Context {
     pub fn alloc_var(&mut self, name: &str, ty: PhpType) -> usize {
         self.stack_offset += ty.stack_size();
         let offset = self.stack_offset;
+        let ownership = HeapOwnership::for_type(&ty);
         self.variables.insert(
             name.to_string(),
             VarInfo {
                 ty,
                 stack_offset: offset,
+                ownership,
             },
         );
         offset
     }
 
+    pub fn set_var_ownership(&mut self, name: &str, ownership: HeapOwnership) {
+        if let Some(var) = self.variables.get_mut(name) {
+            var.ownership = ownership;
+        }
+    }
+
+    pub fn update_var_type_and_ownership(
+        &mut self,
+        name: &str,
+        ty: PhpType,
+        ownership: HeapOwnership,
+    ) {
+        if let Some(var) = self.variables.get_mut(name) {
+            var.ty = ty;
+            var.ownership = ownership;
+        }
+    }
+
     pub fn next_label(&mut self, prefix: &str) -> String {
         let id = GLOBAL_LABEL_COUNTER.fetch_add(1, Ordering::SeqCst);
         format!("_{}_{}", prefix, id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HeapOwnership;
+    use crate::types::PhpType;
+
+    #[test]
+    fn test_heap_ownership_type_classification() {
+        assert_eq!(HeapOwnership::for_type(&PhpType::Int), HeapOwnership::NonHeap);
+        assert_eq!(HeapOwnership::for_type(&PhpType::Str), HeapOwnership::MaybeOwned);
+        assert_eq!(
+            HeapOwnership::local_owner_for_type(&PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Int),
+            }),
+            HeapOwnership::Owned
+        );
+        assert_eq!(
+            HeapOwnership::borrowed_alias_for_type(&PhpType::Object("Foo".to_string())),
+            HeapOwnership::Borrowed
+        );
+    }
+
+    #[test]
+    fn test_heap_ownership_merge() {
+        assert_eq!(
+            HeapOwnership::Owned.merge(HeapOwnership::Owned),
+            HeapOwnership::Owned
+        );
+        assert_eq!(
+            HeapOwnership::Borrowed.merge(HeapOwnership::Borrowed),
+            HeapOwnership::Borrowed
+        );
+        assert_eq!(
+            HeapOwnership::Owned.merge(HeapOwnership::Borrowed),
+            HeapOwnership::MaybeOwned
+        );
+        assert_eq!(
+            HeapOwnership::NonHeap.merge(HeapOwnership::Borrowed),
+            HeapOwnership::Borrowed
+        );
     }
 }

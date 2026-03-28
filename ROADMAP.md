@@ -252,7 +252,7 @@ Proper type system for PHP compatibility.
 
 ## v0.15.x — Memory model hardening
 
-- [ ] Ownership lattice for heap values in codegen (`Owned` / `Borrowed` / `MaybeOwned` / non-heap)
+- [x] Ownership lattice for heap values in codegen (`Owned` / `Borrowed` / `MaybeOwned` / non-heap)
 - [ ] Re-enable epilogue cleanup for locals that are proven to own their heap values
 - [ ] Broader container propagation rules for nested array/hash/object transfers
 - [ ] Focused regressions for aliasing across locals, returns, nested containers, and scope exit

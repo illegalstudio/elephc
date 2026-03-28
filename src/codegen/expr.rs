@@ -1,5 +1,5 @@
 use super::abi;
-use super::context::Context;
+use super::context::{Context, HeapOwnership};
 use super::data_section::DataSection;
 use super::emit::Emitter;
 use crate::parser::ast::{BinOp, Expr, ExprKind};
@@ -2176,40 +2176,48 @@ pub(crate) fn restore_concat_offset_after_nested_call(emitter: &mut Emitter, ret
     emitter.instruction("str x10, [x9]");                                       // restore caller concat offset after nested call
 }
 
-pub(crate) fn expr_result_may_borrow_heap_value(expr: &Expr) -> bool {
+pub(crate) fn expr_result_heap_ownership(expr: &Expr) -> HeapOwnership {
     match &expr.kind {
         ExprKind::Variable(_)
         | ExprKind::ArrayAccess { .. }
         | ExprKind::PropertyAccess { .. }
-        | ExprKind::This => true,
+        | ExprKind::This => HeapOwnership::Borrowed,
         ExprKind::Spread(inner)
         | ExprKind::PtrCast { expr: inner, .. }
-        | ExprKind::Cast { expr: inner, .. } => expr_result_may_borrow_heap_value(inner),
+        | ExprKind::Cast { expr: inner, .. } => expr_result_heap_ownership(inner),
         ExprKind::NullCoalesce { value, default } => {
-            expr_result_may_borrow_heap_value(value) || expr_result_may_borrow_heap_value(default)
+            expr_result_heap_ownership(value).merge(expr_result_heap_ownership(default))
         }
         ExprKind::Ternary {
             then_expr,
             else_expr,
             ..
-        } => {
-            expr_result_may_borrow_heap_value(then_expr)
-                || expr_result_may_borrow_heap_value(else_expr)
-        }
+        } => expr_result_heap_ownership(then_expr).merge(expr_result_heap_ownership(else_expr)),
         ExprKind::Match { arms, default, .. } => {
-            arms.iter()
-                .any(|(_, expr)| expr_result_may_borrow_heap_value(expr))
-                || default
-                    .as_ref()
-                    .map(|expr| expr_result_may_borrow_heap_value(expr))
-                    .unwrap_or(false)
+            let mut ownership = default
+                .as_ref()
+                .map(|expr| expr_result_heap_ownership(expr))
+                .unwrap_or(HeapOwnership::NonHeap);
+            for (_, expr) in arms {
+                ownership = ownership.merge(expr_result_heap_ownership(expr));
+            }
+            ownership
         }
-        _ => false,
+        ExprKind::StringLiteral(_)
+        | ExprKind::ArrayLiteral(_)
+        | ExprKind::ArrayLiteralAssoc(_)
+        | ExprKind::FunctionCall { .. }
+        | ExprKind::ClosureCall { .. }
+        | ExprKind::ExprCall { .. }
+        | ExprKind::MethodCall { .. }
+        | ExprKind::StaticMethodCall { .. }
+        | ExprKind::NewObject { .. } => HeapOwnership::Owned,
+        _ => HeapOwnership::NonHeap,
     }
 }
 
 fn retain_borrowed_heap_arg(emitter: &mut Emitter, expr: &Expr, ty: &PhpType) {
-    if ty.is_refcounted() && expr_result_may_borrow_heap_value(expr) {
+    if ty.is_refcounted() && expr_result_heap_ownership(expr) != HeapOwnership::Owned {
         abi::emit_incref_if_refcounted(emitter, ty);
     }
 }

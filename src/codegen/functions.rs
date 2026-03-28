@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use super::context::Context;
+use super::context::{Context, HeapOwnership};
 use super::data_section::DataSection;
 use super::emit::Emitter;
 use super::stmt;
@@ -128,9 +128,14 @@ fn emit_function_with_label_and_class(
             ctx.alloc_var(pname, PhpType::Int);
             // Set the variable type to the actual referenced type so loading
             // dereferences correctly (e.g., string ref loads x1/x2, not x0)
-            ctx.variables.get_mut(pname).expect("codegen bug: ref param was just allocated but not found").ty = _pty.clone();
+            ctx.update_var_type_and_ownership(
+                pname,
+                _pty.clone(),
+                HeapOwnership::borrowed_alias_for_type(_pty),
+            );
         } else {
             ctx.alloc_var(pname, _pty.clone());
+            ctx.set_var_ownership(pname, HeapOwnership::local_owner_for_type(_pty));
         }
     }
 
