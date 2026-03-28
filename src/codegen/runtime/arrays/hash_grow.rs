@@ -1,8 +1,9 @@
 use crate::codegen::emit::Emitter;
 
-/// hash_grow: double the capacity of a hash table, rehashing all entries.
-/// Allocates a new table with 2x capacity, reinserts all occupied entries,
-/// frees the old table, returns the new pointer.
+/// hash_grow: double the capacity of a hash table, moving all owned entries.
+/// Allocates a new table with 2x capacity, reinserts all occupied entries
+/// without duplicating owned keys/values, frees the old table struct, and
+/// returns the new pointer.
 /// Input:  x0 = old hash table pointer
 /// Output: x0 = new hash table pointer (with doubled capacity)
 pub fn emit_hash_grow(emitter: &mut Emitter) {
@@ -33,7 +34,7 @@ pub fn emit_hash_grow(emitter: &mut Emitter) {
 
     // -- create new table with 2x capacity --
     emitter.instruction("lsl x0, x9, #1");                                      // x0 = old_capacity * 2
-    // x1 = value_type (already set)
+                                           // x1 = value_type (already set)
     emitter.instruction("bl __rt_hash_new");                                    // allocate new table → x0
     emitter.instruction("str x0, [sp, #8]");                                    // save new table pointer
     emitter.instruction("mov x19, x0");                                         // x19 = new table (callee-saved)
@@ -66,8 +67,8 @@ pub fn emit_hash_grow(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [x12, #24]");                                  // x3 = value_lo
     emitter.instruction("ldr x4, [x12, #32]");                                  // x4 = value_hi
 
-    // -- insert into new table --
-    emitter.instruction("bl __rt_hash_set");                                    // rehash and insert
+    // -- move owned entry into the new table without duplicating ownership --
+    emitter.instruction("bl __rt_hash_insert_owned");                           // rehash and move existing key/value ownership
     emitter.instruction("mov x19, x0");                                         // update new table ptr (hash_set returns it)
 
     emitter.label("__rt_hash_grow_next");

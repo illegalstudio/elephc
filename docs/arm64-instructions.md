@@ -4,7 +4,7 @@
 
 ---
 
-This is every ARM64 instruction elephc uses, organized by category. Each entry shows the instruction, what it does, and where elephc uses it.
+This is a reference for the ARM64 instructions elephc uses most often, organized by category. Each entry shows the instruction, what it does, and where elephc uses it.
 
 ## Arithmetic
 
@@ -17,7 +17,10 @@ This is every ARM64 instruction elephc uses, organized by category. Each entry s
 | `sdiv` | `sdiv x0, x1, x2` | x0 = x1 ÷ x2 (signed) |
 | `msub` | `msub x0, x1, x2, x3` | x0 = x3 - (x1 × x2). Used for modulo: `a % b = a - (a/b)*b` |
 | `neg` | `neg x0, x0` | x0 = -x0 (two's complement negation) |
-| `madd` | `madd x0, x1, x2, x3` | x0 = x3 + (x1 × x2). Multiply-accumulate |
+| `cmn` | `cmn x0, #1` | Compare negative: sets flags as if adding the operand. Used for sentinel checks like `-1` |
+| `clz` | `clz x0, x1` | Count leading zero bits |
+| `cneg` | `cneg x0, x0, mi` | Conditionally negate a register |
+| `sxtw` | `sxtw x0, w0` | Sign-extend a 32-bit value to 64 bits |
 
 ### With immediates
 
@@ -51,6 +54,7 @@ These move data between registers and memory. See [Introduction to ARM64 Assembl
 | Instruction | Syntax | What it does |
 |---|---|---|
 | `ldr` | `ldr x0, [x29, #-8]` | Load 8 bytes from memory into x0 |
+| `ldr` | `ldr w0, [x1]` | Load 4 bytes into the 32-bit `w` register |
 | `ldur` | `ldur x0, [x29, #-8]` | Same as `ldr` but for unaligned/negative offsets |
 | `str` | `str x0, [x29, #-8]` | Store x0 (8 bytes) to memory |
 | `stur` | `stur x0, [x29, #-8]` | Same as `str` for unaligned/negative offsets |
@@ -84,6 +88,7 @@ These two always appear together — `adrp` gets the page, `add` gets the exact 
 |---|---|---|
 | `mov` | `mov x0, x1` | Copy x1 to x0 |
 | `mov` | `mov x0, #42` | Load small constant (0-65535) |
+| `fmov` | `fmov d0, d1` | Move a floating-point value (or bit pattern) between FP / GP registers |
 | `movz` | `movz x0, #0x1234` | Load 16-bit value, zero the rest |
 | `movk` | `movk x0, #0x5678, lsl #16` | Insert 16-bit value at bit position, keep the rest |
 | `movn` | `movn x0, #0` | Load bitwise NOT of immediate. `movn x0, #0` = -1 |
@@ -112,7 +117,6 @@ See [Memory Model](memory-model.md) for why this specific value is used as the n
 | `tst` | `tst x0, #1` | Bitwise AND, set flags (but discard result) |
 | `cset` | `cset x0, eq` | x0 = 1 if equal flag set, 0 otherwise |
 | `csel` | `csel x0, x1, x2, gt` | x0 = x1 if greater, x2 otherwise |
-| `csinc` | `csinc x0, xzr, xzr, eq` | x0 = 1 if NOT equal (inverse cset pattern) |
 | `csinv` | `csinv x0, x0, xzr, ge` | If condition false: x0 = ~xzr = -1, else x0 unchanged. Used for spaceship (`<=>`) |
 
 ### Floating-point comparison
@@ -147,6 +151,10 @@ After `cmp`, these codes test the result:
 | `b.gt` | `b.gt _label` | Jump if greater than |
 | `b.le` | `b.le _label` | Jump if less or equal |
 | `b.ge` | `b.ge _label` | Jump if greater or equal |
+| `b.lo` | `b.lo _label` | Jump if lower (unsigned compare) |
+| `b.hs` | `b.hs _label` | Jump if higher or same (unsigned compare) |
+| `b.hi` | `b.hi _label` | Jump if higher (unsigned compare) |
+| `b.ls` | `b.ls _label` | Jump if lower or same (unsigned compare) |
 | `b.mi` | `b.mi _label` | Jump if negative |
 | `cbz` | `cbz x0, _label` | Jump if x0 == 0 |
 | `cbnz` | `cbnz x0, _label` | Jump if x0 != 0 |
@@ -199,6 +207,7 @@ Before `svc`, set up: `x16` = syscall number, `x0`-`x5` = arguments.
 |---|---|---|---|
 | exit | `#1` | x0 = exit code | `exit()`, program termination |
 | write | `#4` | x0 = fd, x1 = buf, x2 = len | `echo`, `print` |
+| stat64 | `#338` | path / buffer pointers | filesystem metadata helpers |
 
 ## Assembly directives
 

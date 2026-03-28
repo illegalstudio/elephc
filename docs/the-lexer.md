@@ -77,7 +77,7 @@ For each token, the scanner looks at the current character and decides:
 
 2. **`'`** → Start of a single-quoted string. No interpolation, only `\\` and `\'` escapes.
 
-3. **Digit** → Start of a number. Read all digits. If there's a `.` followed by more digits, it's a float. Handle `e`/`E` for scientific notation.
+3. **Digit** → Start of a number. Read all digits. `0x` / `0X` starts a hexadecimal integer literal. If there's a `.` followed by more digits, it's a float. Handle `e`/`E` for scientific notation.
 
 4. **`$`** → Start of a variable. Read the name (letters, digits, underscores).
 
@@ -107,7 +107,7 @@ The full set of tokens elephc recognizes:
 
 | Token | Example | Carries |
 |---|---|---|
-| `IntLiteral` | `42`, `0`, `-1` | `i64` value |
+| `IntLiteral` | `42`, `0`, `0xFF` | `i64` value |
 | `FloatLiteral` | `3.14`, `.5`, `1e3` | `f64` value |
 | `StringLiteral` | `"hello"`, `'world'` | `String` content (escapes resolved) |
 
@@ -125,7 +125,7 @@ The full set of tokens elephc recognizes:
 echo  if  else  elseif  while  do  for  foreach  as
 break  continue  function  return  include  require
 include_once  require_once  true  false  null  print
-switch  case  default  match  fn  use  const
+switch  case  default  match  fn  use  extern  const
 global  static  class  new  public  private  readonly
 ```
 

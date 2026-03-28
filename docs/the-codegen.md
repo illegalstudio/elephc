@@ -21,12 +21,22 @@ _fn_factorial:
     ...
     ret
 
+; --- class methods ---
+_method_Point_move:
+    ...
+    ret
+
 ; --- main program ---
 _main:
     ; prologue (stack frame setup)
     ; global argc/argv initialization
     ; program statements
     ; epilogue (exit syscall)
+
+; --- deferred closures emitted after _main ---
+_closure_1:
+    ...
+    ret
 
 ; --- runtime routines ---
 __rt_itoa:
@@ -38,6 +48,10 @@ __rt_concat:
 .data
 _str_0: .ascii "hello"
 _float_0: .quad 0x400921FB54442D18
+
+; --- runtime data / BSS declarations ---
+.comm _concat_buf, 65536, 3
+.comm _heap_buf, 8388608, 3
 ```
 
 ## The Emitter
@@ -81,6 +95,9 @@ pub struct Context {
     pub closure_captures: HashMap<String, Vec<(String, PhpType)>>,
     pub classes: HashMap<String, ClassInfo>,
     pub current_class: Option<String>,
+    pub extern_functions: HashMap<String, ExternFunctionSig>,
+    pub extern_classes: HashMap<String, ExternClassInfo>,
+    pub extern_globals: HashMap<String, PhpType>,
 }
 ```
 
@@ -107,6 +124,7 @@ String literals and float constants are stored in the `.data` section:
 pub struct DataSection {
     entries: Vec<(String, Vec<u8>)>,          // string label → bytes
     float_entries: Vec<(String, u64)>,        // float label → bit pattern
+    counter: usize,                           // next unique label suffix
     dedup: HashMap<Vec<u8>, String>,          // avoid duplicate strings
     float_dedup: HashMap<u64, String>,        // avoid duplicate floats
 }
@@ -352,7 +370,7 @@ $fn = function($name) use ($greeting) {
 };
 ```
 
-Arrow functions (`fn($x) => ...`) automatically capture all referenced outer variables — no `use` clause needed.
+Only explicit `use (...)` captures are stored in the AST and forwarded as hidden closure arguments. Arrow functions are still parsed as closures, but they use `is_arrow = true` with an empty `captures` list.
 
 The AST stores captured variable names in the `captures` field of the `Closure` expression. At the call site, captured variables are passed as **extra arguments** after the explicit arguments:
 
@@ -455,6 +473,12 @@ The `global` statement inside a function declares that a variable refers to glob
 1. At `global $x;`: the variable is marked as global in the context. The current value is loaded from `_gvar_x` into the local stack slot.
 2. On assignment to a global variable: the codegen writes to the BSS storage (`_gvar_x`) via `adrp`/`add`/`str` instead of (or in addition to) the local stack slot.
 3. In `_main`: when the main scope assigns to a variable that any function declares as `global`, the value is also written to `_gvar_NAME` so that functions can read it.
+
+### Extern declarations
+
+`ExternFunctionDecl`, `ExternClassDecl`, and `ExternGlobalDecl` are registration-only statements during codegen. Their metadata has already been collected by the type checker and copied into `Context`, so `emit_stmt()` treats the declarations themselves as no-ops while later expression codegen uses the recorded FFI data.
+
+Extern globals are loaded through GOT-relative addressing (`adrp ...@GOTPAGE` / `ldr ...@GOTPAGEOFF`) instead of ordinary stack or BSS slots.
 
 ### Static variables
 
@@ -684,7 +708,7 @@ Stores the current result to a stack variable. Uses `store_at_offset()` internal
 |---|---|
 | `Int` / `Bool` | `stur x0, [x29, #-offset]` (or 2-insn sequence for large offsets) |
 | `Float` | `stur d0, [x29, #-offset]` |
-| `Str` | `stur x1, [x29, #-offset]` + `stur x2, [x29, #-(offset-8)]` |
+| `Str` | `bl __rt_str_persist`, then `stur x1, [x29, #-offset]` + `stur x2, [x29, #-(offset-8)]` |
 | `Array` | `stur x0, [x29, #-offset]` |
 | `Object` | `stur x0, [x29, #-offset]` |
 
@@ -776,14 +800,17 @@ It walks `Assign`, `If`, `While`, `For`, `Foreach`, `DoWhile`, `Switch`, `ListUn
 The `generate()` function orchestrates everything:
 
 1. **Emit user functions** — scan AST for `FunctionDecl`, emit each one
-2. **Emit `_main`**:
+2. **Emit class methods** — constructor, instance methods, and static methods use their own labels
+3. **Emit `_main`**:
    - Prologue (stack frame for global variables)
    - Save `argc` and `argv` from OS (they arrive in `x0` and `x1`)
    - Build `$argv` array via `__rt_build_argv` runtime call
    - Emit all non-function statements
    - Epilogue: `exit(0)` syscall
-3. **Emit runtime routines** — all `__rt_*` helper functions
-4. **Emit data section** — string and float literals
+4. **Emit deferred closures** — closure bodies recorded during earlier expression codegen
+5. **Emit runtime routines** — all `__rt_*` helper functions
+6. **Emit data section** — string and float literals
+7. **Emit runtime data / BSS** — global buffers, globals, statics, and lookup tables
 
 ---
 

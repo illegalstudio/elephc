@@ -59,6 +59,10 @@ pub fn emit(
             }
             _ => {
                 emitter.instruction("str x3, [sp, #-16]!");                     // save value
+                if val_ty.is_refcounted() {
+                    emitter.instruction("ldr x0, [sp]");                        // reload borrowed heap pointer before result array takes ownership
+                    emitter.instruction("bl __rt_incref");                      // retain copied heap value for the new indexed array
+                }
                 emitter.instruction("ldr x0, [sp, #32]");                       // load result array (sp+16+16)
                 emitter.instruction("ldr x1, [sp]");                            // reload value
                 emitter.instruction("bl __rt_array_push_int");                  // push int value
@@ -76,6 +80,6 @@ pub fn emit(
         return Some(PhpType::Array(Box::new(val_ty)));
     }
 
-    // -- indexed array: array_values is a no-op, return same array --
-    Some(PhpType::Array(Box::new(PhpType::Int)))
+    // -- indexed array: array_values is a no-op, return same array type --
+    Some(arr_ty)
 }

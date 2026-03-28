@@ -4,8 +4,13 @@ mod functions;
 use std::collections::HashMap;
 
 use crate::errors::CompileError;
-use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Program, Stmt, StmtKind, Visibility};
-use crate::types::{CheckResult, ClassInfo, FunctionSig, PhpType, TypeEnv};
+use crate::parser::ast::{
+    BinOp, CType, CastType, Expr, ExprKind, Program, Stmt, StmtKind, Visibility,
+};
+use crate::types::{
+    ctype_stack_size, ctype_to_php_type, CheckResult, ClassInfo, ExternClassInfo, ExternFieldInfo,
+    ExternFunctionSig, FunctionSig, PhpType, TypeEnv,
+};
 
 /// Infer a function's return type by scanning its body for Return statements.
 /// This is a syntactic/heuristic check — no full type inference.
@@ -34,31 +39,66 @@ fn collect_return_types_syntactic(stmt: &Stmt, types: &mut Vec<PhpType>) {
         StmtKind::Return(None) => {
             types.push(PhpType::Void);
         }
-        StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
-            for s in then_body { collect_return_types_syntactic(s, types); }
-            for (_, body) in elseif_clauses { for s in body { collect_return_types_syntactic(s, types); } }
-            if let Some(body) = else_body { for s in body { collect_return_types_syntactic(s, types); } }
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            for s in then_body {
+                collect_return_types_syntactic(s, types);
+            }
+            for (_, body) in elseif_clauses {
+                for s in body {
+                    collect_return_types_syntactic(s, types);
+                }
+            }
+            if let Some(body) = else_body {
+                for s in body {
+                    collect_return_types_syntactic(s, types);
+                }
+            }
         }
         StmtKind::While { body, .. }
         | StmtKind::DoWhile { body, .. }
         | StmtKind::For { body, .. }
         | StmtKind::Foreach { body, .. } => {
-            for s in body { collect_return_types_syntactic(s, types); }
+            for s in body {
+                collect_return_types_syntactic(s, types);
+            }
         }
         StmtKind::Switch { cases, default, .. } => {
-            for (_, body) in cases { for s in body { collect_return_types_syntactic(s, types); } }
-            if let Some(body) = default { for s in body { collect_return_types_syntactic(s, types); } }
+            for (_, body) in cases {
+                for s in body {
+                    collect_return_types_syntactic(s, types);
+                }
+            }
+            if let Some(body) = default {
+                for s in body {
+                    collect_return_types_syntactic(s, types);
+                }
+            }
         }
         _ => {}
     }
 }
 
 fn wider_type_syntactic(a: &PhpType, b: &PhpType) -> PhpType {
-    if a == b { return a.clone(); }
-    if *a == PhpType::Str || *b == PhpType::Str { return PhpType::Str; }
-    if *a == PhpType::Float || *b == PhpType::Float { return PhpType::Float; }
-    if *a == PhpType::Void { return b.clone(); }
-    if *b == PhpType::Void { return a.clone(); }
+    if a == b {
+        return a.clone();
+    }
+    if *a == PhpType::Str || *b == PhpType::Str {
+        return PhpType::Str;
+    }
+    if *a == PhpType::Float || *b == PhpType::Float {
+        return PhpType::Float;
+    }
+    if *a == PhpType::Void {
+        return b.clone();
+    }
+    if *b == PhpType::Void {
+        return a.clone();
+    }
     a.clone()
 }
 
@@ -68,49 +108,60 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         ExprKind::IntLiteral(_) => PhpType::Int,
         ExprKind::FloatLiteral(_) => PhpType::Float,
         ExprKind::BoolLiteral(_) => PhpType::Bool,
-        ExprKind::Cast { target: CastType::String, .. } => PhpType::Str,
-        ExprKind::Cast { target: CastType::Int, .. } => PhpType::Int,
-        ExprKind::Cast { target: CastType::Float, .. } => PhpType::Float,
-        ExprKind::Cast { target: CastType::Bool, .. } => PhpType::Bool,
-        ExprKind::FunctionCall { name, args } => {
-            match name.as_str() {
-                "substr" | "strtolower" | "strtoupper" | "trim" | "ltrim" | "rtrim"
-                | "str_repeat" | "strrev" | "chr" | "str_replace" | "str_ireplace"
-                | "ucfirst" | "lcfirst" | "ucwords" | "str_pad" | "implode"
-                | "sprintf" | "nl2br" | "wordwrap" | "md5" | "sha1" | "hash"
-                | "substr_replace" | "addslashes" | "stripslashes"
-                | "htmlspecialchars" | "html_entity_decode" | "urlencode" | "urldecode"
-                | "base64_encode" | "base64_decode" | "bin2hex" | "hex2bin"
-                | "number_format" | "date" | "json_encode" | "gettype"
-                | "str_word_count" | "chunk_split" => PhpType::Str,
-                "strlen" | "strpos" | "strrpos" | "ord" | "count" | "intval"
-                | "abs" | "intdiv" | "rand" | "time" => PhpType::Int,
-                "floatval" | "floor" | "ceil" | "round" | "sqrt" | "pow" | "fmod"
-                | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "atan2"
-                | "sinh" | "cosh" | "tanh" | "log" | "log2" | "log10" | "exp"
-                | "hypot" | "pi" | "deg2rad" | "rad2deg" => PhpType::Float,
-                "ptr" | "ptr_null" => PhpType::Pointer(None),
-                "ptr_offset" => {
-                    if let Some(first_arg) = args.first() {
-                        match infer_expr_type_syntactic(first_arg) {
-                            PhpType::Pointer(tag) => PhpType::Pointer(tag),
-                            _ => PhpType::Pointer(None),
-                        }
-                    } else {
-                        PhpType::Pointer(None)
+        ExprKind::Cast {
+            target: CastType::String,
+            ..
+        } => PhpType::Str,
+        ExprKind::Cast {
+            target: CastType::Int,
+            ..
+        } => PhpType::Int,
+        ExprKind::Cast {
+            target: CastType::Float,
+            ..
+        } => PhpType::Float,
+        ExprKind::Cast {
+            target: CastType::Bool,
+            ..
+        } => PhpType::Bool,
+        ExprKind::FunctionCall { name, args } => match name.as_str() {
+            "substr" | "strtolower" | "strtoupper" | "trim" | "ltrim" | "rtrim" | "str_repeat"
+            | "strrev" | "chr" | "str_replace" | "str_ireplace" | "ucfirst" | "lcfirst"
+            | "ucwords" | "str_pad" | "implode" | "sprintf" | "nl2br" | "wordwrap" | "md5"
+            | "sha1" | "hash" | "substr_replace" | "addslashes" | "stripslashes"
+            | "htmlspecialchars" | "html_entity_decode" | "urlencode" | "urldecode"
+            | "base64_encode" | "base64_decode" | "bin2hex" | "hex2bin" | "number_format"
+            | "date" | "json_encode" | "gettype" | "str_word_count" | "chunk_split" => PhpType::Str,
+            "strlen" | "strpos" | "strrpos" | "ord" | "count" | "intval" | "abs" | "intdiv"
+            | "rand" | "time" => PhpType::Int,
+            "floatval" | "floor" | "ceil" | "round" | "sqrt" | "pow" | "fmod" | "sin" | "cos"
+            | "tan" | "asin" | "acos" | "atan" | "atan2" | "sinh" | "cosh" | "tanh" | "log"
+            | "log2" | "log10" | "exp" | "hypot" | "pi" | "deg2rad" | "rad2deg" => PhpType::Float,
+            "ptr" | "ptr_null" => PhpType::Pointer(None),
+            "ptr_offset" => {
+                if let Some(first_arg) = args.first() {
+                    match infer_expr_type_syntactic(first_arg) {
+                        PhpType::Pointer(tag) => PhpType::Pointer(tag),
+                        _ => PhpType::Pointer(None),
                     }
+                } else {
+                    PhpType::Pointer(None)
                 }
-                "ptr_is_null" => PhpType::Bool,
-                "ptr_sizeof" | "ptr_get" => PhpType::Int,
-                _ => PhpType::Int,
             }
-        }
+            "ptr_is_null" => PhpType::Bool,
+            "ptr_sizeof" | "ptr_get" | "ptr_read8" | "ptr_read32" => PhpType::Int,
+            _ => PhpType::Int,
+        },
         ExprKind::NullCoalesce { value, default } => {
             let left_ty = infer_expr_type_syntactic(value);
             let right_ty = infer_expr_type_syntactic(default);
             wider_type_syntactic(&left_ty, &right_ty)
         }
-        ExprKind::Ternary { then_expr, else_expr, .. } => {
+        ExprKind::Ternary {
+            then_expr,
+            else_expr,
+            ..
+        } => {
             let then_ty = infer_expr_type_syntactic(then_expr);
             let else_ty = infer_expr_type_syntactic(else_expr);
             if then_ty == else_ty {
@@ -126,25 +177,30 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.clone()),
         ExprKind::This => PhpType::Object(String::new()),
         ExprKind::PtrCast { target_type, .. } => PhpType::Pointer(Some(target_type.clone())),
-        ExprKind::BinaryOp { left, op, right } => {
-            match op {
-                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Mod => {
-                    let lt = infer_expr_type_syntactic(left);
-                    let rt = infer_expr_type_syntactic(right);
-                    if lt == PhpType::Float || rt == PhpType::Float {
-                        PhpType::Float
-                    } else {
-                        PhpType::Int
-                    }
+        ExprKind::BinaryOp { left, op, right } => match op {
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Mod => {
+                let lt = infer_expr_type_syntactic(left);
+                let rt = infer_expr_type_syntactic(right);
+                if lt == PhpType::Float || rt == PhpType::Float {
+                    PhpType::Float
+                } else {
+                    PhpType::Int
                 }
-                BinOp::Div | BinOp::Pow => PhpType::Float,
-                BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt
-                | BinOp::LtEq | BinOp::GtEq | BinOp::StrictEq
-                | BinOp::StrictNotEq | BinOp::And | BinOp::Or => PhpType::Bool,
-                BinOp::Concat => PhpType::Str,
-                _ => PhpType::Int,
             }
-        }
+            BinOp::Div | BinOp::Pow => PhpType::Float,
+            BinOp::Eq
+            | BinOp::NotEq
+            | BinOp::Lt
+            | BinOp::Gt
+            | BinOp::LtEq
+            | BinOp::GtEq
+            | BinOp::StrictEq
+            | BinOp::StrictNotEq
+            | BinOp::And
+            | BinOp::Or => PhpType::Bool,
+            BinOp::Concat => PhpType::Str,
+            _ => PhpType::Int,
+        },
         _ => PhpType::Int,
     }
 }
@@ -163,6 +219,14 @@ pub(crate) struct Checker {
     pub current_method: Option<String>,
     /// Whether the current class method is static.
     pub current_method_is_static: bool,
+    /// Extern function declarations.
+    pub extern_functions: HashMap<String, ExternFunctionSig>,
+    /// Extern class (C struct) declarations.
+    pub extern_classes: HashMap<String, ExternClassInfo>,
+    /// Extern global variable declarations.
+    pub extern_globals: HashMap<String, PhpType>,
+    /// Libraries required by extern blocks.
+    pub required_libraries: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -184,10 +248,20 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         current_class: None,
         current_method: None,
         current_method_is_static: false,
+        extern_functions: HashMap::new(),
+        extern_classes: HashMap::new(),
+        extern_globals: HashMap::new(),
+        required_libraries: Vec::new(),
     };
 
     for stmt in program {
-        if let StmtKind::FunctionDecl { name, params, variadic, body } = &stmt.kind {
+        if let StmtKind::FunctionDecl {
+            name,
+            params,
+            variadic,
+            body,
+        } = &stmt.kind
+        {
             let param_names: Vec<String> = params.iter().map(|(n, _, _)| n.clone()).collect();
             let defaults: Vec<Option<Expr>> = params.iter().map(|(_, d, _)| d.clone()).collect();
             let ref_flags: Vec<bool> = params.iter().map(|(_, _, r)| *r).collect();
@@ -207,7 +281,12 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
     // First pass: collect class declarations and build ClassInfo
     let mut next_class_id = 0u64;
     for stmt in program {
-        if let StmtKind::ClassDecl { name, properties, methods } = &stmt.kind {
+        if let StmtKind::ClassDecl {
+            name,
+            properties,
+            methods,
+        } = &stmt.kind
+        {
             let mut prop_types = Vec::new();
             let mut property_visibilities = HashMap::new();
             let mut readonly_properties = std::collections::HashSet::new();
@@ -228,15 +307,14 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
             let mut method_visibilities = HashMap::new();
             let mut static_method_visibilities = HashMap::new();
             for method in methods {
-                let params: Vec<(String, PhpType)> = method.params.iter()
+                let params: Vec<(String, PhpType)> = method
+                    .params
+                    .iter()
                     .map(|(n, _, _)| (n.clone(), PhpType::Int))
                     .collect();
-                let defaults: Vec<Option<Expr>> = method.params.iter()
-                    .map(|(_, d, _)| d.clone())
-                    .collect();
-                let ref_params: Vec<bool> = method.params.iter()
-                    .map(|(_, _, r)| *r)
-                    .collect();
+                let defaults: Vec<Option<Expr>> =
+                    method.params.iter().map(|(_, d, _)| d.clone()).collect();
+                let ref_params: Vec<bool> = method.params.iter().map(|(_, _, r)| *r).collect();
                 let return_type = infer_return_type_syntactic(&method.body);
                 let sig = FunctionSig {
                     params,
@@ -247,7 +325,8 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 };
                 if method.is_static {
                     static_sigs.insert(method.name.clone(), sig);
-                    static_method_visibilities.insert(method.name.clone(), method.visibility.clone());
+                    static_method_visibilities
+                        .insert(method.name.clone(), method.visibility.clone());
                 } else {
                     method_sigs.insert(method.name.clone(), sig);
                     method_visibilities.insert(method.name.clone(), method.visibility.clone());
@@ -258,42 +337,154 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
             let mut param_to_prop = Vec::new();
             if let Some(constructor) = methods.iter().find(|m| m.name == "__construct") {
                 // For each constructor param, check if it's directly assigned to a property
-                param_to_prop = constructor.params.iter().map(|(pname, _, _)| {
-                    for stmt in &constructor.body {
-                        if let StmtKind::PropertyAssign { property, value, .. } = &stmt.kind {
-                            if let ExprKind::Variable(vn) = &value.kind {
-                                if vn == pname {
-                                    return Some(property.clone());
+                param_to_prop = constructor
+                    .params
+                    .iter()
+                    .map(|(pname, _, _)| {
+                        for stmt in &constructor.body {
+                            if let StmtKind::PropertyAssign {
+                                property, value, ..
+                            } = &stmt.kind
+                            {
+                                if let ExprKind::Variable(vn) = &value.kind {
+                                    if vn == pname {
+                                        return Some(property.clone());
+                                    }
                                 }
                             }
                         }
-                    }
-                    None
-                }).collect();
+                        None
+                    })
+                    .collect();
             }
 
-            let defaults: Vec<Option<Expr>> = properties.iter()
-                .map(|p| p.default.clone())
-                .collect();
-            checker.classes.insert(name.clone(), ClassInfo {
-                class_id: next_class_id,
-                properties: prop_types,
-                defaults,
-                property_visibilities,
-                readonly_properties,
-                methods: method_sigs,
-                static_methods: static_sigs,
-                method_visibilities,
-                static_method_visibilities,
-                constructor_param_to_prop: param_to_prop,
-            });
+            let defaults: Vec<Option<Expr>> =
+                properties.iter().map(|p| p.default.clone()).collect();
+            checker.classes.insert(
+                name.clone(),
+                ClassInfo {
+                    class_id: next_class_id,
+                    properties: prop_types,
+                    defaults,
+                    property_visibilities,
+                    readonly_properties,
+                    methods: method_sigs,
+                    static_methods: static_sigs,
+                    method_visibilities,
+                    static_method_visibilities,
+                    constructor_param_to_prop: param_to_prop,
+                },
+            );
             next_class_id += 1;
+        }
+    }
+
+    // Pre-scan: collect extern declarations
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::ExternFunctionDecl {
+                name,
+                params,
+                return_type,
+                library,
+            } => {
+                if checker.extern_functions.contains_key(name)
+                    || checker.fn_decls.contains_key(name)
+                {
+                    return Err(CompileError::new(
+                        stmt.span,
+                        &format!("Duplicate function declaration: {}", name),
+                    ));
+                }
+                let php_params: Vec<(String, PhpType)> = params
+                    .iter()
+                    .map(|p| (p.name.clone(), ctype_to_php_type(&p.c_type)))
+                    .collect();
+                let php_ret = ctype_to_php_type(return_type);
+                checker.validate_extern_function_decl(
+                    name,
+                    params,
+                    return_type,
+                    &php_params,
+                    &php_ret,
+                    stmt.span,
+                )?;
+                // Register as a regular function sig so call-site type checking works
+                let sig = FunctionSig {
+                    params: php_params.clone(),
+                    defaults: params.iter().map(|_| None).collect(),
+                    return_type: php_ret.clone(),
+                    ref_params: params.iter().map(|_| false).collect(),
+                    variadic: None,
+                };
+                checker.functions.insert(name.clone(), sig);
+                checker.extern_functions.insert(
+                    name.clone(),
+                    ExternFunctionSig {
+                        name: name.clone(),
+                        params: php_params,
+                        return_type: php_ret,
+                        library: library.clone(),
+                    },
+                );
+                if let Some(lib) = library {
+                    if !checker.required_libraries.contains(lib) {
+                        checker.required_libraries.push(lib.clone());
+                    }
+                }
+            }
+            StmtKind::ExternClassDecl { name, fields } => {
+                if checker.extern_classes.contains_key(name) || checker.classes.contains_key(name) {
+                    return Err(CompileError::new(
+                        stmt.span,
+                        &format!("Duplicate class declaration: {}", name),
+                    ));
+                }
+                let mut extern_fields = Vec::new();
+                let mut offset = 0usize;
+                let mut seen_fields = std::collections::HashSet::new();
+                for f in fields {
+                    checker.validate_extern_field_decl(name, f, stmt.span)?;
+                    if !seen_fields.insert(f.name.clone()) {
+                        return Err(CompileError::new(
+                            stmt.span,
+                            &format!("Duplicate extern field: {}::{}", name, f.name),
+                        ));
+                    }
+                    let php_type = ctype_to_php_type(&f.c_type);
+                    let size = ctype_stack_size(&f.c_type);
+                    extern_fields.push(ExternFieldInfo {
+                        name: f.name.clone(),
+                        php_type,
+                        offset,
+                    });
+                    offset += size;
+                }
+                checker.extern_classes.insert(
+                    name.clone(),
+                    ExternClassInfo {
+                        name: name.clone(),
+                        total_size: offset,
+                        fields: extern_fields,
+                    },
+                );
+            }
+            StmtKind::ExternGlobalDecl { name, c_type } => {
+                checker.validate_extern_global_decl(name, c_type, stmt.span)?;
+                let php_type = ctype_to_php_type(c_type);
+                checker.extern_globals.insert(name.clone(), php_type);
+            }
+            _ => {}
         }
     }
 
     let mut global_env: TypeEnv = HashMap::new();
     global_env.insert("argc".to_string(), PhpType::Int);
     global_env.insert("argv".to_string(), PhpType::Array(Box::new(PhpType::Str)));
+    // Add extern globals to the global environment
+    for (name, ty) in &checker.extern_globals {
+        global_env.insert(name.clone(), ty.clone());
+    }
     for stmt in program {
         checker.check_stmt(stmt, &mut global_env)?;
     }
@@ -301,23 +492,30 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
     // Register provisional signatures for functions that were declared but never
     // called directly (e.g., used only as string callbacks in array_map).
     // This ensures their return types are available for callback type inference.
-    let unchecked: Vec<String> = checker.fn_decls.keys()
+    let unchecked: Vec<String> = checker
+        .fn_decls
+        .keys()
         .filter(|name| !checker.functions.contains_key(*name))
         .cloned()
         .collect();
     for name in unchecked {
         if let Some(decl) = checker.fn_decls.get(&name) {
             let return_type = infer_return_type_syntactic(&decl.body);
-            let params = decl.params.iter()
+            let params = decl
+                .params
+                .iter()
                 .map(|p| (p.clone(), PhpType::Int))
                 .collect();
-            checker.functions.insert(name.clone(), FunctionSig {
-                params,
-                defaults: decl.defaults.clone(),
-                return_type,
-                ref_params: decl.ref_params.clone(),
-                variadic: decl.variadic.clone(),
-            });
+            checker.functions.insert(
+                name.clone(),
+                FunctionSig {
+                    params,
+                    defaults: decl.defaults.clone(),
+                    return_type,
+                    ref_params: decl.ref_params.clone(),
+                    variadic: decl.variadic.clone(),
+                },
+            );
         }
     }
 
@@ -332,15 +530,28 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                     method_env.insert("this".to_string(), PhpType::Object(name.clone()));
                 }
                 // Use param types from ClassInfo sig (updated by MethodCall inference)
-                let method_sig_key = if method.is_static { "static" } else { "instance" };
+                let method_sig_key = if method.is_static {
+                    "static"
+                } else {
+                    "instance"
+                };
                 let _ = method_sig_key;
                 let sig_params = if method.is_static {
-                    checker.classes.get(name).and_then(|c| c.static_methods.get(&method.name)).map(|s| s.params.clone())
+                    checker
+                        .classes
+                        .get(name)
+                        .and_then(|c| c.static_methods.get(&method.name))
+                        .map(|s| s.params.clone())
                 } else {
-                    checker.classes.get(name).and_then(|c| c.methods.get(&method.name)).map(|s| s.params.clone())
+                    checker
+                        .classes
+                        .get(name)
+                        .and_then(|c| c.methods.get(&method.name))
+                        .map(|s| s.params.clone())
                 };
                 for (i, (pname, _, _)) in method.params.iter().enumerate() {
-                    let ty = sig_params.as_ref()
+                    let ty = sig_params
+                        .as_ref()
                         .and_then(|p| p.get(i))
                         .map(|(_, t)| t.clone())
                         .unwrap_or(PhpType::Int);
@@ -353,7 +564,9 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                     if let Some(ci) = checker.classes.get(name).cloned() {
                         for (i, (pname, _, _)) in method.params.iter().enumerate() {
                             if let Some(Some(prop_name)) = ci.constructor_param_to_prop.get(i) {
-                                if let Some((_, ty)) = ci.properties.iter().find(|(n, _)| n == prop_name) {
+                                if let Some((_, ty)) =
+                                    ci.properties.iter().find(|(n, _)| n == prop_name)
+                                {
                                     method_env.insert(pname.clone(), ty.clone());
                                     // Also update the sig in ClassInfo
                                     // (sig.params has user params only, $this added by codegen)
@@ -412,6 +625,10 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         global_env,
         functions: checker.functions,
         classes: checker.classes,
+        extern_functions: checker.extern_functions,
+        extern_classes: checker.extern_classes,
+        extern_globals: checker.extern_globals,
+        required_libraries: checker.required_libraries,
     })
 }
 
@@ -466,8 +683,21 @@ impl Checker {
             "string" => Some("string".to_string()),
             "ptr" | "pointer" => Some("ptr".to_string()),
             class_name if self.classes.contains_key(class_name) => Some(class_name.to_string()),
+            class_name if self.extern_classes.contains_key(class_name) => {
+                Some(class_name.to_string())
+            }
             _ => None,
         }
+    }
+
+    fn extern_field_type(&self, class_name: &str, field_name: &str) -> Option<PhpType> {
+        self.extern_classes.get(class_name).and_then(|class_info| {
+            class_info
+                .fields
+                .iter()
+                .find(|field| field.name == field_name)
+                .map(|field| field.php_type.clone())
+        })
     }
 
     fn ensure_pointer_type(
@@ -491,7 +721,10 @@ impl Checker {
         ty: &PhpType,
         span: crate::span::Span,
     ) -> Result<(), CompileError> {
-        if matches!(ty, PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Pointer(_)) {
+        if matches!(
+            ty,
+            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Pointer(_)
+        ) {
             Ok(())
         } else {
             Err(CompileError::new(
@@ -499,6 +732,271 @@ impl Checker {
                 "ptr_set() value must be int, bool, null, or pointer",
             ))
         }
+    }
+
+    fn validate_extern_function_decl(
+        &self,
+        name: &str,
+        params: &[crate::parser::ast::ExternParam],
+        return_type: &CType,
+        php_params: &[(String, PhpType)],
+        php_ret: &PhpType,
+        span: crate::span::Span,
+    ) -> Result<(), CompileError> {
+        let mut seen = std::collections::HashSet::new();
+        let mut int_regs = 0usize;
+        let mut float_regs = 0usize;
+
+        for (param, (_, php_ty)) in params.iter().zip(php_params.iter()) {
+            if !seen.insert(param.name.clone()) {
+                return Err(CompileError::new(
+                    span,
+                    &format!("Duplicate extern parameter: ${}", param.name),
+                ));
+            }
+            if matches!(param.c_type, CType::Void) {
+                return Err(CompileError::new(
+                    span,
+                    "Extern parameters cannot use type void",
+                ));
+            }
+            match php_ty {
+                PhpType::Float => float_regs += 1,
+                PhpType::Str
+                | PhpType::Int
+                | PhpType::Bool
+                | PhpType::Pointer(_)
+                | PhpType::Callable => {
+                    int_regs += 1;
+                }
+                PhpType::Void
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Object(_) => {
+                    return Err(CompileError::new(
+                        span,
+                        &format!("Unsupported extern parameter type in {}()", name),
+                    ));
+                }
+            }
+        }
+
+        if int_regs > 8 || float_regs > 8 {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Extern function '{}' exceeds supported ARM64 register ABI limits (max 8 integer and 8 float arguments)",
+                    name
+                ),
+            ));
+        }
+
+        if matches!(return_type, CType::Callable)
+            || matches!(
+                php_ret,
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+            )
+        {
+            return Err(CompileError::new(
+                span,
+                &format!("Extern function '{}' has an unsupported return type", name),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn validate_extern_field_decl(
+        &self,
+        class_name: &str,
+        field: &crate::parser::ast::ExternField,
+        span: crate::span::Span,
+    ) -> Result<(), CompileError> {
+        if matches!(field.c_type, CType::Void | CType::Callable) {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Extern class '{}' field ${} uses an unsupported type",
+                    class_name, field.name
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_extern_global_decl(
+        &self,
+        name: &str,
+        c_type: &CType,
+        span: crate::span::Span,
+    ) -> Result<(), CompileError> {
+        if name == "argc" || name == "argv" {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "extern global ${} would shadow a reserved superglobal",
+                    name
+                ),
+            ));
+        }
+        if self.extern_globals.contains_key(name) {
+            return Err(CompileError::new(
+                span,
+                &format!("Duplicate extern global declaration: ${}", name),
+            ));
+        }
+        if matches!(c_type, CType::Void | CType::Callable) {
+            return Err(CompileError::new(
+                span,
+                &format!("Extern global ${} uses an unsupported type", name),
+            ));
+        }
+        Ok(())
+    }
+
+    fn callback_type_is_c_compatible(ty: &PhpType) -> bool {
+        matches!(
+            ty,
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Pointer(_) | PhpType::Void
+        )
+    }
+
+    fn register_callback_function(
+        &mut self,
+        callback_name: &str,
+        span: crate::span::Span,
+    ) -> Result<(), CompileError> {
+        let decl = self.fn_decls.get(callback_name).cloned().ok_or_else(|| {
+            CompileError::new(
+                span,
+                &format!("Undefined callback function: {}", callback_name),
+            )
+        })?;
+
+        if decl.variadic.is_some() {
+            return Err(CompileError::new(
+                span,
+                &format!("Callback function '{}' cannot be variadic", callback_name),
+            ));
+        }
+        if decl.defaults.iter().any(|d| d.is_some()) {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Callback function '{}' cannot use default parameters",
+                    callback_name
+                ),
+            ));
+        }
+        if decl.ref_params.iter().any(|is_ref| *is_ref) {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Callback function '{}' cannot use pass-by-reference parameters",
+                    callback_name
+                ),
+            ));
+        }
+        if let Some(sig) = self.functions.get(callback_name) {
+            if sig
+                .params
+                .iter()
+                .any(|(_, ty)| !Self::callback_type_is_c_compatible(ty))
+                || !Self::callback_type_is_c_compatible(&sig.return_type)
+            {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "Callback function '{}' uses unsupported C callback types; only int, float, bool, ptr, and void are supported",
+                        callback_name
+                    ),
+                ));
+            }
+        } else {
+            let return_type = infer_return_type_syntactic(&decl.body);
+            if !Self::callback_type_is_c_compatible(&return_type) {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "Callback function '{}' uses an unsupported return type; only int, float, bool, ptr, and void are supported",
+                        callback_name
+                    ),
+                ));
+            }
+
+            let params: Vec<(String, PhpType)> = decl
+                .params
+                .iter()
+                .map(|name| (name.clone(), PhpType::Int))
+                .collect();
+            self.functions.insert(
+                callback_name.to_string(),
+                FunctionSig {
+                    params,
+                    defaults: decl.defaults.clone(),
+                    return_type,
+                    ref_params: decl.ref_params.clone(),
+                    variadic: decl.variadic.clone(),
+                },
+            );
+        }
+
+        let _ = decl;
+        Ok(())
+    }
+
+    fn check_extern_function_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        span: crate::span::Span,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let extern_sig = self.extern_functions.get(name).cloned().ok_or_else(|| {
+            CompileError::new(span, &format!("Undefined extern function: {}", name))
+        })?;
+
+        let sig = self
+            .functions
+            .get(name)
+            .cloned()
+            .ok_or_else(|| CompileError::new(span, &format!("Undefined function: {}", name)))?;
+
+        self.check_call_arity("Extern function", name, &sig, args, span)?;
+
+        for (idx, arg) in args.iter().enumerate() {
+            let Some((param_name, expected_ty)) = extern_sig.params.get(idx) else {
+                break;
+            };
+
+            if *expected_ty == PhpType::Callable {
+                match &arg.kind {
+                    ExprKind::StringLiteral(callback_name) => {
+                        self.register_callback_function(callback_name, span)?;
+                    }
+                    _ => {
+                        return Err(CompileError::new(
+                            arg.span,
+                            &format!(
+                                "Extern function '{}' parameter ${} expects a string literal naming a user function",
+                                name, param_name
+                            ),
+                        ));
+                    }
+                }
+                continue;
+            }
+
+            let actual_ty = self.infer_type(arg, env)?;
+            self.require_compatible_arg_type(
+                expected_ty,
+                &actual_ty,
+                arg.span,
+                &format!("Extern function '{}' parameter ${}", name, param_name),
+            )?;
+        }
+
+        Ok(extern_sig.return_type)
     }
 
     fn check_call_arity(
@@ -509,7 +1007,8 @@ impl Checker {
         args: &[Expr],
         span: crate::span::Span,
     ) -> Result<(), CompileError> {
-        let effective_arg_count = args.iter()
+        let effective_arg_count = args
+            .iter()
             .filter(|a| !matches!(a.kind, ExprKind::Spread(_)))
             .count();
         let has_spread = args.iter().any(|a| matches!(a.kind, ExprKind::Spread(_)));
@@ -580,7 +1079,11 @@ impl Checker {
                 }
                 Ok(())
             }
-            StmtKind::ArrayAssign { array, index, value } => {
+            StmtKind::ArrayAssign {
+                array,
+                index,
+                value,
+            } => {
                 let arr_ty = env.get(array).cloned().ok_or_else(|| {
                     CompileError::new(stmt.span, &format!("Undefined variable: ${}", array))
                 })?;
@@ -611,7 +1114,12 @@ impl Checker {
                 }
                 Ok(())
             }
-            StmtKind::Foreach { array, key_var, value_var, body } => {
+            StmtKind::Foreach {
+                array,
+                key_var,
+                value_var,
+                body,
+            } => {
                 let arr_ty = self.infer_type(array, env)?;
                 if let PhpType::Array(elem_ty) = &arr_ty {
                     if let Some(k) = key_var {
@@ -631,7 +1139,11 @@ impl Checker {
                 }
                 Ok(())
             }
-            StmtKind::Switch { subject, cases, default } => {
+            StmtKind::Switch {
+                subject,
+                cases,
+                default,
+            } => {
                 self.infer_type(subject, env)?;
                 for (values, body) in cases {
                     for v in values {
@@ -649,34 +1161,60 @@ impl Checker {
                 Ok(())
             }
             StmtKind::If {
-                condition, then_body, elseif_clauses, else_body,
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
             } => {
                 self.infer_type(condition, env)?;
-                for s in then_body { self.check_stmt(s, env)?; }
+                for s in then_body {
+                    self.check_stmt(s, env)?;
+                }
                 for (cond, body) in elseif_clauses {
                     self.infer_type(cond, env)?;
-                    for s in body { self.check_stmt(s, env)?; }
+                    for s in body {
+                        self.check_stmt(s, env)?;
+                    }
                 }
                 if let Some(body) = else_body {
-                    for s in body { self.check_stmt(s, env)?; }
+                    for s in body {
+                        self.check_stmt(s, env)?;
+                    }
                 }
                 Ok(())
             }
             StmtKind::DoWhile { body, condition } => {
-                for s in body { self.check_stmt(s, env)?; }
+                for s in body {
+                    self.check_stmt(s, env)?;
+                }
                 self.infer_type(condition, env)?;
                 Ok(())
             }
             StmtKind::While { condition, body } => {
                 self.infer_type(condition, env)?;
-                for s in body { self.check_stmt(s, env)?; }
+                for s in body {
+                    self.check_stmt(s, env)?;
+                }
                 Ok(())
             }
-            StmtKind::For { init, condition, update, body } => {
-                if let Some(s) = init { self.check_stmt(s, env)?; }
-                if let Some(c) = condition { self.infer_type(c, env)?; }
-                if let Some(s) = update { self.check_stmt(s, env)?; }
-                for s in body { self.check_stmt(s, env)?; }
+            StmtKind::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(s) = init {
+                    self.check_stmt(s, env)?;
+                }
+                if let Some(c) = condition {
+                    self.infer_type(c, env)?;
+                }
+                if let Some(s) = update {
+                    self.check_stmt(s, env)?;
+                }
+                for s in body {
+                    self.check_stmt(s, env)?;
+                }
                 Ok(())
             }
             StmtKind::Include { .. } => {
@@ -728,7 +1266,9 @@ impl Checker {
             }
             StmtKind::FunctionDecl { .. } => Ok(()),
             StmtKind::Return(expr) => {
-                if let Some(e) = expr { self.infer_type(e, env)?; }
+                if let Some(e) = expr {
+                    self.infer_type(e, env)?;
+                }
                 Ok(())
             }
             StmtKind::ClassDecl { .. } => {
@@ -736,7 +1276,17 @@ impl Checker {
                 // calls have updated property types from constructor arg types)
                 Ok(())
             }
-            StmtKind::PropertyAssign { object, property, value } => {
+            StmtKind::ExternFunctionDecl { .. }
+            | StmtKind::ExternClassDecl { .. }
+            | StmtKind::ExternGlobalDecl { .. } => {
+                // Extern declarations are processed in the pre-scan pass
+                Ok(())
+            }
+            StmtKind::PropertyAssign {
+                object,
+                property,
+                value,
+            } => {
                 let obj_ty = self.infer_type(object, env)?;
                 let val_ty = self.infer_type(value, env)?;
                 if let PhpType::Object(class_name) = &obj_ty {
@@ -750,10 +1300,14 @@ impl Checker {
                         if matches!(
                             class_info.property_visibilities.get(property),
                             Some(Visibility::Private)
-                        ) && !self.can_access_private_member(class_name) {
+                        ) && !self.can_access_private_member(class_name)
+                        {
                             return Err(CompileError::new(
                                 stmt.span,
-                                &format!("Cannot access private property: {}::{}", class_name, property),
+                                &format!(
+                                    "Cannot access private property: {}::{}",
+                                    class_name, property
+                                ),
                             ));
                         }
                         if class_info.readonly_properties.contains(property)
@@ -771,11 +1325,33 @@ impl Checker {
                     }
                     // Update property type from assigned value (e.g., Object type from $a->next = $b)
                     if let Some(class_info) = self.classes.get_mut(class_name) {
-                        if let Some(prop) = class_info.properties.iter_mut().find(|(n, _)| n == property) {
+                        if let Some(prop) = class_info
+                            .properties
+                            .iter_mut()
+                            .find(|(n, _)| n == property)
+                        {
                             if prop.1 == PhpType::Int && val_ty != PhpType::Int {
-                                prop.1 = val_ty;
+                                prop.1 = val_ty.clone();
                             }
                         }
+                    }
+                }
+                if let PhpType::Pointer(Some(class_name)) = &obj_ty {
+                    if let Some(field_ty) = self.extern_field_type(class_name, property) {
+                        if field_ty == PhpType::Int && val_ty != PhpType::Int {
+                            return Err(CompileError::new(
+                                stmt.span,
+                                &format!(
+                                    "Type error: cannot assign {:?} to extern field {}::{} of type {:?}",
+                                    val_ty, class_name, property, field_ty
+                                ),
+                            ));
+                        }
+                    } else if self.extern_classes.contains_key(class_name) {
+                        return Err(CompileError::new(
+                            stmt.span,
+                            &format!("Undefined extern field: {}::{}", class_name, property),
+                        ));
                     }
                 }
                 Ok(())
@@ -798,30 +1374,35 @@ impl Checker {
                 match ty {
                     PhpType::Int => Ok(PhpType::Int),
                     PhpType::Float => Ok(PhpType::Float),
-                    _ => Err(CompileError::new(expr.span, "Cannot negate a non-numeric value")),
+                    _ => Err(CompileError::new(
+                        expr.span,
+                        "Cannot negate a non-numeric value",
+                    )),
                 }
             }
             ExprKind::Not(inner) => {
                 self.infer_type(inner, env)?;
                 Ok(PhpType::Bool)
             }
-            ExprKind::PreIncrement(name) | ExprKind::PostIncrement(name)
-            | ExprKind::PreDecrement(name) | ExprKind::PostDecrement(name) => {
-                match env.get(name) {
-                    Some(PhpType::Int) | Some(PhpType::Bool) | Some(PhpType::Void) => Ok(PhpType::Int),
-                    Some(other) => Err(CompileError::new(
-                        expr.span,
-                        &format!("Cannot increment/decrement ${} of type {:?}", name, other),
-                    )),
-                    None => Err(CompileError::new(
-                        expr.span, &format!("Undefined variable: ${}", name),
-                    )),
-                }
-            }
+            ExprKind::PreIncrement(name)
+            | ExprKind::PostIncrement(name)
+            | ExprKind::PreDecrement(name)
+            | ExprKind::PostDecrement(name) => match env.get(name) {
+                Some(PhpType::Int) | Some(PhpType::Bool) | Some(PhpType::Void) => Ok(PhpType::Int),
+                Some(other) => Err(CompileError::new(
+                    expr.span,
+                    &format!("Cannot increment/decrement ${} of type {:?}", name, other),
+                )),
+                None => Err(CompileError::new(
+                    expr.span,
+                    &format!("Undefined variable: ${}", name),
+                )),
+            },
             ExprKind::ArrayLiteralAssoc(pairs) => {
                 if pairs.is_empty() {
                     return Err(CompileError::new(
-                        expr.span, "Cannot infer type of empty associative array literal",
+                        expr.span,
+                        "Cannot infer type of empty associative array literal",
                     ));
                 }
                 let key_ty = self.infer_type(&pairs[0].0, env)?;
@@ -832,7 +1413,10 @@ impl Checker {
                     if kt != key_ty {
                         return Err(CompileError::new(
                             k.span,
-                            &format!("Assoc array key type mismatch: expected {:?}, got {:?}", key_ty, kt),
+                            &format!(
+                                "Assoc array key type mismatch: expected {:?}, got {:?}",
+                                key_ty, kt
+                            ),
                         ));
                     }
                     // Allow mixed value types — keep first value's type as the
@@ -846,7 +1430,11 @@ impl Checker {
                     value: Box::new(val_ty),
                 })
             }
-            ExprKind::Match { subject, arms, default } => {
+            ExprKind::Match {
+                subject,
+                arms,
+                default,
+            } => {
                 self.infer_type(subject, env)?;
                 let mut result_ty = None;
                 for (conditions, result) in arms {
@@ -876,7 +1464,10 @@ impl Checker {
                     if ty != first_ty {
                         return Err(CompileError::new(
                             elem.span,
-                            &format!("Array element type mismatch: expected {:?}, got {:?}", first_ty, ty),
+                            &format!(
+                                "Array element type mismatch: expected {:?}, got {:?}",
+                                first_ty, ty
+                            ),
                         ));
                     }
                 }
@@ -888,7 +1479,10 @@ impl Checker {
                 match &arr_ty {
                     PhpType::Array(elem_ty) => {
                         if idx_ty != PhpType::Int {
-                            return Err(CompileError::new(expr.span, "Array index must be integer"));
+                            return Err(CompileError::new(
+                                expr.span,
+                                "Array index must be integer",
+                            ));
                         }
                         Ok(*elem_ty.clone())
                     }
@@ -899,7 +1493,11 @@ impl Checker {
                     _ => Err(CompileError::new(expr.span, "Cannot index non-array")),
                 }
             }
-            ExprKind::Ternary { condition, then_expr, else_expr } => {
+            ExprKind::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
                 self.infer_type(condition, env)?;
                 let then_ty = self.infer_type(then_expr, env)?;
                 let else_ty = self.infer_type(else_expr, env)?;
@@ -928,6 +1526,9 @@ impl Checker {
             ExprKind::FunctionCall { name, args } => {
                 let name = name.clone();
                 let args = args.clone();
+                if self.extern_functions.contains_key(&name) {
+                    return self.check_extern_function_call(&name, &args, expr.span, env);
+                }
                 if let Some(ty) = self.check_builtin(&name, &args, expr.span, env)? {
                     return Ok(ty);
                 }
@@ -936,7 +1537,10 @@ impl Checker {
             ExprKind::BitNot(inner) => {
                 let ty = self.infer_type(inner, env)?;
                 if !matches!(ty, PhpType::Int | PhpType::Bool | PhpType::Void) {
-                    return Err(CompileError::new(expr.span, "Bitwise NOT requires integer operand"));
+                    return Err(CompileError::new(
+                        expr.span,
+                        "Bitwise NOT requires integer operand",
+                    ));
                 }
                 Ok(PhpType::Int)
             }
@@ -945,12 +1549,16 @@ impl Checker {
                 let dt = self.infer_type(default, env)?;
                 Ok(wider_type_syntactic(&vt, &dt))
             }
-            ExprKind::ConstRef(name) => {
-                self.constants.get(name).cloned().ok_or_else(|| {
-                    CompileError::new(expr.span, &format!("Undefined constant: {}", name))
-                })
-            }
-            ExprKind::Closure { params, variadic, body, is_arrow: _, captures } => {
+            ExprKind::ConstRef(name) => self.constants.get(name).cloned().ok_or_else(|| {
+                CompileError::new(expr.span, &format!("Undefined constant: {}", name))
+            }),
+            ExprKind::Closure {
+                params,
+                variadic,
+                body,
+                is_arrow: _,
+                captures,
+            } => {
                 // Verify captured variables exist in the enclosing scope
                 for cap in captures {
                     if !env.contains_key(cap) {
@@ -978,7 +1586,10 @@ impl Checker {
                 let ty = self.infer_type(inner, env)?;
                 match ty {
                     PhpType::Array(elem_ty) => Ok(*elem_ty),
-                    _ => Err(CompileError::new(expr.span, "Spread operator requires an array")),
+                    _ => Err(CompileError::new(
+                        expr.span,
+                        "Spread operator requires an array",
+                    )),
                 }
             }
             ExprKind::ClosureCall { var, args } => {
@@ -995,7 +1606,11 @@ impl Checker {
                     self.infer_type(arg, env)?;
                 }
                 // Use tracked return type if available, otherwise default to Int.
-                let ret_ty = self.closure_return_types.get(var).cloned().unwrap_or(PhpType::Int);
+                let ret_ty = self
+                    .closure_return_types
+                    .get(var)
+                    .cloned()
+                    .unwrap_or(PhpType::Int);
                 Ok(ret_ty)
             }
             ExprKind::ExprCall { callee, args } => {
@@ -1003,7 +1618,10 @@ impl Checker {
                 if callee_ty != PhpType::Callable {
                     return Err(CompileError::new(
                         expr.span,
-                        &format!("Cannot call expression — not a callable (got {:?})", callee_ty),
+                        &format!(
+                            "Cannot call expression — not a callable (got {:?})",
+                            callee_ty
+                        ),
                     ));
                 }
                 for arg in args {
@@ -1035,21 +1653,35 @@ impl Checker {
                 let rt = self.infer_type(right, env)?;
                 match op {
                     BinOp::Pow => {
-                        let lt_ok = matches!(lt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
-                        let rt_ok = matches!(rt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
+                        let lt_ok = matches!(
+                            lt,
+                            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
+                        );
+                        let rt_ok = matches!(
+                            rt,
+                            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
+                        );
                         if !lt_ok || !rt_ok {
                             return Err(CompileError::new(
-                                expr.span, "Exponentiation requires numeric operands",
+                                expr.span,
+                                "Exponentiation requires numeric operands",
                             ));
                         }
                         Ok(PhpType::Float)
                     }
                     BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                        let lt_ok = matches!(lt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
-                        let rt_ok = matches!(rt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
+                        let lt_ok = matches!(
+                            lt,
+                            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
+                        );
+                        let rt_ok = matches!(
+                            rt,
+                            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
+                        );
                         if !lt_ok || !rt_ok {
                             return Err(CompileError::new(
-                                expr.span, "Arithmetic operators require numeric operands",
+                                expr.span,
+                                "Arithmetic operators require numeric operands",
                             ));
                         }
                         // Division always returns float (PHP compat: 10/3 → 3.333...)
@@ -1070,11 +1702,18 @@ impl Checker {
                         Ok(PhpType::Bool)
                     }
                     BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
-                        let lt_ok = matches!(lt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
-                        let rt_ok = matches!(rt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
+                        let lt_ok = matches!(
+                            lt,
+                            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
+                        );
+                        let rt_ok = matches!(
+                            rt,
+                            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
+                        );
                         if !lt_ok || !rt_ok {
                             return Err(CompileError::new(
-                                expr.span, "Comparison operators require numeric operands",
+                                expr.span,
+                                "Comparison operators require numeric operands",
                             ));
                         }
                         Ok(PhpType::Bool)
@@ -1085,23 +1724,34 @@ impl Checker {
                     }
                     BinOp::Concat => Ok(PhpType::Str),
                     BinOp::And | BinOp::Or => Ok(PhpType::Bool),
-                    BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor
-                    | BinOp::ShiftLeft | BinOp::ShiftRight => {
+                    BinOp::BitAnd
+                    | BinOp::BitOr
+                    | BinOp::BitXor
+                    | BinOp::ShiftLeft
+                    | BinOp::ShiftRight => {
                         let lt_ok = matches!(lt, PhpType::Int | PhpType::Bool | PhpType::Void);
                         let rt_ok = matches!(rt, PhpType::Int | PhpType::Bool | PhpType::Void);
                         if !lt_ok || !rt_ok {
                             return Err(CompileError::new(
-                                expr.span, "Bitwise operators require integer operands",
+                                expr.span,
+                                "Bitwise operators require integer operands",
                             ));
                         }
                         Ok(PhpType::Int)
                     }
                     BinOp::Spaceship => {
-                        let lt_ok = matches!(lt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
-                        let rt_ok = matches!(rt, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
+                        let lt_ok = matches!(
+                            lt,
+                            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
+                        );
+                        let rt_ok = matches!(
+                            rt,
+                            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
+                        );
                         if !lt_ok || !rt_ok {
                             return Err(CompileError::new(
-                                expr.span, "Spaceship operator requires numeric operands",
+                                expr.span,
+                                "Spaceship operator requires numeric operands",
                             ));
                         }
                         Ok(PhpType::Int)
@@ -1109,7 +1759,11 @@ impl Checker {
                     BinOp::NullCoalesce => {
                         // Handled by ExprKind::NullCoalesce — shouldn't reach here
                         // but handle gracefully
-                        if lt == PhpType::Void { Ok(rt) } else { Ok(lt) }
+                        if lt == PhpType::Void {
+                            Ok(rt)
+                        } else {
+                            Ok(lt)
+                        }
                     }
                 }
             }
@@ -1141,7 +1795,9 @@ impl Checker {
                     }
                 }
                 // Infer arg types and propagate to property types via constructor mapping
-                let param_to_prop = self.classes.get(class_name)
+                let param_to_prop = self
+                    .classes
+                    .get(class_name)
                     .map(|c| c.constructor_param_to_prop.clone())
                     .unwrap_or_default();
                 for (i, arg) in args.iter().enumerate() {
@@ -1149,7 +1805,11 @@ impl Checker {
                     // If this arg maps to a property, update the property type
                     if let Some(Some(prop_name)) = param_to_prop.get(i) {
                         if let Some(class_info) = self.classes.get_mut(class_name) {
-                            if let Some(prop) = class_info.properties.iter_mut().find(|(n, _)| n == prop_name) {
+                            if let Some(prop) = class_info
+                                .properties
+                                .iter_mut()
+                                .find(|(n, _)| n == prop_name)
+                            {
                                 prop.1 = arg_ty;
                             }
                         }
@@ -1164,13 +1824,19 @@ impl Checker {
                         if matches!(
                             class_info.property_visibilities.get(property),
                             Some(Visibility::Private)
-                        ) && !self.can_access_private_member(class_name) {
+                        ) && !self.can_access_private_member(class_name)
+                        {
                             return Err(CompileError::new(
                                 expr.span,
-                                &format!("Cannot access private property: {}::{}", class_name, property),
+                                &format!(
+                                    "Cannot access private property: {}::{}",
+                                    class_name, property
+                                ),
                             ));
                         }
-                        if let Some((_, ty)) = class_info.properties.iter().find(|(n, _)| n == property) {
+                        if let Some((_, ty)) =
+                            class_info.properties.iter().find(|(n, _)| n == property)
+                        {
                             return Ok(ty.clone());
                         }
                         return Err(CompileError::new(
@@ -1179,9 +1845,27 @@ impl Checker {
                         ));
                     }
                 }
-                Ok(PhpType::Int)
+                if let PhpType::Pointer(Some(class_name)) = &obj_ty {
+                    if let Some(field_ty) = self.extern_field_type(class_name, property) {
+                        return Ok(field_ty);
+                    }
+                    if self.extern_classes.contains_key(class_name) {
+                        return Err(CompileError::new(
+                            expr.span,
+                            &format!("Undefined extern field: {}::{}", class_name, property),
+                        ));
+                    }
+                }
+                Err(CompileError::new(
+                    expr.span,
+                    "Property access requires an object or typed extern pointer",
+                ))
             }
-            ExprKind::MethodCall { object, method, args } => {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+            } => {
                 let obj_ty = self.infer_type(object, env)?;
                 // Infer arg types and propagate to method sig params
                 let mut arg_types = Vec::new();
@@ -1194,10 +1878,14 @@ impl Checker {
                             if matches!(
                                 class_info.method_visibilities.get(method),
                                 Some(Visibility::Private)
-                            ) && !self.can_access_private_member(class_name) {
+                            ) && !self.can_access_private_member(class_name)
+                            {
                                 return Err(CompileError::new(
                                     expr.span,
-                                    &format!("Cannot access private method: {}::{}", class_name, method),
+                                    &format!(
+                                        "Cannot access private method: {}::{}",
+                                        class_name, method
+                                    ),
                                 ));
                             }
                             self.check_call_arity(
@@ -1218,7 +1906,10 @@ impl Checker {
                     if let Some(class_info) = self.classes.get_mut(class_name) {
                         if let Some(sig) = class_info.methods.get_mut(method) {
                             for (i, arg_ty) in arg_types.iter().enumerate() {
-                                if i < sig.params.len() && sig.params[i].1 == PhpType::Int && *arg_ty != PhpType::Int {
+                                if i < sig.params.len()
+                                    && sig.params[i].1 == PhpType::Int
+                                    && *arg_ty != PhpType::Int
+                                {
                                     sig.params[i].1 = arg_ty.clone();
                                 }
                             }
@@ -1228,7 +1919,11 @@ impl Checker {
                 }
                 Ok(PhpType::Int)
             }
-            ExprKind::StaticMethodCall { class_name, method, args } => {
+            ExprKind::StaticMethodCall {
+                class_name,
+                method,
+                args,
+            } => {
                 // Infer arg types and propagate to static method sig params
                 let mut arg_types = Vec::new();
                 for arg in args {
@@ -1239,10 +1934,14 @@ impl Checker {
                         if matches!(
                             class_info.static_method_visibilities.get(method),
                             Some(Visibility::Private)
-                        ) && !self.can_access_private_member(class_name) {
+                        ) && !self.can_access_private_member(class_name)
+                        {
                             return Err(CompileError::new(
                                 expr.span,
-                                &format!("Cannot access private method: {}::{}", class_name, method),
+                                &format!(
+                                    "Cannot access private method: {}::{}",
+                                    class_name, method
+                                ),
                             ));
                         }
                         self.check_call_arity(
@@ -1255,7 +1954,10 @@ impl Checker {
                     } else if class_info.methods.contains_key(method) {
                         return Err(CompileError::new(
                             expr.span,
-                            &format!("Cannot call instance method statically: {}::{}", class_name, method),
+                            &format!(
+                                "Cannot call instance method statically: {}::{}",
+                                class_name, method
+                            ),
                         ));
                     } else {
                         return Err(CompileError::new(
@@ -1273,7 +1975,10 @@ impl Checker {
                 if let Some(class_info) = self.classes.get_mut(class_name) {
                     if let Some(sig) = class_info.static_methods.get_mut(method) {
                         for (i, arg_ty) in arg_types.iter().enumerate() {
-                            if i < sig.params.len() && sig.params[i].1 == PhpType::Int && *arg_ty != PhpType::Int {
+                            if i < sig.params.len()
+                                && sig.params[i].1 == PhpType::Int
+                                && *arg_ty != PhpType::Int
+                            {
                                 sig.params[i].1 = arg_ty.clone();
                             }
                         }
@@ -1292,18 +1997,26 @@ impl Checker {
                 if let Some(class_name) = &self.current_class {
                     Ok(PhpType::Object(class_name.clone()))
                 } else {
-                    Err(CompileError::new(expr.span, "Cannot use $this outside of a class method"))
+                    Err(CompileError::new(
+                        expr.span,
+                        "Cannot use $this outside of a class method",
+                    ))
                 }
             }
-            ExprKind::PtrCast { target_type, expr: inner } => {
+            ExprKind::PtrCast {
+                target_type,
+                expr: inner,
+            } => {
                 let inner_ty = self.infer_type(inner, env)?;
                 self.ensure_pointer_type(&inner_ty, expr.span, "ptr_cast()")?;
-                let normalized = self.normalize_pointer_target_type(target_type).ok_or_else(|| {
-                    CompileError::new(
-                        expr.span,
-                        &format!("Unknown ptr_cast target type: {}", target_type),
-                    )
-                })?;
+                let normalized =
+                    self.normalize_pointer_target_type(target_type)
+                        .ok_or_else(|| {
+                            CompileError::new(
+                                expr.span,
+                                &format!("Unknown ptr_cast target type: {}", target_type),
+                            )
+                        })?;
                 Ok(PhpType::Pointer(Some(normalized)))
             }
         }
@@ -1341,7 +2054,12 @@ impl Checker {
             StmtKind::Return(None) => {
                 return_types.push(PhpType::Void);
             }
-            StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
                 for stmt in then_body {
                     self.collect_closure_return_types(stmt, env, return_types);
                 }

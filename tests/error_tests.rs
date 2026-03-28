@@ -12,7 +12,10 @@ fn check_source(src: &str) -> Result<(), String> {
 
 fn expect_error(src: &str, expected_substr: &str) {
     match check_source(src) {
-        Ok(_) => panic!("Expected error containing '{}', but got Ok", expected_substr),
+        Ok(_) => panic!(
+            "Expected error containing '{}', but got Ok",
+            expected_substr
+        ),
         Err(msg) => {
             assert!(
                 msg.contains(expected_substr),
@@ -126,10 +129,7 @@ fn test_error_undefined_variable() {
 
 #[test]
 fn test_error_type_mismatch_reassign() {
-    expect_error(
-        "<?php $x = 42; $x = \"hello\";",
-        "cannot reassign $x",
-    );
+    expect_error("<?php $x = 42; $x = \"hello\";", "cannot reassign $x");
 }
 
 #[test]
@@ -171,10 +171,7 @@ fn test_error_wrong_arg_count() {
 
 #[test]
 fn test_error_increment_string() {
-    expect_error(
-        "<?php $x = \"hi\"; $x++;",
-        "Cannot increment/decrement",
-    );
+    expect_error("<?php $x = \"hi\"; $x++;", "Cannot increment/decrement");
 }
 
 // --- Error positions ---
@@ -481,6 +478,11 @@ expect_builtin_arity_error!(
     "mt_rand() takes 0 or 2 arguments"
 );
 expect_builtin_arity_error!(
+    test_error_rand_wrong_args,
+    "<?php rand(1);",
+    "rand() takes 0 or 2 arguments"
+);
+expect_builtin_arity_error!(
     test_error_asin_wrong_args,
     "<?php asin();",
     "asin() takes exactly 1 argument"
@@ -533,10 +535,8 @@ expect_builtin_arity_error!(
 
 #[test]
 fn test_null_coalesce_widens_function_return_type_in_checker() {
-    let tokens = tokenize(
-        "<?php function fallback_pi($x) { return $x ?? 3.14159; }",
-    )
-    .expect("tokenize failed");
+    let tokens = tokenize("<?php function fallback_pi($x) { return $x ?? 3.14159; }")
+        .expect("tokenize failed");
     let ast = parse(&tokens).expect("parse failed");
     let check_result = types::check(&ast).expect("type check failed");
 
@@ -573,7 +573,10 @@ fn test_error_is_finite_wrong_args() {
 
 #[test]
 fn test_error_is_infinite_wrong_args() {
-    expect_error("<?php is_infinite();", "is_infinite() takes exactly 1 argument");
+    expect_error(
+        "<?php is_infinite();",
+        "is_infinite() takes exactly 1 argument",
+    );
 }
 
 // --- Type operation errors ---
@@ -605,12 +608,18 @@ fn test_error_fmod_wrong_args() {
 
 #[test]
 fn test_error_random_int_wrong_args() {
-    expect_error("<?php random_int(1);", "random_int() takes exactly 2 arguments");
+    expect_error(
+        "<?php random_int(1);",
+        "random_int() takes exactly 2 arguments",
+    );
 }
 
 #[test]
 fn test_error_number_format_wrong_args() {
-    expect_error("<?php number_format();", "number_format() takes 1 to 4 arguments");
+    expect_error(
+        "<?php number_format();",
+        "number_format() takes 1 to 4 arguments",
+    );
 }
 
 // --- String function errors ---
@@ -622,12 +631,18 @@ fn test_error_substr_wrong_args() {
 
 #[test]
 fn test_error_strpos_wrong_args() {
-    expect_error("<?php strpos(\"hi\");", "strpos() takes exactly 2 arguments");
+    expect_error(
+        "<?php strpos(\"hi\");",
+        "strpos() takes exactly 2 arguments",
+    );
 }
 
 #[test]
 fn test_error_str_replace_wrong_args() {
-    expect_error("<?php str_replace(\"a\", \"b\");", "str_replace() takes exactly 3 arguments");
+    expect_error(
+        "<?php str_replace(\"a\", \"b\");",
+        "str_replace() takes exactly 3 arguments",
+    );
 }
 
 #[test]
@@ -636,8 +651,21 @@ fn test_error_sprintf_no_args() {
 }
 
 #[test]
+fn test_error_printf_no_args() {
+    expect_error("<?php printf();", "printf() requires at least 1 argument");
+}
+
+#[test]
+fn test_error_ord_wrong_args() {
+    expect_error("<?php ord();", "ord() takes exactly 1 argument");
+}
+
+#[test]
 fn test_error_explode_wrong_args() {
-    expect_error("<?php explode(\",\");", "explode() takes exactly 2 arguments");
+    expect_error(
+        "<?php explode(\",\");",
+        "explode() takes exactly 2 arguments",
+    );
 }
 
 #[test]
@@ -657,7 +685,10 @@ fn test_error_sha1_wrong_args() {
 
 #[test]
 fn test_error_htmlspecialchars_wrong_args() {
-    expect_error("<?php htmlspecialchars();", "htmlspecialchars() takes exactly 1 argument");
+    expect_error(
+        "<?php htmlspecialchars();",
+        "htmlspecialchars() takes exactly 1 argument",
+    );
 }
 
 #[test]
@@ -667,12 +698,18 @@ fn test_error_urlencode_wrong_args() {
 
 #[test]
 fn test_error_base64_encode_wrong_args() {
-    expect_error("<?php base64_encode();", "base64_encode() takes exactly 1 argument");
+    expect_error(
+        "<?php base64_encode();",
+        "base64_encode() takes exactly 1 argument",
+    );
 }
 
 #[test]
 fn test_error_ctype_alpha_wrong_args() {
-    expect_error("<?php ctype_alpha();", "ctype_alpha() takes exactly 1 argument");
+    expect_error(
+        "<?php ctype_alpha();",
+        "ctype_alpha() takes exactly 1 argument",
+    );
 }
 
 #[test]
@@ -682,7 +719,10 @@ fn test_error_hash_wrong_args() {
 
 #[test]
 fn test_error_sscanf_wrong_args() {
-    expect_error(r#"<?php sscanf("hi");"#, "sscanf() takes at least 2 arguments");
+    expect_error(
+        r#"<?php sscanf("hi");"#,
+        "sscanf() takes at least 2 arguments",
+    );
 }
 
 // --- v0.5: I/O function errors ---
@@ -699,7 +739,10 @@ fn test_error_print_r_wrong_args() {
 
 #[test]
 fn test_error_fopen_wrong_args() {
-    expect_error(r#"<?php fopen("file");"#, "fopen() takes exactly 2 arguments");
+    expect_error(
+        r#"<?php fopen("file");"#,
+        "fopen() takes exactly 2 arguments",
+    );
 }
 
 #[test]
@@ -729,17 +772,26 @@ fn test_error_feof_wrong_args() {
 
 #[test]
 fn test_error_file_get_contents_wrong_args() {
-    expect_error("<?php file_get_contents();", "file_get_contents() takes exactly 1 argument");
+    expect_error(
+        "<?php file_get_contents();",
+        "file_get_contents() takes exactly 1 argument",
+    );
 }
 
 #[test]
 fn test_error_file_put_contents_wrong_args() {
-    expect_error(r#"<?php file_put_contents("x");"#, "file_put_contents() takes exactly 2 arguments");
+    expect_error(
+        r#"<?php file_put_contents("x");"#,
+        "file_put_contents() takes exactly 2 arguments",
+    );
 }
 
 #[test]
 fn test_error_file_exists_wrong_args() {
-    expect_error("<?php file_exists();", "file_exists() takes exactly 1 argument");
+    expect_error(
+        "<?php file_exists();",
+        "file_exists() takes exactly 1 argument",
+    );
 }
 
 #[test]
@@ -754,7 +806,10 @@ fn test_error_copy_wrong_args() {
 
 #[test]
 fn test_error_rename_wrong_args() {
-    expect_error(r#"<?php rename("x");"#, "rename() takes exactly 2 arguments");
+    expect_error(
+        r#"<?php rename("x");"#,
+        "rename() takes exactly 2 arguments",
+    );
 }
 
 #[test]
@@ -769,7 +824,10 @@ fn test_error_scandir_wrong_args() {
 
 #[test]
 fn test_error_tempnam_wrong_args() {
-    expect_error(r#"<?php tempnam("x");"#, "tempnam() takes exactly 2 arguments");
+    expect_error(
+        r#"<?php tempnam("x");"#,
+        "tempnam() takes exactly 2 arguments",
+    );
 }
 
 #[test]
@@ -784,12 +842,18 @@ fn test_error_is_dir_wrong_args() {
 
 #[test]
 fn test_error_is_readable_wrong_args() {
-    expect_error("<?php is_readable();", "is_readable() takes exactly 1 argument");
+    expect_error(
+        "<?php is_readable();",
+        "is_readable() takes exactly 1 argument",
+    );
 }
 
 #[test]
 fn test_error_is_writable_wrong_args() {
-    expect_error("<?php is_writable();", "is_writable() takes exactly 1 argument");
+    expect_error(
+        "<?php is_writable();",
+        "is_writable() takes exactly 1 argument",
+    );
 }
 
 #[test]
@@ -824,7 +888,10 @@ fn test_error_glob_wrong_args() {
 
 #[test]
 fn test_error_sys_get_temp_dir_wrong_args() {
-    expect_error("<?php sys_get_temp_dir(1);", "sys_get_temp_dir() takes no arguments");
+    expect_error(
+        "<?php sys_get_temp_dir(1);",
+        "sys_get_temp_dir() takes no arguments",
+    );
 }
 
 #[test]
@@ -849,7 +916,10 @@ fn test_error_file_wrong_args() {
 
 #[test]
 fn test_error_readline_wrong_args() {
-    expect_error(r#"<?php readline(1, 2);"#, "readline() takes 0 or 1 arguments");
+    expect_error(
+        r#"<?php readline(1, 2);"#,
+        "readline() takes 0 or 1 arguments",
+    );
 }
 
 #[test]
@@ -883,12 +953,18 @@ fn test_error_assoc_array_mixed() {
 
 #[test]
 fn test_error_array_reverse_wrong_args() {
-    expect_error("<?php array_reverse();", "array_reverse() takes exactly 1 argument");
+    expect_error(
+        "<?php array_reverse();",
+        "array_reverse() takes exactly 1 argument",
+    );
 }
 
 #[test]
 fn test_error_array_merge_wrong_args() {
-    expect_error("<?php $a = [1]; array_merge($a);", "array_merge() takes exactly 2 arguments");
+    expect_error(
+        "<?php $a = [1]; array_merge($a);",
+        "array_merge() takes exactly 2 arguments",
+    );
 }
 
 #[test]
@@ -898,22 +974,34 @@ fn test_error_array_sum_wrong_args() {
 
 #[test]
 fn test_error_array_search_wrong_args() {
-    expect_error("<?php $a = [1]; array_search($a);", "array_search() takes exactly 2 arguments");
+    expect_error(
+        "<?php $a = [1]; array_search($a);",
+        "array_search() takes exactly 2 arguments",
+    );
 }
 
 #[test]
 fn test_error_array_key_exists_wrong_args() {
-    expect_error("<?php array_key_exists(1);", "array_key_exists() takes exactly 2 arguments");
+    expect_error(
+        "<?php array_key_exists(1);",
+        "array_key_exists() takes exactly 2 arguments",
+    );
 }
 
 #[test]
 fn test_error_array_slice_wrong_args() {
-    expect_error("<?php $a = [1]; array_slice($a);", "array_slice() takes 2 or 3 arguments");
+    expect_error(
+        "<?php $a = [1]; array_slice($a);",
+        "array_slice() takes 2 or 3 arguments",
+    );
 }
 
 #[test]
 fn test_error_array_combine_wrong_args() {
-    expect_error("<?php $a = [1]; array_combine($a);", "array_combine() takes exactly 2 arguments");
+    expect_error(
+        "<?php $a = [1]; array_combine($a);",
+        "array_combine() takes exactly 2 arguments",
+    );
 }
 
 #[test]
@@ -928,12 +1016,18 @@ fn test_error_shuffle_wrong_args() {
 
 #[test]
 fn test_error_array_fill_wrong_args() {
-    expect_error("<?php array_fill(0, 5);", "array_fill() takes exactly 3 arguments");
+    expect_error(
+        "<?php array_fill(0, 5);",
+        "array_fill() takes exactly 3 arguments",
+    );
 }
 
 #[test]
 fn test_error_array_push_wrong_args() {
-    expect_error("<?php array_push();", "array_push() takes exactly 2 arguments");
+    expect_error(
+        "<?php array_push();",
+        "array_push() takes exactly 2 arguments",
+    );
 }
 
 #[test]
@@ -948,12 +1042,18 @@ fn test_error_in_array_wrong_args() {
 
 #[test]
 fn test_error_array_keys_wrong_args() {
-    expect_error("<?php array_keys();", "array_keys() takes exactly 1 argument");
+    expect_error(
+        "<?php array_keys();",
+        "array_keys() takes exactly 1 argument",
+    );
 }
 
 #[test]
 fn test_error_array_values_wrong_args() {
-    expect_error("<?php array_values();", "array_values() takes exactly 1 argument");
+    expect_error(
+        "<?php array_values();",
+        "array_values() takes exactly 1 argument",
+    );
 }
 
 #[test]
@@ -973,72 +1073,119 @@ fn test_error_isset_wrong_args() {
 
 #[test]
 fn test_error_array_unique_wrong_args() {
-    expect_error("<?php array_unique();", "array_unique() takes exactly 1 argument");
+    expect_error(
+        "<?php array_unique();",
+        "array_unique() takes exactly 1 argument",
+    );
 }
 
 #[test]
 fn test_error_array_product_wrong_args() {
-    expect_error("<?php array_product();", "array_product() takes exactly 1 argument");
+    expect_error(
+        "<?php array_product();",
+        "array_product() takes exactly 1 argument",
+    );
 }
 
 #[test]
 fn test_error_array_shift_wrong_args() {
-    expect_error("<?php array_shift();", "array_shift() takes exactly 1 argument");
+    expect_error(
+        "<?php array_shift();",
+        "array_shift() takes exactly 1 argument",
+    );
 }
 
 #[test]
 fn test_error_array_unshift_wrong_args() {
-    expect_error("<?php array_unshift();", "array_unshift() takes exactly 2 arguments");
+    expect_error(
+        "<?php array_unshift();",
+        "array_unshift() takes exactly 2 arguments",
+    );
 }
 
 #[test]
 fn test_error_array_splice_wrong_args() {
-    expect_error("<?php array_splice();", "array_splice() takes 2 or 3 arguments");
+    expect_error(
+        "<?php array_splice();",
+        "array_splice() takes 2 or 3 arguments",
+    );
 }
 
 #[test]
 fn test_error_array_flip_wrong_args() {
-    expect_error("<?php array_flip();", "array_flip() takes exactly 1 argument");
+    expect_error(
+        "<?php array_flip();",
+        "array_flip() takes exactly 1 argument",
+    );
 }
 
 #[test]
 fn test_error_array_chunk_wrong_args() {
-    expect_error("<?php array_chunk();", "array_chunk() takes exactly 2 arguments");
+    expect_error(
+        "<?php array_chunk();",
+        "array_chunk() takes exactly 2 arguments",
+    );
 }
 
 #[test]
 fn test_error_array_pad_wrong_args() {
-    expect_error("<?php array_pad();", "array_pad() takes exactly 3 arguments");
+    expect_error(
+        "<?php array_pad();",
+        "array_pad() takes exactly 3 arguments",
+    );
 }
 
 #[test]
 fn test_error_array_fill_keys_wrong_args() {
-    expect_error("<?php array_fill_keys();", "array_fill_keys() takes exactly 2 arguments");
+    expect_error(
+        "<?php array_fill_keys();",
+        "array_fill_keys() takes exactly 2 arguments",
+    );
+}
+
+#[test]
+fn test_error_count_wrong_args() {
+    expect_error("<?php count();", "count() takes exactly 1 argument");
 }
 
 #[test]
 fn test_error_array_diff_wrong_args() {
-    expect_error("<?php array_diff();", "array_diff() takes exactly 2 arguments");
+    expect_error(
+        "<?php array_diff();",
+        "array_diff() takes exactly 2 arguments",
+    );
 }
 
 #[test]
 fn test_error_array_intersect_wrong_args() {
-    expect_error("<?php array_intersect();", "array_intersect() takes exactly 2 arguments");
+    expect_error(
+        "<?php array_intersect();",
+        "array_intersect() takes exactly 2 arguments",
+    );
 }
 
 #[test]
 fn test_error_array_diff_key_wrong_args() {
-    expect_error("<?php array_diff_key();", "array_diff_key() takes exactly 2 arguments");
+    expect_error(
+        "<?php array_diff_key();",
+        "array_diff_key() takes exactly 2 arguments",
+    );
 }
 
 #[test]
 fn test_error_array_intersect_key_wrong_args() {
-    expect_error("<?php array_intersect_key();", "array_intersect_key() takes exactly 2 arguments");
+    expect_error(
+        "<?php array_intersect_key();",
+        "array_intersect_key() takes exactly 2 arguments",
+    );
 }
 
 #[test]
 fn test_error_array_rand_wrong_args() {
-    expect_error("<?php array_rand();", "array_rand() takes exactly 1 argument");
+    expect_error(
+        "<?php array_rand();",
+        "array_rand() takes exactly 1 argument",
+    );
 }
 
 #[test]
@@ -1068,32 +1215,50 @@ fn test_error_natsort_wrong_args() {
 
 #[test]
 fn test_error_natcasesort_wrong_args() {
-    expect_error("<?php natcasesort();", "natcasesort() takes exactly 1 argument");
+    expect_error(
+        "<?php natcasesort();",
+        "natcasesort() takes exactly 1 argument",
+    );
 }
 
 #[test]
 fn test_error_array_column_wrong_args() {
-    expect_error(r#"<?php array_column([]);"#, "array_column() takes exactly 2 arguments");
+    expect_error(
+        r#"<?php array_column([]);"#,
+        "array_column() takes exactly 2 arguments",
+    );
 }
 
 #[test]
 fn test_error_array_map_wrong_args() {
-    expect_error(r#"<?php array_map("fn");"#, "array_map() takes exactly 2 arguments");
+    expect_error(
+        r#"<?php array_map("fn");"#,
+        "array_map() takes exactly 2 arguments",
+    );
 }
 
 #[test]
 fn test_error_array_filter_wrong_args() {
-    expect_error(r#"<?php array_filter([]);"#, "array_filter() takes exactly 2 arguments");
+    expect_error(
+        r#"<?php array_filter([]);"#,
+        "array_filter() takes exactly 2 arguments",
+    );
 }
 
 #[test]
 fn test_error_array_reduce_wrong_args() {
-    expect_error(r#"<?php array_reduce([], "fn");"#, "array_reduce() takes exactly 3 arguments");
+    expect_error(
+        r#"<?php array_reduce([], "fn");"#,
+        "array_reduce() takes exactly 3 arguments",
+    );
 }
 
 #[test]
 fn test_error_array_walk_wrong_args() {
-    expect_error(r#"<?php array_walk([]);"#, "array_walk() takes exactly 2 arguments");
+    expect_error(
+        r#"<?php array_walk([]);"#,
+        "array_walk() takes exactly 2 arguments",
+    );
 }
 
 #[test]
@@ -1113,38 +1278,35 @@ fn test_error_uasort_wrong_args() {
 
 #[test]
 fn test_error_call_user_func_wrong_args() {
-    expect_error(r#"<?php call_user_func();"#, "call_user_func() takes at least 1 argument");
+    expect_error(
+        r#"<?php call_user_func();"#,
+        "call_user_func() takes at least 1 argument",
+    );
 }
 
 #[test]
 fn test_error_function_exists_wrong_args() {
-    expect_error(r#"<?php function_exists();"#, "function_exists() takes exactly 1 argument");
+    expect_error(
+        r#"<?php function_exists();"#,
+        "function_exists() takes exactly 1 argument",
+    );
 }
 
 // --- Closure / arrow function errors ---
 
 #[test]
 fn test_error_call_non_callable_variable() {
-    expect_error(
-        r#"<?php $x = 5; $x(1);"#,
-        "not a callable",
-    );
+    expect_error(r#"<?php $x = 5; $x(1);"#, "not a callable");
 }
 
 #[test]
 fn test_error_arrow_function_missing_arrow() {
-    expect_error(
-        r#"<?php $f = fn($x) $x * 2;"#,
-        "Expected '=>'",
-    );
+    expect_error(r#"<?php $f = fn($x) $x * 2;"#, "Expected '=>'");
 }
 
 #[test]
 fn test_error_arrow_function_missing_lparen() {
-    expect_error(
-        r#"<?php $f = fn $x => $x * 2;"#,
-        "Expected '(' after 'fn'",
-    );
+    expect_error(r#"<?php $f = fn $x => $x * 2;"#, "Expected '(' after 'fn'");
 }
 
 // --- v0.7: Default parameter, bitwise, spaceship errors ---
@@ -1191,44 +1353,29 @@ fn test_error_spaceship_string() {
 
 #[test]
 fn test_error_heredoc_unterminated() {
-    expect_error(
-        "<?php echo <<<EOT\nHello",
-        "Unterminated heredoc",
-    );
+    expect_error("<?php echo <<<EOT\nHello", "Unterminated heredoc");
 }
 
 // --- Constants errors ---
 
 #[test]
 fn test_error_undefined_constant() {
-    expect_error(
-        "<?php echo UNDEFINED_CONST;",
-        "Undefined constant",
-    );
+    expect_error("<?php echo UNDEFINED_CONST;", "Undefined constant");
 }
 
 #[test]
 fn test_error_const_missing_name() {
-    expect_error(
-        "<?php const = 5;",
-        "Expected constant name",
-    );
+    expect_error("<?php const = 5;", "Expected constant name");
 }
 
 #[test]
 fn test_error_const_missing_value() {
-    expect_error(
-        "<?php const MAX;",
-        "Expected '='",
-    );
+    expect_error("<?php const MAX;", "Expected '='");
 }
 
 #[test]
 fn test_error_define_wrong_args() {
-    expect_error(
-        "<?php define(\"X\");",
-        "define() takes exactly 2 arguments",
-    );
+    expect_error("<?php define(\"X\");", "define() takes exactly 2 arguments");
 }
 
 #[test]
@@ -1243,10 +1390,7 @@ fn test_error_define_non_string_name() {
 
 #[test]
 fn test_error_list_unpack_non_array() {
-    expect_error(
-        "<?php [$a, $b] = 42;",
-        "List unpacking requires an array",
-    );
+    expect_error("<?php [$a, $b] = 42;", "List unpacking requires an array");
 }
 
 // --- call_user_func_array errors ---
@@ -1268,7 +1412,10 @@ fn test_error_time_wrong_args() {
 
 #[test]
 fn test_error_microtime_wrong_args() {
-    expect_error("<?php microtime(1, 2);", "microtime() takes 0 or 1 arguments");
+    expect_error(
+        "<?php microtime(1, 2);",
+        "microtime() takes 0 or 1 arguments",
+    );
 }
 
 #[test]
@@ -1298,7 +1445,10 @@ fn test_error_phpversion_wrong_args() {
 
 #[test]
 fn test_error_php_uname_wrong_args() {
-    expect_error("<?php php_uname(1, 2);", "php_uname() takes 0 or 1 arguments");
+    expect_error(
+        "<?php php_uname(1, 2);",
+        "php_uname() takes 0 or 1 arguments",
+    );
 }
 
 #[test]
@@ -1308,7 +1458,10 @@ fn test_error_exec_wrong_args() {
 
 #[test]
 fn test_error_shell_exec_wrong_args() {
-    expect_error("<?php shell_exec();", "shell_exec() takes exactly 1 argument");
+    expect_error(
+        "<?php shell_exec();",
+        "shell_exec() takes exactly 1 argument",
+    );
 }
 
 #[test]
@@ -1342,7 +1495,10 @@ fn test_error_static_missing_init() {
 
 #[test]
 fn test_error_variadic_missing_variable() {
-    expect_error("<?php function foo(... ) {}", "Expected variable after '...'");
+    expect_error(
+        "<?php function foo(... ) {}",
+        "Expected variable after '...'",
+    );
 }
 
 #[test]
@@ -1423,15 +1579,15 @@ fn test_error_date_no_args() {
 
 #[test]
 fn test_error_date_too_many_args() {
-    expect_error(
-        r#"<?php date("Y", 0, 0);"#,
-        "date() takes 1 or 2 arguments",
-    );
+    expect_error(r#"<?php date("Y", 0, 0);"#, "date() takes 1 or 2 arguments");
 }
 
 #[test]
 fn test_error_mktime_wrong_args() {
-    expect_error("<?php mktime(1, 2, 3);", "mktime() takes exactly 6 arguments");
+    expect_error(
+        "<?php mktime(1, 2, 3);",
+        "mktime() takes exactly 6 arguments",
+    );
 }
 
 #[test]
@@ -1443,7 +1599,10 @@ fn test_error_strtotime_no_args() {
 
 #[test]
 fn test_error_json_encode_no_args() {
-    expect_error("<?php json_encode();", "json_encode() takes exactly 1 argument");
+    expect_error(
+        "<?php json_encode();",
+        "json_encode() takes exactly 1 argument",
+    );
 }
 
 #[test]
@@ -1456,19 +1615,28 @@ fn test_error_json_encode_too_many_args() {
 
 #[test]
 fn test_error_json_decode_no_args() {
-    expect_error("<?php json_decode();", "json_decode() takes exactly 1 argument");
+    expect_error(
+        "<?php json_decode();",
+        "json_decode() takes exactly 1 argument",
+    );
 }
 
 #[test]
 fn test_error_json_last_error_with_args() {
-    expect_error("<?php json_last_error(1);", "json_last_error() takes no arguments");
+    expect_error(
+        "<?php json_last_error(1);",
+        "json_last_error() takes no arguments",
+    );
 }
 
 // --- Regex error tests ---
 
 #[test]
 fn test_error_preg_match_no_args() {
-    expect_error("<?php preg_match();", "preg_match() takes exactly 2 arguments");
+    expect_error(
+        "<?php preg_match();",
+        "preg_match() takes exactly 2 arguments",
+    );
 }
 
 #[test]
@@ -1481,7 +1649,10 @@ fn test_error_preg_match_one_arg() {
 
 #[test]
 fn test_error_preg_match_all_no_args() {
-    expect_error("<?php preg_match_all();", "preg_match_all() takes exactly 2 arguments");
+    expect_error(
+        "<?php preg_match_all();",
+        "preg_match_all() takes exactly 2 arguments",
+    );
 }
 
 #[test]
@@ -1494,7 +1665,10 @@ fn test_error_preg_replace_wrong_args() {
 
 #[test]
 fn test_error_preg_split_no_args() {
-    expect_error("<?php preg_split();", "preg_split() takes exactly 2 arguments");
+    expect_error(
+        "<?php preg_split();",
+        "preg_split() takes exactly 2 arguments",
+    );
 }
 
 // --- Hex literal errors ---
@@ -1596,27 +1770,42 @@ fn test_error_ptr_null_with_args() {
 
 #[test]
 fn test_error_ptr_is_null_wrong_args() {
-    expect_error("<?php ptr_is_null();", "ptr_is_null() takes exactly 1 argument");
+    expect_error(
+        "<?php ptr_is_null();",
+        "ptr_is_null() takes exactly 1 argument",
+    );
 }
 
 #[test]
 fn test_error_ptr_is_null_requires_pointer() {
-    expect_error("<?php ptr_is_null(123);", "ptr_is_null() requires a pointer argument");
+    expect_error(
+        "<?php ptr_is_null(123);",
+        "ptr_is_null() requires a pointer argument",
+    );
 }
 
 #[test]
 fn test_error_ptr_offset_wrong_args() {
-    expect_error("<?php $p = ptr_null(); ptr_offset($p);", "ptr_offset() takes exactly 2 arguments");
+    expect_error(
+        "<?php $p = ptr_null(); ptr_offset($p);",
+        "ptr_offset() takes exactly 2 arguments",
+    );
 }
 
 #[test]
 fn test_error_ptr_offset_requires_pointer() {
-    expect_error("<?php ptr_offset(123, 8);", "ptr_offset() requires a pointer argument");
+    expect_error(
+        "<?php ptr_offset(123, 8);",
+        "ptr_offset() requires a pointer argument",
+    );
 }
 
 #[test]
 fn test_error_ptr_offset_requires_integer_offset() {
-    expect_error("<?php $p = ptr_null(); ptr_offset($p, \"8\");", "ptr_offset() second argument must be integer");
+    expect_error(
+        "<?php $p = ptr_null(); ptr_offset($p, \"8\");",
+        "ptr_offset() second argument must be integer",
+    );
 }
 
 #[test]
@@ -1626,17 +1815,42 @@ fn test_error_ptr_get_wrong_args() {
 
 #[test]
 fn test_error_ptr_get_requires_pointer() {
-    expect_error("<?php ptr_get(123);", "ptr_get() requires a pointer argument");
+    expect_error(
+        "<?php ptr_get(123);",
+        "ptr_get() requires a pointer argument",
+    );
+}
+
+#[test]
+fn test_error_ptr_read8_requires_pointer() {
+    expect_error(
+        "<?php ptr_read8(123);",
+        "ptr_read8() requires a pointer argument",
+    );
+}
+
+#[test]
+fn test_error_ptr_read32_requires_pointer() {
+    expect_error(
+        "<?php ptr_read32(123);",
+        "ptr_read32() requires a pointer argument",
+    );
 }
 
 #[test]
 fn test_error_ptr_set_wrong_args() {
-    expect_error("<?php ptr_set(ptr_null());", "ptr_set() takes exactly 2 arguments");
+    expect_error(
+        "<?php ptr_set(ptr_null());",
+        "ptr_set() takes exactly 2 arguments",
+    );
 }
 
 #[test]
 fn test_error_ptr_set_requires_pointer() {
-    expect_error("<?php ptr_set(123, 1);", "ptr_set() requires a pointer argument");
+    expect_error(
+        "<?php ptr_set(123, 1);",
+        "ptr_set() requires a pointer argument",
+    );
 }
 
 #[test]
@@ -1648,8 +1862,27 @@ fn test_error_ptr_set_requires_word_value() {
 }
 
 #[test]
+fn test_error_ptr_write8_requires_int_value() {
+    expect_error(
+        "<?php $p = ptr_null(); ptr_write8($p, \"hello\");",
+        "ptr_write8() value must be int",
+    );
+}
+
+#[test]
+fn test_error_ptr_write32_requires_int_value() {
+    expect_error(
+        "<?php $p = ptr_null(); ptr_write32($p, \"hello\");",
+        "ptr_write32() value must be int",
+    );
+}
+
+#[test]
 fn test_error_ptr_sizeof_wrong_args() {
-    expect_error("<?php ptr_sizeof();", "ptr_sizeof() takes exactly 1 argument");
+    expect_error(
+        "<?php ptr_sizeof();",
+        "ptr_sizeof() takes exactly 1 argument",
+    );
 }
 
 #[test]
@@ -1670,12 +1903,18 @@ fn test_error_ptr_sizeof_unknown_type() {
 
 #[test]
 fn test_error_ptr_cast_missing_type() {
-    expect_error("<?php ptr_cast<>(ptr_null());", "Expected type name after 'ptr_cast<'");
+    expect_error(
+        "<?php ptr_cast<>(ptr_null());",
+        "Expected type name after 'ptr_cast<'",
+    );
 }
 
 #[test]
 fn test_error_ptr_cast_requires_pointer_argument() {
-    expect_error("<?php ptr_cast<int>(123);", "ptr_cast() requires a pointer argument");
+    expect_error(
+        "<?php ptr_cast<int>(123);",
+        "ptr_cast() requires a pointer argument",
+    );
 }
 
 #[test]
@@ -1691,5 +1930,100 @@ fn test_error_pointer_loose_comparison_is_rejected() {
     expect_error(
         "<?php $x = 1; $p = ptr($x); $q = ptr($x); echo $p == $q;",
         "Loose pointer comparison is not supported; use === or !==",
+    );
+}
+
+// --- FFI error tests ---
+
+#[test]
+fn test_error_extern_unknown_type() {
+    expect_error(
+        "<?php extern function foo(badtype $x): int;",
+        "Unknown C type: badtype",
+    );
+}
+
+#[test]
+fn test_error_extern_missing_function() {
+    expect_error(
+        "<?php extern badkw;",
+        "Expected 'function', string literal, 'class', or 'global' after 'extern'",
+    );
+}
+
+#[test]
+fn test_error_extern_block_empty() {
+    expect_error("<?php extern \"lib\" { }", "Empty extern block");
+}
+
+#[test]
+fn test_error_extern_wrong_arg_count() {
+    expect_error(
+        "<?php extern function abs(int $n): int; abs();",
+        "Extern function 'abs' expects 1 arguments, got 0",
+    );
+}
+
+#[test]
+fn test_error_extern_wrong_arg_type() {
+    expect_error(
+        "<?php extern function strlen(string $s): int; strlen(123);",
+        "Extern function 'strlen' parameter $s expects Str, got Int",
+    );
+}
+
+#[test]
+fn test_error_duplicate_extern_function() {
+    expect_error(
+        "<?php extern function foo(int $x): int; extern function foo(int $y): int;",
+        "Duplicate function declaration: foo",
+    );
+}
+
+#[test]
+fn test_error_extern_global_reserved_name() {
+    expect_error(
+        "<?php extern global int $argc;",
+        "extern global $argc would shadow a reserved superglobal",
+    );
+}
+
+#[test]
+fn test_error_extern_global_void_type() {
+    expect_error(
+        "<?php extern global void $bad;",
+        "Extern global $bad uses an unsupported type",
+    );
+}
+
+#[test]
+fn test_error_extern_callable_requires_literal_function_name() {
+    expect_error(
+        "<?php extern function signal(int $sig, callable $handler): ptr; function on_signal($sig) {} $fn = \"on_signal\"; signal(15, $fn);",
+        "expects a string literal naming a user function",
+    );
+}
+
+#[test]
+fn test_error_extern_callable_requires_defined_function() {
+    expect_error(
+        "<?php extern function signal(int $sig, callable $handler): ptr; signal(15, \"missing_handler\");",
+        "Undefined callback function: missing_handler",
+    );
+}
+
+#[test]
+fn test_error_extern_callable_requires_c_compatible_return_type() {
+    expect_error(
+        "<?php extern function signal(int $sig, callable $handler): ptr; function bad_handler($sig) { return \"oops\"; } signal(15, \"bad_handler\");",
+        "unsupported return type",
+    );
+}
+
+#[test]
+fn test_error_extern_class_void_field() {
+    expect_error(
+        "<?php extern class Bad { void $field; }",
+        "Extern class 'Bad' field $field uses an unsupported type",
     );
 }

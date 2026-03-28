@@ -63,7 +63,7 @@ Things that have a value:
 | `ArrayAccess { array, index }` | `$arr[0]` | |
 | `Ternary { cond, then, else }` | `$a ? $b : $c` | |
 | `Cast { target, expr }` | `(int)$x` | |
-| `Closure { params, variadic, body, is_arrow, captures }` | `function($x) use ($y) { ... }` or `fn($x) => ...` | Anonymous function / arrow function. Params is `Vec<(String, Option<Expr>, bool)>` — name, default, is_ref. `variadic` is an optional parameter name. `captures` is `Vec<String>` — variables captured via `use` clause (arrow functions auto-capture, so `captures` is populated by the parser for both forms) |
+| `Closure { params, variadic, body, is_arrow, captures }` | `function($x) use ($y) { ... }` or `fn($x) => ...` | Anonymous function / arrow function. Params is `Vec<(String, Option<Expr>, bool)>` — name, default, is_ref. `variadic` is an optional parameter name. `captures` is `Vec<String>` — variables captured via an explicit `use (...)` clause. Arrow functions are still represented as `Closure`, but parse with `is_arrow = true` and `captures = []`. |
 | `ClosureCall { var, args }` | `$fn(1, 2)` | Calling a closure stored in a variable |
 | `ExprCall { callee, args }` | `$arr[0](1, 2)` | Calling the result of an expression (e.g., array access returning a callable) |
 | `Spread(Expr)` | `...$arr` | Spread/unpack operator — expands an array into individual arguments or elements |
@@ -102,6 +102,9 @@ Things that do something:
 | `StaticVar { name, init }` | `static $count = 0;` — declares a variable that persists across function calls |
 | `ClassDecl { name, properties, methods }` | `class Point { ... }` |
 | `PropertyAssign { object, property, value }` | `$p->x = 10;` |
+| `ExternFunctionDecl { name, params, return_type, library }` | `extern function foo(int $x): int;` or entries inside `extern "lib" { ... }` |
+| `ExternClassDecl { name, fields }` | `extern class Point { public int $x; }` |
+| `ExternGlobalDecl { name, var_type }` | `extern global ptr $environ;` |
 | `ExprStmt(Expr)` | `my_func();` (expression used as statement) |
 
 ### Binary operators (`BinOp`)
@@ -279,6 +282,7 @@ Statement parsing is simpler — it looks at the current token to decide what ki
 | `Switch` | `Switch` statement with cases and optional default |
 | `Function` | Function declaration with parameters and body |
 | `Class` | Class declaration with properties and methods |
+| `Extern` | Extern function / class / global declarations |
 | `Return` | Return with optional expression |
 | `Break` | Break statement |
 | `Continue` | Continue statement |

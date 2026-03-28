@@ -70,7 +70,7 @@ Converts a double-precision float in `d0` to a decimal string. Handles special c
 
 Concatenates two strings by copying both into the [concat buffer](memory-model.md#the-string-buffer).
 
-**Input:** `x1`/`x2` = right string (ptr/len), `x3`/`x4` = left string (ptr/len)
+**Input:** `x1`/`x2` = left string (ptr/len), `x3`/`x4` = right string (ptr/len)
 **Output:** `x1` = pointer to result, `x2` = total length
 
 **Algorithm:**
@@ -156,7 +156,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 ## Array routines
 
-**Source:** `src/codegen/runtime/arrays/` (53 files)
+**Source:** `src/codegen/runtime/arrays/` (56 files)
 
 ### Core allocation
 
@@ -181,9 +181,11 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_hash_new` | Create hash table | `x0` = capacity, `x1` = value type | `x0` = hash ptr |
 | `__rt_hash_grow` | Double hash table capacity, rehash all entries | `x0` = hash | `x0` = new hash |
 | `__rt_hash_set` | Insert/update (grows at 75% load) | `x0`=hash, `x1`/`x2`=key, `x3`/`x4`=value | `x0` = hash |
+| `__rt_hash_insert_owned` | Reinsert an already-owned key/value pair during hash growth | `x0`=hash, `x1`/`x2`=key, `x3`/`x4`=value | `x0` = hash |
 | `__rt_hash_get` | Look up value by key | `x0`=hash, `x1`/`x2`=key | `x0`=found, `x1`=val_lo, `x2`=val_hi |
 | `__rt_hash_iter_next` | Iterate to next entry | `x0`=hash, `x1`=index | `x0`=next_idx, `x1`/`x2`=key, `x3`/`x4`=value |
 | `__rt_hash_count` | Count occupied entries | `x0`=hash | `x0`=count |
+| `__rt_hash_free_deep` | Free a hash table plus owned keys and nested heap-backed values | `x0`=hash | — |
 
 See [Memory Model](memory-model.md) for the hash table memory layout.
 
@@ -207,6 +209,7 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_array_fill` / `__rt_array_fill_keys` | Create filled arrays |
 | `__rt_array_chunk` / `__rt_array_pad` | Chunk/pad arrays |
 | `__rt_array_column` | Extract column from array of assoc arrays (int values) |
+| `__rt_array_column_ref` | Extract column of retained heap-backed values (arrays / hashes / objects) |
 | `__rt_array_column_str` | Extract column from array of assoc arrays (string values) |
 | `__rt_range` | Generate integer range array |
 | `__rt_shuffle` / `__rt_array_rand` | Randomize order / pick random |
@@ -318,7 +321,7 @@ These routines handle file and filesystem operations via macOS system calls. PHP
 
 ## Pointer routines
 
-**Source:** `src/codegen/runtime/pointers/` (3 files)
+**Source:** `src/codegen/runtime/pointers/` (5 files)
 
 These helpers support the compiler-specific pointer builtins.
 
@@ -326,51 +329,27 @@ These helpers support the compiler-specific pointer builtins.
 |---|---|---|---|
 | `__rt_ptoa` | Format a pointer value as a hexadecimal string with `0x` prefix | `x0` = pointer/address | `x1`/`x2` = formatted string |
 | `__rt_ptr_check_nonnull` | Abort with `Fatal error: null pointer dereference` if the pointer is null | `x0` = pointer/address | `x0` unchanged on success |
+| `__rt_str_to_cstr` | Copy an elephc string to owned null-terminated heap storage for C calls | `x1`/`x2` = string | `x0` = C string pointer |
+| `__rt_cstr_to_str` | Copy a null-terminated C string back into an owned elephc string | `x0` = C string pointer | `x1`/`x2` = elephc string |
 
 ## How routines are emitted
 
 **File:** `src/codegen/runtime/mod.rs`
 
-The `emit_runtime()` function calls every routine's emitter in sequence:
+The `emit_runtime()` function calls every routine emitter in a fixed order:
 
 ```rust
 pub fn emit_runtime(emitter: &mut Emitter) {
-    strings::emit_itoa(emitter);
-    strings::emit_ftoa(emitter);
-    strings::emit_concat(emitter);
-    // ... 48 more string routines ...
-    system::emit_build_argv(emitter);
-    system::emit_time(emitter);
-    system::emit_microtime(emitter);
-    system::emit_getenv(emitter);
-    system::emit_shell_exec(emitter);
-    system::emit_date(emitter);
-    system::emit_mktime(emitter);
-    system::emit_strtotime(emitter);
-    system::emit_json_encode_bool(emitter);
-    system::emit_json_encode_null(emitter);
-    system::emit_json_encode_str(emitter);
-    system::emit_json_encode_array_int(emitter);
-    system::emit_json_encode_array_str(emitter);
-    system::emit_json_encode_assoc(emitter);
-    system::emit_json_decode(emitter);
-    system::emit_preg_match(emitter);
-    system::emit_preg_match_all(emitter);
-    system::emit_preg_replace(emitter);
-    system::emit_preg_split(emitter);
-    arrays::emit_heap_alloc(emitter);
-    arrays::emit_heap_free(emitter);
-    arrays::emit_array_free_deep(emitter);
-    arrays::emit_array_grow(emitter);
-    arrays::emit_array_new(emitter);
-    // ... 47+ more array routines ...
-    io::emit_cstr(emitter);
-    io::emit_fopen(emitter);
-    // ... 15 more I/O routines ...
-    pointers::emit_ptoa(emitter);
-    pointers::emit_ptr_check_nonnull(emitter);
+    // strings: itoa, ftoa, concat, atoi, equality, formatting, trim/mask,
+    // search/replace, explode/implode, hashing, encoding, sscanf, ...
+    // system: argv, time, getenv, shell, date/mktime/strtotime, JSON, regex
+    // arrays: heap alloc/free, array/hash helpers, sort, callbacks, refcount
+    // io: c-string buffers, file I/O, stat/fs helpers, scandir/glob/tempnam, CSV
+    // pointers: ptoa, null check, str_to_cstr, cstr_to_str
 }
 ```
+
+Notable runtime-only helpers emitted here include `__rt_hash_insert_owned`, `__rt_hash_free_deep`, `__rt_array_column_ref`, `__rt_str_to_cstr`, and `__rt_cstr_to_str` in addition to the more user-visible helpers.
 
 All routines are included in every binary, even if unused. This is simpler than dead-code elimination (a potential future optimization).
 
@@ -386,6 +365,8 @@ The runtime also declares global buffers using `.comm` and static data tables:
 .comm _heap_buf, 8388608     ; 8MB heap by default (--heap-size overrides)
 .comm _heap_off, 8           ; current heap offset
 .comm _heap_free_list, 8     ; head of free-list allocator
+_heap_max:
+    .quad 8388608            ; configured heap size limit
 .comm _gc_allocs, 8          ; allocation counter
 .comm _gc_frees, 8           ; free counter
 .comm _gc_peak, 8            ; high-water mark counter

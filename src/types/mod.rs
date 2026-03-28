@@ -3,8 +3,7 @@ pub mod checker;
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
-use crate::parser::ast::Visibility;
-use crate::parser::ast::Program;
+use crate::parser::ast::{CType, Program, Visibility};
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)] // Callable used in match arms, constructed when closures are added
@@ -32,12 +31,12 @@ impl PhpType {
             PhpType::Int => 8,
             PhpType::Float => 8,
             PhpType::Str => 16,
-            PhpType::Void => 8, // null sentinel stored as 8 bytes
-            PhpType::Array(_) => 8, // pointer to heap
+            PhpType::Void => 8,              // null sentinel stored as 8 bytes
+            PhpType::Array(_) => 8,          // pointer to heap
             PhpType::AssocArray { .. } => 8, // pointer to heap
-            PhpType::Callable => 8, // function address
-            PhpType::Object(_) => 8, // pointer to heap
-            PhpType::Pointer(_) => 8, // 64-bit address
+            PhpType::Callable => 8,          // function address
+            PhpType::Object(_) => 8,         // pointer to heap
+            PhpType::Pointer(_) => 8,        // 64-bit address
         }
     }
 
@@ -60,6 +59,14 @@ impl PhpType {
     /// Returns true if this type uses a floating-point register (d0-d7).
     pub fn is_float_reg(&self) -> bool {
         matches!(self, PhpType::Float)
+    }
+
+    /// Returns true for heap values whose lifetime is tracked with runtime refcounts.
+    pub fn is_refcounted(&self) -> bool {
+        matches!(
+            self,
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+        )
     }
 }
 
@@ -90,11 +97,68 @@ pub struct ClassInfo {
     pub constructor_param_to_prop: Vec<Option<String>>,
 }
 
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // Fields read by codegen via pattern matching
+pub struct ExternFunctionSig {
+    pub name: String,
+    pub params: Vec<(String, PhpType)>,
+    pub return_type: PhpType,
+    pub library: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // Fields used in extern class codegen
+pub struct ExternClassInfo {
+    pub name: String,
+    pub fields: Vec<ExternFieldInfo>,
+    pub total_size: usize,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // Fields used in extern class codegen
+pub struct ExternFieldInfo {
+    pub name: String,
+    pub php_type: PhpType,
+    pub offset: usize,
+}
+
+/// Convert a parser CType to a PhpType.
+pub fn ctype_to_php_type(ct: &crate::parser::ast::CType) -> PhpType {
+    match ct {
+        CType::Int => PhpType::Int,
+        CType::Float => PhpType::Float,
+        CType::Str => PhpType::Str,
+        CType::Bool => PhpType::Bool,
+        CType::Void => PhpType::Void,
+        CType::Ptr => PhpType::Pointer(None),
+        CType::TypedPtr(name) => PhpType::Pointer(Some(name.clone())),
+        CType::Callable => PhpType::Callable,
+    }
+}
+
+/// Size in bytes used by a C-facing FFI type.
+pub fn ctype_stack_size(ct: &CType) -> usize {
+    match ct {
+        CType::Int
+        | CType::Float
+        | CType::Bool
+        | CType::Ptr
+        | CType::TypedPtr(_)
+        | CType::Callable => 8,
+        CType::Str => 8, // char*
+        CType::Void => 0,
+    }
+}
+
 #[derive(Debug)]
 pub struct CheckResult {
     pub global_env: TypeEnv,
     pub functions: HashMap<String, FunctionSig>,
     pub classes: HashMap<String, ClassInfo>,
+    pub extern_functions: HashMap<String, ExternFunctionSig>,
+    pub extern_classes: HashMap<String, ExternClassInfo>,
+    pub extern_globals: HashMap<String, PhpType>,
+    pub required_libraries: Vec<String>,
 }
 
 pub fn check(program: &Program) -> Result<CheckResult, CompileError> {

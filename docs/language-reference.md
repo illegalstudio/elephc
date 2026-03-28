@@ -63,7 +63,6 @@ $x = 42;              // reassignment from null works
 | `>` | `$a > $b` | Greater than |
 | `<=` | `$a <= $b` | Less than or equal |
 | `>=` | `$a >= $b` | Greater than or equal |
-
 | `<=>` | `$a <=> $b` | Spaceship: returns -1, 0, or 1 |
 
 ### Bitwise
@@ -656,7 +655,7 @@ foreach ($map as $key => $value) {
 }
 ```
 
-Associative arrays use a hash table runtime for string keys. Keys are always strings; values must all be the same type.
+Associative arrays use a hash table runtime. Keys follow the type inferred from the first key expression (commonly strings, but integer keys are also accepted when used consistently). The static `AssocArray` value type is inferred from the first value expression; later values are not re-checked for full PHP-style heterogeneity.
 
 ### Multi-dimensional arrays
 
@@ -679,6 +678,125 @@ foreach ($matrix as $row) {
 
 - No array union operator (`+`)
 - Arrays are homogeneous: all elements must be the same type
+
+## FFI
+
+elephc supports direct calls into C libraries through `extern` declarations.
+
+### Extern functions
+
+```php
+<?php
+extern function atoi(string $s): int;
+extern function signal(int $sig, callable $handler): ptr;
+extern function raise(int $sig): int;
+```
+
+Supported FFI types:
+
+| FFI type | C shape | Notes |
+|---|---|---|
+| `int` | integer / long | Passed in integer registers |
+| `float` | `double` | Passed in floating-point registers |
+| `string` | `char *` | Copied to an owned null-terminated string before the C call |
+| `bool` | integer `0` / `1` | Passed as an integer register |
+| `void` | no value | Valid only as a return type |
+| `ptr` | `void *` | Opaque pointer |
+| `ptr<Name>` | typed pointer | Still ABI-compatible with a raw pointer |
+| `callable` | function pointer | Pass a user-defined elephc function by string name |
+
+### Extern blocks
+
+```php
+<?php
+extern "System" {
+    function getenv(string $name): string;
+    function strlen(string $s): int;
+}
+```
+
+Libraries declared in an `extern "lib"` block are added automatically to the linker command as `-l<lib>`.
+
+This makes direct bindings to native libraries practical for simple APIs. For example, ordinary libc allocation routines can be declared and used without special compiler support:
+
+```php
+<?php
+extern "System" {
+    function malloc(int $size): ptr;
+    function free(ptr $p): void;
+    function memset(ptr $dest, int $byte, int $count): ptr;
+}
+
+$buf = malloc(16);
+memset($buf, 0, 16);
+free($buf);
+```
+
+### Extern globals
+
+```php
+<?php
+extern global ptr $environ;
+echo ptr_is_null($environ) ? "missing" : "ok";
+```
+
+`extern global` reads and writes the actual C symbol, not an elephc-managed shadow copy.
+
+### Extern classes
+
+```php
+<?php
+extern class Point {
+    public int $x;
+    public int $y;
+}
+```
+
+Extern classes describe flat C struct layouts for FFI type checking. Field sizes follow the declared C-facing types, so `string` fields are treated as a single pointer-sized `char *`.
+
+Typed extern pointers can be dereferenced with `ptr_cast<T>()` plus normal property syntax for flat layouts:
+
+```php
+<?php
+extern class Point {
+    public int $x;
+    public int $y;
+}
+
+extern "System" {
+    function malloc(int $size): ptr;
+    function free(ptr $p): void;
+}
+
+$mem = malloc(ptr_sizeof("Point"));
+$pt = ptr_cast<Point>($mem);
+$pt->x = 10;
+$pt->y = 20;
+echo $pt->x; // 10
+free($mem);
+```
+
+### Callback functions
+
+```php
+<?php
+extern function signal(int $sig, callable $handler): ptr;
+extern function raise(int $sig): int;
+
+function on_signal($sig) {
+    echo $sig;
+}
+
+signal(15, "on_signal");
+raise(15);
+```
+
+Callback rules:
+
+- Pass callbacks by string name, for example `"on_signal"`.
+- Callback functions cannot be variadic, cannot use default values, and cannot use pass-by-reference parameters.
+- Only C-compatible callback shapes are supported today: `int`, `float`, `bool`, `ptr`, and `void`.
+- String callback parameters and string callback return values are not supported.
 
 ## Built-in Functions
 
@@ -758,7 +876,7 @@ foreach ($matrix as $row) {
 | `isset()` | `isset($var): int` | Check if variable is defined (always 1) |
 | **Searching** | | |
 | `array_key_exists()` | `array_key_exists($key, $arr): bool` | Check if key exists in array |
-| `array_search()` | `array_search($needle, $arr): int\|string` | Search for value, return key. Returns `-1` if not found (PHP returns `false`) |
+| `array_search()` | `array_search($needle, $arr): int` | Search for value, return key. Returns `-1` if not found (PHP returns `false`) |
 | **Slicing** | | |
 | `array_slice()` | `array_slice($arr, $offset [, $length]): array` | Extract a slice of the array |
 | `array_splice()` | `array_splice($arr, $offset [, $length]): array` | Remove/replace part of array |
@@ -808,8 +926,6 @@ foreach ($matrix as $row) {
 | `call_user_func()` | `call_user_func("name", ...): mixed` | Call a function by name with arguments |
 | `call_user_func_array()` | `call_user_func_array("name", $args): mixed` | Call a function with arguments from an array |
 | `function_exists()` | `function_exists("name"): bool` | Check if a function is defined |
-| `define()` | `define("NAME", value): void` | Define a named constant |
-
 > **Note:** Callback arguments can be string literals containing the function name (e.g., `"double"`), anonymous functions, or arrow functions.
 
 **Not yet supported:** `compact()`, `extract()` (require dynamic variables).
@@ -877,8 +993,9 @@ foreach ($matrix as $row) {
 |---|---|---|
 | `exit()` | `exit($code = 0): void` | Terminate program |
 | `die()` | `die($code = 0): void` | Alias for `exit()` |
+| `define()` | `define("NAME", value): void` | Define a named constant |
 | `time()` | `time(): int` | Get current Unix timestamp |
-| `microtime()` | `microtime($as_float = false): float` | Get current time with microsecond precision |
+| `microtime()` | `microtime($as_float = false): float` | Get current time with microsecond precision. elephc currently always returns a float, even when PHP would return a string for `false`. |
 | `sleep()` | `sleep($seconds): int` | Sleep for given seconds |
 | `usleep()` | `usleep($microseconds): void` | Sleep for given microseconds |
 | `getenv()` | `getenv($name): string` | Get environment variable value |
@@ -973,6 +1090,10 @@ print_r($arr);
 | `ptr_is_null()` | `ptr_is_null($p): bool` | Check if pointer is null |
 | `ptr_get()` | `ptr_get($p): int` | Read one 8-byte machine word at pointer address |
 | `ptr_set()` | `ptr_set($p, $val): void` | Write one 8-byte machine word (`int`, `bool`, `null`, or `pointer`) |
+| `ptr_read8()` | `ptr_read8($p): int` | Read one byte and zero-extend it to an integer |
+| `ptr_read32()` | `ptr_read32($p): int` | Read one 32-bit word and zero-extend it to an integer |
+| `ptr_write8()` | `ptr_write8($p, $val): void` | Write the low 8 bits of an integer |
+| `ptr_write32()` | `ptr_write32($p, $val): void` | Write the low 32 bits of an integer |
 | `ptr_offset()` | `ptr_offset($p, $bytes): pointer` | Pointer arithmetic (add byte offset) |
 | `ptr_cast<T>()` | `ptr_cast<Type>($p): pointer` | Change pointer type tag (same address, validated target type) |
 | `ptr_sizeof()` | `ptr_sizeof("type"): int` | Return byte size of a known builtin type or declared class |
@@ -998,11 +1119,30 @@ $b = ptr_null();
 echo $a === $b;          // 1 (same address)
 ```
 
+Raw off-heap buffers can be accessed byte-by-byte or word-by-word:
+
+```php
+<?php
+extern "System" {
+    function malloc(int $size): ptr;
+    function free(ptr $p): void;
+}
+
+$buf = malloc(4);
+ptr_write8($buf, 255);
+ptr_write32($buf, 305419896);
+echo ptr_read8($buf);
+echo ptr_read32($buf);
+free($buf);
+```
+
 Notes:
 - `ptr()` only accepts variables. `ptr(1 + 2)` is a compile-time error.
 - `ptr_get()` and `ptr_set()` only accept pointers. Dereferencing `ptr_null()` aborts with `Fatal error: null pointer dereference`.
 - `ptr_set()` currently writes a single 8-byte word. It is intended for `int`, `bool`, `null`, and pointer values.
-- `ptr_cast<T>()` preserves the address and only changes the static pointer tag. `T` must be a known builtin pointee type (`int`, `float`, `bool`, `string`, `ptr`) or a declared class name.
+- `ptr_read8()`, `ptr_read32()`, `ptr_write8()`, and `ptr_write32()` are intended for raw buffers and packed native data.
+- `ptr_cast<T>()` preserves the address and only changes the static pointer tag. `T` must be a known builtin pointee type (`int`, `float`, `bool`, `string`, `ptr`) or a declared class / extern class name.
+- `ptr_sizeof()` accepts builtin pointee names plus declared PHP class names and `extern class` names.
 - Use `===` and `!==` for pointer comparison. Loose comparison with `==` / `!=` is rejected.
 
 ## Constants

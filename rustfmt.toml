@@ -1,0 +1,4 @@
+ignore = [
+    "src/codegen/runtime",
+    "src/codegen/builtins",
+]

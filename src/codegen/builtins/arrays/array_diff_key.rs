@@ -22,8 +22,5 @@ pub fn emit(
     emitter.instruction("ldr x0, [sp], #16");                                   // pop first array pointer into x0
     emitter.instruction("bl __rt_array_diff_key");                              // call runtime: diff by keys → x0=new array
 
-    match arr_ty {
-        PhpType::Array(inner) => Some(PhpType::Array(inner)),
-        _ => Some(PhpType::Array(Box::new(PhpType::Int))),
-    }
+    Some(arr_ty)
 }

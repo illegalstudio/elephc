@@ -4,9 +4,41 @@ use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
-use super::Checker;
+use super::{Checker, FnDecl};
 
 impl Checker {
+    pub(crate) fn types_compatible(expected: &PhpType, actual: &PhpType) -> bool {
+        if expected == actual {
+            return true;
+        }
+
+        match (expected, actual) {
+            (PhpType::Float, PhpType::Int | PhpType::Bool | PhpType::Void) => true,
+            (PhpType::Int, PhpType::Bool | PhpType::Void) => true,
+            (PhpType::Bool, PhpType::Int | PhpType::Void) => true,
+            (PhpType::Pointer(_), PhpType::Pointer(_) | PhpType::Void) => true,
+            (PhpType::Callable, PhpType::Callable) => true,
+            _ => false,
+        }
+    }
+
+    pub(crate) fn require_compatible_arg_type(
+        &self,
+        expected: &PhpType,
+        actual: &PhpType,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        if Self::types_compatible(expected, actual) {
+            Ok(())
+        } else {
+            Err(CompileError::new(
+                span,
+                &format!("{} expects {:?}, got {:?}", context, expected, actual),
+            ))
+        }
+    }
+
     fn format_fixed_or_range_arity(min_args: usize, max_args: usize) -> String {
         if min_args == max_args {
             format!("{}", min_args)
@@ -23,7 +55,10 @@ impl Checker {
         caller_env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         // Count non-spread arguments for arity checking
-        let effective_arg_count = args.iter().filter(|a| !matches!(a.kind, ExprKind::Spread(_))).count();
+        let effective_arg_count = args
+            .iter()
+            .filter(|a| !matches!(a.kind, ExprKind::Spread(_)))
+            .count();
         let has_spread = args.iter().any(|a| matches!(a.kind, ExprKind::Spread(_)));
 
         // Already resolved or being resolved (recursive)?
@@ -54,8 +89,43 @@ impl Checker {
                     ));
                 }
             }
+            let regular_param_count = if sig.variadic.is_some() {
+                sig.params.len().saturating_sub(1)
+            } else {
+                sig.params.len()
+            };
+            let variadic_elem_ty = sig.variadic.as_ref().and_then(|_| {
+                sig.params.last().and_then(|(_, ty)| match ty {
+                    PhpType::Array(elem) => Some((**elem).clone()),
+                    _ => None,
+                })
+            });
+            let mut param_idx = 0usize;
             for arg in args {
-                self.infer_type(arg, caller_env)?;
+                let actual_ty = self.infer_type(arg, caller_env)?;
+                if matches!(arg.kind, ExprKind::Spread(_)) {
+                    continue;
+                }
+                if param_idx < regular_param_count {
+                    if let Some((param_name, expected_ty)) = sig.params.get(param_idx) {
+                        self.require_compatible_arg_type(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("Function '{}' parameter ${}", name, param_name),
+                        )?;
+                    }
+                } else if let (Some(vname), Some(expected_ty)) =
+                    (sig.variadic.as_ref(), variadic_elem_ty.as_ref())
+                {
+                    self.require_compatible_arg_type(
+                        expected_ty,
+                        &actual_ty,
+                        arg.span,
+                        &format!("Function '{}' variadic parameter ${}", name, vname),
+                    )?;
+                }
+                param_idx += 1;
             }
             return Ok(sig.return_type);
         }
@@ -121,13 +191,23 @@ impl Checker {
         if let Some(ref vp) = decl.variadic {
             // Infer variadic element type from excess args
             let variadic_elem_ty = if args.len() > decl.params.len() {
-                self.infer_type(&args[decl.params.len()], caller_env).unwrap_or(PhpType::Int)
+                self.infer_type(&args[decl.params.len()], caller_env)
+                    .unwrap_or(PhpType::Int)
             } else {
                 PhpType::Int
             };
             param_types.push((vp.clone(), PhpType::Array(Box::new(variadic_elem_ty))));
         }
 
+        self.resolve_function_signature(name, &decl, param_types)
+    }
+
+    pub(crate) fn resolve_function_signature(
+        &mut self,
+        name: &str,
+        decl: &FnDecl,
+        param_types: Vec<(String, PhpType)>,
+    ) -> Result<PhpType, CompileError> {
         let mut local_env: TypeEnv = HashMap::new();
         for (pname, pty) in &param_types {
             local_env.insert(pname.clone(), pty.clone());
@@ -196,27 +276,44 @@ impl Checker {
             StmtKind::Return(None) => {
                 types.push(PhpType::Void);
             }
-            StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
-                for s in then_body { self.collect_return_types(s, env, types); }
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                for s in then_body {
+                    self.collect_return_types(s, env, types);
+                }
                 for (_, body) in elseif_clauses {
-                    for s in body { self.collect_return_types(s, env, types); }
+                    for s in body {
+                        self.collect_return_types(s, env, types);
+                    }
                 }
                 if let Some(body) = else_body {
-                    for s in body { self.collect_return_types(s, env, types); }
+                    for s in body {
+                        self.collect_return_types(s, env, types);
+                    }
                 }
             }
             StmtKind::While { body, .. }
             | StmtKind::DoWhile { body, .. }
             | StmtKind::For { body, .. }
             | StmtKind::Foreach { body, .. } => {
-                for s in body { self.collect_return_types(s, env, types); }
+                for s in body {
+                    self.collect_return_types(s, env, types);
+                }
             }
             StmtKind::Switch { cases, default, .. } => {
                 for (_, body) in cases {
-                    for s in body { self.collect_return_types(s, env, types); }
+                    for s in body {
+                        self.collect_return_types(s, env, types);
+                    }
                 }
                 if let Some(body) = default {
-                    for s in body { self.collect_return_types(s, env, types); }
+                    for s in body {
+                        self.collect_return_types(s, env, types);
+                    }
                 }
             }
             _ => {}

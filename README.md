@@ -78,6 +78,9 @@ elephc hello.php
 
 # Custom heap size (default: 8MB)
 elephc --heap-size=16777216 heavy.php
+
+# Link extra native libraries or frameworks for FFI
+elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 ```
 
 Or via cargo:
@@ -86,6 +89,38 @@ Or via cargo:
 cargo run -- hello.php
 ./hello
 ```
+
+## FFI
+
+elephc can call native C functions directly through `extern` declarations.
+
+```php
+<?php
+extern function atoi(string $s): int;
+extern function signal(int $sig, callable $handler): ptr;
+extern function raise(int $sig): int;
+extern global ptr $environ;
+
+function on_signal($sig) {
+    echo "signal = " . $sig . "\n";
+}
+
+echo atoi("999") . "\n";
+echo ptr_is_null($environ) ? "missing\n" : "ok\n";
+signal(15, "on_signal");
+raise(15);
+```
+
+Notes:
+
+- `extern function`, `extern "lib" { ... }`, `extern global`, and `extern class` are supported.
+- `string` arguments are copied to owned null-terminated C strings before the call.
+- `string` return values are copied back into owned elephc strings.
+- `callable` parameters pass a user-defined elephc function by string name, for example `"on_signal"`.
+- Callback functions must stay C-compatible: use `int`, `float`, `bool`, `ptr`, or `void`-shaped values. String callbacks are not supported yet.
+- Raw C memory patterns are supported through ordinary extern declarations such as `malloc`, `free`, `memcpy`, and `memset`.
+- Pointer helpers include byte/word buffer access (`ptr_read8`, `ptr_read32`, `ptr_write8`, `ptr_write32`) in addition to `ptr_get` / `ptr_set`.
+- See `examples/ffi-memory`, `examples/sdl_window`, `examples/sdl_input`, `examples/sdl_framebuffer`, and `examples/sdl_audio` for end-to-end native interop examples.
 
 ## What it compiles
 
@@ -163,10 +198,10 @@ if ($x === 3) {
 
 **Strings:** `strlen`, `intval`, `number_format`, `substr`, `strpos`, `strrpos`, `strstr`, `str_replace`, `str_ireplace`, `substr_replace`, `strtolower`, `strtoupper`, `ucfirst`, `lcfirst`, `ucwords`, `trim`, `ltrim`, `rtrim`, `str_repeat`, `str_pad`, `strrev`, `str_split`, `strcmp`, `strcasecmp`, `str_contains`, `str_starts_with`, `str_ends_with`, `ord`, `chr`, `explode`, `implode`, `addslashes`, `stripslashes`, `nl2br`, `wordwrap`, `bin2hex`, `hex2bin`, `sprintf`, `printf`, `sscanf`, `md5`, `sha1`, `hash`, `htmlspecialchars`, `htmlentities`, `html_entity_decode`, `urlencode`, `urldecode`, `rawurlencode`, `rawurldecode`, `base64_encode`, `base64_decode`, `ctype_alpha`, `ctype_digit`, `ctype_alnum`, `ctype_space`
 **Arrays:** `count`, `array_push`, `array_pop`, `in_array`, `array_keys`, `array_values`, `sort`, `rsort`, `isset`, `array_key_exists`, `array_search`, `array_merge`, `array_slice`, `array_splice`, `array_combine`, `array_flip`, `array_reverse`, `array_unique`, `array_sum`, `array_product`, `array_chunk`, `array_pad`, `array_fill`, `array_fill_keys`, `array_diff`, `array_intersect`, `array_diff_key`, `array_intersect_key`, `array_unshift`, `array_shift`, `asort`, `arsort`, `ksort`, `krsort`, `natsort`, `natcasesort`, `shuffle`, `array_rand`, `array_column`, `range`, `array_map`, `array_filter`, `array_reduce`, `array_walk`, `usort`, `uksort`, `uasort`, `call_user_func`, `call_user_func_array`, `function_exists`
-**Math:** `abs`, `floor`, `ceil`, `round`, `sqrt`, `pow`, `min`, `max`, `intdiv`, `fmod`, `fdiv`, `rand`, `mt_rand`, `random_int`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `log`, `log2`, `log10`, `exp`, `hypot`, `deg2rad`, `rad2deg`, `pi`, `number_format`
+**Math:** `abs`, `floor`, `ceil`, `round`, `sqrt`, `pow`, `min`, `max`, `intdiv`, `fmod`, `fdiv`, `rand`, `mt_rand`, `random_int`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `log`, `log2`, `log10`, `exp`, `hypot`, `deg2rad`, `rad2deg`, `pi`
 **Types:** `gettype`, `settype`, `empty`, `unset`, `is_int`, `is_float`, `is_string`, `is_bool`, `is_null`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`, `boolval`, `floatval`
 **I/O:** `fopen`, `fclose`, `fread`, `fwrite`, `fgets`, `feof`, `readline`, `fseek`, `ftell`, `rewind`, `file_get_contents`, `file_put_contents`, `file`, `fgetcsv`, `fputcsv`, `file_exists`, `is_file`, `is_dir`, `is_readable`, `is_writable`, `filesize`, `filemtime`, `copy`, `rename`, `unlink`, `mkdir`, `rmdir`, `scandir`, `glob`, `getcwd`, `chdir`, `tempnam`, `sys_get_temp_dir`
-**Pointers:** `ptr`, `ptr_null`, `ptr_is_null`, `ptr_get`, `ptr_set`, `ptr_offset`, `ptr_cast<T>`, `ptr_sizeof`
+**Pointers:** `ptr`, `ptr_null`, `ptr_is_null`, `ptr_get`, `ptr_set`, `ptr_read8`, `ptr_read32`, `ptr_write8`, `ptr_write32`, `ptr_offset`, `ptr_cast<T>`, `ptr_sizeof`
 **Debugging:** `var_dump`, `print_r`
 **System:** `exit`, `die`, `define`, `time`, `microtime`, `date`, `mktime`, `strtotime`, `sleep`, `usleep`, `getenv`, `putenv`, `php_uname`, `phpversion`, `exec`, `shell_exec`, `system`, `passthru`, `json_encode`, `json_decode`, `json_last_error`, `preg_match`, `preg_match_all`, `preg_replace`, `preg_split`
 
@@ -252,16 +287,16 @@ src/
 │   ├── data_section.rs  # String/float literal .data section
 │   ├── emit.rs          # Assembly text buffer
 │   │
-│   ├── builtins/        # Built-in function codegen (one file per function)
+│   ├── builtins/        # Built-in function codegen (one file per language function)
 │   │   ├── strings/     # strlen, substr, strpos, explode, implode, ...
 │   │   ├── arrays/      # count, array_push, array_pop, sort, ...
 │   │   ├── math/        # abs, floor, pow, rand, fmod, ...
 │   │   ├── types/       # is_int, gettype, empty, unset, settype, ...
 │   │   ├── io/          # fopen, fclose, fread, fwrite, fgets, file_get_contents, ...
-│   │   ├── pointers/    # ptr, ptr_get, ptr_set, ptr_offset, ptr_sizeof, ...
+│   │   ├── pointers/    # ptr, ptr_get, ptr_set, ptr_read8, ptr_write8, ptr_offset, ...
 │   │   └── system/      # exit, die, time, sleep, getenv, exec, ...
 │   │
-│   └── runtime/         # ARM64 runtime routines (one file per function)
+│   └── runtime/         # ARM64 runtime routines (one file per language/runtime helper)
 │       ├── strings/     # itoa, concat, ftoa, strpos, str_replace, ...
 │       ├── arrays/      # heap_alloc, array_new, array_push, sort, ...
 │       ├── io/          # fopen, fclose, fread, fwrite, file_ops, ...
@@ -274,7 +309,7 @@ src/
 ## Tests
 
 ```bash
-cargo test                      # all tests (~1360)
+cargo test                      # all tests
 cargo test test_my_feature      # run specific tests
 ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 ```

@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 
 static TEST_ID: AtomicU64 = AtomicU64::new(0);
 static SDK_PATH: OnceLock<String> = OnceLock::new();
+static SDK_VERSION: OnceLock<String> = OnceLock::new();
 
 fn get_sdk_path() -> &'static str {
     SDK_PATH.get_or_init(|| {
@@ -17,8 +18,78 @@ fn get_sdk_path() -> &'static str {
     })
 }
 
+fn get_sdk_version() -> &'static str {
+    SDK_VERSION.get_or_init(|| {
+        match Command::new("xcrun")
+            .args(["--sdk", "macosx", "--show-sdk-version"])
+            .output()
+        {
+            Ok(output) => {
+                let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if version.is_empty() {
+                    "15.0".to_string()
+                } else {
+                    version
+                }
+            }
+            Err(_) => "15.0".to_string(),
+        }
+    })
+}
+
 /// Compile ASM string to binary via as + ld, then run it and return stdout.
-fn assemble_and_run(asm: &str, dir: &Path) -> String {
+fn default_link_paths() -> Vec<String> {
+    let mut paths = Vec::new();
+    for candidate in ["/opt/homebrew/lib", "/usr/local/lib"] {
+        if std::path::Path::new(candidate).exists() {
+            paths.push(candidate.to_string());
+        }
+    }
+    paths
+}
+
+fn link_binary(
+    obj_path: &Path,
+    bin_path: &Path,
+    extra_link_libs: &[String],
+    extra_link_paths: &[String],
+    extra_frameworks: &[String],
+) {
+    let mut ld_cmd = Command::new("ld");
+    ld_cmd.args(["-arch", "arm64", "-e", "_main", "-o"]);
+    ld_cmd.arg(bin_path);
+    ld_cmd.arg(obj_path);
+    ld_cmd.args(["-lSystem", "-syslibroot"]);
+    ld_cmd.arg(get_sdk_path());
+    ld_cmd.args([
+        "-platform_version",
+        "macos",
+        get_sdk_version(),
+        get_sdk_version(),
+    ]);
+    for path in extra_link_paths {
+        ld_cmd.arg(format!("-L{}", path));
+    }
+    for lib in extra_link_libs {
+        if lib != "System" {
+            ld_cmd.arg(format!("-l{}", lib));
+        }
+    }
+    for framework in extra_frameworks {
+        ld_cmd.args(["-framework", framework]);
+    }
+
+    let ld_status = ld_cmd.status().expect("failed to run linker");
+    assert!(ld_status.success(), "linker failed");
+}
+
+fn assemble_and_run(
+    asm: &str,
+    dir: &Path,
+    extra_link_libs: &[String],
+    extra_link_paths: &[String],
+    extra_frameworks: &[String],
+) -> String {
     let asm_path = dir.join("test.s");
     let obj_path = dir.join("test.o");
     let bin_path = dir.join("test");
@@ -33,15 +104,13 @@ fn assemble_and_run(asm: &str, dir: &Path) -> String {
         .expect("failed to run assembler");
     assert!(as_status.success(), "assembler failed");
 
-    let ld_status = Command::new("ld")
-        .args(["-arch", "arm64", "-e", "_main", "-o"])
-        .arg(&bin_path)
-        .arg(&obj_path)
-        .args(["-lSystem", "-syslibroot"])
-        .arg(get_sdk_path())
-        .status()
-        .expect("failed to run linker");
-    assert!(ld_status.success(), "linker failed");
+    link_binary(
+        &obj_path,
+        &bin_path,
+        extra_link_libs,
+        extra_link_paths,
+        extra_frameworks,
+    );
 
     let output = Command::new(&bin_path)
         .current_dir(dir)
@@ -58,7 +127,8 @@ fn assemble_and_run(asm: &str, dir: &Path) -> String {
 fn compile_and_run(source: &str) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
-    let dir = std::env::temp_dir().join(format!("elephc_test_{:?}_{}", tid, id));
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
     // Compile in-process using library
@@ -71,11 +141,20 @@ fn compile_and_run(source: &str) -> String {
         &check_result.global_env,
         &check_result.functions,
         &check_result.classes,
+        &check_result.extern_functions,
+        &check_result.extern_classes,
+        &check_result.extern_globals,
         8_388_608,
         false,
     );
 
-    let elephc_out = assemble_and_run(&asm, &dir);
+    let elephc_out = assemble_and_run(
+        &asm,
+        &dir,
+        &check_result.required_libraries,
+        &default_link_paths(),
+        &[],
+    );
 
     // PHP cross-check (opt-in via ELEPHC_PHP_CHECK=1)
     if std::env::var("ELEPHC_PHP_CHECK").is_ok() {
@@ -102,7 +181,8 @@ fn compile_and_run(source: &str) -> String {
 fn compile_and_run_expect_failure(source: &str) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
-    let dir = std::env::temp_dir().join(format!("elephc_test_{:?}_{}", tid, id));
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
@@ -114,6 +194,9 @@ fn compile_and_run_expect_failure(source: &str) -> String {
         &check_result.global_env,
         &check_result.functions,
         &check_result.classes,
+        &check_result.extern_functions,
+        &check_result.extern_classes,
+        &check_result.extern_globals,
         8_388_608,
         false,
     );
@@ -132,15 +215,13 @@ fn compile_and_run_expect_failure(source: &str) -> String {
         .expect("failed to run assembler");
     assert!(as_status.success(), "assembler failed");
 
-    let ld_status = Command::new("ld")
-        .args(["-arch", "arm64", "-e", "_main", "-o"])
-        .arg(&bin_path)
-        .arg(&obj_path)
-        .args(["-lSystem", "-syslibroot"])
-        .arg(get_sdk_path())
-        .status()
-        .expect("failed to run linker");
-    assert!(ld_status.success(), "linker failed");
+    link_binary(
+        &obj_path,
+        &bin_path,
+        &check_result.required_libraries,
+        &default_link_paths(),
+        &[],
+    );
 
     let output = Command::new(&bin_path)
         .current_dir(&dir)
@@ -156,7 +237,8 @@ fn compile_and_run_expect_failure(source: &str) -> String {
 fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
-    let dir = std::env::temp_dir().join(format!("elephc_test_{:?}_{}", tid, id));
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
     for (path, content) in files {
@@ -180,11 +262,20 @@ fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> String {
         &check_result.global_env,
         &check_result.functions,
         &check_result.classes,
+        &check_result.extern_functions,
+        &check_result.extern_classes,
+        &check_result.extern_globals,
         8_388_608,
         false,
     );
 
-    let elephc_out = assemble_and_run(&asm, &dir);
+    let elephc_out = assemble_and_run(
+        &asm,
+        &dir,
+        &check_result.required_libraries,
+        &default_link_paths(),
+        &[],
+    );
     let _ = fs::remove_dir_all(&dir);
     elephc_out
 }
@@ -193,7 +284,8 @@ fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> String {
 fn compile_files_fails(files: &[(&str, &str)], main_file: &str) -> bool {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
-    let dir = std::env::temp_dir().join(format!("elephc_test_{:?}_{}", tid, id));
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
     for (path, content) in files {
@@ -224,7 +316,8 @@ fn compile_files_fails(files: &[(&str, &str)], main_file: &str) -> bool {
 fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
-    let dir = std::env::temp_dir().join(format!("elephc_test_{:?}_{}", tid, id));
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
@@ -236,6 +329,9 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
         &check_result.global_env,
         &check_result.functions,
         &check_result.classes,
+        &check_result.extern_functions,
+        &check_result.extern_classes,
+        &check_result.extern_globals,
         8_388_608,
         false,
     );
@@ -254,15 +350,13 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
         .expect("failed to run assembler");
     assert!(as_status.success(), "assembler failed");
 
-    let ld_status = Command::new("ld")
-        .args(["-arch", "arm64", "-e", "_main", "-o"])
-        .arg(&bin_path)
-        .arg(&obj_path)
-        .args(["-lSystem", "-syslibroot"])
-        .arg(get_sdk_path())
-        .status()
-        .expect("failed to run linker");
-    assert!(ld_status.success(), "linker failed");
+    link_binary(
+        &obj_path,
+        &bin_path,
+        &check_result.required_libraries,
+        &default_link_paths(),
+        &[],
+    );
 
     use std::io::Write;
     let mut child = Command::new(&bin_path)
@@ -288,7 +382,8 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
 fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
-    let dir = std::env::temp_dir().join(format!("elephc_test_{:?}_{}", tid, id));
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
@@ -300,11 +395,20 @@ fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {
         &check_result.global_env,
         &check_result.functions,
         &check_result.classes,
+        &check_result.extern_functions,
+        &check_result.extern_classes,
+        &check_result.extern_globals,
         8_388_608,
         false,
     );
 
-    let elephc_out = assemble_and_run(&asm, &dir);
+    let elephc_out = assemble_and_run(
+        &asm,
+        &dir,
+        &check_result.required_libraries,
+        &default_link_paths(),
+        &[],
+    );
     (elephc_out, dir)
 }
 
@@ -380,9 +484,8 @@ fn test_variable_reassign_same_type() {
 
 #[test]
 fn test_multiple_variables() {
-    let out = compile_and_run(
-        "<?php $a = 10; $b = 20; echo $a; echo \" \"; echo $b; echo \"\\n\";",
-    );
+    let out =
+        compile_and_run("<?php $a = 10; $b = 20; echo $a; echo \" \"; echo $b; echo \"\\n\";");
     assert_eq!(out, "10 20\n");
 }
 
@@ -476,9 +579,7 @@ fn test_concat_literals() {
 
 #[test]
 fn test_concat_variables() {
-    let out = compile_and_run(
-        "<?php $a = \"Hello, \"; $b = \"World!\"; echo $a . $b;",
-    );
+    let out = compile_and_run("<?php $a = \"Hello, \"; $b = \"World!\"; echo $a . $b;");
     assert_eq!(out, "Hello, World!");
 }
 
@@ -490,9 +591,7 @@ fn test_concat_chain() {
 
 #[test]
 fn test_concat_assign() {
-    let out = compile_and_run(
-        "<?php $msg = \"foo\" . \"bar\"; echo $msg;",
-    );
+    let out = compile_and_run("<?php $msg = \"foo\" . \"bar\"; echo $msg;");
     assert_eq!(out, "foobar");
 }
 
@@ -676,9 +775,7 @@ fn test_if_else_falls_through() {
 
 #[test]
 fn test_while_loop() {
-    let out = compile_and_run(
-        "<?php $i = 0; while ($i < 5) { echo $i; $i = $i + 1; }",
-    );
+    let out = compile_and_run("<?php $i = 0; while ($i < 5) { echo $i; $i = $i + 1; }");
     assert_eq!(out, "01234");
 }
 
@@ -708,9 +805,7 @@ fn test_while_continue() {
 
 #[test]
 fn test_for_loop() {
-    let out = compile_and_run(
-        "<?php for ($i = 0; $i < 5; $i = $i + 1) { echo $i; }",
-    );
+    let out = compile_and_run("<?php for ($i = 0; $i < 5; $i = $i + 1) { echo $i; }");
     assert_eq!(out, "01234");
 }
 
@@ -803,9 +898,7 @@ fn test_while_with_pre_increment() {
 
 #[test]
 fn test_function_call_int() {
-    let out = compile_and_run(
-        "<?php function add($a, $b) { return $a + $b; } echo add(10, 32);",
-    );
+    let out = compile_and_run("<?php function add($a, $b) { return $a + $b; } echo add(10, 32);");
     assert_eq!(out, "42");
 }
 
@@ -819,9 +912,7 @@ fn test_function_call_string() {
 
 #[test]
 fn test_function_void() {
-    let out = compile_and_run(
-        "<?php function say() { echo \"hi\"; return; } say();",
-    );
+    let out = compile_and_run("<?php function say() { echo \"hi\"; return; } say();");
     assert_eq!(out, "hi");
 }
 
@@ -859,9 +950,7 @@ fn test_function_as_argument() {
 
 #[test]
 fn test_function_no_args() {
-    let out = compile_and_run(
-        "<?php function answer() { return 42; } echo answer();",
-    );
+    let out = compile_and_run("<?php function answer() { return 42; } echo answer();");
     assert_eq!(out, "42");
 }
 
@@ -905,23 +994,27 @@ fn test_not_nonzero() {
 
 #[test]
 fn test_short_circuit_and() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $count = 0;
 function inc() { return 1; }
 $r = 0 && inc();
 echo $r;
-"#);
+"#,
+    );
     assert_eq!(out, ""); // false prints nothing
 }
 
 #[test]
 fn test_short_circuit_or() {
     // With ||, if left is true the right side should not be evaluated.
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function inc() { return 1; }
 $r = 1 || inc();
 echo $r;
-"#);
+"#,
+    );
     assert_eq!(out, "1");
 }
 
@@ -1049,14 +1142,16 @@ fn test_not_null_is_true() {
 
 #[test]
 fn test_if_null_is_falsy() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = null;
 if ($x) {
     echo "true";
 } else {
     echo "false";
 }
-"#);
+"#,
+    );
     assert_eq!(out, "false");
 }
 
@@ -1396,7 +1491,8 @@ fn test_array_literal_and_count() {
 
 #[test]
 fn test_array_access() {
-    let out = compile_and_run("<?php $a = [10, 20, 30]; echo $a[0] . \" \" . $a[1] . \" \" . $a[2];");
+    let out =
+        compile_and_run("<?php $a = [10, 20, 30]; echo $a[0] . \" \" . $a[1] . \" \" . $a[2];");
     assert_eq!(out, "10 20 30");
 }
 
@@ -1420,7 +1516,8 @@ fn test_array_push() {
 
 #[test]
 fn test_array_push_builtin() {
-    let out = compile_and_run("<?php $a = [10]; array_push($a, 20); echo count($a) . \" \" . $a[1];");
+    let out =
+        compile_and_run("<?php $a = [10]; array_push($a, 20); echo count($a) . \" \" . $a[1];");
     assert_eq!(out, "2 20");
 }
 
@@ -1438,13 +1535,16 @@ fn test_foreach_string() {
 
 #[test]
 fn test_foreach_break() {
-    let out = compile_and_run("<?php $a = [1, 2, 3, 4, 5]; foreach ($a as $v) { if ($v == 3) { break; } echo $v; }");
+    let out = compile_and_run(
+        "<?php $a = [1, 2, 3, 4, 5]; foreach ($a as $v) { if ($v == 3) { break; } echo $v; }",
+    );
     assert_eq!(out, "12");
 }
 
 #[test]
 fn test_array_in_function() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function sum($arr) {
     $total = 0;
     foreach ($arr as $v) {
@@ -1453,18 +1553,21 @@ function sum($arr) {
     return $total;
 }
 echo sum([1, 2, 3, 4, 5]);
-"#);
+"#,
+    );
     assert_eq!(out, "15");
 }
 
 #[test]
 fn test_string_array() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $names = ["Alice", "Bob"];
 $names[] = "Charlie";
 echo count($names) . ": ";
 foreach ($names as $n) { echo $n . " "; }
-"#);
+"#,
+    );
     assert_eq!(out, "3: Alice Bob Charlie ");
 }
 
@@ -1472,7 +1575,8 @@ foreach ($names as $n) { echo $n . " "; }
 
 #[test]
 fn test_array_pop() {
-    let out = compile_and_run("<?php $a = [1, 2, 3]; $v = array_pop($a); echo $v . \" \" . count($a);");
+    let out =
+        compile_and_run("<?php $a = [1, 2, 3]; $v = array_pop($a); echo $v . \" \" . count($a);");
     assert_eq!(out, "3 2");
 }
 
@@ -1508,19 +1612,23 @@ fn test_in_array_string_not_found() {
 
 #[test]
 fn test_sort() {
-    let out = compile_and_run(r#"<?php $a = [5, 3, 1, 4, 2]; sort($a); foreach ($a as $v) { echo $v; }"#);
+    let out =
+        compile_and_run(r#"<?php $a = [5, 3, 1, 4, 2]; sort($a); foreach ($a as $v) { echo $v; }"#);
     assert_eq!(out, "12345");
 }
 
 #[test]
 fn test_rsort() {
-    let out = compile_and_run(r#"<?php $a = [1, 3, 2]; rsort($a); foreach ($a as $v) { echo $v; }"#);
+    let out =
+        compile_and_run(r#"<?php $a = [1, 3, 2]; rsort($a); foreach ($a as $v) { echo $v; }"#);
     assert_eq!(out, "321");
 }
 
 #[test]
 fn test_array_keys() {
-    let out = compile_and_run(r#"<?php $a = [10, 20, 30]; $k = array_keys($a); foreach ($k as $v) { echo $v; }"#);
+    let out = compile_and_run(
+        r#"<?php $a = [10, 20, 30]; $k = array_keys($a); foreach ($k as $v) { echo $v; }"#,
+    );
     assert_eq!(out, "012");
 }
 
@@ -1532,7 +1640,9 @@ fn test_isset() {
 
 #[test]
 fn test_array_values() {
-    let out = compile_and_run(r#"<?php $a = [10, 20, 30]; $v = array_values($a); foreach ($v as $x) { echo $x; }"#);
+    let out = compile_and_run(
+        r#"<?php $a = [10, 20, 30]; $v = array_values($a); foreach ($v as $x) { echo $x; }"#,
+    );
     assert_eq!(out, "102030");
 }
 
@@ -1562,15 +1672,15 @@ fn test_nested_loops() {
 
 #[test]
 fn test_for_continue() {
-    let out = compile_and_run(
-        "<?php for ($i = 0; $i < 5; $i++) { if ($i == 2) { continue; } echo $i; }",
-    );
+    let out =
+        compile_and_run("<?php for ($i = 0; $i < 5; $i++) { if ($i == 2) { continue; } echo $i; }");
     assert_eq!(out, "0134");
 }
 
 #[test]
 fn test_while_with_function() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function sum_to($n) {
     $s = 0;
     $i = 1;
@@ -1581,13 +1691,15 @@ function sum_to($n) {
     return $s;
 }
 echo sum_to(10);
-"#);
+"#,
+    );
     assert_eq!(out, "55");
 }
 
 #[test]
 fn test_function_with_if_return() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function abs_val($x) {
     if ($x < 0) {
         return -$x;
@@ -1595,30 +1707,35 @@ function abs_val($x) {
     return $x;
 }
 echo abs_val(-5) . " " . abs_val(3);
-"#);
+"#,
+    );
     assert_eq!(out, "5 3");
 }
 
 #[test]
 fn test_function_calling_function() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function square($x) { return $x * $x; }
 function sum_of_squares($a, $b) { return square($a) + square($b); }
 echo sum_of_squares(3, 4);
-"#);
+"#,
+    );
     assert_eq!(out, "25");
 }
 
 #[test]
 fn test_multiple_elseif() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 4;
 if ($x == 1) { echo "one"; }
 elseif ($x == 2) { echo "two"; }
 elseif ($x == 3) { echo "three"; }
 elseif ($x == 4) { echo "four"; }
 else { echo "other"; }
-"#);
+"#,
+    );
     assert_eq!(out, "four");
 }
 
@@ -1626,9 +1743,7 @@ else { echo "other"; }
 
 #[test]
 fn test_comments_ignored() {
-    let out = compile_and_run(
-        "<?php\n// this is a comment\necho \"ok\";\n/* block comment */\n",
-    );
+    let out = compile_and_run("<?php\n// this is a comment\necho \"ok\";\n/* block comment */\n");
     assert_eq!(out, "ok");
 }
 
@@ -1896,7 +2011,8 @@ fn test_float_variable_arithmetic() {
 
 #[test]
 fn test_float_in_condition() {
-    let out = compile_and_run("<?php $x = 3.14; if ($x > 3.0) { echo \"yes\"; } else { echo \"no\"; }");
+    let out =
+        compile_and_run("<?php $x = 3.14; if ($x > 3.0) { echo \"yes\"; } else { echo \"no\"; }");
     assert_eq!(out, "yes");
 }
 
@@ -2024,76 +2140,90 @@ fn test_strict_eq_float_vs_int() {
 
 #[test]
 fn test_strict_eq_in_if() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 5;
 if ($x === 5) {
     echo "yes";
 } else {
     echo "no";
 }
-"#);
+"#,
+    );
     assert_eq!(out, "yes");
 }
 
 #[test]
 fn test_strict_neq_in_if() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = "hello";
 if ($x !== "world") {
     echo "different";
 } else {
     echo "same";
 }
-"#);
+"#,
+    );
     assert_eq!(out, "different");
 }
 
 #[test]
 fn test_strict_eq_string_variables() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = "test";
 $b = "test";
 echo $a === $b;
-"#);
+"#,
+    );
     assert_eq!(out, "1");
 }
 
 #[test]
 fn test_strict_neq_string_variables() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = "foo";
 $b = "bar";
 echo $a !== $b;
-"#);
+"#,
+    );
     assert_eq!(out, "1");
 }
 
 #[test]
 fn test_strict_eq_side_effects_preserved() {
     // Both operands must be evaluated even when types differ
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function effect() { echo "X"; return 1; }
 $r = 1.0 === effect();
 echo $r;
-"#);
+"#,
+    );
     assert_eq!(out, "X");
 }
 
 #[test]
 fn test_strict_eq_assign_result() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 1 === 1;
 echo $x;
-"#);
+"#,
+    );
     assert_eq!(out, "1");
 }
 
 #[test]
 fn test_strict_neq_assign_result() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 1 !== 2;
 echo $x;
-"#);
+"#,
+    );
     assert_eq!(out, "1");
 }
 
@@ -2101,130 +2231,182 @@ echo $x;
 
 #[test]
 fn test_include_basic() {
-    let out = compile_and_run_files(&[
-        ("main.php", "<?php include 'helper.php'; echo greet();"),
-        ("helper.php", "<?php function greet() { return \"hello\"; }"),
-    ], "main.php");
+    let out = compile_and_run_files(
+        &[
+            ("main.php", "<?php include 'helper.php'; echo greet();"),
+            ("helper.php", "<?php function greet() { return \"hello\"; }"),
+        ],
+        "main.php",
+    );
     assert_eq!(out, "hello");
 }
 
 #[test]
 fn test_require_basic() {
-    let out = compile_and_run_files(&[
-        ("main.php", "<?php require 'math.php'; echo add(3, 4);"),
-        ("math.php", "<?php function add($a, $b) { return $a + $b; }"),
-    ], "main.php");
+    let out = compile_and_run_files(
+        &[
+            ("main.php", "<?php require 'math.php'; echo add(3, 4);"),
+            ("math.php", "<?php function add($a, $b) { return $a + $b; }"),
+        ],
+        "main.php",
+    );
     assert_eq!(out, "7");
 }
 
 #[test]
 fn test_include_with_parens() {
-    let out = compile_and_run_files(&[
-        ("main.php", "<?php include('helper.php'); echo greet();"),
-        ("helper.php", "<?php function greet() { return \"hi\"; }"),
-    ], "main.php");
+    let out = compile_and_run_files(
+        &[
+            ("main.php", "<?php include('helper.php'); echo greet();"),
+            ("helper.php", "<?php function greet() { return \"hi\"; }"),
+        ],
+        "main.php",
+    );
     assert_eq!(out, "hi");
 }
 
 #[test]
 fn test_include_top_level_code() {
     // Top-level code in included file executes at the include point
-    let out = compile_and_run_files(&[
-        ("main.php", "<?php echo \"before\"; include 'mid.php'; echo \"after\";"),
-        ("mid.php", "<?php echo \"middle\";"),
-    ], "main.php");
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php echo \"before\"; include 'mid.php'; echo \"after\";",
+            ),
+            ("mid.php", "<?php echo \"middle\";"),
+        ],
+        "main.php",
+    );
     assert_eq!(out, "beforemiddleafter");
 }
 
 #[test]
 fn test_include_once() {
     // include_once should only include the file once
-    let out = compile_and_run_files(&[
-        ("main.php", r#"<?php
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
 include_once 'counter.php';
 include_once 'counter.php';
 echo $x;
-"#),
-        ("counter.php", "<?php $x = 42;"),
-    ], "main.php");
+"#,
+            ),
+            ("counter.php", "<?php $x = 42;"),
+        ],
+        "main.php",
+    );
     assert_eq!(out, "42");
 }
 
 #[test]
 fn test_require_once() {
-    let out = compile_and_run_files(&[
-        ("main.php", r#"<?php
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
 require_once 'lib.php';
 require_once 'lib.php';
 echo double(5);
-"#),
-        ("lib.php", "<?php function double($n) { return $n * 2; }"),
-    ], "main.php");
+"#,
+            ),
+            ("lib.php", "<?php function double($n) { return $n * 2; }"),
+        ],
+        "main.php",
+    );
     assert_eq!(out, "10");
 }
 
 #[test]
 fn test_include_nested() {
     // a.php includes b.php which includes c.php
-    let out = compile_and_run_files(&[
-        ("main.php", "<?php include 'a.php'; echo c_func();"),
-        ("a.php", "<?php include 'b.php';"),
-        ("b.php", "<?php include 'c.php';"),
-        ("c.php", "<?php function c_func() { return \"deep\"; }"),
-    ], "main.php");
+    let out = compile_and_run_files(
+        &[
+            ("main.php", "<?php include 'a.php'; echo c_func();"),
+            ("a.php", "<?php include 'b.php';"),
+            ("b.php", "<?php include 'c.php';"),
+            ("c.php", "<?php function c_func() { return \"deep\"; }"),
+        ],
+        "main.php",
+    );
     assert_eq!(out, "deep");
 }
 
 #[test]
 fn test_include_subdirectory() {
-    let out = compile_and_run_files(&[
-        ("main.php", "<?php include 'lib/utils.php'; echo greet();"),
-        ("lib/utils.php", "<?php function greet() { return \"from lib\"; }"),
-    ], "main.php");
+    let out = compile_and_run_files(
+        &[
+            ("main.php", "<?php include 'lib/utils.php'; echo greet();"),
+            (
+                "lib/utils.php",
+                "<?php function greet() { return \"from lib\"; }",
+            ),
+        ],
+        "main.php",
+    );
     assert_eq!(out, "from lib");
 }
 
 #[test]
 fn test_include_variables_shared_scope() {
     // Variables from included file are in the same scope
-    let out = compile_and_run_files(&[
-        ("main.php", r#"<?php
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
 $prefix = "Hello";
 include 'greet.php';
-"#),
-        ("greet.php", "<?php echo $prefix . \" World\";"),
-    ], "main.php");
+"#,
+            ),
+            ("greet.php", "<?php echo $prefix . \" World\";"),
+        ],
+        "main.php",
+    );
     assert_eq!(out, "Hello World");
 }
 
 #[test]
 fn test_include_multiple_files() {
-    let out = compile_and_run_files(&[
-        ("main.php", r#"<?php
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
 include 'a.php';
 include 'b.php';
 echo add(1, 2) . " " . mul(3, 4);
-"#),
-        ("a.php", "<?php function add($x, $y) { return $x + $y; }"),
-        ("b.php", "<?php function mul($x, $y) { return $x * $y; }"),
-    ], "main.php");
+"#,
+            ),
+            ("a.php", "<?php function add($x, $y) { return $x + $y; }"),
+            ("b.php", "<?php function mul($x, $y) { return $x * $y; }"),
+        ],
+        "main.php",
+    );
     assert_eq!(out, "3 12");
 }
 
 #[test]
 fn test_circular_include_error() {
-    assert!(compile_files_fails(&[
-        ("main.php", "<?php include 'a.php';"),
-        ("a.php", "<?php include 'b.php';"),
-        ("b.php", "<?php include 'a.php';"),
-    ], "main.php"));
+    assert!(compile_files_fails(
+        &[
+            ("main.php", "<?php include 'a.php';"),
+            ("a.php", "<?php include 'b.php';"),
+            ("b.php", "<?php include 'a.php';"),
+        ],
+        "main.php"
+    ));
 }
 
 #[test]
 fn test_require_missing_file_error() {
-    assert!(compile_files_fails(&[
-        ("main.php", "<?php require 'nonexistent.php';"),
-    ], "main.php"));
+    assert!(compile_files_fails(
+        &[("main.php", "<?php require 'nonexistent.php';"),],
+        "main.php"
+    ));
 }
 
 // --- Division returns float ---
@@ -2548,11 +2730,13 @@ fn test_empty_true() {
 
 #[test]
 fn test_unset_variable() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 42;
 unset($x);
 echo is_null($x);
-"#);
+"#,
+    );
     assert_eq!(out, "1");
 }
 
@@ -2560,21 +2744,25 @@ echo is_null($x);
 
 #[test]
 fn test_settype_to_string() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 42;
 settype($x, "string");
 echo $x;
-"#);
+"#,
+    );
     assert_eq!(out, "42");
 }
 
 #[test]
 fn test_settype_to_int() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 3.7;
 settype($x, "integer");
 echo $x;
-"#);
+"#,
+    );
     assert_eq!(out, "3");
 }
 
@@ -2974,31 +3162,37 @@ fn test_str_replace_multiple() {
 
 #[test]
 fn test_explode() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $parts = explode(",", "a,b,c");
 echo count($parts);
 echo " ";
 echo $parts[0] . " " . $parts[1] . " " . $parts[2];
-"#);
+"#,
+    );
     assert_eq!(out, "3 a b c");
 }
 
 #[test]
 fn test_implode() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $arr = ["Hello", "World"];
 echo implode(" ", $arr);
-"#);
+"#,
+    );
     assert_eq!(out, "Hello World");
 }
 
 #[test]
 fn test_explode_implode_roundtrip() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $str = "one-two-three";
 $parts = explode("-", $str);
 echo implode(", ", $parts);
-"#);
+"#,
+    );
     assert_eq!(out, "one, two, three");
 }
 
@@ -3054,10 +3248,12 @@ fn test_str_pad_custom_char() {
 
 #[test]
 fn test_str_split() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $parts = str_split("Hello", 2);
 echo count($parts) . " " . $parts[0] . " " . $parts[1] . " " . $parts[2];
-"#);
+"#,
+    );
     assert_eq!(out, "3 He ll o");
 }
 
@@ -3081,7 +3277,9 @@ fn test_nl2br() {
 
 #[test]
 fn test_wordwrap() {
-    let out = compile_and_run(r#"<?php echo wordwrap("The quick brown fox jumped over the lazy dog", 15, "\n");"#);
+    let out = compile_and_run(
+        r#"<?php echo wordwrap("The quick brown fox jumped over the lazy dog", 15, "\n");"#,
+    );
     assert!(out.contains('\n'));
 }
 
@@ -3108,7 +3306,10 @@ fn test_bin2hex_hex2bin_roundtrip() {
 #[test]
 fn test_htmlspecialchars() {
     let out = compile_and_run(r#"<?php echo htmlspecialchars("<b>\"Hi\" & 'bye'</b>");"#);
-    assert_eq!(out, "&lt;b&gt;&quot;Hi&quot; &amp; &#039;bye&#039;&lt;/b&gt;");
+    assert_eq!(
+        out,
+        "&lt;b&gt;&quot;Hi&quot; &amp; &#039;bye&#039;&lt;/b&gt;"
+    );
 }
 
 #[test]
@@ -3125,7 +3326,9 @@ fn test_html_entity_decode() {
 
 #[test]
 fn test_htmlspecialchars_roundtrip() {
-    let out = compile_and_run(r#"<?php echo html_entity_decode(htmlspecialchars("<div>\"test\"</div>"));"#);
+    let out = compile_and_run(
+        r#"<?php echo html_entity_decode(htmlspecialchars("<div>\"test\"</div>"));"#,
+    );
     assert_eq!(out, "<div>\"test\"</div>");
 }
 
@@ -3381,35 +3584,44 @@ fn test_hash_sha1() {
 #[test]
 fn test_hash_sha256() {
     let out = compile_and_run(r#"<?php echo hash("sha256", "Hello");"#);
-    assert_eq!(out, "185f8db32271fe25f561a6fc938b2e264306ec304eda518007d1764826381969");
+    assert_eq!(
+        out,
+        "185f8db32271fe25f561a6fc938b2e264306ec304eda518007d1764826381969"
+    );
 }
 
 // --- sscanf() ---
 
 #[test]
 fn test_sscanf_int() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $result = sscanf("Age: 25", "Age: %d");
 echo $result[0];
-"#);
+"#,
+    );
     assert_eq!(out, "25");
 }
 
 #[test]
 fn test_sscanf_string() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $result = sscanf("Name: Alice", "Name: %s");
 echo $result[0];
-"#);
+"#,
+    );
     assert_eq!(out, "Alice");
 }
 
 #[test]
 fn test_sscanf_multiple() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $result = sscanf("John 30", "%s %d");
 echo $result[0] . " " . $result[1];
-"#);
+"#,
+    );
     assert_eq!(out, "John 30");
 }
 
@@ -3513,17 +3725,20 @@ fn test_print_r_array() {
 
 #[test]
 fn test_file_put_get_contents() {
-    let (out, dir) = compile_and_run_in_dir(r#"<?php
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
 file_put_contents("test.txt", "hello world");
 echo file_get_contents("test.txt");
-"#);
+"#,
+    );
     assert_eq!(out, "hello world");
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_file_exists() {
-    let (out, dir) = compile_and_run_in_dir(r#"<?php
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
 file_put_contents("exists.txt", "data");
 if (file_exists("exists.txt")) {
     echo "yes";
@@ -3531,24 +3746,28 @@ if (file_exists("exists.txt")) {
 if (!file_exists("nope.txt")) {
     echo "no";
 }
-"#);
+"#,
+    );
     assert_eq!(out, "yesno");
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_filesize() {
-    let (out, dir) = compile_and_run_in_dir(r#"<?php
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
 file_put_contents("size.txt", "12345");
 echo filesize("size.txt");
-"#);
+"#,
+    );
     assert_eq!(out, "5");
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_is_file_is_dir() {
-    let (out, dir) = compile_and_run_in_dir(r#"<?php
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
 file_put_contents("afile.txt", "x");
 mkdir("adir");
 if (is_file("afile.txt")) { echo "F"; }
@@ -3556,53 +3775,61 @@ if (!is_dir("afile.txt")) { echo "!D"; }
 if (is_dir("adir")) { echo "D"; }
 if (!is_file("adir")) { echo "!F"; }
 rmdir("adir");
-"#);
+"#,
+    );
     assert_eq!(out, "F!DD!F");
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_mkdir_rmdir() {
-    let (out, dir) = compile_and_run_in_dir(r#"<?php
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
 mkdir("testdir");
 if (is_dir("testdir")) { echo "made"; }
 rmdir("testdir");
 if (!is_dir("testdir")) { echo "gone"; }
-"#);
+"#,
+    );
     assert_eq!(out, "madegone");
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_copy_unlink() {
-    let (out, dir) = compile_and_run_in_dir(r#"<?php
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
 file_put_contents("orig.txt", "content");
 copy("orig.txt", "dup.txt");
 echo file_get_contents("dup.txt");
 unlink("dup.txt");
 if (!file_exists("dup.txt")) { echo "|gone"; }
 unlink("orig.txt");
-"#);
+"#,
+    );
     assert_eq!(out, "content|gone");
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_rename_file() {
-    let (out, dir) = compile_and_run_in_dir(r#"<?php
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
 file_put_contents("old.txt", "data");
 rename("old.txt", "new.txt");
 echo file_get_contents("new.txt");
 if (!file_exists("old.txt")) { echo "|moved"; }
 unlink("new.txt");
-"#);
+"#,
+    );
     assert_eq!(out, "data|moved");
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_fopen_fwrite_fclose_fread() {
-    let (out, dir) = compile_and_run_in_dir(r#"<?php
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
 $f = fopen("rw.txt", "w");
 fwrite($f, "test data");
 fclose($f);
@@ -3611,72 +3838,88 @@ $content = fread($f, 9);
 fclose($f);
 echo $content;
 unlink("rw.txt");
-"#);
+"#,
+    );
     assert_eq!(out, "test data");
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_fgets_stdin() {
-    let out = compile_and_run_with_stdin(r#"<?php
+    let out = compile_and_run_with_stdin(
+        r#"<?php
 $line = fgets(STDIN);
 echo "got: " . $line;
-"#, "hello\n");
+"#,
+        "hello\n",
+    );
     assert_eq!(out, "got: hello\n");
 }
 
 #[test]
 fn test_fopen_nonexistent_fgets_no_hang() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $f = fopen("no_such_file.txt", "r");
 $line = fgets($f);
 echo "done";
-"#);
+"#,
+    );
     assert_eq!(out, "done");
 }
 
 #[test]
 fn test_readline() {
-    let out = compile_and_run_with_stdin(r#"<?php
+    let out = compile_and_run_with_stdin(
+        r#"<?php
 $line = readline();
 echo "read: " . trim($line);
-"#, "world\n");
+"#,
+        "world\n",
+    );
     assert_eq!(out, "read: world");
 }
 
 #[test]
 fn test_file_lines() {
-    let (out, dir) = compile_and_run_in_dir(r#"<?php
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
 file_put_contents("lines.txt", "one\ntwo\nthree\n");
 $lines = file("lines.txt");
 echo count($lines);
 unlink("lines.txt");
-"#);
+"#,
+    );
     assert_eq!(out, "3");
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_getcwd() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $cwd = getcwd();
 if (strlen($cwd) > 0) { echo "ok"; }
-"#);
+"#,
+    );
     assert_eq!(out, "ok");
 }
 
 #[test]
 fn test_sys_get_temp_dir() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $tmp = sys_get_temp_dir();
 echo $tmp;
-"#);
+"#,
+    );
     assert!(out.contains("tmp") || out.contains("Tmp"));
 }
 
 #[test]
 fn test_fseek_ftell() {
-    let (out, dir) = compile_and_run_in_dir(r#"<?php
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
 file_put_contents("seek.txt", "abcdefghij");
 $f = fopen("seek.txt", "r");
 $result = fseek($f, 5);
@@ -3686,14 +3929,16 @@ $data = fread($f, 5);
 echo $data;
 fclose($f);
 unlink("seek.txt");
-"#);
+"#,
+    );
     assert_eq!(out, "05fghij");
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_fseek_return_value() {
-    let (out, dir) = compile_and_run_in_dir(r#"<?php
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
 file_put_contents("seek2.txt", "hello world");
 $f = fopen("seek2.txt", "r");
 $r1 = fseek($f, 0);
@@ -3705,26 +3950,30 @@ echo $r3;
 echo ftell($f);
 fclose($f);
 unlink("seek2.txt");
-"#);
+"#,
+    );
     assert_eq!(out, "0005");
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_is_readable_writable() {
-    let (out, dir) = compile_and_run_in_dir(r#"<?php
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
 file_put_contents("perm.txt", "x");
 if (is_readable("perm.txt")) { echo "R"; }
 if (is_writable("perm.txt")) { echo "W"; }
 unlink("perm.txt");
-"#);
+"#,
+    );
     assert_eq!(out, "RW");
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_chdir_getcwd() {
-    let (out, dir) = compile_and_run_in_dir(r#"<?php
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
 mkdir("subdir");
 $before = getcwd();
 chdir("subdir");
@@ -3732,18 +3981,21 @@ $after = getcwd();
 if (strlen($after) > strlen($before)) { echo "changed"; }
 chdir("..");
 rmdir("subdir");
-"#);
+"#,
+    );
     assert_eq!(out, "changed");
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_var_dump_multiple() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 var_dump(1);
 var_dump("hi");
 var_dump(true);
-"#);
+"#,
+    );
     assert_eq!(out, "int(1)\nstring(2) \"hi\"\nbool(true)\n");
 }
 
@@ -3751,21 +4003,24 @@ var_dump(true);
 
 #[test]
 fn test_fgetcsv() {
-    let (out, dir) = compile_and_run_in_dir(r#"<?php
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
 file_put_contents("data.csv", "alice,30,NY\n");
 $f = fopen("data.csv", "r");
 $row = fgetcsv($f);
 echo $row[0];
 fclose($f);
 unlink("data.csv");
-"#);
+"#,
+    );
     assert_eq!(out, "alice");
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_fputcsv() {
-    let (out, dir) = compile_and_run_in_dir(r#"<?php
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
 $f = fopen("out.csv", "w");
 $data = ["hello", "world"];
 fputcsv($f, $data);
@@ -3773,26 +4028,30 @@ fclose($f);
 $content = file_get_contents("out.csv");
 echo trim($content);
 unlink("out.csv");
-"#);
+"#,
+    );
     assert_eq!(out, "hello,world");
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_filemtime() {
-    let (out, dir) = compile_and_run_in_dir(r#"<?php
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
 file_put_contents("ts.txt", "x");
 $t = filemtime("ts.txt");
 if ($t > 1000000000) { echo "ok"; }
 unlink("ts.txt");
-"#);
+"#,
+    );
     assert_eq!(out, "ok");
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_scandir() {
-    let (out, dir) = compile_and_run_in_dir(r#"<?php
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
 mkdir("sd");
 file_put_contents("sd/a.txt", "a");
 file_put_contents("sd/b.txt", "b");
@@ -3801,14 +4060,16 @@ echo count($files);
 unlink("sd/a.txt");
 unlink("sd/b.txt");
 rmdir("sd");
-"#);
+"#,
+    );
     assert_eq!(out, "4");
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_glob_fn() {
-    let (out, dir) = compile_and_run_in_dir(r#"<?php
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
 mkdir("gd");
 file_put_contents("gd/g1.txt", "a");
 file_put_contents("gd/g2.txt", "b");
@@ -3817,25 +4078,29 @@ if (count($matches) >= 2) { echo "ok"; }
 unlink("gd/g1.txt");
 unlink("gd/g2.txt");
 rmdir("gd");
-"#);
+"#,
+    );
     assert_eq!(out, "ok");
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_tempnam() {
-    let (out, dir) = compile_and_run_in_dir(r#"<?php
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
 $tmp = tempnam(".", "test");
 if (file_exists($tmp)) { echo "ok"; }
 unlink($tmp);
-"#);
+"#,
+    );
     assert_eq!(out, "ok");
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_rewind() {
-    let (out, dir) = compile_and_run_in_dir(r#"<?php
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
 file_put_contents("rw.txt", "abcdef");
 $f = fopen("rw.txt", "r");
 $first = fread($f, 3);
@@ -3844,14 +4109,16 @@ $again = fread($f, 3);
 fclose($f);
 echo $first . "|" . $again;
 unlink("rw.txt");
-"#);
+"#,
+    );
     assert_eq!(out, "abc|abc");
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_feof() {
-    let (out, dir) = compile_and_run_in_dir(r#"<?php
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
 file_put_contents("eof.txt", "hi");
 $f = fopen("eof.txt", "r");
 $data = fread($f, 2);
@@ -3859,7 +4126,8 @@ $data = fread($f, 1);
 if (feof($f)) { echo "eof"; }
 fclose($f);
 unlink("eof.txt");
-"#);
+"#,
+    );
     assert_eq!(out, "eof");
     let _ = fs::remove_dir_all(&dir);
 }
@@ -3868,68 +4136,81 @@ unlink("eof.txt");
 
 #[test]
 fn test_assoc_array_basic() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $m = ["name" => "Alice", "city" => "NYC"];
 echo $m["name"];
-"#);
+"#,
+    );
     assert_eq!(out, "Alice");
 }
 
 #[test]
 fn test_assoc_array_int_values() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $m = ["a" => 1, "b" => 2, "c" => 3];
 echo $m["a"] + $m["b"] + $m["c"];
-"#);
+"#,
+    );
     assert_eq!(out, "6");
 }
 
 #[test]
 fn test_assoc_array_assign() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $m = ["x" => 10];
 $m["y"] = 20;
 echo $m["x"] + $m["y"];
-"#);
+"#,
+    );
     assert_eq!(out, "30");
 }
 
 #[test]
 fn test_assoc_array_update() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $m = ["key" => "old"];
 $m["key"] = "new";
 echo $m["key"];
-"#);
+"#,
+    );
     assert_eq!(out, "new");
 }
 
 #[test]
 fn test_assoc_foreach_key_value() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $m = ["a" => "1", "b" => "2"];
 foreach ($m as $k => $v) {
     echo $k . "=" . $v . " ";
 }
-"#);
+"#,
+    );
     // Hash table iteration order may vary; check both entries appear
     assert!(out.contains("a=1") && out.contains("b=2"));
 }
 
 #[test]
 fn test_indexed_foreach_key_value() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $arr = [10, 20, 30];
 foreach ($arr as $i => $v) {
     echo $i . ":" . $v . " ";
 }
-"#);
+"#,
+    );
     assert_eq!(out, "0:10 1:20 2:30 ");
 }
 
 #[test]
 fn test_switch_basic() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 2;
 switch ($x) {
     case 1:
@@ -3942,13 +4223,15 @@ switch ($x) {
         echo "three";
         break;
 }
-"#);
+"#,
+    );
     assert_eq!(out, "two");
 }
 
 #[test]
 fn test_switch_default() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 99;
 switch ($x) {
     case 1:
@@ -3958,13 +4241,15 @@ switch ($x) {
         echo "other";
         break;
 }
-"#);
+"#,
+    );
     assert_eq!(out, "other");
 }
 
 #[test]
 fn test_switch_fallthrough() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 1;
 switch ($x) {
     case 1:
@@ -3976,13 +4261,15 @@ switch ($x) {
         echo "c";
         break;
 }
-"#);
+"#,
+    );
     assert_eq!(out, "ab");
 }
 
 #[test]
 fn test_switch_string() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $s = "hello";
 switch ($s) {
     case "hi":
@@ -3995,13 +4282,15 @@ switch ($s) {
         echo "C";
         break;
 }
-"#);
+"#,
+    );
     assert_eq!(out, "B");
 }
 
 #[test]
 fn test_match_basic() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 2;
 $result = match($x) {
     1 => "one",
@@ -4010,19 +4299,22 @@ $result = match($x) {
     default => "other",
 };
 echo $result;
-"#);
+"#,
+    );
     assert_eq!(out, "two");
 }
 
 #[test]
 fn test_match_default() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 99;
 echo match($x) {
     1 => "one",
     default => "unknown",
 };
-"#);
+"#,
+    );
     assert_eq!(out, "unknown");
 }
 
@@ -4030,80 +4322,96 @@ echo match($x) {
 
 #[test]
 fn test_array_reverse() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [3, 1, 2];
 $b = array_reverse($a);
 echo $b[0] . $b[1] . $b[2];
-"#);
+"#,
+    );
     assert_eq!(out, "213");
 }
 
 #[test]
 fn test_array_sum() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [10, 20, 30];
 echo array_sum($a);
-"#);
+"#,
+    );
     assert_eq!(out, "60");
 }
 
 #[test]
 fn test_array_product() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [2, 3, 4];
 echo array_product($a);
-"#);
+"#,
+    );
     assert_eq!(out, "24");
 }
 
 #[test]
 fn test_array_search() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [10, 20, 30];
 echo array_search(20, $a);
-"#);
+"#,
+    );
     assert_eq!(out, "1");
 }
 
 #[test]
 fn test_array_key_exists() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [10, 20, 30];
 if (array_key_exists(1, $a)) { echo "yes"; }
 if (!array_key_exists(5, $a)) { echo "no"; }
-"#);
+"#,
+    );
     assert_eq!(out, "yesno");
 }
 
 #[test]
 fn test_array_merge() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [1, 2];
 $b = [3, 4];
 $c = array_merge($a, $b);
 echo count($c);
 echo $c[0] . $c[1] . $c[2] . $c[3];
-"#);
+"#,
+    );
     assert_eq!(out, "41234");
 }
 
 #[test]
 fn test_array_slice() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [10, 20, 30, 40, 50];
 $b = array_slice($a, 1, 3);
 echo $b[0] . " " . $b[1] . " " . $b[2];
-"#);
+"#,
+    );
     assert_eq!(out, "20 30 40");
 }
 
 #[test]
 fn test_array_shift() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [10, 20, 30];
 $first = array_shift($a);
 echo $first . " " . count($a);
-"#);
+"#,
+    );
     assert_eq!(out, "10 2");
 }
 
@@ -4115,246 +4423,324 @@ fn test_array_shift_empty() {
 
 #[test]
 fn test_array_unshift() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [2, 3];
 $n = array_unshift($a, 1);
 echo $n . " " . $a[0];
-"#);
+"#,
+    );
     assert_eq!(out, "3 1");
 }
 
 #[test]
 fn test_range() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = range(1, 5);
 echo count($a) . ":";
 foreach ($a as $v) { echo $v; }
-"#);
+"#,
+    );
     assert_eq!(out, "5:12345");
 }
 
 #[test]
 fn test_range_descending() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = range(5, 1);
 echo count($a) . ":";
 foreach ($a as $v) { echo $v; }
-"#);
+"#,
+    );
     assert_eq!(out, "5:54321");
 }
 
 #[test]
 fn test_range_single_element() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = range(3, 3);
 echo count($a) . ":";
 foreach ($a as $v) { echo $v; }
-"#);
+"#,
+    );
     assert_eq!(out, "1:3");
 }
 
 #[test]
 fn test_array_unique() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [1, 2, 2, 3, 3, 3];
 $b = array_unique($a);
 echo count($b);
-"#);
+"#,
+    );
     assert_eq!(out, "3");
 }
 
 #[test]
 fn test_array_fill() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = array_fill(0, 3, 42);
 echo $a[0] . " " . $a[1] . " " . $a[2];
-"#);
+"#,
+    );
     assert_eq!(out, "42 42 42");
 }
 
 #[test]
 fn test_array_diff() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [1, 2, 3, 4];
 $b = [2, 4];
 $c = array_diff($a, $b);
 echo count($c);
-"#);
+"#,
+    );
     assert_eq!(out, "2");
 }
 
 #[test]
 fn test_array_intersect() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [1, 2, 3, 4];
 $b = [2, 4, 6];
 $c = array_intersect($a, $b);
 echo count($c);
-"#);
+"#,
+    );
     assert_eq!(out, "2");
 }
 
 #[test]
 fn test_array_rand() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [10, 20, 30];
 $i = array_rand($a);
 if ($i >= 0 && $i < 3) { echo "ok"; }
-"#);
+"#,
+    );
     assert_eq!(out, "ok");
 }
 
 #[test]
 fn test_shuffle() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [1, 2, 3, 4, 5];
 shuffle($a);
 echo count($a);
 echo array_sum($a);
-"#);
+"#,
+    );
     assert_eq!(out, "515");
 }
 
 #[test]
 fn test_array_pad() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [1, 2];
 $b = array_pad($a, 5, 0);
 echo count($b);
-"#);
+"#,
+    );
     assert_eq!(out, "5");
 }
 
 #[test]
 fn test_array_splice() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [1, 2, 3, 4, 5];
 $removed = array_splice($a, 1, 2);
 echo count($removed) . " " . count($a);
-"#);
+"#,
+    );
     assert_eq!(out, "2 3");
 }
 
 #[test]
 fn test_array_combine() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $keys = ["a", "b"];
 $vals = [1, 2];
 $m = array_combine($keys, $vals);
 echo count($m);
-"#);
+"#,
+    );
     assert_eq!(out, "2");
 }
 
 #[test]
 fn test_array_flip() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [10, 20, 30];
 $f = array_flip($a);
 echo count($f);
-"#);
+"#,
+    );
     assert_eq!(out, "3");
 }
 
 #[test]
 fn test_array_chunk() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [1, 2, 3, 4, 5];
 $c = array_chunk($a, 2);
 echo count($c);
-"#);
+"#,
+    );
     assert_eq!(out, "3");
 }
 
 #[test]
 fn test_array_fill_keys() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $keys = ["x", "y"];
 $m = array_fill_keys($keys, 0);
 echo count($m);
-"#);
+"#,
+    );
     assert_eq!(out, "2");
 }
 
 #[test]
 fn test_array_diff_key() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = ["a" => "1", "b" => "2"];
 $b = ["a" => "9"];
 $c = array_diff_key($a, $b);
 echo count($c);
-"#);
+"#,
+    );
     assert_eq!(out, "1");
+}
+
+#[test]
+fn test_gc_array_diff_key_borrowed_array_survives_source_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$src = ["keep" => [1, 2], "drop" => [3, 4]];
+$mask = ["drop" => 1];
+$filtered = array_diff_key($src, $mask);
+unset($src);
+$saved = $filtered["keep"];
+echo $saved[1];
+"#,
+    );
+    assert_eq!(out, "2");
 }
 
 #[test]
 fn test_array_intersect_key() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = ["a" => "1", "b" => "2"];
 $b = ["a" => "9"];
 $c = array_intersect_key($a, $b);
 echo count($c);
-"#);
+"#,
+    );
     assert_eq!(out, "1");
 }
 
 #[test]
+fn test_gc_array_intersect_key_borrowed_array_survives_source_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$src = ["keep" => [5, 6], "drop" => [7, 8]];
+$mask = ["keep" => 1];
+$filtered = array_intersect_key($src, $mask);
+unset($src);
+$saved = $filtered["keep"];
+echo $saved[0] . "|" . $saved[1];
+"#,
+    );
+    assert_eq!(out, "5|6");
+}
+
+#[test]
 fn test_asort() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [3, 1, 2];
 asort($a);
 echo $a[0];
-"#);
+"#,
+    );
     assert_eq!(out, "1");
 }
 
 #[test]
 fn test_arsort() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [1, 3, 2];
 arsort($a);
 echo $a[0];
-"#);
+"#,
+    );
     assert_eq!(out, "3");
 }
 
 #[test]
 fn test_ksort() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [3, 1, 2];
 ksort($a);
 echo count($a);
-"#);
+"#,
+    );
     assert_eq!(out, "3");
 }
 
 #[test]
 fn test_krsort() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [1, 2, 3];
 krsort($a);
 echo count($a);
-"#);
+"#,
+    );
     assert_eq!(out, "3");
 }
 
 #[test]
 fn test_natsort() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [3, 1, 2];
 natsort($a);
 echo $a[0];
-"#);
+"#,
+    );
     assert_eq!(out, "1");
 }
 
 #[test]
 fn test_natcasesort() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [3, 1, 2];
 natcasesort($a);
 echo $a[0];
-"#);
+"#,
+    );
     assert_eq!(out, "1");
 }
 
@@ -4362,145 +4748,186 @@ echo $a[0];
 
 #[test]
 fn test_assoc_array_key_exists() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $m = ["name" => "Alice", "age" => "30"];
 if (array_key_exists("name", $m)) { echo "yes"; }
 if (array_key_exists("missing", $m)) { echo "bad"; } else { echo "no"; }
-"#);
+"#,
+    );
     assert_eq!(out, "yesno");
 }
 
 #[test]
 fn test_assoc_in_array_str() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $m = ["a" => "apple", "b" => "banana"];
 if (in_array("apple", $m)) { echo "yes"; }
 if (in_array("cherry", $m)) { echo "bad"; } else { echo "no"; }
-"#);
+"#,
+    );
     assert_eq!(out, "yesno");
 }
 
 #[test]
 fn test_assoc_in_array_int() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $m = ["x" => 10, "y" => 20];
 if (in_array(10, $m)) { echo "yes"; }
 if (in_array(99, $m)) { echo "bad"; } else { echo "no"; }
-"#);
+"#,
+    );
     assert_eq!(out, "yesno");
 }
 
 #[test]
 fn test_assoc_array_search_str() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $m = ["first" => "Alice", "second" => "Bob"];
 $key = array_search("Bob", $m);
 echo $key;
-"#);
+"#,
+    );
     assert_eq!(out, "second");
 }
 
 #[test]
 fn test_assoc_array_keys() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $m = ["x" => 1, "y" => 2];
 $keys = array_keys($m);
 $n = count($keys);
 for ($i = 0; $i < $n; $i++) {
     echo $keys[$i] . " ";
 }
-"#);
+"#,
+    );
     // Hash iteration order may vary
     assert!(out.contains("x") && out.contains("y"));
 }
 
 #[test]
 fn test_assoc_array_values_str() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $m = ["a" => "one", "b" => "two"];
 $vals = array_values($m);
 $n = count($vals);
 for ($i = 0; $i < $n; $i++) {
     echo $vals[$i] . " ";
 }
-"#);
+"#,
+    );
     assert!(out.contains("one") && out.contains("two"));
 }
 
 #[test]
 fn test_assoc_array_values_int() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $m = ["a" => 10, "b" => 20, "c" => 30];
 $vals = array_values($m);
 echo $vals[0] + $vals[1] + $vals[2];
-"#);
+"#,
+    );
     assert_eq!(out, "60");
+}
+
+#[test]
+fn test_gc_assoc_array_values_borrowed_array_survives_source_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$map = ["nums" => [7, 8, 9]];
+$vals = array_values($map);
+unset($map);
+$saved = $vals[0];
+echo $saved[1];
+"#,
+    );
+    assert_eq!(out, "8");
 }
 
 // --- Phase 14: Multi-dimensional arrays ---
 
 #[test]
 fn test_nested_array_create_access() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [[1, 2], [3, 4]];
 echo $a[0][0] . " " . $a[0][1] . " " . $a[1][0] . " " . $a[1][1];
-"#);
+"#,
+    );
     assert_eq!(out, "1 2 3 4");
 }
 
 #[test]
 fn test_nested_array_count() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [[10, 20], [30, 40], [50, 60]];
 echo count($a) . " " . count($a[0]);
-"#);
+"#,
+    );
     assert_eq!(out, "3 2");
 }
 
 #[test]
 fn test_nested_array_push() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [[1, 2]];
 $a[] = [3, 4];
 echo count($a) . " " . $a[1][0];
-"#);
+"#,
+    );
     assert_eq!(out, "2 3");
 }
 
 #[test]
 fn test_nested_array_foreach() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $matrix = [[1, 2], [3, 4]];
 foreach ($matrix as $row) {
     foreach ($row as $v) {
         echo $v . " ";
     }
 }
-"#);
+"#,
+    );
     assert_eq!(out, "1 2 3 4 ");
 }
 
 #[test]
 fn test_nested_array_3_levels() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [[[1]]];
 echo $a[0][0][0];
-"#);
+"#,
+    );
     assert_eq!(out, "1");
 }
 
 #[test]
 fn test_nested_array_string_elements() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [["hello", "world"], ["foo", "bar"]];
 echo $a[0][0] . " " . $a[1][1];
-"#);
+"#,
+    );
     assert_eq!(out, "hello bar");
 }
 
 #[test]
 fn test_array_column() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $users = [
     ["name" => "Alice", "age" => "30"],
     ["name" => "Bob", "age" => "25"],
@@ -4508,211 +4935,268 @@ $users = [
 ];
 $names = array_column($users, "name");
 echo count($names);
-"#);
+"#,
+    );
     assert_eq!(out, "3");
+}
+
+#[test]
+fn test_gc_array_column_borrowed_array_survives_source_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$rows = [
+    ["nums" => [4, 5]],
+    ["nums" => [6, 7]],
+];
+$cols = array_column($rows, "nums");
+unset($rows);
+$first = $cols[0];
+$second = $cols[1];
+echo $first[1] . "|" . $second[0];
+"#,
+    );
+    assert_eq!(out, "5|6");
 }
 
 // --- Callback-based array functions ---
 
 #[test]
 fn test_array_map() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function double($x) { return $x * 2; }
 $a = [1, 2, 3];
 $b = array_map("double", $a);
 echo $b[0] . $b[1] . $b[2];
-"#);
+"#,
+    );
     assert_eq!(out, "246");
 }
 
 #[test]
 fn test_array_map_single() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function inc($x) { return $x + 1; }
 $a = [10];
 $b = array_map("inc", $a);
 echo $b[0];
-"#);
+"#,
+    );
     assert_eq!(out, "11");
 }
 
 #[test]
 fn test_array_filter() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function is_even($x) { return $x % 2 == 0; }
 $a = [1, 2, 3, 4, 5, 6];
 $b = array_filter($a, "is_even");
 echo count($b);
 foreach ($b as $v) { echo $v; }
-"#);
+"#,
+    );
     assert_eq!(out, "3246");
 }
 
 #[test]
 fn test_array_filter_none_pass() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function never($x) { return 0; }
 $a = [1, 2, 3];
 $b = array_filter($a, "never");
 echo count($b);
-"#);
+"#,
+    );
     assert_eq!(out, "0");
 }
 
 #[test]
 fn test_array_reduce() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function add($carry, $item) { return $carry + $item; }
 $a = [1, 2, 3, 4, 5];
 $sum = array_reduce($a, "add", 0);
 echo $sum;
-"#);
+"#,
+    );
     assert_eq!(out, "15");
 }
 
 #[test]
 fn test_array_reduce_with_initial() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function mul($carry, $item) { return $carry * $item; }
 $a = [2, 3, 4];
 $product = array_reduce($a, "mul", 1);
 echo $product;
-"#);
+"#,
+    );
     assert_eq!(out, "24");
 }
 
 #[test]
 fn test_array_walk() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function show($x) { echo $x; }
 $a = [10, 20, 30];
 array_walk($a, "show");
-"#);
+"#,
+    );
     assert_eq!(out, "102030");
 }
 
 #[test]
 fn test_usort() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function cmp($a, $b) { return $a - $b; }
 $a = [5, 3, 1, 4, 2];
 usort($a, "cmp");
 foreach ($a as $v) { echo $v; }
-"#);
+"#,
+    );
     assert_eq!(out, "12345");
 }
 
 #[test]
 fn test_usort_reverse() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function rcmp($a, $b) { return $b - $a; }
 $a = [1, 3, 2];
 usort($a, "rcmp");
 foreach ($a as $v) { echo $v; }
-"#);
+"#,
+    );
     assert_eq!(out, "321");
 }
 
 #[test]
 fn test_uksort() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function cmp($a, $b) { return $a - $b; }
 $a = [5, 3, 1, 4, 2];
 uksort($a, "cmp");
 foreach ($a as $v) { echo $v; }
-"#);
+"#,
+    );
     assert_eq!(out, "12345");
 }
 
 #[test]
 fn test_uasort() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function cmp($a, $b) { return $a - $b; }
 $a = [30, 10, 20];
 uasort($a, "cmp");
 foreach ($a as $value) { echo $value . " "; }
-"#);
+"#,
+    );
     assert_eq!(out, "10 20 30 ");
 }
 
 #[test]
 fn test_call_user_func() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function greet($x) { return $x + 100; }
 $result = call_user_func("greet", 42);
 echo $result;
-"#);
+"#,
+    );
     assert_eq!(out, "142");
 }
 
 #[test]
 fn test_call_user_func_no_args() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function get_value() { return 99; }
 $result = call_user_func("get_value");
 echo $result;
-"#);
+"#,
+    );
     assert_eq!(out, "99");
 }
 
 #[test]
 fn test_function_exists_true() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function my_func() { return 1; }
 if (function_exists("my_func")) { echo "yes"; } else { echo "no"; }
-"#);
+"#,
+    );
     assert_eq!(out, "yes");
 }
 
 #[test]
 fn test_function_exists_false() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 if (function_exists("nonexistent")) { echo "yes"; } else { echo "no"; }
-"#);
+"#,
+    );
     assert_eq!(out, "no");
 }
 
 #[test]
 fn test_usort_already_sorted() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function cmp($a, $b) { return $a - $b; }
 $a = [1, 2, 3];
 usort($a, "cmp");
 foreach ($a as $v) { echo $v; }
-"#);
+"#,
+    );
     assert_eq!(out, "123");
 }
 
 #[test]
 fn test_usort_single_element() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function cmp($a, $b) { return $a - $b; }
 $a = [42];
 usort($a, "cmp");
 echo $a[0];
-"#);
+"#,
+    );
     assert_eq!(out, "42");
 }
 
 #[test]
 fn test_array_map_with_complex_callback() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function square($x) { return $x * $x; }
 $a = [1, 2, 3, 4];
 $b = array_map("square", $a);
 echo $b[0] . " " . $b[1] . " " . $b[2] . " " . $b[3];
-"#);
+"#,
+    );
     assert_eq!(out, "1 4 9 16");
 }
 
 #[test]
 fn test_array_reduce_single() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function add($carry, $item) { return $carry + $item; }
 $a = [42];
 $sum = array_reduce($a, "add", 100);
 echo $sum;
-"#);
+"#,
+    );
     assert_eq!(out, "142");
 }
 
@@ -4720,116 +5204,140 @@ echo $sum;
 
 #[test]
 fn test_closure_basic() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $double = function($x) { return $x * 2; };
 echo $double(5);
-"#);
+"#,
+    );
     assert_eq!(out, "10");
 }
 
 #[test]
 fn test_closure_multiple_params() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $add = function($a, $b) { return $a + $b; };
 echo $add(3, 7);
-"#);
+"#,
+    );
     assert_eq!(out, "10");
 }
 
 #[test]
 fn test_arrow_function_basic() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $triple = fn($x) => $x * 3;
 echo $triple(4);
-"#);
+"#,
+    );
     assert_eq!(out, "12");
 }
 
 #[test]
 fn test_arrow_function_expression() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $calc = fn($x) => $x * $x + 1;
 echo $calc(5);
-"#);
+"#,
+    );
     assert_eq!(out, "26");
 }
 
 #[test]
 fn test_closure_array_map() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $result = array_map(function($x) { return $x * 10; }, [1, 2, 3]);
 echo $result[0];
 echo $result[1];
 echo $result[2];
-"#);
+"#,
+    );
     assert_eq!(out, "102030");
 }
 
 #[test]
 fn test_arrow_function_array_map() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $result = array_map(fn($x) => $x + 100, [1, 2, 3]);
 echo $result[0];
 echo $result[1];
 echo $result[2];
-"#);
+"#,
+    );
     assert_eq!(out, "101102103");
 }
 
 #[test]
 fn test_closure_array_filter() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $evens = array_filter([1, 2, 3, 4, 5, 6], function($x) { return $x % 2 == 0; });
 echo count($evens);
-"#);
+"#,
+    );
     assert_eq!(out, "3");
 }
 
 #[test]
 fn test_arrow_function_array_filter() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $big = array_filter([1, 5, 10, 15, 20], fn($x) => $x > 8);
 echo count($big);
-"#);
+"#,
+    );
     assert_eq!(out, "3");
 }
 
 #[test]
 fn test_closure_as_variable_then_call() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $fn = function($x) { return $x + 1; };
 $a = $fn(10);
 $b = $fn(20);
 echo $a;
 echo $b;
-"#);
+"#,
+    );
     assert_eq!(out, "1121");
 }
 
 #[test]
 fn test_closure_no_params() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $hello = function() { return 42; };
 echo $hello();
-"#);
+"#,
+    );
     assert_eq!(out, "42");
 }
 
 #[test]
 fn test_arrow_no_params() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $val = fn() => 99;
 echo $val();
-"#);
+"#,
+    );
     assert_eq!(out, "99");
 }
 
 #[test]
 fn test_closure_array_reduce() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $sum = array_reduce([1, 2, 3, 4], function($carry, $item) { return $carry + $item; }, 0);
 echo $sum;
-"#);
+"#,
+    );
     assert_eq!(out, "10");
 }
 
@@ -4837,25 +5345,31 @@ echo $sum;
 
 #[test]
 fn test_iife_basic() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo (function() { return 42; })();
-"#);
+"#,
+    );
     assert_eq!(out, "42");
 }
 
 #[test]
 fn test_iife_with_args() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo (function($x) { return $x * 3; })(7);
-"#);
+"#,
+    );
     assert_eq!(out, "21");
 }
 
 #[test]
 fn test_iife_arrow() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo (fn($x) => $x + 100)(5);
-"#);
+"#,
+    );
     assert_eq!(out, "105");
 }
 
@@ -4863,19 +5377,23 @@ echo (fn($x) => $x + 100)(5);
 
 #[test]
 fn test_closure_from_array_call() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $fns = [function($x) { return $x * 10; }];
 echo $fns[0](5);
-"#);
+"#,
+    );
     assert_eq!(out, "50");
 }
 
 #[test]
 fn test_closure_from_array_no_args() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $fns = [function() { return 99; }];
 echo $fns[0]();
-"#);
+"#,
+    );
     assert_eq!(out, "99");
 }
 
@@ -4883,21 +5401,25 @@ echo $fns[0]();
 
 #[test]
 fn test_closure_returning_closure() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $f = function() { return function() { return 99; }; };
 $g = $f();
 echo $g();
-"#);
+"#,
+    );
     assert_eq!(out, "99");
 }
 
 #[test]
 fn test_closure_returning_closure_with_args() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $maker = function() { return function($x) { return $x * 3; }; };
 $fn = $maker();
 echo $fn(7);
-"#);
+"#,
+    );
     assert_eq!(out, "21");
 }
 
@@ -4905,67 +5427,79 @@ echo $fn(7);
 
 #[test]
 fn test_default_param_string() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function greet($name = "world") {
     echo "Hello " . $name;
 }
 greet();
-"#);
+"#,
+    );
     assert_eq!(out, "Hello world");
 }
 
 #[test]
 fn test_default_param_override() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function greet($name = "world") {
     echo "Hello " . $name;
 }
 greet("PHP");
-"#);
+"#,
+    );
     assert_eq!(out, "Hello PHP");
 }
 
 #[test]
 fn test_default_param_int() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function add($a, $b = 0) {
     return $a + $b;
 }
 echo add(5);
-"#);
+"#,
+    );
     assert_eq!(out, "5");
 }
 
 #[test]
 fn test_default_param_int_override() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function add($a, $b = 0) {
     return $a + $b;
 }
 echo add(5, 3);
-"#);
+"#,
+    );
     assert_eq!(out, "8");
 }
 
 #[test]
 fn test_default_param_multiple() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function multi($a = 1, $b = 2, $c = 3) {
     echo $a + $b + $c;
 }
 multi();
-"#);
+"#,
+    );
     assert_eq!(out, "6");
 }
 
 #[test]
 fn test_default_param_partial() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function multi($a = 1, $b = 2, $c = 3) {
     echo $a + $b + $c;
 }
 multi(10);
-"#);
+"#,
+    );
     assert_eq!(out, "15");
 }
 
@@ -4973,133 +5507,161 @@ multi(10);
 
 #[test]
 fn test_null_coalesce_null_value() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = null;
 echo $x ?? "default";
-"#);
+"#,
+    );
     assert_eq!(out, "default");
 }
 
 #[test]
 fn test_null_coalesce_non_null() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 42;
 echo $x ?? 0;
-"#);
+"#,
+    );
     assert_eq!(out, "42");
 }
 
 #[test]
 fn test_null_coalesce_chained() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = null;
 $y = null;
 echo $x ?? $y ?? "found";
-"#);
+"#,
+    );
     assert_eq!(out, "found");
 }
 
 #[test]
 fn test_null_coalesce_literal_null() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo null ?? "fallback";
-"#);
+"#,
+    );
     assert_eq!(out, "fallback");
 }
 
 #[test]
 fn test_null_coalesce_string() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $name = "Alice";
 echo $name ?? "default";
-"#);
+"#,
+    );
     assert_eq!(out, "Alice");
 }
 
 #[test]
 fn test_null_coalesce_null_to_string() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $name = null;
 echo $name ?? "default";
-"#);
+"#,
+    );
     assert_eq!(out, "default");
 }
 
 #[test]
 fn test_null_coalesce_empty_string() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $val = "";
 echo ($val ?? "fallback") . "|done";
-"#);
+"#,
+    );
     assert_eq!(out, "|done");
 }
 
 #[test]
 fn test_null_coalesce_int() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 42;
 echo $x ?? 0;
-"#);
+"#,
+    );
     assert_eq!(out, "42");
 }
 
 #[test]
 fn test_null_coalesce_null_to_int() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = null;
 echo $x ?? 99;
-"#);
+"#,
+    );
     assert_eq!(out, "99");
 }
 
 #[test]
 fn test_null_coalesce_chain() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = null;
 $b = null;
 $c = "found";
 echo $a ?? $b ?? $c;
-"#);
+"#,
+    );
     assert_eq!(out, "found");
 }
 
 #[test]
 fn test_null_coalesce_float() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 3.14;
 echo $x ?? 0.0;
-"#);
+"#,
+    );
     assert_eq!(out, "3.14");
 }
 
 #[test]
 fn test_null_coalesce_null_to_float() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = null;
 echo $x ?? 2.718;
-"#);
+"#,
+    );
     assert_eq!(out, "2.718");
 }
 
 #[test]
 fn test_null_coalesce_float_in_calc() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $pi = null;
 $val = $pi ?? 3.14159;
 echo round($val * 2, 4);
-"#);
+"#,
+    );
     assert_eq!(out, "6.2832");
 }
 
 #[test]
 fn test_null_coalesce_result_survives_nested_function_calls_in_concat() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function fallback_pi($x) {
     return $x ?? 3.14159;
 }
 
 echo round(fallback_pi(2), 1) . "|" . round(fallback_pi(null), 4);
-"#);
+"#,
+    );
     assert_eq!(out, "2|3.1416");
 }
 
@@ -5226,19 +5788,24 @@ fn test_nowdoc_no_escapes() {
 
 #[test]
 fn test_heredoc_interpolation() {
-    let out = compile_and_run("<?php\n$name = \"World\";\n$s = <<<EOT\nHello $name\nEOT;\necho $s;\n");
+    let out =
+        compile_and_run("<?php\n$name = \"World\";\n$s = <<<EOT\nHello $name\nEOT;\necho $s;\n");
     assert_eq!(out, "Hello World");
 }
 
 #[test]
 fn test_heredoc_interpolation_multiple_vars() {
-    let out = compile_and_run("<?php\n$first = \"Hello\";\n$second = \"World\";\necho <<<EOT\n$first $second\nEOT;\n");
+    let out = compile_and_run(
+        "<?php\n$first = \"Hello\";\n$second = \"World\";\necho <<<EOT\n$first $second\nEOT;\n",
+    );
     assert_eq!(out, "Hello World");
 }
 
 #[test]
 fn test_heredoc_interpolation_multiline() {
-    let out = compile_and_run("<?php\n$name = \"Alice\";\necho <<<EOT\nHello $name\nWelcome $name\nEOT;\n");
+    let out = compile_and_run(
+        "<?php\n$name = \"Alice\";\necho <<<EOT\nHello $name\nWelcome $name\nEOT;\n",
+    );
     assert_eq!(out, "Hello Alice\nWelcome Alice");
 }
 
@@ -5300,13 +5867,15 @@ fn test_const_in_expression() {
 
 #[test]
 fn test_const_in_function() {
-    let out = compile_and_run("<?php\nconst LIMIT = 42;\nfunction test() { echo LIMIT; }\ntest();\n");
+    let out =
+        compile_and_run("<?php\nconst LIMIT = 42;\nfunction test() { echo LIMIT; }\ntest();\n");
     assert_eq!(out, "42");
 }
 
 #[test]
 fn test_define_in_function() {
-    let out = compile_and_run("<?php\ndefine(\"RATE\", 100);\nfunction show() { echo RATE; }\nshow();\n");
+    let out =
+        compile_and_run("<?php\ndefine(\"RATE\", 100);\nfunction show() { echo RATE; }\nshow();\n");
     assert_eq!(out, "100");
 }
 
@@ -5320,7 +5889,9 @@ fn test_const_concat() {
 
 #[test]
 fn test_list_unpack_int() {
-    let out = compile_and_run("<?php\n[$a, $b, $c] = [10, 20, 30];\necho $a . \" \" . $b . \" \" . $c;\n");
+    let out = compile_and_run(
+        "<?php\n[$a, $b, $c] = [10, 20, 30];\necho $a . \" \" . $b . \" \" . $c;\n",
+    );
     assert_eq!(out, "10 20 30");
 }
 
@@ -5332,7 +5903,9 @@ fn test_list_unpack_string() {
 
 #[test]
 fn test_list_unpack_from_variable() {
-    let out = compile_and_run("<?php\n$arr = [1, 2, 3];\n[$a, $b, $c] = $arr;\necho $a . \" \" . $b . \" \" . $c;\n");
+    let out = compile_and_run(
+        "<?php\n$arr = [1, 2, 3];\n[$a, $b, $c] = $arr;\necho $a . \" \" . $b . \" \" . $c;\n",
+    );
     assert_eq!(out, "1 2 3");
 }
 
@@ -5414,22 +5987,27 @@ fn test_usleep_zero() {
 
 #[test]
 fn test_getenv_home() {
-    let out = compile_and_run("<?php $home = getenv(\"HOME\"); if (strlen($home) > 0) { echo \"ok\"; }");
+    let out =
+        compile_and_run("<?php $home = getenv(\"HOME\"); if (strlen($home) > 0) { echo \"ok\"; }");
     assert_eq!(out, "ok");
 }
 
 #[test]
 fn test_getenv_nonexistent() {
-    let out = compile_and_run("<?php $missing = getenv(\"ELEPHC_NONEXISTENT_VAR_XYZ\"); echo strlen($missing);");
+    let out = compile_and_run(
+        "<?php $missing = getenv(\"ELEPHC_NONEXISTENT_VAR_XYZ\"); echo strlen($missing);",
+    );
     assert_eq!(out, "0");
 }
 
 #[test]
 fn test_putenv() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 putenv("ELEPHC_TEST_VAR=hello");
 echo getenv("ELEPHC_TEST_VAR");
-"#);
+"#,
+    );
     assert_eq!(out, "hello");
 }
 
@@ -5477,20 +6055,23 @@ fn test_passthru() {
 
 #[test]
 fn test_global_read() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 10;
 function test() {
     global $x;
     echo $x;
 }
 test();
-"#);
+"#,
+    );
     assert_eq!(out, "10");
 }
 
 #[test]
 fn test_global_write() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $y = 5;
 function modify() {
     global $y;
@@ -5498,13 +6079,15 @@ function modify() {
 }
 modify();
 echo $y;
-"#);
+"#,
+    );
     assert_eq!(out, "99");
 }
 
 #[test]
 fn test_global_read_write() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 10;
 function test() {
     global $x;
@@ -5513,13 +6096,15 @@ function test() {
 }
 test();
 echo $x;
-"#);
+"#,
+    );
     assert_eq!(out, "1020");
 }
 
 #[test]
 fn test_global_multiple_vars() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = 1;
 $b = 2;
 function sum() {
@@ -5527,13 +6112,15 @@ function sum() {
     echo $a + $b;
 }
 sum();
-"#);
+"#,
+    );
     assert_eq!(out, "3");
 }
 
 #[test]
 fn test_global_increment() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $counter = 0;
 function inc() {
     global $counter;
@@ -5543,7 +6130,8 @@ inc();
 inc();
 inc();
 echo $counter;
-"#);
+"#,
+    );
     assert_eq!(out, "3");
 }
 
@@ -5551,7 +6139,8 @@ echo $counter;
 
 #[test]
 fn test_static_counter() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function counter() {
     static $n = 0;
     $n++;
@@ -5560,13 +6149,15 @@ function counter() {
 counter();
 counter();
 counter();
-"#);
+"#,
+    );
     assert_eq!(out, "123");
 }
 
 #[test]
 fn test_static_preserves_value() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function acc() {
     static $total = 0;
     $total = $total + 10;
@@ -5575,13 +6166,15 @@ function acc() {
 echo acc();
 echo acc();
 echo acc();
-"#);
+"#,
+    );
     assert_eq!(out, "102030");
 }
 
 #[test]
 fn test_static_separate_functions() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function a() {
     static $x = 0;
     $x++;
@@ -5596,7 +6189,8 @@ a();
 b();
 a();
 b();
-"#);
+"#,
+    );
     assert_eq!(out, "110220");
 }
 
@@ -5604,33 +6198,38 @@ b();
 
 #[test]
 fn test_ref_increment() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function increment(&$val) {
     $val++;
 }
 $x = 5;
 increment($x);
 echo $x;
-"#);
+"#,
+    );
     assert_eq!(out, "6");
 }
 
 #[test]
 fn test_ref_assign() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function set_value(&$v, $new_val) {
     $v = $new_val;
 }
 $x = 1;
 set_value($x, 42);
 echo $x;
-"#);
+"#,
+    );
     assert_eq!(out, "42");
 }
 
 #[test]
 fn test_ref_swap() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function swap(&$a, &$b) {
     $tmp = $a;
     $a = $b;
@@ -5640,20 +6239,23 @@ $p = 1;
 $q = 2;
 swap($p, $q);
 echo $p . $q;
-"#);
+"#,
+    );
     assert_eq!(out, "21");
 }
 
 #[test]
 fn test_ref_mixed_params() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function add_to(&$target, $amount) {
     $target = $target + $amount;
 }
 $x = 10;
 add_to($x, 5);
 echo $x;
-"#);
+"#,
+    );
     assert_eq!(out, "15");
 }
 
@@ -5661,7 +6263,8 @@ echo $x;
 
 #[test]
 fn test_variadic_sum() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function sum(...$nums) {
     $total = 0;
     foreach ($nums as $n) {
@@ -5670,13 +6273,15 @@ function sum(...$nums) {
     return $total;
 }
 echo sum(1, 2, 3);
-"#);
+"#,
+    );
     assert_eq!(out, "6");
 }
 
 #[test]
 fn test_variadic_five_args() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function sum(...$nums) {
     $total = 0;
     foreach ($nums as $n) {
@@ -5685,13 +6290,34 @@ function sum(...$nums) {
     return $total;
 }
 echo sum(1, 2, 3, 4, 5);
-"#);
+"#,
+    );
     assert_eq!(out, "15");
 }
 
 #[test]
+fn test_variadic_multiple_calls_same_function() {
+    let out = compile_and_run(
+        r#"<?php
+function sum(...$nums) {
+    $total = 0;
+    foreach ($nums as $n) {
+        $total += $n;
+    }
+    return $total;
+}
+echo sum(1, 2, 3);
+echo ":";
+echo sum(10, 20, 30, 40, 50);
+"#,
+    );
+    assert_eq!(out, "6:150");
+}
+
+#[test]
 fn test_variadic_empty() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function sum(...$nums) {
     $total = 0;
     foreach ($nums as $n) {
@@ -5700,43 +6326,50 @@ function sum(...$nums) {
     return $total;
 }
 echo sum();
-"#);
+"#,
+    );
     assert_eq!(out, "0");
 }
 
 #[test]
 fn test_variadic_with_regular_params() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function greet($greeting, ...$names) {
     foreach ($names as $name) {
         echo $greeting . " " . $name . "\n";
     }
 }
 greet("Hello", "Alice", "Bob");
-"#);
+"#,
+    );
     assert_eq!(out, "Hello Alice\nHello Bob\n");
 }
 
 #[test]
 fn test_variadic_count() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function num_args(...$args) {
     return count($args);
 }
 echo num_args(10, 20, 30, 40);
-"#);
+"#,
+    );
     assert_eq!(out, "4");
 }
 
 #[test]
 fn test_variadic_single_arg() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function wrap(...$items) {
     return $items;
 }
 $arr = wrap(42);
 echo $arr[0];
-"#);
+"#,
+    );
     assert_eq!(out, "42");
 }
 
@@ -5744,7 +6377,8 @@ echo $arr[0];
 
 #[test]
 fn test_spread_in_function_call() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function sum(...$nums) {
     $total = 0;
     foreach ($nums as $n) {
@@ -5754,37 +6388,43 @@ function sum(...$nums) {
 }
 $args = [10, 20, 30];
 echo sum(...$args);
-"#);
+"#,
+    );
     assert_eq!(out, "60");
 }
 
 #[test]
 fn test_spread_in_array_literal() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [1, 2];
 $b = [3, 4];
 $c = [...$a, ...$b];
 echo count($c);
-"#);
+"#,
+    );
     assert_eq!(out, "4");
 }
 
 #[test]
 fn test_spread_array_values() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [1, 2];
 $b = [3, 4];
 $c = [...$a, ...$b];
 foreach ($c as $v) {
     echo $v;
 }
-"#);
+"#,
+    );
     assert_eq!(out, "1234");
 }
 
 #[test]
 fn test_spread_mixed_with_elements() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [1, 2];
 $b = [5, 6];
 $c = [...$a, 3, 4, ...$b];
@@ -5793,28 +6433,33 @@ echo " ";
 foreach ($c as $v) {
     echo $v;
 }
-"#);
+"#,
+    );
     assert_eq!(out, "6 123456");
 }
 
 #[test]
 fn test_spread_single_source() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [1, 2, 3];
 $c = [...$a];
 echo count($c);
-"#);
+"#,
+    );
     assert_eq!(out, "3");
 }
 
 #[test]
 fn test_variadic_with_regular_and_no_extra() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function prefix($pre, ...$items) {
     echo count($items);
 }
 prefix("x");
-"#);
+"#,
+    );
     assert_eq!(out, "0");
 }
 
@@ -5902,63 +6547,83 @@ fn test_date_literal_text() {
 
 #[test]
 fn test_mktime() {
-    let out = compile_and_run("<?php
+    let out = compile_and_run(
+        "<?php
 $ts = mktime(0, 0, 0, 1, 1, 2000);
 echo date(\"Y-m-d\", $ts);
-");
+",
+    );
     assert_eq!(out, "2000-01-01");
 }
 
 #[test]
 fn test_mktime_specific_time() {
-    let out = compile_and_run("<?php
+    let out = compile_and_run(
+        "<?php
 $ts = mktime(12, 30, 45, 6, 15, 2024);
 echo date(\"H:i:s\", $ts);
-");
+",
+    );
     assert_eq!(out, "12:30:45");
 }
 
 #[test]
 fn test_strtotime_date() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $ts = strtotime("2000-01-01");
 echo date("Y-m-d", $ts);
-"#);
+"#,
+    );
     assert_eq!(out, "2000-01-01");
 }
 
 #[test]
 fn test_strtotime_datetime() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $ts = strtotime("2024-06-15 12:30:45");
 echo date("Y-m-d H:i:s", $ts);
-"#);
+"#,
+    );
     assert_eq!(out, "2024-06-15 12:30:45");
 }
 
 #[test]
 fn test_strtotime_mktime_roundtrip() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $ts1 = mktime(10, 30, 0, 3, 25, 2024);
 $ts2 = strtotime("2024-03-25 10:30:00");
 if ($ts1 == $ts2) {
     echo "match";
 }
-"#);
+"#,
+    );
     assert_eq!(out, "match");
 }
 
 #[test]
 fn test_date_current_time() {
     // date() with no timestamp should use current time
-    let out = compile_and_run("<?php $y = date(\"Y\"); $val = intval($y); if ($val >= 2024) { echo \"ok\"; }");
+    let out = compile_and_run(
+        "<?php $y = date(\"Y\"); $val = intval($y); if ($val >= 2024) { echo \"ok\"; }",
+    );
     assert_eq!(out, "ok");
 }
 
 #[test]
 fn test_date_full_day_name() {
     let out = compile_and_run("<?php echo date(\"l\", 1700000000);");
-    let valid_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+    let valid_days = [
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+    ];
     assert!(valid_days.contains(&out.as_str()), "Got: {}", out);
 }
 
@@ -6044,7 +6709,8 @@ fn test_json_encode_assoc() {
     // Hash table iteration order may vary, so check both possibilities
     assert!(
         out == r#"{"name":"Alice","age":"30"}"# || out == r#"{"age":"30","name":"Alice"}"#,
-        "Got: {}", out
+        "Got: {}",
+        out
     );
 }
 
@@ -6142,19 +6808,23 @@ fn test_preg_replace_no_match() {
 
 #[test]
 fn test_preg_split_simple() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $parts = preg_split("/,/", "a,b,c");
 echo count($parts) . "|" . $parts[0] . "|" . $parts[1] . "|" . $parts[2];
-"#);
+"#,
+    );
     assert_eq!(out, "3|a|b|c");
 }
 
 #[test]
 fn test_preg_split_whitespace() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $parts = preg_split("/[ ]+/", "hello   world");
 echo count($parts) . "|" . $parts[0] . "|" . $parts[1];
-"#);
+"#,
+    );
     assert_eq!(out, "2|hello|world");
 }
 
@@ -6193,7 +6863,8 @@ fn test_is_numeric_string_digits() {
 
 #[test]
 fn test_is_numeric_string_float() {
-    let out = compile_and_run(r#"<?php if (is_numeric("3.14")) { echo "yes"; } else { echo "no"; }"#);
+    let out =
+        compile_and_run(r#"<?php if (is_numeric("3.14")) { echo "yes"; } else { echo "no"; }"#);
     assert_eq!(out, "yes");
 }
 
@@ -6205,7 +6876,8 @@ fn test_is_numeric_string_negative() {
 
 #[test]
 fn test_is_numeric_string_not_numeric() {
-    let out = compile_and_run(r#"<?php if (is_numeric("abc")) { echo "yes"; } else { echo "no"; }"#);
+    let out =
+        compile_and_run(r#"<?php if (is_numeric("abc")) { echo "yes"; } else { echo "no"; }"#);
     assert_eq!(out, "no");
 }
 
@@ -6226,19 +6898,23 @@ fn test_function_exists_builtin_array_push() {
 
 #[test]
 fn test_preg_split_backslash_s() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $parts = preg_split("/\s+/", "hello  world");
 echo $parts[1];
-"#);
+"#,
+    );
     assert_eq!(out, "world");
 }
 
 #[test]
 fn test_preg_split_backslash_d() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $parts = preg_split("/\d+/", "abc123def456ghi");
 echo count($parts) . "|" . $parts[0] . "|" . $parts[1] . "|" . $parts[2];
-"#);
+"#,
+    );
     assert_eq!(out, "3|abc|def|ghi");
 }
 
@@ -6316,30 +6992,36 @@ fn test_modulo_normal_remainder() {
 
 #[test]
 fn test_negative_array_index_returns_null() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [10, 20, 30];
 $v = $a[-1];
 if (is_null($v)) { echo "null"; } else { echo "not null"; }
-"#);
+"#,
+    );
     assert_eq!(out, "null");
 }
 
 #[test]
 fn test_array_out_of_bounds_returns_null() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [10, 20, 30];
 $v = $a[5];
 if (is_null($v)) { echo "null"; } else { echo "not null"; }
-"#);
+"#,
+    );
     assert_eq!(out, "null");
 }
 
 #[test]
 fn test_array_valid_index_still_works() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [10, 20, 30];
 echo $a[0] . "|" . $a[1] . "|" . $a[2];
-"#);
+"#,
+    );
     assert_eq!(out, "10|20|30");
 }
 
@@ -6347,10 +7029,12 @@ echo $a[0] . "|" . $a[1] . "|" . $a[2];
 
 #[test]
 fn test_assoc_array_missing_key_returns_null() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $m = ["a" => 1];
 echo $m["missing"];
-"#);
+"#,
+    );
     assert_eq!(out, "");
 }
 
@@ -6358,19 +7042,23 @@ echo $m["missing"];
 
 #[test]
 fn test_array_map_str_callback() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $r = array_map(fn($x) => "v" . $x, [1, 2, 3]);
 echo $r[0];
-"#);
+"#,
+    );
     assert_eq!(out, "v1");
 }
 
 #[test]
 fn test_array_map_str_callback_all_elements() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $r = array_map(fn($x) => "item" . $x, [1, 2, 3]);
 echo $r[0] . "|" . $r[1] . "|" . $r[2];
-"#);
+"#,
+    );
     assert_eq!(out, "item1|item2|item3");
 }
 
@@ -6378,19 +7066,23 @@ echo $r[0] . "|" . $r[1] . "|" . $r[2];
 
 #[test]
 fn test_empty_array_literal() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [];
 $a[] = 1;
 echo count($a);
-"#);
+"#,
+    );
     assert_eq!(out, "1");
 }
 
 #[test]
 fn test_empty_array_json_encode() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo json_encode([]);
-"#);
+"#,
+    );
     assert_eq!(out, "[]");
 }
 
@@ -6398,31 +7090,37 @@ echo json_encode([]);
 
 #[test]
 fn test_spread_into_named_params() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function add($a, $b) { return $a + $b; }
 $args = [3, 4];
 echo add(...$args);
-"#);
+"#,
+    );
     assert_eq!(out, "7");
 }
 
 #[test]
 fn test_spread_into_named_params_three() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function sum3($a, $b, $c) { return $a + $b + $c; }
 $args = [10, 20, 30];
 echo sum3(...$args);
-"#);
+"#,
+    );
     assert_eq!(out, "60");
 }
 
 #[test]
 fn test_spread_mixed_with_regular_args() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function add3($a, $b, $c) { return $a + $b + $c; }
 $rest = [20, 30];
 echo add3(10, ...$rest);
-"#);
+"#,
+    );
     assert_eq!(out, "60");
 }
 
@@ -6430,56 +7128,68 @@ echo add3(10, ...$rest);
 
 #[test]
 fn test_braceless_if() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 if (true) echo "yes";
-"#);
+"#,
+    );
     assert_eq!(out, "yes");
 }
 
 #[test]
 fn test_braceless_if_else() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 5;
 if ($x > 10) echo "big";
 else echo "small";
-"#);
+"#,
+    );
     assert_eq!(out, "small");
 }
 
 #[test]
 fn test_braceless_for() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 for ($i = 0; $i < 3; $i++) echo $i;
-"#);
+"#,
+    );
     assert_eq!(out, "012");
 }
 
 #[test]
 fn test_braceless_while() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $i = 0;
 while ($i < 3) echo $i++;
-"#);
+"#,
+    );
     assert_eq!(out, "012");
 }
 
 #[test]
 fn test_braceless_foreach() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $arr = [1, 2, 3];
 foreach ($arr as $v) echo $v;
-"#);
+"#,
+    );
     assert_eq!(out, "123");
 }
 
 #[test]
 fn test_braceless_else_if() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 5;
 if ($x > 10) echo "big";
 else if ($x > 3) echo "medium";
 else echo "small";
-"#);
+"#,
+    );
     assert_eq!(out, "medium");
 }
 
@@ -6487,42 +7197,51 @@ else echo "small";
 
 #[test]
 fn test_closure_default_param() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $fn = function($x, $y = 10) { return $x + $y; };
 echo $fn(5);
-"#);
+"#,
+    );
     assert_eq!(out, "15");
 }
 
 #[test]
 fn test_closure_default_param_overridden() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $fn = function($x, $y = 10) { return $x + $y; };
 echo $fn(5, 20);
-"#);
+"#,
+    );
     assert_eq!(out, "25");
 }
 
 #[test]
 fn test_implode_int_array() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [1, 2, 3];
 echo implode(", ", $a);
-"#);
+"#,
+    );
     assert_eq!(out, "1, 2, 3");
 }
 
 #[test]
 fn test_implode_chained_array_builtins() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo implode(",", array_reverse([3, 1, 2]));
-"#);
+"#,
+    );
     assert_eq!(out, "2,1,3");
 }
 
 #[test]
 fn test_str_replace_in_foreach_assoc_function() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function transform($map, $text) {
     foreach ($map as $key => $value) {
         $text = str_replace($key, $value, $text);
@@ -6531,7 +7250,8 @@ function transform($map, $text) {
 }
 $map = ["hello" => "world", "foo" => "bar"];
 echo transform($map, "hello foo");
-"#);
+"#,
+    );
     assert_eq!(out, "world bar");
 }
 
@@ -6553,9 +7273,11 @@ fn test_float_modulo_negative() {
 
 #[test]
 fn test_string_zero_falsy_if() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 if ("0") { echo "bad"; } else { echo "good"; }
-"#);
+"#,
+    );
     assert_eq!(out, "good");
 }
 
@@ -6587,25 +7309,31 @@ fn test_string_empty_falsy() {
 
 #[test]
 fn test_for_compound_subtract() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 for ($i = 10; $i > 0; $i -= 3) { echo $i . " "; }
-"#);
+"#,
+    );
     assert_eq!(out, "10 7 4 1 ");
 }
 
 #[test]
 fn test_for_compound_add() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 for ($i = 0; $i < 10; $i += 3) { echo $i . " "; }
-"#);
+"#,
+    );
     assert_eq!(out, "0 3 6 9 ");
 }
 
 #[test]
 fn test_for_compound_multiply() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 for ($i = 1; $i < 100; $i *= 2) { echo $i . " "; }
-"#);
+"#,
+    );
     assert_eq!(out, "1 2 4 8 16 32 64 ");
 }
 
@@ -6613,22 +7341,26 @@ for ($i = 1; $i < 100; $i *= 2) { echo $i . " "; }
 
 #[test]
 fn test_array_push_string_to_empty() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = [];
 $a[] = "hello";
 echo $a[0];
-"#);
+"#,
+    );
     assert_eq!(out, "hello");
 }
 
 #[test]
 fn test_array_push_concat_expr() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $tokens = [];
 $word = "42";
 $tokens[] = "NUM:" . $word;
 echo $tokens[0];
-"#);
+"#,
+    );
     assert_eq!(out, "NUM:42");
 }
 
@@ -6649,7 +7381,8 @@ fn test_many_local_vars() {
 #[test]
 fn test_ref_array_assign() {
     // Issue #32: pass-by-reference array mutation via index assignment
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function swap(&$a) {
     $t = $a[0];
     $a[0] = $a[1];
@@ -6659,14 +7392,16 @@ $x = [1, 2];
 swap($x);
 echo $x[0];
 echo $x[1];
-"#);
+"#,
+    );
     assert_eq!(out, "21");
 }
 
 #[test]
 fn test_ref_array_push() {
     // Issue #32: pass-by-reference array mutation via push
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function append(&$arr, $val) {
     $arr[] = $val;
 }
@@ -6674,18 +7409,21 @@ $x = [10, 20];
 append($x, 30);
 echo count($x);
 echo $x[2];
-"#);
+"#,
+    );
     assert_eq!(out, "330");
 }
 
 #[test]
 fn test_array_column_string_implode() {
     // Issue #33: array_column on arrays of assoc arrays with string values + implode
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $s = [["n" => "Alice"], ["n" => "Bob"]];
 $names = array_column($s, "n");
 echo implode(",", $names);
-"#);
+"#,
+    );
     assert_eq!(out, "Alice,Bob");
 }
 
@@ -6739,44 +7477,52 @@ fn test_min_five_args() {
 
 #[test]
 fn test_closure_use_int() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $factor = 3;
 $mul = function($x) use ($factor) { return $x * $factor; };
 echo $mul(5);
-"#);
+"#,
+    );
     assert_eq!(out, "15");
 }
 
 #[test]
 fn test_closure_use_string() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $greeting = "Hello";
 $greet = function($name) use ($greeting) { return $greeting . " " . $name; };
 echo $greet("World");
-"#);
+"#,
+    );
     assert_eq!(out, "Hello World");
 }
 
 #[test]
 fn test_closure_use_multiple() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = 10;
 $b = 20;
 $sum = function() use ($a, $b) { return $a + $b; };
 echo $sum();
-"#);
+"#,
+    );
     assert_eq!(out, "30");
 }
 
 #[test]
 fn test_closure_use_no_params() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $name = "World";
 $greet = function() use ($name) {
     echo "Hello " . $name;
 };
 $greet();
-"#);
+"#,
+    );
     assert_eq!(out, "Hello World");
 }
 
@@ -6785,180 +7531,231 @@ $greet();
 #[test]
 fn test_concat_loop_1000() {
     // Regression test for issue #21: concat buffer overflow after ~362 iterations
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $s = "";
 for ($i = 0; $i < 1000; $i++) {
     $s .= "x";
 }
 echo strlen($s);
-"#);
+"#,
+    );
     assert_eq!(out, "1000");
 }
 
 #[test]
 fn test_string_function_in_loop() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 for ($i = 0; $i < 500; $i++) {
     $x = strtolower("HELLO WORLD");
 }
 echo $x;
-"#);
+"#,
+    );
     assert_eq!(out, "hello world");
 }
 
 #[test]
 fn test_hash_table_computed_keys_loop() {
     // Tests that hash keys survive concat_buf reset (persisted to heap)
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $h = ["init" => 0];
 for ($i = 0; $i < 10; $i++) {
     $h["k" . $i] = $i;
 }
 echo $h["k9"];
-"#);
+"#,
+    );
     assert_eq!(out, "9");
 }
 
 #[test]
 fn test_string_reassignment_loop() {
     // Tests that old string values are freed on reassignment (free-list reuse)
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 for ($i = 0; $i < 2000; $i++) {
     $s = str_repeat("a", 100);
 }
 echo strlen($s);
-"#);
+"#,
+    );
     assert_eq!(out, "100");
 }
 
 #[test]
 fn test_string_variables_survive_statements() {
     // Tests that string persist works: values survive across statement boundaries
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = "foo" . "bar";
 $b = "baz" . "qux";
 echo $a . $b;
-"#);
+"#,
+    );
     assert_eq!(out, "foobarbazqux");
 }
 
 #[test]
 fn test_unset_frees_string() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = "hello" . " world";
 echo strlen($x);
 unset($x);
 echo is_null($x) ? "1" : "0";
-"#);
+"#,
+    );
     assert_eq!(out, "111");
 }
 
 #[test]
 fn test_multiple_string_vars_independent() {
     // Ensure multiple string variables don't interfere after concat_buf reset
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = "hello";
 $b = "world";
 $c = $a . " " . $b;
 $d = strtoupper($a);
 echo $c . "|" . $d;
-"#);
+"#,
+    );
     assert_eq!(out, "hello world|HELLO");
 }
 
 #[test]
 fn test_str_replace_in_loop() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $result = "";
 for ($i = 0; $i < 100; $i++) {
     $result = str_replace("x", "y", "xox");
 }
 echo $result;
-"#);
+"#,
+    );
     assert_eq!(out, "yoy");
 }
 
 #[test]
 fn test_array_dynamic_growth_int() {
     // Array grows beyond initial capacity via reallocation
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $arr = [1, 2, 3];
 for ($i = 4; $i <= 100; $i++) {
     $arr[] = $i;
 }
 echo count($arr) . "|" . $arr[0] . "|" . $arr[99];
-"#);
+"#,
+    );
     assert_eq!(out, "100|1|100");
 }
 
 #[test]
 fn test_array_dynamic_growth_str() {
     // String array grows beyond initial capacity
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $arr = ["first"];
 for ($i = 0; $i < 50; $i++) {
     $arr[] = "item" . $i;
 }
 echo count($arr) . "|" . $arr[0] . "|" . $arr[50];
-"#);
+"#,
+    );
     assert_eq!(out, "51|first|item49");
 }
 
 #[test]
 fn test_array_push_function_growth() {
     // array_push() triggers growth
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $arr = [10];
 for ($i = 0; $i < 20; $i++) {
     array_push($arr, $i * 10);
 }
 echo count($arr) . "|" . $arr[20];
-"#);
+"#,
+    );
     assert_eq!(out, "21|190");
 }
 
 #[test]
+fn test_array_reassign_after_function_growth() {
+    let out = compile_and_run(
+        r#"<?php
+function grow($arr) {
+    for ($i = 0; $i < 32; $i++) {
+        array_push($arr, $i);
+    }
+    return $arr;
+}
+
+$arr = [100];
+for ($j = 0; $j < 20; $j++) {
+    $arr = grow($arr);
+}
+echo count($arr) > 100 ? "ok" : "bad";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+#[test]
 fn test_array_push_float() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $arr = [1.1];
 array_push($arr, 2.2);
 echo count($arr) . "|" . $arr[1];
-"#);
+"#,
+    );
     assert_eq!(out, "2|2.2");
 }
 
 #[test]
 fn test_array_push_bool() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $arr = [true];
 array_push($arr, false);
 echo count($arr);
-"#);
+"#,
+    );
     assert_eq!(out, "2");
 }
 
 #[test]
 fn test_array_push_object() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Item { public $name;
     public function __construct($n) { $this->name = $n; }
 }
 $items = [new Item("a")];
 array_push($items, new Item("b"));
 echo count($items) . "|" . $items[1]->name;
-"#);
+"#,
+    );
     assert_eq!(out, "2|b");
 }
 
 #[test]
 fn test_array_push_syntax_float() {
     // $arr[] = float syntax
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $arr = [1.0];
 $arr[] = 2.5;
 $arr[] = 3.7;
 echo count($arr) . "|" . $arr[2];
-"#);
+"#,
+    );
     assert_eq!(out, "3|3.7");
 }
 
@@ -6969,45 +7766,168 @@ echo count($arr) . "|" . $arr[2];
 #[test]
 fn test_class_empty() {
     // Empty class with no properties or methods
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Blank {}
 $e = new Blank();
 echo "ok";
-"#);
+"#,
+    );
     assert_eq!(out, "ok");
 }
 
 #[test]
 fn test_class_object_aliasing() {
     // Assigning object to another variable shares the same instance
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Box { public $val = 0; }
 $a = new Box();
 $a->val = 42;
 $b = $a;
 echo $b->val;
-"#);
+"#,
+    );
     assert_eq!(out, "42");
+}
+
+#[test]
+fn test_gc_array_alias_survives_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [10, 20, 30];
+$b = $a;
+unset($a);
+echo $b[0];
+echo $b[1];
+echo $b[2];
+"#,
+    );
+    assert_eq!(out, "102030");
+}
+
+#[test]
+fn test_gc_returned_array_alias_survives_caller_unset() {
+    let out = compile_and_run(
+        r#"<?php
+function share($arr) {
+    return $arr;
+}
+
+$a = [7, 8];
+$b = share($a);
+unset($a);
+echo $b[0];
+echo $b[1];
+"#,
+    );
+    assert_eq!(out, "78");
+}
+
+#[test]
+fn test_gc_returned_object_alias_survives_caller_unset() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public $val = 0; }
+
+function share($box) {
+    return $box;
+}
+
+$a = new Box();
+$a->val = 41;
+$b = share($a);
+unset($a);
+echo $b->val;
+"#,
+    );
+    assert_eq!(out, "41");
+}
+
+#[test]
+fn test_gc_array_push_borrowed_array_survives_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = [9];
+$outer = [];
+$outer[] = $inner;
+unset($inner);
+echo $outer[0][0];
+"#,
+    );
+    assert_eq!(out, "9");
+}
+
+#[test]
+fn test_gc_array_assign_borrowed_array_survives_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = [4];
+$outer = [[1], [2]];
+$outer[1] = $inner;
+unset($inner);
+echo $outer[1][0];
+"#,
+    );
+    assert_eq!(out, "4");
+}
+
+#[test]
+fn test_gc_property_assign_borrowed_array_survives_unset() {
+    let out = compile_and_run(
+        r#"<?php
+class Holder { public $value; }
+
+$inner = [7];
+$h = new Holder();
+$h->value = $inner;
+unset($inner);
+$saved = $h->value;
+echo $saved[0];
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_gc_static_assign_borrowed_array_survives_unset() {
+    let out = compile_and_run(
+        r#"<?php
+function hold_once() {
+    static $saved = [];
+    $tmp = [5];
+    $saved = $tmp;
+    unset($tmp);
+    echo $saved[0];
+}
+
+hold_once();
+"#,
+    );
+    assert_eq!(out, "5");
 }
 
 #[test]
 fn test_class_constructor_calls_method() {
     // Constructor calling another method on the same object
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Init { public $ready = 0;
     public function __construct() { $this->setup(); }
     public function setup() { $this->ready = 1; }
 }
 $i = new Init();
 echo $i->ready;
-"#);
+"#,
+    );
     assert_eq!(out, "1");
 }
 
 #[test]
 fn test_class_multiple_classes_composing() {
     // Two classes where one holds an instance of the other
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Address { public $city;
     public function __construct($c) { $this->city = $c; }
 }
@@ -7018,81 +7938,93 @@ class Person { public $name; public $address;
 $addr = new Address("Rome");
 $p = new Person("Marco", $addr);
 echo $p->info();
-"#);
+"#,
+    );
     assert_eq!(out, "Marco from Rome");
 }
 
 #[test]
 fn test_class_empty_string_property() {
     // Empty string property and strlen on it
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Tag { public $label = "";
     public function __construct($l) { $this->label = $l; }
 }
 $t = new Tag("");
 echo strlen($t->label) . "|" . $t->label . "|done";
-"#);
+"#,
+    );
     assert_eq!(out, "0||done");
 }
 
 #[test]
 fn test_class_long_string_property() {
     // String property holding a long (1000 char) string
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Buffer { public $data;
     public function __construct($d) { $this->data = $d; }
 }
 $b = new Buffer(str_repeat("x", 1000));
 echo strlen($b->data);
-"#);
+"#,
+    );
     assert_eq!(out, "1000");
 }
 
 #[test]
 fn test_class_string_concat_in_method() {
     // Method concatenating multiple string properties
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Row { public $a; public $b; public $c;
     public function __construct($a, $b, $c) { $this->a = $a; $this->b = $b; $this->c = $c; }
     public function csv() { return $this->a . "," . $this->b . "," . $this->c; }
 }
 $r = new Row("x", "y", "z");
 echo $r->csv();
-"#);
+"#,
+    );
     assert_eq!(out, "x,y,z");
 }
 
 #[test]
 fn test_class_bool_property() {
     // Boolean property used in ternary
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Flag { public $on;
     public function __construct($v) { $this->on = $v; }
 }
 $f = new Flag(true);
 echo $f->on ? "yes" : "no";
-"#);
+"#,
+    );
     assert_eq!(out, "yes");
 }
 
 #[test]
 fn test_class_array_property() {
     // Array property with count()
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Stack { public $items;
     public function __construct() { $this->items = [1, 2, 3]; }
     public function size() { return count($this->items); }
 }
 $s = new Stack();
 echo $s->size();
-"#);
+"#,
+    );
     assert_eq!(out, "3");
 }
 
 #[test]
 fn test_class_1000_objects_in_loop() {
     // Stress test: create 1000 objects in a loop
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Obj { public $id;
     public function __construct($id) { $this->id = $id; }
 }
@@ -7101,14 +8033,16 @@ for ($i = 1; $i < 1000; $i++) {
     $last = new Obj($i);
 }
 echo $last->id;
-"#);
+"#,
+    );
     assert_eq!(out, "999");
 }
 
 #[test]
 fn test_class_many_properties() {
     // Object with 10 properties and a method summing them
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Big { public $a; public $b; public $c; public $d; public $e;
     public $f; public $g; public $h; public $i; public $j;
     public function __construct() {
@@ -7122,7 +8056,8 @@ class Big { public $a; public $b; public $c; public $d; public $e;
 }
 $b = new Big();
 echo $b->sum();
-"#);
+"#,
+    );
     assert_eq!(out, "55");
 }
 
@@ -7133,43 +8068,50 @@ echo $b->sum();
 #[test]
 fn test_deeply_nested_string_function_calls() {
     // Deeply nested function calls building nested HTML tags
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function wrap($s, $tag) { return "<" . $tag . ">" . $s . "</" . $tag . ">"; }
 echo wrap(wrap(wrap("hello", "b"), "i"), "p");
-"#);
+"#,
+    );
     assert_eq!(out, "<p><i><b>hello</b></i></p>");
 }
 
 #[test]
 fn test_recursive_string_building() {
     // Recursive function that builds a string via concatenation
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function repeat_str($s, $n) {
     if ($n <= 0) { return ""; }
     return $s . repeat_str($s, $n - 1);
 }
 echo repeat_str("ab", 5);
-"#);
+"#,
+    );
     assert_eq!(out, "ababababab");
 }
 
 #[test]
 fn test_closure_capturing_object() {
     // Closure capturing an object via use()
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Counter { public $n = 0; public function inc() { $this->n = $this->n + 1; } }
 $c = new Counter();
 $c->inc();
 $c->inc();
 $fn = function() use ($c) { return $c; };
 echo "ok";
-"#);
+"#,
+    );
     assert_eq!(out, "ok");
 }
 
 #[test]
 fn test_class_float_property_via_method() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Circle {
     public $radius;
     public function __construct($r) { $this->radius = $r; }
@@ -7177,13 +8119,15 @@ class Circle {
 }
 $c = new Circle(5.0);
 echo $c->area();
-"#);
+"#,
+    );
     assert_eq!(out, "78.53975");
 }
 
 #[test]
 fn test_class_method_returns_float_property() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Foo {
     public $x;
     public function __construct($v) { $this->x = $v; }
@@ -7191,13 +8135,15 @@ class Foo {
 }
 $f = new Foo(3.14);
 echo $f->getX();
-"#);
+"#,
+    );
     assert_eq!(out, "3.14");
 }
 
 #[test]
 fn test_class_chained_property_access() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Node {
     public $value;
     public $next;
@@ -7207,13 +8153,15 @@ $a = new Node(1);
 $b = new Node(2);
 $a->next = $b;
 echo $a->next->value;
-"#);
+"#,
+    );
     assert_eq!(out, "2");
 }
 
 #[test]
 fn test_class_array_of_objects_property_access() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Item {
     public $name;
     public $price;
@@ -7227,24 +8175,28 @@ for ($i = 0; $i < count($items); $i++) {
     $total = $total + $items[$i]->price;
 }
 echo $total;
-"#);
+"#,
+    );
     assert_eq!(out, "3");
 }
 
 #[test]
 fn test_class_static_method_string_param() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Utils {
     public static function greet($name) { return "Hello " . $name; }
 }
 echo Utils::greet("World");
-"#);
+"#,
+    );
     assert_eq!(out, "Hello World");
 }
 
 #[test]
 fn test_class_method_returns_this() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Builder {
     public $parts = "";
     public function add($s) { $this->parts = $this->parts . $s; return $this; }
@@ -7252,13 +8204,15 @@ class Builder {
 $b = new Builder();
 $b->add("hello");
 echo "ok";
-"#);
+"#,
+    );
     assert_eq!(out, "ok");
 }
 
 #[test]
 fn test_class_private_property_via_method() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Secret {
     private $value;
     public function __construct($value) { $this->value = $value; }
@@ -7266,13 +8220,15 @@ class Secret {
 }
 $s = new Secret("ok");
 echo $s->reveal();
-"#);
+"#,
+    );
     assert_eq!(out, "ok");
 }
 
 #[test]
 fn test_class_readonly_property() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class User {
     public readonly $id;
     public function __construct($id) { $this->id = $id; }
@@ -7280,13 +8236,15 @@ class User {
 }
 $u = new User(7);
 echo $u->id();
-"#);
+"#,
+    );
     assert_eq!(out, "7");
 }
 
 #[test]
 fn test_class_static_and_instance() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Counter {
     public $n;
     public function __construct($n) { $this->n = $n; }
@@ -7295,7 +8253,8 @@ class Counter {
 }
 $c = Counter::make(4);
 echo $c->next();
-"#);
+"#,
+    );
     assert_eq!(out, "5");
 }
 
@@ -7303,45 +8262,54 @@ echo $c->next();
 
 #[test]
 fn test_nested_indexed_assoc_direct() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $data = [["name" => "Alice"]];
 echo $data[0]["name"];
-"#);
+"#,
+    );
     assert_eq!(out, "Alice");
 }
 
 #[test]
 fn test_nested_assoc_indexed() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $map = ["items" => [10, 20, 30]];
 $items = $map["items"];
 echo $items[1];
-"#);
+"#,
+    );
     assert_eq!(out, "20");
 }
 
 #[test]
 fn test_nested_3_level_chained() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $data = [["tags" => ["php", "rust", "asm"]]];
 echo $data[0]["tags"][1];
-"#);
+"#,
+    );
     assert_eq!(out, "rust");
 }
 
 #[test]
 fn test_nested_int_assoc_in_indexed() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $scores = [["math" => 90, "eng" => 85]];
 $s = $scores[0];
 echo $s["math"] . "|" . $s["eng"];
-"#);
+"#,
+    );
     assert_eq!(out, "90|85");
 }
 
 #[test]
 fn test_nested_string_assoc_loop() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $contacts = [
     ["name" => "Alice", "email" => "alice@test"],
     ["name" => "Bob", "email" => "bob@test"]
@@ -7350,23 +8318,27 @@ for ($i = 0; $i < 2; $i++) {
     $c = $contacts[$i];
     echo $c["name"] . "|" . $c["email"] . "\n";
 }
-"#);
+"#,
+    );
     assert_eq!(out, "Alice|alice@test\nBob|bob@test\n");
 }
 
 #[test]
 fn test_nested_assoc_of_indexed() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $groups = ["fruits" => ["apple", "banana"], "vegs" => ["carrot", "pea"]];
 $f = $groups["fruits"];
 echo $f[0] . "|" . $f[1];
-"#);
+"#,
+    );
     assert_eq!(out, "apple|banana");
 }
 
 #[test]
 fn test_nested_dynamic_building() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function make_user($name, $email) {
     return ["name" => $name, "email" => $email];
 }
@@ -7377,37 +8349,43 @@ for ($i = 0; $i < count($users); $i++) {
     $u = $users[$i];
     echo $u["name"] . "|" . $u["email"] . "\n";
 }
-"#);
+"#,
+    );
     assert_eq!(out, "Alice|a@t\nBob|b@t\n");
 }
 
 #[test]
 fn test_nested_explode_to_assoc() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function parse_row($line) {
     $parts = explode("|", $line);
     return ["name" => $parts[0], "email" => $parts[1]];
 }
 $r = parse_row("Alice|alice@test");
 echo $r["name"] . " <" . $r["email"] . ">";
-"#);
+"#,
+    );
     assert_eq!(out, "Alice <alice@test>");
 }
 
 #[test]
 fn test_nested_foreach_of_assoc() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $people = [["name" => "Alice"], ["name" => "Bob"]];
 foreach ($people as $p) {
     echo $p["name"] . " ";
 }
-"#);
+"#,
+    );
     assert_eq!(out, "Alice Bob ");
 }
 
 #[test]
 fn test_nested_objects_in_assoc() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Item { public $name;
     public function __construct($n) { $this->name = $n; }
 }
@@ -7415,13 +8393,15 @@ $data = ["items" => [new Item("Sword"), new Item("Shield")]];
 $items = $data["items"];
 $first = $items[0];
 echo $first->name;
-"#);
+"#,
+    );
     assert_eq!(out, "Sword");
 }
 
 #[test]
 fn test_switch_return_string() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function classify($n) {
     switch ($n % 3) {
         case 0: return "fizz";
@@ -7435,13 +8415,15 @@ $r = classify(1);
 echo $r . " ";
 $r = classify(2);
 echo $r;
-"#);
+"#,
+    );
     assert_eq!(out, "fizz buzz none");
 }
 
 #[test]
 fn test_switch_return_int() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function score($grade) {
     switch ($grade) {
         case 1: return 100;
@@ -7451,7 +8433,8 @@ function score($grade) {
     }
 }
 echo score(1) . "|" . score(2) . "|" . score(3) . "|" . score(9);
-"#);
+"#,
+    );
     assert_eq!(out, "100|80|60|0");
 }
 
@@ -7460,7 +8443,8 @@ echo score(1) . "|" . score(2) . "|" . score(3) . "|" . score(9);
 #[test]
 fn test_gc_scope_cleanup_basic() {
     // Function locals freed on return (no leak in loop)
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function process() {
     $arr = [1, 2, 3];
     $map = ["a" => "b"];
@@ -7468,76 +8452,117 @@ function process() {
 }
 for ($i = 0; $i < 1000; $i++) { process(); }
 echo "ok";
-"#);
+"#,
+    );
     assert_eq!(out, "ok");
 }
 
 #[test]
 fn test_gc_return_array_survives() {
     // Returned array must not be freed by epilogue decref
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function make() {
     $arr = [10, 20, 30];
     return $arr;
 }
 $result = make();
 echo $result[0] . "|" . $result[1] . "|" . $result[2];
-"#);
+"#,
+    );
     assert_eq!(out, "10|20|30");
 }
 
 #[test]
 fn test_gc_return_array_loop() {
     // Return array in tight loop must not leak
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function make() { return [1, 2, 3]; }
 for ($i = 0; $i < 100000; $i++) { $x = make(); }
 echo "ok";
-"#);
+"#,
+    );
     assert_eq!(out, "ok");
 }
 
 #[test]
 fn test_gc_return_assoc_array() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function config() { return ["host" => "localhost", "port" => "3306"]; }
 $c = config();
 echo $c["host"];
-"#);
+"#,
+    );
     assert_eq!(out, "localhost");
 }
 
 #[test]
+fn test_gc_assoc_array_literal_borrowed_array_survives_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = [7, 8, 9];
+$map = ["nums" => $inner];
+unset($inner);
+$saved = $map["nums"];
+echo $saved[1];
+"#,
+    );
+    assert_eq!(out, "8");
+}
+
+#[test]
+fn test_gc_assoc_array_assign_borrowed_array_survives_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = [4, 5, 6];
+$map = ["nums" => [1]];
+$map["nums"] = $inner;
+unset($inner);
+$saved = $map["nums"];
+echo $saved[2];
+"#,
+    );
+    assert_eq!(out, "6");
+}
+
+#[test]
 fn test_gc_return_object() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Box { public $val;
     public function __construct($v) { $this->val = $v; }
 }
 function make_box($n) { return new Box($n); }
 $b = make_box(42);
 echo $b->val;
-"#);
+"#,
+    );
     assert_eq!(out, "42");
 }
 
 #[test]
 fn test_gc_explode_in_function_loop() {
     // Classic leak case: explode in function called 100K times
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function parse($data) {
     $parts = explode(",", $data);
     return $parts[0];
 }
 for ($i = 0; $i < 1000; $i++) { $r = parse("a,b,c"); }
 echo $r;
-"#);
+"#,
+    );
     assert_eq!(out, "a");
 }
 
 #[test]
 fn test_gc_multiple_locals_one_returned() {
     // Multiple array locals, only one returned — others must be freed
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function work() {
     $a = [1, 2];
     $b = [3, 4];
@@ -7546,26 +8571,30 @@ function work() {
 }
 $r = work();
 echo $r[0] . "|" . $r[1];
-"#);
+"#,
+    );
     assert_eq!(out, "3|4");
 }
 
 #[test]
 fn test_gc_array_reassign_in_loop() {
     // Array reassignment decrefs old value (100K iterations)
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 for ($i = 0; $i < 1000; $i++) {
     $parts = explode(",", "a,b,c");
 }
 echo "survived";
-"#);
+"#,
+    );
     assert_eq!(out, "survived");
 }
 
 #[test]
 fn test_gc_nested_function_arrays() {
     // Nested function calls all creating arrays
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function inner() { return [1, 2, 3]; }
 function outer() {
     $tmp = [4, 5, 6];
@@ -7574,7 +8603,8 @@ function outer() {
 }
 for ($i = 0; $i < 50000; $i++) { $x = outer(); }
 echo $x[0];
-"#);
+"#,
+    );
     assert_eq!(out, "1");
 }
 
@@ -7584,7 +8614,8 @@ echo $x[0];
 #[test]
 fn test_regression_assoc_value_in_function() {
     // AssocArray element stored in local → must allocate 16 bytes for Str
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function show($todo) {
     $status = $todo["done"] === "1" ? "[x]" : "[ ]";
     $pri = $todo["priority"];
@@ -7592,14 +8623,16 @@ function show($todo) {
 }
 $t = ["title" => "Buy milk", "done" => "0", "priority" => "high", "created" => "now"];
 show($t);
-"#);
+"#,
+    );
     assert_eq!(out, "[ ] Buy milk high");
 }
 
 // Pattern: function receives assoc, iterates, accesses string values
 #[test]
 fn test_regression_iterate_assoc_in_function() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function format($items) {
     $result = "";
     for ($i = 0; $i < count($items); $i++) {
@@ -7610,14 +8643,16 @@ function format($items) {
 }
 $data = [["name" => "a", "value" => "1"], ["name" => "b", "value" => "2"]];
 echo format($data);
-"#);
+"#,
+    );
     assert_eq!(out, "a:1\nb:2\n");
 }
 
 // Pattern: $arr = func($arr) where func pushes to the array
 #[test]
 fn test_regression_arr_equals_func_arr() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function add($arr, $val) {
     $arr[] = $val;
     return $arr;
@@ -7626,14 +8661,16 @@ $nums = [1];
 $nums = add($nums, 2);
 $nums = add($nums, 3);
 echo count($nums) . "|" . $nums[0] . "|" . $nums[2];
-"#);
+"#,
+    );
     assert_eq!(out, "3|1|3");
 }
 
 // Pattern: function creates assoc array from parameters, caller iterates
 #[test]
 fn test_regression_make_assoc_then_iterate() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function make($name, $val) { return ["name" => $name, "val" => $val]; }
 $items = [];
 $items[] = make("x", "1");
@@ -7643,14 +8680,16 @@ for ($i = 0; $i < count($items); $i++) {
     $it = $items[$i];
     echo $it["name"] . "=" . $it["val"] . " ";
 }
-"#);
+"#,
+    );
     assert_eq!(out, "x=1 y=2 z=3 ");
 }
 
 // Pattern: save function iterates assoc array with 5-field concat chain
 #[test]
 fn test_regression_save_concat_chain() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function save($items) {
     $content = "";
     for ($i = 0; $i < count($items); $i++) {
@@ -7661,14 +8700,16 @@ function save($items) {
 }
 $data = [["a" => "x", "b" => "y", "c" => "z"]];
 echo save($data);
-"#);
+"#,
+    );
     assert_eq!(out, "x|y|z\n");
 }
 
 // Pattern: pass object to function, access string property
 #[test]
 fn test_regression_object_string_property_in_function() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Dog {
     public $name;
     public $breed;
@@ -7679,14 +8720,16 @@ function describe($dog) {
 }
 $d = new Dog("Rex", "Labrador");
 echo describe($d);
-"#);
+"#,
+    );
     assert_eq!(out, "Rex (Labrador)");
 }
 
 // Pattern: objects in array, iterated with method calls
 #[test]
 fn test_regression_objects_in_array_with_methods() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Item {
     public $name;
     public $price;
@@ -7697,14 +8740,16 @@ $items = [new Item("Apple", 1), new Item("Banana", 2)];
 for ($i = 0; $i < count($items); $i++) {
     echo $items[$i]->format() . "\n";
 }
-"#);
+"#,
+    );
     assert_eq!(out, "Apple: $1\nBanana: $2\n");
 }
 
 // Pattern: switch+return inside function called multiple times
 #[test]
 fn test_regression_switch_return_in_loop() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function label($n) {
     switch ($n % 3) {
         case 0: return "A";
@@ -7717,54 +8762,62 @@ for ($i = 0; $i < 6; $i++) {
     $r .= label($i);
 }
 echo $r;
-"#);
+"#,
+    );
     assert_eq!(out, "ABCABC");
 }
 
 // Pattern: str_replace + strtolower inside a function
 #[test]
 fn test_regression_string_ops_in_function() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function clean($s) {
     $s = strtolower($s);
     $s = str_replace(" ", "_", $s);
     return $s;
 }
 echo clean("Hello World");
-"#);
+"#,
+    );
     assert_eq!(out, "hello_world");
 }
 
 // Pattern: explode inside function, use result
 #[test]
 fn test_regression_explode_in_function_use_parts() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function parse($csv) {
     $parts = explode(",", $csv);
     return $parts[0] . "+" . $parts[1];
 }
 echo parse("foo,bar");
-"#);
+"#,
+    );
     assert_eq!(out, "foo+bar");
 }
 
 // Pattern: function returns assoc array, caller reads multiple keys
 #[test]
 fn test_regression_return_assoc_read_keys() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function config() {
     return ["host" => "localhost", "port" => "3306", "db" => "myapp"];
 }
 $c = config();
 echo $c["host"] . ":" . $c["port"] . "/" . $c["db"];
-"#);
+"#,
+    );
     assert_eq!(out, "localhost:3306/myapp");
 }
 
 // Pattern: multiple string locals from hash_get in same function
 #[test]
 fn test_regression_multiple_hash_get_locals() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function show($row) {
     $a = $row["first"];
     $b = $row["second"];
@@ -7772,14 +8825,16 @@ function show($row) {
     echo $a . "|" . $b . "|" . $c;
 }
 show(["first" => "x", "second" => "y", "third" => "z"]);
-"#);
+"#,
+    );
     assert_eq!(out, "x|y|z");
 }
 
 // Pattern: class method with string param + string property access
 #[test]
 fn test_regression_method_string_param_and_prop() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Greeter {
     public $prefix;
     public function __construct($p) { $this->prefix = $p; }
@@ -7787,26 +8842,30 @@ class Greeter {
 }
 $g = new Greeter("Hello");
 echo $g->greet("World");
-"#);
+"#,
+    );
     assert_eq!(out, "Hello World!");
 }
 
 // Pattern: static method with string params
 #[test]
 fn test_regression_static_method_string() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Fmt {
     public static function wrap($s, $tag) { return "<" . $tag . ">" . $s . "</" . $tag . ">"; }
 }
 echo Fmt::wrap("hello", "b");
-"#);
+"#,
+    );
     assert_eq!(out, "<b>hello</b>");
 }
 
 // Pattern: chained property access $a->b->c
 #[test]
 fn test_regression_chained_property_access() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Inner { public $val;
     public function __construct($v) { $this->val = $v; }
 }
@@ -7815,14 +8874,16 @@ class Outer { public $inner;
 }
 $o = new Outer(new Inner(42));
 echo $o->inner->val;
-"#);
+"#,
+    );
     assert_eq!(out, "42");
 }
 
 // Pattern: float property in class
 #[test]
 fn test_regression_float_property() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Circle {
     public $radius;
     public function __construct($r) { $this->radius = $r; }
@@ -7830,7 +8891,8 @@ class Circle {
 }
 $c = new Circle(10.0);
 echo $c->area();
-"#);
+"#,
+    );
     assert_eq!(out, "314");
 }
 
@@ -7840,106 +8902,131 @@ echo $c->area();
 
 #[test]
 fn test_math_trig_basic() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo round(sin(0.0), 4) . "|" . round(cos(0.0), 4) . "|" . round(tan(0.0), 4);
-"#);
+"#,
+    );
     assert_eq!(out, "0|1|0");
 }
 
 #[test]
 fn test_math_trig_pi() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo round(sin(M_PI_2), 4) . "|" . round(cos(M_PI), 1) . "|" . round(tan(M_PI_4), 4);
-"#);
+"#,
+    );
     assert_eq!(out, "1|-1|1");
 }
 
 #[test]
 fn test_math_inverse_trig() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo round(asin(1.0), 4) . "|" . round(acos(0.0), 4) . "|" . round(atan(1.0), 4);
-"#);
+"#,
+    );
     assert_eq!(out, "1.5708|1.5708|0.7854");
 }
 
 #[test]
 fn test_math_atan2() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo round(atan2(1.0, 0.0), 4);
-"#);
+"#,
+    );
     assert_eq!(out, "1.5708");
 }
 
 #[test]
 fn test_math_hyperbolic() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo round(sinh(0.0), 4) . "|" . round(cosh(0.0), 4) . "|" . round(tanh(0.0), 4);
-"#);
+"#,
+    );
     assert_eq!(out, "0|1|0");
 }
 
 #[test]
 fn test_math_log_exp() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo round(log(M_E), 4) . "|" . log2(8.0) . "|" . log10(1000.0) . "|" . exp(0.0);
-"#);
+"#,
+    );
     assert_eq!(out, "1|3|3|1");
 }
 
 #[test]
 fn test_math_hypot() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo hypot(3.0, 4.0);
-"#);
+"#,
+    );
     assert_eq!(out, "5");
 }
 
 #[test]
 fn test_math_deg_rad() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo round(deg2rad(180.0), 4) . "|" . round(rad2deg(M_PI), 1);
-"#);
+"#,
+    );
     assert_eq!(out, "3.1416|180");
 }
 
 #[test]
 fn test_math_pi_function() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo round(pi(), 4);
-"#);
+"#,
+    );
     assert_eq!(out, "3.1416");
 }
 
 #[test]
 fn test_math_constants() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo round(M_E, 4) . "|" . round(M_SQRT2, 4) . "|" . round(M_PI_2, 4) . "|" . round(M_PI_4, 4);
-"#);
+"#,
+    );
     assert_eq!(out, "2.7183|1.4142|1.5708|0.7854");
 }
 
 #[test]
 fn test_math_int_coercion() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo sin(0) . "|" . cos(0) . "|" . log(1) . "|" . exp(0);
-"#);
+"#,
+    );
     assert_eq!(out, "0|1|0|1");
 }
 
 #[test]
 fn test_math_distance_calculation() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x1 = 1.0; $y1 = 2.0;
 $x2 = 4.0; $y2 = 6.0;
 $dist = hypot($x2 - $x1, $y2 - $y1);
 echo round($dist, 4);
-"#);
+"#,
+    );
     assert_eq!(out, "5");
 }
 
 #[test]
 fn test_return_type_from_foreach() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function find($arr, $target) {
     foreach ($arr as $v) {
         if ($v === $target) { return "found"; }
@@ -7947,26 +9034,30 @@ function find($arr, $target) {
     return "not found";
 }
 echo find([1, 2, 3], 2);
-"#);
+"#,
+    );
     assert_eq!(out, "found");
 }
 
 #[test]
 fn test_return_type_mixed_branches() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function describe($n) {
     if ($n > 0) { return "positive"; }
     return 0;
 }
 $r = describe(5);
 echo $r;
-"#);
+"#,
+    );
     assert_eq!(out, "positive");
 }
 
 #[test]
 fn test_return_type_switch_foreach() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function classify($items) {
     foreach ($items as $item) {
         switch ($item) {
@@ -7977,13 +9068,15 @@ function classify($items) {
     return "empty";
 }
 echo classify([0]);
-"#);
+"#,
+    );
     assert_eq!(out, "zero");
 }
 
 #[test]
 fn test_return_string_from_else() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function check($x) {
     if ($x > 10) {
         return "big";
@@ -7992,85 +9085,104 @@ function check($x) {
     }
 }
 echo check(5) . "|" . check(15);
-"#);
+"#,
+    );
     assert_eq!(out, "small|big");
 }
 
 #[test]
 fn test_log_natural() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo round(log(M_E), 4);
-"#);
+"#,
+    );
     assert_eq!(out, "1");
 }
 
 #[test]
 fn test_log_base_10() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo log(1000, 10);
-"#);
+"#,
+    );
     assert_eq!(out, "3");
 }
 
 #[test]
 fn test_log_base_2() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo log(256, 2);
-"#);
+"#,
+    );
     assert_eq!(out, "8");
 }
 
 #[test]
 fn test_log_base_custom() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo round(log(27, 3), 4);
-"#);
+"#,
+    );
     assert_eq!(out, "3");
 }
 
 #[test]
 fn test_expr_call_returns_string() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $greet = function($name) { return "Hello " . $name; };
 echo $greet("World");
-"#);
+"#,
+    );
     assert_eq!(out, "Hello World");
 }
 
 #[test]
 fn test_expr_call_returns_float() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $calc = function($x) { return $x * 3.14; };
 echo $calc(2.0);
-"#);
+"#,
+    );
     assert_eq!(out, "6.28");
 }
 
 #[test]
 fn test_expr_call_returns_int() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $double = function($x) { return $x * 2; };
 echo $double(21);
-"#);
+"#,
+    );
     assert_eq!(out, "42");
 }
 
 #[test]
 fn test_expr_call_string_in_concat() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $tag = function($s) { return "<b>" . $s . "</b>"; };
 echo "Result: " . $tag("hello");
-"#);
+"#,
+    );
     assert_eq!(out, "Result: <b>hello</b>");
 }
 
 #[test]
 fn test_closure_call_returns_string() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $fn = function() { return "test"; };
 $result = $fn();
 echo $result;
-"#);
+"#,
+    );
     assert_eq!(out, "test");
 }
 
@@ -8078,18 +9190,22 @@ echo $result;
 
 #[test]
 fn test_iife_returns_string() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $result = (function() { return "hello"; })();
 echo $result;
-"#);
+"#,
+    );
     assert_eq!(out, "hello");
 }
 
 #[test]
 fn test_iife_returns_int() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo (function($x) { return $x * 2; })(21);
-"#);
+"#,
+    );
     assert_eq!(out, "42");
 }
 
@@ -8111,7 +9227,8 @@ fn test_only_open_tag() {
 
 #[test]
 fn test_callback_return_from_dowhile() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function find_first($arr) {
     $i = 0;
     do {
@@ -8121,49 +9238,57 @@ function find_first($arr) {
     return 0;
 }
 echo find_first([1, 3, 7, 2]);
-"#);
+"#,
+    );
     assert_eq!(out, "7");
 }
 
 #[test]
 fn test_mixed_return_types_widened() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function describe($n) {
     if ($n > 100) { return "big"; }
     if ($n < 0) { return "negative"; }
     return $n;
 }
 echo describe(200);
-"#);
+"#,
+    );
     assert_eq!(out, "big");
 }
 
 #[test]
 fn test_null_coalesce_allocates_for_string_default() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function test() {
     $x = null;
     $result = $x ?? "fallback";
     echo $result;
 }
 test();
-"#);
+"#,
+    );
     assert_eq!(out, "fallback");
 }
 
 #[test]
 fn test_null_coalesce_runtime_null_to_string_default() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = false ? 1 : null;
 $result = $x ?? "fallback";
 echo $result;
-"#);
+"#,
+    );
     assert_eq!(out, "fallback");
 }
 
 #[test]
 fn test_closure_return_type_from_nested_branch() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $describe = function($n) {
     if ($n > 0) {
         return "positive";
@@ -8172,13 +9297,15 @@ $describe = function($n) {
 };
 $result = $describe(3);
 echo $result;
-"#);
+"#,
+    );
     assert_eq!(out, "positive");
 }
 
 #[test]
 fn test_assigned_user_function_call_string_result() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function greet($name) {
     return "Hello, " . $name;
 }
@@ -8187,31 +9314,36 @@ function run() {
     echo $message;
 }
 run();
-"#);
+"#,
+    );
     assert_eq!(out, "Hello, World");
 }
 
 #[test]
 fn test_ternary_allocates_for_wider_type() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function test($flag) {
     $val = $flag ? 42 : "none";
     echo $val;
 }
 test(false);
-"#);
+"#,
+    );
     assert_eq!(out, "none");
 }
 
 #[test]
 fn test_ternary_both_branches_in_function() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function label($n) {
     $result = $n > 0 ? "positive" : "zero or negative";
     return $result;
 }
 echo label(5) . "|" . label(-1);
-"#);
+"#,
+    );
     assert_eq!(out, "positive|zero or negative");
 }
 
@@ -8219,184 +9351,235 @@ echo label(5) . "|" . label(-1);
 
 #[test]
 fn test_ptr_null_and_is_null() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $p = ptr_null();
 echo ptr_is_null($p) ? "1" : "0";
-"#);
+"#,
+    );
     assert_eq!(out, "1");
 }
 
 #[test]
 fn test_ptr_null_echo() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo ptr_null();
-"#);
+"#,
+    );
     assert_eq!(out, "0x0");
 }
 
 #[test]
 fn test_ptr_take_address() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 42;
 $p = ptr($x);
 echo ptr_is_null($p) ? "null" : "not null";
-"#);
+"#,
+    );
     assert_eq!(out, "not null");
 }
 
 #[test]
 fn test_ptr_get_roundtrip() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 42;
 $p = ptr($x);
 echo ptr_get($p);
-"#);
+"#,
+    );
     assert_eq!(out, "42");
 }
 
 #[test]
 fn test_ptr_set_modifies_variable() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 10;
 $p = ptr($x);
 ptr_set($p, 99);
 echo $x;
-"#);
+"#,
+    );
     assert_eq!(out, "99");
 }
 
 #[test]
 fn test_ptr_offset() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 42;
 $p = ptr($x);
 $q = ptr_offset($p, 0);
 echo ptr_get($q);
-"#);
+"#,
+    );
     assert_eq!(out, "42");
 }
 
 #[test]
 fn test_ptr_cast() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 42;
 $p = ptr($x);
 $q = ptr_cast<int>($p);
 echo ptr_get($q);
-"#);
+"#,
+    );
     assert_eq!(out, "42");
 }
 
 #[test]
 fn test_ptr_strict_equal_after_cast() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 42;
 $p = ptr($x);
 $q = ptr_cast<int>($p);
 echo $p === $q ? "1" : "0";
-"#);
+"#,
+    );
     assert_eq!(out, "1");
 }
 
 #[test]
 fn test_ptr_sizeof_int() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo ptr_sizeof("int");
-"#);
+"#,
+    );
     assert_eq!(out, "8");
 }
 
 #[test]
 fn test_ptr_sizeof_string() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo ptr_sizeof("string");
-"#);
+"#,
+    );
     assert_eq!(out, "16");
 }
 
 #[test]
 fn test_ptr_sizeof_float() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo ptr_sizeof("float");
-"#);
+"#,
+    );
     assert_eq!(out, "8");
 }
 
 #[test]
 fn test_ptr_sizeof_ptr() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 echo ptr_sizeof("ptr");
-"#);
+"#,
+    );
     assert_eq!(out, "8");
 }
 
 #[test]
 fn test_ptr_sizeof_class() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Point {
     public $x;
     public $y;
 }
 echo ptr_sizeof("Point");
-"#);
+"#,
+    );
     // class_id(8) + 2 properties * 16 = 40
     assert_eq!(out, "40");
 }
 
 #[test]
+fn test_ptr_sizeof_extern_class() {
+    let out = compile_and_run(
+        r#"<?php
+extern class Point {
+    public int $x;
+    public int $y;
+}
+echo ptr_sizeof("Point");
+"#,
+    );
+    assert_eq!(out, "16");
+}
+
+#[test]
 fn test_ptr_strict_equal() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $a = ptr_null();
 $b = ptr_null();
 echo $a === $b ? "1" : "0";
-"#);
+"#,
+    );
     assert_eq!(out, "1");
 }
 
 #[test]
 fn test_ptr_strict_not_equal() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 1;
 $a = ptr_null();
 $b = ptr($x);
 echo $a !== $b ? "1" : "0";
-"#);
+"#,
+    );
     assert_eq!(out, "1");
 }
 
 #[test]
 fn test_ptr_echo_hex() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $p = ptr_null();
 echo $p;
-"#);
+"#,
+    );
     assert_eq!(out, "0x0");
 }
 
 #[test]
 fn test_ptr_gettype() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $p = ptr_null();
 echo gettype($p);
-"#);
+"#,
+    );
     assert_eq!(out, "pointer");
 }
 
 #[test]
 fn test_ptr_empty_null_and_non_null() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $x = 1;
 $p = ptr($x);
 $n = ptr_null();
 echo empty($n) ? "1" : "0";
 echo empty($p) ? "1" : "0";
-"#);
+"#,
+    );
     assert_eq!(out, "10");
 }
 
 #[test]
 fn test_ptr_in_function() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 function double_via_ptr($p) {
     $val = ptr_get($p);
     ptr_set($p, $val * 2);
@@ -8404,28 +9587,393 @@ function double_via_ptr($p) {
 $x = 21;
 double_via_ptr(ptr($x));
 echo $x;
-"#);
+"#,
+    );
     assert_eq!(out, "42");
 }
 
 #[test]
 fn test_ptr_in_loop() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 $sum = 0;
 $p = ptr($sum);
 for ($i = 1; $i <= 10; $i++) {
     ptr_set($p, ptr_get($p) + $i);
 }
 echo $sum;
-"#);
+"#,
+    );
     assert_eq!(out, "55");
 }
 
 #[test]
+fn test_ptr_read8_and_write8() {
+    let out = compile_and_run(
+        r#"<?php
+extern function malloc(int $size): ptr;
+extern function free(ptr $p): void;
+
+$buf = malloc(1);
+ptr_write8($buf, 255);
+echo ptr_read8($buf);
+free($buf);
+"#,
+    );
+    assert_eq!(out, "255");
+}
+
+#[test]
+fn test_ptr_read32_and_write32() {
+    let out = compile_and_run(
+        r#"<?php
+extern function malloc(int $size): ptr;
+extern function free(ptr $p): void;
+
+$buf = malloc(4);
+ptr_write32($buf, 305419896);
+echo ptr_read32($buf);
+free($buf);
+"#,
+    );
+    assert_eq!(out, "305419896");
+}
+
+#[test]
 fn test_ptr_null_dereference_reports_runtime_error() {
-    let err = compile_and_run_expect_failure(r#"<?php
+    let err = compile_and_run_expect_failure(
+        r#"<?php
 $p = ptr_null();
 echo ptr_get($p);
-"#);
+"#,
+    );
     assert!(err.contains("Fatal error: null pointer dereference"));
+}
+
+// === FFI tests (v0.14) ===
+
+#[test]
+fn test_ffi_extern_abs() {
+    let out = compile_and_run(
+        r#"<?php
+extern function abs(int $n): int;
+echo abs(-42);
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_ffi_extern_atoi() {
+    let out = compile_and_run(
+        r#"<?php
+extern function atoi(string $s): int;
+echo atoi("12345");
+"#,
+    );
+    assert_eq!(out, "12345");
+}
+
+#[test]
+fn test_ffi_extern_strlen() {
+    let out = compile_and_run(
+        r#"<?php
+extern function strlen(string $s): int;
+echo strlen("hello world");
+"#,
+    );
+    assert_eq!(out, "11");
+}
+
+#[test]
+fn test_ffi_malloc_and_free() {
+    let out = compile_and_run(
+        r#"<?php
+extern "System" {
+    function malloc(int $size): ptr;
+    function free(ptr $p): void;
+}
+
+$buf = malloc(16);
+echo ptr_is_null($buf) ? "null" : "ok";
+free($buf);
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_ffi_memset_fills_raw_buffer() {
+    let out = compile_and_run(
+        r#"<?php
+extern "System" {
+    function malloc(int $size): ptr;
+    function free(ptr $p): void;
+    function memset(ptr $dest, int $byte, int $count): ptr;
+}
+
+$buf = malloc(4);
+memset($buf, 65, 4);
+echo ptr_read8($buf);
+echo ",";
+echo ptr_read8(ptr_offset($buf, 3));
+free($buf);
+"#,
+    );
+    assert_eq!(out, "65,65");
+}
+
+#[test]
+fn test_ffi_memcpy_copies_raw_buffer() {
+    let out = compile_and_run(
+        r#"<?php
+extern "System" {
+    function malloc(int $size): ptr;
+    function free(ptr $p): void;
+    function memcpy(ptr $dest, ptr $src, int $count): ptr;
+}
+
+$src = malloc(4);
+$dst = malloc(4);
+ptr_write32($src, 305419896);
+memcpy($dst, $src, 4);
+echo ptr_read32($dst);
+free($dst);
+free($src);
+"#,
+    );
+    assert_eq!(out, "305419896");
+}
+
+#[test]
+fn test_ffi_extern_getpid() {
+    let out = compile_and_run(
+        r#"<?php
+extern function getpid(): int;
+$pid = getpid();
+echo $pid > 0 ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "yes");
+}
+
+#[test]
+fn test_ffi_extern_string_return() {
+    let out = compile_and_run(
+        r#"<?php
+extern function getenv(string $name): string;
+$home = getenv("HOME");
+echo strlen($home) > 0 ? "ok" : "empty";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+#[test]
+#[ignore] // requires SDL2 library installed locally
+fn test_ffi_sdl_init_and_ticks() {
+    let out = compile_and_run(
+        r#"<?php
+extern "SDL2" {
+    function SDL_Init(int $flags): int;
+    function SDL_Quit(): void;
+    function SDL_GetTicks(): int;
+    function SDL_Delay(int $ms): void;
+}
+
+$SDL_INIT_VIDEO = 32;
+echo SDL_Init($SDL_INIT_VIDEO) === 0 ? "init|" : "fail|";
+$before = SDL_GetTicks();
+SDL_Delay(10);
+$after = SDL_GetTicks();
+echo $after >= $before ? "ticks" : "bad";
+SDL_Quit();
+"#,
+    );
+    assert_eq!(out, "init|ticks");
+}
+
+#[test]
+#[ignore] // requires SDL2 library installed locally
+fn test_ffi_sdl_window_with_dummy_driver() {
+    let out = compile_and_run(
+        r#"<?php
+putenv("SDL_VIDEODRIVER=dummy");
+
+extern "SDL2" {
+    function SDL_Init(int $flags): int;
+    function SDL_Quit(): void;
+    function SDL_CreateWindow(string $title, int $x, int $y, int $w, int $h, int $flags): ptr;
+    function SDL_DestroyWindow(ptr $window): void;
+}
+
+$SDL_INIT_VIDEO = 32;
+if (SDL_Init($SDL_INIT_VIDEO) != 0) {
+    echo "init fail";
+    exit(1);
+}
+
+$window = SDL_CreateWindow("test", 0, 0, 64, 64, 0);
+echo ptr_is_null($window) ? "null" : "ok";
+if (!ptr_is_null($window)) {
+    SDL_DestroyWindow($window);
+}
+SDL_Quit();
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+#[test]
+#[ignore] // requires SDL2 library installed locally
+fn test_ffi_sdl_keyboard_state_pointer() {
+    let out = compile_and_run(
+        r#"<?php
+putenv("SDL_VIDEODRIVER=dummy");
+
+extern "SDL2" {
+    function SDL_Init(int $flags): int;
+    function SDL_Quit(): void;
+    function SDL_PumpEvents(): void;
+    function SDL_GetKeyboardState(ptr $numkeys): ptr;
+}
+
+$SDL_INIT_VIDEO = 32;
+if (SDL_Init($SDL_INIT_VIDEO) != 0) {
+    echo "init fail";
+    exit(1);
+}
+
+SDL_PumpEvents();
+$keys = SDL_GetKeyboardState(ptr_null());
+echo ptr_is_null($keys) ? "null" : "ok";
+SDL_Quit();
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_ffi_extern_block_syntax() {
+    let out = compile_and_run(
+        r#"<?php
+extern "System" {
+    function abs(int $n): int;
+    function atoi(string $s): int;
+}
+echo abs(-7) . "," . atoi("99");
+"#,
+    );
+    assert_eq!(out, "7,99");
+}
+
+#[test]
+fn test_ffi_extern_lib_function_syntax() {
+    let out = compile_and_run(
+        r#"<?php
+extern "System" function abs(int $n): int;
+echo abs(-1);
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_ffi_extern_void_return() {
+    let out = compile_and_run(
+        r#"<?php
+extern function abs(int $n): int;
+$x = abs(-5);
+echo $x;
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+#[test]
+fn test_ffi_extern_float_arg_and_return() {
+    let out = compile_and_run(
+        r#"<?php
+extern function sqrt(float $x): float;
+echo sqrt(144.0);
+"#,
+    );
+    assert_eq!(out, "12");
+}
+
+#[test]
+fn test_ffi_extern_multiple_args() {
+    let out = compile_and_run(
+        r#"<?php
+extern function strtol(string $s, ptr $endptr, int $base): int;
+echo strtol("FF", ptr_null(), 16);
+"#,
+    );
+    assert_eq!(out, "255");
+}
+
+#[test]
+fn test_ffi_extern_multiple_string_args() {
+    let out = compile_and_run(
+        r#"<?php
+extern function strcmp(string $left, string $right): int;
+echo strcmp("aa", "ab") < 0 ? "ok" : "bad";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_ffi_extern_global() {
+    let out = compile_and_run(
+        r#"<?php
+extern global ptr $environ;
+echo ptr_is_null($environ) ? "fail" : "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_ffi_callback_signal_handler() {
+    let out = compile_and_run(
+        r#"<?php
+extern function signal(int $sig, callable $handler): ptr;
+extern function raise(int $sig): int;
+
+function on_signal($sig) {
+    echo $sig;
+}
+
+signal(15, "on_signal");
+raise(15);
+"#,
+    );
+    assert_eq!(out, "15");
+}
+
+#[test]
+fn test_ffi_extern_non_string_global_smoke() {
+    let out = compile_and_run(
+        r#"<?php
+extern function getpid(): int;
+$pid = getpid();
+echo $pid > 0 ? "ok" : "fail";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_ffi_extern_in_function() {
+    let out = compile_and_run(
+        r#"<?php
+extern function abs(int $n): int;
+function my_abs($x) {
+    return abs($x);
+}
+echo my_abs(-10);
+"#,
+    );
+    assert_eq!(out, "10");
 }

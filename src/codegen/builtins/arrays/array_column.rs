@@ -23,15 +23,17 @@ pub fn emit(
         _ => PhpType::Str,
     };
     emitter.instruction("str x0, [sp, #-16]!");                                 // save outer array pointer
-    // -- evaluate column key (string) --
+                                                // -- evaluate column key (string) --
     emit_expr(&args[1], emitter, ctx, data);
     // x1/x2 = column key string
     emitter.instruction("stp x1, x2, [sp, #-16]!");                             // save column key ptr/len
-    // -- call runtime --
+                                                    // -- call runtime --
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload outer array pointer
     emitter.instruction("ldp x1, x2, [sp]");                                    // reload column key
     if val_ty == PhpType::Str {
         emitter.instruction("bl __rt_array_column_str");                        // extract string column → x0=new array (elem_size=16)
+    } else if val_ty.is_refcounted() {
+        emitter.instruction("bl __rt_array_column_ref");                        // extract retained heap column → x0=new array (elem_size=8)
     } else {
         emitter.instruction("bl __rt_array_column");                            // extract column → x0=new array (elem_size=8)
     }

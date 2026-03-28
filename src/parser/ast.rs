@@ -276,6 +276,20 @@ pub enum StmtKind {
         property: String,
         value: Expr,
     },
+    ExternFunctionDecl {
+        name: String,
+        params: Vec<ExternParam>,
+        return_type: CType,
+        library: Option<String>,
+    },
+    ExternClassDecl {
+        name: String,
+        fields: Vec<ExternField>,
+    },
+    ExternGlobalDecl {
+        name: String,
+        c_type: CType,
+    },
 }
 
 impl PartialEq for Stmt {
@@ -306,6 +320,35 @@ impl Stmt {
 }
 
 pub type Program = Vec<Stmt>;
+
+// --- FFI ---
+
+/// C type annotation for extern declarations
+#[derive(Debug, Clone, PartialEq)]
+pub enum CType {
+    Int,
+    Float,
+    Str,        // char* (null-terminated)
+    Bool,
+    Void,
+    Ptr,                    // opaque void*
+    TypedPtr(String),       // ptr<ClassName>
+    Callable,               // function pointer
+}
+
+/// Parameter in an extern function declaration
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternParam {
+    pub name: String,
+    pub c_type: CType,
+}
+
+/// Field in an extern class (C struct) declaration
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternField {
+    pub name: String,
+    pub c_type: CType,
+}
 
 // --- OOP ---
 

@@ -1,7 +1,8 @@
 use crate::codegen::emit::Emitter;
 
 /// hash_set: insert or update a key-value pair in the hash table.
-/// Grows the table automatically if load factor exceeds 75%.
+/// Grows the table automatically if load factor exceeds 75%, persists newly
+/// inserted keys, and releases overwritten heap-backed values on update.
 /// Input:  x0=hash_table_ptr, x1=key_ptr, x2=key_len, x3=value_lo, x4=value_hi
 /// Output: x0=hash_table_ptr (may differ if table was reallocated)
 pub fn emit_hash_set(emitter: &mut Emitter) {
@@ -43,16 +44,8 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
 
     emitter.label("__rt_hash_set_no_grow");
 
-    // -- copy the key to persistent storage on heap --
-    // reload key args (may have been clobbered by hash_grow)
-    emitter.instruction("ldr x1, [sp, #8]");                                    // reload key_ptr
-    emitter.instruction("ldr x2, [sp, #16]");                                   // reload key_len
-    emitter.instruction("bl __rt_str_persist");                                 // copy key to heap, x1=new_ptr, x2=len
-    emitter.instruction("str x1, [sp, #8]");                                    // update key_ptr to persistent copy
-    // x2 (key_len) unchanged
-
     // -- hash the key --
-    emitter.instruction("ldr x1, [sp, #8]");                                    // reload persistent key_ptr
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload incoming key_ptr
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload key_len
     emitter.instruction("bl __rt_hash_fnv1a");                                  // compute hash, result in x0
 
@@ -114,6 +107,16 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
 
     // -- insert into empty/tombstone slot --
     emitter.label("__rt_hash_set_insert");
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload inserted key_ptr
+    emitter.instruction("ldr x2, [sp, #16]");                                   // reload inserted key_len
+    emitter.instruction("bl __rt_str_persist");                                 // persist inserted key into heap storage
+    emitter.instruction("str x1, [sp, #8]");                                    // save persistent key pointer for slot write
+    emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash table pointer after helper call
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload probe index after helper call
+    emitter.instruction("mov x11, #40");                                        // entry size = 40 bytes
+    emitter.instruction("mul x12, x9, x11");                                    // recompute byte offset for this slot
+    emitter.instruction("add x12, x5, x12");                                    // advance from table base to slot
+    emitter.instruction("add x12, x12, #24");                                   // skip hash header to entry storage
     emitter.instruction("mov x13, #1");                                         // occupied = 1
     emitter.instruction("str x13, [x12]");                                      // set entry as occupied
     emitter.instruction("ldr x13, [sp, #8]");                                   // load persistent key_ptr
@@ -134,6 +137,45 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
 
     // -- update existing entry's value --
     emitter.label("__rt_hash_set_update");
+    emitter.instruction("ldr x13, [x5, #16]");                                  // load runtime value_type tag from hash header
+    emitter.instruction("cmp x13, #1");                                         // is the overwritten value a string?
+    emitter.instruction("b.eq __rt_hash_set_release_str");                      // free old string payload before overwrite
+    emitter.instruction("cmp x13, #4");                                         // is the overwritten value an indexed array?
+    emitter.instruction("b.eq __rt_hash_set_release_array");                    // decref old indexed array payload
+    emitter.instruction("cmp x13, #5");                                         // is the overwritten value an associative array?
+    emitter.instruction("b.eq __rt_hash_set_release_hash");                     // decref old hash payload
+    emitter.instruction("cmp x13, #6");                                         // is the overwritten value an object?
+    emitter.instruction("b.eq __rt_hash_set_release_object");                   // decref old object payload
+    emitter.instruction("b __rt_hash_set_write_value");                         // scalars do not need release before overwrite
+
+    emitter.label("__rt_hash_set_release_str");
+    emitter.instruction("ldr x0, [x12, #24]");                                  // load previous string pointer from entry
+    emitter.instruction("bl __rt_heap_free_safe");                              // release old string storage before overwrite
+    emitter.instruction("b __rt_hash_set_recompute_entry");                     // recompute slot after helper call clobbers regs
+
+    emitter.label("__rt_hash_set_release_array");
+    emitter.instruction("ldr x0, [x12, #24]");                                  // load previous indexed array pointer from entry
+    emitter.instruction("bl __rt_decref_array");                                // release old indexed array ownership before overwrite
+    emitter.instruction("b __rt_hash_set_recompute_entry");                     // recompute slot after helper call clobbers regs
+
+    emitter.label("__rt_hash_set_release_hash");
+    emitter.instruction("ldr x0, [x12, #24]");                                  // load previous hash pointer from entry
+    emitter.instruction("bl __rt_decref_hash");                                 // release old associative array ownership before overwrite
+    emitter.instruction("b __rt_hash_set_recompute_entry");                     // recompute slot after helper call clobbers regs
+
+    emitter.label("__rt_hash_set_release_object");
+    emitter.instruction("ldr x0, [x12, #24]");                                  // load previous object pointer from entry
+    emitter.instruction("bl __rt_decref_object");                               // release old object ownership before overwrite
+
+    emitter.label("__rt_hash_set_recompute_entry");
+    emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash table pointer after helper call
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload probe index after helper call
+    emitter.instruction("mov x11, #40");                                        // entry size = 40 bytes
+    emitter.instruction("mul x12, x9, x11");                                    // recompute byte offset for this slot
+    emitter.instruction("add x12, x5, x12");                                    // advance from table base to slot
+    emitter.instruction("add x12, x12, #24");                                   // skip hash header to entry storage
+
+    emitter.label("__rt_hash_set_write_value");
     emitter.instruction("ldr x13, [sp, #24]");                                  // load value_lo
     emitter.instruction("str x13, [x12, #24]");                                 // update value_lo in entry
     emitter.instruction("ldr x13, [sp, #32]");                                  // load value_hi

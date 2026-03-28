@@ -87,23 +87,23 @@ src/
 │   ├── data_section.rs        String/float literal .data section
 │   ├── emit.rs                Assembly text buffer
 │   │
-│   ├── builtins/              Built-in function codegen (one file per function)
+│   ├── builtins/              Built-in function codegen (one file per language function)
 │   │   ├── mod.rs             Dispatcher — chains to category modules
 │   │   ├── strings/           strlen, substr, strpos, explode, sprintf, md5, ... (57 files)
 │   │   ├── arrays/            count, array_push, sort, array_map, usort, ... (51 files)
 │   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, round, min, max, sin, cos, ... (32 files)
 │   │   ├── types/             is_*, gettype, empty, unset, settype, ... (16 files)
 │   │   ├── io/                fopen, fwrite, file_get_contents, scandir, ... (36 files)
-│   │   ├── pointers/          ptr, ptr_get, ptr_set, ptr_offset, ptr_sizeof, ... (8 files)
+│   │   ├── pointers/          ptr, ptr_get, ptr_set, ptr_read8, ptr_write8, ptr_offset, ... (12 files)
 │   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, ... (25 files)
 │   │
-│   └── runtime/               ARM64 runtime routines (one file per function)
+│   └── runtime/               ARM64 runtime routines (one file per language/runtime helper)
 │       ├── mod.rs             Emits all runtime functions into assembly
 │       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, str_persist, ... (53 files)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, sort, usort, refcount, ... (53 files)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, sort, usort, refcount, ... (56 files)
 │       ├── io/                fopen, fgets, fread, stat, scandir, ... (17 files)
 │       ├── system/            build_argv, time, getenv, shell_exec, date, mktime, strtotime, json_encode, json_decode, preg (14 files)
-│       └── pointers/          ptoa, ptr_check_nonnull (3 files)
+│       └── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ... (5 files)
 │
 │
 └── errors/
@@ -128,6 +128,29 @@ src/
 | Stack locals | `[x29, #-offset]` | Negative offsets from frame pointer |
 | Null sentinel | `0x7FFFFFFFFFFFFFFE` | Distinguished from real integers |
 
+## FFI pipeline
+
+FFI declarations are parsed into dedicated AST nodes:
+
+- `StmtKind::ExternFunctionDecl`
+- `StmtKind::ExternClassDecl`
+- `StmtKind::ExternGlobalDecl`
+
+During type checking, extern declarations are registered in dedicated maps that are carried into codegen:
+
+- `extern_functions`: extern signatures exposed through the C ABI
+- `extern_classes`: flat C struct layout metadata
+- `extern_globals`: native global symbols loaded through the linker
+
+Extern calls differ from ordinary elephc function calls in four important ways:
+
+1. Codegen dispatches extern functions before built-ins, so an `extern function strlen(...)` declaration really calls C `strlen`, not the elephc builtin.
+2. `string` arguments are converted with `__rt_str_to_cstr`, which allocates an owned null-terminated copy on the elephc heap before calling C.
+3. `string` return values are converted with `__rt_cstr_to_str`, which copies bytes back into an owned elephc string.
+4. `extern class` layouts are available to pointer-oriented codegen too, so `ptr_sizeof("StructName")` and `ptr_cast<StructName>($p)->field` use the same checked layout metadata recorded by the type checker.
+
+`callable` FFI parameters pass a user-defined elephc function by address. The function name is provided as a string literal at the call site, and codegen loads the address of the compiled `_fn_<name>` symbol before branching into C.
+
 ## Runtime memory layout
 
 ### Array header (heap-allocated)
@@ -151,13 +174,13 @@ The runtime reserves a fixed set of global symbols in `emit_runtime_data()`:
 | Heap allocator | `_heap_buf`, `_heap_off`, `_heap_free_list`, `_heap_max` | Heap storage plus allocator metadata |
 | Runtime diagnostics | `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` | Fatal error messages for heap, array, and pointer failures |
 | GC statistics | `_gc_allocs`, `_gc_frees`, `_gc_peak` | Allocation/free counters emitted for runtime tracking |
-| I/O scratch | `_cstr_buf`, `_cstr_buf2`, `_eof_flags` | Null-terminated conversion buffers and EOF bookkeeping |
+| I/O scratch | `_cstr_buf`, `_cstr_buf2`, `_eof_flags` | Syscall-oriented C-string scratch buffers and EOF bookkeeping |
 | String/regex tables | `_fmt_g`, `_b64_encode_tbl`, `_b64_decode_tbl`, `_pcre_*` | Formatting and lookup tables for runtime helpers |
 | JSON/date tables | `_json_true`, `_json_false`, `_json_null`, `_day_names`, `_month_names` | Static data used by JSON and date routines |
 
 ### Heap allocator
 
-8MB free-list + bump hybrid allocator in BSS (`_heap_buf`). Each allocation has an 8-byte header: `[size:4][refcount:4]` — a 32-bit block size followed by a 32-bit reference count. When memory is freed (via `__rt_heap_free`), blocks are returned to a singly-linked free list (LIFO). New allocations check the free list first (first-fit), falling back to bump allocation if no suitable block exists. Reference counting (`__rt_incref`, `__rt_decref_array`, `__rt_decref_hash`, `__rt_decref_object`) automatically frees heap objects when their reference count reaches zero. Configurable via `--heap-size=BYTES` (minimum 64KB). Bounds-checked with fatal error on overflow.
+8MB free-list + bump hybrid allocator in BSS (`_heap_buf`). Each allocation has an 8-byte header: `[size:4][refcount:4]` — a 32-bit block size followed by a 32-bit reference count. When memory is freed (via `__rt_heap_free`), blocks are returned to a singly-linked free list (LIFO). New allocations check the free list first (first-fit), falling back to bump allocation if no suitable block exists. Reference counting (`__rt_incref`, `__rt_decref_array`, `__rt_decref_hash`, `__rt_decref_object`) automatically frees heap objects when their reference count reaches zero. Codegen now treats reassignment of ordinary locals/globals, by-value call arguments, borrowed heap returns, indexed array writes, associative-array/hash writes, object property writes, and `static` slot writes as ownership transfer points: borrowed arrays/objects are retained before a new owner is created, overwritten owners are decreffed before replacement, hash destruction now deep-frees owned keys plus heap-backed string/array/hash/object values based on the table's runtime value tag, and assoc-derived container copies (`array_values`, `array_column`, `array_diff_key`, `array_intersect_key`) retain borrowed heap payloads before handing them to a new container. Full epilogue cleanup is still conservative because some locals are populated from borrowed container/object reads, and broader indexed-array / nested-container propagation still needs deeper ownership tracking. Configurable via `--heap-size=BYTES` (minimum 64KB). Bounds-checked with fatal error on overflow.
 
 ### Hash table header (heap-allocated, for associative arrays)
 
@@ -165,7 +188,7 @@ The runtime reserves a fixed set of global symbols in `emit_runtime_data()`:
 Offset  Size  Field
   0      8    count       (number of occupied entries)
   8      8    capacity    (number of slots)
- 16      8    value_type  (0=int, 1=str, 2=float, 3=bool)
+ 16      8    value_type  (0=int, 1=str, 2=float, 3=bool, 4=array, 5=assoc, 6=object)
  24      ...  entries     (each entry is 40 bytes)
 ```
 
@@ -205,4 +228,4 @@ Total size: `8 + (num_properties × 16)`. Properties are stored at fixed offsets
 
 ### I/O buffers
 
-Two 4KB C-string conversion buffers (`_cstr_buf`, `_cstr_buf2`) for converting PHP strings (ptr+len) to null-terminated C strings before syscalls. Plus a 256-byte EOF flag array (`_eof_flags`) tracking end-of-file state per file descriptor.
+Two 4KB C-string conversion buffers (`_cstr_buf`, `_cstr_buf2`) are still used by low-level I/O helpers and syscalls. FFI string calls do not use these scratch buffers anymore; they allocate owned C strings through `__rt_str_to_cstr` so multiple string arguments remain valid across the same native call. A 256-byte EOF flag array (`_eof_flags`) tracks end-of-file state per file descriptor.

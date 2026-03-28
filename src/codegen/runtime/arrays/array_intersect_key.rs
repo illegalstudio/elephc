@@ -53,13 +53,24 @@ pub fn emit_array_intersect_key(emitter: &mut Emitter) {
 
     // -- check if this key exists in hash2 --
     emitter.instruction("ldr x0, [sp, #40]");                                   // load hash2 pointer (sp+8 shifted by 32)
-    // x1=key_ptr, x2=key_len already set
+                                              // x1=key_ptr, x2=key_len already set
     emitter.instruction("bl __rt_hash_get");                                    // check if key exists in hash2, x0=found
 
     // -- if key IS found in hash2, add to result --
     emitter.instruction("cbz x0, __rt_array_isect_key_skip");                   // if NOT found in hash2, skip this entry
 
+    // -- copied hash values stay borrowed until we retain them for the result --
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload source hash table pointer
+    emitter.instruction("ldr x9, [x9, #16]");                                   // load source hash value_type tag
+    emitter.instruction("cmp x9, #4");                                          // is the borrowed value refcounted?
+    emitter.instruction("b.lt __rt_array_isect_key_copy");                      // scalar values need no retain
+    emitter.instruction("cmp x9, #6");                                          // array/hash/object tags are contiguous
+    emitter.instruction("b.gt __rt_array_isect_key_copy");                      // scalar values need no retain
+    emitter.instruction("ldr x0, [sp, #16]");                                   // load borrowed heap pointer from saved value_lo
+    emitter.instruction("bl __rt_incref");                                      // retain copied heap value for the result hash
+
     // -- key found in hash2: add to result hash table --
+    emitter.label("__rt_array_isect_key_copy");
     emitter.instruction("ldr x0, [sp, #48]");                                   // load result hash table (sp+16 shifted by 32)
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload key_ptr
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload key_len

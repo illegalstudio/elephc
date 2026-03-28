@@ -201,9 +201,9 @@ Proper type system for PHP compatibility.
 - [x] Strings freed on variable reassignment (value-copied, always owned)
 
 ### Known limitations
-- Arrays/objects are NOT freed on reassignment (the pattern `$arr = func($arr)` where func internally grows via array_push causes use-after-free — array_grow frees old block, then caller decrefs freed memory)
-- Scope-based cleanup (decref locals at function epilogue) removed: local variables may alias data owned by other structures (e.g., `$t = $arr[$i]` shares the pointer)
-- Full array/object GC requires either ownership tracking or a tracing collector
+- Ordinary local/global reassignment now releases previous arrays/objects safely, and indexed array writes / associative-array writes / object property writes / `static` slots now retain borrowed heap values consistently
+- Automatic epilogue cleanup is still disabled; general local-scope cleanup needs broader ownership tracking
+- Assoc-derived container copies such as `array_values()`, `array_column()`, `array_diff_key()`, and `array_intersect_key()` now retain borrowed heap values, but broader indexed-array/container propagation and general scope-exit cleanup still need fuller ownership tracking or a tracing collector
 
 ## v0.12.x — Math coverage (done)
 
@@ -231,21 +231,24 @@ Proper type system for PHP compatibility.
 - [x] Opaque pointer type (`ptr`) for handles and `void*`
 - [x] Typed pointer tags via `ptr_cast<T>()` for annotating raw addresses with a checked pointee type
 - [x] Pointer builtins: `ptr()`, `ptr_null()`, `ptr_is_null()`, `ptr_offset()`, `ptr_cast<T>()`, `ptr_get()`, `ptr_set()`
+- [x] Raw buffer pointer builtins: `ptr_read8()`, `ptr_read32()`, `ptr_write8()`, `ptr_write32()`
 - [x] `ptr_sizeof()` — returns byte size of a type (`"int"` → 8, `"float"` → 8, class name → computed)
 - [x] Pointer echo: `echo $ptr` prints hex address (`0x...`)
 - [x] Pointer comparison: `===`, `!==` between pointer values
 
 ## v0.14.x — FFI (Foreign Function Interface)
 
-- [ ] `extern function` declarations with C type annotations (`int`, `float`, `string`, `bool`, `void`, `ptr`)
-- [ ] `extern "libname" { }` blocks (auto `-l` linker flag)
-- [ ] `--link` / `-l` and `--link-path` / `-L` CLI flags
-- [ ] `--framework` flag for macOS frameworks
-- [ ] Null-terminated string ↔ length-prefixed string conversion (`__rt_str_to_cstr`, `__rt_cstr_to_str`)
-- [ ] `extern class` for C struct mapping (flat layout, no methods)
-- [ ] Callback support: pass elephc functions as C function pointers (`callable` params)
-- [ ] `extern global` for accessing C global variables
-- [ ] C memory management via extern libc: `malloc()`, `free()`, `memcpy()`, `memset()`
+- [x] `extern function` declarations with C type annotations (`int`, `float`, `string`, `bool`, `void`, `ptr`)
+- [x] `extern "libname" { }` blocks (auto `-l` linker flag)
+- [x] `extern "libname" function name(): type;` single-line syntax
+- [x] `--link` / `-l` and `--link-path` / `-L` CLI flags
+- [x] `--framework` flag for macOS frameworks
+- [x] Owned null-terminated string ↔ length-prefixed string conversion (`__rt_str_to_cstr`, `__rt_cstr_to_str`)
+- [x] `extern class` for C struct mapping (flat layout, available to `ptr_sizeof()` and typed pointer field access)
+- [x] `extern global` for accessing C global variables
+- [x] Callback support: pass elephc functions as C function pointers (`callable` params)
+- [x] C memory management via extern libc: `malloc()`, `free()`, `memcpy()`, `memset()`
+- [x] Native interop validation examples: raw FFI memory + SDL2 window/input/framebuffer/audio demos
 
 ## v0.15.x — Multi-platform and optimizations
 
@@ -266,8 +269,8 @@ Proper type system for PHP compatibility.
 - [ ] Source maps (assembly ↔ PHP line mapping)
 - [ ] `--emit-asm`, `--check` flags
 - [ ] Benchmark suite (vs C, vs PHP interpreter)
-- [x] Full test coverage (>500 tests — currently 1200+)
-- [ ] Documentation: language subset spec, architecture guide
+- [x] Full test coverage (>500 tests — currently 1400+)
+- [x] Documentation: language subset spec, architecture guide
 - [x] CI/CD with release binaries
 - [ ] Apple notarization for direct downloads (codesign + notarytool)
 - [ ] Performance within 2x of C -O0 on compute benchmarks
@@ -314,10 +317,10 @@ Features that are desirable but not yet planned for a specific version.
 
 | Idea | Notes |
 |---|---|
-| Array/object decref on reassignment | Unsafe with `$arr = func($arr)` pattern (array_grow frees old block inside function, caller decrefs freed memory). Needs copy-on-write semantics or ownership tracking to be safe. |
-| Scope-based cleanup | Decref locals at function epilogue. Unsafe when locals alias shared data (`$t = $arr[$i]`). Needs escape analysis or full ownership model. |
+| Hash/container ownership beyond indexed slots | Associative array updates and deeper nested container propagation still need stronger retain/release rules to avoid conservative leaks under heavy aliasing. |
+| Copy-on-write arrays | PHP's actual array semantics: shared until modified. Would make reassignment and aliasing both safer and cheaper. Requires COW flag in array header + copy-on-mutation. |
+| Scope-based cleanup | Ordinary locals, globals, statics, by-ref params, and container-backed aliases still need escape analysis or a fuller ownership model. |
 | Cycle detection (GC) | Mark-and-sweep for circular object references. Same approach as PHP 5.3 (Bacon & Rajan 2001). Requires runtime type descriptors. Low priority — most PHP programs don't create cycles. |
-| Copy-on-write arrays | PHP's actual array semantics: shared until modified. Would enable safe decref-on-reassign. Requires COW flag in array header + copy-on-mutation. |
 | Inheritance (`extends`) | Requires vtable for method dispatch, property layout chaining, `parent::` calls. Major architectural change to the class system. |
 | Interfaces / abstract classes | Requires interface method tables and compile-time conformance checking. |
 | Traits | Requires method copying/inlining at compile time. |

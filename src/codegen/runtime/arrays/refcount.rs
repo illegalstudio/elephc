@@ -112,8 +112,8 @@ fn emit_decref_hash(emitter: &mut Emitter) {
     emitter.instruction("str w9, [x0, #-4]");                                   // store decremented refcount
     emitter.instruction("b.ne __rt_decref_hash_skip");                          // if not zero, still referenced — skip free
 
-    // -- refcount reached zero: shallow free the hash table --
-    emitter.instruction("b __rt_heap_free");                                    // tail-call to heap free (shallow)
+    // -- refcount reached zero: deep free the hash table and its owned entries --
+    emitter.instruction("b __rt_hash_free_deep");                               // tail-call to deep free hash keys and heap-backed values
 
     emitter.label("__rt_decref_hash_skip");
     emitter.instruction("ret");                                                 // return to caller

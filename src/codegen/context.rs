@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::parser::ast::{ExprKind, Stmt};
-use crate::types::{ClassInfo, FunctionSig, PhpType};
+use crate::types::{ClassInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, PhpType};
 
 static GLOBAL_LABEL_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -44,6 +44,12 @@ pub struct Context {
     pub classes: HashMap<String, ClassInfo>,
     /// Name of the class currently being compiled (for $this resolution).
     pub current_class: Option<String>,
+    /// Extern function declarations (FFI).
+    pub extern_functions: HashMap<String, ExternFunctionSig>,
+    /// Extern class (C struct) declarations (FFI).
+    pub extern_classes: HashMap<String, ExternClassInfo>,
+    /// Extern global variable declarations (FFI).
+    pub extern_globals: HashMap<String, PhpType>,
 }
 
 pub struct VarInfo {
@@ -85,6 +91,9 @@ impl Context {
             closure_captures: HashMap::new(),
             classes: HashMap::new(),
             current_class: None,
+            extern_functions: HashMap::new(),
+            extern_classes: HashMap::new(),
+            extern_globals: HashMap::new(),
         }
     }
 

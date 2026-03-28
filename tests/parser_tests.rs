@@ -158,7 +158,12 @@ fn test_if_elseif_else_parses() {
     let stmts = parse_source(
         "<?php if (1) { echo \"a\"; } elseif (2) { echo \"b\"; } else { echo \"c\"; }",
     );
-    if let StmtKind::If { elseif_clauses, else_body, .. } = &stmts[0].kind {
+    if let StmtKind::If {
+        elseif_clauses,
+        else_body,
+        ..
+    } = &stmts[0].kind
+    {
         assert_eq!(elseif_clauses.len(), 1);
         assert!(else_body.is_some());
     } else {
@@ -170,6 +175,12 @@ fn test_if_elseif_else_parses() {
 fn test_while_parses() {
     let stmts = parse_source("<?php while (1) { echo \"loop\"; }");
     assert!(matches!(&stmts[0].kind, StmtKind::While { .. }));
+}
+
+#[test]
+fn test_do_while_parses() {
+    let stmts = parse_source("<?php do { echo \"loop\"; } while (1);");
+    assert!(matches!(&stmts[0].kind, StmtKind::DoWhile { .. }));
 }
 
 #[test]
@@ -199,7 +210,10 @@ fn test_continue_parses() {
 #[test]
 fn test_function_declaration_parses() {
     let stmts = parse_source("<?php function foo($a, $b) { return $a; }");
-    if let StmtKind::FunctionDecl { name, params, body, .. } = &stmts[0].kind {
+    if let StmtKind::FunctionDecl {
+        name, params, body, ..
+    } = &stmts[0].kind
+    {
         assert_eq!(name, "foo");
         let param_names: Vec<&str> = params.iter().map(|(n, _, _)| n.as_str()).collect();
         assert_eq!(param_names, &["a", "b"]);
@@ -298,7 +312,12 @@ fn test_strict_equal_same_precedence_as_loose() {
 fn test_include_parses() {
     let stmts = parse_source("<?php include 'file.php';");
     assert_eq!(stmts.len(), 1);
-    if let StmtKind::Include { path, once, required } = &stmts[0].kind {
+    if let StmtKind::Include {
+        path,
+        once,
+        required,
+    } = &stmts[0].kind
+    {
         assert_eq!(path, "file.php");
         assert!(!once);
         assert!(!required);
@@ -310,7 +329,12 @@ fn test_include_parses() {
 #[test]
 fn test_require_parses() {
     let stmts = parse_source("<?php require 'file.php';");
-    if let StmtKind::Include { path, once, required } = &stmts[0].kind {
+    if let StmtKind::Include {
+        path,
+        once,
+        required,
+    } = &stmts[0].kind
+    {
         assert_eq!(path, "file.php");
         assert!(!once);
         assert!(required);
@@ -356,11 +380,7 @@ fn test_include_with_parens_parses() {
 #[test]
 fn test_pow_operator_parses() {
     let stmts = parse_source("<?php echo 2 ** 3;");
-    let expected = Stmt::echo(Expr::binop(
-        Expr::int_lit(2),
-        BinOp::Pow,
-        Expr::int_lit(3),
-    ));
+    let expected = Stmt::echo(Expr::binop(Expr::int_lit(2), BinOp::Pow, Expr::int_lit(3)));
     assert_eq!(stmts, vec![expected]);
 }
 
@@ -434,7 +454,8 @@ fn test_parse_assoc_array() {
 
 #[test]
 fn test_parse_switch() {
-    let stmts = parse_source("<?php switch ($x) { case 1: echo \"one\"; break; default: echo \"other\"; }");
+    let stmts =
+        parse_source("<?php switch ($x) { case 1: echo \"one\"; break; default: echo \"other\"; }");
     assert_eq!(stmts.len(), 1);
     assert!(matches!(&stmts[0].kind, StmtKind::Switch { .. }));
 }
@@ -458,7 +479,10 @@ fn test_parse_match() {
 fn test_parse_foreach_key_value() {
     let stmts = parse_source("<?php foreach ($a as $k => $v) {}");
     assert_eq!(stmts.len(), 1);
-    if let StmtKind::Foreach { key_var, value_var, .. } = &stmts[0].kind {
+    if let StmtKind::Foreach {
+        key_var, value_var, ..
+    } = &stmts[0].kind
+    {
         assert_eq!(key_var, &Some("k".to_string()));
         assert_eq!(value_var, "v");
     } else {
@@ -467,11 +491,35 @@ fn test_parse_foreach_key_value() {
 }
 
 #[test]
+fn test_parse_foreach_value_only() {
+    let stmts = parse_source("<?php foreach ($a as $value) {}");
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Foreach {
+        key_var, value_var, ..
+    } = &stmts[0].kind
+    {
+        assert_eq!(key_var, &None);
+        assert_eq!(value_var, "value");
+    } else {
+        panic!("expected Foreach");
+    }
+}
+
+#[test]
+fn test_print_parses_as_echo_statement() {
+    let stmts = parse_source("<?php print \"hello\";");
+    assert_eq!(stmts, vec![Stmt::echo(Expr::string_lit("hello"))]);
+}
+
+#[test]
 fn test_parse_closure() {
     let stmts = parse_source("<?php $fn = function($x) { return $x; };");
     assert_eq!(stmts.len(), 1);
     if let StmtKind::Assign { value, .. } = &stmts[0].kind {
-        if let ExprKind::Closure { params, is_arrow, .. } = &value.kind {
+        if let ExprKind::Closure {
+            params, is_arrow, ..
+        } = &value.kind
+        {
             let param_names: Vec<&str> = params.iter().map(|(n, _, _)| n.as_str()).collect();
             assert_eq!(param_names, &["x"]);
             assert!(!is_arrow);
@@ -488,7 +536,10 @@ fn test_parse_arrow_function() {
     let stmts = parse_source("<?php $fn = fn($x) => $x * 2;");
     assert_eq!(stmts.len(), 1);
     if let StmtKind::Assign { value, .. } = &stmts[0].kind {
-        if let ExprKind::Closure { params, is_arrow, .. } = &value.kind {
+        if let ExprKind::Closure {
+            params, is_arrow, ..
+        } = &value.kind
+        {
             let param_names: Vec<&str> = params.iter().map(|(n, _, _)| n.as_str()).collect();
             assert_eq!(param_names, &["x"]);
             assert!(is_arrow);
@@ -742,7 +793,12 @@ fn test_parse_non_ref_param() {
 fn test_parse_variadic_function() {
     let stmts = parse_source("<?php function foo(...$args) { }");
     match &stmts[0].kind {
-        StmtKind::FunctionDecl { name, params, variadic, .. } => {
+        StmtKind::FunctionDecl {
+            name,
+            params,
+            variadic,
+            ..
+        } => {
             assert_eq!(name, "foo");
             assert!(params.is_empty());
             assert_eq!(variadic.as_deref(), Some("args"));
@@ -755,7 +811,9 @@ fn test_parse_variadic_function() {
 fn test_parse_variadic_with_regular_params() {
     let stmts = parse_source("<?php function foo($a, $b, ...$rest) { }");
     match &stmts[0].kind {
-        StmtKind::FunctionDecl { params, variadic, .. } => {
+        StmtKind::FunctionDecl {
+            params, variadic, ..
+        } => {
             assert_eq!(params.len(), 2);
             assert_eq!(params[0].0, "a");
             assert_eq!(params[1].0, "b");
@@ -811,7 +869,11 @@ fn test_parse_spread_in_array_literal() {
 fn test_parse_class_decl() {
     let stmts = parse_source("<?php class Point { public $x; private $y = 1; public function get() { return $this->x; } public static function origin() { return new Point(); } }");
     match &stmts[0].kind {
-        StmtKind::ClassDecl { name, properties, methods } => {
+        StmtKind::ClassDecl {
+            name,
+            properties,
+            methods,
+        } => {
             assert_eq!(name, "Point");
             assert_eq!(properties.len(), 2);
             assert_eq!(properties[0].name, "x");
@@ -864,7 +926,11 @@ fn test_parse_method_call() {
     let stmts = parse_source("<?php $obj->run(1, 2);");
     match &stmts[0].kind {
         StmtKind::ExprStmt(expr) => match &expr.kind {
-            ExprKind::MethodCall { object, method, args } => {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+            } => {
                 assert_eq!(method, "run");
                 assert_eq!(args.len(), 2);
                 assert!(matches!(object.kind, ExprKind::Variable(_)));
@@ -880,7 +946,11 @@ fn test_parse_static_method_call() {
     let stmts = parse_source("<?php Factory::make(1);");
     match &stmts[0].kind {
         StmtKind::ExprStmt(expr) => match &expr.kind {
-            ExprKind::StaticMethodCall { class_name, method, args } => {
+            ExprKind::StaticMethodCall {
+                class_name,
+                method,
+                args,
+            } => {
                 assert_eq!(class_name, "Factory");
                 assert_eq!(method, "make");
                 assert_eq!(args.len(), 1);
@@ -895,7 +965,11 @@ fn test_parse_static_method_call() {
 fn test_parse_property_assign() {
     let stmts = parse_source("<?php $obj->prop = 42;");
     match &stmts[0].kind {
-        StmtKind::PropertyAssign { object, property, value } => {
+        StmtKind::PropertyAssign {
+            object,
+            property,
+            value,
+        } => {
             assert_eq!(property, "prop");
             assert!(matches!(object.kind, ExprKind::Variable(_)));
             assert!(matches!(value.kind, ExprKind::IntLiteral(42)));
@@ -912,7 +986,11 @@ fn test_parse_chained_access() {
             ExprKind::PropertyAccess { object, property } => {
                 assert_eq!(property, "prop");
                 match &object.kind {
-                    ExprKind::MethodCall { object, method, args } => {
+                    ExprKind::MethodCall {
+                        object,
+                        method,
+                        args,
+                    } => {
                         assert_eq!(method, "make");
                         assert!(args.is_empty());
                         assert!(matches!(object.kind, ExprKind::Variable(_)));
@@ -953,5 +1031,100 @@ fn test_parse_ptr_builtins_as_function_calls() {
             },
             _ => panic!("Expected ExprStmt"),
         }
+    }
+}
+
+#[test]
+fn test_parse_extern_function() {
+    let stmts = parse_source("<?php extern function abs(int $n): int;");
+    match &stmts[0].kind {
+        StmtKind::ExternFunctionDecl {
+            name,
+            params,
+            return_type,
+            library,
+        } => {
+            assert_eq!(name, "abs");
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].name, "n");
+            assert!(matches!(return_type, elephc::parser::ast::CType::Int));
+            assert!(library.is_none());
+        }
+        _ => panic!("Expected ExternFunctionDecl"),
+    }
+}
+
+#[test]
+fn test_parse_extern_block() {
+    let stmts = parse_source(
+        r#"<?php extern "curl" { function init(): ptr; function cleanup(ptr $h): void; }"#,
+    );
+    assert_eq!(stmts.len(), 2);
+    match &stmts[0].kind {
+        StmtKind::ExternFunctionDecl { name, library, .. } => {
+            assert_eq!(name, "init");
+            assert_eq!(library.as_deref(), Some("curl"));
+        }
+        _ => panic!("Expected ExternFunctionDecl"),
+    }
+    match &stmts[1].kind {
+        StmtKind::ExternFunctionDecl { name, library, .. } => {
+            assert_eq!(name, "cleanup");
+            assert_eq!(library.as_deref(), Some("curl"));
+        }
+        _ => panic!("Expected ExternFunctionDecl"),
+    }
+}
+
+#[test]
+fn test_parse_extern_class() {
+    let stmts = parse_source("<?php extern class Point { public int $x; public float $y; }");
+    match &stmts[0].kind {
+        StmtKind::ExternClassDecl { name, fields } => {
+            assert_eq!(name, "Point");
+            assert_eq!(fields.len(), 2);
+            assert_eq!(fields[0].name, "x");
+            assert_eq!(fields[1].name, "y");
+        }
+        _ => panic!("Expected ExternClassDecl"),
+    }
+}
+
+#[test]
+fn test_parse_extern_global() {
+    let stmts = parse_source("<?php extern global int $errno;");
+    match &stmts[0].kind {
+        StmtKind::ExternGlobalDecl { name, c_type } => {
+            assert_eq!(name, "errno");
+            assert!(matches!(c_type, elephc::parser::ast::CType::Int));
+        }
+        _ => panic!("Expected ExternGlobalDecl"),
+    }
+}
+
+#[test]
+fn test_parse_extern_lib_function() {
+    let stmts = parse_source(r#"<?php extern "m" function sin(float $x): float;"#);
+    match &stmts[0].kind {
+        StmtKind::ExternFunctionDecl { name, library, .. } => {
+            assert_eq!(name, "sin");
+            assert_eq!(library.as_deref(), Some("m"));
+        }
+        _ => panic!("Expected ExternFunctionDecl"),
+    }
+}
+
+#[test]
+fn test_parse_extern_callable_param() {
+    let stmts = parse_source(r#"<?php extern function signal(int $sig, callable $handler): ptr;"#);
+    match &stmts[0].kind {
+        StmtKind::ExternFunctionDecl { params, .. } => {
+            assert_eq!(params.len(), 2);
+            assert!(matches!(
+                params[1].c_type,
+                elephc::parser::ast::CType::Callable
+            ));
+        }
+        _ => panic!("Expected ExternFunctionDecl"),
     }
 }
