@@ -21,10 +21,13 @@ The compiler outputs a native binary next to the source file (e.g., `file.php` �
 ### Running tests
 
 ```bash
-cargo test               # run all tests (slow — ~65s due to as+ld per test)
-cargo test --test codegen_tests  # run only end-to-end tests
-cargo test test_fizzbuzz  # run a specific test
+cargo test                          # run all tests (slow — ~65s due to as+ld per test)
+cargo test -- --include-ignored     # run ALL tests including those requiring external libs
+cargo test --test codegen_tests     # run only end-to-end tests
+cargo test test_fizzbuzz            # run a specific test
 ```
+
+Some tests are marked `#[ignore]` because they require external libraries (e.g., SDL2) not available in CI. **Before committing, always run `cargo test -- --include-ignored` locally** to verify nothing is broken — including ignored tests.
 
 ### Test strategy during development
 
