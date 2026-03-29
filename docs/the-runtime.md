@@ -370,8 +370,7 @@ The runtime also declares global buffers using `.comm` and static data tables:
 .comm _heap_buf, 8388608     ; 8MB heap by default (--heap-size overrides)
 .comm _heap_off, 8           ; current heap offset
 .comm _heap_free_list, 8     ; head of free-list allocator
-_heap_debug_enabled:
-    .quad 0                  ; set to 1 when compiled with --heap-debug
+.comm _heap_debug_enabled, 8 ; BSS-backed debug flag, set to 1 in _main when compiled with --heap-debug
 _heap_max:
     .quad 8388608            ; configured heap size limit
 .comm _gc_allocs, 8          ; allocation counter

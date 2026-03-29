@@ -917,7 +917,7 @@ Callback rules:
 | **Callback-based** | | |
 | `array_map()` | `array_map("callback", $arr): array` | Apply callback to each element, return new array |
 | `array_filter()` | `array_filter($arr, "callback"): array` | Filter elements where callback returns truthy |
-| `array_reduce()` | `array_reduce($arr, "callback", $init): mixed` | Reduce array to single value via callback |
+| `array_reduce()` | `array_reduce($arr, "callback", $init): int` | Reduce array to a single integer result via callback |
 | `array_walk()` | `array_walk($arr, "callback"): void` | Call callback on each element (side-effects) |
 | `usort()` | `usort($arr, "callback"): void` | Sort array using user comparison function |
 | `uksort()` | `uksort($arr, "callback"): void` | Sort array with a user comparison callback (currently routed through the same runtime sort path as `usort`) |
@@ -926,7 +926,7 @@ Callback rules:
 | `call_user_func()` | `call_user_func("name", ...): mixed` | Call a function by name with arguments |
 | `call_user_func_array()` | `call_user_func_array("name", $args): mixed` | Call a function with arguments from an array |
 | `function_exists()` | `function_exists("name"): bool` | Check if a function is defined |
-> **Note:** Callback arguments can be string literals containing the function name (e.g., `"double"`), anonymous functions, or arrow functions.
+> **Note:** Callback arguments can be string literals containing the function name (e.g., `"double"`), anonymous functions, or arrow functions. The checker has the strongest callback-shape awareness for string-literal function names; closure support is documented separately below, including the `use (...)` limitation.
 
 > **Type checker note:** `array_push()` only accepts indexed arrays as its first argument, and `array_column()` requires an indexed array whose elements are associative arrays.
 
@@ -1253,7 +1253,7 @@ Both `include 'f';` and `include('f');` syntax are supported.
 - Path must be a string literal (no variables or expressions)
 - Included files must start with `<?php`
 
-### Known limitations in v0.8 features
+### Known limitations in current JSON / regex / date support
 
 - `strtotime()` only supports "YYYY-MM-DD" and "YYYY-MM-DD HH:MM:SS" formats. Relative time strings like "next Monday" or "+1 week" are not supported.
 - `json_decode()` returns a string. It strips quotes and unescapes JSON string values, but does not parse JSON objects into associative arrays or JSON arrays into PHP arrays.
