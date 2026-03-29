@@ -121,6 +121,53 @@ fn assemble_and_run(
     String::from_utf8(output.stdout).unwrap()
 }
 
+struct ProgramOutput {
+    stdout: String,
+    stderr: String,
+    success: bool,
+}
+
+fn assemble_and_run_capture(
+    asm: &str,
+    dir: &Path,
+    extra_link_libs: &[String],
+    extra_link_paths: &[String],
+    extra_frameworks: &[String],
+) -> ProgramOutput {
+    let asm_path = dir.join("test.s");
+    let obj_path = dir.join("test.o");
+    let bin_path = dir.join("test");
+
+    fs::write(&asm_path, asm).unwrap();
+
+    let as_status = Command::new("as")
+        .args(["-arch", "arm64", "-o"])
+        .arg(&obj_path)
+        .arg(&asm_path)
+        .status()
+        .expect("failed to run assembler");
+    assert!(as_status.success(), "assembler failed");
+
+    link_binary(
+        &obj_path,
+        &bin_path,
+        extra_link_libs,
+        extra_link_paths,
+        extra_frameworks,
+    );
+
+    let output = Command::new(&bin_path)
+        .current_dir(dir)
+        .output()
+        .expect("failed to run compiled binary");
+
+    ProgramOutput {
+        stdout: String::from_utf8(output.stdout).unwrap(),
+        stderr: String::from_utf8(output.stderr).unwrap(),
+        success: output.status.success(),
+    }
+}
+
 fn assemble_and_run_expect_failure(
     asm: &str,
     dir: &Path,
@@ -235,6 +282,47 @@ fn compile_harness_and_run(source: &str, heap_size: usize, harness: &str) -> Str
 
     let _ = fs::remove_dir_all(&dir);
     stdout
+}
+
+fn compile_and_run_with_gc_stats(source: &str) -> ProgramOutput {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, true, false);
+    let output = assemble_and_run_capture(
+        &asm,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    output
+}
+
+fn parse_gc_stats(stderr: &str) -> (u64, u64) {
+    let line = stderr
+        .lines()
+        .find(|line| line.starts_with("GC: allocs="))
+        .unwrap_or_else(|| panic!("missing gc stats line: {stderr}"));
+    let allocs = line
+        .split("allocs=")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or_else(|| panic!("missing alloc count: {stderr}"));
+    let frees = line
+        .split("frees=")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or_else(|| panic!("missing free count: {stderr}"));
+    (allocs, frees)
 }
 
 /// Compile a PHP source string to a native binary, run it, and return stdout.
@@ -9526,6 +9614,35 @@ echo $nums[1];
 "#,
     );
     assert_eq!(out, "72");
+}
+
+#[test]
+fn test_gc_stats_self_cycle_keeps_one_extra_object_alive() {
+    let acyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+class Node { public $next = null; }
+$n = new Node();
+unset($n);
+"#,
+    );
+    assert!(acyclic.success, "acyclic program failed: {}", acyclic.stderr);
+
+    let cyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+class Node { public $next = null; }
+$n = new Node();
+$n->next = $n;
+unset($n);
+"#,
+    );
+    assert!(cyclic.success, "cyclic program failed: {}", cyclic.stderr);
+
+    let (acyclic_allocs, acyclic_frees) = parse_gc_stats(&acyclic.stderr);
+    let (cyclic_allocs, cyclic_frees) = parse_gc_stats(&cyclic.stderr);
+    assert_eq!(acyclic.stdout, "");
+    assert_eq!(cyclic.stdout, "");
+    assert_eq!(acyclic_allocs, cyclic_allocs);
+    assert_eq!(acyclic_frees, cyclic_frees + 1);
 }
 
 #[test]

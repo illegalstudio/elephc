@@ -233,7 +233,7 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_decref_hash` | Decrement refcount, free hash table if zero | `x0` = hash pointer | — |
 | `__rt_decref_object` | Decrement refcount, free object if zero | `x0` = object pointer | — |
 
-Refcounts are stored as a 32-bit value in the uniform 16-byte heap header, at `[user_ptr - 12]`. Each heap allocation starts with refcount 1. When a reference is shared (e.g., assigned to another variable or passed to a function), `__rt_incref` bumps it. When the reference goes away, the appropriate `__rt_decref_*` variant decrements and frees the block if it reaches zero.
+Refcounts are stored as a 32-bit value in the uniform 16-byte heap header, at `[user_ptr - 12]`. Each heap allocation starts with refcount 1. When a reference is shared (e.g., assigned to another variable or passed to a function), `__rt_incref` bumps it. When the reference goes away, the appropriate `__rt_decref_*` variant decrements and frees the block if it reaches zero. This is still pure reference counting today, so cyclic object/container graphs are a documented limitation until a dedicated cycle pass exists.
 
 ## System routines
 
@@ -398,7 +398,7 @@ Additionally, the runtime emits static data tables:
 
 When `--heap-debug` is enabled, the runtime also activates `__rt_heap_debug_check_live` and `__rt_heap_debug_validate_free_list`. These helpers turn allocator corruption into immediate fatal errors for duplicate frees, zero-refcount `incref`/`decref` paths, and malformed free-list state.
 
-Every heap allocation now also carries a uniform 8-byte kind tag in its 16-byte allocator header. The current runtime uses `0=raw/untyped`, `1=string`, `2=indexed array`, `3=assoc/hash`, and `4=object`, which makes future runtime dispatch independent from each payload's internal layout.
+Every heap allocation now also carries a uniform 8-byte kind tag in its 16-byte allocator header. The current runtime uses `0=raw/untyped`, `1=string`, `2=indexed array`, `3=assoc/hash`, and `4=object`, which makes future runtime dispatch independent from each payload's internal layout and gives a future cycle collector a cheap way to limit scans to container/object blocks.
 
 See [Memory Model](memory-model.md) for details on how these buffers work.
 

@@ -434,11 +434,22 @@ elephc uses a **free-list allocator with reference counting** — not a garbage 
 ### What is NOT freed
 
 - **Non-adjacent free blocks** are still not compacted — fragmentation can still occur over time even though adjacent neighbors are coalesced on free and oversized free blocks are split on allocation
+- **Circular container/object graphs** are not reclaimed today. Pure reference counting keeps self-referential or mutually-referential arrays/hash tables/objects alive once external roots disappear
 - **Pointer targets** are not ownership-tracked just because a raw pointer exists; the pointer value itself is only an address
 - **Intermediate scratch strings** in `_concat_buf` are not individually freed — the buffer is simply reset per statement
 - **General function epilogues** do not blanket-decref all heap locals. They now selectively clean up slots proven `Owned`, while locals populated from still-ambiguous borrowed/control-flow paths remain excluded
 - **Container-copying builtins** no longer blindly duplicate borrowed heap handles for common nested payload paths: refcounted runtime variants now retain values before new arrays/hash tables take ownership (`array` literals with spreads, `array_merge`, `array_chunk`, `array_slice`, `array_reverse`, `array_pad`, `array_unique`, `array_splice`, `array_diff`, `array_intersect`, `array_filter`, `array_fill`, `array_combine`, `array_fill_keys`)
 - **Regression coverage now explicitly exercises** local aliases, borrowed nested-container returns, `Owned`/`Borrowed` control-flow merges, and scope-exit paths so future ownership work has focused tripwires instead of relying only on large end-to-end suites
+
+### Evaluated next step for cycles
+
+The current runtime now has enough uniform metadata to support a targeted future cycle collector:
+
+- the allocator header carries a heap-kind tag (`string`, `array`, `hash`, `object`, raw)
+- refcounted containers/objects already funnel destruction through `__rt_decref_array`, `__rt_decref_hash`, and `__rt_decref_object`
+- raw buffers and helper allocations can stay outside any future cycle walk because they keep kind `0`
+
+That makes a **container/object-only trial-deletion or candidate-queue collector** the most realistic next design point. It would be narrower and cheaper than a whole-heap tracer, while still addressing the only structural leak class that plain refcounting leaves behind.
 
 ### Performance characteristics
 
