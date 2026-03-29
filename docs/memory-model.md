@@ -52,9 +52,9 @@ Each function has a stack frame. The [code generator](the-codegen.md) calculates
                           │
                           ▼
 ┌────────────┬────────────┬────────────┬────────────┐
-│  saved x30 │  saved x29 │   $x (8B)  │   $y (8B)  │ ...
+│  saved x29 │  saved x30 │   $x (8B)  │   $y (8B)  │ ...
 └────────────┴────────────┴────────────┴────────────┘
-  [x29, #8]    [x29, #0]   [x29, #-8]   [x29, #-16]
+  [x29, #0]    [x29, #8]   [x29, #-8]   [x29, #-16]
 ```
 
 - `x29` and `x30` are saved at the top of the frame (positive offsets from `x29`)
@@ -178,7 +178,7 @@ Minimum allocation is 8 bytes (to fit the next pointer when the block is later f
 
 The runtime routine `__rt_heap_free`:
 
-1. Read the block size (32-bit) from the header at `user_pointer - 8`
+1. Read the block size (32-bit) from the 16-byte header at `user_pointer - 16`
 2. If the block is exactly at the bump tail, shrink `_heap_off` immediately
 3. Otherwise, insert the block into the free list in address order, merge it with adjacent free neighbors, and repeatedly trim any now-free tail chain back into `_heap_off`
 4. Free blocks reuse the same 16-byte header, clear the kind back to `0`, and then store the free-list pointer immediately after it: `[size:4][refcnt:4][kind:8][next_ptr:8][...unused...]`
@@ -197,8 +197,8 @@ When one of these checks trips, the program exits with a fatal heap-debug error 
 
 ### When memory is freed
 
-- **Variable reassignment**: when a string or array variable is overwritten, the old value is freed via `__rt_heap_free_safe`
-- **`unset()`**: frees the variable's heap allocation before nulling it
+- **Variable reassignment**: when a heap-backed local/global/static slot is overwritten, codegen releases the previous owner through the appropriate runtime path (`__rt_heap_free_safe` for persisted strings, `__rt_decref_*` for refcounted arrays / hashes / objects)
+- **`unset()`**: releases the current heap-backed value before nulling the slot
 - **Process exit**: all memory is reclaimed by the OS
 
 ### Configurable heap size

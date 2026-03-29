@@ -156,15 +156,17 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 ## Array routines
 
-**Source:** `src/codegen/runtime/arrays/` (71 files)
+**Source:** `src/codegen/runtime/arrays/` (79 files)
 
 ### Core allocation
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
-| `__rt_heap_alloc` | Free-list + bump allocator with 8-byte header | `x0` = size | `x0` = pointer |
+| `__rt_heap_alloc` | Free-list + bump allocator with a 16-byte `[size:4][refcount:4][kind:8]` header | `x0` = size | `x0` = pointer |
 | `__rt_heap_free` | Return block to free list (bump reset if last block) | `x0` = pointer | — |
 | `__rt_heap_free_safe` | Free only if pointer is in heap range | `x0` = pointer | — |
+| `__rt_heap_debug_fail` | Print a heap-debug fatal error and terminate immediately | `x1` = msg ptr, `x2` = msg len | — |
+| `__rt_heap_kind` | Return the uniform heap-kind tag for a heap-backed pointer | `x0` = pointer | `x0` = kind |
 | `__rt_array_new` | Create indexed array with header | `x0` = capacity, `x1` = elem_size | `x0` = array ptr |
 | `__rt_array_grow` | Double array capacity, copy elements, free old | `x0` = array | `x0` = new array |
 | `__rt_array_free_deep` | Free array + all string elements inside | `x0` = array | — |
@@ -237,7 +239,7 @@ Refcounts are stored as a 32-bit value in the uniform 16-byte heap header, at `[
 
 ## System routines
 
-**Source:** `src/codegen/runtime/system/` (14 files)
+**Source:** `src/codegen/runtime/system/` (24 files)
 
 ### `__rt_build_argv` — Build $argv array
 
@@ -270,7 +272,7 @@ At program start, the OS passes `argc` (argument count) in `x0` and `argv` (poin
 
 ### JSON routines
 
-**Files:** `system/json_encode.rs`, `system/json_decode.rs`
+**Files:** `system/json_encode_bool.rs`, `system/json_encode_null.rs`, `system/json_encode_str.rs`, `system/json_encode_array_int.rs`, `system/json_encode_array_str.rs`, `system/json_encode_assoc.rs`, `system/json_decode.rs`
 
 The `json_encode` implementation uses **type-aware dispatch** — the codegen calls a different runtime routine depending on the compile-time type of the value being encoded:
 
@@ -286,7 +288,7 @@ The `json_encode` implementation uses **type-aware dispatch** — the codegen ca
 
 ### Regex routines
 
-**File:** `system/preg.rs`
+**Files:** `system/preg_strip.rs`, `system/pcre_to_posix.rs`, `system/preg_match.rs`, `system/preg_match_all.rs`, `system/preg_replace.rs`, `system/preg_split.rs`
 
 All regex routines use **POSIX extended regular expressions** via libc's `regcomp()`, `regexec()`, and `regfree()`. Shared helpers (`__rt_preg_strip` and `__rt_pcre_to_posix`) strip PHP-style delimiters and translate common PCRE shorthands before passing the pattern to the POSIX API.
 
@@ -352,7 +354,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
 }
 ```
 
-Notable runtime-only helpers emitted here include `__rt_hash_insert_owned`, `__rt_hash_free_deep`, `__rt_array_column_ref`, `__rt_str_to_cstr`, and `__rt_cstr_to_str` in addition to the more user-visible helpers.
+Notable runtime-only helpers emitted here include `__rt_heap_debug_fail`, `__rt_heap_kind`, `__rt_hash_insert_owned`, `__rt_hash_free_deep`, `__rt_array_column_ref`, `__rt_preg_strip`, `__rt_pcre_to_posix`, `__rt_str_to_cstr`, and `__rt_cstr_to_str` in addition to the more user-visible helpers.
 
 All routines are included in every binary, even if unused. This is simpler than dead-code elimination (a potential future optimization).
 

@@ -138,13 +138,19 @@ substr($str: Str, $start: Int, $len?: Int) → Str
 strpos($hay: Str, $needle: Str) → Int
 count($arr: Array) → Int
 abs($val: Int|Float) → Int|Float
-floor($val: Float) → Float
+floor($val: Int|Float) → Float
 rand($min?: Int, $max?: Int) → Int
 ptr($var: lvalue) → Pointer(None)
 ptr_get($ptr: Pointer) → Int
 ptr_set($ptr: Pointer, $value: Int|Bool|Void|Pointer) → Void
 ptr_cast<T>($ptr: Pointer) → Pointer(Some(T))
 ```
+
+For some built-ins the checker also enforces container shape, not just raw argument count:
+
+- `array_push($arr, $val)` requires the first argument to be an indexed `Array`, not an `AssocArray`
+- `array_column($rows, $column_key)` requires the first argument to be an indexed array whose element type is `AssocArray`
+- `wordwrap()` accepts 1 to 4 arguments, matching the builtin checker
 
 The type checker validates:
 1. **Argument count** — too few or too many arguments → error

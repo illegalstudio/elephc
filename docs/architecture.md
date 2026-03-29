@@ -29,7 +29,7 @@ PHP source (.php)
      ▼
 ┌─────────┐
 │  Type    │  src/types/
-│  Checker │  checker/mod.rs, builtins.rs, functions.rs
+│  Checker │  checker/mod.rs, checker/builtins.rs, checker/functions.rs
 │          │  Validates types, returns CheckResult (TypeEnv + FunctionSig map)
 └────┬─────┘
      │
@@ -90,7 +90,7 @@ src/
 │   ├── builtins/              Built-in function codegen (one file per language function)
 │   │   ├── mod.rs             Dispatcher — chains to category modules
 │   │   ├── strings/           strlen, substr, strpos, explode, sprintf, md5, ... (57 files)
-│   │   ├── arrays/            count, array_push, sort, array_map, usort, ... (51 files)
+│   │   ├── arrays/            count, array_push, sort, array_map, usort, ... (54 files)
 │   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, round, min, max, sin, cos, ... (32 files)
 │   │   ├── types/             is_*, gettype, empty, unset, settype, ... (16 files)
 │   │   ├── io/                fopen, fwrite, file_get_contents, scandir, ... (36 files)
@@ -100,9 +100,9 @@ src/
 │   └── runtime/               ARM64 runtime routines (one file per language/runtime helper)
 │       ├── mod.rs             Emits all runtime functions into assembly
 │       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, str_persist, ... (53 files)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, sort, usort, refcount, ... (75 files)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, sort, usort, refcount, ... (79 files)
 │       ├── io/                fopen, fgets, fread, stat, scandir, ... (17 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, date, mktime, strtotime, json_encode, json_decode, preg (14 files)
+│       ├── system/            build_argv, time, getenv, shell_exec, date, mktime, strtotime, json_encode_*, json_decode, preg_*, ... (24 files)
 │       └── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ... (5 files)
 │
 │

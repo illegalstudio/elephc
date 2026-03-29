@@ -405,7 +405,9 @@ When a closure variable is called (`$fn(1, 2)`), the codegen:
 
 ### Closures as callback arguments
 
-Built-in functions like `array_map`, `array_filter`, `usort` etc. accept closures as callback arguments. The closure's function pointer is passed in a register (like any other `Callable` argument) and the runtime routine calls it via `blr`.
+Built-in functions like `array_map`, `array_filter`, `array_reduce`, `array_walk`, and `usort` accept callback values. The callback function pointer is passed in a register (like any other `Callable` argument) and the runtime routine calls it via `blr`.
+
+Closures that depend on hidden `use (...)` capture arguments still only work for direct `$fn(...)` calls today. Callback-style built-ins do not forward those hidden capture values, so captured closures are not yet valid drop-in callbacks there.
 
 ## Associative array codegen
 
@@ -808,7 +810,7 @@ When a call site omits an argument that has a default value, the codegen fills i
 
 Pre-scans the function body AST to find every variable that will be used. This is necessary because stack space must be allocated in the prologue, before any code runs.
 
-It walks `Assign`, `If`, `While`, `For`, `Foreach`, `DoWhile`, `Switch`, `ListUnpack`, `Global`, `StaticVar` nodes recursively, collecting variable names and inferring their types from the expressions assigned to them.
+It walks the statement tree before code emission and handles the major local-binding forms recursively (`Assign`, control-flow blocks, `For`/`Foreach`, `ListUnpack`, `Global`, `StaticVar`, and related cases). The exact match is implementation-driven in `functions.rs`, so this list is illustrative rather than exhaustive.
 
 ## Main program codegen
 
