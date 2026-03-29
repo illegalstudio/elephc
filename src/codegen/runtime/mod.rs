@@ -190,7 +190,6 @@ pub fn emit_runtime_data(
     global_var_names: &std::collections::HashSet<String>,
     static_vars: &std::collections::HashMap<(String, String), crate::types::PhpType>,
     heap_size: usize,
-    heap_debug: bool,
 ) -> String {
     let mut out = String::new();
     out.push_str(".comm _concat_buf, 65536, 3\n");
@@ -200,7 +199,7 @@ pub fn emit_runtime_data(
     out.push_str(&format!(".comm _heap_buf, {}, 3\n", heap_size));
     out.push_str(".comm _heap_off, 8, 3\n");
     out.push_str(".comm _heap_free_list, 8, 3\n");
-    out.push_str(&format!("_heap_debug_enabled:\n    .quad {}\n", if heap_debug { 1 } else { 0 }));
+    out.push_str(".comm _heap_debug_enabled, 8, 3\n");
     out.push_str(&format!("_heap_max:\n    .quad {}\n", heap_size));
     out.push_str("_heap_err_msg:\n    .ascii \"Fatal error: heap memory exhausted\\n\"\n");
     out.push_str("_heap_dbg_bad_refcount_msg:\n    .ascii \"Fatal error: heap debug detected bad refcount\\n\"\n");

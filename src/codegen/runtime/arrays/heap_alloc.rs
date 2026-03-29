@@ -42,8 +42,8 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_heap_alloc_fl_found");                       // yes — use this block
 
     // -- advance to next free block --
-    emitter.instruction("add x9, x10, #8");                                     // prev_next_addr = &current->next
-    emitter.instruction("ldr x10, [x10, #8]");                                  // current = current->next
+    emitter.instruction("add x9, x10, #16");                                    // prev_next_addr = &current->next after the 16-byte free-block header
+    emitter.instruction("ldr x10, [x10, #16]");                                 // current = current->next
     emitter.instruction("b __rt_heap_alloc_fl_loop");                           // continue searching
 
     // -- found a suitable free block, either split it or unlink it whole --

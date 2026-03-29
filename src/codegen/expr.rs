@@ -1092,6 +1092,7 @@ fn emit_array_literal_with_spread(
             } else {
                 emitter.instruction("bl __rt_array_merge_into");                // append all src elements to dest array
             }
+            emitter.instruction("str x0, [sp]");                                // persist the possibly-grown dest array pointer after the spread merge
         } else {
             // -- regular element: push single value --
             let ty = emit_expr(elem, emitter, ctx, data);
@@ -1106,17 +1107,20 @@ fn emit_array_literal_with_spread(
                     emitter.instruction("mov x1, x0");                          // x1 = value to push
                     emitter.instruction("mov x0, x9");                          // x0 = array pointer
                     emitter.instruction("bl __rt_array_push_int");              // push value onto array
+                    emitter.instruction("str x0, [sp]");                        // persist the possibly-grown dest array pointer after the push
                 }
                 PhpType::Float => {
                     // -- push float element --
                     emitter.instruction("fmov x1, d0");                         // move float bits to int register
                     emitter.instruction("mov x0, x9");                          // x0 = array pointer
                     emitter.instruction("bl __rt_array_push_int");              // push value onto array
+                    emitter.instruction("str x0, [sp]");                        // persist the possibly-grown dest array pointer after the push
                 }
                 _ => {
                     emitter.instruction("mov x1, x0");                          // x1 = value to push
                     emitter.instruction("mov x0, x9");                          // x0 = array pointer
                     emitter.instruction("bl __rt_array_push_int");              // push value onto array
+                    emitter.instruction("str x0, [sp]");                        // persist the possibly-grown dest array pointer after the push
                 }
             }
         }

@@ -225,11 +225,16 @@ fn emit_function_with_label_and_class(
 
     // -- function epilogue: save static vars back and restore/return --
     emitter.label(epilogue_label);
-    preserve_return_registers(emitter, &sig.return_type);
+    let needs_return_preserve = epilogue_has_side_effects(&ctx);
+    if needs_return_preserve {
+        preserve_return_registers(emitter, &sig.return_type);
+    }
 
     // Save static vars back to global storage before returning
     let func_name = label.strip_prefix("_fn_").unwrap_or(label);
-    for static_var in &ctx.static_vars {
+    let mut static_vars: Vec<_> = ctx.static_vars.iter().collect();
+    static_vars.sort();
+    for static_var in static_vars {
         let data_label = format!("_static_{}_{}", func_name, static_var);
         let var_info = ctx.variables.get(static_var);
         if let Some(var) = var_info {
@@ -290,7 +295,9 @@ fn emit_function_with_label_and_class(
 
     emit_owned_local_epilogue_cleanup(emitter, &ctx);
 
-    restore_return_registers(emitter, &sig.return_type);
+    if needs_return_preserve {
+        restore_return_registers(emitter, &sig.return_type);
+    }
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16));  // restore frame ptr & return addr
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
@@ -341,14 +348,33 @@ fn restore_return_registers(emitter: &mut Emitter, return_ty: &PhpType) {
     }
 }
 
+fn epilogue_has_side_effects(ctx: &Context) -> bool {
+    !ctx.static_vars.is_empty()
+        || ctx.variables.iter().any(|(name, var)| {
+            !ctx.global_vars.contains(name)
+                && !ctx.static_vars.contains(name)
+                && !ctx.ref_params.contains(name)
+                && var.epilogue_cleanup_safe
+                && var.ownership == HeapOwnership::Owned
+                && (matches!(var.ty, PhpType::Str) || var.ty.is_refcounted())
+        })
+}
+
 fn emit_owned_local_epilogue_cleanup(emitter: &mut Emitter, ctx: &Context) {
-    for (name, var) in &ctx.variables {
-        if ctx.global_vars.contains(name) || ctx.static_vars.contains(name) || ctx.ref_params.contains(name) {
-            continue;
-        }
-        if !var.epilogue_cleanup_safe || var.ownership != HeapOwnership::Owned {
-            continue;
-        }
+    let mut cleanup_vars: Vec<_> = ctx
+        .variables
+        .iter()
+        .filter(|(name, var)| {
+            !ctx.global_vars.contains(*name)
+                && !ctx.static_vars.contains(*name)
+                && !ctx.ref_params.contains(*name)
+                && var.epilogue_cleanup_safe
+                && var.ownership == HeapOwnership::Owned
+        })
+        .collect();
+    cleanup_vars.sort_by_key(|(_, var)| var.stack_offset);
+
+    for (name, var) in cleanup_vars {
         match &var.ty {
             PhpType::Str => {
                 emitter.comment(&format!("epilogue cleanup ${}", name));
@@ -413,10 +439,10 @@ fn mark_control_flow_epilogue_unsafe(
             }
             StmtKind::For { init, update, body, .. } => {
                 if let Some(stmt) = init {
-                    mark_control_flow_epilogue_unsafe(&[*stmt.clone()], ctx, true);
+                    mark_control_flow_epilogue_unsafe(std::slice::from_ref(stmt.as_ref()), ctx, true);
                 }
                 if let Some(stmt) = update {
-                    mark_control_flow_epilogue_unsafe(&[*stmt.clone()], ctx, true);
+                    mark_control_flow_epilogue_unsafe(std::slice::from_ref(stmt.as_ref()), ctx, true);
                 }
                 mark_control_flow_epilogue_unsafe(body, ctx, true);
             }

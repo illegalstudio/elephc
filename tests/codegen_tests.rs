@@ -9696,6 +9696,46 @@ echo $small[0] . "|" . count($mid) . "|" . $keep[0];
 }
 
 #[test]
+fn test_gc_heap_alloc_walks_past_small_first_free_block() {
+    let out = compile_harness_and_run(
+        "<?php",
+        256,
+        r#"    adrp x9, _heap_off@PAGE
+    add x9, x9, _heap_off@PAGEOFF
+    str xzr, [x9]
+    adrp x9, _heap_free_list@PAGE
+    add x9, x9, _heap_free_list@PAGEOFF
+    str xzr, [x9]
+    mov x0, #8
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    mov x0, #8
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    mov x0, #16
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    mov x0, #8
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    ldr x0, [sp, #48]
+    bl __rt_heap_free
+    ldr x0, [sp, #16]
+    bl __rt_heap_free
+    mov x0, #16
+    bl __rt_heap_alloc
+    ldr x9, [sp, #16]
+    cmp x0, x9
+    cset x0, eq
+    bl __rt_itoa
+    mov x0, #1
+    mov x16, #4
+    svc #0x80"#,
+    );
+    assert_eq!(out, "1");
+}
+
+#[test]
 fn test_heap_debug_double_free_reports_error() {
     let err = compile_harness_expect_failure(
         "<?php",
@@ -9739,12 +9779,37 @@ fn test_heap_debug_free_list_corruption_reports_error() {
     bl __rt_heap_alloc
     ldr x0, [sp], #16
     bl __rt_heap_free
-    sub x9, x0, #8
-    str x9, [x9, #8]
+    sub x9, x0, #16
+    str x9, [x9, #16]
     mov x0, #8
     bl __rt_heap_alloc"#,
     );
     assert!(err.contains("heap debug detected free-list corruption"), "{err}");
+}
+
+#[test]
+fn test_array_literal_spread_grows_past_initial_capacity() {
+    let out = compile_and_run(
+        r#"<?php
+$nums = [...range(1, 10), ...range(11, 20), ...range(21, 30)];
+echo count($nums) . "|" . $nums[25];
+"#,
+    );
+    assert_eq!(out, "30|26");
+}
+
+#[test]
+fn test_array_literal_spread_refcounted_grows_past_initial_capacity() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = [1];
+$a = array_fill(0, 10, $inner);
+$b = array_fill(0, 10, $inner);
+$c = [...$a, ...$b, ...$a];
+echo count($c) . "|" . count($c[25]);
+"#,
+    );
+    assert_eq!(out, "30|1");
 }
 
 #[test]

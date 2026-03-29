@@ -24,10 +24,14 @@ pub fn emit_array_merge_into_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x0]");                                       // load dest array length
     emitter.instruction("ldr x11, [x0, #8]");                                   // load dest array capacity
     emitter.instruction("add x12, x10, x9");                                    // compute needed total capacity
+    emitter.label("__rt_amir_grow_check");
     emitter.instruction("cmp x12, x11");                                        // compare required capacity with current capacity
     emitter.instruction("b.le __rt_amir_loop");                                 // skip resize when dest already has enough room
-
-    emitter.comment("WARNING: array_merge_into_refcounted assumes caller pre-sized dest");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload current dest array pointer before growth
+    emitter.instruction("bl __rt_array_grow");                                  // grow dest array storage until it can hold the merge result
+    emitter.instruction("str x0, [sp, #0]");                                    // persist the possibly-moved dest array pointer
+    emitter.instruction("ldr x11, [x0, #8]");                                   // reload dest capacity after growth
+    emitter.instruction("b __rt_amir_grow_check");                              // keep growing until the required capacity fits
 
     emitter.label("__rt_amir_loop");
     emitter.instruction("ldr x4, [sp, #16]");                                   // reload loop index
