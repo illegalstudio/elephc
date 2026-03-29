@@ -206,6 +206,7 @@ pub fn emit_runtime_data(
     out.push_str(&format!(".comm _heap_buf, {}, 3\n", heap_size));
     out.push_str(".comm _heap_off, 8, 3\n");
     out.push_str(".comm _heap_free_list, 8, 3\n");
+    out.push_str(".comm _heap_small_bins, 32, 3\n");
     out.push_str(".comm _heap_debug_enabled, 8, 3\n");
     out.push_str(".comm _gc_collecting, 8, 3\n");
     out.push_str(".comm _gc_release_suppressed, 8, 3\n");

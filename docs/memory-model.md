@@ -29,7 +29,7 @@ This page explains where every value lives in memory at runtime.
 ├─────────────────────────────┤
 │   Runtime metadata (BSS)     │  _concat_off, _global_argc/_argv,
 │  (heap state, counters,      │  _heap_off, _heap_free_list,
-│   globals, static storage)   │  _gc_allocs/_frees/_peak,
+│   globals, static storage)   │  _heap_small_bins, _gc_allocs/_frees/_live/_peak,
 │                              │  _gc_collecting/_gc_release_suppressed, ...
 ├─────────────────────────────┤
 │       Data section           │  String literals, float constants
@@ -146,7 +146,9 @@ When a string result is stored to a variable (e.g., `$x = "a" . "b";`), the code
 ```asm
 .comm _heap_buf, 8388608    ; 8MB buffer (configurable via --heap-size)
 .comm _heap_off, 8          ; current bump allocation offset
-.comm _heap_free_list, 8    ; head of free block linked list
+.comm _heap_free_list, 8    ; head of the general free block linked list
+.comm _heap_small_bins, 32  ; 4 x 8-byte heads for <=8/16/32/64-byte cached blocks
+.comm _heap_debug_enabled, 8 ; heap-debug toggle
 .comm _gc_collecting, 8     ; cycle collector re-entry guard
 .comm _gc_release_suppressed, 8 ; suppress nested collection during deep free
 .comm _gc_allocs, 8         ; allocation counter
@@ -155,7 +157,7 @@ When a string result is stored to a variable (e.g., `$x = "a" . "b";`), the code
 .comm _gc_peak, 8           ; heap high-water mark
 ```
 
-The heap (`_heap_buf`) is an 8MB region (by default) for dynamically-sized data — arrays, hash tables, objects, and persisted strings. It uses a **free-list + bump hybrid allocator**.
+The heap (`_heap_buf`) is an 8MB region (by default) for dynamically-sized data — arrays, hash tables, objects, and persisted strings. It uses a **free-list + bump hybrid allocator** with segregated small-block bins for the hottest tiny allocations.
 
 ### How heap allocation works
 
@@ -172,9 +174,10 @@ The size is stored at header offset `+0`, the reference count at `+4`, and the h
 
 The runtime routine `__rt_heap_alloc`:
 
-1. **Walk the free list** — check each freed block (first-fit). If a block with `size >= requested` is found, either unlink it whole or split it so the remainder stays on the free list, then reset the allocated block's refcount to 1 and return it.
-2. **Bump allocate** — if no free block fits, allocate from the end of the heap: write size and refcount=1 to the header, advance `_heap_off`, return user pointer.
-3. **Bounds check** — if the bump would exceed `_heap_max`, print a fatal error and exit.
+1. **Probe the segregated small bins** — requests up to 64 bytes first check `_heap_small_bins` (`<=8`, `<=16`, `<=32`, `<=64`) and reuse a cached block from the smallest fitting class available.
+2. **Walk the general free list** — if no cached small block fits, check the address-ordered free list (first-fit). If a block with `size >= requested` is found, either unlink it whole or split it so the remainder stays on the free list, then reset the allocated block's refcount to 1 and return it.
+3. **Bump allocate** — if neither free path fits, allocate from the end of the heap: write size and refcount=1 to the header, advance `_heap_off`, return user pointer.
+4. **Bounds check** — if the bump would exceed `_heap_max`, print a fatal error and exit.
 
 Minimum allocation is 8 bytes (to fit the next pointer when the block is later freed).
 
@@ -184,8 +187,9 @@ The runtime routine `__rt_heap_free`:
 
 1. Read the block size (32-bit) from the 16-byte header at `user_pointer - 16`
 2. If the block is exactly at the bump tail, shrink `_heap_off` immediately
-3. Otherwise, insert the block into the free list in address order, merge it with adjacent free neighbors, and repeatedly trim any now-free tail chain back into `_heap_off`
-4. Free blocks reuse the same 16-byte header, clear the kind back to `0`, and then store the free-list pointer immediately after it: `[size:4][refcnt:4][kind:8][next_ptr:8][...unused...]`
+3. Otherwise, payloads up to 64 bytes are cached into one of four segregated small-bin heads (`<=8`, `<=16`, `<=32`, `<=64`) so later tiny allocations can reuse them without scanning the larger free list
+4. Larger non-tail blocks are inserted into the general free list in address order, merged with adjacent free neighbors, and repeatedly trim any now-free tail chain back into `_heap_off`
+5. Free blocks reuse the same 16-byte header, clear the kind back to `0`, and then store the next pointer immediately after it: `[size:4][refcnt:4][kind:8][next_ptr:8][...unused...]`
 
 The variant `__rt_heap_free_safe` validates that the pointer is within `_heap_buf` range before freeing — safe to call with garbage, null, or `.data` section pointers.
 
@@ -195,7 +199,7 @@ Passing `--heap-debug` enables additional runtime verification without changing 
 
 - `__rt_heap_free` rejects duplicate insertion of the same block into the free list (`double free`)
 - `__rt_incref` / `__rt_decref_*` reject zero-refcount heap blocks before mutating them (`bad refcount`)
-- `__rt_heap_alloc` / `__rt_heap_free` validate the ordered free list and trap on out-of-range, overlapping, cyclic, or merely-adjacent free blocks (`free-list corruption`)
+- `__rt_heap_alloc` / `__rt_heap_free` validate the ordered free list plus the segregated small-bin chains and trap on out-of-range, overlapping, cyclic, mis-sized, or merely-adjacent free blocks (`free-list corruption`)
 - `__rt_heap_free` poisons freed payload bytes with `0xA5`, so stale raw reads stand out immediately in debug repros
 - process exit prints a heap-debug summary with alloc/free counts, live blocks, live bytes, a leak summary line, and the peak live-byte watermark
 
@@ -418,7 +422,7 @@ The naming pattern is `_static_FUNCNAME_VARNAME`. The init flag ensures the init
 | Stack | OS default (~8MB) | Stack overflow (crash) |
 | String buffer | 64KB | Resets each statement — effectively unlimited |
 | Heap | 8MB (configurable) | Fatal error: "heap memory exhausted" |
-| Heap metadata | `_heap_off`, `_heap_free_list`, `_gc_*` flags/counters = 64 bytes total | Fixed-size bookkeeping, not user-visible |
+| Heap metadata | `_heap_off`, `_heap_free_list`, `_heap_small_bins`, `_heap_debug_enabled`, `_gc_*` flags/counters = 104 bytes total | Fixed-size bookkeeping, not user-visible |
 | CLI globals | `_global_argc`, `_global_argv` = 16 bytes total | Fixed-size bookkeeping |
 | User globals | 16 bytes per `global $var` slot | Grows with number of referenced globals |
 | Static vars | 24 bytes per `static $var` (`16 + 8 init flag`) | Grows with number of declared static locals |

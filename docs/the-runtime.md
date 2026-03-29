@@ -375,7 +375,8 @@ The runtime also declares global buffers using `.comm` and static data tables:
 .comm _global_argv, 8        ; saved argv pointer from OS
 .comm _heap_buf, 8388608     ; 8MB heap by default (--heap-size overrides)
 .comm _heap_off, 8           ; current heap offset
-.comm _heap_free_list, 8     ; head of free-list allocator
+.comm _heap_free_list, 8     ; head of the general address-ordered free list
+.comm _heap_small_bins, 32   ; 4 x 8-byte heads for <=8/16/32/64-byte cached blocks
 .comm _heap_debug_enabled, 8 ; BSS-backed debug flag, set to 1 in _main when compiled with --heap-debug
 .comm _gc_collecting, 8      ; cycle collector re-entry guard
 .comm _gc_release_suppressed, 8 ; suppress nested collection during deep frees
@@ -383,7 +384,7 @@ _heap_max:
     .quad 8388608            ; configured heap size limit
 .comm _gc_allocs, 8          ; allocation counter
 .comm _gc_frees, 8           ; free counter
-.comm _gc_live, 8           ; current live heap footprint in bytes
+.comm _gc_live, 8            ; current live heap footprint in bytes
 .comm _gc_peak, 8            ; high-water mark counter
 .comm _cstr_buf, 4096        ; 4KB C-string conversion buffer
 .comm _cstr_buf2, 4096       ; 4KB second C-string buffer
@@ -408,7 +409,7 @@ Additionally, the runtime emits static data tables:
 - `_month_names` — 12 entries (144 bytes), same layout as day names. Used by `__rt_date` for `F` (full name) and `M` (abbreviated) format characters
 - `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>` — per-class property traversal metadata used by object deep-free and cycle collection
 
-When `--heap-debug` is enabled, the runtime also activates `__rt_heap_debug_check_live`, `__rt_heap_debug_validate_free_list`, and `__rt_heap_debug_report`. These helpers turn allocator corruption into immediate fatal errors for duplicate frees, zero-refcount `incref`/`decref` paths, and malformed free-list state, poison freed payload bytes with `0xA5`, and print an end-of-process summary with alloc/free counts, live block count, live bytes, leak summary, and the peak live-byte watermark.
+When `--heap-debug` is enabled, the runtime also activates `__rt_heap_debug_check_live`, `__rt_heap_debug_validate_free_list`, and `__rt_heap_debug_report`. These helpers turn allocator corruption into immediate fatal errors for duplicate frees, zero-refcount `incref`/`decref` paths, and malformed free-list or small-bin state, poison freed payload bytes with `0xA5`, and print an end-of-process summary with alloc/free counts, live block count, live bytes, leak summary, and the peak live-byte watermark.
 
 Every heap allocation now also carries a uniform 8-byte kind tag in its 16-byte allocator header. The current runtime uses `0=raw/untyped`, `1=string`, `2=indexed array`, `3=assoc/hash`, and `4=object`, which lets runtime dispatch stay independent from each payload's internal layout. The low 16 bits keep the stable heap-kind plus indexed-array value type, while the collector reuses higher bits for transient reachable/incoming-edge metadata during `__rt_gc_collect_cycles`. Runtime data also now includes `_gc_collecting`, `_gc_release_suppressed`, `_class_gc_desc_count`, and `_class_gc_desc_ptrs` so deep-free / cycle-collection paths can coordinate nested releases and discover class property traversal metadata.
 

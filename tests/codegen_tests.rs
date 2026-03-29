@@ -9948,6 +9948,53 @@ fn test_gc_heap_alloc_walks_past_small_first_free_block() {
 }
 
 #[test]
+fn test_gc_heap_alloc_reuses_small_bin_before_bump() {
+    let out = compile_harness_and_run(
+        "<?php",
+        256,
+        r#"    adrp x9, _heap_off@PAGE
+    add x9, x9, _heap_off@PAGEOFF
+    str xzr, [x9]
+    adrp x9, _heap_free_list@PAGE
+    add x9, x9, _heap_free_list@PAGEOFF
+    str xzr, [x9]
+    adrp x9, _heap_small_bins@PAGE
+    add x9, x9, _heap_small_bins@PAGEOFF
+    stp xzr, xzr, [x9]
+    stp xzr, xzr, [x9, #16]
+    mov x0, #16
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    mov x0, #24
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    ldr x0, [sp, #16]
+    bl __rt_heap_free
+    adrp x9, _heap_off@PAGE
+    add x9, x9, _heap_off@PAGEOFF
+    ldr x10, [x9]
+    str x10, [sp, #-16]!
+    mov x0, #12
+    bl __rt_heap_alloc
+    ldr x9, [sp, #32]
+    cmp x0, x9
+    cset x11, eq
+    adrp x9, _heap_off@PAGE
+    add x9, x9, _heap_off@PAGEOFF
+    ldr x9, [x9]
+    ldr x10, [sp]
+    cmp x9, x10
+    cset x12, eq
+    and x0, x11, x12
+    bl __rt_itoa
+    mov x0, #1
+    mov x16, #4
+    svc #0x80"#,
+    );
+    assert_eq!(out, "1");
+}
+
+#[test]
 fn test_heap_debug_double_free_reports_error() {
     let err = compile_harness_expect_failure(
         "<?php",

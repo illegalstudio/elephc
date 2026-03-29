@@ -8,8 +8,8 @@ use crate::codegen::emit::Emitter;
 /// bump-allocated), just decrement the bump pointer instead of adding to
 /// the free list. This makes .= loops O(1) with zero fragmentation.
 ///
-/// Otherwise, inserts into the free list in address order, coalesces adjacent
-/// blocks, and trims any newly-exposed free tail back into the bump pointer.
+/// Otherwise, small blocks are cached in segregated bins while larger blocks
+/// stay in the ordered free list that still coalesces and trims the heap tail.
 /// Free block layout: [size:4][refcnt:4][kind:8][next_ptr:8][...unused...]
 /// Input: x0 = user pointer (as returned by heap_alloc)
 pub fn emit_heap_free(emitter: &mut Emitter) {
@@ -67,14 +67,56 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     // -- check if this is the last bump-allocated block --
     emitter.instruction("add x12, x0, x11");                                    // x12 = user_ptr + size = block end
     emitter.instruction("cmp x12, x14");                                        // is block end == heap end?
-    emitter.instruction("b.ne __rt_heap_free_insert");                          // no — insert into the free list instead
+    emitter.instruction("b.ne __rt_heap_free_cache_small");                     // no — cache small blocks or insert into the free list
 
     // -- bump reset: block is at end of heap, just shrink the bump pointer --
     emitter.instruction("sub x14, x9, x15");                                    // x14 = header - heap_buf = new offset
     emitter.instruction("str x14, [x13]");                                      // heap_off = header offset (shrink heap)
     emitter.instruction("b __rt_heap_free_trim_tail");                          // trim any newly-exposed free tail blocks too
 
-    // -- otherwise: insert block into the free list in address order --
+    // -- small non-tail blocks go through segregated bins first --
+    emitter.label("__rt_heap_free_cache_small");
+    emitter.instruction("cmp x11, #64");                                        // does this payload fit in the segregated small-bin cache?
+    emitter.instruction("b.hi __rt_heap_free_insert");                          // no — keep using the general coalescing free list
+    emitter.instruction("adrp x10, _heap_small_bins@PAGE");                     // load page of the segregated small-bin head array
+    emitter.instruction("add x10, x10, _heap_small_bins@PAGEOFF");              // resolve the segregated small-bin head array address
+    emitter.instruction("mov x12, #0");                                         // default to the <=8-byte bin offset
+    emitter.instruction("cmp x11, #8");                                         // does the freed payload fit in the smallest class?
+    emitter.instruction("b.ls __rt_heap_free_cache_small_ready");               // yes — keep the <=8-byte bin offset
+    emitter.instruction("mov x12, #8");                                         // otherwise target the <=16-byte bin
+    emitter.instruction("cmp x11, #16");                                        // does the freed payload fit in the <=16-byte class?
+    emitter.instruction("b.ls __rt_heap_free_cache_small_ready");               // yes — keep the <=16-byte bin offset
+    emitter.instruction("mov x12, #16");                                        // otherwise target the <=32-byte bin
+    emitter.instruction("cmp x11, #32");                                        // does the freed payload fit in the <=32-byte class?
+    emitter.instruction("b.ls __rt_heap_free_cache_small_ready");               // yes — keep the <=32-byte bin offset
+    emitter.instruction("mov x12, #24");                                        // the remaining cached case is the <=64-byte bin
+    emitter.label("__rt_heap_free_cache_small_ready");
+    emitter.instruction("add x10, x10, x12");                                   // x10 = address of the chosen small-bin head slot
+    emitter.instruction("adrp x16, _heap_debug_enabled@PAGE");                  // load page of the heap-debug enabled flag
+    emitter.instruction("add x16, x16, _heap_debug_enabled@PAGEOFF");           // resolve the heap-debug enabled flag address
+    emitter.instruction("ldr x16, [x16]");                                      // load the heap-debug enabled flag
+    emitter.instruction("cbz x16, __rt_heap_free_cache_small_insert");          // skip duplicate detection when heap-debug mode is disabled
+    emitter.instruction("ldr x12, [x10]");                                      // x12 = current cached block while checking for duplicates
+    emitter.label("__rt_heap_free_cache_small_scan");
+    emitter.instruction("cbz x12, __rt_heap_free_cache_small_insert");          // a null next pointer means the block is not already cached
+    emitter.instruction("cmp x12, x9");                                         // is this exact header already present in the small bin?
+    emitter.instruction("b.eq __rt_heap_free_cache_small_duplicate");           // yes — report a double free under heap-debug mode
+    emitter.instruction("ldr x12, [x12, #16]");                                 // advance to the next cached block in this size class
+    emitter.instruction("b __rt_heap_free_cache_small_scan");                   // keep scanning the small-bin chain for duplicates
+
+    emitter.label("__rt_heap_free_cache_small_duplicate");
+    emitter.instruction("adrp x1, _heap_dbg_double_free_msg@PAGE");             // load page of the double-free debug message
+    emitter.instruction("add x1, x1, _heap_dbg_double_free_msg@PAGEOFF");       // resolve the double-free debug message address
+    emitter.instruction(&format!("mov x2, #{}", double_free_msg.len()));         // pass the exact double-free debug message length
+    emitter.instruction("b __rt_heap_debug_fail");                              // report the duplicate cached block and terminate immediately
+
+    emitter.label("__rt_heap_free_cache_small_insert");
+    emitter.instruction("ldr x12, [x10]");                                      // x12 = current small-bin head before insertion
+    emitter.instruction("str x12, [x9, #16]");                                  // cached_block->next = previous small-bin head
+    emitter.instruction("str x9, [x10]");                                       // publish the freed block as the new head of the selected bin
+    emitter.instruction("b __rt_heap_free_post_validate");                      // finish through the common debug validation and free counting path
+
+    // -- larger blocks still use the ordered free list for coalescing --
     emitter.label("__rt_heap_free_insert");
     emitter.instruction("adrp x10, _heap_free_list@PAGE");                      // load page of free list head
     emitter.instruction("add x10, x10, _heap_free_list@PAGEOFF");               // resolve address of free list head
