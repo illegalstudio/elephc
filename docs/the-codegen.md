@@ -619,7 +619,7 @@ foreach ($arr as $v) { body }
 `break` emits a `b` (unconditional jump) to the current loop's end label.
 `continue` emits a `b` to the loop's continue label (the condition check for `while`, the update for `for`).
 
-The `loop_stack` in the Context tracks which labels to jump to for nested loops.
+The `loop_stack` in the Context tracks which labels to jump to for nested loops. Each `LoopLabels` entry also carries an `sp_adjust` field so returns inside switch/loop-driven control flow can undo any temporary stack slots before jumping to the shared function epilogue.
 
 ### Switch
 

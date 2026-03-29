@@ -218,6 +218,7 @@ The default heap is 8MB. For programs that need more (or less), use:
 
 ```bash
 elephc --heap-size=16777216 heavy.php    # 16MB heap
+elephc --gc-stats heavy.php              # print alloc/free counters to stderr
 elephc --heap-debug heavy.php            # enable runtime heap verification
 ```
 

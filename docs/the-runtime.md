@@ -156,7 +156,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 ## Array routines
 
-**Source:** `src/codegen/runtime/arrays/` (84 files)
+**Source:** `src/codegen/runtime/arrays/` (85 files)
 
 ### Core allocation
 
@@ -268,7 +268,7 @@ At program start, the OS passes `argc` (argument count) in `x0` and `argv` (poin
 
 ### Date/time routines
 
-**Files:** `system/date.rs`, `system/mktime.rs`, `system/strtotime.rs`
+**Files:** `system/date.rs`, `system/date_data.rs`, `system/mktime.rs`, `system/strtotime.rs`
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
@@ -278,7 +278,7 @@ At program start, the OS passes `argc` (argument count) in `x0` and `argv` (poin
 
 ### JSON routines
 
-**Files:** `system/json_encode_bool.rs`, `system/json_encode_null.rs`, `system/json_encode_str.rs`, `system/json_encode_array_int.rs`, `system/json_encode_array_str.rs`, `system/json_encode_assoc.rs`, `system/json_decode.rs`
+**Files:** `system/json_data.rs`, `system/json_encode_bool.rs`, `system/json_encode_null.rs`, `system/json_encode_str.rs`, `system/json_encode_array_int.rs`, `system/json_encode_array_str.rs`, `system/json_encode_assoc.rs`, `system/json_decode.rs`
 
 The `json_encode` implementation uses **type-aware dispatch** — the codegen calls a different runtime routine depending on the compile-time type of the value being encoded:
 
@@ -322,7 +322,8 @@ These routines handle file and filesystem operations via macOS system calls. PHP
 | `__rt_file_put_contents` | Write string to file (create/truncate) |
 | `__rt_file` | Read file into array of lines |
 | `__rt_stat` | Get file metadata (size, timestamps) |
-| `__rt_fs` | Filesystem operations (mkdir, rmdir, unlink, chdir, rename, copy) |
+| `__rt_unlink` / `__rt_mkdir` / `__rt_rmdir` / `__rt_chdir` | Filesystem path operations via libc/syscalls |
+| `__rt_rename` / `__rt_copy` | Two-path filesystem helpers using dual C-string scratch buffers |
 | `__rt_getcwd` | Get current working directory |
 | `__rt_scandir` | List directory contents into array |
 | `__rt_glob` | Pattern-match filenames |

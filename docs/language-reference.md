@@ -924,7 +924,7 @@ Callback rules:
 | **Callback-based** | | |
 | `array_map()` | `array_map("callback", $arr): array` | Apply callback to each element, return new array |
 | `array_filter()` | `array_filter($arr, "callback"): array` | Filter elements where callback returns truthy |
-| `array_reduce()` | `array_reduce($arr, "callback", $init): int` | Reduce array to a single integer result via callback |
+| `array_reduce()` | `array_reduce($arr, "callback", $init): int` | Reduce array to a single accumulator value via callback. In the current checker/runtime subset this accumulator is typed as `int` rather than PHP's fully mixed result |
 | `array_walk()` | `array_walk($arr, "callback"): void` | Call callback on each element (side-effects) |
 | `usort()` | `usort($arr, "callback"): void` | Sort array using user comparison function |
 | `uksort()` | `uksort($arr, "callback"): void` | Sort array with a user comparison callback (currently routed through the same runtime sort path as `usort`) |

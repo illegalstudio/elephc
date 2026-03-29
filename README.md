@@ -82,6 +82,9 @@ elephc --heap-size=16777216 heavy.php
 # Enable runtime heap verification while debugging ownership issues
 elephc --heap-debug heavy.php
 
+# Print allocation/free counters to stderr while debugging GC behavior
+elephc --gc-stats heavy.php
+
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 ```
@@ -117,7 +120,7 @@ raise(15);
 Notes:
 
 - `extern function`, `extern "lib" { ... }`, `extern global`, and `extern class` are supported.
-- `string` arguments are copied to owned null-terminated C strings before the call.
+- `string` arguments are copied to temporary null-terminated C strings for the duration of the native call.
 - `string` return values are copied back into owned elephc strings.
 - `callable` parameters pass a user-defined elephc function by string name, for example `"on_signal"`.
 - Callback functions must stay C-compatible: use `int`, `float`, `bool`, `ptr`, or `void`-shaped values. String callbacks are not supported yet.

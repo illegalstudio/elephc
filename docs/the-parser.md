@@ -59,7 +59,7 @@ Things that have a value:
 | `FunctionCall { name, args }` | `strlen($s)` | |
 | `ArrayLiteral(Vec<Expr>)` | `[1, 2, 3]`, `[...$arr, 4]` | Indexed array; elements may include `Spread` expressions |
 | `ArrayLiteralAssoc(Vec<(Expr, Expr)>)` | `["a" => 1]` | Associative array |
-| `Match { subject, arms, default }` | `match($x) { 1 => "one" }` | Match expression (returns a value) |
+| `Match { subject, arms, default }` | `match($x) { 1, 2 => "low", 3 => "high" }` | Match expression (returns a value). `arms` is `Vec<(Vec<Expr>, Expr)>`, so each arm can have multiple comma-separated patterns before `=>` |
 | `ArrayAccess { array, index }` | `$arr[0]` | |
 | `Ternary { condition, then_expr, else_expr }` | `$a ? $b : $c` | |
 | `Cast { target, expr }` | `(int)$x` | |
@@ -73,7 +73,7 @@ Things that have a value:
 | `MethodCall { object, method, args }` | `$p->move(1, 2)` | Instance method call |
 | `StaticMethodCall { class_name, method, args }` | `Point::origin()` | Static method call via `::` |
 | `This` | `$this` | Reference to the current object inside a method |
-| `PtrCast { target_type, expr }` | `ptr_cast<int>($p)` | Pointer-tag cast parsed specially after `ptr_cast<T>` |
+| `PtrCast { target_type, expr }` | `ptr_cast<Point>($p)` | Pointer-tag cast parsed specially after `ptr_cast<T>` |
 
 ### Statements (`Stmt`)
 
@@ -102,9 +102,9 @@ Things that do something:
 | `StaticVar { name, init }` | `static $count = 0;` — declares a variable that persists across function calls |
 | `ClassDecl { name, properties, methods }` | `class Point { ... }` |
 | `PropertyAssign { object, property, value }` | `$p->x = 10;` |
-| `ExternFunctionDecl { name, params, return_type, library }` | `extern function foo(int $x): int;` or entries inside `extern "lib" { ... }` |
+| `ExternFunctionDecl { name, params, return_type, library }` | `extern function foo(int $x): int;` or entries inside `extern "lib" { ... }` — `params` is `Vec<ExternParam>`, where each `ExternParam` stores `{ name, c_type }`, and `return_type` is a `CType` |
 | `ExternClassDecl { name, fields }` | `extern class Point { public int $x; }` |
-| `ExternGlobalDecl { name, var_type }` | `extern global ptr $environ;` |
+| `ExternGlobalDecl { name, c_type }` | `extern global ptr $environ;` — the declared type is a C-facing `CType`, not a `PhpType` |
 | `ExprStmt(Expr)` | `my_func();` (expression used as statement) |
 
 ### Binary operators (`BinOp`)

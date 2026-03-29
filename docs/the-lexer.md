@@ -118,8 +118,13 @@ The full set of tokens elephc recognizes:
 | Token | Example | Carries |
 |---|---|---|
 | `Variable` | `$x`, `$name`, `$argc` | Name without the `$` |
-| `This` | `$this` | Self-reference inside a class method |
 | `Identifier` | `strlen`, `my_func` | The name |
+
+### Class-related keywords and special names
+
+| Token | Example | Carries |
+|---|---|---|
+| `This` | `$this` | Self-reference inside a class method |
 
 ### Keywords
 
