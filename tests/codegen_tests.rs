@@ -284,6 +284,28 @@ fn compile_harness_and_run(source: &str, heap_size: usize, harness: &str) -> Str
     stdout
 }
 
+fn compile_harness_and_run_with_heap_debug(source: &str, heap_size: usize, harness: &str) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, heap_size, false, true);
+    let patched = inject_main_exit_harness(&asm, harness);
+    let stdout = assemble_and_run(
+        &patched,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    stdout
+}
+
 fn compile_and_run_with_gc_stats(source: &str) -> ProgramOutput {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
@@ -293,6 +315,27 @@ fn compile_and_run_with_gc_stats(source: &str) -> ProgramOutput {
 
     let (asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, true, false);
+    let output = assemble_and_run_capture(
+        &asm,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    output
+}
+
+fn compile_and_run_with_heap_debug(source: &str) -> ProgramOutput {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, true);
     let output = assemble_and_run_capture(
         &asm,
         &dir,
@@ -1664,6 +1707,12 @@ fn test_array_access_variable_index() {
 fn test_array_assign() {
     let out = compile_and_run("<?php $a = [1, 2, 3]; $a[1] = 99; echo $a[1];");
     assert_eq!(out, "99");
+}
+
+#[test]
+fn test_array_assign_into_empty_array_updates_length() {
+    let out = compile_and_run(r#"<?php $a = []; $a[0] = 7; echo count($a) . "|" . $a[0];"#);
+    assert_eq!(out, "1|7");
 }
 
 #[test]
@@ -9601,6 +9650,40 @@ echo $picked[0];
 }
 
 #[test]
+fn test_gc_scope_exit_after_exhaustive_if_owned_local_is_freed() {
+    let baseline = compile_and_run_with_gc_stats(
+        r#"<?php
+function build_and_drop_direct() {
+    $tmp = [11];
+}
+
+build_and_drop_direct();
+build_and_drop_direct();
+"#,
+    );
+    assert!(baseline.success, "baseline program failed: {}", baseline.stderr);
+    let exhaustive = compile_and_run_with_gc_stats(
+        r#"<?php
+function build_and_drop($flag) {
+    if ($flag) {
+        $tmp = [11];
+    } else {
+        $tmp = [22];
+    }
+}
+
+build_and_drop(true);
+build_and_drop(false);
+"#,
+    );
+    assert!(exhaustive.success, "program failed: {}", exhaustive.stderr);
+    let (baseline_allocs, baseline_frees) = parse_gc_stats(&baseline.stderr);
+    let (exhaustive_allocs, exhaustive_frees) = parse_gc_stats(&exhaustive.stderr);
+    assert_eq!(baseline_allocs, exhaustive_allocs);
+    assert_eq!(baseline_frees, exhaustive_frees);
+}
+
+#[test]
 fn test_gc_nested_assoc_alias_survives_outer_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -9617,7 +9700,7 @@ echo $nums[1];
 }
 
 #[test]
-fn test_gc_stats_self_cycle_keeps_one_extra_object_alive() {
+fn test_gc_collect_cycles_reclaims_object_self_cycle() {
     let acyclic = compile_and_run_with_gc_stats(
         r#"<?php
 class Node { public $next = null; }
@@ -9642,7 +9725,170 @@ unset($n);
     assert_eq!(acyclic.stdout, "");
     assert_eq!(cyclic.stdout, "");
     assert_eq!(acyclic_allocs, cyclic_allocs);
-    assert_eq!(acyclic_frees, cyclic_frees + 1);
+    assert_eq!(acyclic_frees, cyclic_frees);
+}
+
+#[test]
+fn test_gc_collect_cycles_reclaims_array_object_cycle() {
+    let acyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+class Node { public $next = null; }
+$n = new Node();
+$a = [$n];
+unset($a);
+unset($n);
+"#,
+    );
+    assert!(acyclic.success, "acyclic program failed: {}", acyclic.stderr);
+
+    let cyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+class Node { public $next = null; }
+$n = new Node();
+$a = [$n];
+$n->next = $a;
+unset($a);
+unset($n);
+"#,
+    );
+    assert!(cyclic.success, "cyclic program failed: {}", cyclic.stderr);
+
+    let (acyclic_allocs, acyclic_frees) = parse_gc_stats(&acyclic.stderr);
+    let (cyclic_allocs, cyclic_frees) = parse_gc_stats(&cyclic.stderr);
+    assert_eq!(acyclic.stdout, "");
+    assert_eq!(cyclic.stdout, "");
+    assert_eq!(acyclic_allocs, cyclic_allocs);
+    assert_eq!(acyclic_frees, cyclic_frees);
+}
+
+#[test]
+fn test_gc_collect_cycles_reclaims_array_array_cycle() {
+    let acyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+$a = [0];
+$b = [0];
+$a[0] = $b;
+unset($a);
+unset($b);
+"#,
+    );
+    assert!(acyclic.success, "acyclic program failed: {}", acyclic.stderr);
+
+    let cyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+$a = [0];
+$b = [0];
+$a[0] = $b;
+$b[0] = $a;
+unset($a);
+unset($b);
+"#,
+    );
+    assert!(cyclic.success, "cyclic program failed: {}", cyclic.stderr);
+
+    let (acyclic_allocs, acyclic_frees) = parse_gc_stats(&acyclic.stderr);
+    let (cyclic_allocs, cyclic_frees) = parse_gc_stats(&cyclic.stderr);
+    assert_eq!(acyclic.stdout, "");
+    assert_eq!(cyclic.stdout, "");
+    assert_eq!(acyclic_allocs, cyclic_allocs);
+    assert_eq!(acyclic_frees, cyclic_frees);
+}
+
+#[test]
+fn test_gc_collect_cycles_reclaims_array_array_cycle_from_empty_literals() {
+    let acyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+$a = [];
+$b = [];
+$a[0] = $b;
+unset($a);
+unset($b);
+"#,
+    );
+    assert!(acyclic.success, "acyclic program failed: {}", acyclic.stderr);
+
+    let cyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+$a = [];
+$b = [];
+$a[0] = $b;
+$b[0] = $a;
+unset($a);
+unset($b);
+"#,
+    );
+    assert!(cyclic.success, "cyclic program failed: {}", cyclic.stderr);
+
+    let (acyclic_allocs, acyclic_frees) = parse_gc_stats(&acyclic.stderr);
+    let (cyclic_allocs, cyclic_frees) = parse_gc_stats(&cyclic.stderr);
+    assert_eq!(acyclic_allocs, cyclic_allocs);
+    assert_eq!(acyclic_frees, cyclic_frees);
+}
+
+#[test]
+fn test_gc_collect_cycles_reclaims_hash_hash_cycle() {
+    let acyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+$a = ["peer" => null];
+$b = ["peer" => null];
+$a["peer"] = $b;
+unset($a);
+unset($b);
+"#,
+    );
+    assert!(acyclic.success, "acyclic program failed: {}", acyclic.stderr);
+
+    let cyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+$a = ["peer" => null];
+$b = ["peer" => null];
+$a["peer"] = $b;
+$b["peer"] = $a;
+unset($a);
+unset($b);
+"#,
+    );
+    assert!(cyclic.success, "cyclic program failed: {}", cyclic.stderr);
+
+    let (acyclic_allocs, acyclic_frees) = parse_gc_stats(&acyclic.stderr);
+    let (cyclic_allocs, cyclic_frees) = parse_gc_stats(&cyclic.stderr);
+    assert_eq!(acyclic.stdout, "");
+    assert_eq!(cyclic.stdout, "");
+    assert_eq!(acyclic_allocs, cyclic_allocs);
+    assert_eq!(acyclic_frees, cyclic_frees);
+}
+
+#[test]
+fn test_gc_collect_cycles_reclaims_mixed_object_hash_cycle() {
+    let acyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+class Node { public $next = null; }
+$n = new Node();
+$h = ["node" => $n];
+unset($h);
+unset($n);
+"#,
+    );
+    assert!(acyclic.success, "acyclic program failed: {}", acyclic.stderr);
+
+    let cyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+class Node { public $next = null; }
+$n = new Node();
+$h = ["node" => $n];
+$n->next = $h;
+unset($h);
+unset($n);
+"#,
+    );
+    assert!(cyclic.success, "cyclic program failed: {}", cyclic.stderr);
+
+    let (acyclic_allocs, acyclic_frees) = parse_gc_stats(&acyclic.stderr);
+    let (cyclic_allocs, cyclic_frees) = parse_gc_stats(&cyclic.stderr);
+    assert_eq!(acyclic.stdout, "");
+    assert_eq!(cyclic.stdout, "");
+    assert_eq!(acyclic_allocs, cyclic_allocs);
+    assert_eq!(acyclic_frees, cyclic_frees);
 }
 
 #[test]
@@ -9736,6 +9982,53 @@ fn test_gc_heap_alloc_walks_past_small_first_free_block() {
 }
 
 #[test]
+fn test_gc_heap_alloc_reuses_small_bin_before_bump() {
+    let out = compile_harness_and_run(
+        "<?php",
+        256,
+        r#"    adrp x9, _heap_off@PAGE
+    add x9, x9, _heap_off@PAGEOFF
+    str xzr, [x9]
+    adrp x9, _heap_free_list@PAGE
+    add x9, x9, _heap_free_list@PAGEOFF
+    str xzr, [x9]
+    adrp x9, _heap_small_bins@PAGE
+    add x9, x9, _heap_small_bins@PAGEOFF
+    stp xzr, xzr, [x9]
+    stp xzr, xzr, [x9, #16]
+    mov x0, #16
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    mov x0, #24
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    ldr x0, [sp, #16]
+    bl __rt_heap_free
+    adrp x9, _heap_off@PAGE
+    add x9, x9, _heap_off@PAGEOFF
+    ldr x10, [x9]
+    str x10, [sp, #-16]!
+    mov x0, #12
+    bl __rt_heap_alloc
+    ldr x9, [sp, #32]
+    cmp x0, x9
+    cset x11, eq
+    adrp x9, _heap_off@PAGE
+    add x9, x9, _heap_off@PAGEOFF
+    ldr x9, [x9]
+    ldr x10, [sp]
+    cmp x9, x10
+    cset x12, eq
+    and x0, x11, x12
+    bl __rt_itoa
+    mov x0, #1
+    mov x16, #4
+    svc #0x80"#,
+    );
+    assert_eq!(out, "1");
+}
+
+#[test]
 fn test_heap_debug_double_free_reports_error() {
     let err = compile_harness_expect_failure(
         "<?php",
@@ -9785,6 +10078,34 @@ fn test_heap_debug_free_list_corruption_reports_error() {
     bl __rt_heap_alloc"#,
     );
     assert!(err.contains("heap debug detected free-list corruption"), "{err}");
+}
+
+#[test]
+fn test_heap_debug_reports_exit_summary() {
+    let out = compile_and_run_with_heap_debug("<?php $a = [1, 2, 3]; unset($a);");
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: allocs="), "{}", out.stderr);
+    assert!(out.stderr.contains("peak_live_bytes="), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary:"), "{}", out.stderr);
+}
+
+#[test]
+fn test_heap_debug_poison_freed_payload() {
+    let out = compile_harness_and_run_with_heap_debug(
+        "<?php",
+        65_536,
+        r#"    mov x0, #16
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    bl __rt_heap_free
+    ldr x0, [sp], #16
+    ldrb w0, [x0, #8]
+    bl __rt_itoa
+    mov x0, #1
+    mov x16, #4
+    svc #0x80"#,
+    );
+    assert_eq!(out, "165");
 }
 
 #[test]
@@ -10457,6 +10778,27 @@ echo strlen("hello world");
 }
 
 #[test]
+fn test_ffi_extern_strlen_frees_borrowed_cstr_temp() {
+    let baseline = compile_and_run_with_gc_stats(
+        r#"<?php
+extern function strlen(string $s): int;
+"#,
+    );
+    assert!(baseline.success, "baseline program failed: {}", baseline.stderr);
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+extern function strlen(string $s): int;
+strlen("hello");
+strlen("world");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    let (baseline_allocs, baseline_frees) = parse_gc_stats(&baseline.stderr);
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs - baseline_allocs, frees - baseline_frees, "{}", out.stderr);
+}
+
+#[test]
 fn test_ffi_malloc_and_free() {
     let out = compile_and_run(
         r#"<?php
@@ -10692,6 +11034,27 @@ echo strcmp("aa", "ab") < 0 ? "ok" : "bad";
 "#,
     );
     assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_ffi_extern_multiple_string_args_free_all_borrowed_cstr_temps() {
+    let baseline = compile_and_run_with_gc_stats(
+        r#"<?php
+extern function strcmp(string $left, string $right): int;
+"#,
+    );
+    assert!(baseline.success, "baseline program failed: {}", baseline.stderr);
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+extern function strcmp(string $left, string $right): int;
+strcmp("aa", "ab");
+strcmp("bb", "bb");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    let (baseline_allocs, baseline_frees) = parse_gc_stats(&baseline.stderr);
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs - baseline_allocs, frees - baseline_frees, "{}", out.stderr);
 }
 
 #[test]

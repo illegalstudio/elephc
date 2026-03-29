@@ -4,7 +4,7 @@
 
 ---
 
-elephc manages memory without a garbage collector and without calling `malloc`/`free` for PHP values. Storage lives on the **stack** (automatic, per-function), in fixed BSS regions, or in a compiler-managed **heap buffer** with a free-list allocator. The final binary still links `libSystem` for OS and libc services.
+elephc manages memory without calling `malloc`/`free` for PHP values directly. Storage lives on the **stack** (automatic, per-function), in fixed BSS regions, or in a compiler-managed **heap buffer** with a free-list allocator, reference counting, and a targeted cycle collector for array/hash/object graphs. The final binary still links `libSystem` for OS and libc services.
 
 This page explains where every value lives in memory at runtime.
 
@@ -29,7 +29,8 @@ This page explains where every value lives in memory at runtime.
 ├─────────────────────────────┤
 │   Runtime metadata (BSS)     │  _concat_off, _global_argc/_argv,
 │  (heap state, counters,      │  _heap_off, _heap_free_list,
-│   globals, static storage)   │  _gc_allocs/_frees/_peak, ...
+│   globals, static storage)   │  _heap_small_bins, _gc_allocs/_frees/_live/_peak,
+│                              │  _gc_collecting/_gc_release_suppressed, ...
 ├─────────────────────────────┤
 │       Data section           │  String literals, float constants
 │  (.data — read-only)         │
@@ -145,13 +146,18 @@ When a string result is stored to a variable (e.g., `$x = "a" . "b";`), the code
 ```asm
 .comm _heap_buf, 8388608    ; 8MB buffer (configurable via --heap-size)
 .comm _heap_off, 8          ; current bump allocation offset
-.comm _heap_free_list, 8    ; head of free block linked list
+.comm _heap_free_list, 8    ; head of the general free block linked list
+.comm _heap_small_bins, 32  ; 4 x 8-byte heads for <=8/16/32/64-byte cached blocks
+.comm _heap_debug_enabled, 8 ; heap-debug toggle
+.comm _gc_collecting, 8     ; cycle collector re-entry guard
+.comm _gc_release_suppressed, 8 ; suppress nested collection during deep free
 .comm _gc_allocs, 8         ; allocation counter
 .comm _gc_frees, 8          ; free counter
+.comm _gc_live, 8           ; current live heap footprint in bytes
 .comm _gc_peak, 8           ; heap high-water mark
 ```
 
-The heap (`_heap_buf`) is an 8MB region (by default) for dynamically-sized data — arrays, hash tables, objects, and persisted strings. It uses a **free-list + bump hybrid allocator**.
+The heap (`_heap_buf`) is an 8MB region (by default) for dynamically-sized data — arrays, hash tables, objects, and persisted strings. It uses a **free-list + bump hybrid allocator** with segregated small-block bins for the hottest tiny allocations.
 
 ### How heap allocation works
 
@@ -168,9 +174,10 @@ The size is stored at header offset `+0`, the reference count at `+4`, and the h
 
 The runtime routine `__rt_heap_alloc`:
 
-1. **Walk the free list** — check each freed block (first-fit). If a block with `size >= requested` is found, either unlink it whole or split it so the remainder stays on the free list, then reset the allocated block's refcount to 1 and return it.
-2. **Bump allocate** — if no free block fits, allocate from the end of the heap: write size and refcount=1 to the header, advance `_heap_off`, return user pointer.
-3. **Bounds check** — if the bump would exceed `_heap_max`, print a fatal error and exit.
+1. **Probe the segregated small bins** — requests up to 64 bytes first check `_heap_small_bins` (`<=8`, `<=16`, `<=32`, `<=64`) and reuse a cached block from the smallest fitting class available.
+2. **Walk the general free list** — if no cached small block fits, check the address-ordered free list (first-fit). If a block with `size >= requested` is found, either unlink it whole or split it so the remainder stays on the free list, then reset the allocated block's refcount to 1 and return it.
+3. **Bump allocate** — if neither free path fits, allocate from the end of the heap: write size and refcount=1 to the header, advance `_heap_off`, return user pointer.
+4. **Bounds check** — if the bump would exceed `_heap_max`, print a fatal error and exit.
 
 Minimum allocation is 8 bytes (to fit the next pointer when the block is later freed).
 
@@ -180,8 +187,9 @@ The runtime routine `__rt_heap_free`:
 
 1. Read the block size (32-bit) from the 16-byte header at `user_pointer - 16`
 2. If the block is exactly at the bump tail, shrink `_heap_off` immediately
-3. Otherwise, insert the block into the free list in address order, merge it with adjacent free neighbors, and repeatedly trim any now-free tail chain back into `_heap_off`
-4. Free blocks reuse the same 16-byte header, clear the kind back to `0`, and then store the free-list pointer immediately after it: `[size:4][refcnt:4][kind:8][next_ptr:8][...unused...]`
+3. Otherwise, payloads up to 64 bytes are cached into one of four segregated small-bin heads (`<=8`, `<=16`, `<=32`, `<=64`) so later tiny allocations can reuse them without scanning the larger free list
+4. Larger non-tail blocks are inserted into the general free list in address order, merged with adjacent free neighbors, and repeatedly trim any now-free tail chain back into `_heap_off`
+5. Free blocks reuse the same 16-byte header, clear the kind back to `0`, and then store the next pointer immediately after it: `[size:4][refcnt:4][kind:8][next_ptr:8][...unused...]`
 
 The variant `__rt_heap_free_safe` validates that the pointer is within `_heap_buf` range before freeing — safe to call with garbage, null, or `.data` section pointers.
 
@@ -191,7 +199,9 @@ Passing `--heap-debug` enables additional runtime verification without changing 
 
 - `__rt_heap_free` rejects duplicate insertion of the same block into the free list (`double free`)
 - `__rt_incref` / `__rt_decref_*` reject zero-refcount heap blocks before mutating them (`bad refcount`)
-- `__rt_heap_alloc` / `__rt_heap_free` validate the ordered free list and trap on out-of-range, overlapping, cyclic, or merely-adjacent free blocks (`free-list corruption`)
+- `__rt_heap_alloc` / `__rt_heap_free` validate the ordered free list plus the segregated small-bin chains and trap on out-of-range, overlapping, cyclic, mis-sized, or merely-adjacent free blocks (`free-list corruption`)
+- `__rt_heap_free` poisons freed payload bytes with `0xA5`, so stale raw reads stand out immediately in debug repros
+- process exit prints a heap-debug summary with alloc/free counts, live blocks, live bytes, a leak summary line, and the peak live-byte watermark
 
 When one of these checks trips, the program exits with a fatal heap-debug error instead of continuing with corrupted allocator state.
 
@@ -199,6 +209,7 @@ When one of these checks trips, the program exits with a fatal heap-debug error 
 
 - **Variable reassignment**: when a heap-backed local/global/static slot is overwritten, codegen releases the previous owner through the appropriate runtime path (`__rt_heap_free_safe` for persisted strings, `__rt_decref_*` for refcounted arrays / hashes / objects)
 - **`unset()`**: releases the current heap-backed value before nulling the slot
+- **Targeted cycle collection**: when decref reaches a container/object graph that may only be keeping itself alive, `__rt_gc_collect_cycles` counts heap-only incoming edges, marks externally reachable blocks, and deep-frees the remaining unreachable array/hash/object island
 - **Process exit**: all memory is reclaimed by the OS
 
 ### Configurable heap size
@@ -207,6 +218,7 @@ The default heap is 8MB. For programs that need more (or less), use:
 
 ```bash
 elephc --heap-size=16777216 heavy.php    # 16MB heap
+elephc --gc-stats heavy.php              # print alloc/free counters to stderr
 elephc --heap-debug heavy.php            # enable runtime heap verification
 ```
 
@@ -257,10 +269,10 @@ When `array_push` finds that `length >= capacity`, the array grows automatically
 
 1. `__rt_array_grow` allocates a new array with **2× capacity** (minimum 8)
 2. Copies the 24-byte header and all elements to the new array
-3. Frees the old array via `__rt_heap_free`
+3. Leaves the old storage in place for alias safety instead of freeing it immediately
 4. Returns the new array pointer
 
-The caller updates its stored pointer to the new array. This means arrays are truly dynamic — you can push unlimited elements (limited only by heap size).
+The caller updates its stored pointer to the new array. This means arrays are truly dynamic — you can push unlimited elements (limited only by heap size). Direct indexed writes into empty arrays now also grow the backing storage and extend `length` to cover the highest written index.
 
 ## Hash table layout (associative arrays)
 
@@ -369,6 +381,7 @@ The runtime also emits static data tables:
 - `_json_true`, `_json_false`, `_json_null` — JSON keyword strings (4, 5, and 4 bytes) used by `json_encode` for boolean and null values
 - `_day_names` — 84-byte table (7 entries x 12 bytes each) with day names, lengths, and padding. Used by `date()` for day-of-week formatting
 - `_month_names` — 144-byte table (12 entries x 12 bytes each) with month names, lengths, and padding. Used by `date()` for month formatting
+- `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>` — per-class property traversal descriptors used by object deep-free and cycle collection
 
 ### Global variables
 
@@ -410,7 +423,7 @@ The naming pattern is `_static_FUNCNAME_VARNAME`. The init flag ensures the init
 | Stack | OS default (~8MB) | Stack overflow (crash) |
 | String buffer | 64KB | Resets each statement — effectively unlimited |
 | Heap | 8MB (configurable) | Fatal error: "heap memory exhausted" |
-| Heap metadata | `_heap_off`, `_heap_free_list`, `_gc_*` = 40 bytes total | Fixed-size bookkeeping, not user-visible |
+| Heap metadata | `_heap_off`, `_heap_free_list`, `_heap_small_bins`, `_heap_debug_enabled`, `_gc_*` flags/counters = 104 bytes total | Fixed-size bookkeeping, not user-visible |
 | CLI globals | `_global_argc`, `_global_argv` = 16 bytes total | Fixed-size bookkeeping |
 | User globals | 16 bytes per `global $var` slot | Grows with number of referenced globals |
 | Static vars | 24 bytes per `static $var` (`16 + 8 init flag`) | Grows with number of declared static locals |
@@ -421,35 +434,37 @@ The naming pattern is `_static_FUNCNAME_VARNAME`. The init flag ensures the init
 
 ## Memory management strategy
 
-elephc uses a **free-list allocator with reference counting** — not a garbage collector, but not pure bump-allocation either. Memory is reclaimed in specific situations:
+elephc uses a **free-list allocator with reference counting plus a targeted cycle collector** — not pure bump-allocation, and not a whole-heap tracing runtime either. Memory is reclaimed in specific situations:
 
 1. **Reference counting** — every heap allocation carries a 32-bit refcount (initialized to 1). When a reference is shared, `__rt_incref` increments it. When a reference is dropped, `__rt_decref_array`, `__rt_decref_hash`, or `__rt_decref_object` decrements it and frees the block when it reaches zero
 2. **Codegen ownership tracking** — locals, globals, statics, `foreach` variables, `list(...)` targets, and call arguments are classified as owned or borrowed at compile time so new owners retain borrowed heap values before storing them
 3. **Variable reassignment** — when `$x = "new value"` overwrites a string or array, the old heap block is freed and returned to the free list for reuse
 4. **`unset($x)`** — explicitly frees the variable's heap allocation
-5. **String buffer reset** — the concat buffer resets at each statement, with strings that need to survive copied to heap via `__rt_str_persist`
-6. **Stack memory** — automatically reclaimed when functions return
-7. **Process exit** — all memory reclaimed by the OS
+5. **FFI string-call cleanup** — temporary C strings created for `extern function foo(string $s)` calls are released immediately after the native call returns
+6. **String buffer reset** — the concat buffer resets at each statement, with strings that need to survive copied to heap via `__rt_str_persist`
+7. **Stack memory** — automatically reclaimed when functions return
+8. **Process exit** — all memory reclaimed by the OS
 
 ### What is NOT freed
 
 - **Non-adjacent free blocks** are still not compacted — fragmentation can still occur over time even though adjacent neighbors are coalesced on free and oversized free blocks are split on allocation
-- **Circular container/object graphs** are not reclaimed today. Pure reference counting keeps self-referential or mutually-referential arrays/hash tables/objects alive once external roots disappear
 - **Pointer targets** are not ownership-tracked just because a raw pointer exists; the pointer value itself is only an address
 - **Intermediate scratch strings** in `_concat_buf` are not individually freed — the buffer is simply reset per statement
-- **General function epilogues** do not blanket-decref all heap locals. They now selectively clean up slots proven `Owned`, while locals populated from still-ambiguous borrowed/control-flow paths remain excluded
+- **General function epilogues** do not blanket-decref all heap locals. They now selectively clean up slots proven `Owned`, and exhaustive `if` / `elseif` / `else` branches can restore that cleanup when every fallthrough branch directly assigns the same heap-backed type to the same local. More dynamic borrowed/control-flow paths still remain excluded on purpose
 - **Container-copying builtins** no longer blindly duplicate borrowed heap handles for common nested payload paths: refcounted runtime variants now retain values before new arrays/hash tables take ownership (`array` literals with spreads, `array_merge`, `array_chunk`, `array_slice`, `array_reverse`, `array_pad`, `array_unique`, `array_splice`, `array_diff`, `array_intersect`, `array_filter`, `array_fill`, `array_combine`, `array_fill_keys`)
 - **Regression coverage now explicitly exercises** local aliases, borrowed nested-container returns, `Owned`/`Borrowed` control-flow merges, and scope-exit paths so future ownership work has focused tripwires instead of relying only on large end-to-end suites
+- **Raw/off-heap ownership cycles** are still outside the collector. `ptr` values, extern-managed buffers, and raw helper allocations (`kind=0`) are not traversed just because an address exists somewhere
 
-### Evaluated next step for cycles
+### Targeted cycle collection
 
-The current runtime now has enough uniform metadata to support a targeted future cycle collector:
+The runtime now includes a targeted collector for heap-backed `array`, associative-array/hash, and `object` graphs:
 
-- the allocator header carries a heap-kind tag (`string`, `array`, `hash`, `object`, raw)
-- refcounted containers/objects already funnel destruction through `__rt_decref_array`, `__rt_decref_hash`, and `__rt_decref_object`
-- raw buffers and helper allocations can stay outside any future cycle walk because they keep kind `0`
+- the allocator header carries a uniform heap-kind tag (`string`, `array`, `hash`, `object`, raw)
+- indexed arrays pack their runtime `value_type` into the same kind word so the collector knows whether their elements can contain nested heap pointers
+- objects record runtime property tags/metadata, with `_class_gc_desc_*` tables as a compile-time fallback for property traversal
+- mixed release paths use `__rt_decref_any`, so deep-free and GC walks can release nested strings/arrays/hashes/objects through one uniform dispatcher
 
-That makes a **container/object-only trial-deletion or candidate-queue collector** the most realistic next design point. It would be narrower and cheaper than a whole-heap tracer, while still addressing the only structural leak class that plain refcounting leaves behind.
+`__rt_gc_collect_cycles` is intentionally narrower than a full tracing GC: it ignores strings and raw helper buffers, clears transient metadata, counts heap-only incoming edges, marks externally reachable container/object blocks, then frees the unmarked remainder with deep-release helpers. That keeps the collector focused on the structural leak class that plain refcounting cannot solve without turning the whole runtime into a moving or stop-the-world heap.
 
 ### Performance characteristics
 

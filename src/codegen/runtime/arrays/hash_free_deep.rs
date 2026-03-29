@@ -33,6 +33,10 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // set up frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save hash table pointer
+    emitter.instruction("adrp x9, _gc_release_suppressed@PAGE");                // load page of the release-suppression flag
+    emitter.instruction("add x9, x9, _gc_release_suppressed@PAGEOFF");          // resolve the release-suppression flag address
+    emitter.instruction("mov x10, #1");                                         // ordinary deep-free walks suppress nested collector runs
+    emitter.instruction("str x10, [x9]");                                       // store release-suppressed = 1 for child cleanup
     emitter.instruction("ldr x9, [x0, #8]");                                    // load table capacity
     emitter.instruction("str x9, [sp, #8]");                                    // save capacity for the loop
     emitter.instruction("ldr x9, [x0, #16]");                                   // load runtime value_type tag
@@ -68,41 +72,20 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     emitter.instruction("add x13, x9, x13");                                    // advance from table base to slot
     emitter.instruction("add x13, x13, #24");                                   // skip hash header to entry storage
     emitter.instruction("ldr x14, [sp, #16]");                                  // reload runtime value_type tag
-    emitter.instruction("cmp x14, #1");                                         // is the entry value a string?
-    emitter.instruction("b.eq __rt_hash_free_deep_value_str");                  // free string values via heap_free_safe
-    emitter.instruction("cmp x14, #4");                                         // is the entry value an indexed array?
-    emitter.instruction("b.eq __rt_hash_free_deep_value_array");                // decref nested indexed arrays
-    emitter.instruction("cmp x14, #5");                                         // is the entry value an associative array?
-    emitter.instruction("b.eq __rt_hash_free_deep_value_hash");                 // decref nested hash tables
-    emitter.instruction("cmp x14, #6");                                         // is the entry value an object?
-    emitter.instruction("b.eq __rt_hash_free_deep_value_object");               // decref nested objects
+    emitter.instruction("cmp x14, #1");                                         // is the entry value heap-backed at all?
+    emitter.instruction("b.eq __rt_hash_free_deep_value_any");                  // strings release through the uniform dispatch helper
+    emitter.instruction("cmp x14, #4");                                         // is this a nested indexed array?
+    emitter.instruction("b.eq __rt_hash_free_deep_value_any");                  // arrays release through the uniform dispatch helper
+    emitter.instruction("cmp x14, #5");                                         // is this a nested associative array?
+    emitter.instruction("b.eq __rt_hash_free_deep_value_any");                  // hashes release through the uniform dispatch helper
+    emitter.instruction("cmp x14, #6");                                         // is this a nested object / callable?
+    emitter.instruction("b.eq __rt_hash_free_deep_value_any");                  // objects release through the uniform dispatch helper
     emitter.instruction("b __rt_hash_free_deep_next");                          // plain scalars need no cleanup
 
-    emitter.label("__rt_hash_free_deep_value_str");
-    emitter.instruction("ldr x0, [x13, #24]");                                  // load string pointer from entry value
+    emitter.label("__rt_hash_free_deep_value_any");
+    emitter.instruction("ldr x0, [x13, #24]");                                  // load the heap-backed value pointer from the entry payload
     emitter.instruction("str x11, [sp, #24]");                                  // preserve loop index across helper call
-    emitter.instruction("bl __rt_heap_free_safe");                              // free persisted string value
-    emitter.instruction("ldr x11, [sp, #24]");                                  // restore loop index after helper call
-    emitter.instruction("b __rt_hash_free_deep_next");                          // continue with the next slot
-
-    emitter.label("__rt_hash_free_deep_value_array");
-    emitter.instruction("ldr x0, [x13, #24]");                                  // load nested indexed array pointer
-    emitter.instruction("str x11, [sp, #24]");                                  // preserve loop index across helper call
-    emitter.instruction("bl __rt_decref_array");                                // release nested indexed array ownership
-    emitter.instruction("ldr x11, [sp, #24]");                                  // restore loop index after helper call
-    emitter.instruction("b __rt_hash_free_deep_next");                          // continue with the next slot
-
-    emitter.label("__rt_hash_free_deep_value_hash");
-    emitter.instruction("ldr x0, [x13, #24]");                                  // load nested hash table pointer
-    emitter.instruction("str x11, [sp, #24]");                                  // preserve loop index across helper call
-    emitter.instruction("bl __rt_decref_hash");                                 // release nested hash table ownership
-    emitter.instruction("ldr x11, [sp, #24]");                                  // restore loop index after helper call
-    emitter.instruction("b __rt_hash_free_deep_next");                          // continue with the next slot
-
-    emitter.label("__rt_hash_free_deep_value_object");
-    emitter.instruction("ldr x0, [x13, #24]");                                  // load nested object pointer
-    emitter.instruction("str x11, [sp, #24]");                                  // preserve loop index across helper call
-    emitter.instruction("bl __rt_decref_object");                               // release nested object ownership
+    emitter.instruction("bl __rt_decref_any");                                  // release the heap-backed value through the uniform dispatcher
     emitter.instruction("ldr x11, [sp, #24]");                                  // restore loop index after helper call
 
     emitter.label("__rt_hash_free_deep_next");
@@ -112,6 +95,9 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
 
     // -- free the hash table struct itself --
     emitter.label("__rt_hash_free_deep_struct");
+    emitter.instruction("adrp x9, _gc_release_suppressed@PAGE");                // load page of the release-suppression flag
+    emitter.instruction("add x9, x9, _gc_release_suppressed@PAGEOFF");          // resolve the release-suppression flag address
+    emitter.instruction("str xzr, [x9]");                                       // clear release suppression before freeing the container storage
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload hash table pointer
     emitter.instruction("bl __rt_heap_free");                                   // free the hash table storage
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address

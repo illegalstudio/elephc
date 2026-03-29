@@ -36,9 +36,32 @@ pub fn emit_decref_hash(emitter: &mut Emitter) {
     emitter.instruction("ldr w9, [x0, #-12]");                                  // load 32-bit refcount from the uniform heap header
     emitter.instruction("subs w9, w9, #1");                                     // decrement refcount, set flags
     emitter.instruction("str w9, [x0, #-12]");                                  // store decremented refcount
-    emitter.instruction("b.ne __rt_decref_hash_skip");                          // if not zero, still referenced — skip free
+    emitter.instruction("b.eq __rt_decref_hash_free");                          // zero refcount means the hash can be freed immediately
+
+    // -- non-zero refcount may indicate a now-unrooted cycle; run the targeted collector unless it is already active --
+    emitter.instruction("adrp x9, _gc_release_suppressed@PAGE");                // load page of the release-suppression flag
+    emitter.instruction("add x9, x9, _gc_release_suppressed@PAGEOFF");          // resolve the release-suppression flag address
+    emitter.instruction("ldr x9, [x9]");                                        // load the release-suppression flag
+    emitter.instruction("cbnz x9, __rt_decref_hash_skip");                      // ordinary deep-free walks suppress nested collector runs
+    emitter.instruction("adrp x9, _gc_collecting@PAGE");                        // load page of the collector-active flag
+    emitter.instruction("add x9, x9, _gc_collecting@PAGEOFF");                  // resolve the collector-active flag address
+    emitter.instruction("ldr x9, [x9]");                                        // load the collector-active flag
+    emitter.instruction("cbnz x9, __rt_decref_hash_skip");                      // nested decref calls during collection must not restart the collector
+    emitter.instruction("ldr x9, [x0, #16]");                                   // load the runtime hash value_type tag from the container header
+    emitter.instruction("cmp x9, #4");                                          // is this a hash of indexed arrays?
+    emitter.instruction("b.eq __rt_decref_hash_collect");                       // nested heap payloads can participate in cycles
+    emitter.instruction("cmp x9, #5");                                          // is this a hash of associative arrays?
+    emitter.instruction("b.eq __rt_decref_hash_collect");                       // nested heap payloads can participate in cycles
+    emitter.instruction("cmp x9, #6");                                          // is this a hash of objects?
+    emitter.instruction("b.ne __rt_decref_hash_skip");                          // scalar/string hashes cannot participate in heap cycles
+    emitter.label("__rt_decref_hash_collect");
+    emitter.instruction("str x30, [sp, #-16]!");                                // preserve the caller return address across the collector call
+    emitter.instruction("bl __rt_gc_collect_cycles");                           // reclaim any newly-unrooted refcounted graph components
+    emitter.instruction("ldr x30, [sp], #16");                                  // restore the caller return address after collection
+    emitter.instruction("b __rt_decref_hash_skip");                             // return after the optional collection pass
 
     // -- refcount reached zero: deep free the hash table and its owned entries --
+    emitter.label("__rt_decref_hash_free");
     emitter.instruction("b __rt_hash_free_deep");                               // tail-call to deep free hash keys and heap-backed values
 
     emitter.label("__rt_decref_hash_skip");

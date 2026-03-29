@@ -36,10 +36,25 @@ pub fn emit_decref_object(emitter: &mut Emitter) {
     emitter.instruction("ldr w9, [x0, #-12]");                                  // load 32-bit refcount from the uniform heap header
     emitter.instruction("subs w9, w9, #1");                                     // decrement refcount, set flags
     emitter.instruction("str w9, [x0, #-12]");                                  // store decremented refcount
-    emitter.instruction("b.ne __rt_decref_object_skip");                        // if not zero, still referenced — skip free
+    emitter.instruction("b.eq __rt_decref_object_free");                        // zero refcount means the object can be freed immediately
 
-    // -- refcount reached zero: shallow free the object --
-    emitter.instruction("b __rt_heap_free");                                    // tail-call to heap free (shallow)
+    // -- non-zero refcount may indicate a now-unrooted cycle; run the targeted collector unless it is already active --
+    emitter.instruction("adrp x9, _gc_release_suppressed@PAGE");                // load page of the release-suppression flag
+    emitter.instruction("add x9, x9, _gc_release_suppressed@PAGEOFF");          // resolve the release-suppression flag address
+    emitter.instruction("ldr x9, [x9]");                                        // load the release-suppression flag
+    emitter.instruction("cbnz x9, __rt_decref_object_skip");                    // ordinary deep-free walks suppress nested collector runs
+    emitter.instruction("adrp x9, _gc_collecting@PAGE");                        // load page of the collector-active flag
+    emitter.instruction("add x9, x9, _gc_collecting@PAGEOFF");                  // resolve the collector-active flag address
+    emitter.instruction("ldr x9, [x9]");                                        // load the collector-active flag
+    emitter.instruction("cbnz x9, __rt_decref_object_skip");                    // nested decref calls during collection must not restart the collector
+    emitter.instruction("str x30, [sp, #-16]!");                                // preserve the caller return address across the collector call
+    emitter.instruction("bl __rt_gc_collect_cycles");                           // reclaim any newly-unrooted refcounted graph components
+    emitter.instruction("ldr x30, [sp], #16");                                  // restore the caller return address after collection
+    emitter.instruction("b __rt_decref_object_skip");                           // return after the optional collection pass
+
+    // -- refcount reached zero: deep free the object --
+    emitter.label("__rt_decref_object_free");
+    emitter.instruction("b __rt_object_free_deep");                              // tail-call to deep free object properties and storage
 
     emitter.label("__rt_decref_object_skip");
     emitter.instruction("ret");                                                 // return to caller

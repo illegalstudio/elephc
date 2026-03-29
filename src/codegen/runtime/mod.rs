@@ -89,6 +89,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_heap_debug_fail(emitter);
     arrays::emit_heap_debug_check_live(emitter);
     arrays::emit_heap_debug_validate_free_list(emitter);
+    arrays::emit_heap_debug_report(emitter);
     arrays::emit_heap_kind(emitter);
     arrays::emit_heap_free(emitter);
     arrays::emit_array_free_deep(emitter);
@@ -159,6 +160,11 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_usort(emitter);
     arrays::emit_array_merge_into(emitter);
     arrays::emit_array_merge_into_refcounted(emitter);
+    arrays::emit_decref_any(emitter);
+    arrays::emit_gc_note_child_ref(emitter);
+    arrays::emit_gc_mark_reachable(emitter);
+    arrays::emit_gc_collect_cycles(emitter);
+    arrays::emit_object_free_deep(emitter);
     arrays::emit_refcount(emitter);
 
     // I/O runtime functions
@@ -189,6 +195,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
 pub fn emit_runtime_data(
     global_var_names: &std::collections::HashSet<String>,
     static_vars: &std::collections::HashMap<(String, String), crate::types::PhpType>,
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
     heap_size: usize,
 ) -> String {
     let mut out = String::new();
@@ -199,7 +206,10 @@ pub fn emit_runtime_data(
     out.push_str(&format!(".comm _heap_buf, {}, 3\n", heap_size));
     out.push_str(".comm _heap_off, 8, 3\n");
     out.push_str(".comm _heap_free_list, 8, 3\n");
+    out.push_str(".comm _heap_small_bins, 32, 3\n");
     out.push_str(".comm _heap_debug_enabled, 8, 3\n");
+    out.push_str(".comm _gc_collecting, 8, 3\n");
+    out.push_str(".comm _gc_release_suppressed, 8, 3\n");
     out.push_str(&format!("_heap_max:\n    .quad {}\n", heap_size));
     out.push_str("_heap_err_msg:\n    .ascii \"Fatal error: heap memory exhausted\\n\"\n");
     out.push_str("_heap_dbg_bad_refcount_msg:\n    .ascii \"Fatal error: heap debug detected bad refcount\\n\"\n");
@@ -210,10 +220,20 @@ pub fn emit_runtime_data(
     // GC statistics counters
     out.push_str(".comm _gc_allocs, 8, 3\n");
     out.push_str(".comm _gc_frees, 8, 3\n");
+    out.push_str(".comm _gc_live, 8, 3\n");
     out.push_str(".comm _gc_peak, 8, 3\n");
     out.push_str(".comm _cstr_buf, 4096, 3\n");
     out.push_str(".comm _cstr_buf2, 4096, 3\n");
     out.push_str(".comm _eof_flags, 256, 3\n");
+    out.push_str("_heap_dbg_stats_prefix:\n    .ascii \"HEAP DEBUG: allocs=\"\n");
+    out.push_str("_heap_dbg_frees_label:\n    .ascii \" frees=\"\n");
+    out.push_str("_heap_dbg_live_blocks_label:\n    .ascii \" live_blocks=\"\n");
+    out.push_str("_heap_dbg_live_bytes_label:\n    .ascii \" live_bytes=\"\n");
+    out.push_str("_heap_dbg_peak_label:\n    .ascii \" peak_live_bytes=\"\n");
+    out.push_str("_heap_dbg_leak_prefix:\n    .ascii \"HEAP DEBUG: leak summary: \"\n");
+    out.push_str("_heap_dbg_live_blocks_short_label:\n    .ascii \"live_blocks=\"\n");
+    out.push_str("_heap_dbg_clean_label:\n    .ascii \"clean\\n\"\n");
+    out.push_str("_heap_dbg_newline:\n    .ascii \"\\n\"\n");
     out.push_str("_fmt_g:\n    .asciz \"%.14G\"\n");
     // Base64 encode lookup table (A-Z, a-z, 0-9, +, /)
     out.push_str("_b64_encode_tbl:\n    .ascii \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\"\n");
@@ -265,6 +285,44 @@ pub fn emit_runtime_data(
             ".comm _static_{}_{}_init, 8, 3\n",
             func_name, var_name
         ));
+    }
+
+    let mut sorted_classes: Vec<(&String, &crate::types::ClassInfo)> = classes.iter().collect();
+    sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
+    out.push_str(".data\n");
+    out.push_str(".p2align 3\n");
+    out.push_str("_class_gc_desc_count:\n");
+    out.push_str(&format!("    .quad {}\n", sorted_classes.len()));
+    out.push_str("_class_gc_desc_ptrs:\n");
+    for (_, class_info) in &sorted_classes {
+        out.push_str(&format!("    .quad _class_gc_desc_{}\n", class_info.class_id));
+    }
+    for (_, class_info) in sorted_classes {
+        out.push_str(&format!("_class_gc_desc_{}:\n", class_info.class_id));
+        if class_info.properties.is_empty() {
+            out.push_str("    .byte 0\n");
+            continue;
+        }
+        out.push_str("    .byte ");
+        for (i, (_, prop_ty)) in class_info.properties.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            let tag = match prop_ty {
+                crate::types::PhpType::Int => 0,
+                crate::types::PhpType::Str => 1,
+                crate::types::PhpType::Float => 2,
+                crate::types::PhpType::Bool => 3,
+                crate::types::PhpType::Array(_) => 4,
+                crate::types::PhpType::AssocArray { .. } => 5,
+                crate::types::PhpType::Object(_) => 6,
+                crate::types::PhpType::Callable
+                | crate::types::PhpType::Pointer(_)
+                | crate::types::PhpType::Void => 0,
+            };
+            out.push_str(&tag.to_string());
+        }
+        out.push('\n');
     }
     out
 }

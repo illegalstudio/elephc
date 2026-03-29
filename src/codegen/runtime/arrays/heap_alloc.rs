@@ -2,7 +2,8 @@ use crate::codegen::emit::Emitter;
 
 /// heap_alloc: free-list allocator with 16-byte header.
 /// Each allocation has a 16-byte header [size:4][refcount:4][kind:8] before the user pointer.
-/// Free blocks are organized as a singly-linked list: [size:4][refcount:4][kind:8][next_ptr:8].
+/// Small freed blocks are cached in size-segregated bins before falling back to the
+/// general address-ordered free list: [size:4][refcount:4][kind:8][next_ptr:8].
 /// Input: x0 = bytes needed
 /// Output: x0 = pointer to allocated memory (after header)
 pub fn emit_heap_alloc(emitter: &mut Emitter) {
@@ -28,8 +29,44 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x15");                                         // restore the requested allocation size after validation
     emitter.label("__rt_heap_alloc_debug_checked");
 
-    // -- try to find a free block first --
+    // -- try small segregated bins before walking the general free list --
+    emitter.instruction("cmp x0, #64");                                         // do we fit in the small-block cache classes?
+    emitter.instruction("b.hi __rt_heap_alloc_fl_start");                       // larger requests still use the general free list
+    emitter.instruction("mov x13, #0");                                         // default to the <=8-byte bin
+    emitter.instruction("cmp x0, #8");                                          // does the request fit in the smallest payload class?
+    emitter.instruction("b.ls __rt_heap_alloc_small_bins");                     // yes — start searching at the <=8-byte bin
+    emitter.instruction("mov x13, #8");                                         // otherwise start at the <=16-byte bin
+    emitter.instruction("cmp x0, #16");                                         // does the request fit in the <=16-byte class?
+    emitter.instruction("b.ls __rt_heap_alloc_small_bins");                     // yes — search from the <=16-byte bin upward
+    emitter.instruction("mov x13, #16");                                        // otherwise start at the <=32-byte bin
+    emitter.instruction("cmp x0, #32");                                         // does the request fit in the <=32-byte class?
+    emitter.instruction("b.ls __rt_heap_alloc_small_bins");                     // yes — search from the <=32-byte bin upward
+    emitter.instruction("mov x13, #24");                                        // requests up to 64 bytes start at the largest small-bin class
+    emitter.label("__rt_heap_alloc_small_bins");
+    emitter.instruction("adrp x9, _heap_small_bins@PAGE");                      // load page of the segregated small-bin head array
+    emitter.instruction("add x9, x9, _heap_small_bins@PAGEOFF");                // resolve the segregated small-bin head array address
+    emitter.instruction("add x9, x9, x13");                                     // x9 = address of the first candidate bin head
+    emitter.label("__rt_heap_alloc_small_bin_loop");
+    emitter.instruction("ldr x10, [x9]");                                       // x10 = current small-bin head block (0 if this bin is empty)
+    emitter.instruction("cbnz x10, __rt_heap_alloc_small_bin_found");           // use the first available cached block in this size class or larger
+    emitter.instruction("cmp x13, #24");                                        // have we already checked the <=64-byte bin?
+    emitter.instruction("b.eq __rt_heap_alloc_fl_start");                       // yes — fall back to the general free list
+    emitter.instruction("add x13, x13, #8");                                    // advance to the next larger small-bin class
+    emitter.instruction("add x9, x9, #8");                                      // move to the next bin-head slot
+    emitter.instruction("b __rt_heap_alloc_small_bin_loop");                    // keep searching the remaining small bins
+
+    emitter.label("__rt_heap_alloc_small_bin_found");
+    emitter.instruction("ldr x11, [x10, #16]");                                 // x11 = cached_small_block->next within this size class
+    emitter.instruction("str x11, [x9]");                                       // pop the cached block from the segregated small bin
+    emitter.instruction("mov w13, #1");                                         // initial refcount = 1 for the reused block
+    emitter.instruction("str w13, [x10, #4]");                                  // restore the live refcount in the reused header
+    emitter.instruction("str xzr, [x10, #8]");                                  // reset heap kind to raw until a typed constructor overwrites it
+    emitter.instruction("add x0, x10, #16");                                    // return user pointer = header + 16
+    emitter.instruction("b __rt_heap_alloc_count");                             // reuse the shared allocation-accounting path
+
+    // -- walk the general free list looking for first-fit block --
     // x0 = requested size, x9 = prev_next_addr, x10 = current block header
+    emitter.label("__rt_heap_alloc_fl_start");
     emitter.instruction("adrp x9, _heap_free_list@PAGE");                       // load page of free list head pointer
     emitter.instruction("add x9, x9, _heap_free_list@PAGEOFF");                 // resolve address of free list head
     emitter.instruction("ldr x10, [x9]");                                       // x10 = first free block header (0 if empty)
@@ -82,6 +119,20 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("ldr x13, [x12]");                                      // load current count
     emitter.instruction("add x13, x13, #1");                                    // increment
     emitter.instruction("str x13, [x12]");                                      // store back
+    // -- update current/peak live heap footprint --
+    emitter.instruction("ldr w14, [x10]");                                      // load the allocated payload size from the finalized header
+    emitter.instruction("add x14, x14, #16");                                   // include the 16-byte header in the live-footprint accounting
+    emitter.instruction("adrp x12, _gc_live@PAGE");                             // load gc_live page
+    emitter.instruction("add x12, x12, _gc_live@PAGEOFF");                      // resolve the current-live-bytes counter address
+    emitter.instruction("ldr x13, [x12]");                                      // load current live bytes
+    emitter.instruction("add x13, x13, x14");                                   // add this block's total footprint to live bytes
+    emitter.instruction("str x13, [x12]");                                      // store updated live bytes
+    emitter.instruction("adrp x12, _gc_peak@PAGE");                             // load gc_peak page
+    emitter.instruction("add x12, x12, _gc_peak@PAGEOFF");                      // resolve the peak-live-bytes counter address
+    emitter.instruction("ldr x15, [x12]");                                      // load the previous live-byte high watermark
+    emitter.instruction("cmp x13, x15");                                        // did this allocation raise the live-byte peak?
+    emitter.instruction("csel x15, x13, x15, hi");                              // keep the larger of current live bytes and the previous peak
+    emitter.instruction("str x15, [x12]");                                      // store the updated peak-live-bytes counter
     emitter.instruction("ret");                                                 // return to caller
 
     // -- no free block found, bump allocate with header --
@@ -115,13 +166,8 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("add x10, x10, #16");                                   // advance offset by header size
     emitter.instruction("str x10, [x9]");                                       // store updated offset to _heap_off
     emitter.instruction("add x0, x14, #16");                                    // return user pointer = header + 16
-    // -- increment gc_allocs counter --
-    emitter.instruction("adrp x12, _gc_allocs@PAGE");                           // load gc_allocs page
-    emitter.instruction("add x12, x12, _gc_allocs@PAGEOFF");                    // resolve address
-    emitter.instruction("ldr x13, [x12]");                                      // load current count
-    emitter.instruction("add x13, x13, #1");                                    // increment
-    emitter.instruction("str x13, [x12]");                                      // store back
-    emitter.instruction("ret");                                                 // return to caller
+    emitter.instruction("mov x10, x14");                                        // reuse the common allocation-accounting path with the new block header pointer
+    emitter.instruction("b __rt_heap_alloc_count");                             // count alloc/live/peak stats and return
 
     // -- fatal error: heap memory exhausted --
     emitter.label("__rt_heap_exhausted");

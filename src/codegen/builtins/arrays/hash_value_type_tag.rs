@@ -8,7 +8,7 @@ pub(super) fn hash_value_type_tag(ty: &PhpType) -> u8 {
         PhpType::Bool => 3,
         PhpType::Array(_) => 4,
         PhpType::AssocArray { .. } => 5,
-        PhpType::Object(_) | PhpType::Callable => 6,
-        PhpType::Pointer(_) | PhpType::Void => 0,
+        PhpType::Object(_) => 6,
+        PhpType::Callable | PhpType::Pointer(_) | PhpType::Void => 0,
     }
 }

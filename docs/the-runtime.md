@@ -156,7 +156,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 ## Array routines
 
-**Source:** `src/codegen/runtime/arrays/` (79 files)
+**Source:** `src/codegen/runtime/arrays/` (85 files)
 
 ### Core allocation
 
@@ -166,10 +166,11 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_heap_free` | Return block to free list (bump reset if last block) | `x0` = pointer | — |
 | `__rt_heap_free_safe` | Free only if pointer is in heap range | `x0` = pointer | — |
 | `__rt_heap_debug_fail` | Print a heap-debug fatal error and terminate immediately | `x1` = msg ptr, `x2` = msg len | — |
+| `__rt_heap_debug_report` | Print heap-debug exit summary with leak/high-water stats | — | — |
 | `__rt_heap_kind` | Return the uniform heap-kind tag for a heap-backed pointer | `x0` = pointer | `x0` = kind |
 | `__rt_array_new` | Create indexed array with header | `x0` = capacity, `x1` = elem_size | `x0` = array ptr |
-| `__rt_array_grow` | Double array capacity, copy elements, free old | `x0` = array | `x0` = new array |
-| `__rt_array_free_deep` | Free array + all string elements inside | `x0` = array | — |
+| `__rt_array_grow` | Double array capacity, copy elements, keep old storage alive for alias safety | `x0` = array | `x0` = new array |
+| `__rt_array_free_deep` | Free array storage and release nested heap-backed elements | `x0` = array | — |
 | `__rt_array_push_int` | Append int to array (grows if needed) | `x0` = array, `x1` = value | `x0` = array |
 | `__rt_array_push_refcounted` | `incref` borrowed heap payload, then append it as an 8-byte array element | `x0` = array, `x1` = heap ptr | `x0` = array |
 | `__rt_array_push_str` | Persist string + append to array (grows if needed) | `x0` = array, `x1`/`x2` = str | `x0` = array |
@@ -231,11 +232,16 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | Routine | What it does | Input | Output |
 |---|---|---|---|
 | `__rt_incref` | Increment reference count (safe with null/non-heap pointers) | `x0` = user pointer | — |
+| `__rt_decref_any` | Release any heap-backed value by inspecting the uniform heap-kind tag | `x0` = pointer | — |
 | `__rt_decref_array` | Decrement refcount, deep-free indexed array if zero | `x0` = array pointer | — |
 | `__rt_decref_hash` | Decrement refcount, free hash table if zero | `x0` = hash pointer | — |
 | `__rt_decref_object` | Decrement refcount, free object if zero | `x0` = object pointer | — |
+| `__rt_gc_note_child_ref` | Add one transient incoming edge to a heap child during cycle counting | `x0` = child pointer | — |
+| `__rt_gc_mark_reachable` | Recursively mark array/hash/object blocks reachable from external roots | `x0` = pointer | — |
+| `__rt_gc_collect_cycles` | Run the targeted cycle collector over heap-backed arrays/hashes/objects | — | — |
+| `__rt_object_free_deep` | Free an object and release heap-backed properties using runtime/class metadata | `x0` = object pointer | — |
 
-Refcounts are stored as a 32-bit value in the uniform 16-byte heap header, at `[user_ptr - 12]`. Each heap allocation starts with refcount 1. When a reference is shared (e.g., assigned to another variable or passed to a function), `__rt_incref` bumps it. When the reference goes away, the appropriate `__rt_decref_*` variant decrements and frees the block if it reaches zero. This is still pure reference counting today, so cyclic object/container graphs are a documented limitation until a dedicated cycle pass exists.
+Refcounts are stored as a 32-bit value in the uniform 16-byte heap header, at `[user_ptr - 12]`. Each heap allocation starts with refcount 1. When a reference is shared (e.g., assigned to another variable or passed to a function), `__rt_incref` bumps it. When the reference goes away, `__rt_decref_any` can dispatch through the uniform heap-kind tag to the concrete string/array/hash/object release path. Arrays, hashes, and objects still use ordinary reference counting first, but when a decref sees a container/object graph that can contain nested heap-backed values, the runtime can invoke `__rt_gc_collect_cycles` to clear transient metadata, count heap-only incoming edges, mark externally reachable blocks, and deep-free the remaining unreachable array/hash/object islands.
 
 ## System routines
 
@@ -262,7 +268,7 @@ At program start, the OS passes `argc` (argument count) in `x0` and `argv` (poin
 
 ### Date/time routines
 
-**Files:** `system/date.rs`, `system/mktime.rs`, `system/strtotime.rs`
+**Files:** `system/date.rs`, `system/date_data.rs`, `system/mktime.rs`, `system/strtotime.rs`
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
@@ -272,7 +278,7 @@ At program start, the OS passes `argc` (argument count) in `x0` and `argv` (poin
 
 ### JSON routines
 
-**Files:** `system/json_encode_bool.rs`, `system/json_encode_null.rs`, `system/json_encode_str.rs`, `system/json_encode_array_int.rs`, `system/json_encode_array_str.rs`, `system/json_encode_assoc.rs`, `system/json_decode.rs`
+**Files:** `system/json_data.rs`, `system/json_encode_bool.rs`, `system/json_encode_null.rs`, `system/json_encode_str.rs`, `system/json_encode_array_int.rs`, `system/json_encode_array_str.rs`, `system/json_encode_assoc.rs`, `system/json_decode.rs`
 
 The `json_encode` implementation uses **type-aware dispatch** — the codegen calls a different runtime routine depending on the compile-time type of the value being encoded:
 
@@ -316,7 +322,8 @@ These routines handle file and filesystem operations via macOS system calls. PHP
 | `__rt_file_put_contents` | Write string to file (create/truncate) |
 | `__rt_file` | Read file into array of lines |
 | `__rt_stat` | Get file metadata (size, timestamps) |
-| `__rt_fs` | Filesystem operations (mkdir, rmdir, unlink, chdir, rename, copy) |
+| `__rt_unlink` / `__rt_mkdir` / `__rt_rmdir` / `__rt_chdir` | Filesystem path operations via libc/syscalls |
+| `__rt_rename` / `__rt_copy` | Two-path filesystem helpers using dual C-string scratch buffers |
 | `__rt_getcwd` | Get current working directory |
 | `__rt_scandir` | List directory contents into array |
 | `__rt_glob` | Pattern-match filenames |
@@ -334,8 +341,8 @@ These helpers support the compiler-specific pointer builtins.
 |---|---|---|---|
 | `__rt_ptoa` | Format a pointer value as a hexadecimal string with `0x` prefix | `x0` = pointer/address | `x1`/`x2` = formatted string |
 | `__rt_ptr_check_nonnull` | Abort with `Fatal error: null pointer dereference` if the pointer is null | `x0` = pointer/address | `x0` unchanged on success |
-| `__rt_str_to_cstr` | Copy an elephc string to owned null-terminated heap storage for C calls | `x1`/`x2` = string | `x0` = C string pointer |
-| `__rt_cstr_to_str` | Copy a null-terminated C string back into an owned elephc string | `x0` = C string pointer | `x1`/`x2` = elephc string |
+| `__rt_str_to_cstr` | Copy an elephc string to temporary null-terminated heap storage for a native call | `x1`/`x2` = string | `x0` = C string pointer |
+| `__rt_cstr_to_str` | Copy a borrowed null-terminated C string back into an owned elephc string | `x0` = C string pointer | `x1`/`x2` = elephc string |
 
 ## How routines are emitted
 
@@ -369,12 +376,16 @@ The runtime also declares global buffers using `.comm` and static data tables:
 .comm _global_argv, 8        ; saved argv pointer from OS
 .comm _heap_buf, 8388608     ; 8MB heap by default (--heap-size overrides)
 .comm _heap_off, 8           ; current heap offset
-.comm _heap_free_list, 8     ; head of free-list allocator
+.comm _heap_free_list, 8     ; head of the general address-ordered free list
+.comm _heap_small_bins, 32   ; 4 x 8-byte heads for <=8/16/32/64-byte cached blocks
 .comm _heap_debug_enabled, 8 ; BSS-backed debug flag, set to 1 in _main when compiled with --heap-debug
+.comm _gc_collecting, 8      ; cycle collector re-entry guard
+.comm _gc_release_suppressed, 8 ; suppress nested collection during deep frees
 _heap_max:
     .quad 8388608            ; configured heap size limit
 .comm _gc_allocs, 8          ; allocation counter
 .comm _gc_frees, 8           ; free counter
+.comm _gc_live, 8            ; current live heap footprint in bytes
 .comm _gc_peak, 8            ; high-water mark counter
 .comm _cstr_buf, 4096        ; 4KB C-string conversion buffer
 .comm _cstr_buf2, 4096       ; 4KB second C-string buffer
@@ -392,14 +403,16 @@ Additionally, the runtime emits static data tables:
 - `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
 - `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` — fatal runtime error strings
 - `_heap_dbg_bad_refcount_msg`, `_heap_dbg_double_free_msg`, `_heap_dbg_free_list_msg` — fatal heap-debug error strings enabled by `--heap-debug`
+- `_heap_dbg_*` summary labels — fixed strings used by `__rt_heap_debug_report` for alloc/free/live/leak output
 - `_pcre_space`, `_pcre_digit`, `_pcre_word`, `_pcre_nspace`, `_pcre_ndigit`, `_pcre_nword` — PCRE shorthand replacement strings for regex translation
 - `_json_true`, `_json_false`, `_json_null` — JSON keyword strings used by `__rt_json_encode_bool` and `__rt_json_encode_null`
 - `_day_names` — 7 entries (84 bytes), each 12 bytes: day name padded to 10 chars + 1 length byte + 1 padding byte. Used by `__rt_date` for `l` (full name) and `D` (abbreviated) format characters
 - `_month_names` — 12 entries (144 bytes), same layout as day names. Used by `__rt_date` for `F` (full name) and `M` (abbreviated) format characters
+- `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>` — per-class property traversal metadata used by object deep-free and cycle collection
 
-When `--heap-debug` is enabled, the runtime also activates `__rt_heap_debug_check_live` and `__rt_heap_debug_validate_free_list`. These helpers turn allocator corruption into immediate fatal errors for duplicate frees, zero-refcount `incref`/`decref` paths, and malformed free-list state.
+When `--heap-debug` is enabled, the runtime also activates `__rt_heap_debug_check_live`, `__rt_heap_debug_validate_free_list`, and `__rt_heap_debug_report`. These helpers turn allocator corruption into immediate fatal errors for duplicate frees, zero-refcount `incref`/`decref` paths, and malformed free-list or small-bin state, poison freed payload bytes with `0xA5`, and print an end-of-process summary with alloc/free counts, live block count, live bytes, leak summary, and the peak live-byte watermark.
 
-Every heap allocation now also carries a uniform 8-byte kind tag in its 16-byte allocator header. The current runtime uses `0=raw/untyped`, `1=string`, `2=indexed array`, `3=assoc/hash`, and `4=object`, which makes future runtime dispatch independent from each payload's internal layout and gives a future cycle collector a cheap way to limit scans to container/object blocks.
+Every heap allocation now also carries a uniform 8-byte kind tag in its 16-byte allocator header. The current runtime uses `0=raw/untyped`, `1=string`, `2=indexed array`, `3=assoc/hash`, and `4=object`, which lets runtime dispatch stay independent from each payload's internal layout. The low 16 bits keep the stable heap-kind plus indexed-array value type, while the collector reuses higher bits for transient reachable/incoming-edge metadata during `__rt_gc_collect_cycles`. Runtime data also now includes `_gc_collecting`, `_gc_release_suppressed`, `_class_gc_desc_count`, and `_class_gc_desc_ptrs` so deep-free / cycle-collection paths can coordinate nested releases and discover class property traversal metadata.
 
 See [Memory Model](memory-model.md) for details on how these buffers work.
 

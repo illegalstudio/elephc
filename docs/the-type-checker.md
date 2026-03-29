@@ -128,7 +128,7 @@ Built-in functions have hardcoded type signatures (see below). User-defined func
 
 ## Built-in function signatures
 
-**File:** `src/types/checker/builtins.rs`
+**Files:** `src/types/checker/builtins.rs`, plus `src/types/checker/mod.rs` for special expression forms such as `ExprKind::PtrCast`
 
 Every built-in function has a registered type signature:
 
@@ -146,7 +146,7 @@ ptr_set($ptr: Pointer, $value: Int|Bool|Void|Pointer) → Void
 ptr_cast<T>($ptr: Pointer) → Pointer(Some(T))
 ```
 
-For some built-ins the checker also enforces container shape, not just raw argument count:
+Most entries in the table above come from the builtin signature registry, while pointer-tag casts like `ptr_cast<T>()` are checked directly when the type checker visits `ExprKind::PtrCast`. For some built-ins the checker also enforces container shape, not just raw argument count:
 
 - `array_push($arr, $val)` requires the first argument to be an indexed `Array`, not an `AssocArray`
 - `array_column($rows, $column_key)` requires the first argument to be an indexed array whose element type is `AssocArray`

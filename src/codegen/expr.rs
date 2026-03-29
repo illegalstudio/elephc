@@ -556,15 +556,29 @@ fn emit_new_object(
             match &prop_ty {
                 PhpType::Int
                 | PhpType::Bool
-                | PhpType::Array(_)
-                | PhpType::AssocArray { .. }
-                | PhpType::Object(_)
                 | PhpType::Callable
                 | PhpType::Pointer(_) => {
                     emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
+                    emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8)); // clear runtime property metadata slot
+                }
+                PhpType::Array(_) => {
+                    emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
+                    emitter.instruction("mov x10, #4");                          // runtime property tag 4 = indexed array
+                    emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); // store runtime property metadata tag
+                }
+                PhpType::AssocArray { .. } => {
+                    emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
+                    emitter.instruction("mov x10, #5");                          // runtime property tag 5 = associative array
+                    emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); // store runtime property metadata tag
+                }
+                PhpType::Object(_) => {
+                    emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
+                    emitter.instruction("mov x10, #6");                          // runtime property tag 6 = object
+                    emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); // store runtime property metadata tag
                 }
                 PhpType::Float => {
                     emitter.instruction(&format!("str d0, [x9, #{}]", offset)); // store float default
+                    emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8)); // clear runtime property metadata slot
                 }
                 PhpType::Str => {
                     emitter.instruction(&format!("str x1, [x9, #{}]", offset)); // store string pointer
@@ -1013,6 +1027,9 @@ fn emit_array_literal(
         retain_borrowed_heap_arg(emitter, elem, &ty);
         // -- store element value into array at index i --
         emitter.instruction("ldr x9, [sp]");                                    // peek array pointer from stack (no pop)
+        if i == 0 {
+            emit_array_value_type_stamp(emitter, "x9", &ty);
+        }
         match &ty {
             PhpType::Int | PhpType::Bool | PhpType::Callable => {
                 emitter.instruction(&format!(                                   // store int/bool/callable element at data offset
@@ -1119,7 +1136,11 @@ fn emit_array_literal_with_spread(
                 _ => {
                     emitter.instruction("mov x1, x0");                          // x1 = value to push
                     emitter.instruction("mov x0, x9");                          // x0 = array pointer
-                    emitter.instruction("bl __rt_array_push_int");              // push value onto array
+                    if ty.is_refcounted() {
+                        emitter.instruction("bl __rt_array_push_refcounted");   // push retained refcounted payload and stamp array metadata
+                    } else {
+                        emitter.instruction("bl __rt_array_push_int");          // push value onto array
+                    }
                     emitter.instruction("str x0, [sp]");                        // persist the possibly-grown dest array pointer after the push
                 }
             }
@@ -1129,6 +1150,22 @@ fn emit_array_literal_with_spread(
     // -- return array pointer --
     emitter.instruction("ldr x0, [sp], #16");                                   // pop dest array pointer from stack into x0
     PhpType::Array(Box::new(actual_elem_ty))
+}
+
+fn emit_array_value_type_stamp(emitter: &mut Emitter, array_reg: &str, elem_ty: &PhpType) {
+    let value_type_tag = match elem_ty {
+        PhpType::Str => 1,
+        PhpType::Array(_) => 4,
+        PhpType::AssocArray { .. } => 5,
+        PhpType::Object(_) => 6,
+        _ => return,
+    };
+    emitter.instruction(&format!("ldr x10, [{}, #-8]", array_reg));                // load the packed array kind word from the heap header
+    emitter.instruction("and x10, x10, #0xff");                                    // keep only the low-byte indexed-array heap kind
+    emitter.instruction(&format!("mov x11, #{}", value_type_tag));                 // materialize the runtime array value_type tag
+    emitter.instruction("lsl x11, x11, #8");                                       // move the value_type tag into the packed kind-word byte lane
+    emitter.instruction("orr x10, x10, x11");                                      // combine the heap kind with the array value_type tag
+    emitter.instruction(&format!("str x10, [{}, #-8]", array_reg));                // persist the packed array kind word in the heap header
 }
 
 fn emit_assoc_array_literal(

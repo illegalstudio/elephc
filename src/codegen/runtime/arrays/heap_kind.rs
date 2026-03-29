@@ -26,7 +26,8 @@ pub fn emit_heap_kind(emitter: &mut Emitter) {
     emitter.instruction("b.hs __rt_heap_kind_zero");                            // non-heap pointers report kind 0
 
     // -- load the uniform kind tag from the heap header --
-    emitter.instruction("ldr x0, [x0, #-8]");                                   // load the 64-bit heap kind tag from the uniform header
+    emitter.instruction("ldr x0, [x0, #-8]");                                   // load the full 64-bit heap kind word from the uniform header
+    emitter.instruction("and x0, x0, #0xff");                                   // mask away packed value_type bits and transient GC metadata
     emitter.instruction("ret");                                                 // return the heap kind to the caller
 
     emitter.label("__rt_heap_kind_zero");

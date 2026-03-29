@@ -698,7 +698,7 @@ Supported FFI types:
 |---|---|---|
 | `int` | integer / long | Passed in integer registers |
 | `float` | `double` | Passed in floating-point registers |
-| `string` | `char *` | Copied to an owned null-terminated string before the C call |
+| `string` | `char *` | Copied to a temporary null-terminated C string for the duration of the native call; if C needs to retain the pointer, declare the boundary as `ptr` instead |
 | `bool` | integer `0` / `1` | Passed as an integer register |
 | `void` | no value | Valid only as a return type |
 | `ptr` | `void *` | Opaque pointer |
@@ -716,6 +716,13 @@ extern "System" {
 ```
 
 Libraries declared in an `extern "lib"` block are added automatically to the linker command as `-l<lib>`.
+
+FFI string ownership follows two explicit defaults:
+
+- `string` parameters are **borrowed call-scoped C strings**. elephc creates a temporary null-terminated copy before the native call and frees it immediately after the call returns.
+- `string` return values are **borrowed `char *` results**. elephc copies the bytes into an owned elephc string right away, so the native side retains ownership of the original pointer.
+
+If an API expects the native side to keep a string/buffer beyond the call boundary, prefer declaring that boundary as `ptr` (or using a shim) instead of `string`.
 
 This makes direct bindings to native libraries practical for simple APIs. For example, ordinary libc allocation routines can be declared and used without special compiler support:
 
@@ -917,7 +924,7 @@ Callback rules:
 | **Callback-based** | | |
 | `array_map()` | `array_map("callback", $arr): array` | Apply callback to each element, return new array |
 | `array_filter()` | `array_filter($arr, "callback"): array` | Filter elements where callback returns truthy |
-| `array_reduce()` | `array_reduce($arr, "callback", $init): int` | Reduce array to a single integer result via callback |
+| `array_reduce()` | `array_reduce($arr, "callback", $init): int` | Reduce array to a single accumulator value via callback. In the current checker/runtime subset this accumulator is typed as `int` rather than PHP's fully mixed result |
 | `array_walk()` | `array_walk($arr, "callback"): void` | Call callback on each element (side-effects) |
 | `usort()` | `usort($arr, "callback"): void` | Sort array using user comparison function |
 | `uksort()` | `uksort($arr, "callback"): void` | Sort array with a user comparison callback (currently routed through the same runtime sort path as `usort`) |
