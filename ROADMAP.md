@@ -202,8 +202,8 @@ Proper type system for PHP compatibility.
 
 ### Known limitations
 - Ordinary local/global reassignment now releases previous arrays/objects safely, and indexed array writes / associative-array writes / object property writes / `static` slots now retain borrowed heap values consistently
-- Automatic epilogue cleanup is still disabled; general local-scope cleanup needs broader ownership tracking
-- Assoc-derived container copies such as `array_values()`, `array_column()`, `array_diff_key()`, and `array_intersect_key()` now retain borrowed heap values, but broader indexed-array/container propagation and general scope-exit cleanup still need fuller ownership tracking or a tracing collector
+- Automatic epilogue cleanup has since been re-enabled for locals proven to own heap values; the remaining gaps are conservative control-flow merges and cyclic graphs
+- Assoc-derived and broader container-copy paths now retain borrowed heap values consistently; the main remaining memory-model work has moved to targeted cycle collection, richer debug instrumentation, and tighter ownership precision
 
 ## v0.12.x — Math coverage (done)
 
