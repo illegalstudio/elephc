@@ -179,8 +179,9 @@ Minimum allocation is 8 bytes (to fit the next pointer when the block is later f
 The runtime routine `__rt_heap_free`:
 
 1. Read the block size (32-bit) from the header at `user_pointer - 8`
-2. Insert the block at the head of the free list (LIFO)
-3. Free blocks reuse the same 8-byte header, then store the free-list pointer immediately after it: `[size:4][refcnt:4][next_ptr:8][...unused...]`. At the assembly level this is often described as `[size:8][next_ptr:8][...unused...]` because `__rt_heap_free` links the block through the 8-byte word at `header + 8`.
+2. If the block is exactly at the bump tail, shrink `_heap_off` immediately
+3. Otherwise, insert the block into the free list in address order, merge it with adjacent free neighbors, and repeatedly trim any now-free tail chain back into `_heap_off`
+4. Free blocks reuse the same 8-byte header, then store the free-list pointer immediately after it: `[size:4][refcnt:4][next_ptr:8][...unused...]`. At the assembly level this is often described as `[size:8][next_ptr:8][...unused...]` because `__rt_heap_free` links the block through the 8-byte word at `header + 8`.
 
 The variant `__rt_heap_free_safe` validates that the pointer is within `_heap_buf` range before freeing — safe to call with garbage, null, or `.data` section pointers.
 
@@ -421,7 +422,7 @@ elephc uses a **free-list allocator with reference counting** — not a garbage 
 
 ### What is NOT freed
 
-- **Adjacent free blocks** are not coalesced — fragmentation can occur over time
+- **Non-adjacent free blocks** are still not compacted or split — fragmentation can still occur over time even though adjacent neighbors are now coalesced on free
 - **Pointer targets** are not ownership-tracked just because a raw pointer exists; the pointer value itself is only an address
 - **Intermediate scratch strings** in `_concat_buf` are not individually freed — the buffer is simply reset per statement
 - **General function epilogues** do not blanket-decref all heap locals. They now selectively clean up slots proven `Owned`, while locals populated from still-ambiguous borrowed/control-flow paths remain excluded

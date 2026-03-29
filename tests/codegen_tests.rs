@@ -124,7 +124,7 @@ fn assemble_and_run(
 /// Compile a PHP source string to a native binary, run it, and return stdout.
 /// Uses the elephc library directly (no subprocess) for tokenize → parse → check → codegen.
 /// Only spawns as + ld + binary execution.
-fn compile_and_run(source: &str) -> String {
+fn compile_and_run_with_heap_size(source: &str, heap_size: usize) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -144,7 +144,7 @@ fn compile_and_run(source: &str) -> String {
         &check_result.extern_functions,
         &check_result.extern_classes,
         &check_result.extern_globals,
-        8_388_608,
+        heap_size,
         false,
     );
 
@@ -175,6 +175,10 @@ fn compile_and_run(source: &str) -> String {
 
     let _ = fs::remove_dir_all(&dir);
     elephc_out
+}
+
+fn compile_and_run(source: &str) -> String {
+    compile_and_run_with_heap_size(source, 8_388_608)
 }
 
 /// Compile a PHP source string and assert the generated binary fails at runtime.
@@ -9456,6 +9460,40 @@ echo $nums[1];
 "#,
     );
     assert_eq!(out, "72");
+}
+
+#[test]
+fn test_gc_heap_free_coalesces_adjacent_blocks() {
+    let out = compile_and_run_with_heap_size(
+        r#"<?php
+$a = array_fill(0, 2000, 1);
+$b = array_fill(0, 2000, 2);
+$keep = array_fill(0, 2000, 3);
+unset($a);
+unset($b);
+$c = array_fill(0, 3000, 4);
+echo $c[0] . "|" . count($c) . "|" . $keep[0];
+"#,
+        65_536,
+    );
+    assert_eq!(out, "4|3000|3");
+}
+
+#[test]
+fn test_gc_heap_free_trims_free_tail_chain() {
+    let out = compile_and_run_with_heap_size(
+        r#"<?php
+$a = array_fill(0, 2000, 1);
+$b = array_fill(0, 2000, 2);
+$tail = array_fill(0, 2000, 3);
+unset($b);
+unset($tail);
+$c = array_fill(0, 5000, 4);
+echo $c[0] . "|" . count($c) . "|" . $a[0];
+"#,
+        65_536,
+    );
+    assert_eq!(out, "4|5000|1");
 }
 
 #[test]
