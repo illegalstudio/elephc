@@ -268,7 +268,20 @@ Proper type system for PHP compatibility.
 - [x] Tighten ownership propagation in remaining conservative control-flow / merge paths
 - [x] Formalize FFI heap ownership boundaries for borrowed vs owned native buffers and strings
 
-## v0.16.x — Multi-platform and optimizations
+## v0.16.x — Language and runtime expansion
+
+- [ ] Copy-on-write arrays — PHP-style shared-until-modified semantics with a COW flag in array headers and copy-on-mutation
+- [ ] Inheritance (`extends`) — vtable-based method dispatch, property layout chaining, and `parent::` calls
+- [ ] Interfaces / abstract classes — interface method tables and compile-time conformance checking
+- [ ] Traits — compile-time method copying / inlining
+- [ ] Exceptions (`try`/`catch`) — stack unwinding via `setjmp`/`longjmp` or DWARF-based infrastructure
+- [ ] Hash table insertion order — preserve PHP associative-array insertion order with a secondary linked list through entries
+- [ ] Mixed-type associative arrays — per-entry type tags instead of one value type per table
+- [ ] String indexing (`$str[$i]`) — lower to substring-style access as syntax sugar
+- [ ] `protected` visibility — third visibility level between public and private
+- [ ] Magic methods (`__toString`, `__get`, `__set`) — implicit hooks on property access and string conversion
+
+## v0.17.x — Multi-platform and optimizations
 
 - [ ] Linux x86_64 target
 - [ ] Linux ARM64 target
@@ -326,25 +339,6 @@ Proper type system for PHP compatibility.
 - [ ] Proof of concept with one extension (e.g., `mbstring` or `curl`)
 - [ ] `--ext` flag to specify extension libraries at compile time
 - [ ] Documentation: how to bridge a PHP extension
-
----
-
-## Future ideas
-
-Features that are desirable but not yet planned for a specific version.
-
-| Idea | Notes |
-|---|---|
-| Copy-on-write arrays | PHP's actual array semantics: shared until modified. Would make reassignment and aliasing both safer and cheaper. Requires COW flag in array header + copy-on-mutation. |
-| Inheritance (`extends`) | Requires vtable for method dispatch, property layout chaining, `parent::` calls. Major architectural change to the class system. |
-| Interfaces / abstract classes | Requires interface method tables and compile-time conformance checking. |
-| Traits | Requires method copying/inlining at compile time. |
-| Exceptions (`try`/`catch`) | Requires setjmp/longjmp or DWARF stack unwinding. Complex but possible. |
-| Hash table insertion order | PHP preserves insertion order for associative arrays. Would need a secondary linked list through entries. |
-| Mixed-type associative arrays | Per-entry type tags in hash table entries (currently one type per table). |
-| String indexing (`$str[$i]`) | Requires substr() under the hood — syntactic sugar. |
-| `protected` visibility | Third visibility level between public and private. |
-| Magic methods (`__toString`, `__get`, `__set`) | Implicit method calls on property access / string conversion. |
 
 ---
 
