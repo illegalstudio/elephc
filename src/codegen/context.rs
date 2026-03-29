@@ -173,6 +173,12 @@ impl Context {
         }
     }
 
+    pub fn enable_epilogue_cleanup(&mut self, name: &str) {
+        if let Some(var) = self.variables.get_mut(name) {
+            var.epilogue_cleanup_safe = true;
+        }
+    }
+
     pub fn update_var_type_and_ownership(
         &mut self,
         name: &str,

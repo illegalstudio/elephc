@@ -9650,6 +9650,40 @@ echo $picked[0];
 }
 
 #[test]
+fn test_gc_scope_exit_after_exhaustive_if_owned_local_is_freed() {
+    let baseline = compile_and_run_with_gc_stats(
+        r#"<?php
+function build_and_drop_direct() {
+    $tmp = [11];
+}
+
+build_and_drop_direct();
+build_and_drop_direct();
+"#,
+    );
+    assert!(baseline.success, "baseline program failed: {}", baseline.stderr);
+    let exhaustive = compile_and_run_with_gc_stats(
+        r#"<?php
+function build_and_drop($flag) {
+    if ($flag) {
+        $tmp = [11];
+    } else {
+        $tmp = [22];
+    }
+}
+
+build_and_drop(true);
+build_and_drop(false);
+"#,
+    );
+    assert!(exhaustive.success, "program failed: {}", exhaustive.stderr);
+    let (baseline_allocs, baseline_frees) = parse_gc_stats(&baseline.stderr);
+    let (exhaustive_allocs, exhaustive_frees) = parse_gc_stats(&exhaustive.stderr);
+    assert_eq!(baseline_allocs, exhaustive_allocs);
+    assert_eq!(baseline_frees, exhaustive_frees);
+}
+
+#[test]
 fn test_gc_nested_assoc_alias_survives_outer_unset() {
     let out = compile_and_run(
         r#"<?php

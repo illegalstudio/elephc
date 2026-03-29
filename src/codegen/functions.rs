@@ -147,7 +147,7 @@ fn emit_function_with_label_and_class(
     // (They'll be filled with default values at the call site or by the function prologue)
 
     collect_local_vars(body, &mut ctx, sig);
-    mark_control_flow_epilogue_unsafe(body, &mut ctx, false);
+    mark_control_flow_epilogue_unsafe(body, &mut ctx, sig, false);
 
     let vars_size = ctx.stack_offset;
     let frame_size = super::align16(vars_size + 16);
@@ -394,6 +394,7 @@ fn emit_owned_local_epilogue_cleanup(emitter: &mut Emitter, ctx: &Context) {
 fn mark_control_flow_epilogue_unsafe(
     stmts: &[crate::parser::ast::Stmt],
     ctx: &mut Context,
+    sig: &FunctionSig,
     in_control_flow: bool,
 ) {
     for stmt in stmts {
@@ -419,12 +420,34 @@ fn mark_control_flow_epilogue_unsafe(
                 ctx.disable_epilogue_cleanup(name);
             }
             StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
-                mark_control_flow_epilogue_unsafe(then_body, ctx, true);
+                let direct_assigns =
+                    exhaustive_if_direct_heap_assignments(then_body, elseif_clauses, else_body, ctx, sig);
+                mark_control_flow_epilogue_unsafe(then_body, ctx, sig, true);
                 for (_, body) in elseif_clauses {
-                    mark_control_flow_epilogue_unsafe(body, ctx, true);
+                    mark_control_flow_epilogue_unsafe(body, ctx, sig, true);
                 }
                 if let Some(body) = else_body {
-                    mark_control_flow_epilogue_unsafe(body, ctx, true);
+                    mark_control_flow_epilogue_unsafe(body, ctx, sig, true);
+                }
+                for (name, ty) in direct_assigns {
+                    if ctx.global_vars.contains(&name)
+                        || ctx.static_vars.contains(&name)
+                        || ctx.ref_params.contains(&name)
+                    {
+                        continue;
+                    }
+                    let Some(var) = ctx.variables.get(&name) else {
+                        continue;
+                    };
+                    if var.ty != ty {
+                        continue;
+                    }
+                    ctx.update_var_type_and_ownership(
+                        &name,
+                        ty.clone(),
+                        HeapOwnership::local_owner_for_type(&ty),
+                    );
+                    ctx.enable_epilogue_cleanup(&name);
                 }
             }
             StmtKind::Foreach { body, key_var, value_var, .. } => {
@@ -432,31 +455,109 @@ fn mark_control_flow_epilogue_unsafe(
                 if let Some(key_var) = key_var {
                     ctx.disable_epilogue_cleanup(key_var);
                 }
-                mark_control_flow_epilogue_unsafe(body, ctx, true);
+                mark_control_flow_epilogue_unsafe(body, ctx, sig, true);
             }
             StmtKind::DoWhile { body, .. } | StmtKind::While { body, .. } => {
-                mark_control_flow_epilogue_unsafe(body, ctx, true);
+                mark_control_flow_epilogue_unsafe(body, ctx, sig, true);
             }
             StmtKind::For { init, update, body, .. } => {
                 if let Some(stmt) = init {
-                    mark_control_flow_epilogue_unsafe(std::slice::from_ref(stmt.as_ref()), ctx, true);
+                    mark_control_flow_epilogue_unsafe(
+                        std::slice::from_ref(stmt.as_ref()),
+                        ctx,
+                        sig,
+                        true,
+                    );
                 }
                 if let Some(stmt) = update {
-                    mark_control_flow_epilogue_unsafe(std::slice::from_ref(stmt.as_ref()), ctx, true);
+                    mark_control_flow_epilogue_unsafe(
+                        std::slice::from_ref(stmt.as_ref()),
+                        ctx,
+                        sig,
+                        true,
+                    );
                 }
-                mark_control_flow_epilogue_unsafe(body, ctx, true);
+                mark_control_flow_epilogue_unsafe(body, ctx, sig, true);
             }
             StmtKind::Switch { cases, default, .. } => {
                 for (_, body) in cases {
-                    mark_control_flow_epilogue_unsafe(body, ctx, true);
+                    mark_control_flow_epilogue_unsafe(body, ctx, sig, true);
                 }
                 if let Some(body) = default {
-                    mark_control_flow_epilogue_unsafe(body, ctx, true);
+                    mark_control_flow_epilogue_unsafe(body, ctx, sig, true);
                 }
             }
             _ => {}
         }
     }
+}
+
+fn collect_straight_line_direct_assignments(
+    stmts: &[crate::parser::ast::Stmt],
+    ctx: &Context,
+    sig: &FunctionSig,
+) -> (HashMap<String, PhpType>, bool) {
+    let mut assignments = HashMap::new();
+    let mut may_fall_through = true;
+
+    for stmt in stmts {
+        if !may_fall_through {
+            break;
+        }
+        match &stmt.kind {
+            StmtKind::Assign { name, value } => {
+                assignments.insert(name.clone(), infer_local_type(value, sig, Some(ctx)));
+            }
+            StmtKind::Return(_) | StmtKind::Break | StmtKind::Continue => {
+                may_fall_through = false;
+            }
+            _ => {}
+        }
+    }
+
+    (assignments, may_fall_through)
+}
+
+fn exhaustive_if_direct_heap_assignments(
+    then_body: &[crate::parser::ast::Stmt],
+    elseif_clauses: &[(crate::parser::ast::Expr, Vec<crate::parser::ast::Stmt>)],
+    else_body: &Option<Vec<crate::parser::ast::Stmt>>,
+    ctx: &Context,
+    sig: &FunctionSig,
+) -> HashMap<String, PhpType> {
+    let Some(else_body) = else_body.as_ref() else {
+        return HashMap::new();
+    };
+
+    let mut branch_assignments = Vec::new();
+    let (then_assigns, then_falls_through) =
+        collect_straight_line_direct_assignments(then_body, ctx, sig);
+    if then_falls_through {
+        branch_assignments.push(then_assigns);
+    }
+    for (_, body) in elseif_clauses {
+        let (assigns, falls_through) = collect_straight_line_direct_assignments(body, ctx, sig);
+        if falls_through {
+            branch_assignments.push(assigns);
+        }
+    }
+    let (else_assigns, else_falls_through) =
+        collect_straight_line_direct_assignments(else_body, ctx, sig);
+    if else_falls_through {
+        branch_assignments.push(else_assigns);
+    }
+
+    let Some((first_branch, remaining_branches)) = branch_assignments.split_first() else {
+        return HashMap::new();
+    };
+    let mut definitely_assigned = first_branch.clone();
+    definitely_assigned.retain(|name, ty| {
+        (matches!(ty, PhpType::Str) || ty.is_refcounted())
+            && remaining_branches
+                .iter()
+                .all(|assigns| assigns.get(name) == Some(ty))
+    });
+    definitely_assigned
 }
 
 /// Pre-scan function body for variable assignments to allocate stack slots.
