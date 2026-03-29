@@ -19,6 +19,12 @@ pub fn emit_array_merge_into_refcounted(emitter: &mut Emitter) {
     // -- check if source is empty --
     emitter.instruction("ldr x9, [x1]");                                        // load source array length
     emitter.instruction("cbz x9, __rt_amir_done");                              // return early when source is empty
+    emitter.instruction("ldr x10, [x0, #-8]");                                  // load the destination packed array kind word
+    emitter.instruction("ldr x11, [x1, #-8]");                                  // load the source packed array kind word
+    emitter.instruction("and x10, x10, #0xff");                                 // keep only the destination low-byte heap kind
+    emitter.instruction("and x11, x11, #0xff00");                               // keep only the source packed array value_type lane
+    emitter.instruction("orr x10, x10, x11");                                   // combine the destination heap kind with the source value_type tag
+    emitter.instruction("str x10, [x0, #-8]");                                  // persist the propagated packed array value_type tag
 
     // -- ensure dest has enough capacity --
     emitter.instruction("ldr x10, [x0]");                                       // load dest array length

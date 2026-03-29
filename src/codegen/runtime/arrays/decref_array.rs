@@ -36,9 +36,34 @@ pub fn emit_decref_array(emitter: &mut Emitter) {
     emitter.instruction("ldr w9, [x0, #-12]");                                  // load 32-bit refcount from the uniform heap header
     emitter.instruction("subs w9, w9, #1");                                     // decrement refcount, set flags
     emitter.instruction("str w9, [x0, #-12]");                                  // store decremented refcount
-    emitter.instruction("b.ne __rt_decref_array_skip");                         // if not zero, still referenced — skip free
+    emitter.instruction("b.eq __rt_decref_array_free");                         // zero refcount means the array can be freed immediately
+
+    // -- non-zero refcount may indicate a now-unrooted cycle; run the targeted collector unless it is already active --
+    emitter.instruction("adrp x9, _gc_release_suppressed@PAGE");                // load page of the release-suppression flag
+    emitter.instruction("add x9, x9, _gc_release_suppressed@PAGEOFF");          // resolve the release-suppression flag address
+    emitter.instruction("ldr x9, [x9]");                                        // load the release-suppression flag
+    emitter.instruction("cbnz x9, __rt_decref_array_skip");                     // ordinary deep-free walks suppress nested collector runs
+    emitter.instruction("adrp x9, _gc_collecting@PAGE");                        // load page of the collector-active flag
+    emitter.instruction("add x9, x9, _gc_collecting@PAGEOFF");                  // resolve the collector-active flag address
+    emitter.instruction("ldr x9, [x9]");                                        // load the collector-active flag
+    emitter.instruction("cbnz x9, __rt_decref_array_skip");                     // nested decref calls during collection must not restart the collector
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the packed array kind word from the heap header
+    emitter.instruction("lsr x9, x9, #8");                                      // move the array value_type tag into the low bits
+    emitter.instruction("and x9, x9, #0xff");                                   // isolate the runtime array value_type tag
+    emitter.instruction("cmp x9, #4");                                          // is this an array of indexed arrays?
+    emitter.instruction("b.eq __rt_decref_array_collect");                      // array-of-array cycles can require a collector pass
+    emitter.instruction("cmp x9, #5");                                          // is this an array of associative arrays?
+    emitter.instruction("b.eq __rt_decref_array_collect");                      // nested heap payloads can participate in cycles
+    emitter.instruction("cmp x9, #6");                                          // is this an array of objects?
+    emitter.instruction("b.ne __rt_decref_array_skip");                         // scalar/string arrays skip the targeted collector
+    emitter.label("__rt_decref_array_collect");
+    emitter.instruction("str x30, [sp, #-16]!");                                // preserve the caller return address across the collector call
+    emitter.instruction("bl __rt_gc_collect_cycles");                           // reclaim any newly-unrooted refcounted graph components
+    emitter.instruction("ldr x30, [sp], #16");                                  // restore the caller return address after collection
+    emitter.instruction("b __rt_decref_array_skip");                            // return after the optional collection pass
 
     // -- refcount reached zero: deep free the array --
+    emitter.label("__rt_decref_array_free");
     emitter.instruction("b __rt_array_free_deep");                              // tail-call to deep free array + elements
 
     emitter.label("__rt_decref_array_skip");

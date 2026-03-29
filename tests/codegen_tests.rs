@@ -1667,6 +1667,12 @@ fn test_array_assign() {
 }
 
 #[test]
+fn test_array_assign_into_empty_array_updates_length() {
+    let out = compile_and_run(r#"<?php $a = []; $a[0] = 7; echo count($a) . "|" . $a[0];"#);
+    assert_eq!(out, "1|7");
+}
+
+#[test]
 fn test_array_push() {
     let out = compile_and_run("<?php $a = [1, 2]; $a[] = 3; echo count($a) . \" \" . $a[2];");
     assert_eq!(out, "3 3");
@@ -9617,7 +9623,7 @@ echo $nums[1];
 }
 
 #[test]
-fn test_gc_stats_self_cycle_keeps_one_extra_object_alive() {
+fn test_gc_collect_cycles_reclaims_object_self_cycle() {
     let acyclic = compile_and_run_with_gc_stats(
         r#"<?php
 class Node { public $next = null; }
@@ -9642,7 +9648,170 @@ unset($n);
     assert_eq!(acyclic.stdout, "");
     assert_eq!(cyclic.stdout, "");
     assert_eq!(acyclic_allocs, cyclic_allocs);
-    assert_eq!(acyclic_frees, cyclic_frees + 1);
+    assert_eq!(acyclic_frees, cyclic_frees);
+}
+
+#[test]
+fn test_gc_collect_cycles_reclaims_array_object_cycle() {
+    let acyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+class Node { public $next = null; }
+$n = new Node();
+$a = [$n];
+unset($a);
+unset($n);
+"#,
+    );
+    assert!(acyclic.success, "acyclic program failed: {}", acyclic.stderr);
+
+    let cyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+class Node { public $next = null; }
+$n = new Node();
+$a = [$n];
+$n->next = $a;
+unset($a);
+unset($n);
+"#,
+    );
+    assert!(cyclic.success, "cyclic program failed: {}", cyclic.stderr);
+
+    let (acyclic_allocs, acyclic_frees) = parse_gc_stats(&acyclic.stderr);
+    let (cyclic_allocs, cyclic_frees) = parse_gc_stats(&cyclic.stderr);
+    assert_eq!(acyclic.stdout, "");
+    assert_eq!(cyclic.stdout, "");
+    assert_eq!(acyclic_allocs, cyclic_allocs);
+    assert_eq!(acyclic_frees, cyclic_frees);
+}
+
+#[test]
+fn test_gc_collect_cycles_reclaims_array_array_cycle() {
+    let acyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+$a = [0];
+$b = [0];
+$a[0] = $b;
+unset($a);
+unset($b);
+"#,
+    );
+    assert!(acyclic.success, "acyclic program failed: {}", acyclic.stderr);
+
+    let cyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+$a = [0];
+$b = [0];
+$a[0] = $b;
+$b[0] = $a;
+unset($a);
+unset($b);
+"#,
+    );
+    assert!(cyclic.success, "cyclic program failed: {}", cyclic.stderr);
+
+    let (acyclic_allocs, acyclic_frees) = parse_gc_stats(&acyclic.stderr);
+    let (cyclic_allocs, cyclic_frees) = parse_gc_stats(&cyclic.stderr);
+    assert_eq!(acyclic.stdout, "");
+    assert_eq!(cyclic.stdout, "");
+    assert_eq!(acyclic_allocs, cyclic_allocs);
+    assert_eq!(acyclic_frees, cyclic_frees);
+}
+
+#[test]
+fn test_gc_collect_cycles_reclaims_array_array_cycle_from_empty_literals() {
+    let acyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+$a = [];
+$b = [];
+$a[0] = $b;
+unset($a);
+unset($b);
+"#,
+    );
+    assert!(acyclic.success, "acyclic program failed: {}", acyclic.stderr);
+
+    let cyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+$a = [];
+$b = [];
+$a[0] = $b;
+$b[0] = $a;
+unset($a);
+unset($b);
+"#,
+    );
+    assert!(cyclic.success, "cyclic program failed: {}", cyclic.stderr);
+
+    let (acyclic_allocs, acyclic_frees) = parse_gc_stats(&acyclic.stderr);
+    let (cyclic_allocs, cyclic_frees) = parse_gc_stats(&cyclic.stderr);
+    assert_eq!(acyclic_allocs, cyclic_allocs);
+    assert_eq!(acyclic_frees, cyclic_frees);
+}
+
+#[test]
+fn test_gc_collect_cycles_reclaims_hash_hash_cycle() {
+    let acyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+$a = ["peer" => null];
+$b = ["peer" => null];
+$a["peer"] = $b;
+unset($a);
+unset($b);
+"#,
+    );
+    assert!(acyclic.success, "acyclic program failed: {}", acyclic.stderr);
+
+    let cyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+$a = ["peer" => null];
+$b = ["peer" => null];
+$a["peer"] = $b;
+$b["peer"] = $a;
+unset($a);
+unset($b);
+"#,
+    );
+    assert!(cyclic.success, "cyclic program failed: {}", cyclic.stderr);
+
+    let (acyclic_allocs, acyclic_frees) = parse_gc_stats(&acyclic.stderr);
+    let (cyclic_allocs, cyclic_frees) = parse_gc_stats(&cyclic.stderr);
+    assert_eq!(acyclic.stdout, "");
+    assert_eq!(cyclic.stdout, "");
+    assert_eq!(acyclic_allocs, cyclic_allocs);
+    assert_eq!(acyclic_frees, cyclic_frees);
+}
+
+#[test]
+fn test_gc_collect_cycles_reclaims_mixed_object_hash_cycle() {
+    let acyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+class Node { public $next = null; }
+$n = new Node();
+$h = ["node" => $n];
+unset($h);
+unset($n);
+"#,
+    );
+    assert!(acyclic.success, "acyclic program failed: {}", acyclic.stderr);
+
+    let cyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+class Node { public $next = null; }
+$n = new Node();
+$h = ["node" => $n];
+$n->next = $h;
+unset($h);
+unset($n);
+"#,
+    );
+    assert!(cyclic.success, "cyclic program failed: {}", cyclic.stderr);
+
+    let (acyclic_allocs, acyclic_frees) = parse_gc_stats(&acyclic.stderr);
+    let (cyclic_allocs, cyclic_frees) = parse_gc_stats(&cyclic.stderr);
+    assert_eq!(acyclic.stdout, "");
+    assert_eq!(cyclic.stdout, "");
+    assert_eq!(acyclic_allocs, cyclic_allocs);
+    assert_eq!(acyclic_frees, cyclic_frees);
 }
 
 #[test]

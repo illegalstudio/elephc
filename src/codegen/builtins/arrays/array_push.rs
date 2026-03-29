@@ -37,11 +37,17 @@ pub fn emit(
             emitter.instruction("mov x0, x9");                                  // move array pointer to x0
             emitter.instruction("bl __rt_array_push_str");                      // call runtime: persist + append string to array
         }
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Callable => {
-            // -- push nested array/object/callable pointer onto array --
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            // -- push nested refcounted pointer onto array --
             emitter.instruction("mov x1, x0");                                  // move pointer value to x1
             emitter.instruction("mov x0, x9");                                  // move outer array pointer to x0
-            emitter.instruction("bl __rt_array_push_int");                      // append pointer (8 bytes, same as int)
+            emitter.instruction("bl __rt_array_push_refcounted");               // append retained pointer and stamp array metadata
+        }
+        PhpType::Callable => {
+            // -- push callable pointer onto array as a plain 8-byte scalar --
+            emitter.instruction("mov x1, x0");                                  // move callable pointer value to x1
+            emitter.instruction("mov x0, x9");                                  // move outer array pointer to x0
+            emitter.instruction("bl __rt_array_push_int");                      // append function pointer bits as a plain scalar slot
         }
         _ => {}
     }

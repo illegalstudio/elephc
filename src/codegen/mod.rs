@@ -264,6 +264,7 @@ pub fn generate(
     let runtime_data = runtime::emit_runtime_data(
         &all_global_var_names,
         &all_static_vars,
+            classes,
         heap_size,
     );
 
