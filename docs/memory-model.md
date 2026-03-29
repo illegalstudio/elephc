@@ -155,16 +155,16 @@ The heap (`_heap_buf`) is an 8MB region (by default) for dynamically-sized data 
 
 ### How heap allocation works
 
-Every allocation has an **8-byte header** split into two 32-bit fields: block size and reference count:
+Every allocation has a **16-byte header**: two 32-bit fields for block size and reference count, followed by an 8-byte uniform heap-kind tag:
 
 ```
-┌───────────┬────────────┬──────────────────┐
-│ size (4B) │ refcnt (4B)│  user data ...   │
-└───────────┴────────────┴──────────────────┘
-  header (8 bytes total)   ← pointer returned to caller
+┌───────────┬────────────┬────────────┬──────────────────┐
+│ size (4B) │ refcnt (4B)│ kind (8B)  │  user data ...   │
+└───────────┴────────────┴────────────┴──────────────────┘
+       header (16 bytes total)          ← pointer returned to caller
 ```
 
-The size is stored as a 32-bit value at offset +0, and the reference count as a 32-bit value at offset +4. New allocations start with refcount 1.
+The size is stored at header offset `+0`, the reference count at `+4`, and the heap kind tag at `+8`. New allocations start with refcount `1`; typed constructors then stamp the kind as `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, while raw helper buffers remain `0`.
 
 The runtime routine `__rt_heap_alloc`:
 
@@ -181,7 +181,7 @@ The runtime routine `__rt_heap_free`:
 1. Read the block size (32-bit) from the header at `user_pointer - 8`
 2. If the block is exactly at the bump tail, shrink `_heap_off` immediately
 3. Otherwise, insert the block into the free list in address order, merge it with adjacent free neighbors, and repeatedly trim any now-free tail chain back into `_heap_off`
-4. Free blocks reuse the same 8-byte header, then store the free-list pointer immediately after it: `[size:4][refcnt:4][next_ptr:8][...unused...]`. At the assembly level this is often described as `[size:8][next_ptr:8][...unused...]` because `__rt_heap_free` links the block through the 8-byte word at `header + 8`.
+4. Free blocks reuse the same 16-byte header, clear the kind back to `0`, and then store the free-list pointer immediately after it: `[size:4][refcnt:4][kind:8][next_ptr:8][...unused...]`
 
 The variant `__rt_heap_free_safe` validates that the pointer is within `_heap_buf` range before freeing — safe to call with garbage, null, or `.data` section pointers.
 

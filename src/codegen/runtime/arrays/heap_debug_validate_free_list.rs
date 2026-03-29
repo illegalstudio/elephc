@@ -29,10 +29,10 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
     emitter.instruction("cmp x12, #8");                                           // can the free block still hold the minimum payload?
     emitter.instruction("b.lo __rt_heap_debug_validate_free_list_fail");          // undersized free blocks indicate header corruption
     emitter.instruction("add x13, x11, x12");                                     // x13 = block header + payload size
-    emitter.instruction("add x13, x13, #8");                                      // x13 = end of the free block including its header
+    emitter.instruction("add x13, x13, #16");                                     // x13 = end of the free block including its 16-byte header
     emitter.instruction("cmp x13, x10");                                          // does the free block run past the current heap end?
     emitter.instruction("b.hi __rt_heap_debug_validate_free_list_fail");          // overrunning the heap end indicates corruption
-    emitter.instruction("ldr x14, [x11, #8]");                                    // load the next free block header
+    emitter.instruction("ldr x14, [x11, #16]");                                   // load the next free block header
     emitter.instruction("cbz x14, __rt_heap_debug_validate_free_list_done");      // the tail block is valid if all checks above passed
     emitter.instruction("cmp x14, x11");                                          // is the next block address strictly greater than the current one?
     emitter.instruction("b.ls __rt_heap_debug_validate_free_list_fail");          // cycles or descending addresses corrupt the ordered free list

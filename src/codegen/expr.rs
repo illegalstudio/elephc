@@ -532,6 +532,8 @@ fn emit_new_object(
     // -- allocate object on heap --
     emitter.instruction(&format!("mov x0, #{}", obj_size));                     // object size in bytes
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate object → x0 = pointer
+    emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
+    emitter.instruction("str x9, [x0, #-8]");                                   // store object kind in the uniform heap header
     emitter.instruction(&format!("mov x10, #{}", class_info.class_id));         // load compile-time class id
     emitter.instruction("str x10, [x0]");                                       // store class id at object header
     emitter.instruction("str x0, [sp, #-16]!");                                 // save object pointer on stack

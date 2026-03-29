@@ -1,7 +1,7 @@
 use crate::codegen::emit::Emitter;
 
 /// Reference counting runtime functions for the garbage collector.
-/// Refcount is stored as a 32-bit value at [user_ptr - 4] (upper half of heap header).
+/// Refcount is stored as a 32-bit value at [user_ptr - 12] inside the uniform 16-byte heap header.
 pub fn emit_refcount(emitter: &mut Emitter) {
     // __rt_incref: increment reference count
     // Input: x0 = user pointer (as returned by heap_alloc)
@@ -51,9 +51,9 @@ fn emit_incref(emitter: &mut Emitter) {
     emitter.label("__rt_incref_checked");
 
     // -- increment refcount --
-    emitter.instruction("ldr w9, [x0, #-4]");                                   // load 32-bit refcount from header
+    emitter.instruction("ldr w9, [x0, #-12]");                                  // load 32-bit refcount from the uniform heap header
     emitter.instruction("add w9, w9, #1");                                      // increment refcount
-    emitter.instruction("str w9, [x0, #-4]");                                   // store incremented refcount
+    emitter.instruction("str w9, [x0, #-12]");                                  // store incremented refcount
 
     emitter.label("__rt_incref_skip");
     emitter.instruction("ret");                                                 // return to caller
@@ -92,9 +92,9 @@ fn emit_decref_array(emitter: &mut Emitter) {
     emitter.label("__rt_decref_array_checked");
 
     // -- decrement refcount and check for zero --
-    emitter.instruction("ldr w9, [x0, #-4]");                                   // load 32-bit refcount from header
+    emitter.instruction("ldr w9, [x0, #-12]");                                  // load 32-bit refcount from the uniform heap header
     emitter.instruction("subs w9, w9, #1");                                     // decrement refcount, set flags
-    emitter.instruction("str w9, [x0, #-4]");                                   // store decremented refcount
+    emitter.instruction("str w9, [x0, #-12]");                                  // store decremented refcount
     emitter.instruction("b.ne __rt_decref_array_skip");                         // if not zero, still referenced — skip free
 
     // -- refcount reached zero: deep free the array --
@@ -137,9 +137,9 @@ fn emit_decref_hash(emitter: &mut Emitter) {
     emitter.label("__rt_decref_hash_checked");
 
     // -- decrement refcount and check for zero --
-    emitter.instruction("ldr w9, [x0, #-4]");                                   // load 32-bit refcount from header
+    emitter.instruction("ldr w9, [x0, #-12]");                                  // load 32-bit refcount from the uniform heap header
     emitter.instruction("subs w9, w9, #1");                                     // decrement refcount, set flags
-    emitter.instruction("str w9, [x0, #-4]");                                   // store decremented refcount
+    emitter.instruction("str w9, [x0, #-12]");                                  // store decremented refcount
     emitter.instruction("b.ne __rt_decref_hash_skip");                          // if not zero, still referenced — skip free
 
     // -- refcount reached zero: deep free the hash table and its owned entries --
@@ -182,9 +182,9 @@ fn emit_decref_object(emitter: &mut Emitter) {
     emitter.label("__rt_decref_object_checked");
 
     // -- decrement refcount and check for zero --
-    emitter.instruction("ldr w9, [x0, #-4]");                                   // load 32-bit refcount from header
+    emitter.instruction("ldr w9, [x0, #-12]");                                  // load 32-bit refcount from the uniform heap header
     emitter.instruction("subs w9, w9, #1");                                     // decrement refcount, set flags
-    emitter.instruction("str w9, [x0, #-4]");                                   // store decremented refcount
+    emitter.instruction("str w9, [x0, #-12]");                                  // store decremented refcount
     emitter.instruction("b.ne __rt_decref_object_skip");                        // if not zero, still referenced — skip free
 
     // -- refcount reached zero: shallow free the object --

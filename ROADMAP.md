@@ -258,7 +258,7 @@ Proper type system for PHP compatibility.
 - [x] Focused regressions for aliasing across locals, returns, nested containers, and scope exit
 - [x] Heap allocator improvements: adjacent-block coalescing and less fragmentation under mixed allocation sizes
 - [x] Runtime heap verification / debug mode (`double free`, bad refcount, free-list corruption checks)
-- [ ] Uniform runtime heap-kind metadata for arrays / assoc arrays / objects / persisted strings
+- [x] Uniform runtime heap-kind metadata for arrays / assoc arrays / objects / persisted strings
 - [ ] Evaluate a cycle-collection strategy for circular container/object graphs
 
 ## v0.16.x — Multi-platform and optimizations

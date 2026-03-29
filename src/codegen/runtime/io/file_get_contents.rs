@@ -38,6 +38,8 @@ pub fn emit_file_get_contents(emitter: &mut Emitter) {
     // -- allocate heap buffer for file contents --
     emitter.instruction("ldr x0, [sp, #8]");                                    // load file size as allocation request
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate buffer, x0=pointer
+    emitter.instruction("mov x9, #1");                                          // heap kind 1 = persisted elephc string
+    emitter.instruction("str x9, [x0, #-8]");                                   // store string kind in the uniform heap header
     emitter.instruction("str x0, [sp, #168]");                                  // save heap buffer pointer
 
     // -- read entire file into buffer --

@@ -87,6 +87,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_heap_debug_fail(emitter);
     arrays::emit_heap_debug_check_live(emitter);
     arrays::emit_heap_debug_validate_free_list(emitter);
+    arrays::emit_heap_kind(emitter);
     arrays::emit_heap_free(emitter);
     arrays::emit_array_free_deep(emitter);
     arrays::emit_array_grow(emitter);

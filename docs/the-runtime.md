@@ -398,6 +398,8 @@ Additionally, the runtime emits static data tables:
 
 When `--heap-debug` is enabled, the runtime also activates `__rt_heap_debug_check_live` and `__rt_heap_debug_validate_free_list`. These helpers turn allocator corruption into immediate fatal errors for duplicate frees, zero-refcount `incref`/`decref` paths, and malformed free-list state.
 
+Every heap allocation now also carries a uniform 8-byte kind tag in its 16-byte allocator header. The current runtime uses `0=raw/untyped`, `1=string`, `2=indexed array`, `3=assoc/hash`, and `4=object`, which makes future runtime dispatch independent from each payload's internal layout.
+
 See [Memory Model](memory-model.md) for details on how these buffers work.
 
 ---

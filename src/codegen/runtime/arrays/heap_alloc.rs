@@ -1,8 +1,8 @@
 use crate::codegen::emit::Emitter;
 
-/// heap_alloc: free-list allocator with 8-byte header.
-/// Each allocation has an 8-byte header [block_size] before the user pointer.
-/// Free blocks are organized as a singly-linked list: [size:8][next_ptr:8].
+/// heap_alloc: free-list allocator with 16-byte header.
+/// Each allocation has a 16-byte header [size:4][refcount:4][kind:8] before the user pointer.
+/// Free blocks are organized as a singly-linked list: [size:4][refcount:4][kind:8][next_ptr:8].
 /// Input: x0 = bytes needed
 /// Output: x0 = pointer to allocated memory (after header)
 pub fn emit_heap_alloc(emitter: &mut Emitter) {
@@ -10,7 +10,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.comment("--- runtime: heap_alloc (free-list + bump) ---");
     emitter.label("__rt_heap_alloc");
 
-    // -- enforce minimum allocation of 8 bytes (free list needs space for next ptr) --
+    // -- enforce minimum allocation of 8 bytes (free payload needs space for next ptr) --
     emitter.instruction("cmp x0, #8");                                          // is requested size < 8?
     emitter.instruction("b.ge __rt_heap_alloc_start");                          // skip if already >= 8
     emitter.instruction("mov x0, #8");                                          // round up to minimum 8 bytes
@@ -49,27 +49,31 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     // -- found a suitable free block, either split it or unlink it whole --
     emitter.label("__rt_heap_alloc_fl_found");
     emitter.instruction("sub x12, x11, x0");                                    // x12 = free block payload minus requested payload
-    emitter.instruction("cmp x12, #16");                                        // is there room for a new free header plus minimum payload?
+    emitter.instruction("cmp x12, #24");                                        // is there room for a new 16-byte header plus minimum payload?
     emitter.instruction("b.lt __rt_heap_alloc_fl_take_whole");                   // no — consume the whole free block
     emitter.instruction("add x13, x10, x0");                                    // x13 = current header + requested payload
-    emitter.instruction("add x13, x13, #8");                                    // x13 = split remainder header address
-    emitter.instruction("sub x12, x12, #8");                                    // x12 = remainder payload size after carving out a new header
+    emitter.instruction("add x13, x13, #16");                                   // x13 = split remainder header address
+    emitter.instruction("sub x12, x12, #16");                                   // x12 = remainder payload size after carving out a new header
     emitter.instruction("str w12, [x13]");                                      // write split remainder size into its header
-    emitter.instruction("ldr x14, [x10, #8]");                                  // x14 = current->next before splitting
-    emitter.instruction("str x14, [x13, #8]");                                  // remainder->next = current->next
+    emitter.instruction("str wzr, [x13, #4]");                                  // free remainder keeps refcount cleared while on the free list
+    emitter.instruction("str xzr, [x13, #8]");                                  // free remainder has no heap kind while on the free list
+    emitter.instruction("ldr x14, [x10, #16]");                                 // x14 = current->next before splitting
+    emitter.instruction("str x14, [x13, #16]");                                 // remainder->next = current->next
     emitter.instruction("str x13, [x9]");                                       // prev->next = remainder header
     emitter.instruction("str w0, [x10]");                                       // shrink allocated block header size to the requested payload
     emitter.instruction("mov w13, #1");                                         // initial refcount = 1
     emitter.instruction("str w13, [x10, #4]");                                  // reset refcount in reused header
-    emitter.instruction("add x0, x10, #8");                                     // return user pointer = header + 8
+    emitter.instruction("str xzr, [x10, #8]");                                  // reset heap kind to raw until a typed constructor overwrites it
+    emitter.instruction("add x0, x10, #16");                                    // return user pointer = header + 16
     emitter.instruction("b __rt_heap_alloc_count");                             // count allocation and return
 
     emitter.label("__rt_heap_alloc_fl_take_whole");
-    emitter.instruction("ldr x12, [x10, #8]");                                  // x12 = current->next (rest of list)
+    emitter.instruction("ldr x12, [x10, #16]");                                 // x12 = current->next (rest of list)
     emitter.instruction("str x12, [x9]");                                       // prev->next = current->next (unlink current)
     emitter.instruction("mov w13, #1");                                         // initial refcount = 1
     emitter.instruction("str w13, [x10, #4]");                                  // reset refcount in reused header
-    emitter.instruction("add x0, x10, #8");                                     // return user pointer = header + 8
+    emitter.instruction("str xzr, [x10, #8]");                                  // reset heap kind to raw until a typed constructor overwrites it
+    emitter.instruction("add x0, x10, #16");                                    // return user pointer = header + 16
 
     emitter.label("__rt_heap_alloc_count");
     // -- increment gc_allocs counter --
@@ -88,9 +92,9 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("add x9, x9, _heap_off@PAGEOFF");                       // resolve exact address of _heap_off
     emitter.instruction("ldr x10, [x9]");                                       // x10 = current heap offset
 
-    // -- bounds check: offset + 8 + requested <= heap_max --
+    // -- bounds check: offset + 16 + requested <= heap_max --
     emitter.instruction("add x12, x10, x0");                                    // x12 = offset + requested size
-    emitter.instruction("add x12, x12, #8");                                    // x12 = offset + requested + header (8 bytes)
+    emitter.instruction("add x12, x12, #16");                                   // x12 = offset + requested + header (16 bytes)
     emitter.instruction("adrp x13, _heap_max@PAGE");                            // load page of heap max constant
     emitter.instruction("add x13, x13, _heap_max@PAGEOFF");                     // resolve address of heap max
     emitter.instruction("ldr x13, [x13]");                                      // x13 = heap max size in bytes
@@ -106,10 +110,11 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("str w0, [x14]");                                       // write block size to header (32-bit)
     emitter.instruction("mov w15, #1");                                         // initial refcount = 1
     emitter.instruction("str w15, [x14, #4]");                                  // write refcount to header upper half
+    emitter.instruction("str xzr, [x14, #8]");                                  // initialize heap kind to raw until a typed constructor overwrites it
     emitter.instruction("add x10, x10, x0");                                    // advance offset by requested size
-    emitter.instruction("add x10, x10, #8");                                    // advance offset by header size
+    emitter.instruction("add x10, x10, #16");                                   // advance offset by header size
     emitter.instruction("str x10, [x9]");                                       // store updated offset to _heap_off
-    emitter.instruction("add x0, x14, #8");                                     // return user pointer = header + 8
+    emitter.instruction("add x0, x14, #16");                                    // return user pointer = header + 16
     // -- increment gc_allocs counter --
     emitter.instruction("adrp x12, _gc_allocs@PAGE");                           // load gc_allocs page
     emitter.instruction("add x12, x12, _gc_allocs@PAGEOFF");                    // resolve address

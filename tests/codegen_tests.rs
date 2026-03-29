@@ -215,6 +215,28 @@ fn compile_harness_expect_failure(source: &str, heap_size: usize, harness: &str)
     stderr
 }
 
+fn compile_harness_and_run(source: &str, heap_size: usize, harness: &str) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, heap_size, false, false);
+    let patched = inject_main_exit_harness(&asm, harness);
+    let stdout = assemble_and_run(
+        &patched,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    stdout
+}
+
 /// Compile a PHP source string to a native binary, run it, and return stdout.
 /// Uses the elephc library directly (no subprocess) for tokenize → parse → check → codegen.
 /// Only spawns as + ld + binary execution.
@@ -9582,7 +9604,7 @@ fn test_heap_debug_bad_refcount_reports_error() {
         65_536,
         r#"    mov x0, #16
     bl __rt_heap_alloc
-    str wzr, [x0, #-4]
+    str wzr, [x0, #-12]
     bl __rt_incref"#,
     );
     assert!(err.contains("heap debug detected bad refcount"), "{err}");
@@ -9606,6 +9628,75 @@ fn test_heap_debug_free_list_corruption_reports_error() {
     bl __rt_heap_alloc"#,
     );
     assert!(err.contains("heap debug detected free-list corruption"), "{err}");
+}
+
+#[test]
+fn test_heap_kind_tags_raw_array_hash_and_string() {
+    let out = compile_harness_and_run(
+        "<?php",
+        65_536,
+        r#"    mov x0, #16
+    bl __rt_heap_alloc
+    bl __rt_heap_kind
+    bl __rt_itoa
+    mov x0, #1
+    mov x16, #4
+    svc #0x80
+    mov x0, #4
+    mov x1, #8
+    bl __rt_array_new
+    bl __rt_heap_kind
+    bl __rt_itoa
+    mov x0, #1
+    mov x16, #4
+    svc #0x80
+    mov x0, #4
+    mov x1, #0
+    bl __rt_hash_new
+    bl __rt_heap_kind
+    bl __rt_itoa
+    mov x0, #1
+    mov x16, #4
+    svc #0x80
+    adrp x1, _concat_buf@PAGE
+    add x1, x1, _concat_buf@PAGEOFF
+    mov w3, #65
+    strb w3, [x1]
+    mov w3, #66
+    strb w3, [x1, #1]
+    mov w3, #67
+    strb w3, [x1, #2]
+    mov x2, #3
+    bl __rt_str_persist
+    mov x0, x1
+    bl __rt_heap_kind
+    bl __rt_itoa
+    mov x0, #1
+    mov x16, #4
+    svc #0x80"#,
+    );
+    assert_eq!(out, "0231");
+}
+
+#[test]
+fn test_new_object_codegen_sets_heap_kind() {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (asm, _) = compile_source_to_asm_with_options(
+        "<?php class Foo { public $x = 1; } $o = new Foo();",
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    assert!(asm.contains("new Foo()"));
+    assert!(asm.contains("str x9, [x0, #-8]"), "{asm}");
+
+    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
