@@ -250,6 +250,11 @@ pub fn generate(
         emitter.instruction("svc #0x80");                                       // write newline
     }
 
+    if heap_debug {
+        emitter.comment("heap-debug: print allocator summary and leak report to stderr");
+        emitter.instruction("bl __rt_heap_debug_report");                        // emit the heap-debug summary at process exit
+    }
+
     emitter.instruction("mov x0, #0");                                          // exit code 0
     emitter.instruction("mov x16, #1");                                         // syscall number 1 = exit
     emitter.instruction("svc #0x80");                                           // invoke macOS kernel

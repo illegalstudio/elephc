@@ -151,6 +151,7 @@ When a string result is stored to a variable (e.g., `$x = "a" . "b";`), the code
 .comm _gc_release_suppressed, 8 ; suppress nested collection during deep free
 .comm _gc_allocs, 8         ; allocation counter
 .comm _gc_frees, 8          ; free counter
+.comm _gc_live, 8           ; current live heap footprint in bytes
 .comm _gc_peak, 8           ; heap high-water mark
 ```
 
@@ -195,6 +196,8 @@ Passing `--heap-debug` enables additional runtime verification without changing 
 - `__rt_heap_free` rejects duplicate insertion of the same block into the free list (`double free`)
 - `__rt_incref` / `__rt_decref_*` reject zero-refcount heap blocks before mutating them (`bad refcount`)
 - `__rt_heap_alloc` / `__rt_heap_free` validate the ordered free list and trap on out-of-range, overlapping, cyclic, or merely-adjacent free blocks (`free-list corruption`)
+- `__rt_heap_free` poisons freed payload bytes with `0xA5`, so stale raw reads stand out immediately in debug repros
+- process exit prints a heap-debug summary with alloc/free counts, live blocks, live bytes, a leak summary line, and the peak live-byte watermark
 
 When one of these checks trips, the program exits with a fatal heap-debug error instead of continuing with corrupted allocator state.
 
@@ -415,7 +418,7 @@ The naming pattern is `_static_FUNCNAME_VARNAME`. The init flag ensures the init
 | Stack | OS default (~8MB) | Stack overflow (crash) |
 | String buffer | 64KB | Resets each statement — effectively unlimited |
 | Heap | 8MB (configurable) | Fatal error: "heap memory exhausted" |
-| Heap metadata | `_heap_off`, `_heap_free_list`, `_gc_*` flags/counters = 56 bytes total | Fixed-size bookkeeping, not user-visible |
+| Heap metadata | `_heap_off`, `_heap_free_list`, `_gc_*` flags/counters = 64 bytes total | Fixed-size bookkeeping, not user-visible |
 | CLI globals | `_global_argc`, `_global_argv` = 16 bytes total | Fixed-size bookkeeping |
 | User globals | 16 bytes per `global $var` slot | Grows with number of referenced globals |
 | Static vars | 24 bytes per `static $var` (`16 + 8 init flag`) | Grows with number of declared static locals |

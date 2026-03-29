@@ -82,6 +82,20 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("ldr x13, [x12]");                                      // load current count
     emitter.instruction("add x13, x13, #1");                                    // increment
     emitter.instruction("str x13, [x12]");                                      // store back
+    // -- update current/peak live heap footprint --
+    emitter.instruction("ldr w14, [x10]");                                      // load the allocated payload size from the finalized header
+    emitter.instruction("add x14, x14, #16");                                   // include the 16-byte header in the live-footprint accounting
+    emitter.instruction("adrp x12, _gc_live@PAGE");                             // load gc_live page
+    emitter.instruction("add x12, x12, _gc_live@PAGEOFF");                      // resolve the current-live-bytes counter address
+    emitter.instruction("ldr x13, [x12]");                                      // load current live bytes
+    emitter.instruction("add x13, x13, x14");                                   // add this block's total footprint to live bytes
+    emitter.instruction("str x13, [x12]");                                      // store updated live bytes
+    emitter.instruction("adrp x12, _gc_peak@PAGE");                             // load gc_peak page
+    emitter.instruction("add x12, x12, _gc_peak@PAGEOFF");                      // resolve the peak-live-bytes counter address
+    emitter.instruction("ldr x15, [x12]");                                      // load the previous live-byte high watermark
+    emitter.instruction("cmp x13, x15");                                        // did this allocation raise the live-byte peak?
+    emitter.instruction("csel x15, x13, x15, hi");                              // keep the larger of current live bytes and the previous peak
+    emitter.instruction("str x15, [x12]");                                      // store the updated peak-live-bytes counter
     emitter.instruction("ret");                                                 // return to caller
 
     // -- no free block found, bump allocate with header --
@@ -115,13 +129,8 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("add x10, x10, #16");                                   // advance offset by header size
     emitter.instruction("str x10, [x9]");                                       // store updated offset to _heap_off
     emitter.instruction("add x0, x14, #16");                                    // return user pointer = header + 16
-    // -- increment gc_allocs counter --
-    emitter.instruction("adrp x12, _gc_allocs@PAGE");                           // load gc_allocs page
-    emitter.instruction("add x12, x12, _gc_allocs@PAGEOFF");                    // resolve address
-    emitter.instruction("ldr x13, [x12]");                                      // load current count
-    emitter.instruction("add x13, x13, #1");                                    // increment
-    emitter.instruction("str x13, [x12]");                                      // store back
-    emitter.instruction("ret");                                                 // return to caller
+    emitter.instruction("mov x10, x14");                                        // reuse the common allocation-accounting path with the new block header pointer
+    emitter.instruction("b __rt_heap_alloc_count");                             // count alloc/live/peak stats and return
 
     // -- fatal error: heap memory exhausted --
     emitter.label("__rt_heap_exhausted");

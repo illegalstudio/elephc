@@ -35,6 +35,26 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     // -- compute header address and block end --
     emitter.instruction("sub x9, x0, #16");                                     // x9 = header address (block_size lives here)
     emitter.instruction("ldr w11, [x9]");                                       // x11 = block size (32-bit, zero-extends)
+    emitter.instruction("adrp x16, _heap_debug_enabled@PAGE");                  // load page of the heap-debug enabled flag
+    emitter.instruction("add x16, x16, _heap_debug_enabled@PAGEOFF");           // resolve the heap-debug enabled flag address
+    emitter.instruction("ldr x16, [x16]");                                      // load the heap-debug enabled flag
+    emitter.instruction("cbz x16, __rt_heap_free_poison_done");                 // skip freed-block poisoning when heap-debug mode is disabled
+    emitter.instruction("mov x12, x0");                                         // start poisoning at the beginning of the user payload
+    emitter.instruction("add x13, x0, x11");                                    // compute the end of the user payload
+    emitter.instruction("mov w14, #0xA5");                                      // use a recognizable freed-memory poison byte pattern
+    emitter.label("__rt_heap_free_poison_loop");
+    emitter.instruction("cmp x12, x13");                                        // have we poisoned every byte in the freed payload?
+    emitter.instruction("b.hs __rt_heap_free_poison_done");                     // stop once the entire payload has been overwritten
+    emitter.instruction("strb w14, [x12], #1");                                 // write the poison byte and advance to the next payload byte
+    emitter.instruction("b __rt_heap_free_poison_loop");                        // continue poisoning the remaining payload bytes
+    emitter.label("__rt_heap_free_poison_done");
+    // -- update current live heap footprint before the block joins the free list --
+    emitter.instruction("add x12, x11, #16");                                   // include the 16-byte header in the freed block footprint
+    emitter.instruction("adrp x13, _gc_live@PAGE");                             // load gc_live page
+    emitter.instruction("add x13, x13, _gc_live@PAGEOFF");                      // resolve the current-live-bytes counter address
+    emitter.instruction("ldr x14, [x13]");                                      // load current live bytes
+    emitter.instruction("sub x14, x14, x12");                                   // subtract the freed block footprint from the live-byte total
+    emitter.instruction("str x14, [x13]");                                      // store updated live bytes
     emitter.instruction("str wzr, [x9, #4]");                                   // mark the block header as not live while it is being freed
     emitter.instruction("str xzr, [x9, #8]");                                   // clear the heap kind while the block sits on the free list
     emitter.instruction("adrp x15, _heap_buf@PAGE");                            // load page of heap buffer

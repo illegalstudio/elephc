@@ -263,7 +263,7 @@ Proper type system for PHP compatibility.
 - [x] Introduce targeted cycle collection for circular array/hash/object graphs
 - [x] Add uniform `__rt_decref_any` / heap-kind-based release dispatch for mixed heap values
 - [x] Emit richer runtime metadata for refcounted object/container payload scanning
-- [ ] Extend `--heap-debug` with leak summaries, high-watermark stats, and freed-block poisoning
+- [x] Extend `--heap-debug` with leak summaries, high-watermark stats, and freed-block poisoning
 - [ ] Introduce segregated free lists / size classes to reduce allocator scan cost and fragmentation
 - [ ] Tighten ownership propagation in remaining conservative control-flow / merge paths
 - [ ] Formalize FFI heap ownership boundaries for borrowed vs owned native buffers and strings

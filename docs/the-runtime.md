@@ -166,6 +166,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_heap_free` | Return block to free list (bump reset if last block) | `x0` = pointer | — |
 | `__rt_heap_free_safe` | Free only if pointer is in heap range | `x0` = pointer | — |
 | `__rt_heap_debug_fail` | Print a heap-debug fatal error and terminate immediately | `x1` = msg ptr, `x2` = msg len | — |
+| `__rt_heap_debug_report` | Print heap-debug exit summary with leak/high-water stats | — | — |
 | `__rt_heap_kind` | Return the uniform heap-kind tag for a heap-backed pointer | `x0` = pointer | `x0` = kind |
 | `__rt_array_new` | Create indexed array with header | `x0` = capacity, `x1` = elem_size | `x0` = array ptr |
 | `__rt_array_grow` | Double array capacity, copy elements, keep old storage alive for alias safety | `x0` = array | `x0` = new array |
@@ -382,6 +383,7 @@ _heap_max:
     .quad 8388608            ; configured heap size limit
 .comm _gc_allocs, 8          ; allocation counter
 .comm _gc_frees, 8           ; free counter
+.comm _gc_live, 8           ; current live heap footprint in bytes
 .comm _gc_peak, 8            ; high-water mark counter
 .comm _cstr_buf, 4096        ; 4KB C-string conversion buffer
 .comm _cstr_buf2, 4096       ; 4KB second C-string buffer
@@ -399,13 +401,14 @@ Additionally, the runtime emits static data tables:
 - `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
 - `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` — fatal runtime error strings
 - `_heap_dbg_bad_refcount_msg`, `_heap_dbg_double_free_msg`, `_heap_dbg_free_list_msg` — fatal heap-debug error strings enabled by `--heap-debug`
+- `_heap_dbg_*` summary labels — fixed strings used by `__rt_heap_debug_report` for alloc/free/live/leak output
 - `_pcre_space`, `_pcre_digit`, `_pcre_word`, `_pcre_nspace`, `_pcre_ndigit`, `_pcre_nword` — PCRE shorthand replacement strings for regex translation
 - `_json_true`, `_json_false`, `_json_null` — JSON keyword strings used by `__rt_json_encode_bool` and `__rt_json_encode_null`
 - `_day_names` — 7 entries (84 bytes), each 12 bytes: day name padded to 10 chars + 1 length byte + 1 padding byte. Used by `__rt_date` for `l` (full name) and `D` (abbreviated) format characters
 - `_month_names` — 12 entries (144 bytes), same layout as day names. Used by `__rt_date` for `F` (full name) and `M` (abbreviated) format characters
 - `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>` — per-class property traversal metadata used by object deep-free and cycle collection
 
-When `--heap-debug` is enabled, the runtime also activates `__rt_heap_debug_check_live` and `__rt_heap_debug_validate_free_list`. These helpers turn allocator corruption into immediate fatal errors for duplicate frees, zero-refcount `incref`/`decref` paths, and malformed free-list state.
+When `--heap-debug` is enabled, the runtime also activates `__rt_heap_debug_check_live`, `__rt_heap_debug_validate_free_list`, and `__rt_heap_debug_report`. These helpers turn allocator corruption into immediate fatal errors for duplicate frees, zero-refcount `incref`/`decref` paths, and malformed free-list state, poison freed payload bytes with `0xA5`, and print an end-of-process summary with alloc/free counts, live block count, live bytes, leak summary, and the peak live-byte watermark.
 
 Every heap allocation now also carries a uniform 8-byte kind tag in its 16-byte allocator header. The current runtime uses `0=raw/untyped`, `1=string`, `2=indexed array`, `3=assoc/hash`, and `4=object`, which lets runtime dispatch stay independent from each payload's internal layout. The low 16 bits keep the stable heap-kind plus indexed-array value type, while the collector reuses higher bits for transient reachable/incoming-edge metadata during `__rt_gc_collect_cycles`. Runtime data also now includes `_gc_collecting`, `_gc_release_suppressed`, `_class_gc_desc_count`, and `_class_gc_desc_ptrs` so deep-free / cycle-collection paths can coordinate nested releases and discover class property traversal metadata.
 

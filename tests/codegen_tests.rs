@@ -284,6 +284,28 @@ fn compile_harness_and_run(source: &str, heap_size: usize, harness: &str) -> Str
     stdout
 }
 
+fn compile_harness_and_run_with_heap_debug(source: &str, heap_size: usize, harness: &str) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, heap_size, false, true);
+    let patched = inject_main_exit_harness(&asm, harness);
+    let stdout = assemble_and_run(
+        &patched,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    stdout
+}
+
 fn compile_and_run_with_gc_stats(source: &str) -> ProgramOutput {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
@@ -293,6 +315,27 @@ fn compile_and_run_with_gc_stats(source: &str) -> ProgramOutput {
 
     let (asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, true, false);
+    let output = assemble_and_run_capture(
+        &asm,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    output
+}
+
+fn compile_and_run_with_heap_debug(source: &str) -> ProgramOutput {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, true);
     let output = assemble_and_run_capture(
         &asm,
         &dir,
@@ -9954,6 +9997,34 @@ fn test_heap_debug_free_list_corruption_reports_error() {
     bl __rt_heap_alloc"#,
     );
     assert!(err.contains("heap debug detected free-list corruption"), "{err}");
+}
+
+#[test]
+fn test_heap_debug_reports_exit_summary() {
+    let out = compile_and_run_with_heap_debug("<?php $a = [1, 2, 3]; unset($a);");
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: allocs="), "{}", out.stderr);
+    assert!(out.stderr.contains("peak_live_bytes="), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary:"), "{}", out.stderr);
+}
+
+#[test]
+fn test_heap_debug_poison_freed_payload() {
+    let out = compile_harness_and_run_with_heap_debug(
+        "<?php",
+        65_536,
+        r#"    mov x0, #16
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    bl __rt_heap_free
+    ldr x0, [sp], #16
+    ldrb w0, [x0, #8]
+    bl __rt_itoa
+    mov x0, #1
+    mov x16, #4
+    svc #0x80"#,
+    );
+    assert_eq!(out, "165");
 }
 
 #[test]

@@ -89,6 +89,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_heap_debug_fail(emitter);
     arrays::emit_heap_debug_check_live(emitter);
     arrays::emit_heap_debug_validate_free_list(emitter);
+    arrays::emit_heap_debug_report(emitter);
     arrays::emit_heap_kind(emitter);
     arrays::emit_heap_free(emitter);
     arrays::emit_array_free_deep(emitter);
@@ -218,10 +219,20 @@ pub fn emit_runtime_data(
     // GC statistics counters
     out.push_str(".comm _gc_allocs, 8, 3\n");
     out.push_str(".comm _gc_frees, 8, 3\n");
+    out.push_str(".comm _gc_live, 8, 3\n");
     out.push_str(".comm _gc_peak, 8, 3\n");
     out.push_str(".comm _cstr_buf, 4096, 3\n");
     out.push_str(".comm _cstr_buf2, 4096, 3\n");
     out.push_str(".comm _eof_flags, 256, 3\n");
+    out.push_str("_heap_dbg_stats_prefix:\n    .ascii \"HEAP DEBUG: allocs=\"\n");
+    out.push_str("_heap_dbg_frees_label:\n    .ascii \" frees=\"\n");
+    out.push_str("_heap_dbg_live_blocks_label:\n    .ascii \" live_blocks=\"\n");
+    out.push_str("_heap_dbg_live_bytes_label:\n    .ascii \" live_bytes=\"\n");
+    out.push_str("_heap_dbg_peak_label:\n    .ascii \" peak_live_bytes=\"\n");
+    out.push_str("_heap_dbg_leak_prefix:\n    .ascii \"HEAP DEBUG: leak summary: \"\n");
+    out.push_str("_heap_dbg_live_blocks_short_label:\n    .ascii \"live_blocks=\"\n");
+    out.push_str("_heap_dbg_clean_label:\n    .ascii \"clean\\n\"\n");
+    out.push_str("_heap_dbg_newline:\n    .ascii \"\\n\"\n");
     out.push_str("_fmt_g:\n    .asciz \"%.14G\"\n");
     // Base64 encode lookup table (A-Z, a-z, 0-9, +, /)
     out.push_str("_b64_encode_tbl:\n    .ascii \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\"\n");
