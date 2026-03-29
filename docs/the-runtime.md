@@ -340,8 +340,8 @@ These helpers support the compiler-specific pointer builtins.
 |---|---|---|---|
 | `__rt_ptoa` | Format a pointer value as a hexadecimal string with `0x` prefix | `x0` = pointer/address | `x1`/`x2` = formatted string |
 | `__rt_ptr_check_nonnull` | Abort with `Fatal error: null pointer dereference` if the pointer is null | `x0` = pointer/address | `x0` unchanged on success |
-| `__rt_str_to_cstr` | Copy an elephc string to owned null-terminated heap storage for C calls | `x1`/`x2` = string | `x0` = C string pointer |
-| `__rt_cstr_to_str` | Copy a null-terminated C string back into an owned elephc string | `x0` = C string pointer | `x1`/`x2` = elephc string |
+| `__rt_str_to_cstr` | Copy an elephc string to temporary null-terminated heap storage for a native call | `x1`/`x2` = string | `x0` = C string pointer |
+| `__rt_cstr_to_str` | Copy a borrowed null-terminated C string back into an owned elephc string | `x0` = C string pointer | `x1`/`x2` = elephc string |
 
 ## How routines are emitted
 

@@ -439,9 +439,10 @@ elephc uses a **free-list allocator with reference counting plus a targeted cycl
 2. **Codegen ownership tracking** — locals, globals, statics, `foreach` variables, `list(...)` targets, and call arguments are classified as owned or borrowed at compile time so new owners retain borrowed heap values before storing them
 3. **Variable reassignment** — when `$x = "new value"` overwrites a string or array, the old heap block is freed and returned to the free list for reuse
 4. **`unset($x)`** — explicitly frees the variable's heap allocation
-5. **String buffer reset** — the concat buffer resets at each statement, with strings that need to survive copied to heap via `__rt_str_persist`
-6. **Stack memory** — automatically reclaimed when functions return
-7. **Process exit** — all memory reclaimed by the OS
+5. **FFI string-call cleanup** — temporary C strings created for `extern function foo(string $s)` calls are released immediately after the native call returns
+6. **String buffer reset** — the concat buffer resets at each statement, with strings that need to survive copied to heap via `__rt_str_persist`
+7. **Stack memory** — automatically reclaimed when functions return
+8. **Process exit** — all memory reclaimed by the OS
 
 ### What is NOT freed
 

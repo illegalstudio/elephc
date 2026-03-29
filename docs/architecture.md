@@ -145,8 +145,8 @@ During type checking, extern declarations are registered in dedicated maps that 
 Extern calls differ from ordinary elephc function calls in four important ways:
 
 1. Codegen dispatches extern functions before built-ins, so an `extern function strlen(...)` declaration really calls C `strlen`, not the elephc builtin.
-2. `string` arguments are converted with `__rt_str_to_cstr`, which allocates an owned null-terminated copy on the elephc heap before calling C.
-3. `string` return values are converted with `__rt_cstr_to_str`, which copies bytes back into an owned elephc string.
+2. `string` arguments are converted with `__rt_str_to_cstr`, which allocates a null-terminated C buffer that is valid for the duration of the native call and is released immediately after the call returns.
+3. `string` return values are converted with `__rt_cstr_to_str`, which treats the returned `char *` as borrowed and copies bytes back into an owned elephc string.
 4. `extern class` layouts are available to pointer-oriented codegen too, so `ptr_sizeof("StructName")` and `ptr_cast<StructName>($p)->field` use the same checked layout metadata recorded by the type checker.
 
 `callable` FFI parameters pass a user-defined elephc function by address. The function name is provided as a string literal at the call site, and codegen loads the address of the compiled `_fn_<name>` symbol before branching into C.
@@ -228,4 +228,4 @@ Total size: `8 + (num_properties × 16)`. Properties are stored at fixed offsets
 
 ### I/O buffers
 
-Two 4KB C-string conversion buffers (`_cstr_buf`, `_cstr_buf2`) are still used by low-level I/O helpers and syscalls. FFI string calls do not use these scratch buffers anymore; they allocate owned C strings through `__rt_str_to_cstr` so multiple string arguments remain valid across the same native call. A 256-byte EOF flag array (`_eof_flags`) tracks end-of-file state per file descriptor.
+Two 4KB C-string conversion buffers (`_cstr_buf`, `_cstr_buf2`) are still used by low-level I/O helpers and syscalls. FFI string calls do not use these scratch buffers anymore; they allocate per-call C strings through `__rt_str_to_cstr` so multiple string arguments remain valid across the same native call and are then released as soon as control returns from C. A 256-byte EOF flag array (`_eof_flags`) tracks end-of-file state per file descriptor.

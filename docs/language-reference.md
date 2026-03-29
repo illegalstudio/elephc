@@ -698,7 +698,7 @@ Supported FFI types:
 |---|---|---|
 | `int` | integer / long | Passed in integer registers |
 | `float` | `double` | Passed in floating-point registers |
-| `string` | `char *` | Copied to an owned null-terminated string before the C call |
+| `string` | `char *` | Copied to a temporary null-terminated C string for the duration of the native call; if C needs to retain the pointer, declare the boundary as `ptr` instead |
 | `bool` | integer `0` / `1` | Passed as an integer register |
 | `void` | no value | Valid only as a return type |
 | `ptr` | `void *` | Opaque pointer |
@@ -716,6 +716,13 @@ extern "System" {
 ```
 
 Libraries declared in an `extern "lib"` block are added automatically to the linker command as `-l<lib>`.
+
+FFI string ownership follows two explicit defaults:
+
+- `string` parameters are **borrowed call-scoped C strings**. elephc creates a temporary null-terminated copy before the native call and frees it immediately after the call returns.
+- `string` return values are **borrowed `char *` results**. elephc copies the bytes into an owned elephc string right away, so the native side retains ownership of the original pointer.
+
+If an API expects the native side to keep a string/buffer beyond the call boundary, prefer declaring that boundary as `ptr` (or using a shim) instead of `string`.
 
 This makes direct bindings to native libraries practical for simple APIs. For example, ordinary libc allocation routines can be declared and used without special compiler support:
 

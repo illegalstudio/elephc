@@ -10778,6 +10778,27 @@ echo strlen("hello world");
 }
 
 #[test]
+fn test_ffi_extern_strlen_frees_borrowed_cstr_temp() {
+    let baseline = compile_and_run_with_gc_stats(
+        r#"<?php
+extern function strlen(string $s): int;
+"#,
+    );
+    assert!(baseline.success, "baseline program failed: {}", baseline.stderr);
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+extern function strlen(string $s): int;
+strlen("hello");
+strlen("world");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    let (baseline_allocs, baseline_frees) = parse_gc_stats(&baseline.stderr);
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs - baseline_allocs, frees - baseline_frees, "{}", out.stderr);
+}
+
+#[test]
 fn test_ffi_malloc_and_free() {
     let out = compile_and_run(
         r#"<?php
@@ -11013,6 +11034,27 @@ echo strcmp("aa", "ab") < 0 ? "ok" : "bad";
 "#,
     );
     assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_ffi_extern_multiple_string_args_free_all_borrowed_cstr_temps() {
+    let baseline = compile_and_run_with_gc_stats(
+        r#"<?php
+extern function strcmp(string $left, string $right): int;
+"#,
+    );
+    assert!(baseline.success, "baseline program failed: {}", baseline.stderr);
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+extern function strcmp(string $left, string $right): int;
+strcmp("aa", "ab");
+strcmp("bb", "bb");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    let (baseline_allocs, baseline_frees) = parse_gc_stats(&baseline.stderr);
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs - baseline_allocs, frees - baseline_frees, "{}", out.stderr);
 }
 
 #[test]

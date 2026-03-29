@@ -22,6 +22,22 @@ pub fn emit_extern_call(
 
     emitter.comment(&format!("extern call: {}()", name));
 
+    let string_arg_count = sig
+        .params
+        .iter()
+        .take(args.len())
+        .filter(|(_, ty)| *ty == PhpType::Str)
+        .count();
+
+    if string_arg_count > 0 {
+        // -- preserve callee-saved registers used to track borrowed C-string temporaries --
+        emitter.instruction("sub sp, sp, #64");                                   // reserve spill space for x19-x26 before argument marshaling
+        emitter.instruction("stp x19, x20, [sp, #0]");                            // preserve cstr cleanup register pair 0
+        emitter.instruction("stp x21, x22, [sp, #16]");                           // preserve cstr cleanup register pair 1
+        emitter.instruction("stp x23, x24, [sp, #32]");                           // preserve cstr cleanup register pair 2
+        emitter.instruction("stp x25, x26, [sp, #48]");                           // preserve cstr cleanup register pair 3
+    }
+
     // -- evaluate and push arguments onto the stack --
     for (i, arg) in args.iter().enumerate().rev() {
         let param_ty = sig
@@ -65,6 +81,7 @@ pub fn emit_extern_call(
     // -- pop arguments into registers (C ABI: x0-x7, d0-d7) --
     let mut int_reg = 0usize;
     let mut float_reg = 0usize;
+    let mut cleanup_reg = 19usize;
     for (i, _) in args.iter().enumerate() {
         let param_ty = sig
             .params
@@ -77,6 +94,10 @@ pub fn emit_extern_call(
         } else {
             // String args were already converted to char* (single x register)
             emitter.instruction(&format!("ldr x{}, [sp], #16", int_reg));       // pop int/ptr/cstr into x register
+            if param_ty == PhpType::Str {
+                emitter.instruction(&format!("mov x{}, x{}", cleanup_reg, int_reg)); // preserve borrowed cstr pointer so it can be freed after the call
+                cleanup_reg += 1;
+            }
             int_reg += 1;
         }
     }
@@ -93,6 +114,48 @@ pub fn emit_extern_call(
     if sig.return_type == PhpType::Str {
         // C returned char* in x0 — convert to owned elephc string (x1, x2)
         emitter.instruction("bl __rt_cstr_to_str");                             // x0 → x1=ptr, x2=len
+    }
+
+    if string_arg_count > 0 {
+        // -- preserve the extern return value while borrowed C-string temps are released --
+        match &sig.return_type {
+            PhpType::Float => {
+                emitter.instruction("str d0, [sp, #-16]!");                     // preserve float return value across borrowed cstr cleanup
+            }
+            PhpType::Str => {
+                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve owned elephc string return registers across cstr cleanup
+            }
+            PhpType::Void => {}
+            _ => {
+                emitter.instruction("str x0, [sp, #-16]!");                     // preserve scalar/pointer return value across borrowed cstr cleanup
+            }
+        }
+
+        // -- borrowed C-string arguments are call-scoped and freed immediately after the call --
+        for reg in 19..(19 + string_arg_count) {
+            emitter.instruction(&format!("mov x0, x{}", reg));                  // move borrowed temporary cstr pointer into heap_free argument register
+            emitter.instruction("bl __rt_heap_free");                           // release the call-scoped C-string copy after the extern call returns
+        }
+
+        match &sig.return_type {
+            PhpType::Float => {
+                emitter.instruction("ldr d0, [sp], #16");                       // restore float return value after borrowed cstr cleanup
+            }
+            PhpType::Str => {
+                emitter.instruction("ldp x1, x2, [sp], #16");                   // restore owned elephc string return registers after cstr cleanup
+            }
+            PhpType::Void => {}
+            _ => {
+                emitter.instruction("ldr x0, [sp], #16");                       // restore scalar/pointer return value after borrowed cstr cleanup
+            }
+        }
+
+        // -- restore callee-saved cstr cleanup registers --
+        emitter.instruction("ldp x19, x20, [sp, #0]");                          // restore preserved cstr cleanup register pair 0
+        emitter.instruction("ldp x21, x22, [sp, #16]");                         // restore preserved cstr cleanup register pair 1
+        emitter.instruction("ldp x23, x24, [sp, #32]");                         // restore preserved cstr cleanup register pair 2
+        emitter.instruction("ldp x25, x26, [sp, #48]");                         // restore preserved cstr cleanup register pair 3
+        emitter.instruction("add sp, sp, #64");                                 // release cstr cleanup register spill space
     }
 
     sig.return_type
