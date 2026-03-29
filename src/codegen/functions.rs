@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use super::context::Context;
+use super::context::{Context, HeapOwnership};
 use super::data_section::DataSection;
 use super::emit::Emitter;
 use super::stmt;
@@ -128,9 +128,18 @@ fn emit_function_with_label_and_class(
             ctx.alloc_var(pname, PhpType::Int);
             // Set the variable type to the actual referenced type so loading
             // dereferences correctly (e.g., string ref loads x1/x2, not x0)
-            ctx.variables.get_mut(pname).expect("codegen bug: ref param was just allocated but not found").ty = _pty.clone();
+            ctx.update_var_type_and_ownership(
+                pname,
+                _pty.clone(),
+                HeapOwnership::borrowed_alias_for_type(_pty),
+            );
+        } else if pname == "this" {
+            ctx.alloc_var(pname, _pty.clone());
+            ctx.set_var_ownership(pname, HeapOwnership::borrowed_alias_for_type(_pty));
+            ctx.disable_epilogue_cleanup(pname);
         } else {
             ctx.alloc_var(pname, _pty.clone());
+            ctx.set_var_ownership(pname, HeapOwnership::local_owner_for_type(_pty));
         }
     }
 
@@ -138,6 +147,7 @@ fn emit_function_with_label_and_class(
     // (They'll be filled with default values at the call site or by the function prologue)
 
     collect_local_vars(body, &mut ctx, sig);
+    mark_control_flow_epilogue_unsafe(body, &mut ctx, false);
 
     let vars_size = ctx.stack_offset;
     let frame_size = super::align16(vars_size + 16);
@@ -215,10 +225,16 @@ fn emit_function_with_label_and_class(
 
     // -- function epilogue: save static vars back and restore/return --
     emitter.label(epilogue_label);
+    let needs_return_preserve = epilogue_has_side_effects(&ctx);
+    if needs_return_preserve {
+        preserve_return_registers(emitter, &sig.return_type);
+    }
 
     // Save static vars back to global storage before returning
     let func_name = label.strip_prefix("_fn_").unwrap_or(label);
-    for static_var in &ctx.static_vars {
+    let mut static_vars: Vec<_> = ctx.static_vars.iter().collect();
+    static_vars.sort();
+    for static_var in static_vars {
         let data_label = format!("_static_{}_{}", func_name, static_var);
         let var_info = ctx.variables.get(static_var);
         if let Some(var) = var_info {
@@ -226,39 +242,39 @@ fn emit_function_with_label_and_class(
             let ty = var.ty.clone();
             emitter.comment(&format!("save static ${} back", static_var));
             emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));      // load page of static var storage
-            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); // add page offset
+            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); //add page offset
             // Note: x9 holds the global storage address, so we use x8 as scratch for large offsets
             match &ty {
                 PhpType::Bool | PhpType::Int => {
                     if offset <= 255 {
-                        emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); // load local value
+                        emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); //load local value
                     } else {
-                        emitter.instruction(&format!("sub x8, x29, #{}", offset)); // compute stack address for large offset
+                        emitter.instruction(&format!("sub x8, x29, #{}", offset)); //compute stack address for large offset
                         emitter.instruction("ldr x10, [x8]");                   // load local value via computed address
                     }
                     emitter.instruction("str x10, [x9]");                       // save to static storage
                 }
                 PhpType::Float => {
                     if offset <= 255 {
-                        emitter.instruction(&format!("ldur d0, [x29, #-{}]", offset)); // load local float
+                        emitter.instruction(&format!("ldur d0, [x29, #-{}]", offset)); //load local float
                     } else {
-                        emitter.instruction(&format!("sub x8, x29, #{}", offset)); // compute stack address for large offset
+                        emitter.instruction(&format!("sub x8, x29, #{}", offset)); //compute stack address for large offset
                         emitter.instruction("ldr d0, [x8]");                    // load local float via computed address
                     }
                     emitter.instruction("str d0, [x9]");                        // save to static storage
                 }
                 PhpType::Str => {
                     if offset <= 255 {
-                        emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); // load string ptr
+                        emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); //load string ptr
                     } else {
-                        emitter.instruction(&format!("sub x8, x29, #{}", offset)); // compute stack address for large offset
+                        emitter.instruction(&format!("sub x8, x29, #{}", offset)); //compute stack address for large offset
                         emitter.instruction("ldr x10, [x8]");                   // load string ptr via computed address
                     }
                     let len_offset = offset - 8;
                     if len_offset <= 255 {
-                        emitter.instruction(&format!("ldur x11, [x29, #-{}]", len_offset)); // load string len
+                        emitter.instruction(&format!("ldur x11, [x29, #-{}]", len_offset)); //load string len
                     } else {
-                        emitter.instruction(&format!("sub x8, x29, #{}", len_offset)); // compute stack address for large offset
+                        emitter.instruction(&format!("sub x8, x29, #{}", len_offset)); //compute stack address for large offset
                         emitter.instruction("ldr x11, [x8]");                   // load string len via computed address
                     }
                     emitter.instruction("str x10, [x9]");                       // save ptr to static storage
@@ -266,9 +282,9 @@ fn emit_function_with_label_and_class(
                 }
                 _ => {
                     if offset <= 255 {
-                        emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); // load local value
+                        emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); //load local value
                     } else {
-                        emitter.instruction(&format!("sub x8, x29, #{}", offset)); // compute stack address for large offset
+                        emitter.instruction(&format!("sub x8, x29, #{}", offset)); //compute stack address for large offset
                         emitter.instruction("ldr x10, [x8]");                   // load local value via computed address
                     }
                     emitter.instruction("str x10, [x9]");                       // save to static storage
@@ -277,12 +293,11 @@ fn emit_function_with_label_and_class(
         }
     }
 
-    // Note: full scope-based cleanup is still intentionally disabled here.
-    // Some locals and params are filled from borrowed container/object reads
-    // that do not all retain yet, so a blanket epilogue decref would still be
-    // too aggressive. Reassignment/unset/return/call-site ownership transfers
-    // handle the safe cases without destabilizing unrelated code paths.
+    emit_owned_local_epilogue_cleanup(emitter, &ctx);
 
+    if needs_return_preserve {
+        restore_return_registers(emitter, &sig.return_type);
+    }
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16));  // restore frame ptr & return addr
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
@@ -301,6 +316,145 @@ fn emit_function_with_label_and_class(
                 all_functions,
                 constants,
             );
+        }
+    }
+}
+
+fn preserve_return_registers(emitter: &mut Emitter, return_ty: &PhpType) {
+    match return_ty {
+        PhpType::Float => {
+            emitter.instruction("str d0, [sp, #-16]!");                         // preserve float return value across epilogue side effects
+        }
+        PhpType::Str => {
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve string return registers across epilogue side effects
+        }
+        _ => {
+            emitter.instruction("str x0, [sp, #-16]!");                         // preserve scalar/heap return value across epilogue side effects
+        }
+    }
+}
+
+fn restore_return_registers(emitter: &mut Emitter, return_ty: &PhpType) {
+    match return_ty {
+        PhpType::Float => {
+            emitter.instruction("ldr d0, [sp], #16");                           // restore float return value after epilogue cleanup
+        }
+        PhpType::Str => {
+            emitter.instruction("ldp x1, x2, [sp], #16");                       // restore string return registers after epilogue cleanup
+        }
+        _ => {
+            emitter.instruction("ldr x0, [sp], #16");                           // restore scalar/heap return value after epilogue cleanup
+        }
+    }
+}
+
+fn epilogue_has_side_effects(ctx: &Context) -> bool {
+    !ctx.static_vars.is_empty()
+        || ctx.variables.iter().any(|(name, var)| {
+            !ctx.global_vars.contains(name)
+                && !ctx.static_vars.contains(name)
+                && !ctx.ref_params.contains(name)
+                && var.epilogue_cleanup_safe
+                && var.ownership == HeapOwnership::Owned
+                && (matches!(var.ty, PhpType::Str) || var.ty.is_refcounted())
+        })
+}
+
+fn emit_owned_local_epilogue_cleanup(emitter: &mut Emitter, ctx: &Context) {
+    let mut cleanup_vars: Vec<_> = ctx
+        .variables
+        .iter()
+        .filter(|(name, var)| {
+            !ctx.global_vars.contains(*name)
+                && !ctx.static_vars.contains(*name)
+                && !ctx.ref_params.contains(*name)
+                && var.epilogue_cleanup_safe
+                && var.ownership == HeapOwnership::Owned
+        })
+        .collect();
+    cleanup_vars.sort_by_key(|(_, var)| var.stack_offset);
+
+    for (name, var) in cleanup_vars {
+        match &var.ty {
+            PhpType::Str => {
+                emitter.comment(&format!("epilogue cleanup ${}", name));
+                super::abi::load_at_offset(emitter, "x0", var.stack_offset);     // load owned string pointer from local slot
+                emitter.instruction("bl __rt_heap_free_safe");                  // release owned string storage before returning
+            }
+            ty if ty.is_refcounted() => {
+                emitter.comment(&format!("epilogue cleanup ${}", name));
+                super::abi::load_at_offset(emitter, "x0", var.stack_offset);     // load owned heap pointer from local slot
+                super::abi::emit_decref_if_refcounted(emitter, ty);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn mark_control_flow_epilogue_unsafe(
+    stmts: &[crate::parser::ast::Stmt],
+    ctx: &mut Context,
+    in_control_flow: bool,
+) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::Assign { name, .. } => {
+                if in_control_flow {
+                    ctx.disable_epilogue_cleanup(name);
+                }
+            }
+            StmtKind::ListUnpack { vars, .. } => {
+                if in_control_flow {
+                    for var in vars {
+                        ctx.disable_epilogue_cleanup(var);
+                    }
+                }
+            }
+            StmtKind::Global { vars } => {
+                for var in vars {
+                    ctx.disable_epilogue_cleanup(var);
+                }
+            }
+            StmtKind::StaticVar { name, .. } => {
+                ctx.disable_epilogue_cleanup(name);
+            }
+            StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+                mark_control_flow_epilogue_unsafe(then_body, ctx, true);
+                for (_, body) in elseif_clauses {
+                    mark_control_flow_epilogue_unsafe(body, ctx, true);
+                }
+                if let Some(body) = else_body {
+                    mark_control_flow_epilogue_unsafe(body, ctx, true);
+                }
+            }
+            StmtKind::Foreach { body, key_var, value_var, .. } => {
+                ctx.disable_epilogue_cleanup(value_var);
+                if let Some(key_var) = key_var {
+                    ctx.disable_epilogue_cleanup(key_var);
+                }
+                mark_control_flow_epilogue_unsafe(body, ctx, true);
+            }
+            StmtKind::DoWhile { body, .. } | StmtKind::While { body, .. } => {
+                mark_control_flow_epilogue_unsafe(body, ctx, true);
+            }
+            StmtKind::For { init, update, body, .. } => {
+                if let Some(stmt) = init {
+                    mark_control_flow_epilogue_unsafe(std::slice::from_ref(stmt.as_ref()), ctx, true);
+                }
+                if let Some(stmt) = update {
+                    mark_control_flow_epilogue_unsafe(std::slice::from_ref(stmt.as_ref()), ctx, true);
+                }
+                mark_control_flow_epilogue_unsafe(body, ctx, true);
+            }
+            StmtKind::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    mark_control_flow_epilogue_unsafe(body, ctx, true);
+                }
+                if let Some(body) = default {
+                    mark_control_flow_epilogue_unsafe(body, ctx, true);
+                }
+            }
+            _ => {}
         }
     }
 }

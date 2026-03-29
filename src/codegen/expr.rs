@@ -1,5 +1,5 @@
 use super::abi;
-use super::context::Context;
+use super::context::{Context, HeapOwnership};
 use super::data_section::DataSection;
 use super::emit::Emitter;
 use crate::parser::ast::{BinOp, Expr, ExprKind};
@@ -64,18 +64,18 @@ pub fn emit_expr(
                 emitter.comment(&format!("load extern global ${}", name));
                 match &ty {
                     PhpType::Bool | PhpType::Int | PhpType::Pointer(_) | PhpType::Callable => {
-                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); // load page of extern global GOT entry
-                        emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); // resolve extern global address
+                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); //load page of extern global GOT entry
+                        emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); //resolve extern global address
                         emitter.instruction("ldr x0, [x9]");                    // load extern integer/pointer value
                     }
                     PhpType::Float => {
-                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); // load page of extern global GOT entry
-                        emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); // resolve extern global address
+                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); //load page of extern global GOT entry
+                        emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); //resolve extern global address
                         emitter.instruction("ldr d0, [x9]");                    // load extern float value
                     }
                     PhpType::Str => {
-                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); // load page of extern global GOT entry
-                        emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); // resolve extern global address
+                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); //load page of extern global GOT entry
+                        emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); //resolve extern global address
                         emitter.instruction("ldr x0, [x9]");                    // load char* from extern global
                         emitter.instruction("bl __rt_cstr_to_str");             // convert C string to elephc string
                     }
@@ -294,7 +294,7 @@ pub fn emit_expr(
                     // Save new value (in x1) to global
                     let label = format!("_gvar_{}", name);
                     emitter.instruction(&format!("adrp x9, {}@PAGE", label));   // load page of global var storage
-                    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label)); // add page offset
+                    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label)); //add page offset
                     emitter.instruction("str x1, [x9]");                        // store incremented value to global
                 }
                 PhpType::Int
@@ -532,6 +532,8 @@ fn emit_new_object(
     // -- allocate object on heap --
     emitter.instruction(&format!("mov x0, #{}", obj_size));                     // object size in bytes
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate object → x0 = pointer
+    emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
+    emitter.instruction("str x9, [x0, #-8]");                                   // store object kind in the uniform heap header
     emitter.instruction(&format!("mov x10, #{}", class_info.class_id));         // load compile-time class id
     emitter.instruction("str x10, [x0]");                                       // store class id at object header
     emitter.instruction("str x0, [sp, #-16]!");                                 // save object pointer on stack
@@ -566,7 +568,7 @@ fn emit_new_object(
                 }
                 PhpType::Str => {
                     emitter.instruction(&format!("str x1, [x9, #{}]", offset)); // store string pointer
-                    emitter.instruction(&format!("str x2, [x9, #{}]", offset + 8)); // store string length
+                    emitter.instruction(&format!("str x2, [x9, #{}]", offset + 8)); //store string length
                 }
                 PhpType::Void => {}
             }
@@ -628,10 +630,10 @@ fn emit_new_object(
                 | PhpType::Callable
                 | PhpType::Object(_)
                 | PhpType::Pointer(_) => {
-                    emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop arg into register
+                    emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); //pop arg into register
                 }
                 PhpType::Float => {
-                    emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); // pop float arg
+                    emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); //pop float arg
                 }
                 PhpType::Str => {
                     emitter.instruction(&format!(                               // pop string ptr+len
@@ -1008,6 +1010,7 @@ fn emit_array_literal(
         if i == 0 {
             actual_elem_ty = ty.clone();
         }
+        retain_borrowed_heap_arg(emitter, elem, &ty);
         // -- store element value into array at index i --
         emitter.instruction("ldr x9, [sp]");                                    // peek array pointer from stack (no pop)
         match &ty {
@@ -1073,17 +1076,30 @@ fn emit_array_literal_with_spread(
         if let ExprKind::Spread(inner) = &elem.kind {
             // -- spread: copy all elements from source array into dest array --
             emitter.comment("spread array into dest");
-            let _src_ty = emit_expr(inner, emitter, ctx, data);
+            let src_ty = emit_expr(inner, emitter, ctx, data);
+            if (i == 0 || actual_elem_ty == PhpType::Int)
+                && matches!(&src_ty, PhpType::Array(_))
+            {
+                if let PhpType::Array(inner) = &src_ty {
+                    actual_elem_ty = inner.as_ref().clone();
+                }
+            }
             // x0 = source array pointer
             emitter.instruction("mov x1, x0");                                  // x1 = source array pointer
             emitter.instruction("ldr x0, [sp]");                                // x0 = dest array pointer (peek)
-            emitter.instruction("bl __rt_array_merge_into");                    // append all src elements to dest array
+            if matches!(&src_ty, PhpType::Array(inner) if inner.is_refcounted()) {
+                emitter.instruction("bl __rt_array_merge_into_refcounted");     // append src elements while retaining borrowed heap payloads
+            } else {
+                emitter.instruction("bl __rt_array_merge_into");                // append all src elements to dest array
+            }
+            emitter.instruction("str x0, [sp]");                                // persist the possibly-grown dest array pointer after the spread merge
         } else {
             // -- regular element: push single value --
             let ty = emit_expr(elem, emitter, ctx, data);
             if i == 0 || actual_elem_ty == PhpType::Int {
                 actual_elem_ty = ty.clone();
             }
+            retain_borrowed_heap_arg(emitter, elem, &ty);
             emitter.instruction("ldr x9, [sp]");                                // peek dest array pointer from stack
             match &ty {
                 PhpType::Int | PhpType::Bool => {
@@ -1091,17 +1107,20 @@ fn emit_array_literal_with_spread(
                     emitter.instruction("mov x1, x0");                          // x1 = value to push
                     emitter.instruction("mov x0, x9");                          // x0 = array pointer
                     emitter.instruction("bl __rt_array_push_int");              // push value onto array
+                    emitter.instruction("str x0, [sp]");                        // persist the possibly-grown dest array pointer after the push
                 }
                 PhpType::Float => {
                     // -- push float element --
                     emitter.instruction("fmov x1, d0");                         // move float bits to int register
                     emitter.instruction("mov x0, x9");                          // x0 = array pointer
                     emitter.instruction("bl __rt_array_push_int");              // push value onto array
+                    emitter.instruction("str x0, [sp]");                        // persist the possibly-grown dest array pointer after the push
                 }
                 _ => {
                     emitter.instruction("mov x1, x0");                          // x1 = value to push
                     emitter.instruction("mov x0, x9");                          // x0 = array pointer
                     emitter.instruction("bl __rt_array_push_int");              // push value onto array
+                    emitter.instruction("str x0, [sp]");                        // persist the possibly-grown dest array pointer after the push
                 }
             }
         }
@@ -1911,7 +1930,7 @@ fn emit_function_call(
                     let label = format!("_gvar_{}", var_name);
                     emitter.comment(&format!("ref arg: address of global ${}", var_name));
                     emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page of global var
-                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); // add page offset
+                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); //add page offset
                 } else {
                     let var = match ctx.variables.get(var_name) {
                         Some(v) => v,
@@ -2176,40 +2195,48 @@ pub(crate) fn restore_concat_offset_after_nested_call(emitter: &mut Emitter, ret
     emitter.instruction("str x10, [x9]");                                       // restore caller concat offset after nested call
 }
 
-pub(crate) fn expr_result_may_borrow_heap_value(expr: &Expr) -> bool {
+pub(crate) fn expr_result_heap_ownership(expr: &Expr) -> HeapOwnership {
     match &expr.kind {
         ExprKind::Variable(_)
         | ExprKind::ArrayAccess { .. }
         | ExprKind::PropertyAccess { .. }
-        | ExprKind::This => true,
+        | ExprKind::This => HeapOwnership::Borrowed,
         ExprKind::Spread(inner)
         | ExprKind::PtrCast { expr: inner, .. }
-        | ExprKind::Cast { expr: inner, .. } => expr_result_may_borrow_heap_value(inner),
+        | ExprKind::Cast { expr: inner, .. } => expr_result_heap_ownership(inner),
         ExprKind::NullCoalesce { value, default } => {
-            expr_result_may_borrow_heap_value(value) || expr_result_may_borrow_heap_value(default)
+            expr_result_heap_ownership(value).merge(expr_result_heap_ownership(default))
         }
         ExprKind::Ternary {
             then_expr,
             else_expr,
             ..
-        } => {
-            expr_result_may_borrow_heap_value(then_expr)
-                || expr_result_may_borrow_heap_value(else_expr)
-        }
+        } => expr_result_heap_ownership(then_expr).merge(expr_result_heap_ownership(else_expr)),
         ExprKind::Match { arms, default, .. } => {
-            arms.iter()
-                .any(|(_, expr)| expr_result_may_borrow_heap_value(expr))
-                || default
-                    .as_ref()
-                    .map(|expr| expr_result_may_borrow_heap_value(expr))
-                    .unwrap_or(false)
+            let mut ownership = default
+                .as_ref()
+                .map(|expr| expr_result_heap_ownership(expr))
+                .unwrap_or(HeapOwnership::NonHeap);
+            for (_, expr) in arms {
+                ownership = ownership.merge(expr_result_heap_ownership(expr));
+            }
+            ownership
         }
-        _ => false,
+        ExprKind::StringLiteral(_)
+        | ExprKind::ArrayLiteral(_)
+        | ExprKind::ArrayLiteralAssoc(_)
+        | ExprKind::FunctionCall { .. }
+        | ExprKind::ClosureCall { .. }
+        | ExprKind::ExprCall { .. }
+        | ExprKind::MethodCall { .. }
+        | ExprKind::StaticMethodCall { .. }
+        | ExprKind::NewObject { .. } => HeapOwnership::Owned,
+        _ => HeapOwnership::NonHeap,
     }
 }
 
 fn retain_borrowed_heap_arg(emitter: &mut Emitter, expr: &Expr, ty: &PhpType) {
-    if ty.is_refcounted() && expr_result_may_borrow_heap_value(expr) {
+    if ty.is_refcounted() && expr_result_heap_ownership(expr) != HeapOwnership::Owned {
         abi::emit_incref_if_refcounted(emitter, ty);
     }
 }

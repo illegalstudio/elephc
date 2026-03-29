@@ -1,5 +1,5 @@
 use crate::codegen::abi;
-use crate::codegen::context::Context;
+use crate::codegen::context::{Context, HeapOwnership};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::parser::ast::Expr;
@@ -39,7 +39,7 @@ pub fn emit(
         emitter.instruction("movk x0, #0xFFFF, lsl #32");                       // load null sentinel bits [47:32]
         emitter.instruction("movk x0, #0x7FFF, lsl #48");                       // load null sentinel bits [63:48]
         abi::store_at_offset(emitter, "x0", offset);                              // store null sentinel to variable's stack slot
-        ctx.variables.get_mut(name).unwrap().ty = PhpType::Void;
+        ctx.update_var_type_and_ownership(name, PhpType::Void, HeapOwnership::NonHeap);
     }
     Some(PhpType::Void)
 }

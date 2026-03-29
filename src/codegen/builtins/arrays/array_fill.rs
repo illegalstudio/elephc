@@ -19,12 +19,17 @@ pub fn emit(
     emit_expr(&args[1], emitter, ctx, data);
     // -- save count, evaluate fill value --
     emitter.instruction("str x0, [sp, #-16]!");                                 // push count onto stack
-    emit_expr(&args[2], emitter, ctx, data);
+    let value_ty = emit_expr(&args[2], emitter, ctx, data);
+    let uses_refcounted_runtime = value_ty.is_refcounted();
     // -- set up three-arg call: start, count, value --
     emitter.instruction("mov x2, x0");                                          // move fill value to x2 (third arg)
     emitter.instruction("ldr x1, [sp], #16");                                   // pop count into x1 (second arg)
     emitter.instruction("ldr x0, [sp], #16");                                   // pop start index into x0 (first arg)
-    emitter.instruction("bl __rt_array_fill");                                  // call runtime: fill array → x0=new array
+    emitter.instruction(if uses_refcounted_runtime {
+        "bl __rt_array_fill_refcounted"
+    } else {
+        "bl __rt_array_fill"
+    }); // call runtime: fill array → x0=new array
 
-    Some(PhpType::Array(Box::new(PhpType::Int)))
+    Some(PhpType::Array(Box::new(value_ty)))
 }

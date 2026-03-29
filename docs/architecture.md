@@ -29,7 +29,7 @@ PHP source (.php)
      ▼
 ┌─────────┐
 │  Type    │  src/types/
-│  Checker │  checker/mod.rs, builtins.rs, functions.rs
+│  Checker │  checker/mod.rs, checker/builtins.rs, checker/functions.rs
 │          │  Validates types, returns CheckResult (TypeEnv + FunctionSig map)
 └────┬─────┘
      │
@@ -83,14 +83,14 @@ src/
 │   ├── stmt.rs                Statement codegen
 │   ├── functions.rs           User function emission
 │   ├── abi.rs                 ARM64 register conventions
-│   ├── context.rs             Variables, labels, loop stack
+│   ├── context.rs             Variables, labels, loop stack, ownership lattice
 │   ├── data_section.rs        String/float literal .data section
 │   ├── emit.rs                Assembly text buffer
 │   │
 │   ├── builtins/              Built-in function codegen (one file per language function)
 │   │   ├── mod.rs             Dispatcher — chains to category modules
 │   │   ├── strings/           strlen, substr, strpos, explode, sprintf, md5, ... (57 files)
-│   │   ├── arrays/            count, array_push, sort, array_map, usort, ... (51 files)
+│   │   ├── arrays/            count, array_push, sort, array_map, usort, ... (54 files)
 │   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, round, min, max, sin, cos, ... (32 files)
 │   │   ├── types/             is_*, gettype, empty, unset, settype, ... (16 files)
 │   │   ├── io/                fopen, fwrite, file_get_contents, scandir, ... (36 files)
@@ -100,9 +100,9 @@ src/
 │   └── runtime/               ARM64 runtime routines (one file per language/runtime helper)
 │       ├── mod.rs             Emits all runtime functions into assembly
 │       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, str_persist, ... (53 files)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, sort, usort, refcount, ... (56 files)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, sort, usort, refcount, ... (79 files)
 │       ├── io/                fopen, fgets, fread, stat, scandir, ... (17 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, date, mktime, strtotime, json_encode, json_decode, preg (14 files)
+│       ├── system/            build_argv, time, getenv, shell_exec, date, mktime, strtotime, json_encode_*, json_decode, preg_*, ... (24 files)
 │       └── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ... (5 files)
 │
 │
@@ -180,7 +180,7 @@ The runtime reserves a fixed set of global symbols in `emit_runtime_data()`:
 
 ### Heap allocator
 
-8MB free-list + bump hybrid allocator in BSS (`_heap_buf`). Each allocation has an 8-byte header: `[size:4][refcount:4]` — a 32-bit block size followed by a 32-bit reference count. When memory is freed (via `__rt_heap_free`), blocks are returned to a singly-linked free list (LIFO). New allocations check the free list first (first-fit), falling back to bump allocation if no suitable block exists. Reference counting (`__rt_incref`, `__rt_decref_array`, `__rt_decref_hash`, `__rt_decref_object`) automatically frees heap objects when their reference count reaches zero. Codegen now treats reassignment of ordinary locals/globals, by-value call arguments, borrowed heap returns, indexed array writes, associative-array/hash writes, object property writes, and `static` slot writes as ownership transfer points: borrowed arrays/objects are retained before a new owner is created, overwritten owners are decreffed before replacement, hash destruction now deep-frees owned keys plus heap-backed string/array/hash/object values based on the table's runtime value tag, and assoc-derived container copies (`array_values`, `array_column`, `array_diff_key`, `array_intersect_key`) retain borrowed heap payloads before handing them to a new container. Full epilogue cleanup is still conservative because some locals are populated from borrowed container/object reads, and broader indexed-array / nested-container propagation still needs deeper ownership tracking. Configurable via `--heap-size=BYTES` (minimum 64KB). Bounds-checked with fatal error on overflow.
+8MB free-list + bump hybrid allocator in BSS (`_heap_buf`). Each allocation has a uniform 16-byte header: `[size:4][refcount:4][kind:8]` — a 32-bit block size, a 32-bit reference count, and an 8-byte heap-kind tag shared by arrays, hashes, objects, persisted strings, and raw helper buffers. When memory is freed (via `__rt_heap_free`), blocks are inserted into an address-ordered free list, adjacent blocks are coalesced, and any free chain that reaches the current bump tail is folded back into `_heap_off`. New allocations check the free list first (first-fit); oversized free blocks are split so the remainder stays reusable, and bump allocation is used only when no suitable free block exists. Reference counting (`__rt_incref`, `__rt_decref_array`, `__rt_decref_hash`, `__rt_decref_object`) automatically frees heap objects when their reference count reaches zero. Heap kind tags currently use `0=raw/untyped`, `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, giving the runtime a uniform discriminator regardless of payload layout. With `--heap-debug`, the runtime also validates the ordered free list on allocator/free mutations and traps on double free or zero-refcount `incref`/`decref` paths. Codegen now records a local ownership lattice (`Owned`, `Borrowed`, `MaybeOwned`, `NonHeap`) plus an `epilogue_cleanup_safe` bit in `Context::variables` so it can distinguish between stack slots that truly own a heap value and slots that merely alias global/static/container-backed storage. Ownership transfer points currently include ordinary reassignments, by-value call arguments, borrowed heap returns, indexed array writes, associative-array/hash writes, object property writes, `static` slot writes, `global` loads, `foreach` targets, and `list(...)` targets, while container-copy builtins now dispatch to dedicated `_refcounted` runtime helpers for nested array/hash/object/string payloads (`array` literals with spreads, `array_merge`, `array_chunk`, `array_slice`, `array_reverse`, `array_pad`, `array_unique`, `array_splice`, `array_diff`, `array_intersect`, `array_filter`, `array_fill`, `array_combine`, `array_fill_keys`). Function epilogues now clean up only locals that are both `Owned` and still marked safe; borrowed aliases such as `$this`, ref params, globals, and statics are explicitly excluded, and broader alias-driven cleanup remains conservative until more control-flow cases are proven. Configurable via `--heap-size=BYTES` (minimum 64KB) and `--heap-debug` for runtime verification. Bounds-checked with fatal error on overflow.
 
 ### Hash table header (heap-allocated, for associative arrays)
 

@@ -3,7 +3,6 @@ use crate::codegen::emit::Emitter;
 /// array_merge_into: append all elements from source array to dest array (in-place).
 /// Input: x0 = dest array pointer, x1 = source array pointer
 /// Both arrays must have 8-byte elements.
-/// The dest array must have enough capacity.
 pub fn emit_array_merge_into(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_merge_into ---");
@@ -24,12 +23,14 @@ pub fn emit_array_merge_into(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x0]");                                       // x10 = dest array length
     emitter.instruction("ldr x11, [x0, #8]");                                   // x11 = dest array capacity
     emitter.instruction("add x12, x10, x9");                                    // x12 = needed capacity (dest_len + src_len)
+    emitter.label("__rt_ami_grow_check");
     emitter.instruction("cmp x12, x11");                                        // check if we need to grow
     emitter.instruction("b.le __rt_ami_copy");                                  // skip resize if capacity is enough
-
-    // -- grow dest array: call array_push repeatedly (handles resize) --
-    // Simpler approach: just copy directly since we allocated generously
-    // For robustness, we use a loop calling array_push_int
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload current dest array pointer before growth
+    emitter.instruction("bl __rt_array_grow");                                  // grow dest array storage until it can hold the merge result
+    emitter.instruction("str x0, [sp, #0]");                                    // persist the possibly-moved dest array pointer
+    emitter.instruction("ldr x11, [x0, #8]");                                   // reload dest capacity after growth
+    emitter.instruction("b __rt_ami_grow_check");                               // keep growing until the required capacity fits
 
     emitter.label("__rt_ami_copy");
     // -- copy elements from source to dest --

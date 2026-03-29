@@ -40,13 +40,14 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: elephc [--heap-size=BYTES] [--gc-stats] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] <source.php>");
+        eprintln!("Usage: elephc [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] <source.php>");
         process::exit(1);
     }
 
     // Parse optional flags
     let mut heap_size: usize = 8_388_608; // 8MB default
     let mut gc_stats = false;
+    let mut heap_debug = false;
     let mut filename_arg = None;
     let mut extra_link_libs: Vec<String> = Vec::new();
     let mut extra_link_paths: Vec<String> = Vec::new();
@@ -65,6 +66,8 @@ fn main() {
             };
         } else if arg == "--gc-stats" {
             gc_stats = true;
+        } else if arg == "--heap-debug" {
+            heap_debug = true;
         } else if arg == "--link" || arg == "-l" {
             i += 1;
             if i < args.len() {
@@ -105,7 +108,7 @@ fn main() {
     let filename = match filename_arg {
         Some(f) => f,
         None => {
-            eprintln!("Usage: elephc [--heap-size=BYTES] [--gc-stats] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] <source.php>");
+            eprintln!("Usage: elephc [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] <source.php>");
             process::exit(1);
         }
     };
@@ -168,6 +171,7 @@ fn main() {
         &check_result.extern_globals,
         heap_size,
         gc_stats,
+        heap_debug,
     );
 
     // Merge extern-required libraries with CLI-specified ones

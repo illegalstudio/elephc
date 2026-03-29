@@ -14,6 +14,8 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("array_pad()");
     let arr_ty = emit_expr(&args[0], emitter, ctx, data);
+    let uses_refcounted_runtime =
+        matches!(&arr_ty, PhpType::Array(inner) if inner.is_refcounted());
     // -- save array pointer, evaluate target size --
     emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer onto stack
     emit_expr(&args[1], emitter, ctx, data);
@@ -24,7 +26,11 @@ pub fn emit(
     emitter.instruction("mov x2, x0");                                          // move pad value to x2 (third arg)
     emitter.instruction("ldr x1, [sp], #16");                                   // pop target size into x1 (second arg)
     emitter.instruction("ldr x0, [sp], #16");                                   // pop array pointer into x0 (first arg)
-    emitter.instruction("bl __rt_array_pad");                                   // call runtime: pad array → x0=new array
+    emitter.instruction(if uses_refcounted_runtime {
+        "bl __rt_array_pad_refcounted"
+    } else {
+        "bl __rt_array_pad"
+    }); // call runtime: pad array → x0=new array
 
     match arr_ty {
         PhpType::Array(inner) => Some(PhpType::Array(inner)),

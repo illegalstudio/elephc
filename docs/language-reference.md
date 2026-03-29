@@ -837,7 +837,7 @@ Callback rules:
 | `addslashes()` | `addslashes($str): string` | Escape quotes and backslashes |
 | `stripslashes()` | `stripslashes($str): string` | Remove escape backslashes |
 | `nl2br()` | `nl2br($str): string` | Insert `<br />` before newlines |
-| `wordwrap()` | `wordwrap($str [, $width, $break]): string` | Wrap text at width |
+| `wordwrap()` | `wordwrap($str [, $width [, $break [, $cut]]]): string` | Wrap text at width |
 | `bin2hex()` | `bin2hex($str): string` | Convert binary to hex |
 | `hex2bin()` | `hex2bin($str): string` | Convert hex to binary |
 | `sprintf()` | `sprintf($fmt, ...): string` | Format string (%s, %d, %f, %x, %e, %g, %o, %c, %%) with width, precision, padding, alignment, and sign modifiers |
@@ -866,7 +866,7 @@ Callback rules:
 | Function | Signature | Description |
 |---|---|---|
 | `count()` | `count($arr): int` | Number of elements |
-| `array_push()` | `array_push($arr, $val): void` | Add element to end |
+| `array_push()` | `array_push($arr, $val): void` | Add element to end of an indexed array |
 | `array_pop()` | `array_pop($arr): mixed` | Remove and return last element |
 | `in_array()` | `in_array($needle, $arr): int` | Search for value (returns 0/1) |
 | `array_keys()` | `array_keys($arr): array` | Returns the array keys (ints for indexed arrays, strings for associative arrays) |
@@ -913,11 +913,11 @@ Callback rules:
 | `shuffle()` | `shuffle($arr): void` | Randomly shuffle array (in-place) |
 | `array_rand()` | `array_rand($arr): int` | Pick one random key |
 | **Multi-dimensional** | | |
-| `array_column()` | `array_column($arr, $column_key): array` | Extract column from array of assoc arrays |
+| `array_column()` | `array_column($arr, $column_key): array` | Extract column from an indexed array of associative rows |
 | **Callback-based** | | |
 | `array_map()` | `array_map("callback", $arr): array` | Apply callback to each element, return new array |
 | `array_filter()` | `array_filter($arr, "callback"): array` | Filter elements where callback returns truthy |
-| `array_reduce()` | `array_reduce($arr, "callback", $init): mixed` | Reduce array to single value via callback |
+| `array_reduce()` | `array_reduce($arr, "callback", $init): int` | Reduce array to a single integer result via callback |
 | `array_walk()` | `array_walk($arr, "callback"): void` | Call callback on each element (side-effects) |
 | `usort()` | `usort($arr, "callback"): void` | Sort array using user comparison function |
 | `uksort()` | `uksort($arr, "callback"): void` | Sort array with a user comparison callback (currently routed through the same runtime sort path as `usort`) |
@@ -926,7 +926,9 @@ Callback rules:
 | `call_user_func()` | `call_user_func("name", ...): mixed` | Call a function by name with arguments |
 | `call_user_func_array()` | `call_user_func_array("name", $args): mixed` | Call a function with arguments from an array |
 | `function_exists()` | `function_exists("name"): bool` | Check if a function is defined |
-> **Note:** Callback arguments can be string literals containing the function name (e.g., `"double"`), anonymous functions, or arrow functions.
+> **Note:** Callback arguments can be string literals containing the function name (e.g., `"double"`), anonymous functions, or arrow functions. The checker has the strongest callback-shape awareness for string-literal function names; closure support is documented separately below, including the `use (...)` limitation.
+
+> **Type checker note:** `array_push()` only accepts indexed arrays as its first argument, and `array_column()` requires an indexed array whose elements are associative arrays.
 
 **Not yet supported:** `compact()`, `extract()` (require dynamic variables).
 
@@ -1251,7 +1253,7 @@ Both `include 'f';` and `include('f');` syntax are supported.
 - Path must be a string literal (no variables or expressions)
 - Included files must start with `<?php`
 
-### Known limitations in v0.8 features
+### Known limitations in current JSON / regex / date support
 
 - `strtotime()` only supports "YYYY-MM-DD" and "YYYY-MM-DD HH:MM:SS" formats. Relative time strings like "next Monday" or "+1 week" are not supported.
 - `json_decode()` returns a string. It strips quotes and unescapes JSON string values, but does not parse JSON objects into associative arrays or JSON arrays into PHP arrays.

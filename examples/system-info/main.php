@@ -15,6 +15,8 @@ $home = getenv("HOME");
 echo "HOME: " . $home . PHP_EOL;
 $user = getenv("USER");
 echo "USER: " . $user . PHP_EOL;
+putenv("ELEPHC_SYSTEM_INFO=enabled");
+echo "ELEPHC_SYSTEM_INFO: " . getenv("ELEPHC_SYSTEM_INFO") . PHP_EOL;
 
 echo PHP_EOL . "=== Time ===" . PHP_EOL;
 $t = time();

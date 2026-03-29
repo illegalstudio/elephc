@@ -81,7 +81,9 @@ pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
 /// Retain the current value in x0 if it is runtime-refcounted.
 pub fn emit_incref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
     if ty.is_refcounted() {
+        emitter.instruction("str x0, [sp, #-16]!");                             // preserve heap pointer across incref helper call
         emitter.instruction("bl __rt_incref");                                  // retain shared heap value before creating a new owner
+        emitter.instruction("ldr x0, [sp], #16");                               // restore original heap pointer after incref
     }
 }
 

@@ -105,10 +105,21 @@ Each variable has a `VarInfo`:
 
 ```rust
 pub struct VarInfo {
-    pub ty: PhpType,         // Int, Float, Str, etc.
-    pub stack_offset: usize, // offset from frame pointer (x29)
+    pub ty: PhpType,                  // Int, Float, Str, etc.
+    pub stack_offset: usize,          // offset from frame pointer (x29)
+    pub ownership: HeapOwnership,     // NonHeap / Owned / Borrowed / MaybeOwned
+    pub epilogue_cleanup_safe: bool,  // false for locals populated through still-ambiguous control-flow/alias paths
 }
 ```
+
+`HeapOwnership` is a codegen-only ownership lattice used for heap-backed values flowing through stack slots:
+
+- `NonHeap` — integers, floats, bools, null, raw pointers
+- `Owned` — this slot definitely owns the current heap-backed value
+- `Borrowed` — this slot currently aliases heap storage owned elsewhere
+- `MaybeOwned` — control flow merged heap-backed paths with different ownership states
+
+The lattice is now threaded through the main local-variable paths. Function epilogues re-enable cleanup only for slots classified as `Owned` and still marked `epilogue_cleanup_safe`; locals coming from still-ambiguous control-flow or aliasing paths are intentionally skipped. Special aliases such as `$this`, by-reference params, globals, and statics are explicitly kept out of epilogue cleanup because the current frame does not own their storage. Builtins that duplicate containers now also dispatch to dedicated `_refcounted` runtime helpers when their element/value types are heap-backed, so nested array/hash/object/string payloads are retained before the new container becomes an owner.
 
 ### Label generation
 
@@ -344,8 +355,9 @@ my_func($a, $b, $c)
 
 1. Evaluate each argument and push results onto the stack
 2. Pop arguments into the correct ABI registers (`x0`-`x7` for ints, `d0`-`d7` for floats, two registers per string)
-3. `bl _fn_my_func` — branch with link (saves return address)
-4. Result is in `x0`/`d0`/`x1`+`x2` depending on return type
+3. If a heap-backed argument is being borrowed from an existing owner (for example a local variable or container read), retain it before passing it to the callee
+4. `bl _fn_my_func` — branch with link (saves return address)
+5. Result is in `x0`/`d0`/`x1`+`x2` depending on return type
 
 ## Closure codegen
 
@@ -393,7 +405,9 @@ When a closure variable is called (`$fn(1, 2)`), the codegen:
 
 ### Closures as callback arguments
 
-Built-in functions like `array_map`, `array_filter`, `usort` etc. accept closures as callback arguments. The closure's function pointer is passed in a register (like any other `Callable` argument) and the runtime routine calls it via `blr`.
+Built-in functions like `array_map`, `array_filter`, `array_reduce`, `array_walk`, and `usort` accept callback values. The callback function pointer is passed in a register (like any other `Callable` argument) and the runtime routine calls it via `blr`.
+
+Closures that depend on hidden `use (...)` capture arguments still only work for direct `$fn(...)` calls today. Callback-style built-ins do not forward those hidden capture values, so captured closures are not yet valid drop-in callbacks there.
 
 ## Associative array codegen
 
@@ -448,7 +462,9 @@ $x = expr;
 ```
 
 1. Evaluate expression
-2. `emit_store()` — write result to `$x`'s stack slot
+2. If the result is a borrowed heap value, retain it before the local slot becomes a new owner
+3. Release the previous owned heap value from `$x` when overwriting a heap-backed slot
+4. `emit_store()` — write result to `$x`'s stack slot and classify the local slot as `Owned` for heap-backed types
 
 ### Constant declaration
 
@@ -471,6 +487,7 @@ function inc() {
 The `global` statement inside a function declares that a variable refers to global storage rather than a local stack slot. The codegen uses BSS-allocated storage (`_gvar_NAME`, 16 bytes each) for global variables:
 
 1. At `global $x;`: the variable is marked as global in the context. The current value is loaded from `_gvar_x` into the local stack slot.
+   The local view is tracked as a borrowed alias of the BSS-backed owner.
 2. On assignment to a global variable: the codegen writes to the BSS storage (`_gvar_x`) via `adrp`/`add`/`str` instead of (or in addition to) the local stack slot.
 3. In `_main`: when the main scope assigns to a variable that any function declares as `global`, the value is also written to `_gvar_NAME` so that functions can read it.
 
@@ -501,6 +518,8 @@ The codegen for `static $count = 0;`:
 2. If not initialized: evaluate the init expression, store to the BSS slot, set the init flag to 1
 3. Load the persisted value into the local stack slot
 
+That per-call local slot is tracked as `Borrowed`; the persisted static storage remains the long-lived owner.
+
 At function epilogue, variables marked as static are written back to their BSS storage.
 
 ### List unpacking
@@ -513,7 +532,7 @@ At function epilogue, variables marked as static are written back to their BSS s
 
 1. Evaluates the right-hand side expression (an array)
 2. Saves the array pointer on the stack
-3. For each variable in the list: loads the element at the corresponding index from the array, stores it into the variable's stack slot
+3. For each variable in the list: loads the element at the corresponding index from the array, stores it into the variable's stack slot, and marks heap-backed elements as borrowed aliases of the source container
 
 ### If / Elseif / Else
 
@@ -591,7 +610,7 @@ foreach ($arr as $v) { body }
 ```
 
 1. Save array pointer, length, and index counter on the stack (3 × 16-byte slots)
-2. Loop: load element at current index, store to `$v`, emit body, increment index
+2. Loop: load element at current index, store to `$v`, and classify heap-backed loop variables as borrowed aliases of the iterated container
 3. Branch back to condition check
 4. Cleanup: deallocate the 48 bytes
 
@@ -740,9 +759,9 @@ Compiles a user-defined function:
 1. **Collect local variables** — scan the function body to find all variables and their types
 2. **Calculate stack frame size** — 16-byte aligned, includes space for all locals
 3. **Emit prologue** — `sub sp`, `stp x29, x30`, `add x29`
-4. **Store parameters** — move from argument registers to stack slots
+4. **Store parameters** — move from argument registers to stack slots, marking by-value heap params as `Owned` and by-reference params as borrowed aliases of the caller's storage
 5. **Emit body** — all statements
-6. **Emit epilogue** — `ldp x29, x30`, `add sp`, `ret`
+6. **Emit epilogue** — preserve return registers, save static locals back to BSS, clean up only `Owned` + `epilogue_cleanup_safe` heap locals, then `ldp x29, x30`, `add sp`, `ret`
 
 ### Pass by reference
 
@@ -791,7 +810,7 @@ When a call site omits an argument that has a default value, the codegen fills i
 
 Pre-scans the function body AST to find every variable that will be used. This is necessary because stack space must be allocated in the prologue, before any code runs.
 
-It walks `Assign`, `If`, `While`, `For`, `Foreach`, `DoWhile`, `Switch`, `ListUnpack`, `Global`, `StaticVar` nodes recursively, collecting variable names and inferring their types from the expressions assigned to them.
+It walks the statement tree before code emission and handles the major local-binding forms recursively (`Assign`, control-flow blocks, `For`/`Foreach`, `ListUnpack`, `Global`, `StaticVar`, and related cases). The exact match is implementation-driven in `functions.rs`, so this list is illustrative rather than exhaustive.
 
 ## Main program codegen
 

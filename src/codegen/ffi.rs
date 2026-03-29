@@ -34,7 +34,7 @@ pub fn emit_extern_call(
                 ExprKind::StringLiteral(func_name) => {
                     let label = format!("_fn_{}", func_name);
                     emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page address of callback target
-                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); // resolve callback function address
+                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); //resolve callback function address
                     PhpType::Callable
                 }
                 _ => panic!(

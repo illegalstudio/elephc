@@ -202,8 +202,8 @@ Proper type system for PHP compatibility.
 
 ### Known limitations
 - Ordinary local/global reassignment now releases previous arrays/objects safely, and indexed array writes / associative-array writes / object property writes / `static` slots now retain borrowed heap values consistently
-- Automatic epilogue cleanup is still disabled; general local-scope cleanup needs broader ownership tracking
-- Assoc-derived container copies such as `array_values()`, `array_column()`, `array_diff_key()`, and `array_intersect_key()` now retain borrowed heap values, but broader indexed-array/container propagation and general scope-exit cleanup still need fuller ownership tracking or a tracing collector
+- Automatic epilogue cleanup has since been re-enabled for locals proven to own heap values; the remaining gaps are conservative control-flow merges and cyclic graphs
+- Assoc-derived and broader container-copy paths now retain borrowed heap values consistently; the main remaining memory-model work has moved to targeted cycle collection, richer debug instrumentation, and tighter ownership precision
 
 ## v0.12.x — Math coverage (done)
 
@@ -250,7 +250,25 @@ Proper type system for PHP compatibility.
 - [x] C memory management via extern libc: `malloc()`, `free()`, `memcpy()`, `memset()`
 - [x] Native interop validation examples: raw FFI memory + SDL2 window/input/framebuffer/audio demos
 
-## v0.15.x — Multi-platform and optimizations
+## v0.15.x — Memory model hardening
+
+- [x] Ownership lattice for heap values in codegen (`Owned` / `Borrowed` / `MaybeOwned` / non-heap)
+- [x] Re-enable epilogue cleanup for locals that are proven to own their heap values
+- [x] Broader container propagation rules for nested array/hash/object transfers
+- [x] Focused regressions for aliasing across locals, returns, nested containers, and scope exit
+- [x] Heap allocator improvements: adjacent-block coalescing and less fragmentation under mixed allocation sizes
+- [x] Runtime heap verification / debug mode (`double free`, bad refcount, free-list corruption checks)
+- [x] Uniform runtime heap-kind metadata for arrays / assoc arrays / objects / persisted strings
+- [x] Evaluate a cycle-collection strategy for circular container/object graphs
+- [ ] Introduce targeted cycle collection for circular array/hash/object graphs
+- [ ] Add uniform `__rt_decref_any` / heap-kind-based release dispatch for mixed heap values
+- [ ] Emit richer runtime metadata for refcounted object/container payload scanning
+- [ ] Extend `--heap-debug` with leak summaries, high-watermark stats, and freed-block poisoning
+- [ ] Introduce segregated free lists / size classes to reduce allocator scan cost and fragmentation
+- [ ] Tighten ownership propagation in remaining conservative control-flow / merge paths
+- [ ] Formalize FFI heap ownership boundaries for borrowed vs owned native buffers and strings
+
+## v0.16.x — Multi-platform and optimizations
 
 - [ ] Linux x86_64 target
 - [ ] Linux ARM64 target
@@ -317,10 +335,7 @@ Features that are desirable but not yet planned for a specific version.
 
 | Idea | Notes |
 |---|---|
-| Hash/container ownership beyond indexed slots | Associative array updates and deeper nested container propagation still need stronger retain/release rules to avoid conservative leaks under heavy aliasing. |
 | Copy-on-write arrays | PHP's actual array semantics: shared until modified. Would make reassignment and aliasing both safer and cheaper. Requires COW flag in array header + copy-on-mutation. |
-| Scope-based cleanup | Ordinary locals, globals, statics, by-ref params, and container-backed aliases still need escape analysis or a fuller ownership model. |
-| Cycle detection (GC) | Mark-and-sweep for circular object references. Same approach as PHP 5.3 (Bacon & Rajan 2001). Requires runtime type descriptors. Low priority — most PHP programs don't create cycles. |
 | Inheritance (`extends`) | Requires vtable for method dispatch, property layout chaining, `parent::` calls. Major architectural change to the class system. |
 | Interfaces / abstract classes | Requires interface method tables and compile-time conformance checking. |
 | Traits | Requires method copying/inlining at compile time. |

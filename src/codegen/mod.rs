@@ -27,6 +27,7 @@ pub fn generate(
     extern_globals: &HashMap<String, PhpType>,
     heap_size: usize,
     gc_stats: bool,
+    heap_debug: bool,
 ) -> String {
     let mut emitter = Emitter::new();
     let mut data = DataSection::new();
@@ -169,6 +170,14 @@ pub fn generate(
     emitter.instruction("add x9, x9, _global_argv@PAGEOFF");                    // add page offset
     emitter.instruction("str x1, [x9]");                                        // store argv pointer (x1 from OS)
 
+    if heap_debug {
+        emitter.comment("enable heap debug flag");
+        emitter.instruction("adrp x9, _heap_debug_enabled@PAGE");                // load page of the heap-debug runtime flag
+        emitter.instruction("add x9, x9, _heap_debug_enabled@PAGEOFF");          // resolve the heap-debug runtime flag address
+        emitter.instruction("mov x10, #1");                                      // compile-time option enables heap debug for this binary
+        emitter.instruction("str x10, [x9]");                                    // store enabled=1 into the BSS-backed runtime flag
+    }
+
     // -- store $argc in local variable --
     let argc_offset = ctx.variables.get("argc").expect("codegen bug: $argc not pre-allocated in main scope").stack_offset;
     abi::store_at_offset(&mut emitter, "x0", argc_offset);                        // $argc = OS argc
@@ -252,7 +261,11 @@ pub fn generate(
     runtime::emit_runtime(&mut emitter);
 
     let data_output = data.emit();
-    let runtime_data = runtime::emit_runtime_data(&all_global_var_names, &all_static_vars, heap_size);
+    let runtime_data = runtime::emit_runtime_data(
+        &all_global_var_names,
+        &all_static_vars,
+        heap_size,
+    );
 
     let mut output = emitter.output();
     if !data_output.is_empty() {

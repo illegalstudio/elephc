@@ -45,6 +45,8 @@ pub fn emit_array_grow(emitter: &mut Emitter) {
     emitter.instruction("mul x0, x12, x11");                                    // x0 = new_capacity * elem_size
     emitter.instruction("add x0, x0, #24");                                     // x0 = total bytes (header + data)
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate new array → x0
+    emitter.instruction("mov x14, #2");                                         // heap kind 2 = indexed array
+    emitter.instruction("str x14, [x0, #-8]");                                  // store indexed-array kind in the uniform heap header
 
     // -- write new array header --
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload old length

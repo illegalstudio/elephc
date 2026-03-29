@@ -36,6 +36,8 @@ pub fn emit_cstr_to_str(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #8]");                                    // preserve computed length across heap allocation
     emitter.instruction("mov x0, x2");                                          // allocation size = computed string length
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate owned elephc string storage
+    emitter.instruction("mov x3, #1");                                          // heap kind 1 = persisted elephc string
+    emitter.instruction("str x3, [x0, #-8]");                                   // store string kind in the uniform heap header
     emitter.instruction("ldr x9, [sp, #0]");                                    // restore source pointer after allocation
     emitter.instruction("ldr x2, [sp, #8]");                                    // restore computed length after allocation
     emitter.instruction("mov x1, x0");                                          // x1 = result pointer for elephc string

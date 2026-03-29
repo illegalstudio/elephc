@@ -43,6 +43,8 @@ pub fn emit_str_persist(emitter: &mut Emitter) {
     emitter.instruction("lsl x0, x0, x4");                                      // x0 = 1 << ceil(log2(len)) = next power of 2
     emitter.label("__rt_str_persist_alloc");
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate on heap, x0 = heap pointer
+    emitter.instruction("mov x6, #1");                                          // heap kind 1 = persisted elephc string
+    emitter.instruction("str x6, [x0, #-8]");                                   // store string kind in the uniform heap header
 
     // -- copy bytes from source to heap --
     emitter.instruction("ldr x1, [sp, #0]");                                    // x1 = source pointer (restored)

@@ -59,6 +59,7 @@ echo sprintf("Hex: %x", 255) . "\n";
 echo "\n--- Hashing ---\n";
 echo "md5('hello'): " . md5("hello") . "\n";
 echo "sha1('hello'): " . sha1("hello") . "\n";
+echo "hash('sha1', 'hello'): " . hash("sha1", "hello") . "\n";
 
 // Encoding
 echo "\n--- Encoding ---\n";
@@ -70,3 +71,9 @@ echo "base64: " . base64_encode("Hello") . "\n";
 echo "\n--- Validation ---\n";
 echo "ctype_alpha('abc'): " . (ctype_alpha("abc") ? "yes" : "no") . "\n";
 echo "ctype_digit('123'): " . (ctype_digit("123") ? "yes" : "no") . "\n";
+
+// Parsing
+echo "\n--- Parsing ---\n";
+$parsed = sscanf("X=42 Y=99", "X=%d Y=%d");
+echo "sscanf count: " . count($parsed) . "\n";
+echo "sscanf values: " . $parsed[0] . ", " . $parsed[1] . "\n";

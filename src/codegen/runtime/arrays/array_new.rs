@@ -20,6 +20,8 @@ pub fn emit_array_new(emitter: &mut Emitter) {
     emitter.instruction("mul x2, x0, x1");                                      // x2 = capacity * elem_size = data region size
     emitter.instruction("add x0, x2, #24");                                     // x0 = data size + 24-byte header
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate memory, x0 = pointer to array
+    emitter.instruction("mov x9, #2");                                          // heap kind 2 = indexed array
+    emitter.instruction("str x9, [x0, #-8]");                                   // store indexed-array kind in the uniform heap header
 
     // -- initialize the array header fields --
     emitter.instruction("str xzr, [x0]");                                       // header[0]: length = 0 (array starts empty)

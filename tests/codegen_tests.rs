@@ -121,20 +121,101 @@ fn assemble_and_run(
     String::from_utf8(output.stdout).unwrap()
 }
 
-/// Compile a PHP source string to a native binary, run it, and return stdout.
-/// Uses the elephc library directly (no subprocess) for tokenize → parse → check → codegen.
-/// Only spawns as + ld + binary execution.
-fn compile_and_run(source: &str) -> String {
-    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
-    let tid = std::thread::current().id();
-    let pid = std::process::id();
-    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
-    fs::create_dir_all(&dir).unwrap();
+struct ProgramOutput {
+    stdout: String,
+    stderr: String,
+    success: bool,
+}
 
-    // Compile in-process using library
+fn assemble_and_run_capture(
+    asm: &str,
+    dir: &Path,
+    extra_link_libs: &[String],
+    extra_link_paths: &[String],
+    extra_frameworks: &[String],
+) -> ProgramOutput {
+    let asm_path = dir.join("test.s");
+    let obj_path = dir.join("test.o");
+    let bin_path = dir.join("test");
+
+    fs::write(&asm_path, asm).unwrap();
+
+    let as_status = Command::new("as")
+        .args(["-arch", "arm64", "-o"])
+        .arg(&obj_path)
+        .arg(&asm_path)
+        .status()
+        .expect("failed to run assembler");
+    assert!(as_status.success(), "assembler failed");
+
+    link_binary(
+        &obj_path,
+        &bin_path,
+        extra_link_libs,
+        extra_link_paths,
+        extra_frameworks,
+    );
+
+    let output = Command::new(&bin_path)
+        .current_dir(dir)
+        .output()
+        .expect("failed to run compiled binary");
+
+    ProgramOutput {
+        stdout: String::from_utf8(output.stdout).unwrap(),
+        stderr: String::from_utf8(output.stderr).unwrap(),
+        success: output.status.success(),
+    }
+}
+
+fn assemble_and_run_expect_failure(
+    asm: &str,
+    dir: &Path,
+    extra_link_libs: &[String],
+    extra_link_paths: &[String],
+    extra_frameworks: &[String],
+) -> String {
+    let asm_path = dir.join("test.s");
+    let obj_path = dir.join("test.o");
+    let bin_path = dir.join("test");
+
+    fs::write(&asm_path, asm).unwrap();
+
+    let as_status = Command::new("as")
+        .args(["-arch", "arm64", "-o"])
+        .arg(&obj_path)
+        .arg(&asm_path)
+        .status()
+        .expect("failed to run assembler");
+    assert!(as_status.success(), "assembler failed");
+
+    link_binary(
+        &obj_path,
+        &bin_path,
+        extra_link_libs,
+        extra_link_paths,
+        extra_frameworks,
+    );
+
+    let output = Command::new(&bin_path)
+        .current_dir(dir)
+        .output()
+        .expect("failed to run compiled binary");
+    assert!(!output.status.success(), "binary unexpectedly succeeded");
+
+    String::from_utf8(output.stderr).unwrap()
+}
+
+fn compile_source_to_asm_with_options(
+    source: &str,
+    dir: &Path,
+    heap_size: usize,
+    gc_stats: bool,
+    heap_debug: bool,
+) -> (String, Vec<String>) {
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
-    let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
+    let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
     let check_result = elephc::types::check(&resolved).expect("type check failed");
     let asm = elephc::codegen::generate(
         &resolved,
@@ -144,14 +225,123 @@ fn compile_and_run(source: &str) -> String {
         &check_result.extern_functions,
         &check_result.extern_classes,
         &check_result.extern_globals,
-        8_388_608,
-        false,
+        heap_size,
+        gc_stats,
+        heap_debug,
     );
+    (asm, check_result.required_libraries)
+}
+
+fn inject_main_exit_harness(asm: &str, harness: &str) -> String {
+    let needle = "    mov x0, #0\n    mov x16, #1\n    svc #0x80";
+    let replacement = format!("{harness}\n    mov x0, #0\n    mov x16, #1\n    svc #0x80");
+    let patched = asm.replacen(needle, &replacement, 1);
+    assert_ne!(patched, asm, "failed to inject main exit harness");
+    patched
+}
+
+fn compile_harness_expect_failure(source: &str, heap_size: usize, harness: &str) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, heap_size, false, true);
+    let patched = inject_main_exit_harness(&asm, harness);
+    let stderr = assemble_and_run_expect_failure(
+        &patched,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    stderr
+}
+
+fn compile_harness_and_run(source: &str, heap_size: usize, harness: &str) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, heap_size, false, false);
+    let patched = inject_main_exit_harness(&asm, harness);
+    let stdout = assemble_and_run(
+        &patched,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    stdout
+}
+
+fn compile_and_run_with_gc_stats(source: &str) -> ProgramOutput {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, true, false);
+    let output = assemble_and_run_capture(
+        &asm,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    output
+}
+
+fn parse_gc_stats(stderr: &str) -> (u64, u64) {
+    let line = stderr
+        .lines()
+        .find(|line| line.starts_with("GC: allocs="))
+        .unwrap_or_else(|| panic!("missing gc stats line: {stderr}"));
+    let allocs = line
+        .split("allocs=")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or_else(|| panic!("missing alloc count: {stderr}"));
+    let frees = line
+        .split("frees=")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or_else(|| panic!("missing free count: {stderr}"));
+    (allocs, frees)
+}
+
+/// Compile a PHP source string to a native binary, run it, and return stdout.
+/// Uses the elephc library directly (no subprocess) for tokenize → parse → check → codegen.
+/// Only spawns as + ld + binary execution.
+fn compile_and_run_with_heap_size(source: &str, heap_size: usize) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, heap_size, false, false);
 
     let elephc_out = assemble_and_run(
         &asm,
         &dir,
-        &check_result.required_libraries,
+        &required_libraries,
         &default_link_paths(),
         &[],
     );
@@ -177,6 +367,10 @@ fn compile_and_run(source: &str) -> String {
     elephc_out
 }
 
+fn compile_and_run(source: &str) -> String {
+    compile_and_run_with_heap_size(source, 8_388_608)
+}
+
 /// Compile a PHP source string and assert the generated binary fails at runtime.
 fn compile_and_run_expect_failure(source: &str) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
@@ -185,52 +379,13 @@ fn compile_and_run_expect_failure(source: &str) -> String {
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
-    let ast = elephc::parser::parse(&tokens).expect("parse failed");
-    let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
-    let check_result = elephc::types::check(&resolved).expect("type check failed");
-    let asm = elephc::codegen::generate(
-        &resolved,
-        &check_result.global_env,
-        &check_result.functions,
-        &check_result.classes,
-        &check_result.extern_functions,
-        &check_result.extern_classes,
-        &check_result.extern_globals,
-        8_388_608,
-        false,
-    );
-
-    let asm_path = dir.join("test.s");
-    let obj_path = dir.join("test.o");
-    let bin_path = dir.join("test");
-
-    fs::write(&asm_path, &asm).unwrap();
-
-    let as_status = Command::new("as")
-        .args(["-arch", "arm64", "-o"])
-        .arg(&obj_path)
-        .arg(&asm_path)
-        .status()
-        .expect("failed to run assembler");
-    assert!(as_status.success(), "assembler failed");
-
-    link_binary(
-        &obj_path,
-        &bin_path,
-        &check_result.required_libraries,
-        &default_link_paths(),
-        &[],
-    );
-
-    let output = Command::new(&bin_path)
-        .current_dir(&dir)
-        .output()
-        .expect("failed to run compiled binary");
-    assert!(!output.status.success(), "binary unexpectedly succeeded");
+    let (asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    let output =
+        assemble_and_run_expect_failure(&asm, &dir, &required_libraries, &default_link_paths(), &[]);
 
     let _ = fs::remove_dir_all(&dir);
-    String::from_utf8(output.stderr).unwrap()
+    output
 }
 
 /// Compile a PHP project with multiple files using the library directly.
@@ -266,6 +421,7 @@ fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> String {
         &check_result.extern_classes,
         &check_result.extern_globals,
         8_388_608,
+        false,
         false,
     );
 
@@ -334,6 +490,7 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
         &check_result.extern_globals,
         8_388_608,
         false,
+        false,
     );
 
     let asm_path = dir.join("test.s");
@@ -399,6 +556,7 @@ fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {
         &check_result.extern_classes,
         &check_result.extern_globals,
         8_388_608,
+        false,
         false,
     );
 
@@ -7859,6 +8017,19 @@ echo $outer[0][0];
 }
 
 #[test]
+fn test_gc_indexed_array_literal_borrowed_array_survives_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = [3, 4];
+$outer = [$inner];
+unset($inner);
+echo $outer[0][1];
+"#,
+    );
+    assert_eq!(out, "4");
+}
+
+#[test]
 fn test_gc_array_assign_borrowed_array_survives_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -7905,6 +8076,222 @@ hold_once();
 "#,
     );
     assert_eq!(out, "5");
+}
+
+#[test]
+fn test_gc_spread_borrowed_array_survives_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = [8];
+$src = [$inner];
+$dst = [...$src];
+unset($src);
+unset($inner);
+echo $dst[0][0];
+"#,
+    );
+    assert_eq!(out, "8");
+}
+
+#[test]
+fn test_gc_array_merge_borrowed_array_survives_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = [6];
+$left = [$inner];
+$right = [[7]];
+$merged = array_merge($left, $right);
+unset($left);
+unset($inner);
+echo $merged[0][0] . "|" . $merged[1][0];
+"#,
+    );
+    assert_eq!(out, "6|7");
+}
+
+#[test]
+fn test_gc_array_chunk_borrowed_array_survives_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = [5];
+$rows = [$inner, [9]];
+$chunks = array_chunk($rows, 1);
+unset($rows);
+unset($inner);
+echo $chunks[0][0][0] . "|" . $chunks[1][0][0];
+"#,
+    );
+    assert_eq!(out, "5|9");
+}
+
+#[test]
+fn test_gc_array_slice_borrowed_array_survives_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = [2];
+$src = [[1], $inner, [3]];
+$slice = array_slice($src, 1, 1);
+unset($src);
+unset($inner);
+echo $slice[0][0];
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+#[test]
+fn test_gc_array_reverse_borrowed_array_survives_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = [4];
+$src = [[1], $inner, [7]];
+$rev = array_reverse($src);
+unset($src);
+unset($inner);
+echo $rev[1][0];
+"#,
+    );
+    assert_eq!(out, "4");
+}
+
+#[test]
+fn test_gc_array_pad_borrowed_array_survives_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = [5];
+$src = [[1]];
+$padded = array_pad($src, 3, $inner);
+unset($src);
+unset($inner);
+echo $padded[1][0] . "|" . $padded[2][0];
+"#,
+    );
+    assert_eq!(out, "5|5");
+}
+
+#[test]
+fn test_gc_array_unique_borrowed_array_survives_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = [3];
+$src = [$inner, $inner, [4]];
+$uniq = array_unique($src);
+unset($src);
+unset($inner);
+echo count($uniq) . "|" . $uniq[0][0] . "|" . $uniq[1][0];
+"#,
+    );
+    assert_eq!(out, "2|3|4");
+}
+
+#[test]
+fn test_gc_array_splice_borrowed_array_survives_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = [7];
+$src = [[1], $inner, [9]];
+$removed = array_splice($src, 1, 1);
+unset($src);
+unset($inner);
+echo $removed[0][0];
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_gc_array_diff_borrowed_array_survives_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = [6];
+$left = [$inner, [8]];
+$right = [[8]];
+$diff = array_diff($left, $right);
+unset($left);
+unset($inner);
+echo $diff[0][0];
+"#,
+    );
+    assert_eq!(out, "6");
+}
+
+#[test]
+fn test_gc_array_intersect_borrowed_array_survives_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = [9];
+$left = [[1], $inner];
+$right = [$inner];
+$both = array_intersect($left, $right);
+unset($left);
+unset($right);
+unset($inner);
+echo $both[0][0];
+"#,
+    );
+    assert_eq!(out, "9");
+}
+
+#[test]
+fn test_gc_array_filter_borrowed_array_survives_unset() {
+    let out = compile_and_run(
+        r#"<?php
+function keep_pair($x) { return count($x) == 2; }
+$inner = [10, 11];
+$rows = [[1], $inner, [2, 3]];
+$filtered = array_filter($rows, "keep_pair");
+unset($rows);
+unset($inner);
+echo $filtered[0][1] . "|" . $filtered[1][0];
+"#,
+    );
+    assert_eq!(out, "11|2");
+}
+
+#[test]
+fn test_gc_array_fill_borrowed_array_survives_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = [12];
+$filled = array_fill(0, 2, $inner);
+unset($inner);
+echo $filled[0][0] . "|" . $filled[1][0];
+"#,
+    );
+    assert_eq!(out, "12|12");
+}
+
+#[test]
+fn test_gc_array_combine_borrowed_array_survives_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = [13];
+$keys = ["keep"];
+$vals = [$inner];
+$map = array_combine($keys, $vals);
+unset($vals);
+unset($inner);
+$saved = $map["keep"];
+echo $saved[0];
+"#,
+    );
+    assert_eq!(out, "13");
+}
+
+#[test]
+fn test_gc_array_fill_keys_borrowed_array_survives_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = [14];
+$keys = ["a", "b"];
+$map = array_fill_keys($keys, $inner);
+unset($inner);
+$first = $map["a"];
+$second = $map["b"];
+echo $first[0] . "|" . $second[0];
+"#,
+    );
+    assert_eq!(out, "14|14");
 }
 
 #[test]
@@ -9108,6 +9495,390 @@ echo log(1000, 10);
 "#,
     );
     assert_eq!(out, "3");
+}
+
+#[test]
+fn test_gc_local_alias_survives_original_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = [21];
+$a = $inner;
+$b = $a;
+unset($a);
+unset($inner);
+echo $b[0];
+"#,
+    );
+    assert_eq!(out, "21");
+}
+
+#[test]
+fn test_gc_return_borrowed_nested_array_alias_survives_source_unset() {
+    let out = compile_and_run(
+        r#"<?php
+function pick_first($rows) {
+    $first = $rows[0];
+    return $first;
+}
+
+$inner = [31];
+$rows = [$inner, [32]];
+$picked = pick_first($rows);
+unset($rows);
+unset($inner);
+echo $picked[0];
+"#,
+    );
+    assert_eq!(out, "31");
+}
+
+#[test]
+fn test_gc_control_flow_merge_borrowed_or_owned_return_survives() {
+    let out = compile_and_run(
+        r#"<?php
+function choose($flag, $borrowed) {
+    if ($flag) {
+        $value = $borrowed;
+    } else {
+        $value = [42];
+    }
+    return $value;
+}
+
+$inner = [41];
+$picked = choose(true, $inner);
+unset($inner);
+echo $picked[0];
+"#,
+    );
+    assert_eq!(out, "41");
+}
+
+#[test]
+fn test_gc_control_flow_merge_owned_or_borrowed_other_branch_survives() {
+    let out = compile_and_run(
+        r#"<?php
+function choose($flag, $borrowed) {
+    if ($flag) {
+        $value = [51];
+    } else {
+        $value = $borrowed;
+    }
+    return $value;
+}
+
+$inner = [52];
+$picked = choose(false, $inner);
+unset($inner);
+echo $picked[0];
+"#,
+    );
+    assert_eq!(out, "52");
+}
+
+#[test]
+fn test_gc_scope_exit_after_control_flow_borrowed_alias_survives() {
+    let out = compile_and_run(
+        r#"<?php
+function pick_value($flag, $src) {
+    if ($flag) {
+        $tmp = $src[0];
+    } else {
+        $tmp = [0];
+    }
+    return $tmp;
+}
+
+$inner = [61];
+$src = [$inner];
+$picked = pick_value(true, $src);
+unset($src);
+unset($inner);
+echo $picked[0];
+"#,
+    );
+    assert_eq!(out, "61");
+}
+
+#[test]
+fn test_gc_nested_assoc_alias_survives_outer_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = ["nums" => [71, 72]];
+$outer = ["box" => $inner];
+$alias = $outer["box"];
+unset($outer);
+unset($inner);
+$nums = $alias["nums"];
+echo $nums[1];
+"#,
+    );
+    assert_eq!(out, "72");
+}
+
+#[test]
+fn test_gc_stats_self_cycle_keeps_one_extra_object_alive() {
+    let acyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+class Node { public $next = null; }
+$n = new Node();
+unset($n);
+"#,
+    );
+    assert!(acyclic.success, "acyclic program failed: {}", acyclic.stderr);
+
+    let cyclic = compile_and_run_with_gc_stats(
+        r#"<?php
+class Node { public $next = null; }
+$n = new Node();
+$n->next = $n;
+unset($n);
+"#,
+    );
+    assert!(cyclic.success, "cyclic program failed: {}", cyclic.stderr);
+
+    let (acyclic_allocs, acyclic_frees) = parse_gc_stats(&acyclic.stderr);
+    let (cyclic_allocs, cyclic_frees) = parse_gc_stats(&cyclic.stderr);
+    assert_eq!(acyclic.stdout, "");
+    assert_eq!(cyclic.stdout, "");
+    assert_eq!(acyclic_allocs, cyclic_allocs);
+    assert_eq!(acyclic_frees, cyclic_frees + 1);
+}
+
+#[test]
+fn test_gc_heap_free_coalesces_adjacent_blocks() {
+    let out = compile_and_run_with_heap_size(
+        r#"<?php
+$a = array_fill(0, 2000, 1);
+$b = array_fill(0, 2000, 2);
+$keep = array_fill(0, 2000, 3);
+unset($a);
+unset($b);
+$c = array_fill(0, 3000, 4);
+echo $c[0] . "|" . count($c) . "|" . $keep[0];
+"#,
+        65_536,
+    );
+    assert_eq!(out, "4|3000|3");
+}
+
+#[test]
+fn test_gc_heap_free_trims_free_tail_chain() {
+    let out = compile_and_run_with_heap_size(
+        r#"<?php
+$a = array_fill(0, 2000, 1);
+$b = array_fill(0, 2000, 2);
+$tail = array_fill(0, 2000, 3);
+unset($b);
+unset($tail);
+$c = array_fill(0, 5000, 4);
+echo $c[0] . "|" . count($c) . "|" . $a[0];
+"#,
+        65_536,
+    );
+    assert_eq!(out, "4|5000|1");
+}
+
+#[test]
+fn test_gc_heap_alloc_splits_oversized_free_block() {
+    let out = compile_and_run_with_heap_size(
+        r#"<?php
+$large = array_fill(0, 4000, 1);
+$keep = array_fill(0, 2000, 2);
+unset($large);
+$small = array_fill(0, 1000, 3);
+$mid = array_fill(0, 2500, 4);
+echo $small[0] . "|" . count($mid) . "|" . $keep[0];
+"#,
+        65_536,
+    );
+    assert_eq!(out, "3|2500|2");
+}
+
+#[test]
+fn test_gc_heap_alloc_walks_past_small_first_free_block() {
+    let out = compile_harness_and_run(
+        "<?php",
+        256,
+        r#"    adrp x9, _heap_off@PAGE
+    add x9, x9, _heap_off@PAGEOFF
+    str xzr, [x9]
+    adrp x9, _heap_free_list@PAGE
+    add x9, x9, _heap_free_list@PAGEOFF
+    str xzr, [x9]
+    mov x0, #8
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    mov x0, #8
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    mov x0, #16
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    mov x0, #8
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    ldr x0, [sp, #48]
+    bl __rt_heap_free
+    ldr x0, [sp, #16]
+    bl __rt_heap_free
+    mov x0, #16
+    bl __rt_heap_alloc
+    ldr x9, [sp, #16]
+    cmp x0, x9
+    cset x0, eq
+    bl __rt_itoa
+    mov x0, #1
+    mov x16, #4
+    svc #0x80"#,
+    );
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_heap_debug_double_free_reports_error() {
+    let err = compile_harness_expect_failure(
+        "<?php",
+        65_536,
+        r#"    mov x0, #16
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    mov x0, #24
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    ldr x0, [sp, #16]
+    bl __rt_heap_free
+    ldr x0, [sp, #16]
+    bl __rt_heap_free"#,
+    );
+    assert!(err.contains("heap debug detected double free"), "{err}");
+}
+
+#[test]
+fn test_heap_debug_bad_refcount_reports_error() {
+    let err = compile_harness_expect_failure(
+        "<?php",
+        65_536,
+        r#"    mov x0, #16
+    bl __rt_heap_alloc
+    str wzr, [x0, #-12]
+    bl __rt_incref"#,
+    );
+    assert!(err.contains("heap debug detected bad refcount"), "{err}");
+}
+
+#[test]
+fn test_heap_debug_free_list_corruption_reports_error() {
+    let err = compile_harness_expect_failure(
+        "<?php",
+        65_536,
+        r#"    mov x0, #16
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    mov x0, #24
+    bl __rt_heap_alloc
+    ldr x0, [sp], #16
+    bl __rt_heap_free
+    sub x9, x0, #16
+    str x9, [x9, #16]
+    mov x0, #8
+    bl __rt_heap_alloc"#,
+    );
+    assert!(err.contains("heap debug detected free-list corruption"), "{err}");
+}
+
+#[test]
+fn test_array_literal_spread_grows_past_initial_capacity() {
+    let out = compile_and_run(
+        r#"<?php
+$nums = [...range(1, 10), ...range(11, 20), ...range(21, 30)];
+echo count($nums) . "|" . $nums[25];
+"#,
+    );
+    assert_eq!(out, "30|26");
+}
+
+#[test]
+fn test_array_literal_spread_refcounted_grows_past_initial_capacity() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = [1];
+$a = array_fill(0, 10, $inner);
+$b = array_fill(0, 10, $inner);
+$c = [...$a, ...$b, ...$a];
+echo count($c) . "|" . count($c[25]);
+"#,
+    );
+    assert_eq!(out, "30|1");
+}
+
+#[test]
+fn test_heap_kind_tags_raw_array_hash_and_string() {
+    let out = compile_harness_and_run(
+        "<?php",
+        65_536,
+        r#"    mov x0, #16
+    bl __rt_heap_alloc
+    bl __rt_heap_kind
+    bl __rt_itoa
+    mov x0, #1
+    mov x16, #4
+    svc #0x80
+    mov x0, #4
+    mov x1, #8
+    bl __rt_array_new
+    bl __rt_heap_kind
+    bl __rt_itoa
+    mov x0, #1
+    mov x16, #4
+    svc #0x80
+    mov x0, #4
+    mov x1, #0
+    bl __rt_hash_new
+    bl __rt_heap_kind
+    bl __rt_itoa
+    mov x0, #1
+    mov x16, #4
+    svc #0x80
+    adrp x1, _concat_buf@PAGE
+    add x1, x1, _concat_buf@PAGEOFF
+    mov w3, #65
+    strb w3, [x1]
+    mov w3, #66
+    strb w3, [x1, #1]
+    mov w3, #67
+    strb w3, [x1, #2]
+    mov x2, #3
+    bl __rt_str_persist
+    mov x0, x1
+    bl __rt_heap_kind
+    bl __rt_itoa
+    mov x0, #1
+    mov x16, #4
+    svc #0x80"#,
+    );
+    assert_eq!(out, "0231");
+}
+
+#[test]
+fn test_new_object_codegen_sets_heap_kind() {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (asm, _) = compile_source_to_asm_with_options(
+        "<?php class Foo { public $x = 1; } $o = new Foo();",
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    assert!(asm.contains("new Foo()"));
+    assert!(asm.contains("str x9, [x0, #-8]"), "{asm}");
+
+    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]

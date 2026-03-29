@@ -64,8 +64,22 @@ var_dump(3.14);
 $cwd = getcwd();
 echo "Working in: " . $cwd . "\n";
 
+// Temporary files and directory listing
+$tmpDir = sys_get_temp_dir();
+echo "Temp dir: " . $tmpDir . "\n";
+$tmpFile = tempnam($tmpDir, "ele");
+echo "Temp file: " . $tmpFile . "\n";
+file_put_contents($tmpFile, "temporary\n");
+
+$entries = scandir(".");
+echo "Entries in cwd: " . count($entries) . "\n";
+
+$matches = glob("*.txt");
+echo "TXT matches: " . count($matches) . "\n";
+
 // Cleanup
 unlink("greeting.txt");
 unlink("numbers.txt");
 unlink("archive.txt");
+unlink($tmpFile);
 echo "Done!\n";

@@ -77,6 +77,8 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     system::emit_json_encode_array_str(emitter);
     system::emit_json_encode_assoc(emitter);
     system::emit_json_decode(emitter);
+    system::emit_preg_strip(emitter);
+    system::emit_pcre_to_posix(emitter);
     system::emit_preg_match(emitter);
     system::emit_preg_match_all(emitter);
     system::emit_preg_replace(emitter);
@@ -84,11 +86,16 @@ pub fn emit_runtime(emitter: &mut Emitter) {
 
     // Array runtime functions
     arrays::emit_heap_alloc(emitter);
+    arrays::emit_heap_debug_fail(emitter);
+    arrays::emit_heap_debug_check_live(emitter);
+    arrays::emit_heap_debug_validate_free_list(emitter);
+    arrays::emit_heap_kind(emitter);
     arrays::emit_heap_free(emitter);
     arrays::emit_array_free_deep(emitter);
     arrays::emit_array_grow(emitter);
     arrays::emit_array_new(emitter);
     arrays::emit_array_push_int(emitter);
+    arrays::emit_array_push_refcounted(emitter);
     arrays::emit_array_push_str(emitter);
     arrays::emit_sort_int(emitter, false);
     arrays::emit_sort_int(emitter, true);
@@ -104,28 +111,40 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_array_key_exists(emitter);
     arrays::emit_array_search(emitter);
     arrays::emit_array_reverse(emitter);
+    arrays::emit_array_reverse_refcounted(emitter);
     arrays::emit_array_sum(emitter);
     arrays::emit_array_product(emitter);
     arrays::emit_array_shift(emitter);
     arrays::emit_array_unshift(emitter);
     arrays::emit_array_merge(emitter);
+    arrays::emit_array_merge_refcounted(emitter);
     arrays::emit_array_slice(emitter);
+    arrays::emit_array_slice_refcounted(emitter);
     arrays::emit_range(emitter);
     arrays::emit_shuffle(emitter);
     arrays::emit_array_unique(emitter);
+    arrays::emit_array_unique_refcounted(emitter);
     arrays::emit_array_rand(emitter);
     arrays::emit_array_fill(emitter);
+    arrays::emit_array_fill_refcounted(emitter);
     arrays::emit_array_pad(emitter);
+    arrays::emit_array_pad_refcounted(emitter);
     arrays::emit_array_diff(emitter);
+    arrays::emit_array_diff_refcounted(emitter);
     arrays::emit_array_intersect(emitter);
+    arrays::emit_array_intersect_refcounted(emitter);
     arrays::emit_array_flip(emitter);
     arrays::emit_array_combine(emitter);
+    arrays::emit_array_combine_refcounted(emitter);
     arrays::emit_array_fill_keys(emitter);
+    arrays::emit_array_fill_keys_refcounted(emitter);
     arrays::emit_array_chunk(emitter);
+    arrays::emit_array_chunk_refcounted(emitter);
     arrays::emit_array_column(emitter);
     arrays::emit_array_column_ref(emitter);
     arrays::emit_array_column_str(emitter);
     arrays::emit_array_splice(emitter);
+    arrays::emit_array_splice_refcounted(emitter);
     arrays::emit_array_diff_key(emitter);
     arrays::emit_array_intersect_key(emitter);
     arrays::emit_asort(emitter);
@@ -134,10 +153,12 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_array_map(emitter);
     arrays::emit_array_map_str(emitter);
     arrays::emit_array_filter(emitter);
+    arrays::emit_array_filter_refcounted(emitter);
     arrays::emit_array_reduce(emitter);
     arrays::emit_array_walk(emitter);
     arrays::emit_usort(emitter);
     arrays::emit_array_merge_into(emitter);
+    arrays::emit_array_merge_into_refcounted(emitter);
     arrays::emit_refcount(emitter);
 
     // I/O runtime functions
@@ -178,8 +199,12 @@ pub fn emit_runtime_data(
     out.push_str(&format!(".comm _heap_buf, {}, 3\n", heap_size));
     out.push_str(".comm _heap_off, 8, 3\n");
     out.push_str(".comm _heap_free_list, 8, 3\n");
+    out.push_str(".comm _heap_debug_enabled, 8, 3\n");
     out.push_str(&format!("_heap_max:\n    .quad {}\n", heap_size));
     out.push_str("_heap_err_msg:\n    .ascii \"Fatal error: heap memory exhausted\\n\"\n");
+    out.push_str("_heap_dbg_bad_refcount_msg:\n    .ascii \"Fatal error: heap debug detected bad refcount\\n\"\n");
+    out.push_str("_heap_dbg_double_free_msg:\n    .ascii \"Fatal error: heap debug detected double free\\n\"\n");
+    out.push_str("_heap_dbg_free_list_msg:\n    .ascii \"Fatal error: heap debug detected free-list corruption\\n\"\n");
     out.push_str("_arr_cap_err_msg:\n    .ascii \"Fatal error: array capacity exceeded\\n\"\n");
     out.push_str("_ptr_null_err_msg:\n    .ascii \"Fatal error: null pointer dereference\\n\"\n");
     // GC statistics counters

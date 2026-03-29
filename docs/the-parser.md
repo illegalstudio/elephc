@@ -57,11 +57,11 @@ Things that have a value:
 | `PreDecrement(String)` | `--$i` | |
 | `PostDecrement(String)` | `$i--` | |
 | `FunctionCall { name, args }` | `strlen($s)` | |
-| `ArrayLiteral(Vec<Expr>)` | `[1, 2, 3]` | Indexed array |
+| `ArrayLiteral(Vec<Expr>)` | `[1, 2, 3]`, `[...$arr, 4]` | Indexed array; elements may include `Spread` expressions |
 | `ArrayLiteralAssoc(Vec<(Expr, Expr)>)` | `["a" => 1]` | Associative array |
 | `Match { subject, arms, default }` | `match($x) { 1 => "one" }` | Match expression (returns a value) |
 | `ArrayAccess { array, index }` | `$arr[0]` | |
-| `Ternary { cond, then, else }` | `$a ? $b : $c` | |
+| `Ternary { condition, then_expr, else_expr }` | `$a ? $b : $c` | |
 | `Cast { target, expr }` | `(int)$x` | |
 | `Closure { params, variadic, body, is_arrow, captures }` | `function($x) use ($y) { ... }` or `fn($x) => ...` | Anonymous function / arrow function. Params is `Vec<(String, Option<Expr>, bool)>` — name, default, is_ref. `variadic` is an optional parameter name. `captures` is `Vec<String>` — variables captured via an explicit `use (...)` clause. Arrow functions are still represented as `Closure`, but parse with `is_arrow = true` and `captures = []`. |
 | `ClosureCall { var, args }` | `$fn(1, 2)` | Calling a closure stored in a variable |
@@ -168,6 +168,8 @@ unary (- ! ~)          27                prefix
 
 **Right-associative** operators have `right_bp < left_bp`. This means `2 ** 3 ** 4` parses as `2 ** (3 ** 4)`.
 
+For `??`, the Pratt table still uses `BinOp::NullCoalesce` to assign binding power, but the parser builds a dedicated `ExprKind::NullCoalesce { value, default }` node rather than a generic `BinaryOp`.
+
 ### The algorithm
 
 ```
@@ -237,7 +239,7 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `~` (bitwise not) | Parse inner expr at bp=27, return `BitNot` |
 | `++` / `--` | Return `PreIncrement` / `PreDecrement` |
 | `(int)` / `(float)` / ... | Parse inner expr, return `Cast` |
-| `(` | Parse inner expr, expect `)`, return inner expr |
+| `(` | Parse inner expr, expect `)`, return inner expr (and allow a later postfix call like `(expr)(args)`) |
 | `[` | Parse comma-separated exprs, expect `]`, return `ArrayLiteral` |
 | `Identifier` + `(` | Parse as function call with arguments |
 | `Identifier` (no `(`) | Parse as constant reference → `ConstRef` |
@@ -248,10 +250,11 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `...` + expr | Parse spread/unpack → `Spread` |
 | `ptr_cast` + `<Type>` + `(` | Parse pointer cast syntax → `PtrCast` |
 
-### Postfix: array access and member access
+### Postfix: calls, array access, and member access
 
 After parsing a prefix, the parser checks for postfix operators:
 
+- `(` for calling the result of an expression (`ExprCall`)
 - `[` for array access
 - `->` for property access or method call
 - `::` for static method call (when the prefix is an identifier)

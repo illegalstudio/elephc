@@ -52,9 +52,9 @@ Each function has a stack frame. The [code generator](the-codegen.md) calculates
                           │
                           ▼
 ┌────────────┬────────────┬────────────┬────────────┐
-│  saved x30 │  saved x29 │   $x (8B)  │   $y (8B)  │ ...
+│  saved x29 │  saved x30 │   $x (8B)  │   $y (8B)  │ ...
 └────────────┴────────────┴────────────┴────────────┘
-  [x29, #8]    [x29, #0]   [x29, #-8]   [x29, #-16]
+  [x29, #0]    [x29, #8]   [x29, #-8]   [x29, #-16]
 ```
 
 - `x29` and `x30` are saved at the top of the frame (positive offsets from `x29`)
@@ -65,6 +65,8 @@ Each function has a stack frame. The [code generator](the-codegen.md) calculates
 ### Variable allocation
 
 Variables are allocated stack slots when the [code generator](the-codegen.md) scans the function body (`collect_local_vars`). The allocation is determined at compile time — there's no dynamic stack growth.
+
+For heap-backed values, stack slots also carry compile-time ownership metadata in codegen: `Owned`, `Borrowed`, `MaybeOwned`, or `NonHeap`. This metadata is not stored in the generated binary; it only guides when codegen must retain a borrowed heap value before storing it into a new owner, and which local aliases must not be blindly decreffed yet.
 
 | Type | Stack space | Stored as |
 |---|---|---|
@@ -153,20 +155,20 @@ The heap (`_heap_buf`) is an 8MB region (by default) for dynamically-sized data 
 
 ### How heap allocation works
 
-Every allocation has an **8-byte header** split into two 32-bit fields: block size and reference count:
+Every allocation has a **16-byte header**: two 32-bit fields for block size and reference count, followed by an 8-byte uniform heap-kind tag:
 
 ```
-┌───────────┬────────────┬──────────────────┐
-│ size (4B) │ refcnt (4B)│  user data ...   │
-└───────────┴────────────┴──────────────────┘
-  header (8 bytes total)   ← pointer returned to caller
+┌───────────┬────────────┬────────────┬──────────────────┐
+│ size (4B) │ refcnt (4B)│ kind (8B)  │  user data ...   │
+└───────────┴────────────┴────────────┴──────────────────┘
+       header (16 bytes total)          ← pointer returned to caller
 ```
 
-The size is stored as a 32-bit value at offset +0, and the reference count as a 32-bit value at offset +4. New allocations start with refcount 1.
+The size is stored at header offset `+0`, the reference count at `+4`, and the heap kind tag at `+8`. New allocations start with refcount `1`; typed constructors then stamp the kind as `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, while raw helper buffers remain `0`.
 
 The runtime routine `__rt_heap_alloc`:
 
-1. **Walk the free list** — check each freed block (first-fit). If a block with `size >= requested` is found, unlink it, reset its refcount to 1, and return it.
+1. **Walk the free list** — check each freed block (first-fit). If a block with `size >= requested` is found, either unlink it whole or split it so the remainder stays on the free list, then reset the allocated block's refcount to 1 and return it.
 2. **Bump allocate** — if no free block fits, allocate from the end of the heap: write size and refcount=1 to the header, advance `_heap_off`, return user pointer.
 3. **Bounds check** — if the bump would exceed `_heap_max`, print a fatal error and exit.
 
@@ -176,16 +178,27 @@ Minimum allocation is 8 bytes (to fit the next pointer when the block is later f
 
 The runtime routine `__rt_heap_free`:
 
-1. Read the block size (32-bit) from the header at `user_pointer - 8`
-2. Insert the block at the head of the free list (LIFO)
-3. Free blocks reuse the same 8-byte header, then store the free-list pointer immediately after it: `[size:4][refcnt:4][next_ptr:8][...unused...]`. At the assembly level this is often described as `[size:8][next_ptr:8][...unused...]` because `__rt_heap_free` links the block through the 8-byte word at `header + 8`.
+1. Read the block size (32-bit) from the 16-byte header at `user_pointer - 16`
+2. If the block is exactly at the bump tail, shrink `_heap_off` immediately
+3. Otherwise, insert the block into the free list in address order, merge it with adjacent free neighbors, and repeatedly trim any now-free tail chain back into `_heap_off`
+4. Free blocks reuse the same 16-byte header, clear the kind back to `0`, and then store the free-list pointer immediately after it: `[size:4][refcnt:4][kind:8][next_ptr:8][...unused...]`
 
 The variant `__rt_heap_free_safe` validates that the pointer is within `_heap_buf` range before freeing — safe to call with garbage, null, or `.data` section pointers.
 
+### Heap debug mode
+
+Passing `--heap-debug` enables additional runtime verification without changing normal ownership behavior:
+
+- `__rt_heap_free` rejects duplicate insertion of the same block into the free list (`double free`)
+- `__rt_incref` / `__rt_decref_*` reject zero-refcount heap blocks before mutating them (`bad refcount`)
+- `__rt_heap_alloc` / `__rt_heap_free` validate the ordered free list and trap on out-of-range, overlapping, cyclic, or merely-adjacent free blocks (`free-list corruption`)
+
+When one of these checks trips, the program exits with a fatal heap-debug error instead of continuing with corrupted allocator state.
+
 ### When memory is freed
 
-- **Variable reassignment**: when a string or array variable is overwritten, the old value is freed via `__rt_heap_free_safe`
-- **`unset()`**: frees the variable's heap allocation before nulling it
+- **Variable reassignment**: when a heap-backed local/global/static slot is overwritten, codegen releases the previous owner through the appropriate runtime path (`__rt_heap_free_safe` for persisted strings, `__rt_decref_*` for refcounted arrays / hashes / objects)
+- **`unset()`**: releases the current heap-backed value before nulling the slot
 - **Process exit**: all memory is reclaimed by the OS
 
 ### Configurable heap size
@@ -194,6 +207,7 @@ The default heap is 8MB. For programs that need more (or less), use:
 
 ```bash
 elephc --heap-size=16777216 heavy.php    # 16MB heap
+elephc --heap-debug heavy.php            # enable runtime heap verification
 ```
 
 The minimum is 64KB.
@@ -410,17 +424,32 @@ The naming pattern is `_static_FUNCNAME_VARNAME`. The init flag ensures the init
 elephc uses a **free-list allocator with reference counting** — not a garbage collector, but not pure bump-allocation either. Memory is reclaimed in specific situations:
 
 1. **Reference counting** — every heap allocation carries a 32-bit refcount (initialized to 1). When a reference is shared, `__rt_incref` increments it. When a reference is dropped, `__rt_decref_array`, `__rt_decref_hash`, or `__rt_decref_object` decrements it and frees the block when it reaches zero
-2. **Variable reassignment** — when `$x = "new value"` overwrites a string or array, the old heap block is freed and returned to the free list for reuse
-3. **`unset($x)`** — explicitly frees the variable's heap allocation
-4. **String buffer reset** — the concat buffer resets at each statement, with strings that need to survive copied to heap via `__rt_str_persist`
-5. **Stack memory** — automatically reclaimed when functions return
-6. **Process exit** — all memory reclaimed by the OS
+2. **Codegen ownership tracking** — locals, globals, statics, `foreach` variables, `list(...)` targets, and call arguments are classified as owned or borrowed at compile time so new owners retain borrowed heap values before storing them
+3. **Variable reassignment** — when `$x = "new value"` overwrites a string or array, the old heap block is freed and returned to the free list for reuse
+4. **`unset($x)`** — explicitly frees the variable's heap allocation
+5. **String buffer reset** — the concat buffer resets at each statement, with strings that need to survive copied to heap via `__rt_str_persist`
+6. **Stack memory** — automatically reclaimed when functions return
+7. **Process exit** — all memory reclaimed by the OS
 
 ### What is NOT freed
 
-- **Adjacent free blocks** are not coalesced — fragmentation can occur over time
+- **Non-adjacent free blocks** are still not compacted — fragmentation can still occur over time even though adjacent neighbors are coalesced on free and oversized free blocks are split on allocation
+- **Circular container/object graphs** are not reclaimed today. Pure reference counting keeps self-referential or mutually-referential arrays/hash tables/objects alive once external roots disappear
 - **Pointer targets** are not ownership-tracked just because a raw pointer exists; the pointer value itself is only an address
 - **Intermediate scratch strings** in `_concat_buf` are not individually freed — the buffer is simply reset per statement
+- **General function epilogues** do not blanket-decref all heap locals. They now selectively clean up slots proven `Owned`, while locals populated from still-ambiguous borrowed/control-flow paths remain excluded
+- **Container-copying builtins** no longer blindly duplicate borrowed heap handles for common nested payload paths: refcounted runtime variants now retain values before new arrays/hash tables take ownership (`array` literals with spreads, `array_merge`, `array_chunk`, `array_slice`, `array_reverse`, `array_pad`, `array_unique`, `array_splice`, `array_diff`, `array_intersect`, `array_filter`, `array_fill`, `array_combine`, `array_fill_keys`)
+- **Regression coverage now explicitly exercises** local aliases, borrowed nested-container returns, `Owned`/`Borrowed` control-flow merges, and scope-exit paths so future ownership work has focused tripwires instead of relying only on large end-to-end suites
+
+### Evaluated next step for cycles
+
+The current runtime now has enough uniform metadata to support a targeted future cycle collector:
+
+- the allocator header carries a heap-kind tag (`string`, `array`, `hash`, `object`, raw)
+- refcounted containers/objects already funnel destruction through `__rt_decref_array`, `__rt_decref_hash`, and `__rt_decref_object`
+- raw buffers and helper allocations can stay outside any future cycle walk because they keep kind `0`
+
+That makes a **container/object-only trial-deletion or candidate-queue collector** the most realistic next design point. It would be narrower and cheaper than a whole-heap tracer, while still addressing the only structural leak class that plain refcounting leaves behind.
 
 ### Performance characteristics
 

@@ -79,6 +79,9 @@ elephc hello.php
 # Custom heap size (default: 8MB)
 elephc --heap-size=16777216 heavy.php
 
+# Enable runtime heap verification while debugging ownership issues
+elephc --heap-debug heavy.php
+
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 ```
@@ -232,7 +235,7 @@ The static type system tracks these runtime shapes at compile time:
 - **Float** — 64-bit double-precision
 - **Str** — pointer + length pair
 - **Bool** — `true`/`false`, coerces to 0/1
-- **Null** — sentinel value, coerces to 0/""
+- **Void / null** — null sentinel value, coerces to 0/""
 - **Array** — indexed arrays with inferred element type
 - **AssocArray** — associative arrays with key/value types
 - **Callable** — closures and callable function references
@@ -273,12 +276,14 @@ src/
 │   └── control.rs       # if, while, for, foreach, do-while
 │
 ├── types/               # Static type checking
+│   ├── mod.rs           # PhpType, TypeEnv, check(), CheckResult
 │   └── checker/
 │       ├── mod.rs       # check_stmt(), infer_type()
 │       ├── builtins.rs  # Built-in function type signatures
 │       └── functions.rs # User function type inference
 │
 ├── codegen/             # AST → ARM64 assembly
+│   ├── mod.rs           # Pipeline entry, main/global codegen orchestration
 │   ├── expr.rs          # Expression codegen
 │   ├── stmt.rs          # Statement codegen
 │   ├── abi.rs           # Register conventions (load, store, write)

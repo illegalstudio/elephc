@@ -14,13 +14,19 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("array_diff()");
     let arr_ty = emit_expr(&args[0], emitter, ctx, data);
+    let uses_refcounted_runtime =
+        matches!(&arr_ty, PhpType::Array(inner) if inner.is_refcounted());
     // -- save first array, evaluate second array --
     emitter.instruction("str x0, [sp, #-16]!");                                 // push first array pointer onto stack
     emit_expr(&args[1], emitter, ctx, data);
     // -- call runtime to compute value difference --
     emitter.instruction("mov x1, x0");                                          // move second array pointer to x1
     emitter.instruction("ldr x0, [sp], #16");                                   // pop first array pointer into x0
-    emitter.instruction("bl __rt_array_diff");                                  // call runtime: diff arrays → x0=new array
+    emitter.instruction(if uses_refcounted_runtime {
+        "bl __rt_array_diff_refcounted"
+    } else {
+        "bl __rt_array_diff"
+    }); // call runtime: diff arrays → x0=new array
 
     match arr_ty {
         PhpType::Array(inner) => Some(PhpType::Array(inner)),

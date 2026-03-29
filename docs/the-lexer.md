@@ -4,7 +4,7 @@
 
 ---
 
-**Source:** `src/lexer/` — `scan.rs`, `cursor.rs`, `token.rs`, `literals.rs`
+**Source:** `src/lexer/` — `mod.rs`, `scan.rs`, `cursor.rs`, `token.rs`, `literals.rs`
 
 The lexer (also called tokenizer or scanner) is the first phase of compilation. It takes raw source text and breaks it into **tokens** — the smallest meaningful units of the language.
 
@@ -68,6 +68,8 @@ pub fn scan_tokens(source: &str) -> Result<Vec<(Token, Span)>, CompileError> {
     // 4. When EOF reached, push Eof token and return
 }
 ```
+
+The public lexer entry point used by the rest of the compiler is `tokenize()` in `src/lexer/mod.rs`, which wraps `scan_tokens()` and returns the final `Vec<(Token, Span)>`.
 
 ### The scanning algorithm
 

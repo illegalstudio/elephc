@@ -1,7 +1,7 @@
 use crate::codegen::emit::Emitter;
 
 /// array_fill_keys: create associative array from keys with the same value.
-/// Input:  x0=keys_array (string array), x1=value (int)
+/// Input:  x0=keys_array (string array), x1=value, x2=value_type_tag
 /// Output: x0=new hash table
 pub fn emit_array_fill_keys(emitter: &mut Emitter) {
     emitter.blank();
@@ -16,11 +16,12 @@ pub fn emit_array_fill_keys(emitter: &mut Emitter) {
     //   [sp, #24] = loop index i
     //   [sp, #32] = saved x29
     //   [sp, #40] = saved x30
-    emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack
-    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #32");                                    // set up new frame pointer
+    emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #48");                                    // set up new frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save keys array pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save fill value
+    emitter.instruction("str x2, [sp, #32]");                                   // save result value_type tag
 
     // -- create hash table with capacity = length * 2 --
     emitter.instruction("ldr x0, [x0]");                                        // x0 = keys array length
@@ -28,7 +29,7 @@ pub fn emit_array_fill_keys(emitter: &mut Emitter) {
     emitter.instruction("mov x9, #16");                                         // x9 = minimum capacity
     emitter.instruction("cmp x0, x9");                                          // compare with minimum
     emitter.instruction("csel x0, x9, x0, lt");                                 // if length*2 < 16, use 16
-    emitter.instruction("mov x1, #0");                                          // value_type = 0 (int)
+    emitter.instruction("ldr x1, [sp, #32]");                                   // x1 = requested result value_type tag
     emitter.instruction("bl __rt_hash_new");                                    // create hash table, x0 = hash ptr
     emitter.instruction("str x0, [sp, #16]");                                   // save hash table pointer
 
@@ -65,7 +66,7 @@ pub fn emit_array_fill_keys(emitter: &mut Emitter) {
     // -- return hash table --
     emitter.label("__rt_array_fill_keys_done");
     emitter.instruction("ldr x0, [sp, #16]");                                   // x0 = hash table pointer
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return with x0 = hash table
 }

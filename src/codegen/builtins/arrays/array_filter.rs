@@ -25,6 +25,8 @@ pub fn emit(
 
     // -- evaluate the array argument (first arg) --
     let arr_ty = emit_expr(&args[0], emitter, ctx, data);
+    let uses_refcounted_runtime =
+        matches!(&arr_ty, PhpType::Array(inner) if inner.is_refcounted());
 
     // -- save array pointer --
     emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer onto stack
@@ -54,7 +56,11 @@ pub fn emit(
     if is_closure {
         emitter.instruction("add sp, sp, #16");                                 // discard saved callback address
     }
-    emitter.instruction("bl __rt_array_filter");                                // call runtime: filter array → x0=new array
+    emitter.instruction(if uses_refcounted_runtime {
+        "bl __rt_array_filter_refcounted"
+    } else {
+        "bl __rt_array_filter"
+    }); // call runtime: filter array → x0=new array
 
     match arr_ty {
         PhpType::Array(elem_ty) => Some(PhpType::Array(elem_ty)),

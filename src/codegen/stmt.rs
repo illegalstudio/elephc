@@ -1,8 +1,8 @@
 use super::abi;
-use super::context::{Context, LoopLabels};
+use super::context::{Context, HeapOwnership, LoopLabels};
 use super::data_section::DataSection;
 use super::emit::Emitter;
-use super::expr::{emit_expr, expr_result_may_borrow_heap_value};
+use super::expr::{emit_expr, expr_result_heap_ownership};
 use crate::parser::ast::{ExprKind, Stmt, StmtKind};
 use crate::types::PhpType;
 
@@ -11,9 +11,13 @@ fn retain_borrowed_heap_result(
     expr: &crate::parser::ast::Expr,
     ty: &PhpType,
 ) {
-    if ty.is_refcounted() && expr_result_may_borrow_heap_value(expr) {
+    if ty.is_refcounted() && expr_result_heap_ownership(expr) != HeapOwnership::Owned {
         abi::emit_incref_if_refcounted(emitter, ty);
     }
+}
+
+fn local_slot_ownership_after_store(ty: &PhpType) -> HeapOwnership {
+    HeapOwnership::local_owner_for_type(ty)
 }
 
 fn release_owned_slot(emitter: &mut Emitter, ty: &PhpType, offset: usize, preserve_x0: bool) {
@@ -214,6 +218,11 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                 }
 
                 abi::emit_store(emitter, &ty, offset);
+                ctx.update_var_type_and_ownership(
+                    name,
+                    ty.clone(),
+                    local_slot_ownership_after_store(&ty),
+                );
 
                 // In main scope, also sync to global storage if this var is used globally
                 if ctx.in_main && ctx.all_global_var_names.contains(name) {
@@ -238,10 +247,11 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
             // Update variable type if it changed (e.g. int /= produces float)
             if let Some(var) = ctx.variables.get(name) {
                 if var.ty != ty {
-                    ctx.variables
-                        .get_mut(name)
-                        .expect("variable disappeared between get and get_mut")
-                        .ty = ty;
+                    ctx.update_var_type_and_ownership(
+                        name,
+                        ty.clone(),
+                        local_slot_ownership_after_store(&ty),
+                    );
                 }
             }
         }
@@ -468,9 +478,12 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                 None => PhpType::Int,
             };
             if elem_ty != val_ty {
-                if let Some(v) = ctx.variables.get_mut(array) {
-                    v.ty = PhpType::Array(Box::new(val_ty.clone()));
-                }
+                let updated_ty = PhpType::Array(Box::new(val_ty.clone()));
+                ctx.update_var_type_and_ownership(
+                    array,
+                    updated_ty.clone(),
+                    local_slot_ownership_after_store(&updated_ty),
+                );
             }
             match &val_ty {
                 PhpType::Int | PhpType::Bool => {
@@ -553,6 +566,11 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                         abi::store_at_offset_scratch(emitter, "x1", k_offset, "x10"); // store key ptr
                         abi::store_at_offset_scratch(emitter, "x2", k_offset - 8, "x10");
                     // store key len
+                        ctx.update_var_type_and_ownership(
+                            kv,
+                            PhpType::Str,
+                            HeapOwnership::borrowed_alias_for_type(&PhpType::Str),
+                        );
                     } else {
                         emitter
                             .comment(&format!("WARNING: undefined foreach key variable ${}", kv));
@@ -586,6 +604,11 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                         // store value
                     }
                 }
+                ctx.update_var_type_and_ownership(
+                    value_var,
+                    val_ty.clone(),
+                    HeapOwnership::borrowed_alias_for_type(&val_ty),
+                );
 
                 ctx.loop_stack.push(LoopLabels {
                     continue_label: loop_cont.clone(),
@@ -628,6 +651,7 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                         let k_offset = kvar.stack_offset;
                         abi::store_at_offset_scratch(emitter, "x0", k_offset, "x10");
                     // store index as key
+                        ctx.update_var_type_and_ownership(kv, PhpType::Int, HeapOwnership::NonHeap);
                     } else {
                         emitter
                             .comment(&format!("WARNING: undefined foreach key variable ${}", kv));
@@ -672,6 +696,11 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                     }
                     _ => {}
                 }
+                ctx.update_var_type_and_ownership(
+                    value_var,
+                    elem_ty.clone(),
+                    HeapOwnership::borrowed_alias_for_type(&elem_ty),
+                );
 
                 ctx.loop_stack.push(LoopLabels {
                     continue_label: loop_cont.clone(),
@@ -996,6 +1025,11 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                         abi::store_at_offset(emitter, "x0", offset); // store into variable
                     }
                 }
+                ctx.update_var_type_and_ownership(
+                    var_name,
+                    elem_ty.clone(),
+                    HeapOwnership::borrowed_alias_for_type(&elem_ty),
+                );
             }
 
             // -- clean up saved array pointer --
@@ -1021,6 +1055,11 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                 let ty = var_info.ty.clone();
                 emit_global_load(emitter, ctx, var, &ty);
                 abi::emit_store(emitter, &ty, offset);
+                ctx.update_var_type_and_ownership(
+                    var,
+                    ty.clone(),
+                    HeapOwnership::borrowed_alias_for_type(&ty),
+                );
             }
         }
         StmtKind::StaticVar { name, init } => {
@@ -1033,7 +1072,7 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
 
             // -- check if already initialized --
             emitter.instruction(&format!("adrp x9, {}@PAGE", init_label));      // load page of init flag
-            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", init_label)); // add page offset
+            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", init_label)); //add page offset
             emitter.instruction("ldr x10, [x9]");                               // load init flag value
             emitter.instruction(&format!("cbnz x10, {}", skip_label));          // skip init if already done
 
@@ -1044,7 +1083,7 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
             retain_borrowed_heap_result(emitter, init, &ty);
             // Store init value to static storage
             emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));      // load page of static var storage
-            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); // add page offset
+            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); //add page offset
             match &ty {
                 PhpType::Bool | PhpType::Int => {
                     emitter.instruction("str x0, [x9]");                        // store initial int/bool value
@@ -1064,7 +1103,7 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
 
             // -- load current value from static storage into local variable --
             emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));      // load page of static var storage
-            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); // add page offset
+            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); //add page offset
             let var_info = match ctx.variables.get(name) {
                 Some(v) => v,
                 None => {
@@ -1099,6 +1138,11 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                     abi::store_at_offset_scratch(emitter, "x0", offset, "x10"); // store to local stack slot
                 }
             }
+            ctx.update_var_type_and_ownership(
+                name,
+                var_ty.clone(),
+                HeapOwnership::borrowed_alias_for_type(&var_ty),
+            );
 
             // Mark this variable as static so epilogue saves it back
             ctx.static_vars.insert(name.clone());
@@ -1236,7 +1280,7 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                 | PhpType::Object(_)
                 | PhpType::Pointer(_) => {
                     emitter.instruction("ldr x10, [sp], #16");                  // pop saved value
-                    emitter.instruction(&format!("str x10, [x9, #{}]", offset)); // store value into property
+                    emitter.instruction(&format!("str x10, [x9, #{}]", offset)); //store value into property
                 }
                 PhpType::Float => {
                     emitter.instruction("ldr d0, [sp], #16");                   // pop saved float
@@ -1245,7 +1289,7 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                 PhpType::Str => {
                     emitter.instruction("ldp x1, x2, [sp], #16");               // pop saved string ptr+len
                     emitter.instruction(&format!("str x1, [x9, #{}]", offset)); // store string pointer into property
-                    emitter.instruction(&format!("str x2, [x9, #{}]", offset + 8)); // store string length into property
+                    emitter.instruction(&format!("str x2, [x9, #{}]", offset + 8)); //store string length into property
                 }
                 PhpType::Void => {}
             }

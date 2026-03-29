@@ -23,6 +23,8 @@ pub fn emit_hash_new(emitter: &mut Emitter) {
     emitter.instruction("mul x2, x0, x9");                                      // x2 = capacity * 40 = entries region size
     emitter.instruction("add x0, x2, #24");                                     // x0 = total size (24-byte header + entries)
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate memory, x0 = pointer to hash table
+    emitter.instruction("mov x9, #3");                                          // heap kind 3 = associative array / hash table
+    emitter.instruction("str x9, [x0, #-8]");                                   // store hash-table kind in the uniform heap header
 
     // -- initialize header fields --
     emitter.instruction("str xzr, [x0]");                                       // header[0]: count = 0
