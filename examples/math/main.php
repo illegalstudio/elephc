@@ -19,6 +19,11 @@ echo "\n=== Distance ===\n";
 $dist = hypot(3.0, 4.0);
 echo "distance(0,0 → 3,4) = " . $dist . "\n";
 
+echo "\n=== Randomness ===\n";
+echo "rand(1, 10) = " . rand(1, 10) . "\n";
+echo "mt_rand(100, 105) = " . mt_rand(100, 105) . "\n";
+echo "random_int(20, 25) = " . random_int(20, 25) . "\n";
+
 echo "\n=== Constants ===\n";
 echo "π = " . M_PI . "\n";
 echo "e = " . M_E . "\n";
