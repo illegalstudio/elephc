@@ -79,6 +79,9 @@ elephc hello.php
 # Custom heap size (default: 8MB)
 elephc --heap-size=16777216 heavy.php
 
+# Enable runtime heap verification while debugging ownership issues
+elephc --heap-debug heavy.php
+
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 ```

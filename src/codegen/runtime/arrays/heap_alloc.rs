@@ -16,6 +16,18 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #8");                                          // round up to minimum 8 bytes
     emitter.label("__rt_heap_alloc_start");
 
+    // -- debug mode: validate the free list before consuming it --
+    emitter.instruction("adrp x9, _heap_debug_enabled@PAGE");                   // load page of the heap-debug enabled flag
+    emitter.instruction("add x9, x9, _heap_debug_enabled@PAGEOFF");             // resolve the heap-debug enabled flag address
+    emitter.instruction("ldr x9, [x9]");                                        // load the heap-debug enabled flag
+    emitter.instruction("cbz x9, __rt_heap_alloc_debug_checked");               // skip validation when heap-debug mode is disabled
+    emitter.instruction("mov x15, x0");                                         // preserve the requested allocation size across validation
+    emitter.instruction("str x30, [sp, #-16]!");                                // preserve the caller return address before making a nested call
+    emitter.instruction("bl __rt_heap_debug_validate_free_list");                // verify the ordered free list before searching it
+    emitter.instruction("ldr x30, [sp], #16");                                  // restore the caller return address after validation
+    emitter.instruction("mov x0, x15");                                         // restore the requested allocation size after validation
+    emitter.label("__rt_heap_alloc_debug_checked");
+
     // -- try to find a free block first --
     // x0 = requested size, x9 = prev_next_addr, x10 = current block header
     emitter.instruction("adrp x9, _heap_free_list@PAGE");                       // load page of free list head pointer

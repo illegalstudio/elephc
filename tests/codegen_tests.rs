@@ -121,20 +121,54 @@ fn assemble_and_run(
     String::from_utf8(output.stdout).unwrap()
 }
 
-/// Compile a PHP source string to a native binary, run it, and return stdout.
-/// Uses the elephc library directly (no subprocess) for tokenize → parse → check → codegen.
-/// Only spawns as + ld + binary execution.
-fn compile_and_run_with_heap_size(source: &str, heap_size: usize) -> String {
-    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
-    let tid = std::thread::current().id();
-    let pid = std::process::id();
-    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
-    fs::create_dir_all(&dir).unwrap();
+fn assemble_and_run_expect_failure(
+    asm: &str,
+    dir: &Path,
+    extra_link_libs: &[String],
+    extra_link_paths: &[String],
+    extra_frameworks: &[String],
+) -> String {
+    let asm_path = dir.join("test.s");
+    let obj_path = dir.join("test.o");
+    let bin_path = dir.join("test");
 
-    // Compile in-process using library
+    fs::write(&asm_path, asm).unwrap();
+
+    let as_status = Command::new("as")
+        .args(["-arch", "arm64", "-o"])
+        .arg(&obj_path)
+        .arg(&asm_path)
+        .status()
+        .expect("failed to run assembler");
+    assert!(as_status.success(), "assembler failed");
+
+    link_binary(
+        &obj_path,
+        &bin_path,
+        extra_link_libs,
+        extra_link_paths,
+        extra_frameworks,
+    );
+
+    let output = Command::new(&bin_path)
+        .current_dir(dir)
+        .output()
+        .expect("failed to run compiled binary");
+    assert!(!output.status.success(), "binary unexpectedly succeeded");
+
+    String::from_utf8(output.stderr).unwrap()
+}
+
+fn compile_source_to_asm_with_options(
+    source: &str,
+    dir: &Path,
+    heap_size: usize,
+    gc_stats: bool,
+    heap_debug: bool,
+) -> (String, Vec<String>) {
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
-    let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
+    let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
     let check_result = elephc::types::check(&resolved).expect("type check failed");
     let asm = elephc::codegen::generate(
         &resolved,
@@ -145,13 +179,59 @@ fn compile_and_run_with_heap_size(source: &str, heap_size: usize) -> String {
         &check_result.extern_classes,
         &check_result.extern_globals,
         heap_size,
-        false,
+        gc_stats,
+        heap_debug,
     );
+    (asm, check_result.required_libraries)
+}
+
+fn inject_main_exit_harness(asm: &str, harness: &str) -> String {
+    let needle = "    mov x0, #0\n    mov x16, #1\n    svc #0x80";
+    let replacement = format!("{harness}\n    mov x0, #0\n    mov x16, #1\n    svc #0x80");
+    let patched = asm.replacen(needle, &replacement, 1);
+    assert_ne!(patched, asm, "failed to inject main exit harness");
+    patched
+}
+
+fn compile_harness_expect_failure(source: &str, heap_size: usize, harness: &str) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, heap_size, false, true);
+    let patched = inject_main_exit_harness(&asm, harness);
+    let stderr = assemble_and_run_expect_failure(
+        &patched,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    stderr
+}
+
+/// Compile a PHP source string to a native binary, run it, and return stdout.
+/// Uses the elephc library directly (no subprocess) for tokenize → parse → check → codegen.
+/// Only spawns as + ld + binary execution.
+fn compile_and_run_with_heap_size(source: &str, heap_size: usize) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, heap_size, false, false);
 
     let elephc_out = assemble_and_run(
         &asm,
         &dir,
-        &check_result.required_libraries,
+        &required_libraries,
         &default_link_paths(),
         &[],
     );
@@ -189,52 +269,13 @@ fn compile_and_run_expect_failure(source: &str) -> String {
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
-    let ast = elephc::parser::parse(&tokens).expect("parse failed");
-    let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
-    let check_result = elephc::types::check(&resolved).expect("type check failed");
-    let asm = elephc::codegen::generate(
-        &resolved,
-        &check_result.global_env,
-        &check_result.functions,
-        &check_result.classes,
-        &check_result.extern_functions,
-        &check_result.extern_classes,
-        &check_result.extern_globals,
-        8_388_608,
-        false,
-    );
-
-    let asm_path = dir.join("test.s");
-    let obj_path = dir.join("test.o");
-    let bin_path = dir.join("test");
-
-    fs::write(&asm_path, &asm).unwrap();
-
-    let as_status = Command::new("as")
-        .args(["-arch", "arm64", "-o"])
-        .arg(&obj_path)
-        .arg(&asm_path)
-        .status()
-        .expect("failed to run assembler");
-    assert!(as_status.success(), "assembler failed");
-
-    link_binary(
-        &obj_path,
-        &bin_path,
-        &check_result.required_libraries,
-        &default_link_paths(),
-        &[],
-    );
-
-    let output = Command::new(&bin_path)
-        .current_dir(&dir)
-        .output()
-        .expect("failed to run compiled binary");
-    assert!(!output.status.success(), "binary unexpectedly succeeded");
+    let (asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    let output =
+        assemble_and_run_expect_failure(&asm, &dir, &required_libraries, &default_link_paths(), &[]);
 
     let _ = fs::remove_dir_all(&dir);
-    String::from_utf8(output.stderr).unwrap()
+    output
 }
 
 /// Compile a PHP project with multiple files using the library directly.
@@ -270,6 +311,7 @@ fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> String {
         &check_result.extern_classes,
         &check_result.extern_globals,
         8_388_608,
+        false,
         false,
     );
 
@@ -338,6 +380,7 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
         &check_result.extern_globals,
         8_388_608,
         false,
+        false,
     );
 
     let asm_path = dir.join("test.s");
@@ -403,6 +446,7 @@ fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {
         &check_result.extern_classes,
         &check_result.extern_globals,
         8_388_608,
+        false,
         false,
     );
 
@@ -9510,6 +9554,58 @@ echo $small[0] . "|" . count($mid) . "|" . $keep[0];
         65_536,
     );
     assert_eq!(out, "3|2500|2");
+}
+
+#[test]
+fn test_heap_debug_double_free_reports_error() {
+    let err = compile_harness_expect_failure(
+        "<?php",
+        65_536,
+        r#"    mov x0, #16
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    mov x0, #24
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    ldr x0, [sp, #16]
+    bl __rt_heap_free
+    ldr x0, [sp, #16]
+    bl __rt_heap_free"#,
+    );
+    assert!(err.contains("heap debug detected double free"), "{err}");
+}
+
+#[test]
+fn test_heap_debug_bad_refcount_reports_error() {
+    let err = compile_harness_expect_failure(
+        "<?php",
+        65_536,
+        r#"    mov x0, #16
+    bl __rt_heap_alloc
+    str wzr, [x0, #-4]
+    bl __rt_incref"#,
+    );
+    assert!(err.contains("heap debug detected bad refcount"), "{err}");
+}
+
+#[test]
+fn test_heap_debug_free_list_corruption_reports_error() {
+    let err = compile_harness_expect_failure(
+        "<?php",
+        65_536,
+        r#"    mov x0, #16
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    mov x0, #24
+    bl __rt_heap_alloc
+    ldr x0, [sp], #16
+    bl __rt_heap_free
+    sub x9, x0, #8
+    str x9, [x9, #8]
+    mov x0, #8
+    bl __rt_heap_alloc"#,
+    );
+    assert!(err.contains("heap debug detected free-list corruption"), "{err}");
 }
 
 #[test]

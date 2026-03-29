@@ -185,6 +185,16 @@ The runtime routine `__rt_heap_free`:
 
 The variant `__rt_heap_free_safe` validates that the pointer is within `_heap_buf` range before freeing — safe to call with garbage, null, or `.data` section pointers.
 
+### Heap debug mode
+
+Passing `--heap-debug` enables additional runtime verification without changing normal ownership behavior:
+
+- `__rt_heap_free` rejects duplicate insertion of the same block into the free list (`double free`)
+- `__rt_incref` / `__rt_decref_*` reject zero-refcount heap blocks before mutating them (`bad refcount`)
+- `__rt_heap_alloc` / `__rt_heap_free` validate the ordered free list and trap on out-of-range, overlapping, cyclic, or merely-adjacent free blocks (`free-list corruption`)
+
+When one of these checks trips, the program exits with a fatal heap-debug error instead of continuing with corrupted allocator state.
+
 ### When memory is freed
 
 - **Variable reassignment**: when a string or array variable is overwritten, the old value is freed via `__rt_heap_free_safe`
@@ -197,6 +207,7 @@ The default heap is 8MB. For programs that need more (or less), use:
 
 ```bash
 elephc --heap-size=16777216 heavy.php    # 16MB heap
+elephc --heap-debug heavy.php            # enable runtime heap verification
 ```
 
 The minimum is 64KB.

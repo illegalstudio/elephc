@@ -40,6 +40,16 @@ fn emit_incref(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, x10");                                         // is pointer at or beyond heap end?
     emitter.instruction("b.hs __rt_incref_skip");                               // yes — not a valid heap pointer, skip
 
+    // -- debug mode: reject incref on freed storage --
+    emitter.instruction("adrp x9, _heap_debug_enabled@PAGE");                   // load page of the heap-debug enabled flag
+    emitter.instruction("add x9, x9, _heap_debug_enabled@PAGEOFF");             // resolve the heap-debug enabled flag address
+    emitter.instruction("ldr x9, [x9]");                                        // load the heap-debug enabled flag
+    emitter.instruction("cbz x9, __rt_incref_checked");                         // skip debug validation when heap-debug mode is disabled
+    emitter.instruction("str x30, [sp, #-16]!");                                // preserve the caller return address before nested validation
+    emitter.instruction("bl __rt_heap_debug_check_live");                       // ensure the referenced heap block still has a live refcount
+    emitter.instruction("ldr x30, [sp], #16");                                  // restore the caller return address after validation
+    emitter.label("__rt_incref_checked");
+
     // -- increment refcount --
     emitter.instruction("ldr w9, [x0, #-4]");                                   // load 32-bit refcount from header
     emitter.instruction("add w9, w9, #1");                                      // increment refcount
@@ -70,6 +80,16 @@ fn emit_decref_array(emitter: &mut Emitter) {
     emitter.instruction("add x10, x9, x10");                                    // x10 = heap_buf + heap_off = heap end
     emitter.instruction("cmp x0, x10");                                         // is pointer at or beyond heap end?
     emitter.instruction("b.hs __rt_decref_array_skip");                         // yes — not a valid heap pointer, skip
+
+    // -- debug mode: reject decref on freed storage --
+    emitter.instruction("adrp x9, _heap_debug_enabled@PAGE");                   // load page of the heap-debug enabled flag
+    emitter.instruction("add x9, x9, _heap_debug_enabled@PAGEOFF");             // resolve the heap-debug enabled flag address
+    emitter.instruction("ldr x9, [x9]");                                        // load the heap-debug enabled flag
+    emitter.instruction("cbz x9, __rt_decref_array_checked");                   // skip debug validation when heap-debug mode is disabled
+    emitter.instruction("str x30, [sp, #-16]!");                                // preserve the caller return address before nested validation
+    emitter.instruction("bl __rt_heap_debug_check_live");                       // ensure the array block still has a live refcount
+    emitter.instruction("ldr x30, [sp], #16");                                  // restore the caller return address after validation
+    emitter.label("__rt_decref_array_checked");
 
     // -- decrement refcount and check for zero --
     emitter.instruction("ldr w9, [x0, #-4]");                                   // load 32-bit refcount from header
@@ -106,6 +126,16 @@ fn emit_decref_hash(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, x10");                                         // is pointer at or beyond heap end?
     emitter.instruction("b.hs __rt_decref_hash_skip");                          // yes — not a valid heap pointer, skip
 
+    // -- debug mode: reject decref on freed storage --
+    emitter.instruction("adrp x9, _heap_debug_enabled@PAGE");                   // load page of the heap-debug enabled flag
+    emitter.instruction("add x9, x9, _heap_debug_enabled@PAGEOFF");             // resolve the heap-debug enabled flag address
+    emitter.instruction("ldr x9, [x9]");                                        // load the heap-debug enabled flag
+    emitter.instruction("cbz x9, __rt_decref_hash_checked");                    // skip debug validation when heap-debug mode is disabled
+    emitter.instruction("str x30, [sp, #-16]!");                                // preserve the caller return address before nested validation
+    emitter.instruction("bl __rt_heap_debug_check_live");                       // ensure the hash block still has a live refcount
+    emitter.instruction("ldr x30, [sp], #16");                                  // restore the caller return address after validation
+    emitter.label("__rt_decref_hash_checked");
+
     // -- decrement refcount and check for zero --
     emitter.instruction("ldr w9, [x0, #-4]");                                   // load 32-bit refcount from header
     emitter.instruction("subs w9, w9, #1");                                     // decrement refcount, set flags
@@ -140,6 +170,16 @@ fn emit_decref_object(emitter: &mut Emitter) {
     emitter.instruction("add x10, x9, x10");                                    // x10 = heap_buf + heap_off = heap end
     emitter.instruction("cmp x0, x10");                                         // is pointer at or beyond heap end?
     emitter.instruction("b.hs __rt_decref_object_skip");                        // yes — not a valid heap pointer, skip
+
+    // -- debug mode: reject decref on freed storage --
+    emitter.instruction("adrp x9, _heap_debug_enabled@PAGE");                   // load page of the heap-debug enabled flag
+    emitter.instruction("add x9, x9, _heap_debug_enabled@PAGEOFF");             // resolve the heap-debug enabled flag address
+    emitter.instruction("ldr x9, [x9]");                                        // load the heap-debug enabled flag
+    emitter.instruction("cbz x9, __rt_decref_object_checked");                  // skip debug validation when heap-debug mode is disabled
+    emitter.instruction("str x30, [sp, #-16]!");                                // preserve the caller return address before nested validation
+    emitter.instruction("bl __rt_heap_debug_check_live");                       // ensure the object block still has a live refcount
+    emitter.instruction("ldr x30, [sp], #16");                                  // restore the caller return address after validation
+    emitter.label("__rt_decref_object_checked");
 
     // -- decrement refcount and check for zero --
     emitter.instruction("ldr w9, [x0, #-4]");                                   // load 32-bit refcount from header
