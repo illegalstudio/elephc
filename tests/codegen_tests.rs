@@ -9497,6 +9497,22 @@ echo $c[0] . "|" . count($c) . "|" . $a[0];
 }
 
 #[test]
+fn test_gc_heap_alloc_splits_oversized_free_block() {
+    let out = compile_and_run_with_heap_size(
+        r#"<?php
+$large = array_fill(0, 4000, 1);
+$keep = array_fill(0, 2000, 2);
+unset($large);
+$small = array_fill(0, 1000, 3);
+$mid = array_fill(0, 2500, 4);
+echo $small[0] . "|" . count($mid) . "|" . $keep[0];
+"#,
+        65_536,
+    );
+    assert_eq!(out, "3|2500|2");
+}
+
+#[test]
 fn test_log_base_2() {
     let out = compile_and_run(
         r#"<?php

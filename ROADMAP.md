@@ -256,7 +256,7 @@ Proper type system for PHP compatibility.
 - [x] Re-enable epilogue cleanup for locals that are proven to own their heap values
 - [x] Broader container propagation rules for nested array/hash/object transfers
 - [x] Focused regressions for aliasing across locals, returns, nested containers, and scope exit
-- [ ] Heap allocator improvements: adjacent-block coalescing and less fragmentation under mixed allocation sizes
+- [x] Heap allocator improvements: adjacent-block coalescing and less fragmentation under mixed allocation sizes
 - [ ] Runtime heap verification / debug mode (`double free`, bad refcount, free-list corruption checks)
 - [ ] Uniform runtime heap-kind metadata for arrays / assoc arrays / objects / persisted strings
 - [ ] Evaluate a cycle-collection strategy for circular container/object graphs

@@ -34,13 +34,32 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x10, #8]");                                  // current = current->next
     emitter.instruction("b __rt_heap_alloc_fl_loop");                           // continue searching
 
-    // -- found a suitable free block, unlink it --
+    // -- found a suitable free block, either split it or unlink it whole --
     emitter.label("__rt_heap_alloc_fl_found");
+    emitter.instruction("sub x12, x11, x0");                                    // x12 = free block payload minus requested payload
+    emitter.instruction("cmp x12, #16");                                        // is there room for a new free header plus minimum payload?
+    emitter.instruction("b.lt __rt_heap_alloc_fl_take_whole");                   // no — consume the whole free block
+    emitter.instruction("add x13, x10, x0");                                    // x13 = current header + requested payload
+    emitter.instruction("add x13, x13, #8");                                    // x13 = split remainder header address
+    emitter.instruction("sub x12, x12, #8");                                    // x12 = remainder payload size after carving out a new header
+    emitter.instruction("str w12, [x13]");                                      // write split remainder size into its header
+    emitter.instruction("ldr x14, [x10, #8]");                                  // x14 = current->next before splitting
+    emitter.instruction("str x14, [x13, #8]");                                  // remainder->next = current->next
+    emitter.instruction("str x13, [x9]");                                       // prev->next = remainder header
+    emitter.instruction("str w0, [x10]");                                       // shrink allocated block header size to the requested payload
+    emitter.instruction("mov w13, #1");                                         // initial refcount = 1
+    emitter.instruction("str w13, [x10, #4]");                                  // reset refcount in reused header
+    emitter.instruction("add x0, x10, #8");                                     // return user pointer = header + 8
+    emitter.instruction("b __rt_heap_alloc_count");                             // count allocation and return
+
+    emitter.label("__rt_heap_alloc_fl_take_whole");
     emitter.instruction("ldr x12, [x10, #8]");                                  // x12 = current->next (rest of list)
     emitter.instruction("str x12, [x9]");                                       // prev->next = current->next (unlink current)
     emitter.instruction("mov w13, #1");                                         // initial refcount = 1
     emitter.instruction("str w13, [x10, #4]");                                  // reset refcount in reused header
     emitter.instruction("add x0, x10, #8");                                     // return user pointer = header + 8
+
+    emitter.label("__rt_heap_alloc_count");
     // -- increment gc_allocs counter --
     emitter.instruction("adrp x12, _gc_allocs@PAGE");                           // load gc_allocs page
     emitter.instruction("add x12, x12, _gc_allocs@PAGEOFF");                    // resolve address

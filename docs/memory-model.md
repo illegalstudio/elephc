@@ -168,7 +168,7 @@ The size is stored as a 32-bit value at offset +0, and the reference count as a 
 
 The runtime routine `__rt_heap_alloc`:
 
-1. **Walk the free list** — check each freed block (first-fit). If a block with `size >= requested` is found, unlink it, reset its refcount to 1, and return it.
+1. **Walk the free list** — check each freed block (first-fit). If a block with `size >= requested` is found, either unlink it whole or split it so the remainder stays on the free list, then reset the allocated block's refcount to 1 and return it.
 2. **Bump allocate** — if no free block fits, allocate from the end of the heap: write size and refcount=1 to the header, advance `_heap_off`, return user pointer.
 3. **Bounds check** — if the bump would exceed `_heap_max`, print a fatal error and exit.
 
@@ -422,7 +422,7 @@ elephc uses a **free-list allocator with reference counting** — not a garbage 
 
 ### What is NOT freed
 
-- **Non-adjacent free blocks** are still not compacted or split — fragmentation can still occur over time even though adjacent neighbors are now coalesced on free
+- **Non-adjacent free blocks** are still not compacted — fragmentation can still occur over time even though adjacent neighbors are coalesced on free and oversized free blocks are split on allocation
 - **Pointer targets** are not ownership-tracked just because a raw pointer exists; the pointer value itself is only an address
 - **Intermediate scratch strings** in `_concat_buf` are not individually freed — the buffer is simply reset per statement
 - **General function epilogues** do not blanket-decref all heap locals. They now selectively clean up slots proven `Owned`, while locals populated from still-ambiguous borrowed/control-flow paths remain excluded
