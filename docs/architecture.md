@@ -100,7 +100,7 @@ src/
 │   └── runtime/               ARM64 runtime routines (one file per language/runtime helper)
 │       ├── mod.rs             Emits all runtime functions into assembly
 │       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, str_persist, ... (53 files)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, sort, usort, refcount, ... (56 files)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, sort, usort, refcount, ... (75 files)
 │       ├── io/                fopen, fgets, fread, stat, scandir, ... (17 files)
 │       ├── system/            build_argv, time, getenv, shell_exec, date, mktime, strtotime, json_encode, json_decode, preg (14 files)
 │       └── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ... (5 files)

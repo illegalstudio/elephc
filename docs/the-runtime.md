@@ -233,7 +233,7 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_decref_hash` | Decrement refcount, free hash table if zero | `x0` = hash pointer | — |
 | `__rt_decref_object` | Decrement refcount, free object if zero | `x0` = object pointer | — |
 
-Refcounts are stored as a 32-bit value in the upper half of the 8-byte heap header, at `[user_ptr - 4]`. Each heap allocation starts with refcount 1. When a reference is shared (e.g., assigned to another variable or passed to a function), `__rt_incref` bumps it. When the reference goes away, the appropriate `__rt_decref_*` variant decrements and frees the block if it reaches zero.
+Refcounts are stored as a 32-bit value in the uniform 16-byte heap header, at `[user_ptr - 12]`. Each heap allocation starts with refcount 1. When a reference is shared (e.g., assigned to another variable or passed to a function), `__rt_incref` bumps it. When the reference goes away, the appropriate `__rt_decref_*` variant decrements and frees the block if it reaches zero.
 
 ## System routines
 
