@@ -9340,6 +9340,125 @@ echo log(1000, 10);
 }
 
 #[test]
+fn test_gc_local_alias_survives_original_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = [21];
+$a = $inner;
+$b = $a;
+unset($a);
+unset($inner);
+echo $b[0];
+"#,
+    );
+    assert_eq!(out, "21");
+}
+
+#[test]
+fn test_gc_return_borrowed_nested_array_alias_survives_source_unset() {
+    let out = compile_and_run(
+        r#"<?php
+function pick_first($rows) {
+    $first = $rows[0];
+    return $first;
+}
+
+$inner = [31];
+$rows = [$inner, [32]];
+$picked = pick_first($rows);
+unset($rows);
+unset($inner);
+echo $picked[0];
+"#,
+    );
+    assert_eq!(out, "31");
+}
+
+#[test]
+fn test_gc_control_flow_merge_borrowed_or_owned_return_survives() {
+    let out = compile_and_run(
+        r#"<?php
+function choose($flag, $borrowed) {
+    if ($flag) {
+        $value = $borrowed;
+    } else {
+        $value = [42];
+    }
+    return $value;
+}
+
+$inner = [41];
+$picked = choose(true, $inner);
+unset($inner);
+echo $picked[0];
+"#,
+    );
+    assert_eq!(out, "41");
+}
+
+#[test]
+fn test_gc_control_flow_merge_owned_or_borrowed_other_branch_survives() {
+    let out = compile_and_run(
+        r#"<?php
+function choose($flag, $borrowed) {
+    if ($flag) {
+        $value = [51];
+    } else {
+        $value = $borrowed;
+    }
+    return $value;
+}
+
+$inner = [52];
+$picked = choose(false, $inner);
+unset($inner);
+echo $picked[0];
+"#,
+    );
+    assert_eq!(out, "52");
+}
+
+#[test]
+fn test_gc_scope_exit_after_control_flow_borrowed_alias_survives() {
+    let out = compile_and_run(
+        r#"<?php
+function pick_value($flag, $src) {
+    if ($flag) {
+        $tmp = $src[0];
+    } else {
+        $tmp = [0];
+    }
+    return $tmp;
+}
+
+$inner = [61];
+$src = [$inner];
+$picked = pick_value(true, $src);
+unset($src);
+unset($inner);
+echo $picked[0];
+"#,
+    );
+    assert_eq!(out, "61");
+}
+
+#[test]
+fn test_gc_nested_assoc_alias_survives_outer_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$inner = ["nums" => [71, 72]];
+$outer = ["box" => $inner];
+$alias = $outer["box"];
+unset($outer);
+unset($inner);
+$nums = $alias["nums"];
+echo $nums[1];
+"#,
+    );
+    assert_eq!(out, "72");
+}
+
+#[test]
 fn test_log_base_2() {
     let out = compile_and_run(
         r#"<?php

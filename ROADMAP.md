@@ -255,7 +255,7 @@ Proper type system for PHP compatibility.
 - [x] Ownership lattice for heap values in codegen (`Owned` / `Borrowed` / `MaybeOwned` / non-heap)
 - [x] Re-enable epilogue cleanup for locals that are proven to own their heap values
 - [x] Broader container propagation rules for nested array/hash/object transfers
-- [ ] Focused regressions for aliasing across locals, returns, nested containers, and scope exit
+- [x] Focused regressions for aliasing across locals, returns, nested containers, and scope exit
 - [ ] Heap allocator improvements: adjacent-block coalescing and less fragmentation under mixed allocation sizes
 - [ ] Runtime heap verification / debug mode (`double free`, bad refcount, free-list corruption checks)
 - [ ] Uniform runtime heap-kind metadata for arrays / assoc arrays / objects / persisted strings
