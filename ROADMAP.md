@@ -260,9 +260,6 @@ Proper type system for PHP compatibility.
 - [x] Runtime heap verification / debug mode (`double free`, bad refcount, free-list corruption checks)
 - [x] Uniform runtime heap-kind metadata for arrays / assoc arrays / objects / persisted strings
 - [x] Evaluate a cycle-collection strategy for circular container/object graphs
-
-## v0.16.x — Memory model and heap runtime
-
 - [ ] Introduce targeted cycle collection for circular array/hash/object graphs
 - [ ] Add uniform `__rt_decref_any` / heap-kind-based release dispatch for mixed heap values
 - [ ] Emit richer runtime metadata for refcounted object/container payload scanning
@@ -271,7 +268,7 @@ Proper type system for PHP compatibility.
 - [ ] Tighten ownership propagation in remaining conservative control-flow / merge paths
 - [ ] Formalize FFI heap ownership boundaries for borrowed vs owned native buffers and strings
 
-## v0.17.x — Multi-platform and optimizations
+## v0.16.x — Multi-platform and optimizations
 
 - [ ] Linux x86_64 target
 - [ ] Linux ARM64 target
