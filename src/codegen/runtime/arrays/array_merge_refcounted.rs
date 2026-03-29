@@ -30,7 +30,7 @@ pub fn emit_array_merge_refcounted(emitter: &mut Emitter) {
     emitter.label("__rt_array_merge_ref_copy1");
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload first array length
     emitter.instruction("cmp x4, x9");                                          // compare index with first array length
-    emitter.instruction("b.ge __rt_array_merge_ref_copy2_setup");                // move to second array when first is done
+    emitter.instruction("b.ge __rt_array_merge_ref_copy2_setup");               // move to second array when first is done
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload first array pointer
     emitter.instruction("add x2, x1, #24");                                     // compute first array data base
     emitter.instruction("ldr x5, [x2, x4, lsl #3]");                            // load first array element pointer
@@ -50,7 +50,7 @@ pub fn emit_array_merge_refcounted(emitter: &mut Emitter) {
     emitter.label("__rt_array_merge_ref_copy2");
     emitter.instruction("ldr x10, [sp, #24]");                                  // reload second array length
     emitter.instruction("cmp x4, x10");                                         // compare index with second array length
-    emitter.instruction("b.ge __rt_array_merge_ref_done");                       // finish once second array is copied
+    emitter.instruction("b.ge __rt_array_merge_ref_done");                      // finish once second array is copied
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload second array pointer
     emitter.instruction("add x2, x1, #24");                                     // compute second array data base
     emitter.instruction("ldr x5, [x2, x4, lsl #3]");                            // load second array element pointer

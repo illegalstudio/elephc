@@ -37,7 +37,7 @@ pub fn emit_array_splice_refcounted(emitter: &mut Emitter) {
     emitter.instruction("mov x8, #0");                                          // initialize copy-loop index
     emitter.label("__rt_array_splice_ref_copy");
     emitter.instruction("cmp x8, x7");                                          // compare copy index with removal length
-    emitter.instruction("b.ge __rt_array_splice_ref_shift");                     // move on to in-place shifting after copying removed elements
+    emitter.instruction("b.ge __rt_array_splice_ref_shift");                    // move on to in-place shifting after copying removed elements
     emitter.instruction("add x9, x6, x8");                                      // compute source index = offset + copy index
     emitter.instruction("ldr x1, [x5, x9, lsl #3]");                            // load borrowed removed payload
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload result array pointer
@@ -56,7 +56,7 @@ pub fn emit_array_splice_refcounted(emitter: &mut Emitter) {
     emitter.instruction("add x8, x6, x7");                                      // initialize source read index
     emitter.label("__rt_array_splice_ref_shift_loop");
     emitter.instruction("cmp x8, x3");                                          // compare source read index with original length
-    emitter.instruction("b.ge __rt_array_splice_ref_update");                    // stop shifting after exhausting the tail segment
+    emitter.instruction("b.ge __rt_array_splice_ref_update");                   // stop shifting after exhausting the tail segment
     emitter.instruction("ldr x9, [x5, x8, lsl #3]");                            // load tail payload
     emitter.instruction("str x9, [x5, x6, lsl #3]");                            // move tail payload left in-place
     emitter.instruction("add x6, x6, #1");                                      // increment destination write index

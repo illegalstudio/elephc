@@ -31,7 +31,7 @@ pub fn emit_array_filter_refcounted(emitter: &mut Emitter) {
     emitter.label("__rt_array_filter_ref_loop");
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload source length
     emitter.instruction("cmp x20, x9");                                         // compare source index with source length
-    emitter.instruction("b.ge __rt_array_filter_ref_done");                      // finish once every source element has been examined
+    emitter.instruction("b.ge __rt_array_filter_ref_done");                     // finish once every source element has been examined
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload source array pointer
     emitter.instruction("add x1, x1, #24");                                     // compute source data base
     emitter.instruction("ldr x0, [x1, x20, lsl #3]");                           // load source element for callback

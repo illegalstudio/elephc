@@ -26,7 +26,7 @@ pub fn emit_array_unique_refcounted(emitter: &mut Emitter) {
     emitter.label("__rt_array_unique_ref_outer");
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload source array length
     emitter.instruction("cmp x4, x9");                                          // compare source index with source length
-    emitter.instruction("b.ge __rt_array_unique_ref_done");                      // finish once every source element has been considered
+    emitter.instruction("b.ge __rt_array_unique_ref_done");                     // finish once every source element has been considered
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload source array pointer
     emitter.instruction("add x2, x0, #24");                                     // compute source data base
     emitter.instruction("ldr x6, [x2, x4, lsl #3]");                            // load candidate payload
@@ -37,10 +37,10 @@ pub fn emit_array_unique_refcounted(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_unique_ref_inner");
     emitter.instruction("cmp x7, x5");                                          // compare scan index with destination length
-    emitter.instruction("b.ge __rt_array_unique_ref_add");                       // candidate is unique when scan reaches the end
+    emitter.instruction("b.ge __rt_array_unique_ref_add");                      // candidate is unique when scan reaches the end
     emitter.instruction("ldr x8, [x3, x7, lsl #3]");                            // load existing destination payload
     emitter.instruction("cmp x8, x6");                                          // compare pointer identity
-    emitter.instruction("b.eq __rt_array_unique_ref_skip");                      // skip candidate when it already exists in the destination
+    emitter.instruction("b.eq __rt_array_unique_ref_skip");                     // skip candidate when it already exists in the destination
     emitter.instruction("add x7, x7, #1");                                      // increment destination scan index
     emitter.instruction("b __rt_array_unique_ref_inner");                       // continue scanning destination array
 

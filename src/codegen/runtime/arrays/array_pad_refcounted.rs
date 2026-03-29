@@ -20,7 +20,7 @@ pub fn emit_array_pad_refcounted(emitter: &mut Emitter) {
 
     // -- determine absolute target size and padding direction --
     emitter.instruction("cmp x1, #0");                                          // check whether caller requested left-padding
-    emitter.instruction("b.ge __rt_array_pad_ref_positive");                     // skip negation for right-padding
+    emitter.instruction("b.ge __rt_array_pad_ref_positive");                    // skip negation for right-padding
     emitter.instruction("neg x3, x1");                                          // compute absolute target size
     emitter.instruction("mov x4, #1");                                          // remember that padding goes on the left
     emitter.instruction("b __rt_array_pad_ref_check");                          // continue with normalized size
@@ -44,12 +44,12 @@ pub fn emit_array_pad_refcounted(emitter: &mut Emitter) {
 
     // -- pad left when requested --
     emitter.instruction("ldr x4, [sp, #32]");                                   // reload pad-left flag
-    emitter.instruction("cbz x4, __rt_array_pad_ref_copy_source");               // skip left padding when caller requested right padding
+    emitter.instruction("cbz x4, __rt_array_pad_ref_copy_source");              // skip left padding when caller requested right padding
     emitter.instruction("mov x7, #0");                                          // initialize left-pad loop index
     emitter.label("__rt_array_pad_ref_fill_left");
     emitter.instruction("ldr x6, [sp, #40]");                                   // reload pad element count
     emitter.instruction("cmp x7, x6");                                          // compare loop index with pad count
-    emitter.instruction("b.ge __rt_array_pad_ref_copy_source");                  // stop left-padding after inserting every pad element
+    emitter.instruction("b.ge __rt_array_pad_ref_copy_source");                 // stop left-padding after inserting every pad element
     emitter.instruction("ldr x1, [sp, #16]");                                   // reload borrowed pad payload
     emitter.instruction("str x7, [sp, #56]");                                   // preserve left-pad loop index across helper calls
     emitter.instruction("ldr x0, [sp, #48]");                                   // reload destination array pointer
@@ -65,7 +65,7 @@ pub fn emit_array_pad_refcounted(emitter: &mut Emitter) {
     emitter.label("__rt_array_pad_ref_copy_loop");
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload source array length
     emitter.instruction("cmp x7, x9");                                          // compare loop index with source length
-    emitter.instruction("b.ge __rt_array_pad_ref_fill_right");                   // move on to right-padding after copying every source element
+    emitter.instruction("b.ge __rt_array_pad_ref_fill_right");                  // move on to right-padding after copying every source element
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload source array pointer
     emitter.instruction("add x2, x1, #24");                                     // compute source data base
     emitter.instruction("ldr x1, [x2, x7, lsl #3]");                            // load borrowed source payload
@@ -80,12 +80,12 @@ pub fn emit_array_pad_refcounted(emitter: &mut Emitter) {
     // -- pad right when requested --
     emitter.label("__rt_array_pad_ref_fill_right");
     emitter.instruction("ldr x4, [sp, #32]");                                   // reload pad-left flag
-    emitter.instruction("cbnz x4, __rt_array_pad_ref_done");                     // skip right-padding when caller already padded on the left
+    emitter.instruction("cbnz x4, __rt_array_pad_ref_done");                    // skip right-padding when caller already padded on the left
     emitter.instruction("mov x7, #0");                                          // initialize right-pad loop index
     emitter.label("__rt_array_pad_ref_fill_right_loop");
     emitter.instruction("ldr x6, [sp, #40]");                                   // reload pad element count
     emitter.instruction("cmp x7, x6");                                          // compare loop index with pad count
-    emitter.instruction("b.ge __rt_array_pad_ref_done");                         // finish after inserting every right-pad element
+    emitter.instruction("b.ge __rt_array_pad_ref_done");                        // finish after inserting every right-pad element
     emitter.instruction("ldr x1, [sp, #16]");                                   // reload borrowed pad payload
     emitter.instruction("str x7, [sp, #56]");                                   // preserve right-pad loop index across helper calls
     emitter.instruction("ldr x0, [sp, #48]");                                   // reload destination array pointer

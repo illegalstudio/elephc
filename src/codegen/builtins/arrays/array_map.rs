@@ -3,50 +3,9 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
-use crate::parser::ast::{BinOp, Expr, ExprKind, StmtKind};
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
-
-/// Infer whether a callback returns a string type from its AST.
-fn callback_returns_str(args: &[Expr], ctx: &Context) -> bool {
-    match &args[0].kind {
-        ExprKind::Closure { body, .. } => {
-            // Arrow functions produce [Return(Some(expr))]; check the return expression
-            for stmt in body {
-                if let StmtKind::Return(Some(expr)) = &stmt.kind {
-                    return expr_is_str(expr);
-                }
-            }
-            false
-        }
-        ExprKind::StringLiteral(name) => {
-            // Named function — check its registered return type
-            if let Some(sig) = ctx.functions.get(name) {
-                return sig.return_type == PhpType::Str;
-            }
-            false
-        }
-        _ => false,
-    }
-}
-
-/// Check if an expression produces a string result.
-fn expr_is_str(expr: &Expr) -> bool {
-    match &expr.kind {
-        ExprKind::StringLiteral(_) => true,
-        ExprKind::BinaryOp { op: BinOp::Concat, .. } => true,
-        ExprKind::FunctionCall { name, .. } => {
-            matches!(name.as_str(),
-                "substr" | "strtolower" | "strtoupper" | "trim" | "ltrim" | "rtrim"
-                | "str_repeat" | "strrev" | "chr" | "str_replace" | "ucfirst"
-                | "lcfirst" | "ucwords" | "str_pad" | "implode" | "join"
-                | "sprintf" | "str_word_count" | "nl2br" | "wordwrap"
-                | "number_format" | "chunk_split" | "md5" | "sha1" | "hash"
-            )
-        }
-        ExprKind::Cast { target: crate::parser::ast::CastType::String, .. } => true,
-        _ => false,
-    }
-}
+use super::array_map_callback_returns_str::callback_returns_str;
 
 pub fn emit(
     _name: &str,

@@ -77,6 +77,8 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     system::emit_json_encode_array_str(emitter);
     system::emit_json_encode_assoc(emitter);
     system::emit_json_decode(emitter);
+    system::emit_preg_strip(emitter);
+    system::emit_pcre_to_posix(emitter);
     system::emit_preg_match(emitter);
     system::emit_preg_match_all(emitter);
     system::emit_preg_replace(emitter);

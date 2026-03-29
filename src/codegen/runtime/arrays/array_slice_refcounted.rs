@@ -45,7 +45,7 @@ pub fn emit_array_slice_refcounted(emitter: &mut Emitter) {
     emitter.label("__rt_array_slice_ref_loop");
     emitter.instruction("ldr x4, [sp, #24]");                                   // reload slice length
     emitter.instruction("cmp x6, x4");                                          // compare loop index with slice length
-    emitter.instruction("b.ge __rt_array_slice_ref_done");                       // finish after copying every requested element
+    emitter.instruction("b.ge __rt_array_slice_ref_done");                      // finish after copying every requested element
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload source array pointer
     emitter.instruction("add x2, x1, #24");                                     // compute source data base
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload normalized offset

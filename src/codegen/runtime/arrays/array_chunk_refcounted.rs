@@ -35,7 +35,7 @@ pub fn emit_array_chunk_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [x0]");                                        // load source array length
     emitter.instruction("ldr x4, [sp, #24]");                                   // reload source index i
     emitter.instruction("cmp x4, x3");                                          // compare source index with source length
-    emitter.instruction("b.ge __rt_array_chunk_ref_done");                       // stop when every source element has been consumed
+    emitter.instruction("b.ge __rt_array_chunk_ref_done");                      // stop when every source element has been consumed
 
     // -- create inner array for this chunk --
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload chunk size as inner capacity
@@ -48,12 +48,12 @@ pub fn emit_array_chunk_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ldr x5, [sp, #40]");                                   // reload inner index j
     emitter.instruction("ldr x6, [sp, #8]");                                    // reload chunk size
     emitter.instruction("cmp x5, x6");                                          // compare inner index with chunk size
-    emitter.instruction("b.ge __rt_array_chunk_ref_push");                       // push current chunk once it is full
+    emitter.instruction("b.ge __rt_array_chunk_ref_push");                      // push current chunk once it is full
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload source array pointer
     emitter.instruction("ldr x3, [x0]");                                        // reload source array length
     emitter.instruction("ldr x4, [sp, #24]");                                   // reload source index i
     emitter.instruction("cmp x4, x3");                                          // compare source index with source length
-    emitter.instruction("b.ge __rt_array_chunk_ref_push");                       // push partial chunk once source is exhausted
+    emitter.instruction("b.ge __rt_array_chunk_ref_push");                      // push partial chunk once source is exhausted
     emitter.instruction("add x7, x0, #24");                                     // compute source data base
     emitter.instruction("ldr x1, [x7, x4, lsl #3]");                            // load source element pointer
     emitter.instruction("str x1, [sp, #48]");                                   // preserve source element pointer across incref

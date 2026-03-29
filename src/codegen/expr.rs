@@ -64,18 +64,18 @@ pub fn emit_expr(
                 emitter.comment(&format!("load extern global ${}", name));
                 match &ty {
                     PhpType::Bool | PhpType::Int | PhpType::Pointer(_) | PhpType::Callable => {
-                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); // load page of extern global GOT entry
-                        emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); // resolve extern global address
+                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); //load page of extern global GOT entry
+                        emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); //resolve extern global address
                         emitter.instruction("ldr x0, [x9]");                    // load extern integer/pointer value
                     }
                     PhpType::Float => {
-                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); // load page of extern global GOT entry
-                        emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); // resolve extern global address
+                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); //load page of extern global GOT entry
+                        emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); //resolve extern global address
                         emitter.instruction("ldr d0, [x9]");                    // load extern float value
                     }
                     PhpType::Str => {
-                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); // load page of extern global GOT entry
-                        emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); // resolve extern global address
+                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); //load page of extern global GOT entry
+                        emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); //resolve extern global address
                         emitter.instruction("ldr x0, [x9]");                    // load char* from extern global
                         emitter.instruction("bl __rt_cstr_to_str");             // convert C string to elephc string
                     }
@@ -294,7 +294,7 @@ pub fn emit_expr(
                     // Save new value (in x1) to global
                     let label = format!("_gvar_{}", name);
                     emitter.instruction(&format!("adrp x9, {}@PAGE", label));   // load page of global var storage
-                    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label)); // add page offset
+                    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label)); //add page offset
                     emitter.instruction("str x1, [x9]");                        // store incremented value to global
                 }
                 PhpType::Int
@@ -568,7 +568,7 @@ fn emit_new_object(
                 }
                 PhpType::Str => {
                     emitter.instruction(&format!("str x1, [x9, #{}]", offset)); // store string pointer
-                    emitter.instruction(&format!("str x2, [x9, #{}]", offset + 8)); // store string length
+                    emitter.instruction(&format!("str x2, [x9, #{}]", offset + 8)); //store string length
                 }
                 PhpType::Void => {}
             }
@@ -630,10 +630,10 @@ fn emit_new_object(
                 | PhpType::Callable
                 | PhpType::Object(_)
                 | PhpType::Pointer(_) => {
-                    emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop arg into register
+                    emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); //pop arg into register
                 }
                 PhpType::Float => {
-                    emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); // pop float arg
+                    emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); //pop float arg
                 }
                 PhpType::Str => {
                     emitter.instruction(&format!(                               // pop string ptr+len
@@ -1088,9 +1088,9 @@ fn emit_array_literal_with_spread(
             emitter.instruction("mov x1, x0");                                  // x1 = source array pointer
             emitter.instruction("ldr x0, [sp]");                                // x0 = dest array pointer (peek)
             if matches!(&src_ty, PhpType::Array(inner) if inner.is_refcounted()) {
-                emitter.instruction("bl __rt_array_merge_into_refcounted");      // append src elements while retaining borrowed heap payloads
+                emitter.instruction("bl __rt_array_merge_into_refcounted");     // append src elements while retaining borrowed heap payloads
             } else {
-                emitter.instruction("bl __rt_array_merge_into");                 // append all src elements to dest array
+                emitter.instruction("bl __rt_array_merge_into");                // append all src elements to dest array
             }
         } else {
             // -- regular element: push single value --
@@ -1926,7 +1926,7 @@ fn emit_function_call(
                     let label = format!("_gvar_{}", var_name);
                     emitter.comment(&format!("ref arg: address of global ${}", var_name));
                     emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page of global var
-                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); // add page offset
+                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); //add page offset
                 } else {
                     let var = match ctx.variables.get(var_name) {
                         Some(v) => v,

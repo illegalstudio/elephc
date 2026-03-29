@@ -27,7 +27,7 @@ pub fn emit_array_reverse_refcounted(emitter: &mut Emitter) {
     emitter.instruction("sub x4, x9, #1");                                      // initialize source index to the last element
     emitter.label("__rt_array_reverse_ref_loop");
     emitter.instruction("cmp x4, #0");                                          // test whether source index dropped below zero
-    emitter.instruction("b.lt __rt_array_reverse_ref_done");                     // finish when every source element has been copied
+    emitter.instruction("b.lt __rt_array_reverse_ref_done");                    // finish when every source element has been copied
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload source array pointer
     emitter.instruction("add x2, x1, #24");                                     // compute source data base
     emitter.instruction("ldr x1, [x2, x4, lsl #3]");                            // load borrowed source payload

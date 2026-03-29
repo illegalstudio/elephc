@@ -4,20 +4,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
-
-fn hash_value_type_tag(ty: &PhpType) -> u8 {
-    match ty {
-        PhpType::Int => 0,
-        PhpType::Str => 1,
-        PhpType::Float => 2,
-        PhpType::Bool => 3,
-        PhpType::Array(_) => 4,
-        PhpType::AssocArray { .. } => 5,
-        PhpType::Object(_) => 6,
-        PhpType::Callable => 6,
-        PhpType::Pointer(_) | PhpType::Void => 0,
-    }
-}
+use super::hash_value_type_tag::hash_value_type_tag;
 
 pub fn emit(
     _name: &str,
