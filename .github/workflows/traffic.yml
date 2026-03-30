@@ -16,7 +16,7 @@ jobs:
 
       - name: Fetch and accumulate clone stats
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.TRAFFIC_TOKEN }}
         run: |
           gh api repos/${{ github.repository }}/traffic/clones > /tmp/api_clones.json
 
