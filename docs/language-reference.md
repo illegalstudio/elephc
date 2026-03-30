@@ -1287,7 +1287,7 @@ Both `include 'f';` and `include('f');` syntax are supported.
 
 ## Classes
 
-elephc supports PHP classes with single inheritance, properties, constructors, instance methods, static methods, traits, `self::method()`, `parent::method()`, and `public` / `protected` / `private` visibility.
+elephc supports PHP classes with single inheritance, properties, constructors, instance methods, static methods, traits, `self::method()`, `parent::method()`, `static::method()`, and `public` / `protected` / `private` visibility.
 
 ### Class declaration
 
@@ -1431,6 +1431,38 @@ echo (new Child())->reveal(); // base
 
 If `self::method()` resolves to an instance method, it is only allowed from a non-static method where `$this` exists.
 
+### `static::method()`
+
+`static::method()` uses late static binding: the method lookup happens against the current called class at runtime.
+
+```php
+<?php
+class Base {
+    public static function who() {
+        return "base";
+    }
+
+    public static function relay() {
+        return static::who();
+    }
+}
+
+class Child extends Base {
+    public static function who() {
+        return "child";
+    }
+}
+
+echo Child::relay(); // child
+```
+
+Forwarding rules match the current runtime model:
+
+- `ClassName::method()` fixes the called class to `ClassName`
+- `self::method()` resolves lexically but forwards the current called class
+- `parent::method()` resolves to the immediate parent implementation and also forwards the current called class
+- `static::method()` resolves dynamically against the forwarded called class
+
 ### Static methods
 
 Static methods are called on the class itself using `::`, not on an instance:
@@ -1521,7 +1553,6 @@ echo $p->magnitude(); // method call
 - No abstract or final classes/methods
 - No property type declarations
 - No constructor promotion
-- No `static::` late static binding
 - Property redeclaration across an inheritance chain is rejected for now
 
 ## What elephc cannot do (by design)

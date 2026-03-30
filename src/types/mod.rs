@@ -104,6 +104,8 @@ pub struct ClassInfo {
     pub static_method_visibilities: HashMap<String, Visibility>,
     pub static_method_declaring_classes: HashMap<String, String>,
     pub static_method_impl_classes: HashMap<String, String>,
+    pub static_vtable_methods: Vec<String>,
+    pub static_vtable_slots: HashMap<String, usize>,
     /// Maps constructor param index → property name (for type propagation from new ClassName(args))
     pub constructor_param_to_prop: Vec<Option<String>>,
 }

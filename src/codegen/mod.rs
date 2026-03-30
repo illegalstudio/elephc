@@ -70,21 +70,19 @@ pub fn generate(
                     let label = format!("_static_{}_{}", class_name, method.name);
                     // Use param types from ClassInfo sig (set by type checker)
                     let class_static_sig = class_info.static_methods.get(&method.name);
-                    let params: Vec<(String, PhpType)> = method.params.iter().enumerate()
-                        .map(|(i, (n, _, _))| {
-                            let ty = class_static_sig
-                                .and_then(|s| s.params.get(i))
-                                .map(|(_, t)| t.clone())
-                                .unwrap_or(PhpType::Int);
-                            (n.clone(), ty)
-                        })
-                        .collect();
-                    let defaults: Vec<Option<crate::parser::ast::Expr>> = method.params.iter()
-                        .map(|(_, d, _)| d.clone())
-                        .collect();
-                    let ref_params: Vec<bool> = method.params.iter()
-                        .map(|(_, _, r)| *r)
-                        .collect();
+                    let mut params: Vec<(String, PhpType)> =
+                        vec![("__elephc_called_class_id".to_string(), PhpType::Int)];
+                    params.extend(method.params.iter().enumerate().map(|(i, (n, _, _))| {
+                        let ty = class_static_sig
+                            .and_then(|s| s.params.get(i))
+                            .map(|(_, t)| t.clone())
+                            .unwrap_or(PhpType::Int);
+                        (n.clone(), ty)
+                    }));
+                    let mut defaults: Vec<Option<crate::parser::ast::Expr>> = vec![None];
+                    defaults.extend(method.params.iter().map(|(_, d, _)| d.clone()));
+                    let mut ref_params: Vec<bool> = vec![false];
+                    ref_params.extend(method.params.iter().map(|(_, _, r)| *r));
                     let return_type = class_info
                         .static_methods
                         .get(&method.name)

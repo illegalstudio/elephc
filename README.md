@@ -19,7 +19,7 @@ I made the project as modular as possible. Every function has its own codegen fi
 
 ### What you should not expect
 
-Don't expect to take any existing PHP project and magically compile it. There's no Composer and no interfaces yet. We support PHP classes with single inheritance, traits, constructors, instance/static methods, `self::method()`, `parent::method()`, and `public` / `protected` / `private` visibility. `static::` is parsed too, but true late static binding is not implemented yet — roughly at the level of that famous *PHP 4* book where my journey began, plus some PHP 8 features.
+Don't expect to take any existing PHP project and magically compile it. There's no Composer and no interfaces yet. We support PHP classes with single inheritance, traits, constructors, instance/static methods, `self::method()`, `parent::method()`, `static::method()` with late static binding, and `public` / `protected` / `private` visibility — roughly at the level of that famous *PHP 4* book where my journey began, plus some PHP 8 features.
 
 ### What you can expect
 

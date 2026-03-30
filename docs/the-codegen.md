@@ -708,7 +708,7 @@ bl _static_Point_origin              ; call static method
 ; result in x0 (object pointer)
 ```
 
-`self::method()` is handled as a direct call against the current lexical class. If it resolves to an instance method, codegen loads the implicit `$this` receiver and branches directly to the resolved `_method_Class_method` label. `parent::method()` works the same way against the immediate parent class. `static::method()` is parsed, but late static binding is still rejected during type checking.
+`self::method()` is handled as a direct call against the current lexical class. If it resolves to an instance method, codegen loads the implicit `$this` receiver and branches directly to the resolved `_method_Class_method` label. `parent::method()` works the same way against the immediate parent class. For static targets, codegen now also threads a hidden "called class id" argument through static method bodies: named `ClassName::method()` calls pin that id to the named class, while `self::` and `parent::` forward the current called class. `static::method()` then uses that forwarded class id to load the target from a per-class static-method table at runtime.
 
 ## The ABI module
 

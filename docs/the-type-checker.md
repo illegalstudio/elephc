@@ -241,7 +241,7 @@ When checking property access (`$obj->prop`), the type checker validates that:
 - The class has a property with that name
 - The property is accessible (`public`, `protected` from the declaring class or a subclass, or `private` only from the declaring class)
 
-When checking method calls, it verifies the method exists, enforces method visibility (`public`, subclass-visible `protected`, declaring-class-only `private`), validates argument count and types against the method's `FunctionSig`, and resolves `parent::method()` against the immediate parent class.
+When checking method calls, it verifies the method exists, enforces method visibility (`public`, subclass-visible `protected`, declaring-class-only `private`), validates argument count and types against the method's `FunctionSig`, resolves `parent::method()` against the immediate parent class, resolves `self::method()` against the current lexical class, and accepts `static::method()` as a late-static-bound static call against the current class hierarchy.
 
 ## Output: CheckResult
 

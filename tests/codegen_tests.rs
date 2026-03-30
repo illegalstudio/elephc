@@ -11517,6 +11517,123 @@ echo $child->reveal();
 }
 
 #[test]
+fn test_static_late_binding_uses_child_override_from_instance_method() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public static function who() {
+        return "base";
+    }
+
+    public function reveal() {
+        return static::who();
+    }
+}
+
+class Child extends Base {
+    public static function who() {
+        return "child";
+    }
+}
+
+$child = new Child();
+echo $child->reveal();
+"#,
+    );
+    assert_eq!(out, "child");
+}
+
+#[test]
+fn test_static_late_binding_uses_child_override_from_static_method() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public static function who() {
+        return "base";
+    }
+
+    public static function relay() {
+        return static::who();
+    }
+}
+
+class Child extends Base {
+    public static function who() {
+        return "child";
+    }
+}
+
+echo Child::relay();
+"#,
+    );
+    assert_eq!(out, "child");
+}
+
+#[test]
+fn test_named_static_call_is_non_forwarding_but_self_is_forwarding() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    public static function who() {
+        return static::tag();
+    }
+
+    public static function relayNamed() {
+        return A::who();
+    }
+
+    public static function relaySelf() {
+        return self::who();
+    }
+
+    public static function tag() {
+        return "A";
+    }
+}
+
+class B extends A {
+    public static function tag() {
+        return "B";
+    }
+}
+
+echo B::relayNamed() . " " . B::relaySelf();
+"#,
+    );
+    assert_eq!(out, "A B");
+}
+
+#[test]
+fn test_parent_static_call_is_forwarding() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    public static function who() {
+        return static::tag();
+    }
+
+    public static function tag() {
+        return "A";
+    }
+}
+
+class B extends A {
+    public static function relay() {
+        return parent::who();
+    }
+
+    public static function tag() {
+        return "B";
+    }
+}
+
+echo B::relay();
+"#,
+    );
+    assert_eq!(out, "B");
+}
+
+#[test]
 fn test_inheritance_parent_method_call_and_inherited_properties() {
     let out = compile_and_run(
         r#"<?php

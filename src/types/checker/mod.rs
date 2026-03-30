@@ -419,6 +419,8 @@ fn build_class_info_recursive(
     let mut static_method_visibilities = HashMap::new();
     let mut static_method_declaring_classes = HashMap::new();
     let mut static_method_impl_classes = HashMap::new();
+    let mut static_vtable_methods = Vec::new();
+    let mut static_vtable_slots = HashMap::new();
 
     if let Some(parent) = &parent_info {
         for (index, (name, ty)) in parent.properties.iter().enumerate() {
@@ -469,6 +471,8 @@ fn build_class_info_recursive(
                 static_method_impl_classes.insert(name.clone(), impl_class.clone());
             }
         }
+        static_vtable_methods = parent.static_vtable_methods.clone();
+        static_vtable_slots = parent.static_vtable_slots.clone();
     }
 
     for prop in &class.properties {
@@ -528,6 +532,13 @@ fn build_class_info_recursive(
             static_method_visibilities.insert(method.name.clone(), method.visibility.clone());
             static_method_declaring_classes.insert(method.name.clone(), class.name.clone());
             static_method_impl_classes.insert(method.name.clone(), class.name.clone());
+            if method.visibility != Visibility::Private
+                && !static_vtable_slots.contains_key(&method.name)
+            {
+                let slot = static_vtable_methods.len();
+                static_vtable_slots.insert(method.name.clone(), slot);
+                static_vtable_methods.push(method.name.clone());
+            }
         } else {
             if static_sigs.contains_key(&method.name) {
                 return Err(CompileError::new(
@@ -594,6 +605,8 @@ fn build_class_info_recursive(
             static_method_visibilities,
             static_method_declaring_classes,
             static_method_impl_classes,
+            static_vtable_methods,
+            static_vtable_slots,
             constructor_param_to_prop,
         },
     );
@@ -2266,7 +2279,6 @@ impl Checker {
                 }
                 let parent_call = matches!(receiver, StaticReceiver::Parent);
                 let self_call = matches!(receiver, StaticReceiver::Self_);
-                let static_call = matches!(receiver, StaticReceiver::Static);
                 let resolved_class_name = match receiver {
                     StaticReceiver::Named(class_name) => class_name.clone(),
                     StaticReceiver::Self_ => {
@@ -2306,12 +2318,6 @@ impl Checker {
                         })?
                     }
                 };
-                if static_call {
-                    return Err(CompileError::new(
-                        expr.span,
-                        "Late static binding via static:: is not supported yet",
-                    ));
-                }
                 let class_name = resolved_class_name.as_str();
                 if let Some(class_info) = self.classes.get(class_name) {
                     if let Some(sig) = class_info.static_methods.get(method) {

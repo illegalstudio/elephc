@@ -1666,10 +1666,10 @@ fn test_error_self_outside_class_scope() {
 }
 
 #[test]
-fn test_error_static_late_binding_not_supported_yet() {
+fn test_error_static_outside_class_scope() {
     expect_error(
-        "<?php class Base { public static function boot() { return 1; } public function run() { return static::boot(); } } $b = new Base(); echo $b->run();",
-        "Late static binding via static:: is not supported yet",
+        "<?php static::boot();",
+        "Cannot use static:: outside class method scope",
     );
 }
 

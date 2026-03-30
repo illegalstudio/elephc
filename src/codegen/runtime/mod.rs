@@ -305,6 +305,13 @@ pub fn emit_runtime_data(
     for (_, class_info) in &sorted_classes {
         out.push_str(&format!("    .quad _class_vtable_{}\n", class_info.class_id));
     }
+    out.push_str("_class_static_vtable_ptrs:\n");
+    for (_, class_info) in &sorted_classes {
+        out.push_str(&format!(
+            "    .quad _class_static_vtable_{}\n",
+            class_info.class_id
+        ));
+    }
     for (_, class_info) in sorted_classes {
         out.push_str(&format!("_class_gc_desc_{}:\n", class_info.class_id));
         if class_info.properties.is_empty() {
@@ -335,15 +342,31 @@ pub fn emit_runtime_data(
         out.push_str(&format!("_class_vtable_{}:\n", class_info.class_id));
         if class_info.vtable_methods.is_empty() {
             out.push_str("    .quad 0\n");
+        } else {
+            for method_name in &class_info.vtable_methods {
+                let impl_class = class_info
+                    .method_impl_classes
+                    .get(method_name)
+                    .expect("codegen bug: missing method implementation class");
+                out.push_str(&format!(
+                    "    .quad _method_{}_{}\n",
+                    impl_class, method_name
+                ));
+            }
+        }
+        out.push_str("    .p2align 3\n");
+        out.push_str(&format!("_class_static_vtable_{}:\n", class_info.class_id));
+        if class_info.static_vtable_methods.is_empty() {
+            out.push_str("    .quad 0\n");
             continue;
         }
-        for method_name in &class_info.vtable_methods {
+        for method_name in &class_info.static_vtable_methods {
             let impl_class = class_info
-                .method_impl_classes
+                .static_method_impl_classes
                 .get(method_name)
-                .expect("codegen bug: missing method implementation class");
+                .expect("codegen bug: missing static method implementation class");
             out.push_str(&format!(
-                "    .quad _method_{}_{}\n",
+                "    .quad _static_{}_{}\n",
                 impl_class, method_name
             ));
         }

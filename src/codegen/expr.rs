@@ -925,6 +925,23 @@ fn emit_method_call(
     ret_ty
 }
 
+fn emit_immediate_class_id(emitter: &mut Emitter, class_id: u64) {
+    emitter.instruction(&format!("mov x0, #{}", class_id));                      // load compile-time class id for static dispatch
+}
+
+fn emit_forwarded_called_class_id(emitter: &mut Emitter, ctx: &Context) -> bool {
+    if let Some(var) = ctx.variables.get("__elephc_called_class_id") {
+        super::abi::load_at_offset(emitter, "x0", var.stack_offset);             // forward hidden called-class id from current static method
+        true
+    } else if let Some(var) = ctx.variables.get("this") {
+        super::abi::load_at_offset(emitter, "x0", var.stack_offset);             // load implicit $this pointer
+        emitter.instruction("ldr x0, [x0]");                                     // read dynamic class id from object header
+        true
+    } else {
+        false
+    }
+}
+
 fn emit_static_method_call(
     receiver: &crate::parser::ast::StaticReceiver,
     method: &str,
@@ -936,6 +953,12 @@ fn emit_static_method_call(
     let parent_call = matches!(receiver, crate::parser::ast::StaticReceiver::Parent);
     let self_call = matches!(receiver, crate::parser::ast::StaticReceiver::Self_);
     let static_call = matches!(receiver, crate::parser::ast::StaticReceiver::Static);
+    let forwarded_call = matches!(
+        receiver,
+        crate::parser::ast::StaticReceiver::Parent
+            | crate::parser::ast::StaticReceiver::Self_
+            | crate::parser::ast::StaticReceiver::Static
+    );
     let class_name = match receiver {
         crate::parser::ast::StaticReceiver::Named(class_name) => class_name.clone(),
         crate::parser::ast::StaticReceiver::Self_
@@ -963,13 +986,8 @@ fn emit_static_method_call(
             }
         }
     };
-    if static_call {
-        emitter.comment("WARNING: late static binding via static:: is not supported yet");
-        return PhpType::Int;
-    }
     emitter.comment(&format!("{}::{}()", class_name, method));
 
-    // Evaluate args and push to stack
     let mut arg_types = Vec::new();
     for arg in args {
         let ty = emit_expr(arg, emitter, ctx, data);
@@ -1002,56 +1020,84 @@ fn emit_static_method_call(
             return PhpType::Int;
         }
     };
-    let (ret_ty, label, needs_this) = if class_info.static_methods.contains_key(method) {
+    let static_slot = class_info.static_vtable_slots.get(method).copied();
+    let direct_static_private_label = if static_call {
+        None
+    } else if class_info.static_methods.contains_key(method) && static_slot.is_none() {
         let impl_class = class_info
             .static_method_impl_classes
             .get(method)
             .map(String::as_str)
             .unwrap_or(class_name.as_str());
-        (
-            ctx.classes
-                .get(impl_class)
-                .and_then(|impl_info| impl_info.static_methods.get(method))
-                .map(|sig| sig.return_type.clone())
-                .unwrap_or(PhpType::Int),
-            format!("_static_{}_{}", impl_class, method),
-            false,
-        )
-    } else if parent_call || self_call {
-        let _sig = match class_info.methods.get(method) {
-            Some(sig) => sig,
-            None => {
-                emitter.comment(&format!(
-                    "WARNING: undefined direct instance method {}::{}",
-                    class_name, method
-                ));
-                return PhpType::Int;
-            }
-        };
-        let impl_class = class_info
-            .method_impl_classes
-            .get(method)
-            .map(String::as_str)
-            .unwrap_or(class_name.as_str());
-        (
-            ctx.classes
-                .get(impl_class)
-                .and_then(|impl_info| impl_info.methods.get(method))
-                .map(|sig| sig.return_type.clone())
-                .unwrap_or(PhpType::Int),
-            format!("_method_{}_{}", impl_class, method),
-            true,
-        )
+        Some(format!("_static_{}_{}", impl_class, method))
     } else {
-        emitter.comment(&format!(
-            "WARNING: cannot call instance method statically {}::{}",
-            class_name, method
-        ));
-        return PhpType::Int;
+        None
     };
 
+    let (ret_ty, label, needs_this, needs_called_class_id, dynamic_static_dispatch) =
+        if class_info.static_methods.contains_key(method) {
+            let impl_class = class_info
+                .static_method_impl_classes
+                .get(method)
+                .map(String::as_str)
+                .unwrap_or(class_name.as_str());
+            (
+                ctx.classes
+                    .get(impl_class)
+                    .and_then(|impl_info| impl_info.static_methods.get(method))
+                    .map(|sig| sig.return_type.clone())
+                    .unwrap_or(PhpType::Int),
+                format!("_static_{}_{}", impl_class, method),
+                false,
+                true,
+                static_call && static_slot.is_some(),
+            )
+        } else if static_call {
+            emitter.comment(&format!("WARNING: undefined static method {}::{}", class_name, method));
+            return PhpType::Int;
+        } else if parent_call || self_call {
+            let _sig = match class_info.methods.get(method) {
+                Some(sig) => sig,
+                None => {
+                    emitter.comment(&format!(
+                        "WARNING: undefined direct instance method {}::{}",
+                        class_name, method
+                    ));
+                    return PhpType::Int;
+                }
+            };
+            let impl_class = class_info
+                .method_impl_classes
+                .get(method)
+                .map(String::as_str)
+                .unwrap_or(class_name.as_str());
+            (
+                ctx.classes
+                    .get(impl_class)
+                    .and_then(|impl_info| impl_info.methods.get(method))
+                    .map(|sig| sig.return_type.clone())
+                    .unwrap_or(PhpType::Int),
+                format!("_method_{}_{}", impl_class, method),
+                true,
+                false,
+                false,
+            )
+        } else {
+            emitter.comment(&format!(
+                "WARNING: cannot call instance method statically {}::{}",
+                class_name, method
+            ));
+            return PhpType::Int;
+        };
+
     let total_args = arg_types.len();
-    let mut int_reg_idx = if needs_this { 1usize } else { 0usize };
+    let mut int_reg_idx = 0usize;
+    if needs_called_class_id {
+        int_reg_idx += 1;
+    }
+    if needs_this {
+        int_reg_idx += 1;
+    }
     let mut float_reg_idx = 0usize;
     let mut assignments: Vec<(PhpType, usize, bool)> = Vec::new();
     for ty in &arg_types {
@@ -1064,6 +1110,21 @@ fn emit_static_method_call(
         }
     }
 
+    if needs_called_class_id {
+        if forwarded_call {
+            if !emit_forwarded_called_class_id(emitter, ctx) {
+                emitter.comment("WARNING: missing forwarded called class id");
+                return PhpType::Int;
+            }
+        } else if let Some(target_info) = ctx.classes.get(&class_name) {
+            emit_immediate_class_id(emitter, target_info.class_id);
+        } else {
+            emitter.comment(&format!("WARNING: undefined class {}", class_name));
+            return PhpType::Int;
+        }
+        emitter.instruction("str x0, [sp, #-16]!");                               // push hidden called-class id
+    }
+
     if needs_this {
         let this_var = match ctx.variables.get("this") {
             Some(var) => var,
@@ -1072,12 +1133,16 @@ fn emit_static_method_call(
                 return PhpType::Int;
             }
         };
-        super::abi::load_at_offset(emitter, "x0", this_var.stack_offset);        // load implicit $this for parent call
+        super::abi::load_at_offset(emitter, "x0", this_var.stack_offset);        // load implicit $this for scoped instance call
         emitter.instruction("str x0, [sp, #-16]!");                               // push implicit receiver
     }
 
+    if needs_called_class_id {
+        emitter.instruction("ldr x0, [sp], #16");                                 // pop hidden called-class id into x0
+    }
     if needs_this {
-        emitter.instruction("ldr x0, [sp], #16");                                 // pop implicit $this into x0
+        let this_reg = if needs_called_class_id { 1 } else { 0 };
+        emitter.instruction(&format!("ldr x{}, [sp], #16", this_reg));            // pop implicit $this into its assigned integer register
     }
     for i in (0..total_args).rev() {
         let (ty, start_reg, _) = &assignments[i];
@@ -1106,7 +1171,19 @@ fn emit_static_method_call(
     }
 
     save_concat_offset_before_nested_call(emitter);
-    emitter.instruction(&format!("bl {}", label));                               // call resolved static or parent target
+    if dynamic_static_dispatch {
+        let slot = static_slot.expect("codegen bug: dynamic static dispatch without slot");
+        emitter.instruction("mov x10, x0");                                       // preserve forwarded called-class id for static-vtable lookup
+        emitter.instruction("adrp x11, _class_static_vtable_ptrs@PAGE");          // load static-vtable pointer table page
+        emitter.instruction("add x11, x11, _class_static_vtable_ptrs@PAGEOFF");   // add static-vtable pointer table offset
+        emitter.instruction("ldr x11, [x11, x10, lsl #3]");                       // load class-specific static-vtable pointer
+        emitter.instruction(&format!("ldr x11, [x11, #{}]", slot * 8));           // load static method entry from static-vtable slot
+        emitter.instruction("blr x11");                                           // call late-bound static method implementation
+    } else if let Some(label) = direct_static_private_label {
+        emitter.instruction(&format!("bl {}", label));                            // call direct private static helper
+    } else {
+        emitter.instruction(&format!("bl {}", label));                            // call resolved static or parent/self target
+    }
     restore_concat_offset_after_nested_call(emitter, &ret_ty);
 
     ret_ty
