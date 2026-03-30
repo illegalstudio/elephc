@@ -88,12 +88,13 @@ pub(super) fn emit_try_stmt(
         for catch_clause in catches {
             let catch_label = ctx.next_label("catch_body");
             let next_catch_label = ctx.next_label("catch_next");
-            let class_id = resolve_catch_class_id(ctx, &catch_clause.exception_type);
+            let (catch_id, catch_kind) = resolve_catch_match_target(ctx, &catch_clause.exception_type);
 
             emitter.instruction("adrp x9, _exc_value@PAGE");                      // load page of the current exception slot
             emitter.instruction("add x9, x9, _exc_value@PAGEOFF");                // resolve the current exception slot address
             emitter.instruction("ldr x0, [x9]");                                  // load the active exception object for catch matching
-            emitter.instruction(&format!("mov x1, #{}", class_id));               // materialize the catch class_id for instanceof matching
+            emitter.instruction(&format!("mov x1, #{}", catch_id));               // materialize the catch target id for runtime matching
+            emitter.instruction(&format!("mov x2, #{}", catch_kind));             // tell the runtime whether this catch target is a class or interface
             emitter.instruction("bl __rt_exception_matches");                      // test whether the current exception matches this catch clause
             emitter.instruction(&format!("cbz x0, {}", next_catch_label));         // continue to the next catch when this clause does not match
 
@@ -335,7 +336,7 @@ fn emit_label_address(emitter: &mut Emitter, label: &str, dest_reg: &str) {
     emitter.instruction(&format!("add {}, {}, {}@PAGEOFF", dest_reg, dest_reg, label)); // resolve the local control-flow target address
 }
 
-fn resolve_catch_class_id(ctx: &Context, raw_name: &str) -> u64 {
+fn resolve_catch_match_target(ctx: &Context, raw_name: &str) -> (u64, u64) {
     let resolved_name = match raw_name {
         "self" => ctx.current_class.as_deref().unwrap_or(raw_name),
         "parent" => ctx
@@ -346,8 +347,11 @@ fn resolve_catch_class_id(ctx: &Context, raw_name: &str) -> u64 {
             .unwrap_or(raw_name),
         _ => raw_name,
     };
-    ctx.classes
-        .get(resolved_name)
-        .map(|class_info| class_info.class_id)
-        .unwrap_or(0)
+    if let Some(class_info) = ctx.classes.get(resolved_name) {
+        (class_info.class_id, 0)
+    } else if let Some(interface_info) = ctx.interfaces.get(resolved_name) {
+        (interface_info.interface_id, 1)
+    } else {
+        (0, 0)
+    }
 }

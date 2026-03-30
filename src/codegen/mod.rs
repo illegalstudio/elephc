@@ -60,6 +60,7 @@ pub fn generate(
         self::functions::emit_function(
             &mut emitter, &mut data, name, sig, body, functions,
             &global_constants, &all_global_var_names, &all_static_vars,
+            interfaces,
             Some(classes),
         );
     }
@@ -124,7 +125,7 @@ pub fn generate(
                 let epilogue_label = format!("{}_epilogue", label);
                 self::functions::emit_method(
                     &mut emitter, &mut data, &label, &epilogue_label, &sig, &method.body,
-                    functions, &global_constants, classes, class_name,
+                    functions, &global_constants, interfaces, classes, class_name,
                 );
             }
     }
@@ -138,6 +139,7 @@ pub fn generate(
     ctx.all_global_var_names = all_global_var_names.clone();
     ctx.all_static_vars = all_static_vars.clone();
     ctx.classes = classes.clone();
+    ctx.interfaces = interfaces.clone();
     ctx.extern_functions = extern_functions.clone();
     ctx.extern_classes = extern_classes.clone();
     ctx.extern_globals = extern_globals.clone();

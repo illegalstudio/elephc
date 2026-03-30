@@ -331,8 +331,10 @@ try {
 
 Supported subset:
 
+- built-in `Exception` class and built-in `Throwable` interface are available without declaring them yourself
 - `throw <expr>;` where `<expr>` has an object type
 - `try { ... } catch (ClassName $e) { ... }`
+- `catch (Throwable $e)` matches objects implementing the built-in `Throwable` interface, including the built-in `Exception`
 - multiple `catch` clauses
 - `try { ... } finally { ... }`
 - `return`, `break`, and `continue` run enclosing `finally` blocks before leaving the `try`

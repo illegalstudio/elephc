@@ -268,6 +268,43 @@ struct InterfaceDeclInfo {
     span: crate::span::Span,
 }
 
+fn inject_builtin_throwables(
+    interface_map: &mut HashMap<String, InterfaceDeclInfo>,
+    class_map: &mut HashMap<String, FlattenedClass>,
+) -> Result<(), CompileError> {
+    for builtin_name in ["Throwable", "Exception"] {
+        if interface_map.contains_key(builtin_name) || class_map.contains_key(builtin_name) {
+            return Err(CompileError::new(
+                crate::span::Span::dummy(),
+                &format!("Cannot redeclare built-in exception type: {}", builtin_name),
+            ));
+        }
+    }
+
+    interface_map.insert(
+        "Throwable".to_string(),
+        InterfaceDeclInfo {
+            name: "Throwable".to_string(),
+            extends: Vec::new(),
+            methods: Vec::new(),
+            span: crate::span::Span::dummy(),
+        },
+    );
+    class_map.insert(
+        "Exception".to_string(),
+        FlattenedClass {
+            name: "Exception".to_string(),
+            extends: None,
+            implements: vec!["Throwable".to_string()],
+            is_abstract: false,
+            properties: Vec::new(),
+            methods: Vec::new(),
+        },
+    );
+
+    Ok(())
+}
+
 fn build_method_sig(method: &crate::parser::ast::ClassMethod) -> FunctionSig {
     let params: Vec<(String, PhpType)> = method
         .params
@@ -878,7 +915,18 @@ fn build_class_info_recursive(
                 .expect("type checker bug: missing interface method signature");
             let actual_sig = match method_sigs.get(method_name) {
                 Some(sig) => sig,
-                None if class.is_abstract => continue,
+                None if class.is_abstract => {
+                    method_sigs.insert(method_name.clone(), required_sig.clone());
+                    method_visibilities.insert(method_name.clone(), Visibility::Public);
+                    method_declaring_classes.insert(method_name.clone(), class.name.clone());
+                    method_impl_classes.remove(method_name);
+                    if !vtable_slots.contains_key(method_name) {
+                        let slot = vtable_methods.len();
+                        vtable_slots.insert(method_name.clone(), slot);
+                        vtable_methods.push(method_name.clone());
+                    }
+                    continue;
+                }
                 None => {
                     return Err(CompileError::new(
                         crate::span::Span::dummy(),
@@ -1083,6 +1131,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         .cloned()
         .map(|class| (class.name.clone(), class))
         .collect();
+    let mut class_map = class_map;
     let mut interface_map = HashMap::new();
     for stmt in program {
         if let StmtKind::InterfaceDecl {
@@ -1108,6 +1157,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
             );
         }
     }
+    inject_builtin_throwables(&mut interface_map, &mut class_map)?;
 
     let mut next_interface_id = 0u64;
     let mut building_interfaces = HashSet::new();
@@ -1126,9 +1176,10 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
     // First pass: collect flattened class declarations and build ClassInfo
     let mut next_class_id = 0u64;
     let mut building = HashSet::new();
-    for class in &flattened_classes {
+    let class_names: Vec<String> = class_map.keys().cloned().collect();
+    for class_name in class_names {
         build_class_info_recursive(
-            &class.name,
+            &class_name,
             &class_map,
             &mut checker,
             &mut next_class_id,
@@ -1427,6 +1478,12 @@ impl Checker {
         false
     }
 
+    fn class_implements_interface(&self, class_name: &str, interface_name: &str) -> bool {
+        self.classes
+            .get(class_name)
+            .is_some_and(|class_info| class_info.interfaces.iter().any(|name| name == interface_name))
+    }
+
     fn resolve_catch_type_name(
         &self,
         raw_name: &str,
@@ -1493,6 +1550,12 @@ impl Checker {
     fn common_object_type(&self, left: &str, right: &str) -> Option<PhpType> {
         if left == right {
             return Some(PhpType::Object(left.to_string()));
+        }
+        if self.interfaces.contains_key(left) && self.class_implements_interface(right, left) {
+            return Some(PhpType::Object(left.to_string()));
+        }
+        if self.interfaces.contains_key(right) && self.class_implements_interface(left, right) {
+            return Some(PhpType::Object(right.to_string()));
         }
         if self.is_subclass_of(left, right) {
             return Some(PhpType::Object(right.to_string()));
@@ -2171,7 +2234,9 @@ impl Checker {
                 for catch_clause in catches {
                     let exception_type =
                         self.resolve_catch_type_name(&catch_clause.exception_type, stmt.span)?;
-                    if !self.classes.contains_key(&exception_type) {
+                    if !self.classes.contains_key(&exception_type)
+                        && !self.interfaces.contains_key(&exception_type)
+                    {
                         return Err(CompileError::new(
                             stmt.span,
                             &format!("Undefined class: {}", exception_type),

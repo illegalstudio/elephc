@@ -5,7 +5,7 @@ use super::data_section::DataSection;
 use super::emit::Emitter;
 use super::stmt;
 use crate::parser::ast::{ExprKind, StmtKind};
-use crate::types::{ClassInfo, FunctionSig, PhpType};
+use crate::types::{ClassInfo, FunctionSig, InterfaceInfo, PhpType};
 
 #[allow(clippy::too_many_arguments)]
 pub fn emit_function(
@@ -18,6 +18,7 @@ pub fn emit_function(
     constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
     all_global_var_names: &HashSet<String>,
     all_static_vars: &HashMap<(String, String), PhpType>,
+    interfaces: &HashMap<String, InterfaceInfo>,
     classes: Option<&HashMap<String, ClassInfo>>,
 ) {
     let label = format!("_fn_{}", name);
@@ -25,6 +26,7 @@ pub fn emit_function(
     emit_function_with_label(
         emitter, data, &label, &epilogue_label, sig, body,
         all_functions, constants, all_global_var_names, all_static_vars,
+        interfaces,
         classes,
     );
 }
@@ -41,9 +43,11 @@ pub fn emit_closure(
     let epilogue_label = format!("{}_epilogue", label);
     let empty_globals = HashSet::new();
     let empty_statics = HashMap::new();
+    let empty_interfaces = HashMap::new();
     emit_function_with_label(
         emitter, data, label, &epilogue_label, sig, body,
         all_functions, constants, &empty_globals, &empty_statics,
+        &empty_interfaces,
         None,
     );
 }
@@ -58,6 +62,7 @@ pub fn emit_method(
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
     constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
+    interfaces: &HashMap<String, InterfaceInfo>,
     classes: &HashMap<String, ClassInfo>,
     class_name: &str,
 ) {
@@ -66,6 +71,7 @@ pub fn emit_method(
     emit_function_with_label_and_class(
         emitter, data, label, epilogue_label, sig, body,
         all_functions, constants, &empty_globals, &empty_statics,
+        interfaces,
         Some((classes, class_name)),
     );
 }
@@ -82,6 +88,7 @@ fn emit_function_with_label(
     constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
     all_global_var_names: &HashSet<String>,
     all_static_vars: &HashMap<(String, String), PhpType>,
+    interfaces: &HashMap<String, InterfaceInfo>,
     classes: Option<&HashMap<String, ClassInfo>>,
 ) {
     // Pass classes to regular functions so they can resolve Object types
@@ -89,6 +96,7 @@ fn emit_function_with_label(
     emit_function_with_label_and_class(
         emitter, data, label, epilogue_label, sig, body,
         all_functions, constants, all_global_var_names, all_static_vars,
+        interfaces,
         class_ctx,
     );
 }
@@ -105,6 +113,7 @@ fn emit_function_with_label_and_class(
     constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
     all_global_var_names: &HashSet<String>,
     all_static_vars: &HashMap<(String, String), PhpType>,
+    interfaces: &HashMap<String, InterfaceInfo>,
     class_context: Option<(&HashMap<String, ClassInfo>, &str)>,
 ) {
 
@@ -115,6 +124,7 @@ fn emit_function_with_label_and_class(
     ctx.constants = constants.clone();
     ctx.all_global_var_names = all_global_var_names.clone();
     ctx.all_static_vars = all_static_vars.clone();
+    ctx.interfaces = interfaces.clone();
     if let Some((classes, class_name)) = class_context {
         ctx.classes = classes.clone();
         ctx.current_class = Some(class_name.to_string());

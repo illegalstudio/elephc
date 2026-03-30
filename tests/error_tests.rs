@@ -119,6 +119,22 @@ fn test_error_catch_requires_defined_class() {
 }
 
 #[test]
+fn test_error_cannot_redeclare_builtin_exception_type() {
+    expect_error(
+        "<?php class Exception {}",
+        "Cannot redeclare built-in exception type: Exception",
+    );
+}
+
+#[test]
+fn test_error_cannot_instantiate_throwable_interface() {
+    expect_error(
+        "<?php $e = new Throwable();",
+        "Cannot instantiate interface: Throwable",
+    );
+}
+
+#[test]
 fn test_error_missing_function_name() {
     expect_error("<?php function () { }", "Expected function name");
 }

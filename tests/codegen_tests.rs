@@ -130,6 +130,18 @@ fn test_exception_try_catch_same_function() {
 }
 
 #[test]
+fn test_builtin_exception_try_catch() {
+    let out = compile_and_run("<?php try { throw new Exception(); } catch (Exception $e) { echo 11; }");
+    assert_eq!(out, "11");
+}
+
+#[test]
+fn test_builtin_throwable_catches_exception() {
+    let out = compile_and_run("<?php try { throw new Exception(); } catch (Throwable $e) { echo 12; }");
+    assert_eq!(out, "12");
+}
+
+#[test]
 fn test_exception_try_catch_cross_function() {
     let out = compile_and_run(
         "<?php class MyException {} function boom() { throw new MyException(); } try { boom(); } catch (MyException $e) { echo 7; }",
@@ -9951,6 +9963,15 @@ echo $copy[0][0];
 }
 
 #[test]
+fn test_example_cow_compiles_and_runs() {
+    let out = compile_and_run(include_str!("../examples/cow/main.php"));
+    assert_eq!(
+        out,
+        "left: 1 2 3 \nright: 99 2 3 4 \nouterA inner: 10 20 \nouterB inner: 10 77 \n"
+    );
+}
+
+#[test]
 fn test_cow_split_path_balances_gc_stats() {
     let baseline = compile_and_run_with_gc_stats("<?php");
     let out = compile_and_run_with_gc_stats(
@@ -12165,4 +12186,10 @@ echo $product->label();
 "#,
     );
     assert_eq!(out, "WIDGET");
+}
+
+#[test]
+fn test_example_interfaces_compiles_and_runs() {
+    let out = compile_and_run(include_str!("../examples/interfaces/main.php"));
+    assert_eq!(out, "WIDGET\n");
 }
