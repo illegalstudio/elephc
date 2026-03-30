@@ -2438,6 +2438,29 @@ echo $x;
     assert_eq!(out, "1");
 }
 
+#[test]
+fn test_strict_compare_mixed_uses_payload_type_and_value() {
+    let out = compile_and_run(
+        r#"<?php
+$map = [
+    "int_a" => 42,
+    "int_b" => 42,
+    "int_c" => 7,
+    "str_a" => "42",
+    "str_b" => "42",
+    "bool_t" => true,
+];
+echo $map["int_a"] === $map["int_b"] ? "1" : "0";
+echo $map["int_a"] === $map["int_c"] ? "1" : "0";
+echo $map["int_a"] === $map["str_a"] ? "1" : "0";
+echo $map["str_a"] === $map["str_b"] ? "1" : "0";
+echo $map["int_a"] !== $map["str_a"] ? "1" : "0";
+echo $map["bool_t"] === true ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "100111");
+}
+
 // --- Include / Require ---
 
 #[test]

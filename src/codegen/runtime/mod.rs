@@ -174,6 +174,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_mixed_from_value(emitter);
     arrays::emit_mixed_free_deep(emitter);
     arrays::emit_mixed_is_empty(emitter);
+    arrays::emit_mixed_strict_eq(emitter);
     arrays::emit_mixed_unbox(emitter);
     arrays::emit_mixed_write_stdout(emitter);
     arrays::emit_object_free_deep(emitter);
