@@ -1024,8 +1024,11 @@ fn test_error_match_missing_paren() {
 }
 
 #[test]
-fn test_error_assoc_array_mixed() {
-    expect_error("<?php $a = [\"b\" => 2, 1];", "Cannot mix");
+fn test_assoc_array_mixed_type_checks() {
+    assert!(
+        check_source(r#"<?php $a = ["name" => "Alice", "age" => 30];"#).is_ok(),
+        "heterogeneous associative-array values should widen to mixed",
+    );
 }
 
 // --- v0.6: array function argument errors ---

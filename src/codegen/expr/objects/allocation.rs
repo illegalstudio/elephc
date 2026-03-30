@@ -53,12 +53,14 @@ pub(super) fn emit_new_object(
             let prop_ty = emit_expr(&default_expr, emitter, ctx, data);
             emitter.instruction("ldr x9, [sp]");                                // peek object pointer
             match &prop_ty {
-                PhpType::Int
-                | PhpType::Bool
-                | PhpType::Callable
-                | PhpType::Pointer(_) => {
+                PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Pointer(_) => {
                     emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
                     emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8)); // clear runtime property metadata slot
+                }
+                PhpType::Mixed => {
+                    emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store boxed mixed value
+                    emitter.instruction("mov x10, #7");                         // runtime property tag 7 = mixed
+                    emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); // store runtime property metadata tag
                 }
                 PhpType::Array(_) => {
                     emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
@@ -97,6 +99,7 @@ pub(super) fn emit_new_object(
             match &ty {
                 PhpType::Bool
                 | PhpType::Int
+                | PhpType::Mixed
                 | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Callable
@@ -134,6 +137,7 @@ pub(super) fn emit_new_object(
             match ty {
                 PhpType::Bool
                 | PhpType::Int
+                | PhpType::Mixed
                 | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Callable

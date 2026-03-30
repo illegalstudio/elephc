@@ -31,7 +31,7 @@ pub(super) fn emit_cast(
                 PhpType::Array(_) | PhpType::AssocArray { .. } => {
                     emitter.instruction("ldr x0, [x0]");                        // load array length from header (first field)
                 }
-                PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {}
+                PhpType::Mixed | PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {}
             }
             PhpType::Int
         }
@@ -51,6 +51,7 @@ pub(super) fn emit_cast(
                 }
                 PhpType::Array(_)
                 | PhpType::AssocArray { .. }
+                | PhpType::Mixed
                 | PhpType::Callable
                 | PhpType::Object(_)
                 | PhpType::Pointer(_) => {
@@ -85,7 +86,7 @@ pub(super) fn emit_cast(
                     emitter.instruction("cmp x0, #0");                          // check if array is empty
                     emitter.instruction("cset x0, ne");                         // x0=1 if non-empty, 0 if empty
                 }
-                PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
+                PhpType::Mixed | PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
                     emitter.instruction("cmp x0, #0");                          // test if callable/object address is zero
                     emitter.instruction("cset x0, ne");                         // x0=1 if nonzero (truthy)
                 }
@@ -146,6 +147,9 @@ pub(super) fn emit_strict_compare(
             PhpType::Str => {
                 emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push left string ptr+len for comparison
             }
+            PhpType::Mixed => {
+                emitter.instruction("str x0, [sp, #-16]!");                     // push left boxed mixed pointer for pointer comparison
+            }
             _ => {
                 emitter.instruction("str x0, [sp, #-16]!");                     // push left int/bool/null for comparison
             }
@@ -183,6 +187,7 @@ pub(super) fn emit_strict_compare(
             }
             PhpType::Array(_)
             | PhpType::AssocArray { .. }
+            | PhpType::Mixed
             | PhpType::Callable
             | PhpType::Object(_)
             | PhpType::Pointer(_) => {

@@ -57,6 +57,10 @@ pub fn emit(
             // x0 = hash table pointer
             emitter.instruction("bl __rt_json_encode_assoc");                   // encode assoc array → x1/x2
         }
+        PhpType::Mixed => {
+            // x0 = boxed mixed pointer
+            emitter.instruction("bl __rt_json_encode_mixed");                   // inspect boxed payload and encode it as JSON
+        }
         _ => {
             // Fallback: encode as "null"
             emitter.instruction("bl __rt_json_encode_null");                    // produce "null" → x1/x2

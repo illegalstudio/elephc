@@ -155,6 +155,7 @@ pub(super) fn emit_array_value_type_stamp(
         PhpType::Array(_) => 4,
         PhpType::AssocArray { .. } => 5,
         PhpType::Object(_) => 6,
+        PhpType::Mixed => 7,
         _ => return,
     };
     emitter.instruction(&format!("ldr x10, [{}, #-8]", array_reg));             // load the packed array kind word from the heap header
@@ -175,15 +176,7 @@ pub(super) fn emit_assoc_array_literal(
     emitter.comment("assoc array literal");
 
     let first_value_ty = super::super::functions::infer_contextual_type(&pairs[0].1, ctx);
-    let value_type_tag = match &first_value_ty {
-        PhpType::Str => 1,
-        PhpType::Float => 2,
-        PhpType::Bool => 3,
-        PhpType::Array(_) => 4,
-        PhpType::AssocArray { .. } => 5,
-        PhpType::Object(_) => 6,
-        _ => 0,
-    };
+    let value_type_tag = super::super::runtime_value_tag(&first_value_ty);
 
     emitter.instruction(&format!("mov x0, #{}", std::cmp::max(pairs.len() * 2, 16))); // initial capacity: max of pair count*2 or 16
     emitter.instruction(&format!("mov x1, #{}", value_type_tag));               // value type tag
@@ -198,6 +191,8 @@ pub(super) fn emit_assoc_array_literal(
         retain_borrowed_heap_arg(emitter, &pair.1, &ty);
         if i == 0 {
             val_ty = ty.clone();
+        } else if ty != val_ty {
+            val_ty = PhpType::Mixed;
         }
         let (val_lo, val_hi) = match &ty {
             PhpType::Int | PhpType::Bool => ("x0", "xzr"),
@@ -213,6 +208,7 @@ pub(super) fn emit_assoc_array_literal(
         };
         emitter.instruction(&format!("mov x3, {}", val_lo));                    // value_lo
         emitter.instruction(&format!("mov x4, {}", val_hi));                    // value_hi
+        emitter.instruction(&format!("mov x5, #{}", super::super::runtime_value_tag(&ty))); // value_tag for this specific assoc entry
         emitter.instruction("ldp x1, x2, [sp], #16");                           // pop key ptr/len
         emitter.instruction("ldr x0, [sp]");                                    // peek hash table pointer
         emitter.instruction("bl __rt_hash_set");                                // insert key-value pair (x0 = table, may be new)
@@ -322,7 +318,7 @@ pub(super) fn emit_array_access(
         emitter.instruction("mov x1, x3");                                      // key ptr
         emitter.instruction("mov x2, x4");                                      // key len
         emitter.comment("assoc array access");
-        emitter.instruction("bl __rt_hash_get");                                // lookup key → x0=found, x1=val_lo, x2=val_hi
+        emitter.instruction("bl __rt_hash_get");                                // lookup key → x0=found, x1=val_lo, x2=val_hi, x3=val_tag
 
         let not_found = ctx.next_label("hash_miss");
         let done = ctx.next_label("hash_done");
@@ -335,6 +331,9 @@ pub(super) fn emit_array_access(
             PhpType::Str => {}
             PhpType::Float => {
                 emitter.instruction("fmov d0, x1");                             // move bits to float register
+            }
+            PhpType::Mixed => {
+                super::super::emit_box_runtime_payload_as_mixed(emitter, "x3", "x1", "x2"); // box the borrowed entry payload into a mixed cell
             }
             _ => {
                 emitter.instruction("mov x0, x1");                              // move value to x0
@@ -380,7 +379,7 @@ pub(super) fn emit_array_access(
             emitter.instruction("ldr x1, [x9]");                                // load string pointer from element slot
             emitter.instruction("ldr x2, [x9, #8]");                            // load string length from element slot
         }
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+        PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
             emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header to reach data
             emitter.instruction("ldr x0, [x9, x0, lsl #3]");                    // load pointer at index
         }

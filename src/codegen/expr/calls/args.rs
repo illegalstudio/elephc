@@ -5,6 +5,7 @@ pub(super) fn push_arg_value(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
         PhpType::Bool
         | PhpType::Int
+        | PhpType::Mixed
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
         | PhpType::Callable
@@ -51,6 +52,7 @@ pub(super) fn load_arg_assignments(
         match ty {
             PhpType::Bool
             | PhpType::Int
+            | PhpType::Mixed
             | PhpType::Array(_)
             | PhpType::AssocArray { .. }
             | PhpType::Callable

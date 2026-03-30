@@ -89,6 +89,7 @@ pub fn emit_expr(
                         emitter.instruction("bl __rt_cstr_to_str");             // convert C string to elephc string
                     }
                     PhpType::Void
+                    | PhpType::Mixed
                     | PhpType::Array(_)
                     | PhpType::AssocArray { .. }
                     | PhpType::Object(_) => {

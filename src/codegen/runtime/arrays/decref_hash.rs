@@ -47,13 +47,6 @@ pub fn emit_decref_hash(emitter: &mut Emitter) {
     emitter.instruction("add x9, x9, _gc_collecting@PAGEOFF");                  // resolve the collector-active flag address
     emitter.instruction("ldr x9, [x9]");                                        // load the collector-active flag
     emitter.instruction("cbnz x9, __rt_decref_hash_skip");                      // nested decref calls during collection must not restart the collector
-    emitter.instruction("ldr x9, [x0, #16]");                                   // load the runtime hash value_type tag from the container header
-    emitter.instruction("cmp x9, #4");                                          // is this a hash of indexed arrays?
-    emitter.instruction("b.eq __rt_decref_hash_collect");                       // nested heap payloads can participate in cycles
-    emitter.instruction("cmp x9, #5");                                          // is this a hash of associative arrays?
-    emitter.instruction("b.eq __rt_decref_hash_collect");                       // nested heap payloads can participate in cycles
-    emitter.instruction("cmp x9, #6");                                          // is this a hash of objects?
-    emitter.instruction("b.ne __rt_decref_hash_skip");                          // scalar/string hashes cannot participate in heap cycles
     emitter.label("__rt_decref_hash_collect");
     emitter.instruction("str x30, [sp, #-16]!");                                // preserve the caller return address across the collector call
     emitter.instruction("bl __rt_gc_collect_cycles");                           // reclaim any newly-unrooted refcounted graph components

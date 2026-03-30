@@ -193,8 +193,12 @@ fn emit_function_with_label_and_class(
                     int_reg_idx += 2;
                 }
                 PhpType::Void => {}
-                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable
-                | PhpType::Object(_) | PhpType::Pointer(_) => {
+                PhpType::Mixed
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Callable
+                | PhpType::Object(_)
+                | PhpType::Pointer(_) => {
                     emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
                     super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save array/callable/object/pointer param
                     int_reg_idx += 1;
@@ -213,7 +217,10 @@ fn emit_function_with_label_and_class(
         if param_names.contains(name) {
             continue; // Parameters are initialized by register stores above
         }
-        if matches!(&var.ty, PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)) {
+        if matches!(
+            &var.ty,
+            PhpType::Str | PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+        ) {
             super::abi::store_at_offset(emitter, "xzr", var.stack_offset);       // zero-init to prevent stale ptr free
         }
     }

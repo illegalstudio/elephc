@@ -15,7 +15,15 @@ pub(super) fn emit_assign_stmt(
 ) {
     emitter.blank();
     emitter.comment(&format!("${} = ...", name));
-    let ty = emit_expr(value, emitter, ctx, data);
+    let mut ty = emit_expr(value, emitter, ctx, data);
+    let dest_needs_mixed_box = ctx
+        .variables
+        .get(name)
+        .is_some_and(|var| matches!(var.ty, PhpType::Mixed) && ty != PhpType::Mixed);
+    if dest_needs_mixed_box {
+        super::super::emit_box_current_value_as_mixed(emitter, &ty);
+        ty = PhpType::Mixed;
+    }
 
     if ctx.extern_globals.contains_key(name) {
         super::emit_extern_global_store(emitter, name, &ty);
@@ -139,6 +147,7 @@ pub(super) fn emit_property_assign_stmt(
     match &val_ty {
         PhpType::Bool
         | PhpType::Int
+        | PhpType::Mixed
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
         | PhpType::Callable
@@ -232,6 +241,12 @@ pub(super) fn emit_property_assign_stmt(
             emitter.instruction("ldr x10, [sp], #16");                          // pop saved value
             emitter.instruction(&format!("str x10, [x9, #{}]", offset));        // store value into property
             emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8));    // clear runtime property metadata slot
+        }
+        PhpType::Mixed => {
+            emitter.instruction("ldr x10, [sp], #16");                          // pop saved boxed mixed value
+            emitter.instruction(&format!("str x10, [x9, #{}]", offset));        // store boxed mixed pointer into property
+            emitter.instruction("mov x10, #7");                                 // runtime property tag 7 = mixed
+            emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8));    // store runtime property metadata tag
         }
         PhpType::Array(_) => {
             emitter.instruction("ldr x10, [sp], #16");                          // pop saved value

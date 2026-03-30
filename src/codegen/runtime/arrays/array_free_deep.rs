@@ -50,6 +50,8 @@ pub fn emit_array_free_deep(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, #5");                                         // is this an array of associative arrays?
     emitter.instruction("b.eq __rt_array_free_deep_loop_setup");                // nested hashes need decref_any cleanup
     emitter.instruction("cmp x10, #6");                                         // is this an array of objects / callables?
+    emitter.instruction("b.eq __rt_array_free_deep_loop_setup");                // boxed mixed values need decref_any cleanup too
+    emitter.instruction("cmp x10, #7");                                         // is this an array of boxed mixed values?
     emitter.instruction("b.ne __rt_array_free_deep_struct");                    // scalar arrays need no per-element cleanup
 
     // -- free each releasable element --

@@ -5101,6 +5101,75 @@ echo $vals[0] + $vals[1] + $vals[2];
 }
 
 #[test]
+fn test_assoc_array_mixed_foreach() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["id" => 7, "name" => "Alice", "score" => 12];
+foreach ($m as $key => $value) {
+    echo $key;
+    echo "=";
+    echo $value;
+    echo ";";
+}
+"#,
+    );
+    assert_eq!(out, "id=7;name=Alice;score=12;");
+}
+
+#[test]
+fn test_assoc_array_values_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["id" => 7, "name" => "Alice", "score" => 12];
+$vals = array_values($m);
+$n = count($vals);
+for ($i = 0; $i < $n; $i++) {
+    echo $vals[$i];
+    echo ",";
+}
+"#,
+    );
+    assert_eq!(out, "7,Alice,12,");
+}
+
+#[test]
+fn test_assoc_in_array_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["id" => 7, "name" => "Alice", "score" => 12];
+if (in_array("Alice", $m)) { echo "name"; }
+if (in_array(12, $m)) { echo " score"; }
+if (!in_array("Bob", $m)) { echo " missing"; }
+"#,
+    );
+    assert_eq!(out, "name score missing");
+}
+
+#[test]
+fn test_assoc_array_search_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["id" => 7, "name" => "Alice", "score" => 12];
+echo array_search("Alice", $m);
+echo ":";
+echo array_search(12, $m);
+"#,
+    );
+    assert_eq!(out, "name:score");
+}
+
+#[test]
+fn test_assoc_array_access_mixed_echo() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["id" => 7, "name" => "Alice", "score" => 12];
+echo $m["name"];
+"#,
+    );
+    assert_eq!(out, "Alice");
+}
+
+#[test]
 fn test_gc_assoc_array_values_borrowed_array_survives_source_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -6970,6 +7039,14 @@ fn test_json_encode_single_element_array() {
 fn test_json_encode_assoc() {
     let out = compile_and_run(r#"<?php echo json_encode(["name" => "Alice", "age" => "30"]);"#);
     assert_eq!(out, r#"{"name":"Alice","age":"30"}"#, "Got: {}", out);
+}
+
+#[test]
+fn test_json_encode_assoc_mixed_values() {
+    let out = compile_and_run(
+        r#"<?php echo json_encode(["id" => 7, "name" => "Alice", "ok" => true, "note" => null]);"#,
+    );
+    assert_eq!(out, r#"{"id":7,"name":"Alice","ok":true,"note":null}"#);
 }
 
 #[test]

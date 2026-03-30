@@ -14,6 +14,7 @@ pub enum PhpType {
     Str,
     Bool,
     Void,
+    Mixed,
     Array(Box<PhpType>),
     AssocArray {
         key: Box<PhpType>,
@@ -33,6 +34,7 @@ impl PhpType {
             PhpType::Float => 8,
             PhpType::Str => 16,
             PhpType::Void => 8,              // null sentinel stored as 8 bytes
+            PhpType::Mixed => 8,             // pointer to heap-tagged mixed cell
             PhpType::Array(_) => 8,          // pointer to heap
             PhpType::AssocArray { .. } => 8, // pointer to heap
             PhpType::Callable => 8,          // function address
@@ -49,6 +51,7 @@ impl PhpType {
             PhpType::Float => 1,
             PhpType::Str => 2,
             PhpType::Void => 0,
+            PhpType::Mixed => 1,
             PhpType::Array(_) => 1,
             PhpType::AssocArray { .. } => 1,
             PhpType::Callable => 1,
@@ -66,7 +69,7 @@ impl PhpType {
     pub fn is_refcounted(&self) -> bool {
         matches!(
             self,
-            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+            PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
         )
     }
 }

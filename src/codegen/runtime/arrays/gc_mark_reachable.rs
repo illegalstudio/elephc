@@ -26,7 +26,7 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("and x12, x11, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x12, #2");                                         // is this at least an indexed array?
     emitter.instruction("b.lo __rt_gc_mark_reachable_done");                    // strings/raw values are not traversed by cycle collection
-    emitter.instruction("cmp x12, #4");                                         // is this within the array/hash/object range?
+    emitter.instruction("cmp x12, #5");                                         // is this within the array/hash/object/mixed range?
     emitter.instruction("b.hi __rt_gc_mark_reachable_done");                    // unknown/raw heap kinds do not participate
 
     // -- stop recursion when this node is already marked reachable --
@@ -58,6 +58,8 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_gc_mark_reachable_array");                   // traverse array children
     emitter.instruction("cmp x12, #3");                                         // is this an associative array / hash?
     emitter.instruction("b.eq __rt_gc_mark_reachable_hash");                    // traverse hash children
+    emitter.instruction("cmp x12, #5");                                         // is this a boxed mixed cell?
+    emitter.instruction("b.eq __rt_gc_mark_reachable_mixed");                   // traverse the boxed mixed child if it is heap-backed
     emitter.instruction("b __rt_gc_mark_reachable_object");                     // remaining refcounted kind 4 is an object
 
     // -- array traversal: only arrays tagged with refcounted element payloads contain graph edges --
@@ -69,6 +71,8 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("cmp x12, #5");                                         // is this an array-of-hashes payload?
     emitter.instruction("b.eq __rt_gc_mark_reachable_array_setup");             // traverse nested hash payloads
     emitter.instruction("cmp x12, #6");                                         // is this an array-of-objects payload?
+    emitter.instruction("b.eq __rt_gc_mark_reachable_array_setup");             // traverse nested object payloads
+    emitter.instruction("cmp x12, #7");                                         // is this an array-of-mixed payload?
     emitter.instruction("b.ne __rt_gc_mark_reachable_return");                  // scalar/string arrays contribute no refcounted edges
 
     emitter.label("__rt_gc_mark_reachable_array_setup");
@@ -98,17 +102,8 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("str x9, [sp, #24]");                                   // save the updated array index
     emitter.instruction("b __rt_gc_mark_reachable_array_loop");                 // continue traversing array elements
 
-    // -- hash traversal: the runtime value_type tag already tells us whether values are refcounted --
+    // -- hash traversal: inspect each entry's runtime value_tag for graph edges --
     emitter.label("__rt_gc_mark_reachable_hash");
-    emitter.instruction("ldr x12, [x0, #16]");                                  // load the hash runtime value_type tag
-    emitter.instruction("cmp x12, #4");                                         // is this a hash of indexed arrays?
-    emitter.instruction("b.eq __rt_gc_mark_reachable_hash_setup");              // traverse nested array values
-    emitter.instruction("cmp x12, #5");                                         // is this a hash of associative arrays?
-    emitter.instruction("b.eq __rt_gc_mark_reachable_hash_setup");              // traverse nested hash values
-    emitter.instruction("cmp x12, #6");                                         // is this a hash of objects?
-    emitter.instruction("b.ne __rt_gc_mark_reachable_return");                  // scalar/string hashes contribute no refcounted edges
-
-    emitter.label("__rt_gc_mark_reachable_hash_setup");
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the hash capacity from the header
     emitter.instruction("str x9, [sp, #16]");                                   // save the hash capacity for the scan loop
     emitter.instruction("str xzr, [sp, #24]");                                  // initialize the slot index to zero
@@ -118,13 +113,18 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, x10");                                         // have we scanned every hash slot?
     emitter.instruction("b.ge __rt_gc_mark_reachable_return");                  // finish once all slots have been scanned
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the hash pointer
-    emitter.instruction("mov x11, #56");                                        // each hash entry occupies 56 bytes with insertion-order links
+    emitter.instruction("mov x11, #64");                                        // each hash entry occupies 64 bytes with per-entry tags and insertion-order links
     emitter.instruction("mul x11, x9, x11");                                    // compute the byte offset for this entry
     emitter.instruction("add x11, x10, x11");                                   // advance from the table base to the entry
     emitter.instruction("add x11, x11, #40");                                   // skip the 40-byte hash header
     emitter.instruction("ldr x12, [x11]");                                      // load the occupied flag for this slot
     emitter.instruction("cmp x12, #1");                                         // is this hash slot occupied?
     emitter.instruction("b.ne __rt_gc_mark_reachable_hash_next");               // skip empty or tombstone slots
+    emitter.instruction("ldr x12, [x11, #40]");                                 // load this entry's runtime value_tag
+    emitter.instruction("cmp x12, #4");                                         // does this entry hold a heap-backed child?
+    emitter.instruction("b.lo __rt_gc_mark_reachable_hash_next");               // scalar/string entries contribute no graph edges
+    emitter.instruction("cmp x12, #7");                                         // do the entry tags stay within the heap-backed range?
+    emitter.instruction("b.hi __rt_gc_mark_reachable_hash_next");               // unknown tags are ignored by the cycle collector
     emitter.instruction("ldr x0, [x11, #24]");                                  // load the refcounted child pointer from the value payload
     emitter.instruction("str x9, [sp, #24]");                                   // preserve the slot index across recursion
     emitter.instruction("bl __rt_gc_mark_reachable");                           // recursively mark the nested child reachable
@@ -133,6 +133,17 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("add x9, x9, #1");                                      // advance to the next hash slot
     emitter.instruction("str x9, [sp, #24]");                                   // save the updated slot index
     emitter.instruction("b __rt_gc_mark_reachable_hash_loop");                  // continue traversing hash entries
+
+    // -- mixed traversal: boxed mixed values contribute at most one heap edge --
+    emitter.label("__rt_gc_mark_reachable_mixed");
+    emitter.instruction("ldr x12, [x0]");                                        // load the boxed mixed runtime value_tag
+    emitter.instruction("cmp x12, #4");                                          // does the boxed value hold a heap-backed child?
+    emitter.instruction("b.lo __rt_gc_mark_reachable_return");                   // scalar/string/null mixed payloads contribute no graph edges
+    emitter.instruction("cmp x12, #7");                                          // do boxed mixed tags stay within the heap-backed range?
+    emitter.instruction("b.hi __rt_gc_mark_reachable_return");                   // unknown boxed tags are ignored by the collector
+    emitter.instruction("ldr x0, [x0, #8]");                                     // load the boxed heap child pointer
+    emitter.instruction("bl __rt_gc_mark_reachable");                            // recursively mark the boxed child reachable
+    emitter.instruction("b __rt_gc_mark_reachable_return");                      // mixed traversal is complete
 
     // -- object traversal: consult the emitted per-class property descriptor table --
     emitter.label("__rt_gc_mark_reachable_object");
@@ -169,6 +180,8 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_gc_mark_reachable_object_child");            // recurse into nested hash properties
     emitter.instruction("cmp x13, #6");                                         // was this property last written with an object?
     emitter.instruction("b.eq __rt_gc_mark_reachable_object_child");            // recurse into nested object properties
+    emitter.instruction("cmp x13, #7");                                         // was this property last written with a boxed mixed value?
+    emitter.instruction("b.eq __rt_gc_mark_reachable_object_child");            // recurse into nested mixed properties
     emitter.instruction("ldr x13, [sp, #32]");                                  // reload the fallback descriptor pointer
     emitter.instruction("ldrb w13, [x13, x9]");                                 // load the compile-time fallback tag for this property slot
     emitter.instruction("cmp x13, #4");                                         // is this a compile-time indexed-array property?
@@ -176,6 +189,8 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("cmp x13, #5");                                         // is this a compile-time associative-array property?
     emitter.instruction("b.eq __rt_gc_mark_reachable_object_child");            // recurse into nested hash properties
     emitter.instruction("cmp x13, #6");                                         // is this a compile-time object property?
+    emitter.instruction("b.eq __rt_gc_mark_reachable_object_child");            // recurse into compile-time object properties
+    emitter.instruction("cmp x13, #7");                                         // is this a compile-time mixed property?
     emitter.instruction("b.ne __rt_gc_mark_reachable_object_next");             // scalar and string properties contribute no refcounted edges
     emitter.label("__rt_gc_mark_reachable_object_child");
     emitter.instruction("ldr x0, [x10, x11]");                                  // load the nested child pointer from the property slot

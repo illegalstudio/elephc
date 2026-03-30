@@ -25,7 +25,7 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     // Stack layout:
     //   [sp, #0]  = hash table pointer
     //   [sp, #8]  = capacity
-    //   [sp, #16] = value_type
+    //   [sp, #16] = scratch
     //   [sp, #24] = loop index
     //   [sp, #32] = saved x29
     //   [sp, #40] = saved x30
@@ -39,8 +39,6 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     emitter.instruction("str x10, [x9]");                                       // store release-suppressed = 1 for child cleanup
     emitter.instruction("ldr x9, [x0, #8]");                                    // load table capacity
     emitter.instruction("str x9, [sp, #8]");                                    // save capacity for the loop
-    emitter.instruction("ldr x9, [x0, #16]");                                   // load runtime value_type tag
-    emitter.instruction("str x9, [sp, #16]");                                   // save value_type for cleanup dispatch
     emitter.instruction("str xzr, [sp, #24]");                                  // loop index = 0
 
     // -- iterate all slots and free occupied entries --
@@ -51,7 +49,7 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_hash_free_deep_struct");                     // finish once index reaches capacity
 
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload hash table pointer
-    emitter.instruction("mov x12, #56");                                        // entry size = 56 bytes with insertion-order links
+    emitter.instruction("mov x12, #64");                                        // entry size = 64 bytes with per-entry tags and insertion-order links
     emitter.instruction("mul x13, x11, x12");                                   // compute byte offset for this slot
     emitter.instruction("add x13, x9, x13");                                    // advance from table base to slot
     emitter.instruction("add x13, x13, #40");                                   // skip hash header to entry storage
@@ -67,11 +65,11 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
 
     // -- free the entry value based on the runtime value tag --
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload hash table pointer after helper call
-    emitter.instruction("mov x12, #56");                                        // entry size = 56 bytes with insertion-order links
+    emitter.instruction("mov x12, #64");                                        // entry size = 64 bytes with per-entry tags and insertion-order links
     emitter.instruction("mul x13, x11, x12");                                   // recompute byte offset for this slot
     emitter.instruction("add x13, x9, x13");                                    // advance from table base to slot
     emitter.instruction("add x13, x13, #40");                                   // skip hash header to entry storage
-    emitter.instruction("ldr x14, [sp, #16]");                                  // reload runtime value_type tag
+    emitter.instruction("ldr x14, [x13, #40]");                                 // reload this entry's runtime value_tag
     emitter.instruction("cmp x14, #1");                                         // is the entry value heap-backed at all?
     emitter.instruction("b.eq __rt_hash_free_deep_value_any");                  // strings release through the uniform dispatch helper
     emitter.instruction("cmp x14, #4");                                         // is this a nested indexed array?
@@ -80,6 +78,8 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_hash_free_deep_value_any");                  // hashes release through the uniform dispatch helper
     emitter.instruction("cmp x14, #6");                                         // is this a nested object / callable?
     emitter.instruction("b.eq __rt_hash_free_deep_value_any");                  // objects release through the uniform dispatch helper
+    emitter.instruction("cmp x14, #7");                                         // is this a boxed mixed value?
+    emitter.instruction("b.eq __rt_hash_free_deep_value_any");                  // mixed cells release through the uniform dispatch helper
     emitter.instruction("b __rt_hash_free_deep_next");                          // plain scalars need no cleanup
 
     emitter.label("__rt_hash_free_deep_value_any");

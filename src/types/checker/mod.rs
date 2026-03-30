@@ -1420,6 +1420,9 @@ impl Checker {
         if existing == new_ty {
             return Some(existing.clone());
         }
+        if matches!(existing, PhpType::Mixed) || matches!(new_ty, PhpType::Mixed) {
+            return Some(PhpType::Mixed);
+        }
         if *new_ty == PhpType::Void {
             return Some(existing.clone());
         }
@@ -1484,6 +1487,9 @@ impl Checker {
     fn merge_array_element_type(&self, existing: &PhpType, new_ty: &PhpType) -> Option<PhpType> {
         if existing == new_ty {
             return Some(existing.clone());
+        }
+        if matches!(existing, PhpType::Mixed) || matches!(new_ty, PhpType::Mixed) {
+            return Some(PhpType::Mixed);
         }
 
         match (existing, new_ty) {
@@ -1636,6 +1642,7 @@ impl Checker {
                     int_regs += 1;
                 }
                 PhpType::Void
+                | PhpType::Mixed
                 | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Object(_) => {
@@ -1965,6 +1972,19 @@ impl Checker {
                             .unwrap_or(val_ty);
                         env.insert(array.clone(), PhpType::Array(Box::new(merged_ty)));
                     }
+                } else if let PhpType::AssocArray { key, value: existing_value } = &arr_ty {
+                    let merged_value = if **existing_value == val_ty {
+                        *existing_value.clone()
+                    } else {
+                        PhpType::Mixed
+                    };
+                    env.insert(
+                        array.clone(),
+                        PhpType::AssocArray {
+                            key: key.clone(),
+                            value: Box::new(merged_value),
+                        },
+                    );
                 }
                 Ok(())
             }
@@ -2289,7 +2309,7 @@ impl Checker {
                     ));
                 }
                 let key_ty = self.infer_type(&pairs[0].0, env)?;
-                let val_ty = self.infer_type(&pairs[0].1, env)?;
+                let mut val_ty = self.infer_type(&pairs[0].1, env)?;
                 for (k, v) in &pairs[1..] {
                     let kt = self.infer_type(k, env)?;
                     let vt = self.infer_type(v, env)?;
@@ -2302,11 +2322,9 @@ impl Checker {
                             ),
                         ));
                     }
-                    // Allow mixed value types — keep first value's type as the
-                    // declared type. Hash table stores 16 bytes per entry regardless.
-                    // Reading values of a different type than declared will use
-                    // the declared type's register convention (may need casting).
-                    let _ = vt; // accept any value type without error
+                    if vt != val_ty {
+                        val_ty = PhpType::Mixed;
+                    }
                 }
                 Ok(PhpType::AssocArray {
                     key: Box::new(key_ty),

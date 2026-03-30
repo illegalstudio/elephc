@@ -77,6 +77,7 @@ For heap-backed values, stack slots also carry compile-time ownership metadata i
 | `Str` | 16 bytes | 8-byte pointer + 8-byte length |
 | `Array` | 8 bytes | Pointer to heap-allocated header |
 | `AssocArray` | 8 bytes | Pointer to heap-allocated hash table |
+| `Mixed` | 8 bytes | Pointer to heap-allocated boxed mixed cell |
 | `Void` (null) | 8 bytes | Sentinel value `0x7FFFFFFFFFFFFFFE` |
 | `Object` | 8 bytes | Pointer to heap-allocated object |
 | `Callable` | 8 bytes | Function pointer |
@@ -170,7 +171,7 @@ Every allocation has a **16-byte header**: two 32-bit fields for block size and 
        header (16 bytes total)          ← pointer returned to caller
 ```
 
-The size is stored at header offset `+0`, the reference count at `+4`, and the heap kind tag at `+8`. New allocations start with refcount `1`; typed constructors then stamp the kind as `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, while raw helper buffers remain `0`. For array/hash containers, the low 16 bits of the kind word are persistent metadata: the low byte is still the heap kind, indexed arrays still pack their runtime `value_type` in the next byte, and bit 15 is reserved as the persistent copy-on-write container flag. Higher bits remain transient collector metadata.
+The size is stored at header offset `+0`, the reference count at `+4`, and the heap kind tag at `+8`. New allocations start with refcount `1`; typed constructors then stamp the kind as `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, `5=boxed mixed`, while raw helper buffers remain `0`. For array/hash containers, the low 16 bits of the kind word are persistent metadata: the low byte is still the heap kind, indexed arrays still pack their runtime `value_type` in the next byte, and bit 15 is reserved as the persistent copy-on-write container flag. Higher bits remain transient collector metadata.
 
 The runtime routine `__rt_heap_alloc`:
 
@@ -303,19 +304,19 @@ Associative arrays use a separate heap-allocated structure: an open-addressing h
 |---|---|---|
 | `count` | 8 bytes | Number of occupied entries |
 | `capacity` | 8 bytes | Total number of slots |
-| `val_type` | 8 bytes | Value type tag (0=int, 1=str, 2=float, 3=bool, 4=array, 5=assoc, 6=object) |
+| `val_type` | 8 bytes | Coarse value-type summary (0=int, 1=str, 2=float, 3=bool, 4=array, 5=assoc, 6=object, 7=mixed) |
 | `head` | 8 bytes | Slot index of the first inserted entry, or `-1` when empty |
 | `tail` | 8 bytes | Slot index of the most recently inserted entry, or `-1` when empty |
 
-### Entries (56 bytes each)
+### Entries (64 bytes each)
 
-Starting at offset +40, each slot is 56 bytes:
+Starting at offset +40, each slot is 64 bytes:
 
 ```
-┌──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
-│ occupied │ key_ptr  │ key_len  │ value_lo │ value_hi │   prev   │   next   │
-│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (8 bytes)│
-└──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
+┌──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
+│ occupied │ key_ptr  │ key_len  │ value_lo │ value_hi │ value_tag│   prev   │   next   │
+│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (8 bytes)│
+└──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
 ```
 
 | Field | Description |
@@ -324,7 +325,8 @@ Starting at offset +40, each slot is 56 bytes:
 | `key_ptr` | Pointer to key string bytes |
 | `key_len` | Key string length |
 | `value_lo` | Value (integer) or value pointer (string) |
-| `value_hi` | String length (for string values), unused for int |
+| `value_hi` | String length (for string values), unused for single-word payloads |
+| `value_tag` | Authoritative per-entry runtime tag used by lookup, iteration, JSON, search, and GC |
 | `prev` | Previous inserted slot index, or `-1` for the head entry |
 | `next` | Next inserted slot index, or `-1` for the tail entry |
 
@@ -332,11 +334,11 @@ Starting at offset +40, each slot is 56 bytes:
 
 Keys are hashed with **FNV-1a** (fast, good distribution for short strings). Collisions are resolved by **linear probing** — if slot `hash % capacity` is occupied, try `(hash + 1) % capacity`, and so on.
 
-Entry address: `base + 40 + (slot_index × 56)`
+Entry address: `base + 40 + (slot_index × 64)`
 
 ### Iteration order
 
-Lookup still probes physical buckets, but iteration walks the `head -> next -> ... -> tail` chain. This preserves PHP insertion order across:
+Lookup still probes physical buckets, but iteration walks the `head -> next -> ... -> tail` chain. The header `val_type` is only a summary now; correctness-critical paths read each entry's `value_tag`. This preserves PHP insertion order across:
 
 - `foreach` on associative arrays
 - `array_keys()` and `array_values()`
@@ -349,7 +351,7 @@ Lookup still probes physical buckets, but iteration walks the `head -> next -> .
 | | Indexed array | Associative array |
 |---|---|---|
 | Header | 24 bytes | 40 bytes |
-| Element size | 8 or 16 bytes | 56 bytes (fixed) |
+| Element size | 8 or 16 bytes | 64 bytes (fixed) |
 | Access | O(1) by index | O(1) average by hash |
 | Iteration | Sequential | Insertion-order linked walk over occupied slots |
 | Keys | Implicit (0, 1, 2, ...) | Explicit strings |

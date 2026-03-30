@@ -196,7 +196,10 @@ pub fn generate(
     let main_skip = std::collections::HashSet::from(["argc".to_string(), "argv".to_string()]);
     for (name, var) in &ctx.variables {
         if main_skip.contains(name) { continue; }
-        if matches!(&var.ty, PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)) {
+        if matches!(
+            &var.ty,
+            PhpType::Str | PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+        ) {
             abi::store_at_offset(&mut emitter, "xzr", var.stack_offset);        // zero-init to prevent stale ptr free
         }
     }
@@ -460,6 +463,67 @@ fn collect_static_vars_in_body(
         }
     }
     let _ = global_env;
+}
+
+pub(crate) fn runtime_value_tag(ty: &PhpType) -> u8 {
+    match ty {
+        PhpType::Int => 0,
+        PhpType::Str => 1,
+        PhpType::Float => 2,
+        PhpType::Bool => 3,
+        PhpType::Array(_) => 4,
+        PhpType::AssocArray { .. } => 5,
+        PhpType::Object(_) => 6,
+        PhpType::Mixed => 7,
+        PhpType::Void => 8,
+        PhpType::Callable | PhpType::Pointer(_) => 0,
+    }
+}
+
+pub(crate) fn emit_box_runtime_payload_as_mixed(
+    emitter: &mut Emitter,
+    value_tag_reg: &str,
+    value_lo_reg: &str,
+    value_hi_reg: &str,
+) {
+    emitter.instruction(&format!("mov x0, {}", value_tag_reg));                   // x0 = runtime value tag for the mixed boxing helper
+    emitter.instruction(&format!("mov x1, {}", value_lo_reg));                    // x1 = low payload word for the mixed boxing helper
+    emitter.instruction(&format!("mov x2, {}", value_hi_reg));                    // x2 = high payload word for the mixed boxing helper
+    emitter.instruction("bl __rt_mixed_from_value");                              // retain/persist the payload as needed and return a boxed mixed cell
+}
+
+pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpType) {
+    match ty {
+        PhpType::Mixed => {}
+        PhpType::Int | PhpType::Bool | PhpType::Void => {
+            emitter.instruction("mov x1, x0");                                    // move the current scalar payload into the mixed helper argument register
+            emitter.instruction("mov x2, xzr");                                   // scalar mixed payloads do not use a second word
+            emitter.instruction(&format!("mov x0, #{}", runtime_value_tag(ty)));   // materialize the static value tag for this scalar
+            emitter.instruction("bl __rt_mixed_from_value");                      // box the scalar payload into a mixed cell
+        }
+        PhpType::Float => {
+            emitter.instruction("fmov x1, d0");                                   // move the current float bits into the mixed helper payload register
+            emitter.instruction("mov x2, xzr");                                   // float payloads only use the low word
+            emitter.instruction("mov x0, #2");                                    // runtime tag 2 = float
+            emitter.instruction("bl __rt_mixed_from_value");                      // box the float payload into a mixed cell
+        }
+        PhpType::Str => {
+            emitter.instruction("mov x0, #1");                                    // runtime tag 1 = string
+            emitter.instruction("bl __rt_mixed_from_value");                      // persist the string payload and box it into a mixed cell
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            emitter.instruction("mov x1, x0");                                    // move the current heap pointer into the mixed helper payload register
+            emitter.instruction("mov x2, xzr");                                   // heap-backed payloads only use the low word
+            emitter.instruction(&format!("mov x0, #{}", runtime_value_tag(ty)));   // materialize the heap payload tag for the mixed helper
+            emitter.instruction("bl __rt_mixed_from_value");                      // retain the heap child and box it into a mixed cell
+        }
+        PhpType::Callable | PhpType::Pointer(_) => {
+            emitter.instruction("mov x1, x0");                                    // move the raw pointer into the mixed helper payload register
+            emitter.instruction("mov x2, xzr");                                   // raw pointers only use the low word
+            emitter.instruction("mov x0, #0");                                    // treat unsupported raw pointers as integer-like payloads for now
+            emitter.instruction("bl __rt_mixed_from_value");                      // box the raw pointer bits into a mixed cell
+        }
+    }
 }
 
 fn align16(n: usize) -> usize {

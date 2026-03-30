@@ -36,7 +36,12 @@ pub fn emit_array_push_refcounted(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, #3");                                         // is the child an associative array / hash?
     emitter.instruction("b.eq __rt_array_push_refcounted_kind_hash");           // encode value_type 5 for nested hashes
     emitter.instruction("cmp x10, #4");                                         // is the child an object instance?
+    emitter.instruction("b.eq __rt_array_push_refcounted_kind_object");         // encode value_type 6 for nested objects
+    emitter.instruction("cmp x10, #5");                                         // is the child a boxed mixed cell?
     emitter.instruction("b.ne __rt_array_push_refcounted_push");                // unexpected/non-refcounted children leave the existing tag unchanged
+    emitter.instruction("mov x10, #7");                                         // encode value_type 7 for boxed mixed values
+    emitter.instruction("b __rt_array_push_refcounted_kind_store");             // store the packed array value_type tag
+    emitter.label("__rt_array_push_refcounted_kind_object");
     emitter.instruction("mov x10, #6");                                         // encode value_type 6 for nested objects
     emitter.instruction("b __rt_array_push_refcounted_kind_store");             // store the packed array value_type tag
     emitter.label("__rt_array_push_refcounted_kind_array");

@@ -155,6 +155,16 @@ pub fn emit(
             emitter.instruction("mov x16, #4");                                 // syscall write
             emitter.instruction("svc #0x80");                                   // invoke kernel
         }
+        PhpType::Mixed => {
+            // -- print a compact marker for boxed mixed values --
+            let (lbl, len) = data.add_string(b"mixed\n");
+            emitter.instruction(&format!("adrp x1, {}@PAGE", lbl));             // load "mixed\n" page
+            emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", lbl));       // resolve address
+            emitter.instruction(&format!("mov x2, #{}", len));                  // string length
+            emitter.instruction("mov x0, #1");                                  // fd = stdout
+            emitter.instruction("mov x16, #4");                                 // syscall write
+            emitter.instruction("svc #0x80");                                   // invoke kernel
+        }
         PhpType::Array(elem_ty) | PhpType::AssocArray { value: elem_ty, .. } => {
             // -- print simplified array dump --
             let (pre, pre_len) = data.add_string(b"array(");

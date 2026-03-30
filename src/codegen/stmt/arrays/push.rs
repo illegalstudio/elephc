@@ -31,9 +31,6 @@ pub(super) fn emit_array_push_stmt(
         abi::load_at_offset(emitter, "x0", offset);                                 // load array heap pointer from stack frame
     }
     emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer onto stack to preserve it
-    let val_ty = emit_expr(value, emitter, ctx, data);
-    super::super::retain_borrowed_heap_result(emitter, value, &val_ty);
-    emitter.instruction("ldr x9, [sp], #16");                                   // pop saved array pointer into x9
     let elem_ty = match ctx.variables.get(array) {
         Some(v) => match &v.ty {
             PhpType::Array(t) => *t.clone(),
@@ -41,6 +38,14 @@ pub(super) fn emit_array_push_stmt(
         },
         None => PhpType::Int,
     };
+    let mut val_ty = emit_expr(value, emitter, ctx, data);
+    if matches!(elem_ty, PhpType::Mixed) && val_ty != PhpType::Mixed {
+        crate::codegen::emit_box_current_value_as_mixed(emitter, &val_ty);
+        val_ty = PhpType::Mixed;
+    } else {
+        super::super::retain_borrowed_heap_result(emitter, value, &val_ty);
+    }
+    emitter.instruction("ldr x9, [sp], #16");                                   // pop saved array pointer into x9
     if elem_ty != val_ty {
         let updated_ty = PhpType::Array(Box::new(val_ty.clone()));
         ctx.update_var_type_and_ownership(
@@ -64,7 +69,7 @@ pub(super) fn emit_array_push_stmt(
             emitter.instruction("mov x0, x9");                                  // move array pointer to x0
             emitter.instruction("bl __rt_array_push_str");                      // call runtime: persist + append string to array
         }
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+        PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
             emitter.instruction("mov x1, x0");                                  // move nested array/object pointer to x1
             emitter.instruction("mov x0, x9");                                  // move outer array pointer to x0
             emitter.instruction("bl __rt_array_push_refcounted");               // append retained pointer and stamp array metadata

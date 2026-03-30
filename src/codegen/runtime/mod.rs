@@ -73,6 +73,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     system::emit_json_encode_bool(emitter);
     system::emit_json_encode_null(emitter);
     system::emit_json_encode_str(emitter);
+    system::emit_json_encode_mixed(emitter);
     system::emit_json_encode_array_int(emitter);
     system::emit_json_encode_array_str(emitter);
     system::emit_json_encode_assoc(emitter);
@@ -165,9 +166,13 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_array_merge_into(emitter);
     arrays::emit_array_merge_into_refcounted(emitter);
     arrays::emit_decref_any(emitter);
+    arrays::emit_decref_mixed(emitter);
     arrays::emit_gc_note_child_ref(emitter);
     arrays::emit_gc_mark_reachable(emitter);
     arrays::emit_gc_collect_cycles(emitter);
+    arrays::emit_mixed_from_value(emitter);
+    arrays::emit_mixed_free_deep(emitter);
+    arrays::emit_mixed_write_stdout(emitter);
     arrays::emit_object_free_deep(emitter);
     arrays::emit_refcount(emitter);
 
@@ -399,6 +404,7 @@ pub(crate) fn emit_runtime_data(
                     crate::types::PhpType::Array(_) => 4,
                     crate::types::PhpType::AssocArray { .. } => 5,
                     crate::types::PhpType::Object(_) => 6,
+                    crate::types::PhpType::Mixed => 7,
                     crate::types::PhpType::Callable
                     | crate::types::PhpType::Pointer(_)
                     | crate::types::PhpType::Void => 0,

@@ -20,6 +20,7 @@ pub fn emit(
         PhpType::Str => "string",
         PhpType::Bool => "boolean",
         PhpType::Void => "NULL",
+        PhpType::Mixed => "mixed",
         PhpType::Array(_) | PhpType::AssocArray { .. } => "array",
         PhpType::Callable => "callable",
         PhpType::Object(_) => "object",

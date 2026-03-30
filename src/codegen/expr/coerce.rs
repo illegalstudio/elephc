@@ -29,6 +29,7 @@ pub(super) fn coerce_to_string(emitter: &mut Emitter, ty: &PhpType) {
             emitter.instruction("mov x2, #0");                                  // null produces empty string (length = 0)
         }
         PhpType::Str
+        | PhpType::Mixed
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
         | PhpType::Callable

@@ -35,6 +35,11 @@ pub fn emit(
             // -- null is always empty --
             emitter.instruction("mov x0, #1");                                  // null is always empty, return true
         }
+        PhpType::Mixed => {
+            // -- mixed values are non-empty when the boxed pointer is non-null --
+            emitter.instruction("cmp x0, #0");                                  // compare boxed mixed pointer against null
+            emitter.instruction("cset x0, eq");                                 // x0 = 1 if null mixed pointer, 0 otherwise
+        }
         PhpType::Str => {
             // -- string is empty if length is zero --
             emitter.instruction("cmp x2, #0");                                  // compare string length against zero

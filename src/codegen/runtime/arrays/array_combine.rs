@@ -59,6 +59,7 @@ pub fn emit_array_combine(emitter: &mut Emitter) {
 
     // -- call hash_set --
     emitter.instruction("ldr x0, [sp, #16]");                                   // x0 = hash table pointer
+    emitter.instruction("ldr x5, [sp, #32]");                                   // x5 = value_tag for values[i]
     emitter.instruction("bl __rt_hash_set");                                    // insert key-value pair
     emitter.instruction("str x0, [sp, #16]");                                   // update hash table pointer after possible growth
 

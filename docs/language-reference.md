@@ -12,6 +12,7 @@ This document describes the PHP subset supported by elephc. The language aims to
 | `bool` | Yes | `true`/`false` as distinct type. `echo false` prints nothing, `echo true` prints `1`. Coerces to 0/1 in arithmetic. |
 | `float` | Yes | 64-bit double-precision. Literals: `3.14`, `.5`, `1.5e3`, `1.0e-5`. Constants: `INF`, `NAN`. |
 | `array` | Yes | Indexed (`[1, 2, 3]`) and associative (`["key" => "value"]`). Arrays use copy-on-write semantics: assignments and by-value calls share storage until the first write. |
+| `mixed` | Internal | Static helper type used when an associative array stores heterogeneous values. Runtime values are boxed with a per-entry tag, but PHP source code does not spell this type explicitly. |
 | `object` | Yes | Class instances. Heap-allocated, fixed-layout. `new ClassName(...)` |
 | `pointer` | Yes | 64-bit memory address. `ptr($var)`, `ptr_null()`. Echo prints `0x...` hex. |
 | `resource` | No | File handles are currently modeled as integer file descriptors (`int`), not as a separate runtime resource type. |
@@ -654,7 +655,7 @@ foreach ($map as $key => $value) {
 }
 ```
 
-Associative arrays use a hash table runtime. Keys follow the type inferred from the first key expression (commonly strings, but integer keys are also accepted when used consistently). The static `AssocArray` value type is inferred from the first value expression; later values are not re-checked for full PHP-style heterogeneity. Iteration-based operations such as `foreach`, `array_keys()`, `array_values()`, `array_search()`, and `json_encode()` preserve insertion order like PHP.
+Associative arrays use a hash table runtime. Keys follow the type inferred from the first key expression (commonly strings, but integer keys are also accepted when used consistently). If later values do not match the first value type, the checker widens the associative-array value type to the internal `mixed` runtime shape and the hash stores a per-entry value tag. Iteration-based operations such as `foreach`, `array_keys()`, `array_values()`, `array_search()`, `in_array()`, and `json_encode()` preserve insertion order and dispatch on each entry's runtime tag like PHP.
 
 ### Copy-on-write semantics
 

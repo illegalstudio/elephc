@@ -77,12 +77,14 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("and x15, x14, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x15, #2");                                         // is this at least an indexed array?
     emitter.instruction("b.lo __rt_gc_collect_cycles_count_next");              // strings/raw blocks contribute no outgoing cycle edges
-    emitter.instruction("cmp x15, #4");                                         // is this within the array/hash/object range?
+    emitter.instruction("cmp x15, #5");                                         // is this within the array/hash/object/mixed range?
     emitter.instruction("b.hi __rt_gc_collect_cycles_count_next");              // ignore unknown/raw heap kinds
     emitter.instruction("cmp x15, #2");                                         // is this an indexed array?
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_array");             // scan array payload children
     emitter.instruction("cmp x15, #3");                                         // is this an associative array / hash?
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_hash");              // scan hash payload children
+    emitter.instruction("cmp x15, #5");                                         // is this a boxed mixed cell?
+    emitter.instruction("b.eq __rt_gc_collect_cycles_count_mixed");             // scan the boxed mixed child pointer
     emitter.instruction("b __rt_gc_collect_cycles_count_object");               // remaining refcounted kind 4 is an object
 
     emitter.label("__rt_gc_collect_cycles_count_array");
@@ -93,6 +95,8 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("cmp x15, #5");                                         // is this an array-of-hashes payload?
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_array_setup");       // scan nested hash child pointers
     emitter.instruction("cmp x15, #6");                                         // is this an array-of-objects payload?
+    emitter.instruction("b.eq __rt_gc_collect_cycles_count_array_setup");       // scan nested object child pointers
+    emitter.instruction("cmp x15, #7");                                         // is this an array-of-mixed payload?
     emitter.instruction("b.ne __rt_gc_collect_cycles_count_next");              // scalar/string arrays contribute no refcounted edges
     emitter.label("__rt_gc_collect_cycles_count_array_setup");
     emitter.instruction("ldr x13, [x12]");                                      // load the array length
@@ -114,26 +118,23 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b __rt_gc_collect_cycles_count_array_loop");           // continue scanning array child pointers
 
     emitter.label("__rt_gc_collect_cycles_count_hash");
-    emitter.instruction("ldr x15, [x12, #16]");                                 // load the hash runtime value_type tag
-    emitter.instruction("cmp x15, #4");                                         // is this a hash of indexed arrays?
-    emitter.instruction("b.eq __rt_gc_collect_cycles_count_hash_setup");        // scan nested array child pointers
-    emitter.instruction("cmp x15, #5");                                         // is this a hash of associative arrays?
-    emitter.instruction("b.eq __rt_gc_collect_cycles_count_hash_setup");        // scan nested hash child pointers
-    emitter.instruction("cmp x15, #6");                                         // is this a hash of objects?
-    emitter.instruction("b.ne __rt_gc_collect_cycles_count_next");              // scalar/string hashes contribute no refcounted edges
-    emitter.label("__rt_gc_collect_cycles_count_hash_setup");
     emitter.instruction("ldr x13, [x12, #8]");                                  // load the hash capacity
     emitter.instruction("mov x14, #0");                                         // initialize the slot index to zero
     emitter.label("__rt_gc_collect_cycles_count_hash_loop");
     emitter.instruction("cmp x14, x13");                                        // have we visited every hash slot?
     emitter.instruction("b.ge __rt_gc_collect_cycles_count_next");              // finish the hash scan once all slots were visited
-    emitter.instruction("mov x15, #56");                                        // each hash entry occupies 56 bytes with insertion-order links
+    emitter.instruction("mov x15, #64");                                        // each hash entry occupies 64 bytes with per-entry tags and insertion-order links
     emitter.instruction("mul x15, x14, x15");                                   // compute the byte offset for this hash entry
     emitter.instruction("add x15, x12, x15");                                   // advance from the hash base to the entry
     emitter.instruction("add x15, x15, #40");                                   // skip the 40-byte hash header
     emitter.instruction("ldr x0, [x15]");                                       // load the occupied flag from this slot
     emitter.instruction("cmp x0, #1");                                          // is this hash slot occupied?
     emitter.instruction("b.ne __rt_gc_collect_cycles_count_hash_next");         // skip empty or tombstone slots
+    emitter.instruction("ldr x0, [x15, #40]");                                  // load this entry's runtime value_tag
+    emitter.instruction("cmp x0, #4");                                          // does this entry hold a heap-backed child?
+    emitter.instruction("b.lo __rt_gc_collect_cycles_count_hash_next");         // scalar/string entries contribute no graph edges
+    emitter.instruction("cmp x0, #7");                                          // do the per-entry heap-backed tags stay within range?
+    emitter.instruction("b.hi __rt_gc_collect_cycles_count_hash_next");         // unknown per-entry tags are ignored
     emitter.instruction("ldr x0, [x15, #24]");                                  // load the nested child pointer from the hash value
     emitter.instruction("str x12, [sp, #32]");                                  // preserve the parent hash pointer across the helper call
     emitter.instruction("str x13, [sp, #40]");                                  // preserve the hash capacity across the helper call
@@ -145,6 +146,16 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.label("__rt_gc_collect_cycles_count_hash_next");
     emitter.instruction("add x14, x14, #1");                                    // advance to the next hash slot
     emitter.instruction("b __rt_gc_collect_cycles_count_hash_loop");            // continue scanning hash child pointers
+
+    emitter.label("__rt_gc_collect_cycles_count_mixed");
+    emitter.instruction("ldr x15, [x12]");                                      // load the boxed mixed runtime value_tag
+    emitter.instruction("cmp x15, #4");                                         // does the boxed mixed value hold a heap-backed child?
+    emitter.instruction("b.lo __rt_gc_collect_cycles_count_next");              // scalar/string/null mixed payloads contribute no graph edges
+    emitter.instruction("cmp x15, #7");                                         // do boxed mixed tags stay within the supported heap-backed range?
+    emitter.instruction("b.hi __rt_gc_collect_cycles_count_next");              // unknown mixed tags are ignored
+    emitter.instruction("ldr x0, [x12, #8]");                                   // load the boxed mixed child pointer
+    emitter.instruction("bl __rt_gc_note_child_ref");                           // add one incoming heap edge to the boxed child
+    emitter.instruction("b __rt_gc_collect_cycles_count_next");                 // mixed-child counting is complete
 
     emitter.label("__rt_gc_collect_cycles_count_object");
     emitter.instruction("ldr w13, [x9]");                                       // load the object payload size from the heap header
@@ -175,12 +186,16 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_object_child");      // count nested hash property pointers
     emitter.instruction("cmp x10, #6");                                         // was this property last written with an object?
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_object_child");      // count nested object property pointers
+    emitter.instruction("cmp x10, #7");                                         // was this property last written with a boxed mixed value?
+    emitter.instruction("b.eq __rt_gc_collect_cycles_count_object_child");      // count nested mixed property pointers
     emitter.instruction("ldrb w10, [x14, x15]");                                // load the compile-time fallback tag for this property slot
     emitter.instruction("cmp x10, #4");                                         // is this a compile-time indexed-array property?
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_object_child");      // count nested array property pointers
     emitter.instruction("cmp x10, #5");                                         // is this a compile-time associative-array property?
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_object_child");      // count nested hash property pointers
     emitter.instruction("cmp x10, #6");                                         // is this a compile-time object property?
+    emitter.instruction("b.eq __rt_gc_collect_cycles_count_object_child");      // count compile-time object property pointers
+    emitter.instruction("cmp x10, #7");                                         // is this a compile-time mixed property?
     emitter.instruction("b.ne __rt_gc_collect_cycles_count_object_next");       // scalar and string properties contribute no refcounted edges
     emitter.label("__rt_gc_collect_cycles_count_object_child");
     emitter.instruction("ldr x0, [x12, x0]");                                   // load the nested child pointer from the property slot
@@ -220,7 +235,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("and x14, x13, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x14, #2");                                         // is this at least an indexed array?
     emitter.instruction("b.lo __rt_gc_collect_cycles_root_next");               // strings/raw blocks are outside the cycle collector set
-    emitter.instruction("cmp x14, #4");                                         // is this within the array/hash/object range?
+    emitter.instruction("cmp x14, #5");                                         // is this within the array/hash/object/mixed range?
     emitter.instruction("b.hi __rt_gc_collect_cycles_root_next");               // ignore unknown/raw heap kinds
     emitter.instruction("cmp x14, #2");                                         // is this an indexed array candidate?
     emitter.instruction("b.ne __rt_gc_collect_cycles_root_refcounted");         // hashes/objects decide in their dedicated branches
@@ -231,6 +246,8 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("cmp x15, #5");                                         // is this an array of associative arrays?
     emitter.instruction("b.eq __rt_gc_collect_cycles_root_refcounted");         // refcounted array payloads participate in cycle collection
     emitter.instruction("cmp x15, #6");                                         // is this an array of objects?
+    emitter.instruction("b.eq __rt_gc_collect_cycles_root_refcounted");         // refcounted array payloads participate in cycle collection
+    emitter.instruction("cmp x15, #7");                                         // is this an array of mixed boxes?
     emitter.instruction("b.ne __rt_gc_collect_cycles_root_next");               // scalar/string arrays are never cycle-collector candidates
     emitter.label("__rt_gc_collect_cycles_root_refcounted");
     emitter.instruction("uxtw x12, w12");                                       // widen the 32-bit refcount for comparison
@@ -273,7 +290,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("and x14, x13, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x14, #2");                                         // is this at least an indexed array?
     emitter.instruction("b.lo __rt_gc_collect_cycles_free_next");               // strings/raw blocks are outside the cycle collector set
-    emitter.instruction("cmp x14, #4");                                         // is this within the array/hash/object range?
+    emitter.instruction("cmp x14, #5");                                         // is this within the array/hash/object/mixed range?
     emitter.instruction("b.hi __rt_gc_collect_cycles_free_next");               // ignore unknown/raw heap kinds
     emitter.instruction("cmp x14, #2");                                         // is this an indexed array candidate?
     emitter.instruction("b.ne __rt_gc_collect_cycles_free_refcounted");         // hashes/objects decide in their dedicated branches
@@ -284,6 +301,8 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("cmp x15, #5");                                         // is this an array of associative arrays?
     emitter.instruction("b.eq __rt_gc_collect_cycles_free_refcounted");         // refcounted array payloads participate in cycle collection
     emitter.instruction("cmp x15, #6");                                         // is this an array of objects?
+    emitter.instruction("b.eq __rt_gc_collect_cycles_free_refcounted");         // refcounted array payloads participate in cycle collection
+    emitter.instruction("cmp x15, #7");                                         // is this an array of mixed boxes?
     emitter.instruction("b.ne __rt_gc_collect_cycles_free_next");               // scalar/string arrays are never cycle-collector candidates
     emitter.label("__rt_gc_collect_cycles_free_refcounted");
     emitter.instruction("mov x15, #1");                                         // prepare the reachable-bit mask
@@ -298,6 +317,8 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_gc_collect_cycles_free_array");              // deep-free unreachable arrays
     emitter.instruction("cmp x14, #3");                                         // is this an associative array / hash?
     emitter.instruction("b.eq __rt_gc_collect_cycles_free_hash");               // deep-free unreachable hashes
+    emitter.instruction("cmp x14, #5");                                         // is this a boxed mixed cell?
+    emitter.instruction("b.eq __rt_gc_collect_cycles_free_mixed");              // deep-free unreachable mixed cells
     emitter.instruction("bl __rt_object_free_deep");                            // deep-free unreachable objects
     emitter.instruction("b __rt_gc_collect_cycles_free_loop");                  // continue scanning from the saved next header
     emitter.label("__rt_gc_collect_cycles_free_array");
@@ -305,6 +326,9 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b __rt_gc_collect_cycles_free_loop");                  // continue scanning from the saved next header
     emitter.label("__rt_gc_collect_cycles_free_hash");
     emitter.instruction("bl __rt_hash_free_deep");                              // deep-free the unreachable hash graph node
+    emitter.instruction("b __rt_gc_collect_cycles_free_loop");                  // continue scanning from the saved next header
+    emitter.label("__rt_gc_collect_cycles_free_mixed");
+    emitter.instruction("bl __rt_mixed_free_deep");                             // deep-free the unreachable mixed graph node
     emitter.instruction("b __rt_gc_collect_cycles_free_loop");                  // continue scanning from the saved next header
     emitter.label("__rt_gc_collect_cycles_free_next");
     emitter.instruction("add x9, x9, x11");                                     // advance by this block payload size

@@ -70,3 +70,13 @@ for ($i = 0; $i < $n; $i++) {
     }
 }
 echo "\n";
+
+// Mixed-value associative arrays keep a runtime tag per entry
+$profile = ["name" => "Alice", "age" => 30, "active" => true, "note" => null];
+echo "\nMixed profile:\n";
+foreach ($profile as $key => $value) {
+    echo "  " . $key . " = ";
+    echo $value;
+    echo "\n";
+}
+echo "As JSON: " . json_encode($profile) . "\n";

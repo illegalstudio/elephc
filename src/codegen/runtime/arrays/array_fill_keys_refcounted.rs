@@ -49,6 +49,7 @@ pub fn emit_array_fill_keys_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #48]");                                   // restore key length
     emitter.instruction("ldr x3, [sp, #56]");                                   // restore retained fill payload
     emitter.instruction("mov x4, #0");                                          // value_hi unused for 8-byte refcounted payloads
+    emitter.instruction("ldr x5, [sp, #32]");                                   // x5 = value_tag for the retained fill payload
     emitter.instruction("bl __rt_hash_set");                                    // insert retained fill payload into the result hash
     emitter.instruction("str x0, [sp, #16]");                                   // persist hash pointer after possible growth
     emitter.instruction("ldr x4, [sp, #24]");                                   // reload loop index

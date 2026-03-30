@@ -32,7 +32,7 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
     emitter.instruction("and x13, x11, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x13, #2");                                         // is this a refcounted indexed array?
     emitter.instruction("b.lo __rt_decref_any_dispatch");                       // strings should still be freed immediately
-    emitter.instruction("cmp x13, #4");                                         // is this within the refcounted array/hash/object range?
+    emitter.instruction("cmp x13, #5");                                         // is this within the refcounted array/hash/object/mixed range?
     emitter.instruction("b.hi __rt_decref_any_dispatch");                       // raw/untyped blocks are not part of refcounted graph cleanup
     emitter.instruction("mov x14, #1");                                         // prepare a single-bit reachable mask
     emitter.instruction("lsl x14, x14, #16");                                   // x14 = GC reachable bit in the kind word
@@ -50,6 +50,8 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_decref_any_hash");                           // release hashes through __rt_decref_hash
     emitter.instruction("cmp x11, #4");                                         // is this an object instance?
     emitter.instruction("b.eq __rt_decref_any_object");                         // release objects through __rt_decref_object
+    emitter.instruction("cmp x11, #5");                                         // is this a boxed mixed value?
+    emitter.instruction("b.eq __rt_decref_any_mixed");                          // release mixed cells through __rt_decref_mixed
     emitter.instruction("ret");                                                 // unknown/raw kinds need no release
 
     emitter.label("__rt_decref_any_string");
@@ -63,6 +65,9 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
 
     emitter.label("__rt_decref_any_object");
     emitter.instruction("b __rt_decref_object");                                // tail-call to object decref
+
+    emitter.label("__rt_decref_any_mixed");
+    emitter.instruction("b __rt_decref_mixed");                                 // tail-call to mixed-cell decref
 
     emitter.label("__rt_decref_any_done");
     emitter.instruction("ret");                                                 // nothing to release

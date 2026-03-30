@@ -42,8 +42,13 @@ pub(super) fn emit_array_assign_stmt(
         emitter.instruction("str x0, [sp, #-16]!");                             // save hash table pointer
         emit_expr(index, emitter, ctx, data);
         emitter.instruction("stp x1, x2, [sp, #-16]!");                         // save key ptr/len
-        let val_ty = emit_expr(value, emitter, ctx, data);
-        super::super::retain_borrowed_heap_result(emitter, value, &val_ty);
+        let mut val_ty = emit_expr(value, emitter, ctx, data);
+        if matches!(elem_ty, PhpType::Mixed) && val_ty != PhpType::Mixed {
+            super::super::super::emit_box_current_value_as_mixed(emitter, &val_ty);
+            val_ty = PhpType::Mixed;
+        } else {
+            super::super::retain_borrowed_heap_result(emitter, value, &val_ty);
+        }
         let (val_lo, val_hi) = match &val_ty {
             PhpType::Int | PhpType::Bool => ("x0", "xzr"),
             PhpType::Str => {
@@ -58,6 +63,7 @@ pub(super) fn emit_array_assign_stmt(
         };
         emitter.instruction(&format!("mov x3, {}", val_lo));                    // value_lo
         emitter.instruction(&format!("mov x4, {}", val_hi));                    // value_hi
+        emitter.instruction(&format!("mov x5, #{}", super::super::super::runtime_value_tag(&val_ty))); // value_tag for this assoc entry
         emitter.instruction("ldp x1, x2, [sp], #16");                           // pop key ptr/len
         emitter.instruction("ldr x0, [sp], #16");                               // pop hash table pointer
         emitter.instruction("bl __rt_hash_set");                                // insert/update key-value pair (x0 = table)
@@ -98,7 +104,9 @@ pub(super) fn emit_array_assign_stmt(
                 emitter.instruction("str x0, [sp, #-16]!");                     // preserve scalar or heap pointer value across growth helpers
             }
         }
-        let effective_store_ty = if elem_ty != val_ty {
+        let effective_store_ty = if matches!(elem_ty, PhpType::Mixed) {
+            PhpType::Mixed
+        } else if elem_ty != val_ty {
             val_ty.clone()
         } else {
             elem_ty.clone()
@@ -113,7 +121,7 @@ pub(super) fn emit_array_assign_stmt(
         }
         let stores_refcounted_pointer = matches!(
             effective_store_ty,
-            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+            PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
         );
         emitter.instruction("ldr x9, [sp, #16]");                               // reload index without disturbing the preserved value on top of the stack
         emitter.instruction("ldr x10, [sp, #32]");                              // reload array pointer without disturbing the preserved value on top of the stack
@@ -166,7 +174,7 @@ pub(super) fn emit_array_assign_stmt(
                 emitter.instruction("orr x12, x12, x13");                       // combine heap kind + string value_type tag
                 emitter.instruction("str x12, [x10, #-8]");                     // persist the string-oriented packed kind word
             }
-            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
                 emitter.instruction("mov x12, #8");                             // nested heap pointers use ordinary 8-byte slots
                 emitter.instruction("str x12, [x10, #16]");                     // persist the pointer-sized slot width in the array header
             }

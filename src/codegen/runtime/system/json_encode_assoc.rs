@@ -5,16 +5,16 @@ use crate::codegen::emit::Emitter;
 /// Output: x1 = result ptr (in concat_buf), x2 = result len
 ///
 /// Uses __rt_hash_iter_next to iterate the hash table entries in insertion order.
-/// Hash table iter yields: x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi per entry.
+/// Hash table iter yields: x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi, x5=val_tag per entry.
 pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_assoc ---");
     emitter.label("__rt_json_encode_assoc");
 
     // -- set up stack frame --
-    emitter.instruction("sub sp, sp, #96");                                     // allocate 96 bytes
-    emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #80");                                    // set new frame pointer
+    emitter.instruction("sub sp, sp, #112");                                    // allocate 112 bytes
+    emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #96");                                    // set new frame pointer
 
     // -- save hash table pointer --
     emitter.instruction("str x0, [sp, #0]");                                    // save hash ptr
@@ -60,6 +60,7 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #56]");                                   // save key len
     emitter.instruction("str x3, [sp, #64]");                                   // save val_lo
     emitter.instruction("str x4, [sp, #72]");                                   // save val_hi
+    emitter.instruction("str x5, [sp, #88]");                                   // save val_tag
 
     // -- add comma if not first entry --
     emitter.instruction("ldr x5, [sp, #40]");                                   // load items written
@@ -98,15 +99,79 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("mov w12, #58");                                        // ASCII ':'
     emitter.instruction("strb w12, [x11]");                                     // write ':'
     emitter.instruction("add x11, x11, #1");                                    // advance
+    emitter.instruction("str x11, [sp, #16]");                                  // save write pos after emitting the JSON key prefix
 
-    // -- write value as quoted string --
-    emitter.instruction("mov w12, #34");                                        // ASCII '"'
-    emitter.instruction("strb w12, [x11]");                                     // write opening quote
-    emitter.instruction("add x11, x11, #1");                                    // advance
+    // -- move concat_off to the current write position so nested encoders append safely --
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the current output write position
+    emitter.instruction("ldr x10, [sp, #8]");                                   // reload the JSON output start pointer
+    emitter.instruction("sub x12, x11, x10");                                   // x12 = bytes already committed to the JSON output
+    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of concat offset
+    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve concat offset address
+    emitter.instruction("str x12, [x9]");                                       // nested JSON/string encoders append after the existing key prefix
 
-    // -- copy value bytes --
-    emitter.instruction("ldr x1, [sp, #64]");                                   // load val ptr
-    emitter.instruction("ldr x2, [sp, #72]");                                   // load val len
+    // -- encode the value according to its per-entry runtime tag --
+    emitter.instruction("ldr x12, [sp, #88]");                                  // load the saved per-entry value_tag
+    emitter.instruction("cmp x12, #0");                                         // is this value an integer?
+    emitter.instruction("b.eq __rt_json_assoc_value_int");                       // encode integers via itoa
+    emitter.instruction("cmp x12, #1");                                         // is this value a string?
+    emitter.instruction("b.eq __rt_json_assoc_value_str");                       // encode strings with JSON escaping
+    emitter.instruction("cmp x12, #2");                                         // is this value a float?
+    emitter.instruction("b.eq __rt_json_assoc_value_float");                     // encode floats via ftoa
+    emitter.instruction("cmp x12, #3");                                         // is this value a bool?
+    emitter.instruction("b.eq __rt_json_assoc_value_bool");                      // encode bools via json_encode_bool
+    emitter.instruction("cmp x12, #4");                                         // is this value an indexed array?
+    emitter.instruction("b.eq __rt_json_assoc_value_array");                     // encode arrays via the indexed-array JSON helpers
+    emitter.instruction("cmp x12, #5");                                         // is this value an associative array?
+    emitter.instruction("b.eq __rt_json_assoc_value_assoc");                     // encode nested associative arrays recursively
+    emitter.instruction("cmp x12, #8");                                         // is this value null?
+    emitter.instruction("b.eq __rt_json_assoc_value_null");                      // encode null via json_encode_null
+    emitter.instruction("b __rt_json_assoc_value_null");                         // unsupported mixed/object payloads currently encode as null
+
+    emitter.label("__rt_json_assoc_value_int");
+    emitter.instruction("ldr x0, [sp, #64]");                                   // load integer payload from value_lo
+    emitter.instruction("bl __rt_itoa");                                        // encode integer payload as decimal digits
+    emitter.instruction("b __rt_json_assoc_value_copy");                         // copy the encoded value into concat_buf
+
+    emitter.label("__rt_json_assoc_value_str");
+    emitter.instruction("ldr x1, [sp, #64]");                                   // load string pointer from value_lo
+    emitter.instruction("ldr x2, [sp, #72]");                                   // load string length from value_hi
+    emitter.instruction("bl __rt_json_encode_str");                             // encode string payload with JSON escaping and quotes
+    emitter.instruction("b __rt_json_assoc_value_copy");                         // copy the encoded value into concat_buf
+
+    emitter.label("__rt_json_assoc_value_float");
+    emitter.instruction("ldr x9, [sp, #64]");                                   // load float bits from value_lo
+    emitter.instruction("fmov d0, x9");                                         // move float bits into the FP argument register
+    emitter.instruction("bl __rt_ftoa");                                        // encode float payload as decimal digits
+    emitter.instruction("b __rt_json_assoc_value_copy");                         // copy the encoded value into concat_buf
+
+    emitter.label("__rt_json_assoc_value_bool");
+    emitter.instruction("ldr x0, [sp, #64]");                                   // load bool payload from value_lo
+    emitter.instruction("bl __rt_json_encode_bool");                            // encode bool payload as true/false
+    emitter.instruction("b __rt_json_assoc_value_copy");                         // copy the encoded value into concat_buf
+
+    emitter.label("__rt_json_assoc_value_array");
+    emitter.instruction("ldr x0, [sp, #64]");                                   // load nested array pointer from value_lo
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the nested array kind word
+    emitter.instruction("lsr x9, x9, #8");                                      // move the nested array value_type tag into the low bits
+    emitter.instruction("and x9, x9, #0x7f");                                   // isolate the nested array value_type tag
+    emitter.instruction("cmp x9, #1");                                          // is the nested array a string array?
+    emitter.instruction("b.eq __rt_json_assoc_value_array_str");                 // encode string arrays with the string-array helper
+    emitter.instruction("bl __rt_json_encode_array_int");                        // fall back to the integer-array helper for non-string arrays
+    emitter.instruction("b __rt_json_assoc_value_copy");                         // copy the encoded nested array into concat_buf
+    emitter.label("__rt_json_assoc_value_array_str");
+    emitter.instruction("bl __rt_json_encode_array_str");                        // encode nested string arrays with the string-array helper
+    emitter.instruction("b __rt_json_assoc_value_copy");                         // copy the encoded nested array into concat_buf
+
+    emitter.label("__rt_json_assoc_value_assoc");
+    emitter.instruction("ldr x0, [sp, #64]");                                   // load nested associative array pointer from value_lo
+    emitter.instruction("bl __rt_json_encode_assoc");                            // encode the nested associative array recursively
+    emitter.instruction("b __rt_json_assoc_value_copy");                         // copy the encoded nested associative array into concat_buf
+
+    emitter.label("__rt_json_assoc_value_null");
+    emitter.instruction("bl __rt_json_encode_null");                             // encode null or unsupported payloads as JSON null
+
+    emitter.label("__rt_json_assoc_value_copy");
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the current concat_buf write position
     emitter.instruction("mov x10, #0");                                         // copy index
     emitter.label("__rt_json_assoc_val_copy");
     emitter.instruction("cmp x10, x2");                                         // check if done
@@ -117,9 +182,6 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("b __rt_json_assoc_val_copy");                          // continue
     emitter.label("__rt_json_assoc_val_done");
     emitter.instruction("add x11, x11, x2");                                    // advance write pos
-    emitter.instruction("mov w12, #34");                                        // ASCII '"'
-    emitter.instruction("strb w12, [x11]");                                     // write closing quote
-    emitter.instruction("add x11, x11, #1");                                    // advance
     emitter.instruction("str x11, [sp, #16]");                                  // save write pos
 
     // -- increment items written --
@@ -147,7 +209,7 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("str x10, [x9]");                                       // store updated offset
 
     // -- tear down and return --
-    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #96");                                     // deallocate stack frame
+    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #112");                                    // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 }
