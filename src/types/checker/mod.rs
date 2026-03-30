@@ -5,7 +5,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
 use crate::parser::ast::{
-    BinOp, CType, CastType, Expr, ExprKind, Program, StaticReceiver, Stmt, StmtKind, Visibility,
+    BinOp, CType, CastType, ClassMethod, ClassProperty, Expr, ExprKind, Program, StaticReceiver,
+    Stmt, StmtKind, Visibility,
 };
 use crate::types::{
     ctype_stack_size, ctype_to_php_type, traits::{flatten_classes, FlattenedClass}, CheckResult,
@@ -287,7 +288,7 @@ fn inject_builtin_throwables(
         InterfaceDeclInfo {
             name: "Throwable".to_string(),
             extends: Vec::new(),
-            methods: Vec::new(),
+            methods: vec![builtin_throwable_get_message_method()],
             span: crate::span::Span::dummy(),
         },
     );
@@ -298,12 +299,112 @@ fn inject_builtin_throwables(
             extends: None,
             implements: vec!["Throwable".to_string()],
             is_abstract: false,
-            properties: Vec::new(),
-            methods: Vec::new(),
+            properties: vec![builtin_exception_message_property()],
+            methods: vec![
+                builtin_exception_constructor_method(),
+                builtin_exception_get_message_method(),
+            ],
         },
     );
 
     Ok(())
+}
+
+fn builtin_exception_message_property() -> ClassProperty {
+    ClassProperty {
+        name: "message".to_string(),
+        visibility: Visibility::Public,
+        readonly: false,
+        default: Some(Expr::new(
+            ExprKind::StringLiteral(String::new()),
+            crate::span::Span::dummy(),
+        )),
+        span: crate::span::Span::dummy(),
+    }
+}
+
+fn builtin_exception_constructor_method() -> ClassMethod {
+    ClassMethod {
+        name: "__construct".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        has_body: true,
+        params: vec![(
+            "message".to_string(),
+            Some(Expr::new(
+                ExprKind::StringLiteral(String::new()),
+                crate::span::Span::dummy(),
+            )),
+            false,
+        )],
+        variadic: None,
+        body: vec![Stmt::new(
+            StmtKind::PropertyAssign {
+                object: Box::new(Expr::new(ExprKind::This, crate::span::Span::dummy())),
+                property: "message".to_string(),
+                value: Expr::new(ExprKind::Variable("message".to_string()), crate::span::Span::dummy()),
+            },
+            crate::span::Span::dummy(),
+        )],
+        span: crate::span::Span::dummy(),
+    }
+}
+
+fn builtin_exception_get_message_method() -> ClassMethod {
+    ClassMethod {
+        name: "getMessage".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        has_body: true,
+        params: Vec::new(),
+        variadic: None,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::PropertyAccess {
+                    object: Box::new(Expr::new(ExprKind::This, crate::span::Span::dummy())),
+                    property: "message".to_string(),
+                },
+                crate::span::Span::dummy(),
+            ))),
+            crate::span::Span::dummy(),
+        )],
+        span: crate::span::Span::dummy(),
+    }
+}
+
+fn builtin_throwable_get_message_method() -> ClassMethod {
+    ClassMethod {
+        name: "getMessage".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: true,
+        has_body: false,
+        params: Vec::new(),
+        variadic: None,
+        body: Vec::new(),
+        span: crate::span::Span::dummy(),
+    }
+}
+
+fn patch_builtin_exception_signatures(checker: &mut Checker) {
+    if let Some(interface_info) = checker.interfaces.get_mut("Throwable") {
+        if let Some(sig) = interface_info.methods.get_mut("getMessage") {
+            sig.return_type = PhpType::Str;
+        }
+    }
+    if let Some(class_info) = checker.classes.get_mut("Exception") {
+        if let Some(sig) = class_info.methods.get_mut("__construct") {
+            if let Some(param) = sig.params.get_mut(0) {
+                param.1 = PhpType::Str;
+            }
+            sig.return_type = PhpType::Void;
+        }
+        if let Some(sig) = class_info.methods.get_mut("getMessage") {
+            sig.return_type = PhpType::Str;
+        }
+    }
 }
 
 fn build_method_sig(method: &crate::parser::ast::ClassMethod) -> FunctionSig {
@@ -1187,6 +1288,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
             &mut building,
         )?;
     }
+    patch_builtin_exception_signatures(&mut checker);
 
     // Pre-scan: collect extern declarations
     for stmt in program {

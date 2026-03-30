@@ -332,6 +332,7 @@ try {
 Supported subset:
 
 - built-in `Exception` class and built-in `Throwable` interface are available without declaring them yourself
+- built-in `Exception` currently provides a minimal PHP-style API: public `$message`, `__construct($message = "")`, and `getMessage()`
 - `throw <expr>;` where `<expr>` has an object type implementing `Throwable`
 - `throw <expr>` can also be used inside expressions such as `??` and ternaries
 - `try { ... } catch (ClassName $e) { ... }`

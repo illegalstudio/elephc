@@ -136,6 +136,14 @@ fn test_builtin_exception_try_catch() {
 }
 
 #[test]
+fn test_builtin_exception_message_api() {
+    let out = compile_and_run(
+        "<?php $e = new Exception(\"boom\"); echo $e->message; echo \":\"; echo $e->getMessage();",
+    );
+    assert_eq!(out, "boom:boom");
+}
+
+#[test]
 fn test_builtin_throwable_catches_exception() {
     let out = compile_and_run("<?php try { throw new Exception(); } catch (Throwable $e) { echo 12; }");
     assert_eq!(out, "12");
@@ -163,6 +171,14 @@ fn test_exception_catch_without_variable() {
         "<?php try { throw new Exception(); } catch (Exception) { echo 21; }",
     );
     assert_eq!(out, "21");
+}
+
+#[test]
+fn test_exception_catch_can_read_builtin_message() {
+    let out = compile_and_run(
+        "<?php try { throw new Exception(\"caught\"); } catch (Exception $e) { echo $e->getMessage(); }",
+    );
+    assert_eq!(out, "caught");
 }
 
 #[test]
