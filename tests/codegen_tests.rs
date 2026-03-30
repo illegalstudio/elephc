@@ -2867,6 +2867,35 @@ fn test_cast_bool_from_string_nonempty() {
 }
 
 #[test]
+fn test_cast_mixed_unboxes_payload() {
+    let out = compile_and_run(
+        r#"<?php
+$map = [
+    "int" => 42,
+    "float" => 3.75,
+    "true" => true,
+    "false" => false,
+    "null" => null,
+    "text" => "27",
+];
+echo (int)$map["float"];
+echo "|";
+echo (int)$map["text"];
+echo "|";
+echo (bool)$map["int"] ? "1" : "0";
+echo (bool)$map["false"] ? "1" : "0";
+echo "|";
+echo (string)$map["true"];
+echo "|";
+echo (string)$map["null"];
+echo "|";
+echo (string)$map["int"];
+"#,
+    );
+    assert_eq!(out, "3|27|10|1||42");
+}
+
+#[test]
 fn test_cast_integer_alias() {
     let out = compile_and_run("<?php echo (integer)3.7;");
     assert_eq!(out, "3");

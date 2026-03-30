@@ -28,8 +28,11 @@ pub(super) fn coerce_to_string(emitter: &mut Emitter, ty: &PhpType) {
             // -- null coerces to empty string in PHP --
             emitter.instruction("mov x2, #0");                                  // null produces empty string (length = 0)
         }
+        PhpType::Mixed => {
+            // -- mixed strings dispatch on the boxed payload at runtime --
+            emitter.instruction("bl __rt_mixed_cast_string");                    // cast the boxed mixed payload to string in x1/x2
+        }
         PhpType::Str
-        | PhpType::Mixed
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
         | PhpType::Callable

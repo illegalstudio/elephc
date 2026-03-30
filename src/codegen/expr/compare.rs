@@ -31,7 +31,10 @@ pub(super) fn emit_cast(
                 PhpType::Array(_) | PhpType::AssocArray { .. } => {
                     emitter.instruction("ldr x0, [x0]");                        // load array length from header (first field)
                 }
-                PhpType::Mixed | PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {}
+                PhpType::Mixed => {
+                    emitter.instruction("bl __rt_mixed_cast_int");               // cast the boxed mixed payload to int at runtime
+                }
+                PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {}
             }
             PhpType::Int
         }
@@ -86,7 +89,10 @@ pub(super) fn emit_cast(
                     emitter.instruction("cmp x0, #0");                          // check if array is empty
                     emitter.instruction("cset x0, ne");                         // x0=1 if non-empty, 0 if empty
                 }
-                PhpType::Mixed | PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
+                PhpType::Mixed => {
+                    emitter.instruction("bl __rt_mixed_cast_bool");              // cast the boxed mixed payload to bool at runtime
+                }
+                PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
                     emitter.instruction("cmp x0, #0");                          // test if callable/object address is zero
                     emitter.instruction("cset x0, ne");                         // x0=1 if nonzero (truthy)
                 }
