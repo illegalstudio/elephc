@@ -874,12 +874,16 @@ fn test_parse_class_decl() {
         StmtKind::ClassDecl {
             name,
             extends,
+            implements,
+            is_abstract,
             trait_uses,
             properties,
             methods,
         } => {
             assert_eq!(name, "Point");
             assert_eq!(extends, &None);
+            assert!(implements.is_empty());
+            assert!(!is_abstract);
             assert!(trait_uses.is_empty());
             assert_eq!(properties.len(), 2);
             assert_eq!(properties[0].name, "x");
@@ -921,12 +925,16 @@ fn test_parse_trait_decl_and_use_adaptations() {
         StmtKind::ClassDecl {
             name,
             extends,
+            implements,
+            is_abstract,
             trait_uses,
             properties,
             methods,
         } => {
             assert_eq!(name, "Box");
             assert_eq!(extends, &None);
+            assert!(implements.is_empty());
+            assert!(!is_abstract);
             assert!(properties.is_empty());
             assert!(methods.is_empty());
             assert_eq!(trait_uses.len(), 1);
@@ -1089,6 +1097,55 @@ fn test_parse_class_decl_with_extends() {
             assert_eq!(extends.as_deref(), Some("Base"));
             assert_eq!(methods.len(), 1);
             assert_eq!(methods[0].name, "run");
+        }
+        _ => panic!("Expected ClassDecl"),
+    }
+}
+
+#[test]
+fn test_parse_interface_decl() {
+    let stmts = parse_source(
+        "<?php interface Named extends Renderable, Jsonable { public function name(); }",
+    );
+    match &stmts[0].kind {
+        StmtKind::InterfaceDecl {
+            name,
+            extends,
+            methods,
+        } => {
+            assert_eq!(name, "Named");
+            assert_eq!(extends, &vec!["Renderable".to_string(), "Jsonable".to_string()]);
+            assert_eq!(methods.len(), 1);
+            assert_eq!(methods[0].name, "name");
+            assert!(methods[0].is_abstract);
+            assert!(!methods[0].has_body);
+            assert!(methods[0].body.is_empty());
+        }
+        _ => panic!("Expected InterfaceDecl"),
+    }
+}
+
+#[test]
+fn test_parse_abstract_class_with_implements() {
+    let stmts = parse_source(
+        "<?php abstract class Base implements Named, Tagged { abstract protected function load(); }",
+    );
+    match &stmts[0].kind {
+        StmtKind::ClassDecl {
+            name,
+            implements,
+            is_abstract,
+            methods,
+            ..
+        } => {
+            assert_eq!(name, "Base");
+            assert_eq!(implements, &vec!["Named".to_string(), "Tagged".to_string()]);
+            assert!(*is_abstract);
+            assert_eq!(methods.len(), 1);
+            assert_eq!(methods[0].name, "load");
+            assert!(methods[0].is_abstract);
+            assert!(!methods[0].has_body);
+            assert!(methods[0].body.is_empty());
         }
         _ => panic!("Expected ClassDecl"),
     }

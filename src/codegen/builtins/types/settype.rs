@@ -22,7 +22,7 @@ pub fn emit(
                 "int" | "integer" => {
                     // -- convert value to integer --
                     match &old_ty {
-                        PhpType::Float => { emitter.instruction("fcvtzs x0, d0"); } //convert float to signed int (truncate toward zero)
+                        PhpType::Float => { emitter.instruction("fcvtzs x0, d0"); } // convert float to signed int (truncate toward zero)
                         PhpType::Bool | PhpType::Int => {}
                         _ => { emitter.instruction("mov x0, #0"); }             // unsupported types become 0
                     }

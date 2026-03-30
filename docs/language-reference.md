@@ -693,7 +693,7 @@ foreach ($matrix as $row) {
 ### Limitations
 
 - No array union operator (`+`)
-- Arrays are homogeneous: all elements must be the same type
+- Indexed arrays are still homogeneous, except that object elements may widen to a shared parent class when all entries are related by inheritance (for example `Dog` + `Cat` can infer `Animal[]`)
 
 ## FFI
 
@@ -1281,13 +1281,13 @@ Both `include 'f';` and `include('f');` syntax are supported.
 - `strtotime()` only supports "YYYY-MM-DD" and "YYYY-MM-DD HH:MM:SS" formats. Relative time strings like "next Monday" or "+1 week" are not supported.
 - `json_decode()` returns a string. It strips quotes and unescapes JSON string values, but does not parse JSON objects into associative arrays or JSON arrays into PHP arrays.
 - `json_last_error()` always returns 0 — no actual error tracking is performed.
-- `preg_*` functions use POSIX extended regex (via libc `regcomp`/`regexec`), not PCRE. Lookahead, lookbehind, non-greedy quantifiers, and other PCRE-only features are not supported.
+- `preg_*` functions ultimately run on POSIX extended regex via libc `regcomp`/`regexec`, but elephc first translates a small set of common PCRE shorthands such as `\s`, `\d`, `\w` and their uppercase negations. Lookahead, lookbehind, non-greedy quantifiers, and other PCRE-only features are still not supported.
 - `preg_match()` does not support the `$matches` capture parameter.
 - `preg_replace()` does not support backreferences like `$1` in the replacement string.
 
 ## Classes
 
-elephc supports PHP classes with single inheritance, properties, constructors, instance methods, static methods, traits, `self::method()`, `parent::method()`, `static::method()`, and `public` / `protected` / `private` visibility.
+elephc supports PHP classes with single inheritance, interfaces, abstract classes, properties, constructors, instance methods, static methods, traits, `self::method()`, `parent::method()`, `static::method()`, and `public` / `protected` / `private` visibility.
 
 ### Class declaration
 
@@ -1315,6 +1315,61 @@ class Point extends Shape {
 ```
 
 Concrete classes may extend one parent class with `extends`. Method overrides use virtual dispatch, so an inherited method that calls `$this->otherMethod()` sees the child's override at runtime.
+
+### Interfaces
+
+Interfaces declare required public instance methods. They may extend multiple parent interfaces:
+
+```php
+<?php
+interface Named {
+    public function name();
+}
+
+interface Labeled extends Named {
+    public function label();
+}
+
+class Product implements Labeled {
+    public function name() {
+        return "widget";
+    }
+
+    public function label() {
+        return strtoupper($this->name());
+    }
+}
+```
+
+- Interface methods are signature-only: no method bodies, properties, or trait uses.
+- Interface inheritance is flattened transitively with cycle detection.
+- Concrete classes must implement every inherited interface method with a compatible parameter shape and `public` visibility.
+
+### Abstract classes and abstract methods
+
+Abstract classes can provide shared concrete behavior while deferring required methods to subclasses:
+
+```php
+<?php
+abstract class BaseGreeter {
+    abstract public function label();
+
+    public function greet() {
+        return "hi " . $this->label();
+    }
+}
+
+class PersonGreeter extends BaseGreeter {
+    public function label() {
+        return "world";
+    }
+}
+```
+
+- `abstract class Name { ... }` cannot be instantiated with `new`.
+- `abstract public function foo();` is supported inside abstract classes and traits.
+- Non-abstract classes may not contain abstract methods.
+- Abstract methods must be bodyless declarations ended by `;`.
 
 ### Properties
 
@@ -1549,15 +1604,14 @@ echo $p->magnitude(); // method call
 
 ### Limitations
 
-- No interfaces (`implements`)
-- No abstract or final classes/methods
+- No `final` classes or methods
 - No property type declarations
 - No constructor promotion
 - Property redeclaration across an inheritance chain is rejected for now
 
 ## What elephc cannot do (by design)
 
-- No interfaces, enums
+- No enums
 - No exceptions (`try`/`catch`/`throw`)
 - No `eval()`
 - No dynamic `include`/`require` (path must be a string literal)

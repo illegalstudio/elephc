@@ -36,7 +36,7 @@ PHP source (.php)
      ▼
 ┌─────────┐
 │ Codegen  │  src/codegen/
-│          │  mod.rs, expr.rs, stmt.rs, functions.rs, abi.rs
+│          │  mod.rs, expr.rs + expr/, stmt.rs + stmt/, functions.rs, abi.rs
 │          │  AST → ARM64 assembly string (.s file)
 └────┬─────┘
      │
@@ -81,7 +81,26 @@ src/
 ├── codegen/
 │   ├── mod.rs                 generate() orchestration
 │   ├── expr.rs                Expression codegen
+│   ├── expr/                  Expression submodules
+│   │   ├── arrays.rs          Indexed/assoc arrays, match, array access
+│   │   ├── binops.rs          Arithmetic, comparison, bitwise, null-coalesce helpers
+│   │   ├── calls.rs           Function / closure / indirect call dispatch
+│   │   ├── calls/             Call-specific helpers
+│   │   ├── coerce.rs          Truthiness / string / null coercions
+│   │   ├── compare.rs         Comparison and widening helpers
+│   │   ├── helpers.rs         Shared expression-codegen utilities
+│   │   ├── objects.rs         Object-expression dispatch
+│   │   ├── objects/           Allocation / property / method dispatch helpers
+│   │   └── ownership.rs       Result ownership classification
 │   ├── stmt.rs                Statement codegen
+│   ├── stmt/                  Statement submodules
+│   │   ├── assignments.rs     Variable / property assignment helpers
+│   │   ├── arrays.rs          Array statement dispatch
+│   │   ├── arrays/            Array assign / push / list-unpack helpers
+│   │   ├── control_flow.rs    Loop / branch dispatch
+│   │   ├── control_flow/      Branching / foreach / loop helpers
+│   │   ├── io.rs              Echo / print helpers
+│   │   └── storage.rs         Global / static / extern-global helpers
 │   ├── functions.rs           User function emission
 │   ├── abi.rs                 ARM64 register conventions
 │   ├── ffi.rs                 Extern function/global/class codegen
@@ -179,7 +198,7 @@ The runtime reserves a fixed set of global symbols in `emit_runtime_data()`:
 | I/O scratch | `_cstr_buf`, `_cstr_buf2`, `_eof_flags` | Syscall-oriented C-string scratch buffers and EOF bookkeeping |
 | String/regex tables | `_fmt_g`, `_b64_encode_tbl`, `_b64_decode_tbl`, `_pcre_*` | Formatting and lookup tables for runtime helpers |
 | JSON/date tables | `_json_true`, `_json_false`, `_json_null`, `_day_names`, `_month_names` | Static data used by JSON and date routines |
-| Class metadata tables | `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>`, `_class_vtable_ptrs`, `_class_vtable_<id>`, `_class_static_vtable_ptrs`, `_class_static_vtable_<id>` | Per-class property traversal metadata plus instance/static dispatch tables |
+| Class/interface metadata tables | `_interface_count`, `_interface_method_ptrs`, `_interface_methods_<id>`, `_class_interface_ptrs`, `_class_interfaces_<id>`, `_class_interface_impl_<class>_<iface>`, `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>`, `_class_vtable_ptrs`, `_class_vtable_<id>`, `_class_static_vtable_ptrs`, `_class_static_vtable_<id>` | Per-interface method-order metadata plus per-class property traversal metadata and instance/static dispatch tables |
 
 ### Heap allocator
 
@@ -224,6 +243,7 @@ Total size: `8 + (num_properties × 16)`. Properties are stored at fixed offsets
 
 - Instance methods: codegen resolves a stable slot number from the static class metadata, then uses the object's `class_id` to load the concrete class vtable entry and `blr` to the implementation. The object pointer is still passed as the first argument in `x0` (as `$this`).
 - Private instance methods are excluded from the vtable and emitted as direct calls within the declaring class, preserving PHP's lexical binding for parent-private helpers.
+- Interfaces and abstract classes are enforced at compile time. Runtime method calls still use the existing class vtables, while dedicated interface metadata tables are emitted alongside the class metadata for roadmap-aligned interface bookkeeping and future dispatch work.
 - Static methods: `bl _static_ClassName_methodName`. No object pointer is passed.
 - `self::method()` / `parent::method()`: emitted as direct lexical calls, but static targets still forward the current "called class" id for later `static::` lookups.
 - `static::method()`: uses a per-class static-method table keyed by the forwarded called-class id, so late static binding works across inherited static overrides.

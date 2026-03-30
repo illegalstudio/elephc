@@ -197,9 +197,26 @@ global_env.insert("argv", PhpType::Array(Box::new(PhpType::Str)));
 
 These correspond to PHP's `$argc` and `$argv` superglobals.
 
+## Interface type checking
+
+Before `ClassInfo` is built, the checker flattens trait composition through `src/types/traits.rs`, builds `InterfaceInfo` entries for every interface, and only then builds class metadata recursively.
+
+```rust
+pub struct InterfaceInfo {
+    pub interface_id: u64,
+    pub parents: Vec<String>,
+    pub methods: HashMap<String, FunctionSig>,
+    pub method_declaring_interfaces: HashMap<String, String>,
+    pub method_order: Vec<String>,
+    pub method_slots: HashMap<String, usize>,
+}
+```
+
+For each interface, the checker resolves `interface extends interface` transitively, rejects inheritance cycles, flattens required methods into a single signature map, and assigns a stable method ordering used by runtime metadata emission.
+
 ## Class type checking
 
-Before `ClassInfo` is built, the checker flattens trait composition through `src/types/traits.rs`. Trait methods and properties are merged into the concrete class, `insteadof` / `as` rules are resolved, and then the checker builds inheritance metadata recursively so each class sees parent-first property layout, inherited method signatures, and vtable slot assignments.
+After interfaces are known, the checker builds each class so it sees parent-first property layout, inherited method signatures, abstract obligations, implemented interface contracts, and vtable slot assignments.
 
 When the type checker encounters a `ClassDecl`, it:
 
@@ -207,7 +224,7 @@ When the type checker encounters a `ClassDecl`, it:
 2. **Resolves the parent chain** (`extends`) and merges inherited metadata
 3. **Records each property** with its type (inferred from default values or constructor assignments) and a fixed offset in the inherited object layout
 4. **Type-checks each method body** with `$this` bound to `Object(ClassName)`
-5. **Builds `ClassInfo`** containing property types, defaults, signatures, declaring/implementation class maps, instance/static vtable slots, and constructor-to-property mappings
+5. **Builds `ClassInfo`** containing property types, defaults, signatures, declaring/implementation class maps, instance/static vtable slots, implemented interface lists, and constructor-to-property mappings
 
 The `ClassInfo` struct:
 
@@ -215,6 +232,7 @@ The `ClassInfo` struct:
 pub struct ClassInfo {
     pub class_id: u64,
     pub parent: Option<String>,
+    pub is_abstract: bool,
     pub properties: Vec<(String, PhpType)>,
     pub property_offsets: HashMap<String, usize>,
     pub property_declaring_classes: HashMap<String, String>,
@@ -234,11 +252,14 @@ pub struct ClassInfo {
     pub static_method_impl_classes: HashMap<String, String>,
     pub static_vtable_methods: Vec<String>,
     pub static_vtable_slots: HashMap<String, usize>,
+    pub interfaces: Vec<String>,
     pub constructor_param_to_prop: Vec<Option<String>>,
 }
 ```
 
 `vtable_methods` / `vtable_slots` drive ordinary inherited instance dispatch, while `static_vtable_methods` / `static_vtable_slots` carry the parallel metadata used by `static::method()` late static binding.
+
+For abstract methods, the checker keeps the inherited signature but intentionally leaves the implementation-class entry unset until a concrete subclass provides a body. Concrete classes are rejected if any abstract or interface requirement remains unresolved after inheritance + trait flattening + interface conformance checks.
 
 When checking property access (`$obj->prop`), the type checker validates that:
 - The variable is an `Object` type
@@ -246,6 +267,8 @@ When checking property access (`$obj->prop`), the type checker validates that:
 - The property is accessible (`public`, `protected` from the declaring class or a subclass, or `private` only from the declaring class)
 
 When checking method calls, it verifies the method exists, enforces method visibility (`public`, subclass-visible `protected`, declaring-class-only `private`), validates argument count and types against the method's `FunctionSig`, resolves `parent::method()` against the immediate parent class, resolves `self::method()` against the current lexical class, and accepts `static::method()` as a late-static-bound static call against the current class hierarchy.
+
+When checking `new ClassName(...)`, it also rejects interfaces and abstract classes before codegen.
 
 ## Output: CheckResult
 
@@ -255,6 +278,7 @@ The type checker produces a `CheckResult`:
 pub struct CheckResult {
     pub global_env: TypeEnv,                    // variable name → type
     pub functions: HashMap<String, FunctionSig>, // function name → signature
+    pub interfaces: HashMap<String, InterfaceInfo>, // interface name → interface info
     pub classes: HashMap<String, ClassInfo>,     // class name → class info
     pub extern_functions: HashMap<String, ExternFunctionSig>,
     pub extern_classes: HashMap<String, ExternClassInfo>,

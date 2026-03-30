@@ -221,6 +221,7 @@ fn compile_source_to_asm_with_options(
         &resolved,
         &check_result.global_env,
         &check_result.functions,
+        &check_result.interfaces,
         &check_result.classes,
         &check_result.extern_functions,
         &check_result.extern_classes,
@@ -459,6 +460,7 @@ fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> String {
         &resolved,
         &check_result.global_env,
         &check_result.functions,
+        &check_result.interfaces,
         &check_result.classes,
         &check_result.extern_functions,
         &check_result.extern_classes,
@@ -527,6 +529,7 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
         &resolved,
         &check_result.global_env,
         &check_result.functions,
+        &check_result.interfaces,
         &check_result.classes,
         &check_result.extern_functions,
         &check_result.extern_classes,
@@ -594,6 +597,7 @@ fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {
         &resolved,
         &check_result.global_env,
         &check_result.functions,
+        &check_result.interfaces,
         &check_result.classes,
         &check_result.extern_functions,
         &check_result.extern_classes,
@@ -11687,4 +11691,161 @@ echo $child->reveal();
 "#,
     );
     assert_eq!(out, "42");
+}
+
+#[test]
+fn test_inherited_constructor_specializes_base_string_property_type() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public $name;
+
+    public function __construct($name) {
+        $this->name = $name;
+    }
+
+    public function greet() {
+        return $this->name;
+    }
+}
+
+class Child extends Base {}
+
+$child = new Child("Ada");
+echo $child->greet();
+"#,
+    );
+    assert_eq!(out, "Ada");
+}
+
+#[test]
+fn test_array_literal_allows_sibling_objects_with_common_parent() {
+    let out = compile_and_run(
+        r#"<?php
+class Animal {
+    public $name;
+
+    public function __construct($name) {
+        $this->name = $name;
+    }
+
+    public function label() {
+        return $this->name;
+    }
+}
+
+class Dog extends Animal {}
+class Cat extends Animal {}
+
+$animals = [new Dog("Rex"), new Cat("Mia")];
+foreach ($animals as $animal) {
+    echo $animal->label() . " ";
+}
+"#,
+    );
+    assert_eq!(out, "Rex Mia ");
+}
+
+#[test]
+fn test_interface_contract_can_be_satisfied_by_concrete_class() {
+    let out = compile_and_run(
+        r#"<?php
+interface Named {
+    public function name();
+}
+
+class User implements Named {
+    public function name() {
+        return "Ada";
+    }
+}
+
+$user = new User();
+echo $user->name();
+"#,
+    );
+    assert_eq!(out, "Ada");
+}
+
+#[test]
+fn test_abstract_base_can_defer_method_to_concrete_child() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class BaseGreeter {
+    abstract public function label();
+
+    public function greet() {
+        return "hi " . $this->label();
+    }
+}
+
+class PersonGreeter extends BaseGreeter {
+    public function label() {
+        return "world";
+    }
+}
+
+$g = new PersonGreeter();
+echo $g->greet();
+"#,
+    );
+    assert_eq!(out, "hi world");
+}
+
+#[test]
+fn test_class_can_implement_multiple_interfaces() {
+    let out = compile_and_run(
+        r#"<?php
+interface Named {
+    public function name();
+}
+
+interface Tagged {
+    public function tag();
+}
+
+class Item implements Named, Tagged {
+    public function name() {
+        return "box";
+    }
+
+    public function tag() {
+        return "BX";
+    }
+}
+
+$item = new Item();
+echo $item->name() . ":" . $item->tag();
+"#,
+    );
+    assert_eq!(out, "box:BX");
+}
+
+#[test]
+fn test_transitive_interface_extends_is_enforced() {
+    let out = compile_and_run(
+        r#"<?php
+interface Named {
+    public function name();
+}
+
+interface Labeled extends Named {
+    public function label();
+}
+
+class Product implements Labeled {
+    public function name() {
+        return "widget";
+    }
+
+    public function label() {
+        return strtoupper($this->name());
+    }
+}
+
+$product = new Product();
+echo $product->label();
+"#,
+    );
+    assert_eq!(out, "WIDGET");
 }

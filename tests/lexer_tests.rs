@@ -154,6 +154,14 @@ fn test_logical_operators() {
 }
 
 #[test]
+fn test_interface_related_keywords() {
+    let t = tokens("<?php interface implements abstract");
+    assert_eq!(t[1], Token::Interface);
+    assert_eq!(t[2], Token::Implements);
+    assert_eq!(t[3], Token::Abstract);
+}
+
+#[test]
 fn test_bang() {
     let t = tokens("<?php !");
     assert_eq!(t[1], Token::Bang);

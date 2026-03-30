@@ -4,7 +4,7 @@
 
 ---
 
-**Source:** `src/codegen/` — `mod.rs`, `expr.rs`, `stmt.rs`, `functions.rs`, `ffi.rs`, `abi.rs`, `context.rs`, `data_section.rs`, `emit.rs`
+**Source:** `src/codegen/` — `mod.rs`, `expr.rs`, `expr/`, `stmt.rs`, `stmt/`, `functions.rs`, `ffi.rs`, `abi.rs`, `context.rs`, `data_section.rs`, `emit.rs`
 
 The code generator (codegen) is the heart of the compiler. It takes the typed AST and produces ARM64 assembly text — the actual instructions the CPU will execute. For an introduction to ARM64, see [Introduction to ARM64 Assembly](arm64-assembly.md).
 
@@ -149,9 +149,9 @@ Floats are stored as their raw 64-bit IEEE 754 bit patterns (`.quad` directive).
 
 ## Expression codegen
 
-**File:** `src/codegen/expr.rs`
+**Files:** `src/codegen/expr.rs`, `src/codegen/expr/`
 
-`emit_expr()` takes an expression node and emits code that leaves the result in the standard registers:
+`emit_expr()` takes an expression node and emits code that leaves the result in the standard registers. The top-level `expr.rs` file now mainly dispatches into focused helpers under `expr/` such as `binops.rs`, `arrays.rs`, `compare.rs`, `calls/`, and `objects/`.
 
 | Type | Result location |
 |---|---|
@@ -445,7 +445,9 @@ See [The Runtime](the-runtime.md) for details on hash table routines and [Memory
 
 ## Statement codegen
 
-**File:** `src/codegen/stmt.rs`
+**Files:** `src/codegen/stmt.rs`, `src/codegen/stmt/`
+
+`emit_stmt()` is similarly split across focused helpers under `stmt/`: assignment/storage logic, array statements, and control-flow lowering (`branching`, `foreach`, `loops`) now live outside the thin top-level dispatcher.
 
 ### Echo
 

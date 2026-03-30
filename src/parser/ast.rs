@@ -277,8 +277,15 @@ pub enum StmtKind {
     ClassDecl {
         name: String,
         extends: Option<String>,
+        implements: Vec<String>,
+        is_abstract: bool,
         trait_uses: Vec<TraitUse>,
         properties: Vec<ClassProperty>,
+        methods: Vec<ClassMethod>,
+    },
+    InterfaceDecl {
+        name: String,
+        extends: Vec<String>,
         methods: Vec<ClassMethod>,
     },
     TraitDecl {
@@ -426,6 +433,8 @@ pub struct ClassMethod {
     pub name: String,
     pub visibility: Visibility,
     pub is_static: bool,
+    pub is_abstract: bool,
+    pub has_body: bool,
     pub params: Vec<(String, Option<Expr>, bool)>,
     pub variadic: Option<String>,
     pub body: Vec<Stmt>,
@@ -437,5 +446,7 @@ impl PartialEq for ClassMethod {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name && self.visibility == other.visibility
             && self.is_static == other.is_static
+            && self.is_abstract == other.is_abstract
+            && self.has_body == other.has_body
     }
 }

@@ -9,7 +9,8 @@ use crate::parser::ast::{
 };
 use crate::types::{
     ctype_stack_size, ctype_to_php_type, traits::{flatten_classes, FlattenedClass}, CheckResult,
-    ClassInfo, ExternClassInfo, ExternFieldInfo, ExternFunctionSig, FunctionSig, PhpType, TypeEnv,
+    ClassInfo, ExternClassInfo, ExternFieldInfo, ExternFunctionSig, FunctionSig, InterfaceInfo,
+    PhpType, TypeEnv,
 };
 
 /// Infer a function's return type by scanning its body for Return statements.
@@ -211,6 +212,8 @@ pub(crate) struct Checker {
     pub constants: HashMap<String, PhpType>,
     /// Tracks the return type of closures assigned to variables.
     pub closure_return_types: HashMap<String, PhpType>,
+    /// Interface definitions collected during first pass.
+    pub interfaces: HashMap<String, InterfaceInfo>,
     /// Class definitions collected during first pass.
     pub classes: HashMap<String, ClassInfo>,
     /// Name of the class currently being type-checked (for $this).
@@ -236,6 +239,14 @@ pub(crate) struct FnDecl {
     pub ref_params: Vec<bool>,
     pub variadic: Option<String>,
     pub body: Vec<Stmt>,
+}
+
+#[derive(Clone)]
+struct InterfaceDeclInfo {
+    name: String,
+    extends: Vec<String>,
+    methods: Vec<crate::parser::ast::ClassMethod>,
+    span: crate::span::Span,
 }
 
 fn build_method_sig(method: &crate::parser::ast::ClassMethod) -> FunctionSig {
@@ -291,6 +302,72 @@ fn required_param_count(sig: &FunctionSig) -> usize {
     sig.defaults.iter().filter(|default| default.is_none()).count()
 }
 
+fn validate_signature_compatibility(
+    span: crate::span::Span,
+    owner_name: &str,
+    method_name: &str,
+    child_sig: &FunctionSig,
+    parent_sig: &FunctionSig,
+    kind: &str,
+    context: &str,
+) -> Result<(), CompileError> {
+    if child_sig.params.len() != parent_sig.params.len() {
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "Cannot change parameter count when {} {}: {}::{}",
+                context, kind, owner_name, method_name
+            ),
+        ));
+    }
+
+    if child_sig.ref_params != parent_sig.ref_params {
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "Cannot change pass-by-reference parameters when {} {}: {}::{}",
+                context, kind, owner_name, method_name
+            ),
+        ));
+    }
+
+    let child_defaults: Vec<bool> =
+        child_sig.defaults.iter().map(|default| default.is_some()).collect();
+    let parent_defaults: Vec<bool> =
+        parent_sig.defaults.iter().map(|default| default.is_some()).collect();
+    if child_defaults != parent_defaults {
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "Cannot change optional parameter layout when {} {}: {}::{}",
+                context, kind, owner_name, method_name
+            ),
+        ));
+    }
+
+    if child_sig.variadic != parent_sig.variadic {
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "Cannot change variadic parameter shape when {} {}: {}::{}",
+                context, kind, owner_name, method_name
+            ),
+        ));
+    }
+
+    if required_param_count(child_sig) != required_param_count(parent_sig) {
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "Cannot change required parameter count when {} {}: {}::{}",
+                context, kind, owner_name, method_name
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
 fn validate_override_signature(
     class_name: &str,
     method: &crate::parser::ast::ClassMethod,
@@ -298,70 +375,163 @@ fn validate_override_signature(
     is_static: bool,
 ) -> Result<(), CompileError> {
     let kind = if is_static { "static method" } else { "method" };
+    let child_sig = build_method_sig(method);
+    validate_signature_compatibility(
+        method.span,
+        class_name,
+        &method.name,
+        &child_sig,
+        parent_sig,
+        kind,
+        "overriding",
+    )
+}
 
-    if method.params.len() != parent_sig.params.len() {
+fn build_interface_info_recursive(
+    interface_name: &str,
+    interface_map: &HashMap<String, InterfaceDeclInfo>,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &mut Checker,
+    next_interface_id: &mut u64,
+    building: &mut HashSet<String>,
+) -> Result<(), CompileError> {
+    if checker.interfaces.contains_key(interface_name) {
+        return Ok(());
+    }
+
+    if !building.insert(interface_name.to_string()) {
         return Err(CompileError::new(
-            method.span,
-            &format!(
-                "Cannot change parameter count when overriding {}: {}::{}",
-                kind, class_name, method.name
-            ),
+            crate::span::Span::dummy(),
+            &format!("Circular interface inheritance detected involving {}", interface_name),
         ));
     }
 
-    let child_ref_params: Vec<bool> = method.params.iter().map(|(_, _, is_ref)| *is_ref).collect();
-    if child_ref_params != parent_sig.ref_params {
-        return Err(CompileError::new(
-            method.span,
-            &format!(
-                "Cannot change pass-by-reference parameters when overriding {}: {}::{}",
-                kind, class_name, method.name
-            ),
-        ));
+    let interface = interface_map.get(interface_name).cloned().ok_or_else(|| {
+        CompileError::new(
+            crate::span::Span::dummy(),
+            &format!("Unknown interface referenced during interface flattening: {}", interface_name),
+        )
+    })?;
+
+    let mut methods = HashMap::new();
+    let mut method_declaring_interfaces = HashMap::new();
+    let mut method_order = Vec::new();
+    let mut method_slots = HashMap::new();
+
+    for parent_name in &interface.extends {
+        if class_map.contains_key(parent_name) {
+            return Err(CompileError::new(
+                interface.span,
+                &format!(
+                    "Interface {} cannot extend class {}; only interfaces are allowed",
+                    interface.name, parent_name
+                ),
+            ));
+        }
+        build_interface_info_recursive(
+            parent_name,
+            interface_map,
+            class_map,
+            checker,
+            next_interface_id,
+            building,
+        )?;
+        let parent_info = checker.interfaces.get(parent_name).cloned().ok_or_else(|| {
+            CompileError::new(
+                interface.span,
+                &format!("Unknown parent interface: {}", parent_name),
+            )
+        })?;
+        for method_name in &parent_info.method_order {
+            let parent_sig = parent_info
+                .methods
+                .get(method_name)
+                .expect("type checker bug: missing interface parent method signature");
+            if let Some(existing_sig) = methods.get(method_name) {
+                validate_signature_compatibility(
+                    interface.span,
+                    &interface.name,
+                    method_name,
+                    existing_sig,
+                    parent_sig,
+                    "method",
+                    "combining interface parent",
+                )?;
+                continue;
+            }
+            methods.insert(method_name.clone(), parent_sig.clone());
+            let declaring = parent_info
+                .method_declaring_interfaces
+                .get(method_name)
+                .cloned()
+                .unwrap_or_else(|| parent_name.clone());
+            method_declaring_interfaces.insert(method_name.clone(), declaring);
+            let slot = method_order.len();
+            method_slots.insert(method_name.clone(), slot);
+            method_order.push(method_name.clone());
+        }
     }
 
-    let child_defaults: Vec<bool> = method
-        .params
-        .iter()
-        .map(|(_, default, _)| default.is_some())
-        .collect();
-    let parent_defaults: Vec<bool> =
-        parent_sig.defaults.iter().map(|default| default.is_some()).collect();
-    if child_defaults != parent_defaults {
-        return Err(CompileError::new(
-            method.span,
-            &format!(
-                "Cannot change optional parameter layout when overriding {}: {}::{}",
-                kind, class_name, method.name
-            ),
-        ));
+    for method in &interface.methods {
+        if method.visibility != Visibility::Public {
+            return Err(CompileError::new(
+                method.span,
+                &format!("Interface methods must be public: {}::{}", interface.name, method.name),
+            ));
+        }
+        if method.is_static {
+            return Err(CompileError::new(
+                method.span,
+                &format!(
+                    "Static interface methods are not supported yet: {}::{}",
+                    interface.name, method.name
+                ),
+            ));
+        }
+        if method.has_body {
+            return Err(CompileError::new(
+                method.span,
+                &format!(
+                    "Interface methods cannot have a body: {}::{}",
+                    interface.name, method.name
+                ),
+            ));
+        }
+
+        let sig = build_method_sig(method);
+        if let Some(parent_sig) = methods.get(&method.name) {
+            validate_signature_compatibility(
+                method.span,
+                &interface.name,
+                &method.name,
+                &sig,
+                parent_sig,
+                "method",
+                "redeclaring interface",
+            )?;
+        }
+        methods.insert(method.name.clone(), sig);
+        method_declaring_interfaces.insert(method.name.clone(), interface.name.clone());
+        if !method_slots.contains_key(&method.name) {
+            let slot = method_order.len();
+            method_slots.insert(method.name.clone(), slot);
+            method_order.push(method.name.clone());
+        }
     }
 
-    if method.variadic != parent_sig.variadic {
-        return Err(CompileError::new(
-            method.span,
-            &format!(
-                "Cannot change variadic parameter shape when overriding {}: {}::{}",
-                kind, class_name, method.name
-            ),
-        ));
-    }
-
-    let child_required = method
-        .params
-        .iter()
-        .filter(|(_, default, _)| default.is_none())
-        .count();
-    if child_required != required_param_count(parent_sig) {
-        return Err(CompileError::new(
-            method.span,
-            &format!(
-                "Cannot change required parameter count when overriding {}: {}::{}",
-                kind, class_name, method.name
-            ),
-        ));
-    }
-
+    checker.interfaces.insert(
+        interface.name.clone(),
+        InterfaceInfo {
+            interface_id: *next_interface_id,
+            parents: interface.extends.clone(),
+            methods,
+            method_declaring_interfaces,
+            method_order,
+            method_slots,
+        },
+    );
+    *next_interface_id += 1;
+    building.remove(interface_name);
     Ok(())
 }
 
@@ -391,6 +561,15 @@ fn build_class_info_recursive(
     })?;
 
     let parent_info = if let Some(parent_name) = &class.extends {
+        if checker.interfaces.contains_key(parent_name) {
+            return Err(CompileError::new(
+                crate::span::Span::dummy(),
+                &format!(
+                    "Class {} cannot extend interface {}; use implements instead",
+                    class_name, parent_name
+                ),
+            ));
+        }
         build_class_info_recursive(parent_name, class_map, checker, next_class_id, building)?;
         Some(checker.classes.get(parent_name).cloned().ok_or_else(|| {
             CompileError::new(
@@ -421,6 +600,7 @@ fn build_class_info_recursive(
     let mut static_method_impl_classes = HashMap::new();
     let mut static_vtable_methods = Vec::new();
     let mut static_vtable_slots = HashMap::new();
+    let mut interfaces = Vec::new();
 
     if let Some(parent) = &parent_info {
         for (index, (name, ty)) in parent.properties.iter().enumerate() {
@@ -473,6 +653,7 @@ fn build_class_info_recursive(
         }
         static_vtable_methods = parent.static_vtable_methods.clone();
         static_vtable_slots = parent.static_vtable_slots.clone();
+        interfaces = parent.interfaces.clone();
     }
 
     for prop in &class.properties {
@@ -504,6 +685,24 @@ fn build_class_info_recursive(
 
     for method in &class.methods {
         let sig = build_method_sig(method);
+        if method.is_abstract && method.has_body {
+            return Err(CompileError::new(
+                method.span,
+                &format!("Abstract method cannot have a body: {}::{}", class.name, method.name),
+            ));
+        }
+        if !method.is_abstract && !method.has_body {
+            return Err(CompileError::new(
+                method.span,
+                &format!("Non-abstract method must have a body: {}::{}", class.name, method.name),
+            ));
+        }
+        if method.is_abstract && method.visibility == Visibility::Private {
+            return Err(CompileError::new(
+                method.span,
+                &format!("Private abstract methods are not supported: {}::{}", class.name, method.name),
+            ));
+        }
         if method.is_static {
             if method_sigs.contains_key(&method.name) {
                 return Err(CompileError::new(
@@ -528,10 +727,23 @@ fn build_class_info_recursive(
             if let Some(parent_sig) = static_sigs.get(&method.name) {
                 validate_override_signature(&class.name, method, parent_sig, true)?;
             }
+            if method.is_abstract && static_method_impl_classes.contains_key(&method.name) {
+                return Err(CompileError::new(
+                    method.span,
+                    &format!(
+                        "Cannot make concrete static method abstract: {}::{}",
+                        class.name, method.name
+                    ),
+                ));
+            }
             static_sigs.insert(method.name.clone(), sig);
             static_method_visibilities.insert(method.name.clone(), method.visibility.clone());
             static_method_declaring_classes.insert(method.name.clone(), class.name.clone());
-            static_method_impl_classes.insert(method.name.clone(), class.name.clone());
+            if method.is_abstract {
+                static_method_impl_classes.remove(&method.name);
+            } else {
+                static_method_impl_classes.insert(method.name.clone(), class.name.clone());
+            }
             if method.visibility != Visibility::Private
                 && !static_vtable_slots.contains_key(&method.name)
             {
@@ -563,15 +775,146 @@ fn build_class_info_recursive(
             if let Some(parent_sig) = method_sigs.get(&method.name) {
                 validate_override_signature(&class.name, method, parent_sig, false)?;
             }
+            if method.is_abstract && method_impl_classes.contains_key(&method.name) {
+                return Err(CompileError::new(
+                    method.span,
+                    &format!(
+                        "Cannot make concrete method abstract: {}::{}",
+                        class.name, method.name
+                    ),
+                ));
+            }
             method_sigs.insert(method.name.clone(), sig);
             method_visibilities.insert(method.name.clone(), method.visibility.clone());
             method_declaring_classes.insert(method.name.clone(), class.name.clone());
-            method_impl_classes.insert(method.name.clone(), class.name.clone());
+            if method.is_abstract {
+                method_impl_classes.remove(&method.name);
+            } else {
+                method_impl_classes.insert(method.name.clone(), class.name.clone());
+            }
             if method.visibility != Visibility::Private && !vtable_slots.contains_key(&method.name) {
                 let slot = vtable_methods.len();
                 vtable_slots.insert(method.name.clone(), slot);
                 vtable_methods.push(method.name.clone());
             }
+        }
+    }
+
+    let mut seen_interfaces: HashSet<String> = interfaces.iter().cloned().collect();
+    let mut queue = Vec::new();
+    for interface_name in class.implements.iter().rev() {
+        if class_map.contains_key(interface_name) {
+            return Err(CompileError::new(
+                crate::span::Span::dummy(),
+                &format!(
+                    "Class {} cannot implement non-interface {}",
+                    class.name, interface_name
+                ),
+            ));
+        }
+        if !checker.interfaces.contains_key(interface_name) {
+            return Err(CompileError::new(
+                crate::span::Span::dummy(),
+                &format!("Unknown interface: {}", interface_name),
+            ));
+        }
+        queue.push(interface_name.clone());
+    }
+    while let Some(interface_name) = queue.pop() {
+        if !seen_interfaces.insert(interface_name.clone()) {
+            continue;
+        }
+        let interface_info = checker.interfaces.get(&interface_name).ok_or_else(|| {
+            CompileError::new(
+                crate::span::Span::dummy(),
+                &format!("Unknown interface: {}", interface_name),
+            )
+        })?;
+        for parent_name in interface_info.parents.iter().rev() {
+            queue.push(parent_name.clone());
+        }
+        interfaces.push(interface_name);
+    }
+
+    for interface_name in &interfaces {
+        let interface_info = checker.interfaces.get(interface_name).ok_or_else(|| {
+            CompileError::new(
+                crate::span::Span::dummy(),
+                &format!("Unknown interface: {}", interface_name),
+            )
+        })?;
+        for method_name in &interface_info.method_order {
+            if static_sigs.contains_key(method_name) {
+                return Err(CompileError::new(
+                    crate::span::Span::dummy(),
+                    &format!(
+                        "Cannot use static method to satisfy interface contract: {}::{}",
+                        class.name, method_name
+                    ),
+                ));
+            }
+            let required_sig = interface_info
+                .methods
+                .get(method_name)
+                .expect("type checker bug: missing interface method signature");
+            let actual_sig = match method_sigs.get(method_name) {
+                Some(sig) => sig,
+                None if class.is_abstract => continue,
+                None => {
+                    return Err(CompileError::new(
+                        crate::span::Span::dummy(),
+                        &format!(
+                            "Class {} must implement interface method {}::{}",
+                            class.name, interface_name, method_name
+                        ),
+                    ))
+                }
+            };
+            validate_signature_compatibility(
+                crate::span::Span::dummy(),
+                &class.name,
+                method_name,
+                actual_sig,
+                required_sig,
+                "method",
+                "implementing interface",
+            )?;
+            if method_visibilities.get(method_name) != Some(&Visibility::Public) {
+                return Err(CompileError::new(
+                    crate::span::Span::dummy(),
+                    &format!(
+                        "Interface method implementation must be public: {}::{}",
+                        class.name, method_name
+                    ),
+                ));
+            }
+        }
+    }
+
+    if !class.is_abstract {
+        if let Some(method_name) = method_sigs
+            .keys()
+            .find(|name| !method_impl_classes.contains_key(*name))
+        {
+            return Err(CompileError::new(
+                crate::span::Span::dummy(),
+                &format!(
+                    "Concrete class {} must implement abstract method {}::{}",
+                    class.name, class.name, method_name
+                ),
+            ));
+        }
+        if let Some(method_name) = static_sigs
+            .keys()
+            .find(|name| !static_method_impl_classes.contains_key(*name))
+        {
+            return Err(CompileError::new(
+                crate::span::Span::dummy(),
+                &format!(
+                    "Concrete class {} must implement abstract static method {}::{}",
+                    class.name, class.name, method_name
+                ),
+            ));
         }
     }
 
@@ -588,6 +931,7 @@ fn build_class_info_recursive(
         ClassInfo {
             class_id: *next_class_id,
             parent: class.extends.clone(),
+            is_abstract: class.is_abstract,
             properties: prop_types,
             property_offsets,
             property_declaring_classes,
@@ -607,6 +951,7 @@ fn build_class_info_recursive(
             static_method_impl_classes,
             static_vtable_methods,
             static_vtable_slots,
+            interfaces,
             constructor_param_to_prop,
         },
     );
@@ -615,12 +960,70 @@ fn build_class_info_recursive(
     Ok(())
 }
 
+fn propagate_abstract_return_types(checker: &mut Checker) {
+    let mut sorted_classes: Vec<(String, u64)> = checker
+        .classes
+        .iter()
+        .map(|(name, info)| (name.clone(), info.class_id))
+        .collect();
+    sorted_classes.sort_by_key(|(_, class_id)| std::cmp::Reverse(*class_id));
+
+    for (class_name, _) in sorted_classes {
+        let Some(class_info) = checker.classes.get(&class_name).cloned() else {
+            continue;
+        };
+
+        for (method_name, sig) in &class_info.methods {
+            let mut parent_name = class_info.parent.clone();
+            while let Some(name) = parent_name {
+                let Some(parent_info) = checker.classes.get(&name).cloned() else {
+                    break;
+                };
+                if !parent_info.methods.contains_key(method_name) {
+                    break;
+                }
+                if parent_info.method_impl_classes.contains_key(method_name) {
+                    break;
+                }
+                if let Some(parent_mut) = checker.classes.get_mut(&name) {
+                    if let Some(parent_sig) = parent_mut.methods.get_mut(method_name) {
+                        parent_sig.return_type = sig.return_type.clone();
+                    }
+                }
+                parent_name = parent_info.parent.clone();
+            }
+        }
+
+        for (method_name, sig) in &class_info.static_methods {
+            let mut parent_name = class_info.parent.clone();
+            while let Some(name) = parent_name {
+                let Some(parent_info) = checker.classes.get(&name).cloned() else {
+                    break;
+                };
+                if !parent_info.static_methods.contains_key(method_name) {
+                    break;
+                }
+                if parent_info.static_method_impl_classes.contains_key(method_name) {
+                    break;
+                }
+                if let Some(parent_mut) = checker.classes.get_mut(&name) {
+                    if let Some(parent_sig) = parent_mut.static_methods.get_mut(method_name) {
+                        parent_sig.return_type = sig.return_type.clone();
+                    }
+                }
+                parent_name = parent_info.parent.clone();
+            }
+        }
+    }
+}
+
 pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
     let mut checker = Checker {
         fn_decls: HashMap::new(),
         functions: HashMap::new(),
         constants: HashMap::new(),
         closure_return_types: HashMap::new(),
+        interfaces: HashMap::new(),
         classes: HashMap::new(),
         current_class: None,
         current_method: None,
@@ -656,14 +1059,53 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
     }
 
     let flattened_classes = flatten_classes(program)?;
-
-    // First pass: collect flattened class declarations and build ClassInfo
-    let mut next_class_id = 0u64;
     let class_map: HashMap<String, FlattenedClass> = flattened_classes
         .iter()
         .cloned()
         .map(|class| (class.name.clone(), class))
         .collect();
+    let mut interface_map = HashMap::new();
+    for stmt in program {
+        if let StmtKind::InterfaceDecl {
+            name,
+            extends,
+            methods,
+        } = &stmt.kind
+        {
+            if interface_map.contains_key(name) {
+                return Err(CompileError::new(
+                    stmt.span,
+                    &format!("Duplicate interface declaration: {}", name),
+                ));
+            }
+            interface_map.insert(
+                name.clone(),
+                InterfaceDeclInfo {
+                    name: name.clone(),
+                    extends: extends.clone(),
+                    methods: methods.clone(),
+                    span: stmt.span,
+                },
+            );
+        }
+    }
+
+    let mut next_interface_id = 0u64;
+    let mut building_interfaces = HashSet::new();
+    let interface_names: Vec<String> = interface_map.keys().cloned().collect();
+    for interface_name in interface_names {
+        build_interface_info_recursive(
+            &interface_name,
+            &interface_map,
+            &class_map,
+            &mut checker,
+            &mut next_interface_id,
+            &mut building_interfaces,
+        )?;
+    }
+
+    // First pass: collect flattened class declarations and build ClassInfo
+    let mut next_class_id = 0u64;
     let mut building = HashSet::new();
     for class in &flattened_classes {
         build_class_info_recursive(
@@ -820,6 +1262,9 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
     // This ensures methods see correct property types (e.g., Str not Int).
     for class in &flattened_classes {
         for method in &class.methods {
+                if method.is_abstract {
+                    continue;
+                }
                 let mut method_env: TypeEnv = global_env.clone();
                 if !method.is_static {
                     method_env.insert("this".to_string(), PhpType::Object(class.name.clone()));
@@ -915,9 +1360,12 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         }
     }
 
+    propagate_abstract_return_types(&mut checker);
+
     Ok(CheckResult {
         global_env,
         functions: checker.functions,
+        interfaces: checker.interfaces,
         classes: checker.classes,
         extern_functions: checker.extern_functions,
         extern_classes: checker.extern_classes,
@@ -996,6 +1444,101 @@ impl Checker {
             });
         }
         None
+    }
+
+    fn common_object_type(&self, left: &str, right: &str) -> Option<PhpType> {
+        if left == right {
+            return Some(PhpType::Object(left.to_string()));
+        }
+        if self.is_subclass_of(left, right) {
+            return Some(PhpType::Object(right.to_string()));
+        }
+        if self.is_subclass_of(right, left) {
+            return Some(PhpType::Object(left.to_string()));
+        }
+
+        let mut left_ancestors = HashSet::new();
+        let mut current = Some(left.to_string());
+        while let Some(class_name) = current {
+            left_ancestors.insert(class_name.clone());
+            current = self
+                .classes
+                .get(&class_name)
+                .and_then(|class_info| class_info.parent.clone());
+        }
+
+        let mut current = Some(right.to_string());
+        while let Some(class_name) = current {
+            if left_ancestors.contains(&class_name) {
+                return Some(PhpType::Object(class_name));
+            }
+            current = self
+                .classes
+                .get(&class_name)
+                .and_then(|class_info| class_info.parent.clone());
+        }
+
+        None
+    }
+
+    fn merge_array_element_type(&self, existing: &PhpType, new_ty: &PhpType) -> Option<PhpType> {
+        if existing == new_ty {
+            return Some(existing.clone());
+        }
+
+        match (existing, new_ty) {
+            (PhpType::Object(left), PhpType::Object(right)) => self.common_object_type(left, right),
+            _ => None,
+        }
+    }
+
+    fn propagate_constructor_arg_type(
+        &mut self,
+        instantiated_class: &str,
+        param_index: usize,
+        arg_ty: &PhpType,
+    ) {
+        let Some((prop_name, declaring_class)) = self.classes.get(instantiated_class).and_then(|class_info| {
+            class_info
+                .constructor_param_to_prop
+                .get(param_index)
+                .and_then(|mapped| mapped.as_ref())
+                .map(|prop_name| {
+                    let declaring_class = class_info
+                        .property_declaring_classes
+                        .get(prop_name)
+                        .cloned()
+                        .unwrap_or_else(|| instantiated_class.to_string());
+                    (prop_name.clone(), declaring_class)
+                })
+        }) else {
+            return;
+        };
+
+        for class_info in self.classes.values_mut() {
+            let shares_inherited_property = class_info
+                .property_declaring_classes
+                .get(&prop_name)
+                .is_some_and(|owner| owner == &declaring_class);
+
+            if !shares_inherited_property {
+                continue;
+            }
+
+            if let Some(prop) = class_info
+                .properties
+                .iter_mut()
+                .find(|(name, _)| name == &prop_name)
+            {
+                prop.1 = arg_ty.clone();
+            }
+
+            if let Some(sig) = class_info.methods.get_mut("__construct") {
+                if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
+                    *param_ty = arg_ty.clone();
+                }
+            }
+        }
     }
 
     fn normalize_pointer_target_type(&self, target_type: &str) -> Option<String> {
@@ -1417,7 +1960,10 @@ impl Checker {
                         // Upgrade array element type when assigning a
                         // different type (e.g. empty [] defaults to
                         // Array(Int), first string assign upgrades it)
-                        env.insert(array.clone(), PhpType::Array(Box::new(val_ty)));
+                        let merged_ty = self
+                            .merge_array_element_type(elem_ty, &val_ty)
+                            .unwrap_or(val_ty);
+                        env.insert(array.clone(), PhpType::Array(Box::new(merged_ty)));
                     }
                 }
                 Ok(())
@@ -1432,7 +1978,10 @@ impl Checker {
                         // Upgrade array type when pushing a different type
                         // (e.g. empty [] defaults to Array(Int), first push
                         // of a string should upgrade to Array(Str))
-                        env.insert(array.clone(), PhpType::Array(Box::new(val_ty)));
+                        let merged_ty = self
+                            .merge_array_element_type(elem_ty, &val_ty)
+                            .unwrap_or(val_ty);
+                        env.insert(array.clone(), PhpType::Array(Box::new(merged_ty)));
                     }
                 }
                 Ok(())
@@ -1594,7 +2143,9 @@ impl Checker {
                 }
                 Ok(())
             }
-            StmtKind::ClassDecl { .. } | StmtKind::TraitDecl { .. } => {
+            StmtKind::ClassDecl { .. }
+            | StmtKind::InterfaceDecl { .. }
+            | StmtKind::TraitDecl { .. } => {
                 // Method bodies are type-checked in a post-pass (after all new ClassName()
                 // calls have updated property types from constructor arg types)
                 Ok(())
@@ -1790,20 +2341,24 @@ impl Checker {
                 if elems.is_empty() {
                     return Ok(PhpType::Array(Box::new(PhpType::Int)));
                 }
-                let first_ty = self.infer_type(&elems[0], env)?;
+                let mut elem_ty = self.infer_type(&elems[0], env)?;
                 for elem in &elems[1..] {
                     let ty = self.infer_type(elem, env)?;
-                    if ty != first_ty {
+                    if ty != elem_ty {
+                        if let Some(merged_ty) = self.merge_array_element_type(&elem_ty, &ty) {
+                            elem_ty = merged_ty;
+                            continue;
+                        }
                         return Err(CompileError::new(
                             elem.span,
                             &format!(
                                 "Array element type mismatch: expected {:?}, got {:?}",
-                                first_ty, ty
+                                elem_ty, ty
                             ),
                         ));
                     }
                 }
-                Ok(PhpType::Array(Box::new(first_ty)))
+                Ok(PhpType::Array(Box::new(elem_ty)))
             }
             ExprKind::ArrayAccess { array, index } => {
                 let arr_ty = self.infer_type(array, env)?;
@@ -2100,6 +2655,12 @@ impl Checker {
                 }
             }
             ExprKind::NewObject { class_name, args } => {
+                if self.interfaces.contains_key(class_name) {
+                    return Err(CompileError::new(
+                        expr.span,
+                        &format!("Cannot instantiate interface: {}", class_name),
+                    ));
+                }
                 if !self.classes.contains_key(class_name) {
                     return Err(CompileError::new(
                         expr.span,
@@ -2107,6 +2668,12 @@ impl Checker {
                     ));
                 }
                 if let Some(class_info) = self.classes.get(class_name) {
+                    if class_info.is_abstract {
+                        return Err(CompileError::new(
+                            expr.span,
+                            &format!("Cannot instantiate abstract class: {}", class_name),
+                        ));
+                    }
                     if let Some(sig) = class_info.methods.get("__construct") {
                         self.check_call_arity(
                             "Constructor",
@@ -2134,17 +2701,10 @@ impl Checker {
                     .unwrap_or_default();
                 for (i, arg) in args.iter().enumerate() {
                     let arg_ty = self.infer_type(arg, env)?;
-                    // If this arg maps to a property, update the property type
-                    if let Some(Some(prop_name)) = param_to_prop.get(i) {
-                        if let Some(class_info) = self.classes.get_mut(class_name) {
-                            if let Some(prop) = class_info
-                                .properties
-                                .iter_mut()
-                                .find(|(n, _)| n == prop_name)
-                            {
-                                prop.1 = arg_ty;
-                            }
-                        }
+                    // If this arg maps to a property, keep inherited property metadata and
+                    // inherited constructor signatures in sync with the specialized arg type.
+                    if param_to_prop.get(i).is_some_and(|mapped| mapped.is_some()) {
+                        self.propagate_constructor_arg_type(class_name, i, &arg_ty);
                     }
                 }
                 Ok(PhpType::Object(class_name.clone()))

@@ -199,6 +199,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
 pub(crate) fn emit_runtime_data(
     global_var_names: &std::collections::HashSet<String>,
     static_vars: &std::collections::HashMap<(String, String), crate::types::PhpType>,
+    interfaces: &std::collections::HashMap<String, crate::types::InterfaceInfo>,
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
     heap_size: usize,
 ) -> String {
@@ -291,10 +292,29 @@ pub(crate) fn emit_runtime_data(
         ));
     }
 
+    let mut sorted_interfaces: Vec<(&String, &crate::types::InterfaceInfo)> =
+        interfaces.iter().collect();
+    sorted_interfaces.sort_by_key(|(_, interface_info)| interface_info.interface_id);
     let mut sorted_classes: Vec<(&String, &crate::types::ClassInfo)> = classes.iter().collect();
     sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
     out.push_str(".data\n");
     out.push_str(".p2align 3\n");
+    out.push_str("_interface_count:\n");
+    out.push_str(&format!("    .quad {}\n", sorted_interfaces.len()));
+    out.push_str("_interface_method_ptrs:\n");
+    for (_, interface_info) in &sorted_interfaces {
+        out.push_str(&format!(
+            "    .quad _interface_methods_{}\n",
+            interface_info.interface_id
+        ));
+    }
+    out.push_str("_class_interface_ptrs:\n");
+    for (_, class_info) in &sorted_classes {
+        out.push_str(&format!(
+            "    .quad _class_interfaces_{}\n",
+            class_info.class_id
+        ));
+    }
     out.push_str("_class_gc_desc_count:\n");
     out.push_str(&format!("    .quad {}\n", sorted_classes.len()));
     out.push_str("_class_gc_desc_ptrs:\n");
@@ -312,7 +332,56 @@ pub(crate) fn emit_runtime_data(
             class_info.class_id
         ));
     }
+    for (_, interface_info) in &sorted_interfaces {
+        out.push_str(&format!(
+            "_interface_methods_{}:\n",
+            interface_info.interface_id
+        ));
+        out.push_str(&format!("    .quad {}\n", interface_info.method_order.len()));
+        for method_name in &interface_info.method_order {
+            let slot = interface_info
+                .method_slots
+                .get(method_name)
+                .expect("codegen bug: missing interface method slot");
+            out.push_str(&format!("    .quad {}\n", slot));
+        }
+    }
     for (_, class_info) in sorted_classes {
+        out.push_str(&format!("_class_interfaces_{}:\n", class_info.class_id));
+        out.push_str(&format!("    .quad {}\n", class_info.interfaces.len()));
+        for interface_name in &class_info.interfaces {
+            let interface_info = interfaces
+                .get(interface_name)
+                .expect("codegen bug: missing interface metadata for class");
+            out.push_str(&format!("    .quad {}\n", interface_info.interface_id));
+            out.push_str(&format!(
+                "    .quad _class_interface_impl_{}_{}\n",
+                class_info.class_id, interface_info.interface_id
+            ));
+        }
+        for interface_name in &class_info.interfaces {
+            let interface_info = interfaces
+                .get(interface_name)
+                .expect("codegen bug: missing interface metadata for class");
+            out.push_str(&format!(
+                "_class_interface_impl_{}_{}:\n",
+                class_info.class_id, interface_info.interface_id
+            ));
+            if interface_info.method_order.is_empty() {
+                out.push_str("    .quad 0\n");
+                continue;
+            }
+            for method_name in &interface_info.method_order {
+                if let Some(impl_class) = class_info.method_impl_classes.get(method_name) {
+                    out.push_str(&format!(
+                        "    .quad _method_{}_{}\n",
+                        impl_class, method_name
+                    ));
+                } else {
+                    out.push_str("    .quad 0\n");
+                }
+            }
+        }
         out.push_str(&format!("_class_gc_desc_{}:\n", class_info.class_id));
         if class_info.properties.is_empty() {
             out.push_str("    .byte 0\n");
@@ -344,14 +413,14 @@ pub(crate) fn emit_runtime_data(
             out.push_str("    .quad 0\n");
         } else {
             for method_name in &class_info.vtable_methods {
-                let impl_class = class_info
-                    .method_impl_classes
-                    .get(method_name)
-                    .expect("codegen bug: missing method implementation class");
-                out.push_str(&format!(
-                    "    .quad _method_{}_{}\n",
-                    impl_class, method_name
-                ));
+                if let Some(impl_class) = class_info.method_impl_classes.get(method_name) {
+                    out.push_str(&format!(
+                        "    .quad _method_{}_{}\n",
+                        impl_class, method_name
+                    ));
+                } else {
+                    out.push_str("    .quad 0\n");
+                }
             }
         }
         out.push_str("    .p2align 3\n");
@@ -361,14 +430,14 @@ pub(crate) fn emit_runtime_data(
             continue;
         }
         for method_name in &class_info.static_vtable_methods {
-            let impl_class = class_info
-                .static_method_impl_classes
-                .get(method_name)
-                .expect("codegen bug: missing static method implementation class");
-            out.push_str(&format!(
-                "    .quad _static_{}_{}\n",
-                impl_class, method_name
-            ));
+            if let Some(impl_class) = class_info.static_method_impl_classes.get(method_name) {
+                out.push_str(&format!(
+                    "    .quad _static_{}_{}\n",
+                    impl_class, method_name
+                ));
+            } else {
+                out.push_str("    .quad 0\n");
+            }
         }
     }
     out
