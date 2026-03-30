@@ -1650,6 +1650,14 @@ fn test_error_wrong_constructor_args() {
 }
 
 #[test]
+fn test_error_array_literal_rejects_unrelated_object_types() {
+    expect_error(
+        "<?php class Dog {} class Car {} $items = [new Dog(), new Car()];",
+        "Array element type mismatch",
+    );
+}
+
+#[test]
 fn test_error_parent_outside_class_scope() {
     expect_error(
         "<?php parent::boot();",

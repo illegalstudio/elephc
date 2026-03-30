@@ -1446,6 +1446,52 @@ impl Checker {
         None
     }
 
+    fn common_object_type(&self, left: &str, right: &str) -> Option<PhpType> {
+        if left == right {
+            return Some(PhpType::Object(left.to_string()));
+        }
+        if self.is_subclass_of(left, right) {
+            return Some(PhpType::Object(right.to_string()));
+        }
+        if self.is_subclass_of(right, left) {
+            return Some(PhpType::Object(left.to_string()));
+        }
+
+        let mut left_ancestors = HashSet::new();
+        let mut current = Some(left.to_string());
+        while let Some(class_name) = current {
+            left_ancestors.insert(class_name.clone());
+            current = self
+                .classes
+                .get(&class_name)
+                .and_then(|class_info| class_info.parent.clone());
+        }
+
+        let mut current = Some(right.to_string());
+        while let Some(class_name) = current {
+            if left_ancestors.contains(&class_name) {
+                return Some(PhpType::Object(class_name));
+            }
+            current = self
+                .classes
+                .get(&class_name)
+                .and_then(|class_info| class_info.parent.clone());
+        }
+
+        None
+    }
+
+    fn merge_array_element_type(&self, existing: &PhpType, new_ty: &PhpType) -> Option<PhpType> {
+        if existing == new_ty {
+            return Some(existing.clone());
+        }
+
+        match (existing, new_ty) {
+            (PhpType::Object(left), PhpType::Object(right)) => self.common_object_type(left, right),
+            _ => None,
+        }
+    }
+
     fn propagate_constructor_arg_type(
         &mut self,
         instantiated_class: &str,
@@ -1914,7 +1960,10 @@ impl Checker {
                         // Upgrade array element type when assigning a
                         // different type (e.g. empty [] defaults to
                         // Array(Int), first string assign upgrades it)
-                        env.insert(array.clone(), PhpType::Array(Box::new(val_ty)));
+                        let merged_ty = self
+                            .merge_array_element_type(elem_ty, &val_ty)
+                            .unwrap_or(val_ty);
+                        env.insert(array.clone(), PhpType::Array(Box::new(merged_ty)));
                     }
                 }
                 Ok(())
@@ -1929,7 +1978,10 @@ impl Checker {
                         // Upgrade array type when pushing a different type
                         // (e.g. empty [] defaults to Array(Int), first push
                         // of a string should upgrade to Array(Str))
-                        env.insert(array.clone(), PhpType::Array(Box::new(val_ty)));
+                        let merged_ty = self
+                            .merge_array_element_type(elem_ty, &val_ty)
+                            .unwrap_or(val_ty);
+                        env.insert(array.clone(), PhpType::Array(Box::new(merged_ty)));
                     }
                 }
                 Ok(())
@@ -2289,20 +2341,24 @@ impl Checker {
                 if elems.is_empty() {
                     return Ok(PhpType::Array(Box::new(PhpType::Int)));
                 }
-                let first_ty = self.infer_type(&elems[0], env)?;
+                let mut elem_ty = self.infer_type(&elems[0], env)?;
                 for elem in &elems[1..] {
                     let ty = self.infer_type(elem, env)?;
-                    if ty != first_ty {
+                    if ty != elem_ty {
+                        if let Some(merged_ty) = self.merge_array_element_type(&elem_ty, &ty) {
+                            elem_ty = merged_ty;
+                            continue;
+                        }
                         return Err(CompileError::new(
                             elem.span,
                             &format!(
                                 "Array element type mismatch: expected {:?}, got {:?}",
-                                first_ty, ty
+                                elem_ty, ty
                             ),
                         ));
                     }
                 }
-                Ok(PhpType::Array(Box::new(first_ty)))
+                Ok(PhpType::Array(Box::new(elem_ty)))
             }
             ExprKind::ArrayAccess { array, index } => {
                 let arr_ty = self.infer_type(array, env)?;

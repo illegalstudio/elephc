@@ -141,9 +141,9 @@ pub(super) fn emit_foreach_stmt(
                 crate::codegen::abi::store_at_offset(emitter, "x1", val_offset);
                 crate::codegen::abi::store_at_offset(emitter, "x2", val_offset - 8);
             }
-            PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
                 emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header to reach data
-                emitter.instruction("ldr x0, [x9, x0, lsl #3]");                    // load nested array pointer at index
+                emitter.instruction("ldr x0, [x9, x0, lsl #3]");                    // load nested array/object pointer at index
                 crate::codegen::abi::store_at_offset(emitter, "x0", val_offset);
             }
             _ => {}

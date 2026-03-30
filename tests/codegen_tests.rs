@@ -11719,6 +11719,34 @@ echo $child->greet();
 }
 
 #[test]
+fn test_array_literal_allows_sibling_objects_with_common_parent() {
+    let out = compile_and_run(
+        r#"<?php
+class Animal {
+    public $name;
+
+    public function __construct($name) {
+        $this->name = $name;
+    }
+
+    public function label() {
+        return $this->name;
+    }
+}
+
+class Dog extends Animal {}
+class Cat extends Animal {}
+
+$animals = [new Dog("Rex"), new Cat("Mia")];
+foreach ($animals as $animal) {
+    echo $animal->label() . " ";
+}
+"#,
+    );
+    assert_eq!(out, "Rex Mia ");
+}
+
+#[test]
 fn test_interface_contract_can_be_satisfied_by_concrete_class() {
     let out = compile_and_run(
         r#"<?php
