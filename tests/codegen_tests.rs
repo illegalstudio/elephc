@@ -2893,6 +2893,31 @@ fn test_gettype_null() {
     assert_eq!(out, "NULL");
 }
 
+#[test]
+fn test_gettype_mixed_returns_concrete_payload_type() {
+    let out = compile_and_run(
+        r#"<?php
+$map = [
+    "i" => 42,
+    "s" => "hi",
+    "n" => null,
+    "a" => [1, 2],
+    "b" => true,
+];
+echo gettype($map["i"]);
+echo "|";
+echo gettype($map["s"]);
+echo "|";
+echo gettype($map["n"]);
+echo "|";
+echo gettype($map["a"]);
+echo "|";
+echo gettype($map["b"]);
+"#,
+    );
+    assert_eq!(out, "integer|string|NULL|array|boolean");
+}
+
 // --- empty ---
 
 #[test]
