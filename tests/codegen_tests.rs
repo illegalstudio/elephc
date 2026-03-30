@@ -2937,6 +2937,29 @@ fn test_empty_true() {
     assert_eq!(out, "");
 }
 
+#[test]
+fn test_empty_mixed_uses_boxed_payload_semantics() {
+    let out = compile_and_run(
+        r#"<?php
+$map = [
+    "zero" => 0,
+    "blank" => "",
+    "null" => null,
+    "arr" => [],
+    "one" => 1,
+    "text" => "hi",
+];
+echo empty($map["zero"]) ? "1" : "0";
+echo empty($map["blank"]) ? "1" : "0";
+echo empty($map["null"]) ? "1" : "0";
+echo empty($map["arr"]) ? "1" : "0";
+echo empty($map["one"]) ? "1" : "0";
+echo empty($map["text"]) ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "111100");
+}
+
 // --- unset ---
 
 #[test]
