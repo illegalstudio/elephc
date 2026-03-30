@@ -118,10 +118,10 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, x10");                                         // have we scanned every hash slot?
     emitter.instruction("b.ge __rt_gc_mark_reachable_return");                  // finish once all slots have been scanned
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the hash pointer
-    emitter.instruction("mov x11, #40");                                        // each hash entry occupies 40 bytes
+    emitter.instruction("mov x11, #56");                                        // each hash entry occupies 56 bytes with insertion-order links
     emitter.instruction("mul x11, x9, x11");                                    // compute the byte offset for this entry
     emitter.instruction("add x11, x10, x11");                                   // advance from the table base to the entry
-    emitter.instruction("add x11, x11, #24");                                   // skip the 24-byte hash header
+    emitter.instruction("add x11, x11, #40");                                   // skip the 40-byte hash header
     emitter.instruction("ldr x12, [x11]");                                      // load the occupied flag for this slot
     emitter.instruction("cmp x12, #1");                                         // is this hash slot occupied?
     emitter.instruction("b.ne __rt_gc_mark_reachable_hash_next");               // skip empty or tombstone slots

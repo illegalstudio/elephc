@@ -45,10 +45,10 @@ pub fn emit_hash_insert_owned(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_hash_insert_owned_done");                    // stop if the table is unexpectedly full
 
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload current probe index
-    emitter.instruction("mov x11, #40");                                        // entry size = 40 bytes
+    emitter.instruction("mov x11, #56");                                        // entry size = 56 bytes with insertion-order links
     emitter.instruction("mul x12, x9, x11");                                    // compute byte offset for this slot
     emitter.instruction("add x12, x5, x12");                                    // advance from table base to slot
-    emitter.instruction("add x12, x12, #24");                                   // skip hash header to entry storage
+    emitter.instruction("add x12, x12, #40");                                   // skip hash header to entry storage
     emitter.instruction("ldr x13, [x12]");                                      // load occupied flag
     emitter.instruction("cmp x13, #1");                                         // is the slot already occupied?
     emitter.instruction("b.ne __rt_hash_insert_owned_write");                   // empty or tombstone means we can write here
@@ -63,10 +63,10 @@ pub fn emit_hash_insert_owned(emitter: &mut Emitter) {
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload destination table after call clobbers regs
     emitter.instruction("ldr x6, [x5, #8]");                                    // reload capacity after call clobbers regs
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload probe index after call clobbers regs
-    emitter.instruction("mov x11, #40");                                        // entry size = 40 bytes
+    emitter.instruction("mov x11, #56");                                        // entry size = 56 bytes with insertion-order links
     emitter.instruction("mul x12, x9, x11");                                    // recompute byte offset for this slot
     emitter.instruction("add x12, x5, x12");                                    // advance from table base to slot
-    emitter.instruction("add x12, x12, #24");                                   // skip hash header to entry storage
+    emitter.instruction("add x12, x12, #40");                                   // skip hash header to entry storage
     emitter.instruction("cbnz x0, __rt_hash_insert_owned_overwrite");           // overwrite if this key already exists
 
     // -- advance to the next probe slot --
@@ -89,6 +89,24 @@ pub fn emit_hash_insert_owned(emitter: &mut Emitter) {
     emitter.instruction("str x13, [x12, #24]");                                 // store value_lo in slot
     emitter.instruction("ldr x13, [sp, #32]");                                  // reload moved value_hi
     emitter.instruction("str x13, [x12, #32]");                                 // store value_hi in slot
+    emitter.instruction("ldr x14, [x5, #32]");                                  // load the previous tail slot for insertion-order linking
+    emitter.instruction("str x14, [x12, #40]");                                 // store prev = old tail on the new entry
+    emitter.instruction("mov x15, #-1");                                        // sentinel index for end of the insertion-order chain
+    emitter.instruction("str x15, [x12, #48]");                                 // store next = none on the new tail entry
+    emitter.instruction("ldr x15, [x5, #24]");                                  // load the current head slot
+    emitter.instruction("cmp x15, #-1");                                         // is this the first inserted slot in the destination hash?
+    emitter.instruction("b.ne __rt_hash_insert_owned_link_tail");                // existing hashes append after the previous tail
+    emitter.instruction("str x9, [x5, #24]");                                   // initialize head = inserted slot
+    emitter.instruction("str x9, [x5, #32]");                                   // initialize tail = inserted slot
+    emitter.instruction("b __rt_hash_insert_owned_count");                       // skip the tail-link update for the first entry
+    emitter.label("__rt_hash_insert_owned_link_tail");
+    emitter.instruction("mov x16, #56");                                        // x16 = hash entry size for tail-slot addressing
+    emitter.instruction("mul x17, x14, x16");                                   // x17 = previous tail slot byte offset
+    emitter.instruction("add x17, x5, x17");                                    // advance from table base to the previous tail slot
+    emitter.instruction("add x17, x17, #40");                                   // skip the hash header to the previous tail entry
+    emitter.instruction("str x9, [x17, #48]");                                  // link old tail.next = inserted slot
+    emitter.instruction("str x9, [x5, #32]");                                   // update tail = inserted slot
+    emitter.label("__rt_hash_insert_owned_count");
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload destination table pointer
     emitter.instruction("ldr x13, [x5]");                                       // load current entry count
     emitter.instruction("add x13, x13, #1");                                    // count the newly inserted slot

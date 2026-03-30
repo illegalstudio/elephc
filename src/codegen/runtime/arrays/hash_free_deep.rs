@@ -51,10 +51,10 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_hash_free_deep_struct");                     // finish once index reaches capacity
 
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload hash table pointer
-    emitter.instruction("mov x12, #40");                                        // entry size = 40 bytes
+    emitter.instruction("mov x12, #56");                                        // entry size = 56 bytes with insertion-order links
     emitter.instruction("mul x13, x11, x12");                                   // compute byte offset for this slot
     emitter.instruction("add x13, x9, x13");                                    // advance from table base to slot
-    emitter.instruction("add x13, x13, #24");                                   // skip hash header to entry storage
+    emitter.instruction("add x13, x13, #40");                                   // skip hash header to entry storage
     emitter.instruction("ldr x14, [x13]");                                      // load occupied flag
     emitter.instruction("cmp x14, #1");                                         // is this slot occupied?
     emitter.instruction("b.ne __rt_hash_free_deep_next");                       // skip empty or tombstone slots
@@ -67,10 +67,10 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
 
     // -- free the entry value based on the runtime value tag --
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload hash table pointer after helper call
-    emitter.instruction("mov x12, #40");                                        // entry size = 40 bytes
+    emitter.instruction("mov x12, #56");                                        // entry size = 56 bytes with insertion-order links
     emitter.instruction("mul x13, x11, x12");                                   // recompute byte offset for this slot
     emitter.instruction("add x13, x9, x13");                                    // advance from table base to slot
-    emitter.instruction("add x13, x13, #24");                                   // skip hash header to entry storage
+    emitter.instruction("add x13, x13, #40");                                   // skip hash header to entry storage
     emitter.instruction("ldr x14, [sp, #16]");                                  // reload runtime value_type tag
     emitter.instruction("cmp x14, #1");                                         // is the entry value heap-backed at all?
     emitter.instruction("b.eq __rt_hash_free_deep_value_any");                  // strings release through the uniform dispatch helper
