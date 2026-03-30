@@ -65,12 +65,15 @@ pub enum Token {
     Const,          // const
     Global,         // global
     Static,         // static
+    Trait,          // trait
+    InsteadOf,      // insteadof
     PhpEol,
     PhpOs,
     DirectorySeparator,
     Class,          // class
     New,            // new
     Public,         // public
+    Protected,      // protected
     Private,        // private
     ReadOnly,       // readonly
     This,           // $this

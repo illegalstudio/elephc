@@ -1287,7 +1287,7 @@ Both `include 'f';` and `include('f');` syntax are supported.
 
 ## Classes
 
-elephc supports basic PHP classes with properties, constructors, instance methods, and static methods.
+elephc supports PHP classes with properties, constructors, instance methods, static methods, traits, and `public` / `protected` / `private` visibility.
 
 ### Class declaration
 
@@ -1314,7 +1314,7 @@ class Point {
 
 ### Properties
 
-Properties are declared with a visibility modifier (`public` or `private`) and an optional default value:
+Properties are declared with a visibility modifier (`public`, `protected`, or `private`) and an optional default value:
 
 ```php
 <?php
@@ -1331,6 +1331,7 @@ class Config {
 ```
 
 - `public` properties can be accessed from outside the class via `->`.
+- `protected` properties are not accessible from outside the class. Because inheritance is not implemented yet, they currently behave like class-only members.
 - `private` properties can only be accessed inside the class via `$this->`.
 - `readonly` properties can only be assigned inside `__construct`.
 
@@ -1365,6 +1366,57 @@ echo $origin->x;  // 0
 
 Static methods do not have access to `$this`.
 
+Like instance methods, static methods honor `public`, `protected`, and `private` visibility. Without inheritance, non-`public` static methods are currently only callable from methods on that same class.
+
+### Traits
+
+Traits are flattened into the concrete class at compile time. Imported trait methods use the same fixed labels and object layout as ordinary class members, so there is no runtime trait identity or dynamic dispatch layer.
+
+```php
+<?php
+trait HasName {
+    public $name = "elephc";
+
+    public function target() {
+        return $this->name;
+    }
+}
+
+trait Greets {
+    public function greet() {
+        return "Hello";
+    }
+}
+
+class Demo {
+    use HasName, Greets {
+        Greets::greet as baseGreet;
+    }
+
+    public function greetAll() {
+        return $this->baseGreet() . ", " . $this->target();
+    }
+}
+
+$demo = new Demo();
+echo $demo->greetAll();
+```
+
+Supported trait features:
+
+- `trait Name { ... }` declarations
+- `use TraitName;` inside classes and traits
+- multiple imported traits per `use`
+- conflict resolution with `TraitA::method insteadof TraitB`
+- aliasing and visibility remapping with `as`
+- trait properties and static trait methods
+
+Trait composition follows PHP-like precedence:
+
+- Methods declared directly on the class win over imported trait methods.
+- Conflicts between multiple traits must be resolved explicitly with `insteadof`.
+- `as` creates an alias and/or changes visibility, but does not remove the original method by itself.
+
 ### Property access
 
 Use `->` to access properties and call methods on objects:
@@ -1381,15 +1433,13 @@ echo $p->magnitude(); // method call
 
 - No inheritance (`extends`)
 - No interfaces (`implements`)
-- No traits (`use`)
-- No `protected` visibility
 - No abstract or final classes/methods
 - No property type declarations
 - No constructor promotion
 
 ## What elephc cannot do (by design)
 
-- No inheritance, interfaces, traits, enums
+- No inheritance, interfaces, enums
 - No exceptions (`try`/`catch`/`throw`)
 - No `eval()`
 - No dynamic `include`/`require` (path must be a string literal)

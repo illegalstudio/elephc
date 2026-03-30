@@ -100,12 +100,28 @@ Things that do something:
 | `ListUnpack { vars, value }` | `[$a, $b] = [1, 2];` |
 | `Global { vars }` | `global $x, $y;` — declares variables as referencing global storage |
 | `StaticVar { name, init }` | `static $count = 0;` — declares a variable that persists across function calls |
-| `ClassDecl { name, properties, methods }` | `class Point { ... }` |
+| `ClassDecl { name, trait_uses, properties, methods }` | `class Point { use Named; ... }` |
+| `TraitDecl { name, trait_uses, properties, methods }` | `trait Named { ... }` |
 | `PropertyAssign { object, property, value }` | `$p->x = 10;` |
 | `ExternFunctionDecl { name, params, return_type, library }` | `extern function foo(int $x): int;` or entries inside `extern "lib" { ... }` — `params` is `Vec<ExternParam>`, where each `ExternParam` stores `{ name, c_type }`, and `return_type` is a `CType` |
 | `ExternClassDecl { name, fields }` | `extern class Point { public int $x; }` |
 | `ExternGlobalDecl { name, c_type }` | `extern global ptr $environ;` — the declared type is a C-facing `CType`, not a `PhpType` |
 | `ExprStmt(Expr)` | `my_func();` (expression used as statement) |
+
+### Statement dispatch
+
+At statement level, `stmt.rs` selects the parser entry point from the current token:
+
+| Current token | Parse as |
+|---|---|
+| `Class` | Class declaration |
+| `Trait` | Trait declaration |
+| `Function` | Function declaration |
+| `Return` | Return statement |
+| `Echo` / `Print` | Echo/print statement |
+| `If` / `While` / `Do` / `For` / `Foreach` / `Switch` | Control-flow statement |
+| `Const` / `Global` / `Static` | Declaration-like statement |
+| `Variable` / `This` / `Identifier` | Assignment, property write, call, or generic expression statement |
 
 ### Binary operators (`BinOp`)
 
@@ -123,9 +139,11 @@ NullCoalesce
 
 | Type | Fields | Description |
 |---|---|---|
-| `Visibility` | `Public`, `Private` | Enum for property/method visibility |
+| `Visibility` | `Public`, `Protected`, `Private` | Enum for property/method visibility |
 | `ClassProperty` | `name`, `visibility`, `readonly`, `default`, `span` | A property declaration inside a class |
 | `ClassMethod` | `name`, `visibility`, `is_static`, `params`, `variadic`, `body`, `span` | A method declaration inside a class |
+| `TraitUse` | `trait_names`, `adaptations`, `span` | A `use TraitA, TraitB { ... }` clause inside a class or trait body |
+| `TraitAdaptation` | `Alias { trait_name: Option<String>, method, alias: Option<String>, visibility: Option<Visibility> }`, `InsteadOf { trait_name: Option<String>, method, instead_of: Vec<String> }` | PHP-style trait conflict resolution and aliasing |
 
 Every AST node carries a `Span` (line + column) from the source, so error messages in later phases can point to the right location.
 
@@ -259,6 +277,8 @@ After parsing a prefix, the parser checks for postfix operators:
 - `->` for property access or method call
 - `::` for static method call (when the prefix is an identifier)
 
+At statement level, `stmt.rs` also parses `trait` declarations and class/trait-body `use` clauses. That `use` handling is intentionally context-sensitive so it does not interfere with closure capture lists like `function () use ($x) { ... }`.
+
 ```php
 $arr[0]          →  ArrayAccess { array: Variable("arr"), index: IntLiteral(0) }
 $arr[$i + 1]     →  ArrayAccess { array: Variable("arr"), index: BinaryOp(Add, ...) }
@@ -285,6 +305,7 @@ Statement parsing is simpler — it looks at the current token to decide what ki
 | `Switch` | `Switch` statement with cases and optional default |
 | `Function` | Function declaration with parameters and body |
 | `Class` | Class declaration with properties and methods |
+| `Trait` | Trait declaration with trait uses, properties, and methods |
 | `Extern` | Extern function / class / global declarations |
 | `Return` | Return with optional expression |
 | `Break` | Break statement |

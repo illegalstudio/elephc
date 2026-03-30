@@ -1,9 +1,10 @@
 pub mod checker;
+pub mod traits;
 
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
-use crate::parser::ast::{CType, Program, Visibility};
+use crate::parser::ast::{CType, ClassMethod, Program, Visibility};
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)] // Callable used in match arms, constructed when closures are added
@@ -89,6 +90,7 @@ pub struct ClassInfo {
     pub defaults: Vec<Option<crate::parser::ast::Expr>>,
     pub property_visibilities: HashMap<String, Visibility>,
     pub readonly_properties: HashSet<String>,
+    pub method_decls: Vec<ClassMethod>,
     pub methods: HashMap<String, FunctionSig>,
     pub static_methods: HashMap<String, FunctionSig>,
     pub method_visibilities: HashMap<String, Visibility>,

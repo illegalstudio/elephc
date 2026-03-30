@@ -1306,7 +1306,7 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
             panic!("Unresolved include statement in codegen");
         }
         // OOP stubs — not yet implemented, skip
-        StmtKind::ClassDecl { .. } => {} // already emitted in pre-scan
+        StmtKind::ClassDecl { .. } | StmtKind::TraitDecl { .. } => {} // already emitted in pre-scan
         StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. } => {} // extern decls processed at compile time

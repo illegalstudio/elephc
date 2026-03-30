@@ -34,7 +34,7 @@ fn has_includes(stmts: &[Stmt]) -> bool {
         | StmtKind::For { body, .. }
         | StmtKind::Foreach { body, .. }
         | StmtKind::FunctionDecl { body, .. } => has_includes(body),
-        StmtKind::ClassDecl { methods, .. } => {
+        StmtKind::ClassDecl { methods, .. } | StmtKind::TraitDecl { methods, .. } => {
             methods.iter().any(|m| has_includes(&m.body))
         }
         StmtKind::ConstDecl { .. } | StmtKind::ListUnpack { .. }
@@ -200,7 +200,12 @@ fn resolve_stmts(
                     stmt.span,
                 ));
             }
-            StmtKind::ClassDecl { name, properties, methods } => {
+            StmtKind::ClassDecl {
+                name,
+                trait_uses,
+                properties,
+                methods,
+            } => {
                 let mut methods_resolved = Vec::new();
                 for method in methods {
                     let body_resolved =
@@ -213,6 +218,32 @@ fn resolve_stmts(
                 result.push(Stmt::new(
                     StmtKind::ClassDecl {
                         name: name.clone(),
+                        trait_uses: trait_uses.clone(),
+                        properties: properties.clone(),
+                        methods: methods_resolved,
+                    },
+                    stmt.span,
+                ));
+            }
+            StmtKind::TraitDecl {
+                name,
+                trait_uses,
+                properties,
+                methods,
+            } => {
+                let mut methods_resolved = Vec::new();
+                for method in methods {
+                    let body_resolved =
+                        resolve_stmts(method.body.clone(), base_dir, included, include_chain)?;
+                    methods_resolved.push(crate::parser::ast::ClassMethod {
+                        body: body_resolved,
+                        ..method.clone()
+                    });
+                }
+                result.push(Stmt::new(
+                    StmtKind::TraitDecl {
+                        name: name.clone(),
+                        trait_uses: trait_uses.clone(),
                         properties: properties.clone(),
                         methods: methods_resolved,
                     },

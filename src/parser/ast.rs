@@ -268,6 +268,13 @@ pub enum StmtKind {
     },
     ClassDecl {
         name: String,
+        trait_uses: Vec<TraitUse>,
+        properties: Vec<ClassProperty>,
+        methods: Vec<ClassMethod>,
+    },
+    TraitDecl {
+        name: String,
+        trait_uses: Vec<TraitUse>,
         properties: Vec<ClassProperty>,
         methods: Vec<ClassMethod>,
     },
@@ -355,7 +362,37 @@ pub struct ExternField {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Visibility {
     Public,
+    Protected,
     Private,
+}
+
+#[derive(Debug, Clone)]
+pub struct TraitUse {
+    pub trait_names: Vec<String>,
+    pub adaptations: Vec<TraitAdaptation>,
+    // Used for trait-flattening diagnostics.
+    pub span: Span,
+}
+
+impl PartialEq for TraitUse {
+    fn eq(&self, other: &Self) -> bool {
+        self.trait_names == other.trait_names && self.adaptations == other.adaptations
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TraitAdaptation {
+    Alias {
+        trait_name: Option<String>,
+        method: String,
+        alias: Option<String>,
+        visibility: Option<Visibility>,
+    },
+    InsteadOf {
+        trait_name: Option<String>,
+        method: String,
+        instead_of: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone)]

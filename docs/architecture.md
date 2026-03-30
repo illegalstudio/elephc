@@ -29,7 +29,7 @@ PHP source (.php)
      ▼
 ┌─────────┐
 │  Type    │  src/types/
-│  Checker │  checker/mod.rs, checker/builtins.rs, checker/functions.rs
+│  Checker │  traits.rs, checker/mod.rs, checker/builtins.rs, checker/functions.rs
 │          │  Validates types, returns CheckResult (TypeEnv + FunctionSig map)
 └────┬─────┘
      │
@@ -72,6 +72,7 @@ src/
 │
 ├── types/
 │   ├── mod.rs                 PhpType enum, TypeEnv, FunctionSig, CheckResult
+│   ├── traits.rs              Trait flattening and conflict-resolution helpers
 │   └── checker/
 │       ├── mod.rs             check_stmt(), infer_type()
 │       ├── builtins.rs        Built-in function type signatures
@@ -223,6 +224,8 @@ Total size: `8 + (num_properties × 16)`. Properties are stored at fixed offsets
 
 - Instance methods: `bl _method_ClassName_methodName`. The object pointer is passed as the first argument in `x0` (as `$this`).
 - Static methods: `bl _static_ClassName_methodName`. No object pointer is passed.
+
+Traits are flattened into the owning class before `ClassInfo` is built. Trait properties therefore occupy ordinary fixed object slots, and trait methods are emitted under the owning class labels after `use` / `as` / `insteadof` resolution. This keeps the existing flat object layout and monomorphic method calls intact while still supporting PHP-like trait composition.
 
 ### String buffer
 

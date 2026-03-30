@@ -61,15 +61,15 @@ pub fn generate(
         );
     }
 
-    // Emit class methods
-    for stmt in program {
-        if let StmtKind::ClassDecl { name: class_name, methods, .. } = &stmt.kind {
-            for method in methods {
+    // Emit flattened class methods in class-id order for deterministic output.
+    let mut sorted_classes: Vec<(&String, &ClassInfo)> = classes.iter().collect();
+    sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
+    for (class_name, class_info) in sorted_classes {
+        for method in &class_info.method_decls {
                 let (label, sig) = if method.is_static {
                     let label = format!("_static_{}_{}", class_name, method.name);
                     // Use param types from ClassInfo sig (set by type checker)
-                    let class_static_sig = classes.get(class_name)
-                        .and_then(|c| c.static_methods.get(&method.name));
+                    let class_static_sig = class_info.static_methods.get(&method.name);
                     let params: Vec<(String, PhpType)> = method.params.iter().enumerate()
                         .map(|(i, (n, _, _))| {
                             let ty = class_static_sig
@@ -85,8 +85,9 @@ pub fn generate(
                     let ref_params: Vec<bool> = method.params.iter()
                         .map(|(_, _, r)| *r)
                         .collect();
-                    let return_type = classes.get(class_name)
-                        .and_then(|c| c.static_methods.get(&method.name))
+                    let return_type = class_info
+                        .static_methods
+                        .get(&method.name)
                         .map(|s| s.return_type.clone())
                         .unwrap_or(PhpType::Int);
                     (label, FunctionSig { params, defaults, return_type, ref_params, variadic: method.variadic.clone() })
@@ -97,8 +98,7 @@ pub fn generate(
                         ("this".to_string(), PhpType::Object(class_name.clone())),
                     ];
                     // Use param types from ClassInfo sig (set by type checker post-pass)
-                    let class_method_sig = classes.get(class_name)
-                        .and_then(|c| c.methods.get(&method.name));
+                    let class_method_sig = class_info.methods.get(&method.name);
                     params.extend(method.params.iter().enumerate().map(|(i, (n, _, _))| {
                         let ty = class_method_sig
                             .and_then(|s| s.params.get(i))
@@ -110,8 +110,9 @@ pub fn generate(
                     defaults.extend(method.params.iter().map(|(_, d, _)| d.clone()));
                     let mut ref_params: Vec<bool> = vec![false]; // $this is not a ref
                     ref_params.extend(method.params.iter().map(|(_, _, r)| *r));
-                    let return_type = classes.get(class_name)
-                        .and_then(|c| c.methods.get(&method.name))
+                    let return_type = class_info
+                        .methods
+                        .get(&method.name)
                         .map(|s| s.return_type.clone())
                         .unwrap_or(PhpType::Int);
                     (label, FunctionSig { params, defaults, return_type, ref_params, variadic: method.variadic.clone() })
@@ -122,7 +123,6 @@ pub fn generate(
                     functions, &global_constants, classes, class_name,
                 );
             }
-        }
     }
 
     // --- _main function ---
@@ -199,7 +199,10 @@ pub fn generate(
 
     // -- emit user statements --
     for s in program {
-        if matches!(&s.kind, StmtKind::FunctionDecl { .. } | StmtKind::ClassDecl { .. }) {
+        if matches!(
+            &s.kind,
+            StmtKind::FunctionDecl { .. } | StmtKind::ClassDecl { .. } | StmtKind::TraitDecl { .. }
+        ) {
             continue;
         }
         stmt::emit_stmt(s, &mut emitter, &mut ctx, &mut data);
