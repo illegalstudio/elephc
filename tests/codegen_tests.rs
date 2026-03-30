@@ -3953,6 +3953,35 @@ fn test_var_dump_float() {
 }
 
 #[test]
+fn test_var_dump_mixed_prints_concrete_payload() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {}
+
+$map = [
+    "i" => 42,
+    "s" => "hello",
+    "b" => true,
+    "n" => null,
+    "a" => [1, 2],
+    "o" => new Box(),
+];
+
+var_dump($map["i"]);
+var_dump($map["s"]);
+var_dump($map["b"]);
+var_dump($map["n"]);
+var_dump($map["a"]);
+var_dump($map["o"]);
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(42)\nstring(5) \"hello\"\nbool(true)\nNULL\narray(2) {\n}\nobject(Box)\n"
+    );
+}
+
+#[test]
 fn test_print_r_int() {
     let out = compile_and_run("<?php print_r(42);");
     assert_eq!(out, "42");
