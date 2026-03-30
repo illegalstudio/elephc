@@ -26,15 +26,15 @@ pub(super) fn emit_foreach_stmt(
     if let PhpType::AssocArray { value, .. } = &arr_ty {
         let val_ty = *value.clone();
         emitter.instruction("str x0, [sp, #-16]!");                             // push hash table pointer
-        emitter.instruction("str xzr, [sp, #-16]!");                            // push initial iterator index (0)
+        emitter.instruction("str xzr, [sp, #-16]!");                            // push initial iterator cursor (0 = start from hash header head)
 
         emitter.label(&loop_start);
         emitter.instruction("ldr x0, [sp, #16]");                               // load hash table pointer
-        emitter.instruction("ldr x1, [sp]");                                    // load current iterator index
-        emitter.instruction("bl __rt_hash_iter_next");                          // x0=next_idx(-1=done), x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi
+        emitter.instruction("ldr x1, [sp]");                                    // load current iterator cursor
+        emitter.instruction("bl __rt_hash_iter_next");                          // x0=next_cursor(-1=done), x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi
         emitter.instruction("cmn x0, #1");                                      // compare x0 with -1 (end of iteration)
         emitter.instruction(&format!("b.eq {}", loop_end));                     // exit if done
-        emitter.instruction("str x0, [sp]");                                    // store new iterator index
+        emitter.instruction("str x0, [sp]");                                    // store next iterator cursor
 
         if let Some(kv) = key_var {
             if let Some(kvar) = ctx.variables.get(kv) {

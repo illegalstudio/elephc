@@ -41,7 +41,7 @@ pub fn emit(
         }
 
         // -- push iteration index onto stack --
-        emitter.instruction("str xzr, [sp, #-16]!");                            // push iter_index = 0
+        emitter.instruction("str xzr, [sp, #-16]!");                            // push iter_cursor = 0 (start from hash header head)
 
         // Stack layout (top to bottom):
         //   sp+0:  iter_index (16 bytes)
@@ -50,12 +50,12 @@ pub fn emit(
 
         emitter.label(&loop_label);
         emitter.instruction("ldr x0, [sp, #32]");                               // load hash table pointer
-        emitter.instruction("ldr x1, [sp]");                                    // load current iteration index
-        emitter.instruction("bl __rt_hash_iter_next");                          // → x0=next_idx, x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi
+        emitter.instruction("ldr x1, [sp]");                                    // load current iteration cursor
+        emitter.instruction("bl __rt_hash_iter_next");                          // → x0=next_cursor, x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi
         // -- check if iteration is done --
         emitter.instruction("cmn x0, #1");                                      // check if x0 == -1 (end of iteration)
         emitter.instruction(&format!("b.eq {}", end_label));                    // if done, needle not found
-        emitter.instruction("str x0, [sp]");                                    // save updated iteration index
+        emitter.instruction("str x0, [sp]");                                    // save updated iteration cursor
 
         // -- compare value with needle --
         match &val_ty {

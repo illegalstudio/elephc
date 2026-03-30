@@ -4401,8 +4401,49 @@ foreach ($m as $k => $v) {
 }
 "#,
     );
-    // Hash table iteration order may vary; check both entries appear
-    assert!(out.contains("a=1") && out.contains("b=2"));
+    assert_eq!(out, "a=1 b=2 ");
+}
+
+#[test]
+fn test_assoc_foreach_preserves_order_after_overwrite() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["a" => "1", "b" => "2"];
+$m["a"] = "3";
+foreach ($m as $k => $v) {
+    echo $k . "=" . $v . " ";
+}
+"#,
+    );
+    assert_eq!(out, "a=3 b=2 ");
+}
+
+#[test]
+fn test_assoc_foreach_preserves_order_after_growth() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["k0" => "0"];
+$m["k1"] = "1";
+$m["k2"] = "2";
+$m["k3"] = "3";
+$m["k4"] = "4";
+$m["k5"] = "5";
+$m["k6"] = "6";
+$m["k7"] = "7";
+$m["k8"] = "8";
+$m["k9"] = "9";
+$m["k10"] = "10";
+$m["k11"] = "11";
+$m["k12"] = "12";
+foreach ($m as $k => $v) {
+    echo $k . "=" . $v . " ";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "k0=0 k1=1 k2=2 k3=3 k4=4 k5=5 k6=6 k7=7 k8=8 k9=9 k10=10 k11=11 k12=12 "
+    );
 }
 
 #[test]
@@ -5017,8 +5058,19 @@ for ($i = 0; $i < $n; $i++) {
 }
 "#,
     );
-    // Hash iteration order may vary
-    assert!(out.contains("x") && out.contains("y"));
+    assert_eq!(out, "x y ");
+}
+
+#[test]
+fn test_assoc_array_search_returns_first_inserted_matching_key() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["first" => "same", "second" => "same", "third" => "other"];
+$key = array_search("same", $m);
+echo $key;
+"#,
+    );
+    assert_eq!(out, "first");
 }
 
 #[test]
@@ -5033,7 +5085,7 @@ for ($i = 0; $i < $n; $i++) {
 }
 "#,
     );
-    assert!(out.contains("one") && out.contains("two"));
+    assert_eq!(out, "one two ");
 }
 
 #[test]
@@ -6917,12 +6969,7 @@ fn test_json_encode_single_element_array() {
 #[test]
 fn test_json_encode_assoc() {
     let out = compile_and_run(r#"<?php echo json_encode(["name" => "Alice", "age" => "30"]);"#);
-    // Hash table iteration order may vary, so check both possibilities
-    assert!(
-        out == r#"{"name":"Alice","age":"30"}"# || out == r#"{"age":"30","name":"Alice"}"#,
-        "Got: {}",
-        out
-    );
+    assert_eq!(out, r#"{"name":"Alice","age":"30"}"#, "Got: {}", out);
 }
 
 #[test]

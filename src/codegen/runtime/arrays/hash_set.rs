@@ -64,12 +64,12 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, x6");                                         // check if we've probed all slots
     emitter.instruction("b.ge __rt_hash_set_done");                             // if probed all, table is full (shouldn't happen)
 
-    // -- compute entry address: base + 24 + index * 40 --
+    // -- compute entry address: base + 40 + index * 56 --
     emitter.instruction("ldr x9, [sp, #40]");                                   // load current probe index
-    emitter.instruction("mov x11, #40");                                        // entry size = 40 bytes
-    emitter.instruction("mul x12, x9, x11");                                    // x12 = index * 40
-    emitter.instruction("add x12, x5, x12");                                    // x12 = table_ptr + index * 40
-    emitter.instruction("add x12, x12, #24");                                   // x12 = entry address (skip 24-byte header)
+    emitter.instruction("mov x11, #56");                                        // entry size = 56 bytes with insertion-order links
+    emitter.instruction("mul x12, x9, x11");                                    // x12 = index * 56
+    emitter.instruction("add x12, x5, x12");                                    // x12 = table_ptr + index * 56
+    emitter.instruction("add x12, x12, #40");                                   // x12 = entry address (skip 40-byte header)
 
     // -- check occupied field --
     emitter.instruction("ldr x13, [x12]");                                      // x13 = occupied flag of this entry
@@ -89,10 +89,10 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload probe index
 
     // -- recompute entry address after call clobbered registers --
-    emitter.instruction("mov x11, #40");                                        // entry size = 40 bytes
-    emitter.instruction("mul x12, x9, x11");                                    // x12 = index * 40
-    emitter.instruction("add x12, x5, x12");                                    // x12 = table_ptr + index * 40
-    emitter.instruction("add x12, x12, #24");                                   // x12 = entry address
+    emitter.instruction("mov x11, #56");                                        // entry size = 56 bytes with insertion-order links
+    emitter.instruction("mul x12, x9, x11");                                    // x12 = index * 56
+    emitter.instruction("add x12, x5, x12");                                    // x12 = table_ptr + index * 56
+    emitter.instruction("add x12, x12, #40");                                   // x12 = entry address
 
     emitter.instruction("cbnz x0, __rt_hash_set_update");                       // if keys match, update existing entry
 
@@ -114,10 +114,10 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save persistent key pointer for slot write
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash table pointer after helper call
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload probe index after helper call
-    emitter.instruction("mov x11, #40");                                        // entry size = 40 bytes
+    emitter.instruction("mov x11, #56");                                        // entry size = 56 bytes with insertion-order links
     emitter.instruction("mul x12, x9, x11");                                    // recompute byte offset for this slot
     emitter.instruction("add x12, x5, x12");                                    // advance from table base to slot
-    emitter.instruction("add x12, x12, #24");                                   // skip hash header to entry storage
+    emitter.instruction("add x12, x12, #40");                                   // skip hash header to entry storage
     emitter.instruction("mov x13, #1");                                         // occupied = 1
     emitter.instruction("str x13, [x12]");                                      // set entry as occupied
     emitter.instruction("ldr x13, [sp, #8]");                                   // load persistent key_ptr
@@ -128,6 +128,24 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("str x13, [x12, #24]");                                 // store value_lo in entry
     emitter.instruction("ldr x13, [sp, #32]");                                  // load value_hi
     emitter.instruction("str x13, [x12, #32]");                                 // store value_hi in entry
+    emitter.instruction("ldr x14, [x5, #32]");                                  // load the previous tail slot for insertion-order linking
+    emitter.instruction("str x14, [x12, #40]");                                 // store prev = old tail on the new entry
+    emitter.instruction("mov x15, #-1");                                        // sentinel index for end of the insertion-order chain
+    emitter.instruction("str x15, [x12, #48]");                                 // store next = none on the new tail entry
+    emitter.instruction("ldr x15, [x5, #24]");                                  // load the current head slot
+    emitter.instruction("cmp x15, #-1");                                         // is this the first insertion into the table?
+    emitter.instruction("b.ne __rt_hash_set_link_tail");                         // existing tables append after the previous tail
+    emitter.instruction("str x9, [x5, #24]");                                   // initialize head = inserted slot
+    emitter.instruction("str x9, [x5, #32]");                                   // initialize tail = inserted slot
+    emitter.instruction("b __rt_hash_set_insert_header");                        // skip the tail-link update for the first entry
+    emitter.label("__rt_hash_set_link_tail");
+    emitter.instruction("mov x16, #56");                                        // x16 = hash entry size for tail-slot addressing
+    emitter.instruction("mul x17, x14, x16");                                   // x17 = previous tail slot byte offset
+    emitter.instruction("add x17, x5, x17");                                    // advance from table base to the previous tail slot
+    emitter.instruction("add x17, x17, #40");                                   // skip the hash header to the previous tail entry
+    emitter.instruction("str x9, [x17, #48]");                                  // link old tail.next = inserted slot
+    emitter.instruction("str x9, [x5, #32]");                                   // update tail = inserted slot
+    emitter.label("__rt_hash_set_insert_header");
     emitter.instruction("ldr x13, [sp, #24]");                                  // reload value_lo for dynamic value_type maintenance
     emitter.instruction("cbz x13, __rt_hash_set_insert_header_done");           // null/scalar zero leaves the header value_type unchanged
     emitter.instruction("mov x0, x13");                                         // inspect the inserted payload through the uniform heap-kind helper
@@ -197,10 +215,10 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.label("__rt_hash_set_recompute_entry");
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash table pointer after helper call
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload probe index after helper call
-    emitter.instruction("mov x11, #40");                                        // entry size = 40 bytes
+    emitter.instruction("mov x11, #56");                                        // entry size = 56 bytes with insertion-order links
     emitter.instruction("mul x12, x9, x11");                                    // recompute byte offset for this slot
     emitter.instruction("add x12, x5, x12");                                    // advance from table base to slot
-    emitter.instruction("add x12, x12, #24");                                   // skip hash header to entry storage
+    emitter.instruction("add x12, x12, #40");                                   // skip hash header to entry storage
 
     emitter.label("__rt_hash_set_write_value");
     emitter.instruction("ldr x13, [sp, #24]");                                  // load value_lo

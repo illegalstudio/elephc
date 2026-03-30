@@ -127,10 +127,10 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.label("__rt_gc_collect_cycles_count_hash_loop");
     emitter.instruction("cmp x14, x13");                                        // have we visited every hash slot?
     emitter.instruction("b.ge __rt_gc_collect_cycles_count_next");              // finish the hash scan once all slots were visited
-    emitter.instruction("mov x15, #40");                                        // each hash entry occupies 40 bytes
+    emitter.instruction("mov x15, #56");                                        // each hash entry occupies 56 bytes with insertion-order links
     emitter.instruction("mul x15, x14, x15");                                   // compute the byte offset for this hash entry
     emitter.instruction("add x15, x12, x15");                                   // advance from the hash base to the entry
-    emitter.instruction("add x15, x15, #24");                                   // skip the 24-byte hash header
+    emitter.instruction("add x15, x15, #40");                                   // skip the 40-byte hash header
     emitter.instruction("ldr x0, [x15]");                                       // load the occupied flag from this slot
     emitter.instruction("cmp x0, #1");                                          // is this hash slot occupied?
     emitter.instruction("b.ne __rt_gc_collect_cycles_count_hash_next");         // skip empty or tombstone slots

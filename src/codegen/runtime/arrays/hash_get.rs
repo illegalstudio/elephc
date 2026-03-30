@@ -43,12 +43,12 @@ pub fn emit_hash_get(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, x6");                                         // check if we've probed all slots
     emitter.instruction("b.ge __rt_hash_get_not_found");                        // if probed all, key not found
 
-    // -- compute entry address: base + 24 + index * 40 --
+    // -- compute entry address: base + 40 + index * 56 --
     emitter.instruction("ldr x9, [sp, #24]");                                   // load current probe index
-    emitter.instruction("mov x11, #40");                                        // entry size = 40 bytes
-    emitter.instruction("mul x12, x9, x11");                                    // x12 = index * 40
-    emitter.instruction("add x12, x5, x12");                                    // x12 = table_ptr + index * 40
-    emitter.instruction("add x12, x12, #24");                                   // x12 = entry address (skip header)
+    emitter.instruction("mov x11, #56");                                        // entry size = 56 bytes with insertion-order links
+    emitter.instruction("mul x12, x9, x11");                                    // x12 = index * 56
+    emitter.instruction("add x12, x5, x12");                                    // x12 = table_ptr + index * 56
+    emitter.instruction("add x12, x12, #40");                                   // x12 = entry address (skip header)
 
     // -- check occupied field --
     emitter.instruction("ldr x13, [x12]");                                      // x13 = occupied flag
@@ -84,10 +84,10 @@ pub fn emit_hash_get(emitter: &mut Emitter) {
     // -- recompute entry address (registers were clobbered by str_eq) --
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash_table_ptr
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload probe index
-    emitter.instruction("mov x11, #40");                                        // entry size = 40 bytes
-    emitter.instruction("mul x12, x9, x11");                                    // x12 = index * 40
-    emitter.instruction("add x12, x5, x12");                                    // x12 = table_ptr + index * 40
-    emitter.instruction("add x12, x12, #24");                                   // x12 = entry address
+    emitter.instruction("mov x11, #56");                                        // entry size = 56 bytes with insertion-order links
+    emitter.instruction("mul x12, x9, x11");                                    // x12 = index * 56
+    emitter.instruction("add x12, x5, x12");                                    // x12 = table_ptr + index * 56
+    emitter.instruction("add x12, x12, #40");                                   // x12 = entry address
 
     emitter.instruction("mov x0, #1");                                          // found = 1
     emitter.instruction("ldr x1, [x12, #24]");                                  // x1 = value_lo

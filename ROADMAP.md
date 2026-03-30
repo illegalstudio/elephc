@@ -275,7 +275,7 @@ Proper type system for PHP compatibility.
 - [x] Interfaces / abstract classes — interface method tables and compile-time conformance checking
 - [x] Traits — compile-time method copying / inlining with `use`, `as`, `insteadof`, and trait properties
 - [ ] Exceptions (`try`/`catch`) — stack unwinding via `setjmp`/`longjmp` or DWARF-based infrastructure
-- [ ] Hash table insertion order — preserve PHP associative-array insertion order with a secondary linked list through entries
+- [x] Hash table insertion order — preserve PHP associative-array insertion order with a secondary linked list through entries
 - [ ] Mixed-type associative arrays — per-entry type tags instead of one value type per table
 - [ ] String indexing (`$str[$i]`) — lower to substring-style access as syntax sugar
 - [x] `protected` visibility — third visibility level between public and private
@@ -340,6 +340,20 @@ Proper type system for PHP compatibility.
 - [ ] `--ext` flag to specify extension libraries at compile time
 - [ ] Documentation: how to bridge a PHP extension
 
+## v1.5.x — Advanced language features
+
+- [ ] Generators / `yield` — compile-time state machine transformation (struct holds locals + state index, `next()` dispatches via switch)
+- [ ] `yield from` delegation — forward iteration to an inner generator
+- [ ] Enums (`enum Color { Red; Green; Blue; }`) — backed enums with `->value`, `::from()`, `::cases()`
+- [ ] Named arguments (`foo(name: "Alice", age: 30)`) — reorder args at compile time based on parameter names
+- [ ] First-class callable syntax (`strlen(...)`) — create closures from function names without string indirection
+- [ ] Union types (`int|string`) — tagged union with runtime type dispatch
+- [ ] Nullable types (`?int`) — sugar for `int|null`
+- [ ] `match` with no-match error — runtime fatal when no arm matches and no default
+- [ ] Readonly classes (`readonly class Point {}`) — all properties implicitly readonly
+- [ ] Constructor promotion (`public function __construct(public int $x)`) — declare + assign properties in constructor signature
+- [ ] Fibers — cooperative multitasking via `Fiber::start()`, `Fiber::suspend()`, `Fiber::resume()` (heap-allocated stack frames)
+
 ---
 
 ## Will not implement
@@ -352,4 +366,3 @@ Features that are fundamentally incompatible with a static ahead-of-time compile
 | `extract()` | Creates new variables from array keys at runtime. A static compiler must know all variables before execution — it cannot allocate stack slots on the fly. |
 | `$$var` (variable variables) | Requires a runtime symbol table to resolve variable names dynamically. Incompatible with static stack-based variable allocation. |
 | `eval()` | Requires a full interpreter/compiler at runtime. Fundamentally impossible in an AOT compiler. |
-| Generators / `yield` | Requires coroutine suspension and stack switching, which is far beyond the current single-stack execution model. |

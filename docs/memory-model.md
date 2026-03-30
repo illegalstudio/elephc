@@ -287,16 +287,16 @@ This is what lets PHP-style code such as `$b = $a; $b[0] = 9;` leave `$a` unchan
 
 ## Hash table layout (associative arrays)
 
-Associative arrays use a separate heap-allocated structure — an open-addressing hash table with linear probing.
+Associative arrays use a separate heap-allocated structure: an open-addressing hash table for lookup plus an insertion-order linked list threaded through the entries.
 
-### Header (24 bytes)
+### Header (40 bytes)
 
 ```
-┌──────────┬──────────┬──────────┐
-│  count   │ capacity │ val_type │
-│ (8 bytes)│ (8 bytes)│ (8 bytes)│
-└──────────┴──────────┴──────────┘
- offset+0   offset+8   offset+16
+┌──────────┬──────────┬──────────┬──────────┬──────────┐
+│  count   │ capacity │ val_type │   head   │   tail   │
+│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (8 bytes)│
+└──────────┴──────────┴──────────┴──────────┴──────────┘
+ offset+0   offset+8   offset+16  offset+24  offset+32
 ```
 
 | Field | Size | Description |
@@ -304,16 +304,18 @@ Associative arrays use a separate heap-allocated structure — an open-addressin
 | `count` | 8 bytes | Number of occupied entries |
 | `capacity` | 8 bytes | Total number of slots |
 | `val_type` | 8 bytes | Value type tag (0=int, 1=str, 2=float, 3=bool, 4=array, 5=assoc, 6=object) |
+| `head` | 8 bytes | Slot index of the first inserted entry, or `-1` when empty |
+| `tail` | 8 bytes | Slot index of the most recently inserted entry, or `-1` when empty |
 
-### Entries (40 bytes each)
+### Entries (56 bytes each)
 
-Starting at offset +24, each slot is 40 bytes:
+Starting at offset +40, each slot is 56 bytes:
 
 ```
-┌──────────┬──────────┬──────────┬──────────┬──────────┐
-│ occupied │ key_ptr  │ key_len  │ value_lo │ value_hi │
-│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (8 bytes)│
-└──────────┴──────────┴──────────┴──────────┴──────────┘
+┌──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
+│ occupied │ key_ptr  │ key_len  │ value_lo │ value_hi │   prev   │   next   │
+│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (8 bytes)│ (8 bytes)│
+└──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
 ```
 
 | Field | Description |
@@ -323,21 +325,33 @@ Starting at offset +24, each slot is 40 bytes:
 | `key_len` | Key string length |
 | `value_lo` | Value (integer) or value pointer (string) |
 | `value_hi` | String length (for string values), unused for int |
+| `prev` | Previous inserted slot index, or `-1` for the head entry |
+| `next` | Next inserted slot index, or `-1` for the tail entry |
 
 ### Hashing and collision resolution
 
 Keys are hashed with **FNV-1a** (fast, good distribution for short strings). Collisions are resolved by **linear probing** — if slot `hash % capacity` is occupied, try `(hash + 1) % capacity`, and so on.
 
-Entry address: `base + 24 + (slot_index × 40)`
+Entry address: `base + 40 + (slot_index × 56)`
+
+### Iteration order
+
+Lookup still probes physical buckets, but iteration walks the `head -> next -> ... -> tail` chain. This preserves PHP insertion order across:
+
+- `foreach` on associative arrays
+- `array_keys()` and `array_values()`
+- `array_search()` / `in_array()` when duplicate values exist
+- `json_encode()` on associative arrays
+- Rehashing during growth and copy-on-write cloning
 
 ### Comparison with indexed arrays
 
 | | Indexed array | Associative array |
 |---|---|---|
-| Header | 24 bytes | 24 bytes |
-| Element size | 8 or 16 bytes | 40 bytes (fixed) |
+| Header | 24 bytes | 40 bytes |
+| Element size | 8 or 16 bytes | 56 bytes (fixed) |
 | Access | O(1) by index | O(1) average by hash |
-| Iteration | Sequential | Scan for occupied slots |
+| Iteration | Sequential | Insertion-order linked walk over occupied slots |
 | Keys | Implicit (0, 1, 2, ...) | Explicit strings |
 
 ## Object layout

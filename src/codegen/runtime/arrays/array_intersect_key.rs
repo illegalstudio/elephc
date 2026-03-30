@@ -13,7 +13,7 @@ pub fn emit_array_intersect_key(emitter: &mut Emitter) {
     //   [sp, #0]  = hash1 pointer
     //   [sp, #8]  = hash2 pointer
     //   [sp, #16] = result hash table pointer
-    //   [sp, #24] = iterator index
+    //   [sp, #24] = iterator cursor
     //   [sp, #32] = saved x29
     //   [sp, #40] = saved x30
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack
@@ -30,19 +30,19 @@ pub fn emit_array_intersect_key(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #16]");                                   // save result hash table pointer
 
     // -- iterate over hash1 entries --
-    emitter.instruction("str xzr, [sp, #24]");                                  // iterator index = 0
+    emitter.instruction("str xzr, [sp, #24]");                                  // iterator cursor = 0 (start from hash header head)
 
     emitter.label("__rt_array_isect_key_loop");
     emitter.instruction("ldr x0, [sp, #0]");                                    // x0 = hash1 pointer
-    emitter.instruction("ldr x1, [sp, #24]");                                   // x1 = current iterator index
-    emitter.instruction("bl __rt_hash_iter_next");                              // get next entry, x0=new_idx, x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi
+    emitter.instruction("ldr x1, [sp, #24]");                                   // x1 = current iterator cursor
+    emitter.instruction("bl __rt_hash_iter_next");                              // get next entry, x0=next_cursor, x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi
 
     // -- check if iteration is done --
     emitter.instruction("cmn x0, #1");                                          // check if x0 == -1 (end of iteration)
     emitter.instruction("b.eq __rt_array_isect_key_done");                      // if done, return result
 
     // -- save iterator state and entry data --
-    emitter.instruction("str x0, [sp, #24]");                                   // save new iterator index
+    emitter.instruction("str x0, [sp, #24]");                                   // save next iterator cursor
 
     // -- save entry values on temp stack space --
     emitter.instruction("sub sp, sp, #32");                                     // allocate temp space for entry data
