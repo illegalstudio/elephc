@@ -223,6 +223,7 @@ Total size: `8 + (num_properties × 16)`. Properties are stored at fixed offsets
 ### Method dispatch
 
 - Instance methods: codegen resolves a stable slot number from the static class metadata, then uses the object's `class_id` to load the concrete class vtable entry and `blr` to the implementation. The object pointer is still passed as the first argument in `x0` (as `$this`).
+- Private instance methods are excluded from the vtable and emitted as direct calls within the declaring class, preserving PHP's lexical binding for parent-private helpers.
 - Static methods: `bl _static_ClassName_methodName`. No object pointer is passed.
 - `parent::method()`: emitted as a direct branch to the parent implementation label, bypassing virtual dispatch for that call site.
 

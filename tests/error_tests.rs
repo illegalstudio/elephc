@@ -1689,6 +1689,22 @@ fn test_error_subclass_cannot_access_parent_private_property() {
     );
 }
 
+#[test]
+fn test_error_override_cannot_change_parameter_count() {
+    expect_error(
+        "<?php class Base { public function ping($x) { return $x; } } class Child extends Base { public function ping() { return 1; } }",
+        "Cannot change parameter count when overriding method: Child::ping",
+    );
+}
+
+#[test]
+fn test_error_property_shadowing_across_inheritance_not_supported() {
+    expect_error(
+        "<?php class Base { public $value = 1; } class Child extends Base { public $value = 2; }",
+        "Property redeclaration across inheritance is not yet supported: Child::value",
+    );
+}
+
 // --- Date/time error tests ---
 
 #[test]

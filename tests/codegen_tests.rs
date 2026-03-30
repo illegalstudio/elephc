@@ -11436,6 +11436,33 @@ echo $dog->run();
 }
 
 #[test]
+fn test_inheritance_parent_private_method_stays_lexically_bound() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    private function secret() {
+        return "base";
+    }
+
+    public function reveal() {
+        return $this->secret();
+    }
+}
+
+class Child extends Base {
+    public function secret() {
+        return "child";
+    }
+}
+
+$child = new Child();
+echo $child->reveal();
+"#,
+    );
+    assert_eq!(out, "base");
+}
+
+#[test]
 fn test_inheritance_parent_method_call_and_inherited_properties() {
     let out = compile_and_run(
         r#"<?php

@@ -2,7 +2,7 @@ use super::abi;
 use super::context::{Context, HeapOwnership};
 use super::data_section::DataSection;
 use super::emit::Emitter;
-use crate::parser::ast::{BinOp, Expr, ExprKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind, Visibility};
 use crate::types::FunctionSig;
 use crate::types::PhpType;
 
@@ -894,6 +894,18 @@ fn emit_method_call(
     let slot = class_info
         .as_ref()
         .and_then(|ci| ci.vtable_slots.get(method).copied());
+    let direct_private_label = class_info.as_ref().and_then(|ci| {
+        if ci.method_visibilities.get(method) == Some(&Visibility::Private) {
+            let impl_class = ci
+                .method_impl_classes
+                .get(method)
+                .map(String::as_str)
+                .unwrap_or(class_name.as_str());
+            Some(format!("_method_{}_{}", impl_class, method))
+        } else {
+            None
+        }
+    });
 
     save_concat_offset_before_nested_call(emitter);
     if let Some(slot) = slot {
@@ -903,6 +915,8 @@ fn emit_method_call(
         emitter.instruction("ldr x11, [x11, x10, lsl #3]");                     // load class-specific vtable pointer
         emitter.instruction(&format!("ldr x11, [x11, #{}]", slot * 8));         // load method entry from vtable slot
         emitter.instruction("blr x11");                                         // call virtual method implementation
+    } else if let Some(label) = direct_private_label {
+        emitter.instruction(&format!("bl {}", label));                          // call lexically-resolved private method directly
     } else {
         emitter.comment(&format!("WARNING: missing vtable slot for {}::{}", class_name, method));
     }

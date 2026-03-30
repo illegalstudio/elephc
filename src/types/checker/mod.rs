@@ -287,6 +287,84 @@ fn visibility_rank(visibility: &Visibility) -> u8 {
     }
 }
 
+fn required_param_count(sig: &FunctionSig) -> usize {
+    sig.defaults.iter().filter(|default| default.is_none()).count()
+}
+
+fn validate_override_signature(
+    class_name: &str,
+    method: &crate::parser::ast::ClassMethod,
+    parent_sig: &FunctionSig,
+    is_static: bool,
+) -> Result<(), CompileError> {
+    let kind = if is_static { "static method" } else { "method" };
+
+    if method.params.len() != parent_sig.params.len() {
+        return Err(CompileError::new(
+            method.span,
+            &format!(
+                "Cannot change parameter count when overriding {}: {}::{}",
+                kind, class_name, method.name
+            ),
+        ));
+    }
+
+    let child_ref_params: Vec<bool> = method.params.iter().map(|(_, _, is_ref)| *is_ref).collect();
+    if child_ref_params != parent_sig.ref_params {
+        return Err(CompileError::new(
+            method.span,
+            &format!(
+                "Cannot change pass-by-reference parameters when overriding {}: {}::{}",
+                kind, class_name, method.name
+            ),
+        ));
+    }
+
+    let child_defaults: Vec<bool> = method
+        .params
+        .iter()
+        .map(|(_, default, _)| default.is_some())
+        .collect();
+    let parent_defaults: Vec<bool> =
+        parent_sig.defaults.iter().map(|default| default.is_some()).collect();
+    if child_defaults != parent_defaults {
+        return Err(CompileError::new(
+            method.span,
+            &format!(
+                "Cannot change optional parameter layout when overriding {}: {}::{}",
+                kind, class_name, method.name
+            ),
+        ));
+    }
+
+    if method.variadic != parent_sig.variadic {
+        return Err(CompileError::new(
+            method.span,
+            &format!(
+                "Cannot change variadic parameter shape when overriding {}: {}::{}",
+                kind, class_name, method.name
+            ),
+        ));
+    }
+
+    let child_required = method
+        .params
+        .iter()
+        .filter(|(_, default, _)| default.is_none())
+        .count();
+    if child_required != required_param_count(parent_sig) {
+        return Err(CompileError::new(
+            method.span,
+            &format!(
+                "Cannot change required parameter count when overriding {}: {}::{}",
+                kind, class_name, method.name
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
 fn build_class_info_recursive(
     class_name: &str,
     class_map: &HashMap<String, FlattenedClass>,
@@ -443,6 +521,9 @@ fn build_class_info_recursive(
                     ));
                 }
             }
+            if let Some(parent_sig) = static_sigs.get(&method.name) {
+                validate_override_signature(&class.name, method, parent_sig, true)?;
+            }
             static_sigs.insert(method.name.clone(), sig);
             static_method_visibilities.insert(method.name.clone(), method.visibility.clone());
             static_method_declaring_classes.insert(method.name.clone(), class.name.clone());
@@ -468,11 +549,14 @@ fn build_class_info_recursive(
                     ));
                 }
             }
+            if let Some(parent_sig) = method_sigs.get(&method.name) {
+                validate_override_signature(&class.name, method, parent_sig, false)?;
+            }
             method_sigs.insert(method.name.clone(), sig);
             method_visibilities.insert(method.name.clone(), method.visibility.clone());
             method_declaring_classes.insert(method.name.clone(), class.name.clone());
             method_impl_classes.insert(method.name.clone(), class.name.clone());
-            if !vtable_slots.contains_key(&method.name) {
+            if method.visibility != Visibility::Private && !vtable_slots.contains_key(&method.name) {
                 let slot = vtable_methods.len();
                 vtable_slots.insert(method.name.clone(), slot);
                 vtable_methods.push(method.name.clone());

@@ -1383,6 +1383,8 @@ $dog = new Dog();
 echo $dog->run();  // dog
 ```
 
+Private methods are not virtual. If a parent method calls one of its own private helpers, that call stays bound to the parent's implementation even when the receiver is an instance of a child class.
+
 ### `parent::method()`
 
 Inside a subclass method, `parent::method()` directly calls the parent implementation:
@@ -1415,6 +1417,15 @@ echo $origin->x;  // 0
 Static methods do not have access to `$this`.
 
 Like instance methods, static methods honor `public`, `protected`, and `private` visibility. Inherited `public` and `protected` static methods remain callable through the child class; `private` static methods stay scoped to the declaring class.
+
+### Override rules
+
+For non-private inherited methods, elephc currently requires the child method to keep the same parameter shape as the parent:
+
+- same parameter count
+- same pass-by-reference positions
+- same optional/default parameter layout
+- same variadic vs non-variadic shape
 
 ### Traits
 
@@ -1484,6 +1495,7 @@ echo $p->magnitude(); // method call
 - No property type declarations
 - No constructor promotion
 - No `self::` or `static::` late static binding
+- Property redeclaration across an inheritance chain is rejected for now
 
 ## What elephc cannot do (by design)
 

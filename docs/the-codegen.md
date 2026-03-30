@@ -697,6 +697,8 @@ For property assignment (`$obj->prop = value`), the value is evaluated first, th
 
 Inside the method body, `$this` is the first parameter and lives in the function's first stack slot.
 
+Private instance methods are the exception: they do not get vtable slots, so calls resolved to a private method of the current lexical class use a direct `_method_Class_method` branch instead of virtual dispatch.
+
 ### Static method call (`ClassName::method(args)`)
 
 Static methods are called like regular functions, but with the label `_static_ClassName_methodName`. No object pointer is passed:
