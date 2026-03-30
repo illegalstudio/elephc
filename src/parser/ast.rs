@@ -200,7 +200,7 @@ pub struct Stmt {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CatchClause {
     pub exception_types: Vec<String>,
-    pub variable: String,
+    pub variable: Option<String>,
     pub body: Vec<Stmt>,
 }
 

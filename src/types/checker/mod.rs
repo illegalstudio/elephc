@@ -2315,10 +2315,12 @@ impl Checker {
                         }
                         resolved_types.push(exception_type);
                     }
-                    env.insert(
-                        catch_clause.variable.clone(),
-                        PhpType::Object(self.common_catch_type_name(&resolved_types)),
-                    );
+                    if let Some(variable) = &catch_clause.variable {
+                        env.insert(
+                            variable.clone(),
+                            PhpType::Object(self.common_catch_type_name(&resolved_types)),
+                        );
+                    }
                     for s in &catch_clause.body {
                         self.check_stmt(s, env)?;
                     }

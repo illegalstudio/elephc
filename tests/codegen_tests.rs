@@ -158,6 +158,14 @@ fn test_exception_multi_catch_matches_each_type() {
 }
 
 #[test]
+fn test_exception_catch_without_variable() {
+    let out = compile_and_run(
+        "<?php try { throw new Exception(); } catch (Exception) { echo 21; }",
+    );
+    assert_eq!(out, "21");
+}
+
+#[test]
 fn test_exception_try_catch_cross_function() {
     let out = compile_and_run(
         "<?php class MyException extends Exception {} function boom() { throw new MyException(); } try { boom(); } catch (MyException $e) { echo 7; }",

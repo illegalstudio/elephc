@@ -322,12 +322,15 @@ fn emit_handler_jmpbuf_address(emitter: &mut Emitter, handler_offset: usize, des
 }
 
 fn bind_catch_variable(catch_clause: &CatchClause, emitter: &mut Emitter, ctx: &Context) {
+    let Some(variable) = &catch_clause.variable else {
+        return;
+    };
     let var = ctx
         .variables
-        .get(&catch_clause.variable)
+        .get(variable)
         .expect("codegen bug: catch variable was not pre-allocated");
 
-    emitter.comment(&format!("bind catch ${}", catch_clause.variable));
+    emitter.comment(&format!("bind catch ${}", variable));
     if matches!(var.ty, PhpType::Str) {
         abi::load_at_offset(emitter, "x0", var.stack_offset);                      // load the previous string pointer before overwriting the catch variable
         emitter.instruction("bl __rt_heap_free_safe");                             // release the previous owned string value in the catch slot

@@ -209,10 +209,18 @@ pub fn parse_try(
             break;
         }
         let variable = match tokens.get(*pos).map(|(t, _)| t) {
-            Some(Token::Variable(name)) => name.clone(),
-            _ => return Err(CompileError::new(span, "Expected catch variable after exception type")),
+            Some(Token::Variable(name)) => {
+                *pos += 1;
+                Some(name.clone())
+            }
+            Some(Token::RParen) => None,
+            _ => {
+                return Err(CompileError::new(
+                    span,
+                    "Expected catch variable or ')' after exception type",
+                ))
+            }
         };
-        *pos += 1;
         expect_token(tokens, pos, &Token::RParen, "Expected ')' after catch clause")?;
         let body = parse_body(tokens, pos)?;
         catches.push(CatchClause {

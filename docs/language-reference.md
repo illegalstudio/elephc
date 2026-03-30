@@ -335,6 +335,7 @@ Supported subset:
 - `throw <expr>;` where `<expr>` has an object type implementing `Throwable`
 - `try { ... } catch (ClassName $e) { ... }`
 - `catch (TypeA | TypeB $e)` for PHP-style multi-catch
+- `catch (Exception)` without binding the exception variable
 - catch types must extend or implement `Throwable`
 - `catch (Throwable $e)` matches objects implementing the built-in `Throwable` interface, including the built-in `Exception`
 - multiple `catch` clauses

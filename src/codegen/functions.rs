@@ -772,11 +772,13 @@ pub fn collect_local_vars(
                         ctx,
                         catch_clause.exception_types.first().map(String::as_str).unwrap_or("Throwable"),
                     );
-                    if !ctx.variables.contains_key(&catch_clause.variable) {
-                        ctx.alloc_var(
-                            &catch_clause.variable,
-                            PhpType::Object(catch_type_name),
-                        );
+                    if let Some(variable) = &catch_clause.variable {
+                        if !ctx.variables.contains_key(variable) {
+                            ctx.alloc_var(
+                                variable,
+                                PhpType::Object(catch_type_name),
+                            );
+                        }
                     }
                     collect_local_vars(&catch_clause.body, ctx, sig);
                 }
