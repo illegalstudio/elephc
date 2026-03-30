@@ -9562,6 +9562,117 @@ echo $b[0];
 }
 
 #[test]
+fn test_cow_indexed_array_alias_write_does_not_mutate_source() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2, 3];
+$b = $a;
+$b[0] = 9;
+echo $a[0];
+echo $b[0];
+"#,
+    );
+    assert_eq!(out, "19");
+}
+
+#[test]
+fn test_cow_assoc_array_alias_write_does_not_mutate_source() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["x" => 1];
+$b = $a;
+$b["x"] = 2;
+echo $a["x"];
+echo $b["x"];
+"#,
+    );
+    assert_eq!(out, "12");
+}
+
+#[test]
+fn test_cow_array_growth_after_alias_keeps_source_unchanged() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1];
+$b = $a;
+$b[4] = 5;
+echo count($a);
+echo count($b);
+echo $a[0];
+echo $b[4];
+"#,
+    );
+    assert_eq!(out, "1515");
+}
+
+#[test]
+fn test_cow_array_push_on_alias_keeps_source_unchanged() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [7];
+$b = $a;
+array_push($b, 9);
+echo count($a);
+echo count($b);
+echo $a[0];
+echo $b[1];
+"#,
+    );
+    assert_eq!(out, "1279");
+}
+
+#[test]
+fn test_cow_pass_by_value_array_mutation_splits_in_callee() {
+    let out = compile_and_run(
+        r#"<?php
+function rewrite($arr) {
+    $arr[0] = 9;
+    echo $arr[0];
+}
+
+$a = [1];
+rewrite($a);
+echo $a[0];
+"#,
+    );
+    assert_eq!(out, "91");
+}
+
+#[test]
+fn test_cow_nested_array_mutation_stays_shallow_until_inner_write() {
+    let out = compile_and_run(
+        r#"<?php
+$outer = [[1]];
+$copy = $outer;
+$inner = $copy[0];
+$inner[0] = 9;
+$copy[0] = $inner;
+echo $outer[0][0];
+echo $copy[0][0];
+"#,
+    );
+    assert_eq!(out, "19");
+}
+
+#[test]
+fn test_cow_split_path_balances_gc_stats() {
+    let baseline = compile_and_run_with_gc_stats("<?php");
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$a = [1, 2, 3];
+$b = $a;
+$b[0] = 9;
+unset($a);
+unset($b);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    let (baseline_allocs, baseline_frees) = parse_gc_stats(&baseline.stderr);
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs - baseline_allocs, frees - baseline_frees);
+}
+
+#[test]
 fn test_gc_return_borrowed_nested_array_alias_survives_source_unset() {
     let out = compile_and_run(
         r#"<?php
@@ -9762,7 +9873,7 @@ unset($n);
 }
 
 #[test]
-fn test_gc_collect_cycles_reclaims_array_array_cycle() {
+fn test_cow_array_array_assignment_detaches_before_forming_cycle() {
     let acyclic = compile_and_run_with_gc_stats(
         r#"<?php
 $a = [0];
@@ -9790,12 +9901,12 @@ unset($b);
     let (cyclic_allocs, cyclic_frees) = parse_gc_stats(&cyclic.stderr);
     assert_eq!(acyclic.stdout, "");
     assert_eq!(cyclic.stdout, "");
-    assert_eq!(acyclic_allocs, cyclic_allocs);
-    assert_eq!(acyclic_frees, cyclic_frees);
+    assert_eq!(cyclic_allocs, acyclic_allocs + 1);
+    assert_eq!(cyclic_frees, acyclic_frees + 1);
 }
 
 #[test]
-fn test_gc_collect_cycles_reclaims_array_array_cycle_from_empty_literals() {
+fn test_cow_empty_array_assignment_detaches_before_forming_cycle() {
     let acyclic = compile_and_run_with_gc_stats(
         r#"<?php
 $a = [];
@@ -9821,12 +9932,12 @@ unset($b);
 
     let (acyclic_allocs, acyclic_frees) = parse_gc_stats(&acyclic.stderr);
     let (cyclic_allocs, cyclic_frees) = parse_gc_stats(&cyclic.stderr);
-    assert_eq!(acyclic_allocs, cyclic_allocs);
-    assert_eq!(acyclic_frees, cyclic_frees);
+    assert_eq!(cyclic_allocs, acyclic_allocs + 1);
+    assert_eq!(cyclic_frees, acyclic_frees + 1);
 }
 
 #[test]
-fn test_gc_collect_cycles_reclaims_hash_hash_cycle() {
+fn test_cow_hash_assignment_detaches_before_forming_cycle() {
     let acyclic = compile_and_run_with_gc_stats(
         r#"<?php
 $a = ["peer" => null];
@@ -9854,8 +9965,8 @@ unset($b);
     let (cyclic_allocs, cyclic_frees) = parse_gc_stats(&cyclic.stderr);
     assert_eq!(acyclic.stdout, "");
     assert_eq!(cyclic.stdout, "");
-    assert_eq!(acyclic_allocs, cyclic_allocs);
-    assert_eq!(acyclic_frees, cyclic_frees);
+    assert_eq!(cyclic_allocs, acyclic_allocs + 1);
+    assert_eq!(cyclic_frees, acyclic_frees + 1);
 }
 
 #[test]

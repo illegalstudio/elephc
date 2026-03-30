@@ -1161,7 +1161,8 @@ fn emit_array_value_type_stamp(emitter: &mut Emitter, array_reg: &str, elem_ty: 
         _ => return,
     };
     emitter.instruction(&format!("ldr x10, [{}, #-8]", array_reg));                // load the packed array kind word from the heap header
-    emitter.instruction("and x10, x10, #0xff");                                    // keep only the low-byte indexed-array heap kind
+    emitter.instruction("mov x12, #0x80ff");                                       // preserve the indexed-array kind and persistent COW flag
+    emitter.instruction("and x10, x10, x12");                                      // keep only the persistent indexed-array metadata bits
     emitter.instruction(&format!("mov x11, #{}", value_type_tag));                 // materialize the runtime array value_type tag
     emitter.instruction("lsl x11, x11, #8");                                       // move the value_type tag into the packed kind-word byte lane
     emitter.instruction("orr x10, x10, x11");                                      // combine the heap kind with the array value_type tag

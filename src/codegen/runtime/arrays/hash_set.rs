@@ -23,11 +23,12 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #48");                                    // set up new frame pointer
-    emitter.instruction("str x0, [sp, #0]");                                    // save hash_table_ptr
     emitter.instruction("str x1, [sp, #8]");                                    // save key_ptr
     emitter.instruction("str x2, [sp, #16]");                                   // save key_len
     emitter.instruction("str x3, [sp, #24]");                                   // save value_lo
     emitter.instruction("str x4, [sp, #32]");                                   // save value_hi
+    emitter.instruction("bl __rt_hash_ensure_unique");                           // split shared hash tables before insert/update mutates storage
+    emitter.instruction("str x0, [sp, #0]");                                    // save the unique hash_table_ptr
 
     // -- check load factor: grow if count * 4 >= capacity * 3 (75%) --
     emitter.instruction("ldr x5, [x0]");                                        // x5 = count

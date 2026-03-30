@@ -49,7 +49,7 @@ pub fn emit_decref_array(emitter: &mut Emitter) {
     emitter.instruction("cbnz x9, __rt_decref_array_skip");                     // nested decref calls during collection must not restart the collector
     emitter.instruction("ldr x9, [x0, #-8]");                                   // load the packed array kind word from the heap header
     emitter.instruction("lsr x9, x9, #8");                                      // move the array value_type tag into the low bits
-    emitter.instruction("and x9, x9, #0xff");                                   // isolate the runtime array value_type tag
+    emitter.instruction("and x9, x9, #0x7f");                                   // isolate the runtime array value_type tag without the persistent COW flag
     emitter.instruction("cmp x9, #4");                                          // is this an array of indexed arrays?
     emitter.instruction("b.eq __rt_decref_array_collect");                      // array-of-array cycles can require a collector pass
     emitter.instruction("cmp x9, #5");                                          // is this an array of associative arrays?

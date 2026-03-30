@@ -22,8 +22,10 @@ pub fn emit_array_merge_into_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x0, #-8]");                                  // load the destination packed array kind word
     emitter.instruction("ldr x11, [x1, #-8]");                                  // load the source packed array kind word
     emitter.instruction("and x10, x10, #0xff");                                 // keep only the destination low-byte heap kind
-    emitter.instruction("and x11, x11, #0xff00");                               // keep only the source packed array value_type lane
-    emitter.instruction("orr x10, x10, x11");                                   // combine the destination heap kind with the source value_type tag
+    emitter.instruction("and x11, x11, #0x7f00");                               // keep only the source packed array value_type lane without the persistent COW flag
+    emitter.instruction("mov x12, #0x80ff");                                    // preserve the destination indexed-array kind and persistent COW flag
+    emitter.instruction("and x10, x10, x12");                                   // drop stale destination value_type bits before propagating the source tag
+    emitter.instruction("orr x10, x10, x11");                                   // combine the destination heap kind/COW bits with the source value_type tag
     emitter.instruction("str x10, [x0, #-8]");                                  // persist the propagated packed array value_type tag
 
     // -- ensure dest has enough capacity --
@@ -36,7 +38,11 @@ pub fn emit_array_merge_into_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload current dest array pointer before growth
     emitter.instruction("bl __rt_array_grow");                                  // grow dest array storage until it can hold the merge result
     emitter.instruction("str x0, [sp, #0]");                                    // persist the possibly-moved dest array pointer
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload source array pointer after growth clobbers scratch regs
+    emitter.instruction("ldr x9, [x1]");                                        // reload source length after growth clobbers scratch regs
+    emitter.instruction("ldr x10, [x0]");                                       // reload dest length after growth clobbers scratch regs
     emitter.instruction("ldr x11, [x0, #8]");                                   // reload dest capacity after growth
+    emitter.instruction("add x12, x10, x9");                                    // recompute needed capacity after growth clobbers scratch regs
     emitter.instruction("b __rt_amir_grow_check");                              // keep growing until the required capacity fits
 
     emitter.label("__rt_amir_loop");

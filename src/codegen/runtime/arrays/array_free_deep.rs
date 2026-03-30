@@ -36,7 +36,7 @@ pub fn emit_array_free_deep(emitter: &mut Emitter) {
     // -- load the packed runtime value_type tag for this array --
     emitter.instruction("ldr x9, [x0, #-8]");                                   // load the full kind word from the heap header
     emitter.instruction("lsr x10, x9, #8");                                     // move the packed array value_type tag into the low bits
-    emitter.instruction("and x10, x10, #0xff");                                 // isolate the packed array value_type tag
+    emitter.instruction("and x10, x10, #0x7f");                                 // isolate the packed array value_type tag without the persistent COW flag
     emitter.instruction("cbnz x10, __rt_array_free_deep_have_tag");              // prefer the packed tag when codegen/runtime supplied one
     emitter.instruction("ldr x9, [x0, #16]");                                   // reload elem_size for older/untyped arrays
     emitter.instruction("cmp x9, #16");                                         // does this legacy array store string payloads?
@@ -67,7 +67,7 @@ pub fn emit_array_free_deep(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload array pointer
     emitter.instruction("ldr x10, [x0, #-8]");                                  // reload the full kind word from the heap header
     emitter.instruction("lsr x10, x10, #8");                                    // move the packed array value_type tag into the low bits
-    emitter.instruction("and x10, x10, #0xff");                                 // isolate the packed array value_type tag
+    emitter.instruction("and x10, x10, #0x7f");                                 // isolate the packed array value_type tag without the persistent COW flag
     emitter.instruction("cmp x10, #1");                                         // does this array store string payloads?
     emitter.instruction("b.eq __rt_array_free_deep_load_str");                   // string payloads use 16-byte slots
     emitter.instruction("lsl x13, x12, #3");                                    // compute index * 8 for pointer-sized child slots

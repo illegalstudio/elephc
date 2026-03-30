@@ -14,9 +14,12 @@ pub fn emit_array_push_str(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // set up new frame pointer
-    emitter.instruction("str x0, [sp, #0]");                                    // save array pointer
+    emitter.instruction("stp x1, x2, [sp, #8]");                                // save the incoming string ptr/len across ensure_unique
+    emitter.instruction("bl __rt_array_ensure_unique");                          // split shared arrays before persisting/appending a new string slot
+    emitter.instruction("str x0, [sp, #0]");                                    // save the unique array pointer
 
     // -- persist string to heap before pushing --
+    emitter.instruction("ldp x1, x2, [sp, #8]");                                // restore the incoming string ptr/len after ensure_unique
     emitter.instruction("bl __rt_str_persist");                                 // copy string to heap, x1=heap_ptr, x2=len
     emitter.instruction("stp x1, x2, [sp, #8]");                                // save persisted string ptr and len
 

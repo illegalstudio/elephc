@@ -93,6 +93,8 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_heap_kind(emitter);
     arrays::emit_heap_free(emitter);
     arrays::emit_array_free_deep(emitter);
+    arrays::emit_array_clone_shallow(emitter);
+    arrays::emit_array_ensure_unique(emitter);
     arrays::emit_array_grow(emitter);
     arrays::emit_array_new(emitter);
     arrays::emit_array_push_int(emitter);
@@ -101,6 +103,8 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_sort_int(emitter, false);
     arrays::emit_sort_int(emitter, true);
     arrays::emit_hash_fnv1a(emitter);
+    arrays::emit_hash_clone_shallow(emitter);
+    arrays::emit_hash_ensure_unique(emitter);
     arrays::emit_hash_new(emitter);
     arrays::emit_hash_grow(emitter);
     arrays::emit_hash_set(emitter);

@@ -1,9 +1,9 @@
-use crate::codegen::abi;
+use super::store_mutating_arg::emit_store_mutating_arg;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
-use crate::parser::ast::{Expr, ExprKind};
+use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
 pub fn emit(
@@ -14,7 +14,7 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("array_push()");
-    emit_expr(&args[0], emitter, ctx, data);
+    let _arr_ty = emit_expr(&args[0], emitter, ctx, data);
     // -- save array pointer, evaluate value to push --
     emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer onto stack
     let val_ty = emit_expr(&args[1], emitter, ctx, data);
@@ -52,13 +52,8 @@ pub fn emit(
         _ => {}
     }
 
-    // -- update stored array pointer (may have changed due to reallocation) --
-    if let ExprKind::Variable(name) = &args[0].kind {
-        if let Some(var) = ctx.variables.get(name) {
-            let offset = var.stack_offset;
-            abi::store_at_offset(emitter, "x0", offset);                        // save possibly-new array pointer
-        }
-    }
+    // -- update stored array pointer (may have changed due to COW splitting or reallocation) --
+    emit_store_mutating_arg(emitter, ctx, &args[0]);
 
     Some(PhpType::Void)
 }

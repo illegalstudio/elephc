@@ -11,7 +11,7 @@ This document describes the PHP subset supported by elephc. The language aims to
 | `null` | Yes | Sentinel value, coerces to `0`/`""` in operations |
 | `bool` | Yes | `true`/`false` as distinct type. `echo false` prints nothing, `echo true` prints `1`. Coerces to 0/1 in arithmetic. |
 | `float` | Yes | 64-bit double-precision. Literals: `3.14`, `.5`, `1.5e3`, `1.0e-5`. Constants: `INF`, `NAN`. |
-| `array` | Yes | Indexed (`[1, 2, 3]`) and associative (`["key" => "value"]`). Hash table runtime for string keys. |
+| `array` | Yes | Indexed (`[1, 2, 3]`) and associative (`["key" => "value"]`). Arrays use copy-on-write semantics: assignments and by-value calls share storage until the first write. |
 | `object` | Yes | Class instances. Heap-allocated, fixed-layout. `new ClassName(...)` |
 | `pointer` | Yes | 64-bit memory address. `ptr($var)`, `ptr_null()`. Echo prints `0x...` hex. |
 | `resource` | No | File handles are currently modeled as integer file descriptors (`int`), not as a separate runtime resource type. |
@@ -656,6 +656,22 @@ foreach ($map as $key => $value) {
 ```
 
 Associative arrays use a hash table runtime. Keys follow the type inferred from the first key expression (commonly strings, but integer keys are also accepted when used consistently). The static `AssocArray` value type is inferred from the first value expression; later values are not re-checked for full PHP-style heterogeneity.
+
+### Copy-on-write semantics
+
+Indexed and associative arrays are **shared until modified**, matching PHP's ordinary by-value behavior for arrays:
+
+```php
+<?php
+$a = [1, 2];
+$b = $a;      // shares the same backing storage initially
+$b[0] = 9;    // first write detaches $b
+
+echo $a[0];   // 1
+echo $b[0];   // 9
+```
+
+The same split-on-write rule applies when arrays are passed to ordinary (non-`&`) parameters and when mutating built-ins such as `array_push()`, `sort()`, `shuffle()`, `array_shift()`, `array_unshift()`, and `array_splice()` operate on a shared array value. Nested arrays are still shallow-shared until the nested container itself is written to.
 
 ### Multi-dimensional arrays
 

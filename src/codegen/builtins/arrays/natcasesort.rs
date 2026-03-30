@@ -1,3 +1,5 @@
+use super::ensure_unique_arg::emit_ensure_unique_arg;
+use super::store_mutating_arg::emit_store_mutating_arg;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -13,7 +15,9 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("natcasesort()");
-    emit_expr(&args[0], emitter, ctx, data);
+    let arr_ty = emit_expr(&args[0], emitter, ctx, data);
+    emit_ensure_unique_arg(emitter, &arr_ty);
+    emit_store_mutating_arg(emitter, ctx, &args[0]);
     // -- sort array using case-insensitive natural order algorithm --
     emitter.instruction("bl __rt_natcasesort");                                 // call runtime: sort array using case-insensitive natural ordering
 
