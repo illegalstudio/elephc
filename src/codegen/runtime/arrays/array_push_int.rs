@@ -13,7 +13,7 @@ pub fn emit_array_push_int(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #16");                                    // set up new frame pointer
     emitter.instruction("str x1, [sp, #0]");                                    // save the appended value across ensure_unique
-    emitter.instruction("bl __rt_array_ensure_unique");                          // split shared arrays before the append path mutates storage
+    emitter.instruction("bl __rt_array_ensure_unique");                         // split shared arrays before the append path mutates storage
     emitter.instruction("ldr x1, [sp, #0]");                                    // restore the appended value after ensure_unique
 
     // -- check capacity before pushing --

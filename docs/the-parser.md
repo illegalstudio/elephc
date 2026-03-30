@@ -71,7 +71,7 @@ Things that have a value:
 | `NewObject { class_name, args }` | `new Point(1, 2)` | Object instantiation |
 | `PropertyAccess { object, property }` | `$p->x` | Property access via `->` |
 | `MethodCall { object, method, args }` | `$p->move(1, 2)` | Instance method call |
-| `StaticMethodCall { class_name, method, args }` | `Point::origin()` | Static method call via `::` |
+| `StaticMethodCall { receiver, method, args }` | `Point::origin()`, `self::boot()`, `parent::boot()`, `static::boot()` | Static-style call via `::`, where `receiver` is a named class, `Self_`, `Static`, or `Parent` |
 | `This` | `$this` | Reference to the current object inside a method |
 | `PtrCast { target_type, expr }` | `ptr_cast<Point>($p)` | Pointer-tag cast parsed specially after `ptr_cast<T>` |
 
@@ -100,7 +100,7 @@ Things that do something:
 | `ListUnpack { vars, value }` | `[$a, $b] = [1, 2];` |
 | `Global { vars }` | `global $x, $y;` — declares variables as referencing global storage |
 | `StaticVar { name, init }` | `static $count = 0;` — declares a variable that persists across function calls |
-| `ClassDecl { name, trait_uses, properties, methods }` | `class Point { use Named; ... }` |
+| `ClassDecl { name, extends, trait_uses, properties, methods }` | `class Point extends Shape { use Named; ... }` |
 | `TraitDecl { name, trait_uses, properties, methods }` | `trait Named { ... }` |
 | `PropertyAssign { object, property, value }` | `$p->x = 10;` |
 | `ExternFunctionDecl { name, params, return_type, library }` | `extern function foo(int $x): int;` or entries inside `extern "lib" { ... }` — `params` is `Vec<ExternParam>`, where each `ExternParam` stores `{ name, c_type }`, and `return_type` is a `CType` |
@@ -121,7 +121,7 @@ At statement level, `stmt.rs` selects the parser entry point from the current to
 | `Echo` / `Print` | Echo/print statement |
 | `If` / `While` / `Do` / `For` / `Foreach` / `Switch` | Control-flow statement |
 | `Const` / `Global` / `Static` | Declaration-like statement |
-| `Variable` / `This` / `Identifier` | Assignment, property write, call, or generic expression statement |
+| `Variable` / `This` / `Identifier` / `Self_` / `Parent` / `Static::...` | Assignment, property write, call, or generic expression statement |
 
 ### Binary operators (`BinOp`)
 
@@ -142,6 +142,7 @@ NullCoalesce
 | `Visibility` | `Public`, `Protected`, `Private` | Enum for property/method visibility |
 | `ClassProperty` | `name`, `visibility`, `readonly`, `default`, `span` | A property declaration inside a class |
 | `ClassMethod` | `name`, `visibility`, `is_static`, `params`, `variadic`, `body`, `span` | A method declaration inside a class |
+| `StaticReceiver` | `Named(String)`, `Self_`, `Static`, `Parent` | Left-hand side of `ClassName::method()`, `self::method()`, `static::method()`, and `parent::method()` |
 | `TraitUse` | `trait_names`, `adaptations`, `span` | A `use TraitA, TraitB { ... }` clause inside a class or trait body |
 | `TraitAdaptation` | `Alias { trait_name: Option<String>, method, alias: Option<String>, visibility: Option<Visibility> }`, `InsteadOf { trait_name: Option<String>, method, instead_of: Vec<String> }` | PHP-style trait conflict resolution and aliasing |
 
@@ -284,7 +285,8 @@ $arr[0]          →  ArrayAccess { array: Variable("arr"), index: IntLiteral(0)
 $arr[$i + 1]     →  ArrayAccess { array: Variable("arr"), index: BinaryOp(Add, ...) }
 $p->x            →  PropertyAccess { object: Variable("p"), property: "x" }
 $p->move(1, 2)   →  MethodCall { object: Variable("p"), method: "move", args: [...] }
-Point::origin()  →  StaticMethodCall { class_name: "Point", method: "origin", args: [] }
+Point::origin()  →  StaticMethodCall { receiver: Named("Point"), method: "origin", args: [] }
+parent::boot()   →  StaticMethodCall { receiver: Parent, method: "boot", args: [] }
 ```
 
 ## Statement parsing

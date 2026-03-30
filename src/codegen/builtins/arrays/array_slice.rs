@@ -34,11 +34,12 @@ pub fn emit(
         emitter.instruction("mov x2, #-1");                                     // length = -1 signals "until end of array"
     }
     // -- call runtime to extract slice --
-    emitter.instruction(if uses_refcounted_runtime {
+    let runtime_call = if uses_refcounted_runtime {
         "bl __rt_array_slice_refcounted"
     } else {
         "bl __rt_array_slice"
-    }); // call runtime: slice array → x0=new array
+    };
+    emitter.instruction(runtime_call);                                          // call runtime: slice array → x0=new array
 
     match arr_ty {
         PhpType::Array(inner) => Some(PhpType::Array(inner)),

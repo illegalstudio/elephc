@@ -2,7 +2,7 @@ use super::abi;
 use super::context::{Context, HeapOwnership};
 use super::data_section::DataSection;
 use super::emit::Emitter;
-use crate::parser::ast::{BinOp, Expr, ExprKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind, Visibility};
 use crate::types::FunctionSig;
 use crate::types::PhpType;
 
@@ -483,10 +483,10 @@ pub fn emit_expr(
             args,
         } => emit_method_call(object, method, args, emitter, ctx, data),
         ExprKind::StaticMethodCall {
-            class_name,
+            receiver,
             method,
             args,
-        } => emit_static_method_call(class_name, method, args, emitter, ctx, data),
+        } => emit_static_method_call(receiver, method, args, emitter, ctx, data),
         ExprKind::This => {
             emitter.comment("$this");
             let var = match ctx.variables.get("this") {
@@ -563,17 +563,17 @@ fn emit_new_object(
                 }
                 PhpType::Array(_) => {
                     emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
-                    emitter.instruction("mov x10, #4");                          // runtime property tag 4 = indexed array
+                    emitter.instruction("mov x10, #4");                         // runtime property tag 4 = indexed array
                     emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); // store runtime property metadata tag
                 }
                 PhpType::AssocArray { .. } => {
                     emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
-                    emitter.instruction("mov x10, #5");                          // runtime property tag 5 = associative array
+                    emitter.instruction("mov x10, #5");                         // runtime property tag 5 = associative array
                     emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); // store runtime property metadata tag
                 }
                 PhpType::Object(_) => {
                     emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
-                    emitter.instruction("mov x10, #6");                          // runtime property tag 6 = object
+                    emitter.instruction("mov x10, #6");                         // runtime property tag 6 = object
                     emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); // store runtime property metadata tag
                 }
                 PhpType::Float => {
@@ -663,9 +663,14 @@ fn emit_new_object(
         // Load $this into x0 (peek from stack, don't pop)
         emitter.instruction("ldr x0, [sp]");                                    // load $this pointer for constructor
         save_concat_offset_before_nested_call(emitter);
+        let constructor_impl = class_info
+            .method_impl_classes
+            .get("__construct")
+            .map(String::as_str)
+            .unwrap_or(class_name);
         emitter.instruction(&format!(                                           // call constructor
             "bl _method_{}___construct",
-            class_name
+            constructor_impl
         ));
         restore_concat_offset_after_nested_call(emitter, &PhpType::Void);
     }
@@ -693,12 +698,11 @@ fn emit_property_access(
                 }
             };
 
-            let (prop_idx, prop_ty) = match class_info
+            let prop_ty = match class_info
                 .properties
                 .iter()
-                .enumerate()
-                .find(|(_, (n, _))| n == property)
-                .map(|(i, (_, t))| (i, t.clone()))
+                .find(|(n, _)| n == property)
+                .map(|(_, t)| t.clone())
             {
                 Some(v) => v,
                 None => {
@@ -706,8 +710,15 @@ fn emit_property_access(
                     return PhpType::Int;
                 }
             };
+            let offset = match class_info.property_offsets.get(property) {
+                Some(offset) => *offset,
+                None => {
+                    emitter.comment(&format!("WARNING: missing property offset {}", property));
+                    return PhpType::Int;
+                }
+            };
 
-            (class_name.clone(), prop_ty, 8 + prop_idx * 16, false)
+            (class_name.clone(), prop_ty, offset, false)
         }
         PhpType::Pointer(Some(class_name)) if ctx.extern_classes.contains_key(class_name) => {
             let class_info = match ctx.extern_classes.get(class_name).cloned() {
@@ -866,28 +877,117 @@ fn emit_method_call(
 
     let class_info = ctx.classes.get(&class_name).cloned();
     let ret_ty = class_info
-        .and_then(|ci| ci.methods.get(method).cloned())
+        .as_ref()
+        .and_then(|ci| {
+            let impl_class = ci
+                .method_impl_classes
+                .get(method)
+                .map(String::as_str)
+                .unwrap_or(class_name.as_str());
+            ctx.classes
+                .get(impl_class)
+                .and_then(|impl_info| impl_info.methods.get(method))
+                .cloned()
+        })
         .map(|sig| sig.return_type)
         .unwrap_or(PhpType::Int);
+    let slot = class_info
+        .as_ref()
+        .and_then(|ci| ci.vtable_slots.get(method).copied());
+    let direct_private_label = class_info.as_ref().and_then(|ci| {
+        if ci.method_visibilities.get(method) == Some(&Visibility::Private) {
+            let impl_class = ci
+                .method_impl_classes
+                .get(method)
+                .map(String::as_str)
+                .unwrap_or(class_name.as_str());
+            Some(format!("_method_{}_{}", impl_class, method))
+        } else {
+            None
+        }
+    });
 
     save_concat_offset_before_nested_call(emitter);
-    emitter.instruction(&format!("bl _method_{}_{}", class_name, method));      // call instance method
+    if let Some(slot) = slot {
+        emitter.instruction("ldr x10, [x0]");                                   // load dynamic class id from object header
+        emitter.instruction("adrp x11, _class_vtable_ptrs@PAGE");               // load vtable pointer table page
+        emitter.instruction("add x11, x11, _class_vtable_ptrs@PAGEOFF");        // add vtable pointer table offset
+        emitter.instruction("ldr x11, [x11, x10, lsl #3]");                     // load class-specific vtable pointer
+        emitter.instruction(&format!("ldr x11, [x11, #{}]", slot * 8));         // load method entry from vtable slot
+        emitter.instruction("blr x11");                                         // call virtual method implementation
+    } else if let Some(label) = direct_private_label {
+        emitter.instruction(&format!("bl {}", label));                          // call lexically-resolved private method directly
+    } else {
+        emitter.comment(&format!("WARNING: missing vtable slot for {}::{}", class_name, method));
+    }
     restore_concat_offset_after_nested_call(emitter, &ret_ty);
 
     ret_ty
 }
 
+fn emit_immediate_class_id(emitter: &mut Emitter, class_id: u64) {
+    emitter.instruction(&format!("mov x0, #{}", class_id));                     // load compile-time class id for static dispatch
+}
+
+fn emit_forwarded_called_class_id(emitter: &mut Emitter, ctx: &Context) -> bool {
+    if let Some(var) = ctx.variables.get("__elephc_called_class_id") {
+        super::abi::load_at_offset(emitter, "x0", var.stack_offset);             // forward hidden called-class id from current static method
+        true
+    } else if let Some(var) = ctx.variables.get("this") {
+        super::abi::load_at_offset(emitter, "x0", var.stack_offset);             // load implicit $this pointer
+        emitter.instruction("ldr x0, [x0]");                                    // read dynamic class id from object header
+        true
+    } else {
+        false
+    }
+}
+
 fn emit_static_method_call(
-    class_name: &str,
+    receiver: &crate::parser::ast::StaticReceiver,
     method: &str,
     args: &[Expr],
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> PhpType {
+    let parent_call = matches!(receiver, crate::parser::ast::StaticReceiver::Parent);
+    let self_call = matches!(receiver, crate::parser::ast::StaticReceiver::Self_);
+    let static_call = matches!(receiver, crate::parser::ast::StaticReceiver::Static);
+    let forwarded_call = matches!(
+        receiver,
+        crate::parser::ast::StaticReceiver::Parent
+            | crate::parser::ast::StaticReceiver::Self_
+            | crate::parser::ast::StaticReceiver::Static
+    );
+    let class_name = match receiver {
+        crate::parser::ast::StaticReceiver::Named(class_name) => class_name.clone(),
+        crate::parser::ast::StaticReceiver::Self_
+        | crate::parser::ast::StaticReceiver::Static => match &ctx.current_class {
+            Some(class_name) => class_name.clone(),
+            None => {
+                emitter.comment("WARNING: self::/static:: used outside class scope");
+                return PhpType::Int;
+            }
+        },
+        crate::parser::ast::StaticReceiver::Parent => {
+            let current_class = match &ctx.current_class {
+                Some(class_name) => class_name.clone(),
+                None => {
+                    emitter.comment("WARNING: parent:: used outside class scope");
+                    return PhpType::Int;
+                }
+            };
+            match ctx.classes.get(&current_class).and_then(|info| info.parent.clone()) {
+                Some(parent_name) => parent_name,
+                None => {
+                    emitter.comment(&format!("WARNING: class {} has no parent", current_class));
+                    return PhpType::Int;
+                }
+            }
+        }
+    };
     emitter.comment(&format!("{}::{}()", class_name, method));
 
-    // Evaluate args and push to stack
     let mut arg_types = Vec::new();
     for arg in args {
         let ty = emit_expr(arg, emitter, ctx, data);
@@ -913,9 +1013,91 @@ fn emit_static_method_call(
         arg_types.push(ty);
     }
 
-    // Pop args into registers
+    let class_info = match ctx.classes.get(&class_name).cloned() {
+        Some(class_info) => class_info,
+        None => {
+            emitter.comment(&format!("WARNING: undefined class {}", class_name));
+            return PhpType::Int;
+        }
+    };
+    let static_slot = class_info.static_vtable_slots.get(method).copied();
+    let direct_static_private_label = if static_call {
+        None
+    } else if class_info.static_methods.contains_key(method) && static_slot.is_none() {
+        let impl_class = class_info
+            .static_method_impl_classes
+            .get(method)
+            .map(String::as_str)
+            .unwrap_or(class_name.as_str());
+        Some(format!("_static_{}_{}", impl_class, method))
+    } else {
+        None
+    };
+
+    let (ret_ty, label, needs_this, needs_called_class_id, dynamic_static_dispatch) =
+        if class_info.static_methods.contains_key(method) {
+            let impl_class = class_info
+                .static_method_impl_classes
+                .get(method)
+                .map(String::as_str)
+                .unwrap_or(class_name.as_str());
+            (
+                ctx.classes
+                    .get(impl_class)
+                    .and_then(|impl_info| impl_info.static_methods.get(method))
+                    .map(|sig| sig.return_type.clone())
+                    .unwrap_or(PhpType::Int),
+                format!("_static_{}_{}", impl_class, method),
+                false,
+                true,
+                static_call && static_slot.is_some(),
+            )
+        } else if static_call {
+            emitter.comment(&format!("WARNING: undefined static method {}::{}", class_name, method));
+            return PhpType::Int;
+        } else if parent_call || self_call {
+            let _sig = match class_info.methods.get(method) {
+                Some(sig) => sig,
+                None => {
+                    emitter.comment(&format!(
+                        "WARNING: undefined direct instance method {}::{}",
+                        class_name, method
+                    ));
+                    return PhpType::Int;
+                }
+            };
+            let impl_class = class_info
+                .method_impl_classes
+                .get(method)
+                .map(String::as_str)
+                .unwrap_or(class_name.as_str());
+            (
+                ctx.classes
+                    .get(impl_class)
+                    .and_then(|impl_info| impl_info.methods.get(method))
+                    .map(|sig| sig.return_type.clone())
+                    .unwrap_or(PhpType::Int),
+                format!("_method_{}_{}", impl_class, method),
+                true,
+                false,
+                false,
+            )
+        } else {
+            emitter.comment(&format!(
+                "WARNING: cannot call instance method statically {}::{}",
+                class_name, method
+            ));
+            return PhpType::Int;
+        };
+
     let total_args = arg_types.len();
     let mut int_reg_idx = 0usize;
+    if needs_called_class_id {
+        int_reg_idx += 1;
+    }
+    if needs_this {
+        int_reg_idx += 1;
+    }
     let mut float_reg_idx = 0usize;
     let mut assignments: Vec<(PhpType, usize, bool)> = Vec::new();
     for ty in &arg_types {
@@ -928,6 +1110,40 @@ fn emit_static_method_call(
         }
     }
 
+    if needs_called_class_id {
+        if forwarded_call {
+            if !emit_forwarded_called_class_id(emitter, ctx) {
+                emitter.comment("WARNING: missing forwarded called class id");
+                return PhpType::Int;
+            }
+        } else if let Some(target_info) = ctx.classes.get(&class_name) {
+            emit_immediate_class_id(emitter, target_info.class_id);
+        } else {
+            emitter.comment(&format!("WARNING: undefined class {}", class_name));
+            return PhpType::Int;
+        }
+        emitter.instruction("str x0, [sp, #-16]!");                             // push hidden called-class id
+    }
+
+    if needs_this {
+        let this_var = match ctx.variables.get("this") {
+            Some(var) => var,
+            None => {
+                emitter.comment("WARNING: direct scoped instance call without $this");
+                return PhpType::Int;
+            }
+        };
+        super::abi::load_at_offset(emitter, "x0", this_var.stack_offset);        // load implicit $this for scoped instance call
+        emitter.instruction("str x0, [sp, #-16]!");                             // push implicit receiver
+    }
+
+    if needs_called_class_id {
+        emitter.instruction("ldr x0, [sp], #16");                               // pop hidden called-class id into x0
+    }
+    if needs_this {
+        let this_reg = if needs_called_class_id { 1 } else { 0 };
+        emitter.instruction(&format!("ldr x{}, [sp], #16", this_reg));          // pop implicit $this into its assigned integer register
+    }
     for i in (0..total_args).rev() {
         let (ty, start_reg, _) = &assignments[i];
         match ty {
@@ -938,7 +1154,7 @@ fn emit_static_method_call(
             | PhpType::Callable
             | PhpType::Object(_)
             | PhpType::Pointer(_) => {
-                emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop arg into register
+                emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop arg into assigned register
             }
             PhpType::Float => {
                 emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); // pop float arg
@@ -954,14 +1170,20 @@ fn emit_static_method_call(
         }
     }
 
-    let class_info = ctx.classes.get(class_name).cloned();
-    let ret_ty = class_info
-        .and_then(|ci| ci.static_methods.get(method).cloned())
-        .map(|sig| sig.return_type)
-        .unwrap_or(PhpType::Int);
-
     save_concat_offset_before_nested_call(emitter);
-    emitter.instruction(&format!("bl _static_{}_{}", class_name, method));      // call static method
+    if dynamic_static_dispatch {
+        let slot = static_slot.expect("codegen bug: dynamic static dispatch without slot");
+        emitter.instruction("mov x10, x0");                                     // preserve forwarded called-class id for static-vtable lookup
+        emitter.instruction("adrp x11, _class_static_vtable_ptrs@PAGE");        // load static-vtable pointer table page
+        emitter.instruction("add x11, x11, _class_static_vtable_ptrs@PAGEOFF"); // add static-vtable pointer table offset
+        emitter.instruction("ldr x11, [x11, x10, lsl #3]");                     // load class-specific static-vtable pointer
+        emitter.instruction(&format!("ldr x11, [x11, #{}]", slot * 8));         // load static method entry from static-vtable slot
+        emitter.instruction("blr x11");                                         // call late-bound static method implementation
+    } else if let Some(label) = direct_static_private_label {
+        emitter.instruction(&format!("bl {}", label));                          // call direct private static helper
+    } else {
+        emitter.instruction(&format!("bl {}", label));                          // call resolved static or parent/self target
+    }
     restore_concat_offset_after_nested_call(emitter, &ret_ty);
 
     ret_ty
@@ -1160,13 +1382,13 @@ fn emit_array_value_type_stamp(emitter: &mut Emitter, array_reg: &str, elem_ty: 
         PhpType::Object(_) => 6,
         _ => return,
     };
-    emitter.instruction(&format!("ldr x10, [{}, #-8]", array_reg));                // load the packed array kind word from the heap header
-    emitter.instruction("mov x12, #0x80ff");                                       // preserve the indexed-array kind and persistent COW flag
-    emitter.instruction("and x10, x10, x12");                                      // keep only the persistent indexed-array metadata bits
-    emitter.instruction(&format!("mov x11, #{}", value_type_tag));                 // materialize the runtime array value_type tag
-    emitter.instruction("lsl x11, x11, #8");                                       // move the value_type tag into the packed kind-word byte lane
-    emitter.instruction("orr x10, x10, x11");                                      // combine the heap kind with the array value_type tag
-    emitter.instruction(&format!("str x10, [{}, #-8]", array_reg));                // persist the packed array kind word in the heap header
+    emitter.instruction(&format!("ldr x10, [{}, #-8]", array_reg));             // load the packed array kind word from the heap header
+    emitter.instruction("mov x12, #0x80ff");                                    // preserve the indexed-array kind and persistent COW flag
+    emitter.instruction("and x10, x10, x12");                                   // keep only the persistent indexed-array metadata bits
+    emitter.instruction(&format!("mov x11, #{}", value_type_tag));              // materialize the runtime array value_type tag
+    emitter.instruction("lsl x11, x11, #8");                                    // move the value_type tag into the packed kind-word byte lane
+    emitter.instruction("orr x10, x10, x11");                                   // combine the heap kind with the array value_type tag
+    emitter.instruction(&format!("str x10, [{}, #-8]", array_reg));             // persist the packed array kind word in the heap header
 }
 
 fn emit_assoc_array_literal(

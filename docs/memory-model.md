@@ -342,7 +342,7 @@ Entry address: `base + 24 + (slot_index × 40)`
 
 ## Object layout
 
-Objects are heap-allocated with a fixed layout determined at compile time. Each object starts with an 8-byte class identifier, followed by 16 bytes per property:
+Objects are heap-allocated with a fixed layout determined at compile time. Each object starts with an 8-byte class identifier, followed by 16 bytes per property across the full inheritance chain:
 
 ```
 _heap_buf + offset:
@@ -360,9 +360,9 @@ _heap_buf + offset:
 
 Total object size: `8 + (num_properties × 16)`
 
-Property access is O(1) — the compiler knows each property's index at compile time and computes the offset as `8 + (index × 16)`. No runtime lookup or hash table is needed.
+Property access is O(1) — the compiler resolves each property's final inherited offset at compile time and emits a direct load/store at that offset. No runtime lookup or hash table is needed.
 
-Unlike arrays, objects are not resizable. The number of properties is fixed by the class declaration. Properties are stored in declaration order.
+Unlike arrays, objects are not resizable. The number of properties is fixed by the class declaration. Properties are stored in parent-first order, then by the child class's own declarations.
 
 ## The data section
 
@@ -393,6 +393,8 @@ The runtime also emits static data tables:
 - `_day_names` — 84-byte table (7 entries x 12 bytes each) with day names, lengths, and padding. Used by `date()` for day-of-week formatting
 - `_month_names` — 144-byte table (12 entries x 12 bytes each) with month names, lengths, and padding. Used by `date()` for month formatting
 - `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>` — per-class property traversal descriptors used by object deep-free and cycle collection
+- `_class_vtable_ptrs`, `_class_vtable_<id>` — per-class virtual tables used for inherited instance-method dispatch
+- `_class_static_vtable_ptrs`, `_class_static_vtable_<id>` — per-class static-method tables used for late static binding
 
 ### Global variables
 

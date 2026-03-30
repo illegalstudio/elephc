@@ -31,11 +31,11 @@ pub fn emit_extern_call(
 
     if string_arg_count > 0 {
         // -- preserve callee-saved registers used to track borrowed C-string temporaries --
-        emitter.instruction("sub sp, sp, #64");                                   // reserve spill space for x19-x26 before argument marshaling
-        emitter.instruction("stp x19, x20, [sp, #0]");                            // preserve cstr cleanup register pair 0
-        emitter.instruction("stp x21, x22, [sp, #16]");                           // preserve cstr cleanup register pair 1
-        emitter.instruction("stp x23, x24, [sp, #32]");                           // preserve cstr cleanup register pair 2
-        emitter.instruction("stp x25, x26, [sp, #48]");                           // preserve cstr cleanup register pair 3
+        emitter.instruction("sub sp, sp, #64");                                 // reserve spill space for x19-x26 before argument marshaling
+        emitter.instruction("stp x19, x20, [sp, #0]");                          // preserve cstr cleanup register pair 0
+        emitter.instruction("stp x21, x22, [sp, #16]");                         // preserve cstr cleanup register pair 1
+        emitter.instruction("stp x23, x24, [sp, #32]");                         // preserve cstr cleanup register pair 2
+        emitter.instruction("stp x25, x26, [sp, #48]");                         // preserve cstr cleanup register pair 3
     }
 
     // -- evaluate and push arguments onto the stack --

@@ -202,6 +202,7 @@ fn resolve_stmts(
             }
             StmtKind::ClassDecl {
                 name,
+                extends,
                 trait_uses,
                 properties,
                 methods,
@@ -218,6 +219,7 @@ fn resolve_stmts(
                 result.push(Stmt::new(
                     StmtKind::ClassDecl {
                         name: name.clone(),
+                        extends: extends.clone(),
                         trait_uses: trait_uses.clone(),
                         properties: properties.clone(),
                         methods: methods_resolved,

@@ -199,21 +199,25 @@ These correspond to PHP's `$argc` and `$argv` superglobals.
 
 ## Class type checking
 
-Before `ClassInfo` is built, the checker flattens trait composition through `src/types/traits.rs`. Trait methods and properties are merged into the concrete class, `insteadof` / `as` rules are resolved, and the rest of the checker only sees the final effective member set for each class.
+Before `ClassInfo` is built, the checker flattens trait composition through `src/types/traits.rs`. Trait methods and properties are merged into the concrete class, `insteadof` / `as` rules are resolved, and then the checker builds inheritance metadata recursively so each class sees parent-first property layout, inherited method signatures, and vtable slot assignments.
 
 When the type checker encounters a `ClassDecl`, it:
 
 1. **Registers the class** in a `classes: HashMap<String, ClassInfo>` map
-2. **Records each property** with its type (inferred from default values or constructor assignments)
-3. **Type-checks each method body** with `$this` bound to `Object(ClassName)`
-4. **Builds `ClassInfo`** containing property types, defaults, method signatures, static method signatures, and constructor-to-property mappings
+2. **Resolves the parent chain** (`extends`) and merges inherited metadata
+3. **Records each property** with its type (inferred from default values or constructor assignments) and a fixed offset in the inherited object layout
+4. **Type-checks each method body** with `$this` bound to `Object(ClassName)`
+5. **Builds `ClassInfo`** containing property types, defaults, signatures, declaring/implementation class maps, instance/static vtable slots, and constructor-to-property mappings
 
 The `ClassInfo` struct:
 
 ```rust
 pub struct ClassInfo {
     pub class_id: u64,
+    pub parent: Option<String>,
     pub properties: Vec<(String, PhpType)>,
+    pub property_offsets: HashMap<String, usize>,
+    pub property_declaring_classes: HashMap<String, String>,
     pub defaults: Vec<Option<Expr>>,
     pub property_visibilities: HashMap<String, Visibility>,
     pub readonly_properties: HashSet<String>,
@@ -221,17 +225,27 @@ pub struct ClassInfo {
     pub methods: HashMap<String, FunctionSig>,
     pub static_methods: HashMap<String, FunctionSig>,
     pub method_visibilities: HashMap<String, Visibility>,
+    pub method_declaring_classes: HashMap<String, String>,
+    pub method_impl_classes: HashMap<String, String>,
+    pub vtable_methods: Vec<String>,
+    pub vtable_slots: HashMap<String, usize>,
     pub static_method_visibilities: HashMap<String, Visibility>,
+    pub static_method_declaring_classes: HashMap<String, String>,
+    pub static_method_impl_classes: HashMap<String, String>,
+    pub static_vtable_methods: Vec<String>,
+    pub static_vtable_slots: HashMap<String, usize>,
     pub constructor_param_to_prop: Vec<Option<String>>,
 }
 ```
 
+`vtable_methods` / `vtable_slots` drive ordinary inherited instance dispatch, while `static_vtable_methods` / `static_vtable_slots` carry the parallel metadata used by `static::method()` late static binding.
+
 When checking property access (`$obj->prop`), the type checker validates that:
 - The variable is an `Object` type
 - The class has a property with that name
-- The property is accessible (`public`, or a class-scoped `protected` / `private` member accessed from methods of that same class)
+- The property is accessible (`public`, `protected` from the declaring class or a subclass, or `private` only from the declaring class)
 
-When checking method calls, it verifies the method exists, enforces method visibility (`public` or same-class `protected` / `private` access for both instance and static methods), and validates argument count and types against the method's `FunctionSig`.
+When checking method calls, it verifies the method exists, enforces method visibility (`public`, subclass-visible `protected`, declaring-class-only `private`), validates argument count and types against the method's `FunctionSig`, resolves `parent::method()` against the immediate parent class, resolves `self::method()` against the current lexical class, and accepts `static::method()` as a late-static-bound static call against the current class hierarchy.
 
 ## Output: CheckResult
 

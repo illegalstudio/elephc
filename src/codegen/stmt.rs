@@ -28,13 +28,13 @@ fn stamp_indexed_array_value_type(emitter: &mut Emitter, array_reg: &str, elem_t
         PhpType::Object(_) => 6,
         _ => return,
     };
-    emitter.instruction(&format!("ldr x12, [{}, #-8]", array_reg));              // load the packed array kind word from the heap header
-    emitter.instruction("mov x14, #0x80ff");                                     // preserve the indexed-array kind and persistent COW flag
-    emitter.instruction("and x12, x12, x14");                                    // keep only the persistent indexed-array metadata bits
-    emitter.instruction(&format!("mov x13, #{}", value_type_tag));               // materialize the runtime array value_type tag
-    emitter.instruction("lsl x13, x13, #8");                                     // move the value_type tag into the packed kind-word byte lane
-    emitter.instruction("orr x12, x12, x13");                                    // combine the heap kind with the array value_type tag
-    emitter.instruction(&format!("str x12, [{}, #-8]", array_reg));              // persist the packed array kind word in the heap header
+    emitter.instruction(&format!("ldr x12, [{}, #-8]", array_reg));             // load the packed array kind word from the heap header
+    emitter.instruction("mov x14, #0x80ff");                                    // preserve the indexed-array kind and persistent COW flag
+    emitter.instruction("and x12, x12, x14");                                   // keep only the persistent indexed-array metadata bits
+    emitter.instruction(&format!("mov x13, #{}", value_type_tag));              // materialize the runtime array value_type tag
+    emitter.instruction("lsl x13, x13, #8");                                    // move the value_type tag into the packed kind-word byte lane
+    emitter.instruction("orr x12, x12, x13");                                   // combine the heap kind with the array value_type tag
+    emitter.instruction(&format!("str x12, [{}, #-8]", array_reg));             // persist the packed array kind word in the heap header
 }
 
 fn release_owned_slot(emitter: &mut Emitter, ty: &PhpType, offset: usize, preserve_x0: bool) {
@@ -399,10 +399,10 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                 } else {
                     abi::load_at_offset(emitter, "x0", offset); // load array heap pointer from stack frame
                 }
-                emitter.instruction("bl __rt_array_ensure_unique");              // split shared indexed arrays before direct indexed writes mutate storage
+                emitter.instruction("bl __rt_array_ensure_unique");             // split shared indexed arrays before direct indexed writes mutate storage
                 if is_ref {
                     abi::load_at_offset(emitter, "x13", offset); // load ref pointer
-                    emitter.instruction("str x0, [x13]");                        // persist the unique array pointer through the reference slot
+                    emitter.instruction("str x0, [x13]");                       // persist the unique array pointer through the reference slot
                 } else {
                     abi::store_at_offset(emitter, "x0", offset); // persist the unique array pointer in the local slot
                 }
@@ -419,11 +419,11 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                         emitter.instruction("stp x1, x2, [sp, #-16]!");         // preserve string pointer/length across growth helpers
                     }
                     PhpType::Float => {
-                        emitter.instruction("fmov x12, d0");                     // move float bits into an integer register for stack preservation
-                        emitter.instruction("str x12, [sp, #-16]!");             // preserve float bits across growth helpers
+                        emitter.instruction("fmov x12, d0");                    // move float bits into an integer register for stack preservation
+                        emitter.instruction("str x12, [sp, #-16]!");            // preserve float bits across growth helpers
                     }
                     _ => {
-                        emitter.instruction("str x0, [sp, #-16]!");              // preserve scalar or heap pointer value across growth helpers
+                        emitter.instruction("str x0, [sp, #-16]!");             // preserve scalar or heap pointer value across growth helpers
                     }
                 }
                 let effective_store_ty = if elem_ty != val_ty {
@@ -452,18 +452,18 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                 let grow_ready = ctx.next_label("array_assign_grow_ready");
                 emitter.label(&grow_check);
                 emitter.instruction("cmp x9, x12");                             // does the target index fit within the current capacity?
-                emitter.instruction(&format!("b.lo {}", grow_ready));            // skip growth once the target slot is addressable
+                emitter.instruction(&format!("b.lo {}", grow_ready));           // skip growth once the target slot is addressable
                 emitter.instruction("str x9, [sp, #-16]!");                     // preserve the target index across the growth helper
                 emitter.instruction("mov x0, x10");                             // move the current array pointer into the growth helper argument register
                 emitter.instruction("bl __rt_array_grow");                      // grow the indexed array until the target slot fits
                 emitter.instruction("mov x10, x0");                             // keep the possibly-reallocated array pointer in x10
                 emitter.instruction("ldr x9, [sp], #16");                       // restore the target index after growth
                 emitter.instruction("ldr x12, [x10, #8]");                      // reload the new array capacity after growth
-                emitter.instruction(&format!("b {}", grow_check));               // continue growing until the target slot fits
+                emitter.instruction(&format!("b {}", grow_check));              // continue growing until the target slot fits
                 emitter.label(&grow_ready);
                 if is_ref {
                     abi::load_at_offset(emitter, "x13", offset); // load ref pointer
-                    emitter.instruction("str x10, [x13]");                       // store the possibly-grown array pointer through the ref
+                    emitter.instruction("str x10, [x13]");                      // store the possibly-grown array pointer through the ref
                 } else {
                     abi::store_at_offset(emitter, "x10", offset); // save possibly-grown array pointer
                 }
@@ -472,40 +472,40 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                         emitter.instruction("ldp x1, x2, [sp], #16");           // restore string pointer/length after growth helpers
                     }
                     PhpType::Float => {
-                        emitter.instruction("ldr x12, [sp], #16");               // restore preserved float bits after growth helpers
-                        emitter.instruction("fmov d0, x12");                      // move preserved float bits back into the float result register
+                        emitter.instruction("ldr x12, [sp], #16");              // restore preserved float bits after growth helpers
+                        emitter.instruction("fmov d0, x12");                    // move preserved float bits back into the float result register
                     }
                     _ => {
-                        emitter.instruction("ldr x0, [sp], #16");                // restore scalar or heap pointer value after growth helpers
+                        emitter.instruction("ldr x0, [sp], #16");               // restore scalar or heap pointer value after growth helpers
                     }
                 }
-                emitter.instruction("add sp, sp, #32");                          // drop the original saved index and array pointer after they have been restored
+                emitter.instruction("add sp, sp, #32");                         // drop the original saved index and array pointer after they have been restored
                 let skip_normalize = ctx.next_label("array_assign_skip_normalize");
-                emitter.instruction("cmp x11, #0");                               // is this the first indexed write into the array?
-                emitter.instruction(&format!("b.ne {}", skip_normalize));         // keep the existing storage layout once the array already has elements
+                emitter.instruction("cmp x11, #0");                             // is this the first indexed write into the array?
+                emitter.instruction(&format!("b.ne {}", skip_normalize));       // keep the existing storage layout once the array already has elements
                 match &effective_store_ty {
                     PhpType::Str => {
-                        emitter.instruction("mov x12, #16");                     // string arrays need 16-byte slots for ptr+len payloads
-                        emitter.instruction("str x12, [x10, #16]");              // persist the string slot size in the array header
-                        emitter.instruction("ldr x12, [x10, #-8]");              // load the packed array kind word from the heap header
-                        emitter.instruction("mov x14, #0x80ff");                 // preserve the indexed-array kind and persistent COW flag
-                        emitter.instruction("and x12, x12, x14");                // keep only the persistent indexed-array metadata bits
-                        emitter.instruction("mov x13, #1");                      // runtime value_type 1 = string
-                        emitter.instruction("lsl x13, x13, #8");                 // move the value_type tag into the packed kind-word byte lane
-                        emitter.instruction("orr x12, x12, x13");                // combine heap kind + string value_type tag
-                        emitter.instruction("str x12, [x10, #-8]");              // persist the string-oriented packed kind word
+                        emitter.instruction("mov x12, #16");                    // string arrays need 16-byte slots for ptr+len payloads
+                        emitter.instruction("str x12, [x10, #16]");             // persist the string slot size in the array header
+                        emitter.instruction("ldr x12, [x10, #-8]");             // load the packed array kind word from the heap header
+                        emitter.instruction("mov x14, #0x80ff");                // preserve the indexed-array kind and persistent COW flag
+                        emitter.instruction("and x12, x12, x14");               // keep only the persistent indexed-array metadata bits
+                        emitter.instruction("mov x13, #1");                     // runtime value_type 1 = string
+                        emitter.instruction("lsl x13, x13, #8");                // move the value_type tag into the packed kind-word byte lane
+                        emitter.instruction("orr x12, x12, x13");               // combine heap kind + string value_type tag
+                        emitter.instruction("str x12, [x10, #-8]");             // persist the string-oriented packed kind word
                     }
                     PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
-                        emitter.instruction("mov x12, #8");                      // nested heap pointers use ordinary 8-byte slots
-                        emitter.instruction("str x12, [x10, #16]");              // persist the pointer-sized slot width in the array header
+                        emitter.instruction("mov x12, #8");                     // nested heap pointers use ordinary 8-byte slots
+                        emitter.instruction("str x12, [x10, #16]");             // persist the pointer-sized slot width in the array header
                     }
                     _ => {
-                        emitter.instruction("mov x12, #8");                      // scalar indexed arrays use ordinary 8-byte slots
-                        emitter.instruction("str x12, [x10, #16]");              // persist the scalar slot width in the array header
-                        emitter.instruction("ldr x12, [x10, #-8]");              // load the packed array kind word from the heap header
-                        emitter.instruction("mov x14, #0x80ff");                 // preserve the indexed-array kind and persistent COW flag
-                        emitter.instruction("and x12, x12, x14");                // clear stale value_type bits while keeping the persistent container metadata
-                        emitter.instruction("str x12, [x10, #-8]");              // persist the scalar-oriented packed kind word
+                        emitter.instruction("mov x12, #8");                     // scalar indexed arrays use ordinary 8-byte slots
+                        emitter.instruction("str x12, [x10, #16]");             // persist the scalar slot width in the array header
+                        emitter.instruction("ldr x12, [x10, #-8]");             // load the packed array kind word from the heap header
+                        emitter.instruction("mov x14, #0x80ff");                // preserve the indexed-array kind and persistent COW flag
+                        emitter.instruction("and x12, x12, x14");               // clear stale value_type bits while keeping the persistent container metadata
+                        emitter.instruction("str x12, [x10, #-8]");             // persist the scalar-oriented packed kind word
                     }
                 }
                 emitter.label(&skip_normalize);
@@ -534,24 +534,24 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                     }
                     PhpType::Float => {
                         // -- store float bits at array[index] --
-                        emitter.instruction("fmov x12, d0");                     // move float bits into an integer register for storage
-                        emitter.instruction("add x13, x10, #24");                // skip 24-byte array header
-                        emitter.instruction("str x12, [x13, x9, lsl #3]");       // store float bits at data[index]
+                        emitter.instruction("fmov x12, d0");                    // move float bits into an integer register for storage
+                        emitter.instruction("add x13, x10, #24");               // skip 24-byte array header
+                        emitter.instruction("str x12, [x13, x9, lsl #3]");      // store float bits at data[index]
                     }
                     PhpType::Str => {
                         // -- store string (ptr+len pair) at array[index] --
-                        emitter.instruction("cmp x9, x11");                      // check whether this write overwrites an existing string slot
+                        emitter.instruction("cmp x9, x11");                     // check whether this write overwrites an existing string slot
                         let skip_release = ctx.next_label("array_assign_skip_release");
-                        emitter.instruction(&format!("b.hs {}", skip_release));  // skip release for writes past current length
-                        emitter.instruction("stp x1, x2, [sp, #-16]!");          // preserve new string ptr/len across old-string release
-                        emitter.instruction("stp x9, x10, [sp, #-16]!");         // preserve index and array pointer across old-string release
-                        emitter.instruction("lsl x12, x9, #4");                  // multiply index by 16 for string slots
-                        emitter.instruction("add x12, x10, x12");                // offset into array data region
-                        emitter.instruction("add x12, x12, #24");                // skip 24-byte array header
-                        emitter.instruction("ldr x0, [x12]");                    // load previous string pointer from slot
-                        emitter.instruction("bl __rt_heap_free_safe");            // release the overwritten string storage before replacing it
-                        emitter.instruction("ldp x9, x10, [sp], #16");           // restore index and array pointer after old-string release
-                        emitter.instruction("ldp x1, x2, [sp], #16");            // restore new string ptr/len after old-string release
+                        emitter.instruction(&format!("b.hs {}", skip_release)); // skip release for writes past current length
+                        emitter.instruction("stp x1, x2, [sp, #-16]!");         // preserve new string ptr/len across old-string release
+                        emitter.instruction("stp x9, x10, [sp, #-16]!");        // preserve index and array pointer across old-string release
+                        emitter.instruction("lsl x12, x9, #4");                 // multiply index by 16 for string slots
+                        emitter.instruction("add x12, x10, x12");               // offset into array data region
+                        emitter.instruction("add x12, x12, #24");               // skip 24-byte array header
+                        emitter.instruction("ldr x0, [x12]");                   // load previous string pointer from slot
+                        emitter.instruction("bl __rt_heap_free_safe");          // release the overwritten string storage before replacing it
+                        emitter.instruction("ldp x9, x10, [sp], #16");          // restore index and array pointer after old-string release
+                        emitter.instruction("ldp x1, x2, [sp], #16");           // restore new string ptr/len after old-string release
                         emitter.label(&skip_release);
                         stamp_indexed_array_value_type(emitter, "x10", &val_ty);
                         emitter.instruction("lsl x12, x9, #4");                 // multiply index by 16 without clobbering the logical index register
@@ -566,30 +566,30 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                 let skip_extend = ctx.next_label("array_assign_skip_extend");
                 let extend_loop = ctx.next_label("array_assign_extend_loop");
                 let extend_store_len = ctx.next_label("array_assign_store_len");
-                emitter.instruction("cmp x9, x11");                               // does this assignment extend the array beyond its original length?
-                emitter.instruction(&format!("b.lo {}", skip_extend));            // existing slots already keep the current array length
-                emitter.instruction("mov x12, x11");                              // start zero-filling at the previous logical end of the array
+                emitter.instruction("cmp x9, x11");                             // does this assignment extend the array beyond its original length?
+                emitter.instruction(&format!("b.lo {}", skip_extend));          // existing slots already keep the current array length
+                emitter.instruction("mov x12, x11");                            // start zero-filling at the previous logical end of the array
                 emitter.label(&extend_loop);
-                emitter.instruction("cmp x12, x9");                               // have we filled every gap slot before the target index?
-                emitter.instruction(&format!("b.ge {}", extend_store_len));       // stop zero-filling once we reach the target index
+                emitter.instruction("cmp x12, x9");                             // have we filled every gap slot before the target index?
+                emitter.instruction(&format!("b.ge {}", extend_store_len));     // stop zero-filling once we reach the target index
                 match &effective_store_ty {
                     PhpType::Str => {
-                        emitter.instruction("lsl x13, x12, #4");                  // multiply the gap index by 16 for string slots
-                        emitter.instruction("add x13, x10, x13");                 // offset into the string data region
-                        emitter.instruction("add x13, x13, #24");                 // skip the 24-byte array header
-                        emitter.instruction("str xzr, [x13]");                    // initialize the gap string pointer to null
-                        emitter.instruction("str xzr, [x13, #8]");                // initialize the gap string length to zero
+                        emitter.instruction("lsl x13, x12, #4");                // multiply the gap index by 16 for string slots
+                        emitter.instruction("add x13, x10, x13");               // offset into the string data region
+                        emitter.instruction("add x13, x13, #24");               // skip the 24-byte array header
+                        emitter.instruction("str xzr, [x13]");                  // initialize the gap string pointer to null
+                        emitter.instruction("str xzr, [x13, #8]");              // initialize the gap string length to zero
                     }
                     _ => {
-                        emitter.instruction("add x13, x10, #24");                 // compute the base of the pointer/scalar data region
-                        emitter.instruction("str xzr, [x13, x12, lsl #3]");       // initialize the gap slot to zero/null
+                        emitter.instruction("add x13, x10, #24");               // compute the base of the pointer/scalar data region
+                        emitter.instruction("str xzr, [x13, x12, lsl #3]");     // initialize the gap slot to zero/null
                     }
                 }
-                emitter.instruction("add x12, x12, #1");                          // advance to the next gap slot
-                emitter.instruction(&format!("b {}", extend_loop));                // continue zero-filling until the target index is reached
+                emitter.instruction("add x12, x12, #1");                        // advance to the next gap slot
+                emitter.instruction(&format!("b {}", extend_loop));             // continue zero-filling until the target index is reached
                 emitter.label(&extend_store_len);
-                emitter.instruction("add x12, x9, #1");                            // new length = highest written index + 1
-                emitter.instruction("str x12, [x10]");                             // persist the extended logical length in the array header
+                emitter.instruction("add x12, x9, #1");                         // new length = highest written index + 1
+                emitter.instruction("str x12, [x10]");                          // persist the extended logical length in the array header
                 emitter.label(&skip_extend);
                 let _ = val_ty;
             }
@@ -1353,19 +1353,25 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                             return;
                         }
                     };
-                    let (prop_idx, prop_ty) = match class_info
+                    let prop_ty = match class_info
                         .properties
                         .iter()
-                        .enumerate()
-                        .find(|(_, (n, _))| n == property)
+                        .find(|(n, _)| n == property)
                     {
-                        Some((i, (_, ty))) => (i, ty.clone()),
+                        Some((_, ty)) => ty.clone(),
                         None => {
                             emitter.comment(&format!("WARNING: undefined property {}", property));
                             return;
                         }
                     };
-                    (class_name.clone(), 8 + prop_idx * 16, prop_ty, false)
+                    let offset = match class_info.property_offsets.get(property) {
+                        Some(offset) => *offset,
+                        None => {
+                            emitter.comment(&format!("WARNING: missing property offset {}", property));
+                            return;
+                        }
+                    };
+                    (class_name.clone(), offset, prop_ty, false)
                 }
                 PhpType::Pointer(Some(class_name))
                     if ctx.extern_classes.contains_key(class_name) =>
@@ -1437,19 +1443,19 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                 PhpType::Array(_) => {
                     emitter.instruction("ldr x10, [sp], #16");                  // pop saved value
                     emitter.instruction(&format!("str x10, [x9, #{}]", offset)); // store value into property
-                    emitter.instruction("mov x10, #4");                          // runtime property tag 4 = indexed array
+                    emitter.instruction("mov x10, #4");                         // runtime property tag 4 = indexed array
                     emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); // store runtime property metadata tag
                 }
                 PhpType::AssocArray { .. } => {
                     emitter.instruction("ldr x10, [sp], #16");                  // pop saved value
                     emitter.instruction(&format!("str x10, [x9, #{}]", offset)); // store value into property
-                    emitter.instruction("mov x10, #5");                          // runtime property tag 5 = associative array
+                    emitter.instruction("mov x10, #5");                         // runtime property tag 5 = associative array
                     emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); // store runtime property metadata tag
                 }
                 PhpType::Object(_) => {
                     emitter.instruction("ldr x10, [sp], #16");                  // pop saved value
                     emitter.instruction(&format!("str x10, [x9, #{}]", offset)); // store value into property
-                    emitter.instruction("mov x10, #6");                          // runtime property tag 6 = object
+                    emitter.instruction("mov x10, #6");                         // runtime property tag 6 = object
                     emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); // store runtime property metadata tag
                 }
                 PhpType::Float => {

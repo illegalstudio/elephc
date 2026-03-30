@@ -25,7 +25,7 @@ pub fn emit_hash_grow(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #48");                                    // set up new frame pointer
     emitter.instruction("stp x19, x20, [sp, #32]");                             // save callee-saved registers
-    emitter.instruction("bl __rt_hash_ensure_unique");                           // split shared hash tables before rehashing into new storage
+    emitter.instruction("bl __rt_hash_ensure_unique");                          // split shared hash tables before rehashing into new storage
     emitter.instruction("str x0, [sp, #0]");                                    // save the unique old table pointer
 
     // -- read old table header --

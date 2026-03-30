@@ -27,9 +27,9 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("add x16, x16, _heap_debug_enabled@PAGEOFF");           // resolve the heap-debug enabled flag address
     emitter.instruction("ldr x16, [x16]");                                      // load the heap-debug enabled flag
     emitter.instruction("cbz x16, __rt_heap_free_debug_checked");               // skip validation when heap-debug mode is disabled
-    emitter.instruction("stp x0, x30, [sp, #-16]!");                             // preserve the freed pointer and caller return address before nested validation
+    emitter.instruction("stp x0, x30, [sp, #-16]!");                            // preserve the freed pointer and caller return address before nested validation
     emitter.instruction("bl __rt_heap_debug_validate_free_list");               // verify the ordered free list before inserting into it
-    emitter.instruction("ldp x0, x30, [sp], #16");                               // restore the freed pointer and caller return address after validation
+    emitter.instruction("ldp x0, x30, [sp], #16");                              // restore the freed pointer and caller return address after validation
     emitter.label("__rt_heap_free_debug_checked");
 
     // -- compute header address and block end --
@@ -107,7 +107,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.label("__rt_heap_free_cache_small_duplicate");
     emitter.instruction("adrp x1, _heap_dbg_double_free_msg@PAGE");             // load page of the double-free debug message
     emitter.instruction("add x1, x1, _heap_dbg_double_free_msg@PAGEOFF");       // resolve the double-free debug message address
-    emitter.instruction(&format!("mov x2, #{}", double_free_msg.len()));         // pass the exact double-free debug message length
+    emitter.instruction(&format!("mov x2, #{}", double_free_msg.len()));        // pass the exact double-free debug message length
     emitter.instruction("b __rt_heap_debug_fail");                              // report the duplicate cached block and terminate immediately
 
     emitter.label("__rt_heap_free_cache_small_insert");
@@ -138,7 +138,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("cbz x16, __rt_heap_free_insert_here");                 // keep legacy behavior when heap-debug mode is disabled
     emitter.instruction("adrp x1, _heap_dbg_double_free_msg@PAGE");             // load page of the double-free debug message
     emitter.instruction("add x1, x1, _heap_dbg_double_free_msg@PAGEOFF");       // resolve the double-free debug message address
-    emitter.instruction(&format!("mov x2, #{}", double_free_msg.len()));         // pass the exact double-free debug message length
+    emitter.instruction(&format!("mov x2, #{}", double_free_msg.len()));        // pass the exact double-free debug message length
     emitter.instruction("b __rt_heap_debug_fail");                              // report the double-free and terminate immediately
 
     emitter.label("__rt_heap_free_insert_here");
@@ -212,9 +212,9 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("add x16, x16, _heap_debug_enabled@PAGEOFF");           // resolve the heap-debug enabled flag address
     emitter.instruction("ldr x16, [x16]");                                      // load the heap-debug enabled flag
     emitter.instruction("cbz x16, __rt_heap_free_count");                       // skip validation when heap-debug mode is disabled
-    emitter.instruction("stp x0, x30, [sp, #-16]!");                             // preserve the freed pointer and caller return address before nested validation
+    emitter.instruction("stp x0, x30, [sp, #-16]!");                            // preserve the freed pointer and caller return address before nested validation
     emitter.instruction("bl __rt_heap_debug_validate_free_list");               // verify the free list after insertion, coalescing, and tail trimming
-    emitter.instruction("ldp x0, x30, [sp], #16");                               // restore the freed pointer and caller return address after validation
+    emitter.instruction("ldp x0, x30, [sp], #16");                              // restore the freed pointer and caller return address after validation
 
     // -- increment gc_frees counter --
     emitter.label("__rt_heap_free_count");

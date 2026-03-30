@@ -87,7 +87,7 @@ pub enum ExprKind {
         args: Vec<Expr>,
     },
     StaticMethodCall {
-        class_name: String,
+        receiver: StaticReceiver,
         method: String,
         args: Vec<Expr>,
     },
@@ -105,6 +105,14 @@ pub enum CastType {
     String,
     Bool,
     Array,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StaticReceiver {
+    Named(String),
+    Self_,
+    Static,
+    Parent,
 }
 
 impl PartialEq for Expr {
@@ -268,6 +276,7 @@ pub enum StmtKind {
     },
     ClassDecl {
         name: String,
+        extends: Option<String>,
         trait_uses: Vec<TraitUse>,
         properties: Vec<ClassProperty>,
         methods: Vec<ClassMethod>,

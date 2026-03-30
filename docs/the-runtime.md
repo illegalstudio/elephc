@@ -183,6 +183,20 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 Common copy-producing array/hash routines now also have dedicated `_refcounted` siblings for nested heap-backed payloads. These variants retain borrowed values before pushing or inserting them into freshly allocated arrays/hash tables, covering array literals with spreads plus `array_merge`, `array_chunk`, `array_slice`, `array_reverse`, `array_pad`, `array_unique`, `array_splice`, `array_diff`, `array_intersect`, `array_filter`, `array_fill`, `array_combine`, and `array_fill_keys`.
 
+| Refcounted sibling | What it does |
+|---|---|
+| `__rt_array_reverse_refcounted` | Reverse an indexed array while retaining nested heap-backed elements |
+| `__rt_array_merge_refcounted` | Merge indexed arrays that carry nested heap-backed payloads |
+| `__rt_array_slice_refcounted` / `__rt_array_splice_refcounted` | Slice or splice while retaining nested heap-backed payloads |
+| `__rt_array_unique_refcounted` | Remove duplicates while preserving retained heap-backed elements |
+| `__rt_array_fill_refcounted` / `__rt_array_fill_keys_refcounted` | Build filled arrays/hashes from borrowed heap-backed values |
+| `__rt_array_pad_refcounted` | Pad an array with retained heap-backed values |
+| `__rt_array_diff_refcounted` / `__rt_array_intersect_refcounted` | Set-style comparisons that keep nested heap-backed values alive |
+| `__rt_array_combine_refcounted` | Combine key/value arrays into a hash while retaining heap-backed values |
+| `__rt_array_chunk_refcounted` | Split an array into retained heap-backed chunks |
+| `__rt_array_filter_refcounted` | Filter an array of heap-backed elements without dropping borrowed payloads |
+| `__rt_array_merge_into_refcounted` | Append one indexed array into another in-place while retaining nested heap-backed elements |
+
 ### Hash table (for associative arrays)
 
 | Routine | What it does | Input | Output |
@@ -415,10 +429,12 @@ Additionally, the runtime emits static data tables:
 - `_day_names` — 7 entries (84 bytes), each 12 bytes: day name padded to 10 chars + 1 length byte + 1 padding byte. Used by `__rt_date` for `l` (full name) and `D` (abbreviated) format characters
 - `_month_names` — 12 entries (144 bytes), same layout as day names. Used by `__rt_date` for `F` (full name) and `M` (abbreviated) format characters
 - `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>` — per-class property traversal metadata used by object deep-free and cycle collection
+- `_class_vtable_ptrs`, `_class_vtable_<id>` — per-class virtual-method tables used by inheritance dispatch through `class_id`
+- `_class_static_vtable_ptrs`, `_class_static_vtable_<id>` — per-class static-method tables used by late static binding
 
 When `--heap-debug` is enabled, the runtime also activates `__rt_heap_debug_check_live`, `__rt_heap_debug_validate_free_list`, and `__rt_heap_debug_report`. These helpers turn allocator corruption into immediate fatal errors for duplicate frees, zero-refcount `incref`/`decref` paths, and malformed free-list or small-bin state, poison freed payload bytes with `0xA5`, and print an end-of-process summary with alloc/free counts, live block count, live bytes, leak summary, and the peak live-byte watermark.
 
-Every heap allocation now also carries a uniform 8-byte kind tag in its 16-byte allocator header. The current runtime uses `0=raw/untyped`, `1=string`, `2=indexed array`, `3=assoc/hash`, and `4=object`, which lets runtime dispatch stay independent from each payload's internal layout. The low 16 bits keep the persistent container metadata: low byte = heap kind, bits `8..14` = indexed-array runtime `value_type`, and bit `15` = copy-on-write container flag. The collector reuses higher bits for transient reachable/incoming-edge metadata during `__rt_gc_collect_cycles`. Runtime data also now includes `_gc_collecting`, `_gc_release_suppressed`, `_class_gc_desc_count`, and `_class_gc_desc_ptrs` so deep-free / cycle-collection paths can coordinate nested releases and discover class property traversal metadata.
+Every heap allocation now also carries a uniform 8-byte kind tag in its 16-byte allocator header. The current runtime uses `0=raw/untyped`, `1=string`, `2=indexed array`, `3=assoc/hash`, and `4=object`, which lets runtime dispatch stay independent from each payload's internal layout. The low 16 bits keep the persistent container metadata: low byte = heap kind, bits `8..14` = indexed-array runtime `value_type`, and bit `15` = copy-on-write container flag. The collector reuses higher bits for transient reachable/incoming-edge metadata during `__rt_gc_collect_cycles`. Runtime data also now includes `_gc_collecting`, `_gc_release_suppressed`, `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_vtable_ptrs`, and `_class_static_vtable_ptrs` so deep-free / cycle-collection paths can coordinate nested releases, discover class property traversal metadata, and support both inherited instance dispatch and late static binding.
 
 See [Memory Model](memory-model.md) for details on how these buffers work.
 

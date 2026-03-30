@@ -22,11 +22,12 @@ pub fn emit(
     // -- call runtime to compute value intersection --
     emitter.instruction("mov x1, x0");                                          // move second array pointer to x1
     emitter.instruction("ldr x0, [sp], #16");                                   // pop first array pointer into x0
-    emitter.instruction(if uses_refcounted_runtime {
+    let runtime_call = if uses_refcounted_runtime {
         "bl __rt_array_intersect_refcounted"
     } else {
         "bl __rt_array_intersect"
-    }); // call runtime: intersect arrays → x0=new array
+    };
+    emitter.instruction(runtime_call);                                          // call runtime: intersect arrays → x0=new array
 
     match arr_ty {
         PhpType::Array(inner) => Some(PhpType::Array(inner)),

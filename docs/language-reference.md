@@ -1287,13 +1287,15 @@ Both `include 'f';` and `include('f');` syntax are supported.
 
 ## Classes
 
-elephc supports PHP classes with properties, constructors, instance methods, static methods, traits, and `public` / `protected` / `private` visibility.
+elephc supports PHP classes with single inheritance, properties, constructors, instance methods, static methods, traits, `self::method()`, `parent::method()`, `static::method()`, and `public` / `protected` / `private` visibility.
 
 ### Class declaration
 
 ```php
 <?php
-class Point {
+class Shape {}
+
+class Point extends Shape {
     public $x;
     public $y;
 
@@ -1311,6 +1313,8 @@ class Point {
     }
 }
 ```
+
+Concrete classes may extend one parent class with `extends`. Method overrides use virtual dispatch, so an inherited method that calls `$this->otherMethod()` sees the child's override at runtime.
 
 ### Properties
 
@@ -1331,9 +1335,10 @@ class Config {
 ```
 
 - `public` properties can be accessed from outside the class via `->`.
-- `protected` properties are not accessible from outside the class. Because inheritance is not implemented yet, they currently behave like class-only members.
+- `protected` properties are not accessible from outside the class, but they are accessible inside subclasses.
 - `private` properties can only be accessed inside the class via `$this->`.
 - `readonly` properties can only be assigned inside `__construct`.
+- Property redeclaration across an inheritance chain is not supported yet.
 
 ### Constructor
 
@@ -1354,6 +1359,110 @@ $p = new Point(3, 4);
 echo $p->magnitude();  // 5
 ```
 
+Overrides on subclasses use runtime dispatch:
+
+```php
+<?php
+class Animal {
+    public function speak() {
+        return "animal";
+    }
+
+    public function run() {
+        return $this->speak();
+    }
+}
+
+class Dog extends Animal {
+    public function speak() {
+        return "dog";
+    }
+}
+
+$dog = new Dog();
+echo $dog->run();  // dog
+```
+
+Private methods are not virtual. If a parent method calls one of its own private helpers, that call stays bound to the parent's implementation even when the receiver is an instance of a child class.
+
+### `parent::method()`
+
+Inside a subclass method, `parent::method()` directly calls the parent implementation:
+
+```php
+<?php
+class Base {
+    public function greet() {
+        return "hi";
+    }
+}
+
+class Child extends Base {
+    public function greet() {
+        return parent::greet() . "!";
+    }
+}
+```
+
+### `self::method()`
+
+Inside a class body, `self::method()` binds to the current lexical class rather than the runtime child override:
+
+```php
+<?php
+class Base {
+    public function reveal() {
+        return self::label();
+    }
+
+    public function label() {
+        return "base";
+    }
+}
+
+class Child extends Base {
+    public function label() {
+        return "child";
+    }
+}
+
+echo (new Child())->reveal(); // base
+```
+
+If `self::method()` resolves to an instance method, it is only allowed from a non-static method where `$this` exists.
+
+### `static::method()`
+
+`static::method()` uses late static binding: the method lookup happens against the current called class at runtime.
+
+```php
+<?php
+class Base {
+    public static function who() {
+        return "base";
+    }
+
+    public static function relay() {
+        return static::who();
+    }
+}
+
+class Child extends Base {
+    public static function who() {
+        return "child";
+    }
+}
+
+echo Child::relay(); // child
+```
+
+Forwarding rules match the current runtime model:
+
+- `ClassName::method()` fixes the called class to `ClassName`
+- `self::method()` resolves lexically but forwards the current called class
+- `parent::method()` resolves to the immediate parent implementation and also forwards the current called class
+- `static::method()` resolves dynamically against the forwarded called class
+
 ### Static methods
 
 Static methods are called on the class itself using `::`, not on an instance:
@@ -1366,11 +1475,20 @@ echo $origin->x;  // 0
 
 Static methods do not have access to `$this`.
 
-Like instance methods, static methods honor `public`, `protected`, and `private` visibility. Without inheritance, non-`public` static methods are currently only callable from methods on that same class.
+Like instance methods, static methods honor `public`, `protected`, and `private` visibility. Inherited `public` and `protected` static methods remain callable through the child class; `private` static methods stay scoped to the declaring class.
+
+### Override rules
+
+For non-private inherited methods, elephc currently requires the child method to keep the same parameter shape as the parent:
+
+- same parameter count
+- same pass-by-reference positions
+- same optional/default parameter layout
+- same variadic vs non-variadic shape
 
 ### Traits
 
-Traits are flattened into the concrete class at compile time. Imported trait methods use the same fixed labels and object layout as ordinary class members, so there is no runtime trait identity or dynamic dispatch layer.
+Traits are flattened into the concrete class at compile time. There is no runtime trait identity: imported members become ordinary class members before inheritance metadata and vtable slots are built.
 
 ```php
 <?php
@@ -1431,15 +1549,15 @@ echo $p->magnitude(); // method call
 
 ### Limitations
 
-- No inheritance (`extends`)
 - No interfaces (`implements`)
 - No abstract or final classes/methods
 - No property type declarations
 - No constructor promotion
+- Property redeclaration across an inheritance chain is rejected for now
 
 ## What elephc cannot do (by design)
 
-- No inheritance, interfaces, enums
+- No interfaces, enums
 - No exceptions (`try`/`catch`/`throw`)
 - No `eval()`
 - No dynamic `include`/`require` (path must be a string literal)

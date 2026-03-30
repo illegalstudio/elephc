@@ -17,11 +17,12 @@ pub fn emit(
     let uses_refcounted_runtime =
         matches!(&arr_ty, PhpType::Array(inner) if inner.is_refcounted());
     // -- call runtime to create reversed copy of array --
-    emitter.instruction(if uses_refcounted_runtime {
+    let runtime_call = if uses_refcounted_runtime {
         "bl __rt_array_reverse_refcounted"
     } else {
         "bl __rt_array_reverse"
-    }); // call runtime: reverse array → x0=new array
+    };
+    emitter.instruction(runtime_call);                                          // call runtime: reverse array → x0=new array
 
     match arr_ty {
         PhpType::Array(inner) => Some(PhpType::Array(inner)),

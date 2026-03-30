@@ -1,15 +1,15 @@
 mod builtins;
 mod functions;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
 use crate::parser::ast::{
-    BinOp, CType, CastType, Expr, ExprKind, Program, Stmt, StmtKind, Visibility,
+    BinOp, CType, CastType, Expr, ExprKind, Program, StaticReceiver, Stmt, StmtKind, Visibility,
 };
 use crate::types::{
-    ctype_stack_size, ctype_to_php_type, traits::flatten_classes, CheckResult, ClassInfo,
-    ExternClassInfo, ExternFieldInfo, ExternFunctionSig, FunctionSig, PhpType, TypeEnv,
+    ctype_stack_size, ctype_to_php_type, traits::{flatten_classes, FlattenedClass}, CheckResult,
+    ClassInfo, ExternClassInfo, ExternFieldInfo, ExternFunctionSig, FunctionSig, PhpType, TypeEnv,
 };
 
 /// Infer a function's return type by scanning its body for Return statements.
@@ -238,6 +238,383 @@ pub(crate) struct FnDecl {
     pub body: Vec<Stmt>,
 }
 
+fn build_method_sig(method: &crate::parser::ast::ClassMethod) -> FunctionSig {
+    let params: Vec<(String, PhpType)> = method
+        .params
+        .iter()
+        .map(|(n, _, _)| (n.clone(), PhpType::Int))
+        .collect();
+    let defaults: Vec<Option<Expr>> = method.params.iter().map(|(_, d, _)| d.clone()).collect();
+    let ref_params: Vec<bool> = method.params.iter().map(|(_, _, r)| *r).collect();
+    let return_type = infer_return_type_syntactic(&method.body);
+    FunctionSig {
+        params,
+        defaults,
+        return_type,
+        ref_params,
+        variadic: method.variadic.clone(),
+    }
+}
+
+fn build_constructor_param_map(methods: &[crate::parser::ast::ClassMethod]) -> Vec<Option<String>> {
+    let mut param_to_prop = Vec::new();
+    if let Some(constructor) = methods.iter().find(|m| m.name == "__construct") {
+        param_to_prop = constructor
+            .params
+            .iter()
+            .map(|(pname, _, _)| {
+                for stmt in &constructor.body {
+                    if let StmtKind::PropertyAssign { property, value, .. } = &stmt.kind {
+                        if let ExprKind::Variable(vn) = &value.kind {
+                            if vn == pname {
+                                return Some(property.clone());
+                            }
+                        }
+                    }
+                }
+                None
+            })
+            .collect();
+    }
+    param_to_prop
+}
+
+fn visibility_rank(visibility: &Visibility) -> u8 {
+    match visibility {
+        Visibility::Private => 0,
+        Visibility::Protected => 1,
+        Visibility::Public => 2,
+    }
+}
+
+fn required_param_count(sig: &FunctionSig) -> usize {
+    sig.defaults.iter().filter(|default| default.is_none()).count()
+}
+
+fn validate_override_signature(
+    class_name: &str,
+    method: &crate::parser::ast::ClassMethod,
+    parent_sig: &FunctionSig,
+    is_static: bool,
+) -> Result<(), CompileError> {
+    let kind = if is_static { "static method" } else { "method" };
+
+    if method.params.len() != parent_sig.params.len() {
+        return Err(CompileError::new(
+            method.span,
+            &format!(
+                "Cannot change parameter count when overriding {}: {}::{}",
+                kind, class_name, method.name
+            ),
+        ));
+    }
+
+    let child_ref_params: Vec<bool> = method.params.iter().map(|(_, _, is_ref)| *is_ref).collect();
+    if child_ref_params != parent_sig.ref_params {
+        return Err(CompileError::new(
+            method.span,
+            &format!(
+                "Cannot change pass-by-reference parameters when overriding {}: {}::{}",
+                kind, class_name, method.name
+            ),
+        ));
+    }
+
+    let child_defaults: Vec<bool> = method
+        .params
+        .iter()
+        .map(|(_, default, _)| default.is_some())
+        .collect();
+    let parent_defaults: Vec<bool> =
+        parent_sig.defaults.iter().map(|default| default.is_some()).collect();
+    if child_defaults != parent_defaults {
+        return Err(CompileError::new(
+            method.span,
+            &format!(
+                "Cannot change optional parameter layout when overriding {}: {}::{}",
+                kind, class_name, method.name
+            ),
+        ));
+    }
+
+    if method.variadic != parent_sig.variadic {
+        return Err(CompileError::new(
+            method.span,
+            &format!(
+                "Cannot change variadic parameter shape when overriding {}: {}::{}",
+                kind, class_name, method.name
+            ),
+        ));
+    }
+
+    let child_required = method
+        .params
+        .iter()
+        .filter(|(_, default, _)| default.is_none())
+        .count();
+    if child_required != required_param_count(parent_sig) {
+        return Err(CompileError::new(
+            method.span,
+            &format!(
+                "Cannot change required parameter count when overriding {}: {}::{}",
+                kind, class_name, method.name
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
+fn build_class_info_recursive(
+    class_name: &str,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &mut Checker,
+    next_class_id: &mut u64,
+    building: &mut HashSet<String>,
+) -> Result<(), CompileError> {
+    if checker.classes.contains_key(class_name) {
+        return Ok(());
+    }
+
+    if !building.insert(class_name.to_string()) {
+        return Err(CompileError::new(
+            crate::span::Span::dummy(),
+            &format!("Circular inheritance detected involving class {}", class_name),
+        ));
+    }
+
+    let class = class_map.get(class_name).cloned().ok_or_else(|| {
+        CompileError::new(
+            crate::span::Span::dummy(),
+            &format!("Unknown class referenced during inheritance flattening: {}", class_name),
+        )
+    })?;
+
+    let parent_info = if let Some(parent_name) = &class.extends {
+        build_class_info_recursive(parent_name, class_map, checker, next_class_id, building)?;
+        Some(checker.classes.get(parent_name).cloned().ok_or_else(|| {
+            CompileError::new(
+                crate::span::Span::dummy(),
+                &format!("Unknown parent class: {}", parent_name),
+            )
+        })?)
+    } else {
+        None
+    };
+
+    let mut prop_types = Vec::new();
+    let mut property_offsets = HashMap::new();
+    let mut property_declaring_classes = HashMap::new();
+    let mut defaults = Vec::new();
+    let mut property_visibilities = HashMap::new();
+    let mut readonly_properties = std::collections::HashSet::new();
+
+    let mut method_sigs = HashMap::new();
+    let mut static_sigs = HashMap::new();
+    let mut method_visibilities = HashMap::new();
+    let mut method_declaring_classes = HashMap::new();
+    let mut method_impl_classes = HashMap::new();
+    let mut vtable_methods = Vec::new();
+    let mut vtable_slots = HashMap::new();
+    let mut static_method_visibilities = HashMap::new();
+    let mut static_method_declaring_classes = HashMap::new();
+    let mut static_method_impl_classes = HashMap::new();
+    let mut static_vtable_methods = Vec::new();
+    let mut static_vtable_slots = HashMap::new();
+
+    if let Some(parent) = &parent_info {
+        for (index, (name, ty)) in parent.properties.iter().enumerate() {
+            prop_types.push((name.clone(), ty.clone()));
+            property_offsets.insert(name.clone(), 8 + index * 16);
+            defaults.push(parent.defaults[index].clone());
+            if let Some(visibility) = parent.property_visibilities.get(name) {
+                property_visibilities.insert(name.clone(), visibility.clone());
+            }
+            if let Some(declaring_class) = parent.property_declaring_classes.get(name) {
+                property_declaring_classes.insert(name.clone(), declaring_class.clone());
+            }
+            if parent.readonly_properties.contains(name) {
+                readonly_properties.insert(name.clone());
+            }
+        }
+
+        for (name, sig) in &parent.methods {
+            if parent.method_visibilities.get(name) == Some(&Visibility::Private) {
+                continue;
+            }
+            method_sigs.insert(name.clone(), sig.clone());
+            if let Some(visibility) = parent.method_visibilities.get(name) {
+                method_visibilities.insert(name.clone(), visibility.clone());
+            }
+            if let Some(declaring_class) = parent.method_declaring_classes.get(name) {
+                method_declaring_classes.insert(name.clone(), declaring_class.clone());
+            }
+            if let Some(impl_class) = parent.method_impl_classes.get(name) {
+                method_impl_classes.insert(name.clone(), impl_class.clone());
+            }
+        }
+        vtable_methods = parent.vtable_methods.clone();
+        vtable_slots = parent.vtable_slots.clone();
+
+        for (name, sig) in &parent.static_methods {
+            if parent.static_method_visibilities.get(name) == Some(&Visibility::Private) {
+                continue;
+            }
+            static_sigs.insert(name.clone(), sig.clone());
+            if let Some(visibility) = parent.static_method_visibilities.get(name) {
+                static_method_visibilities.insert(name.clone(), visibility.clone());
+            }
+            if let Some(declaring_class) = parent.static_method_declaring_classes.get(name) {
+                static_method_declaring_classes.insert(name.clone(), declaring_class.clone());
+            }
+            if let Some(impl_class) = parent.static_method_impl_classes.get(name) {
+                static_method_impl_classes.insert(name.clone(), impl_class.clone());
+            }
+        }
+        static_vtable_methods = parent.static_vtable_methods.clone();
+        static_vtable_slots = parent.static_vtable_slots.clone();
+    }
+
+    for prop in &class.properties {
+        if property_declaring_classes.contains_key(&prop.name) {
+            return Err(CompileError::new(
+                prop.span,
+                &format!(
+                    "Property redeclaration across inheritance is not yet supported: {}::{}",
+                    class.name, prop.name
+                ),
+            ));
+        }
+
+        let ty = if let Some(default) = &prop.default {
+            infer_expr_type_syntactic(default)
+        } else {
+            PhpType::Int
+        };
+        let slot_index = prop_types.len();
+        prop_types.push((prop.name.clone(), ty));
+        property_offsets.insert(prop.name.clone(), 8 + slot_index * 16);
+        property_declaring_classes.insert(prop.name.clone(), class.name.clone());
+        defaults.push(prop.default.clone());
+        property_visibilities.insert(prop.name.clone(), prop.visibility.clone());
+        if prop.readonly {
+            readonly_properties.insert(prop.name.clone());
+        }
+    }
+
+    for method in &class.methods {
+        let sig = build_method_sig(method);
+        if method.is_static {
+            if method_sigs.contains_key(&method.name) {
+                return Err(CompileError::new(
+                    method.span,
+                    &format!(
+                        "Cannot change method kind when overriding {}::{}",
+                        class.name, method.name
+                    ),
+                ));
+            }
+            if let Some(parent_visibility) = static_method_visibilities.get(&method.name) {
+                if visibility_rank(&method.visibility) < visibility_rank(parent_visibility) {
+                    return Err(CompileError::new(
+                        method.span,
+                        &format!(
+                            "Cannot reduce visibility when overriding static method: {}::{}",
+                            class.name, method.name
+                        ),
+                    ));
+                }
+            }
+            if let Some(parent_sig) = static_sigs.get(&method.name) {
+                validate_override_signature(&class.name, method, parent_sig, true)?;
+            }
+            static_sigs.insert(method.name.clone(), sig);
+            static_method_visibilities.insert(method.name.clone(), method.visibility.clone());
+            static_method_declaring_classes.insert(method.name.clone(), class.name.clone());
+            static_method_impl_classes.insert(method.name.clone(), class.name.clone());
+            if method.visibility != Visibility::Private
+                && !static_vtable_slots.contains_key(&method.name)
+            {
+                let slot = static_vtable_methods.len();
+                static_vtable_slots.insert(method.name.clone(), slot);
+                static_vtable_methods.push(method.name.clone());
+            }
+        } else {
+            if static_sigs.contains_key(&method.name) {
+                return Err(CompileError::new(
+                    method.span,
+                    &format!(
+                        "Cannot change method kind when overriding {}::{}",
+                        class.name, method.name
+                    ),
+                ));
+            }
+            if let Some(parent_visibility) = method_visibilities.get(&method.name) {
+                if visibility_rank(&method.visibility) < visibility_rank(parent_visibility) {
+                    return Err(CompileError::new(
+                        method.span,
+                        &format!(
+                            "Cannot reduce visibility when overriding method: {}::{}",
+                            class.name, method.name
+                        ),
+                    ));
+                }
+            }
+            if let Some(parent_sig) = method_sigs.get(&method.name) {
+                validate_override_signature(&class.name, method, parent_sig, false)?;
+            }
+            method_sigs.insert(method.name.clone(), sig);
+            method_visibilities.insert(method.name.clone(), method.visibility.clone());
+            method_declaring_classes.insert(method.name.clone(), class.name.clone());
+            method_impl_classes.insert(method.name.clone(), class.name.clone());
+            if method.visibility != Visibility::Private && !vtable_slots.contains_key(&method.name) {
+                let slot = vtable_methods.len();
+                vtable_slots.insert(method.name.clone(), slot);
+                vtable_methods.push(method.name.clone());
+            }
+        }
+    }
+
+    let constructor_param_to_prop = if class.methods.iter().any(|m| m.name == "__construct") {
+        build_constructor_param_map(&class.methods)
+    } else if let Some(parent) = &parent_info {
+        parent.constructor_param_to_prop.clone()
+    } else {
+        Vec::new()
+    };
+
+    checker.classes.insert(
+        class.name.clone(),
+        ClassInfo {
+            class_id: *next_class_id,
+            parent: class.extends.clone(),
+            properties: prop_types,
+            property_offsets,
+            property_declaring_classes,
+            defaults,
+            property_visibilities,
+            readonly_properties,
+            method_decls: class.methods.clone(),
+            methods: method_sigs,
+            static_methods: static_sigs,
+            method_visibilities,
+            method_declaring_classes,
+            method_impl_classes,
+            vtable_methods,
+            vtable_slots,
+            static_method_visibilities,
+            static_method_declaring_classes,
+            static_method_impl_classes,
+            static_vtable_methods,
+            static_vtable_slots,
+            constructor_param_to_prop,
+        },
+    );
+    *next_class_id += 1;
+    building.remove(class_name);
+    Ok(())
+}
+
 pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
     let mut checker = Checker {
         fn_decls: HashMap::new(),
@@ -282,97 +659,20 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
 
     // First pass: collect flattened class declarations and build ClassInfo
     let mut next_class_id = 0u64;
+    let class_map: HashMap<String, FlattenedClass> = flattened_classes
+        .iter()
+        .cloned()
+        .map(|class| (class.name.clone(), class))
+        .collect();
+    let mut building = HashSet::new();
     for class in &flattened_classes {
-            let mut prop_types = Vec::new();
-            let mut property_visibilities = HashMap::new();
-            let mut readonly_properties = std::collections::HashSet::new();
-            for prop in &class.properties {
-                let ty = if let Some(default) = &prop.default {
-                    infer_expr_type_syntactic(default)
-                } else {
-                    PhpType::Int // properties without defaults are set by constructor
-                };
-                prop_types.push((prop.name.clone(), ty));
-                property_visibilities.insert(prop.name.clone(), prop.visibility.clone());
-                if prop.readonly {
-                    readonly_properties.insert(prop.name.clone());
-                }
-            }
-            let mut method_sigs = HashMap::new();
-            let mut static_sigs = HashMap::new();
-            let mut method_visibilities = HashMap::new();
-            let mut static_method_visibilities = HashMap::new();
-            for method in &class.methods {
-                let params: Vec<(String, PhpType)> = method
-                    .params
-                    .iter()
-                    .map(|(n, _, _)| (n.clone(), PhpType::Int))
-                    .collect();
-                let defaults: Vec<Option<Expr>> =
-                    method.params.iter().map(|(_, d, _)| d.clone()).collect();
-                let ref_params: Vec<bool> = method.params.iter().map(|(_, _, r)| *r).collect();
-                let return_type = infer_return_type_syntactic(&method.body);
-                let sig = FunctionSig {
-                    params,
-                    defaults,
-                    return_type,
-                    ref_params,
-                    variadic: method.variadic.clone(),
-                };
-                if method.is_static {
-                    static_sigs.insert(method.name.clone(), sig);
-                    static_method_visibilities
-                        .insert(method.name.clone(), method.visibility.clone());
-                } else {
-                    method_sigs.insert(method.name.clone(), sig);
-                    method_visibilities.insert(method.name.clone(), method.visibility.clone());
-                }
-            }
-            // Build constructor param → property mapping
-            // Scan __construct body for $this->prop = $param patterns
-            let mut param_to_prop = Vec::new();
-            if let Some(constructor) = class.methods.iter().find(|m| m.name == "__construct") {
-                // For each constructor param, check if it's directly assigned to a property
-                param_to_prop = constructor
-                    .params
-                    .iter()
-                    .map(|(pname, _, _)| {
-                        for stmt in &constructor.body {
-                            if let StmtKind::PropertyAssign {
-                                property, value, ..
-                            } = &stmt.kind
-                            {
-                                if let ExprKind::Variable(vn) = &value.kind {
-                                    if vn == pname {
-                                        return Some(property.clone());
-                                    }
-                                }
-                            }
-                        }
-                        None
-                    })
-                    .collect();
-            }
-
-            let defaults: Vec<Option<Expr>> =
-                class.properties.iter().map(|p| p.default.clone()).collect();
-            checker.classes.insert(
-                class.name.clone(),
-                ClassInfo {
-                    class_id: next_class_id,
-                    properties: prop_types,
-                    defaults,
-                    property_visibilities,
-                    readonly_properties,
-                    method_decls: class.methods.clone(),
-                    methods: method_sigs,
-                    static_methods: static_sigs,
-                    method_visibilities,
-                    static_method_visibilities,
-                    constructor_param_to_prop: param_to_prop,
-                },
-            );
-            next_class_id += 1;
+        build_class_info_recursive(
+            &class.name,
+            &class_map,
+            &mut checker,
+            &mut next_class_id,
+            &mut building,
+        )?;
     }
 
     // Pre-scan: collect extern declarations
@@ -627,12 +927,14 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
 }
 
 impl Checker {
-    fn can_access_member(&self, class_name: &str, visibility: &Visibility) -> bool {
+    fn can_access_member(&self, declaring_class: &str, visibility: &Visibility) -> bool {
         match visibility {
             Visibility::Public => true,
-            Visibility::Protected | Visibility::Private => {
-                self.current_class.as_deref() == Some(class_name)
-            }
+            Visibility::Protected => self
+                .current_class
+                .as_deref()
+                .is_some_and(|current| current == declaring_class || self.is_subclass_of(current, declaring_class)),
+            Visibility::Private => self.current_class.as_deref() == Some(declaring_class),
         }
     }
 
@@ -642,6 +944,20 @@ impl Checker {
             Visibility::Protected => "protected",
             Visibility::Private => "private",
         }
+    }
+
+    fn is_subclass_of(&self, class_name: &str, ancestor_name: &str) -> bool {
+        let mut current = self.classes.get(class_name).and_then(|class| class.parent.clone());
+        while let Some(parent_name) = current {
+            if parent_name == ancestor_name {
+                return true;
+            }
+            current = self
+                .classes
+                .get(&parent_name)
+                .and_then(|class| class.parent.clone());
+        }
+        false
     }
 
     fn is_pointer_type(ty: &PhpType) -> bool {
@@ -1305,7 +1621,12 @@ impl Checker {
                             ));
                         }
                         if let Some(visibility) = class_info.property_visibilities.get(property) {
-                            if !self.can_access_member(class_name, visibility) {
+                            let declaring_class = class_info
+                                .property_declaring_classes
+                                .get(property)
+                                .map(String::as_str)
+                                .unwrap_or(class_name);
+                            if !self.can_access_member(declaring_class, visibility) {
                                 return Err(CompileError::new(
                                     stmt.span,
                                     &format!(
@@ -1318,7 +1639,11 @@ impl Checker {
                             }
                         }
                         if class_info.readonly_properties.contains(property)
-                            && !(self.current_class.as_deref() == Some(class_name)
+                            && !(self.current_class.as_deref()
+                                == class_info
+                                    .property_declaring_classes
+                                    .get(property)
+                                    .map(String::as_str)
                                 && self.current_method.as_deref() == Some("__construct"))
                         {
                             return Err(CompileError::new(
@@ -1829,7 +2154,12 @@ impl Checker {
                 if let PhpType::Object(class_name) = &obj_ty {
                     if let Some(class_info) = self.classes.get(class_name) {
                         if let Some(visibility) = class_info.property_visibilities.get(property) {
-                            if !self.can_access_member(class_name, visibility) {
+                            let declaring_class = class_info
+                                .property_declaring_classes
+                                .get(property)
+                                .map(String::as_str)
+                                .unwrap_or(class_name);
+                            if !self.can_access_member(declaring_class, visibility) {
                                 return Err(CompileError::new(
                                     expr.span,
                                     &format!(
@@ -1883,7 +2213,12 @@ impl Checker {
                     if let Some(class_info) = self.classes.get(class_name) {
                         if let Some(sig) = class_info.methods.get(method) {
                             if let Some(visibility) = class_info.method_visibilities.get(method) {
-                                if !self.can_access_member(class_name, visibility) {
+                                let declaring_class = class_info
+                                    .method_declaring_classes
+                                    .get(method)
+                                    .map(String::as_str)
+                                    .unwrap_or(class_name);
+                                if !self.can_access_member(declaring_class, visibility) {
                                     return Err(CompileError::new(
                                         expr.span,
                                         &format!(
@@ -1910,7 +2245,13 @@ impl Checker {
                         }
                     }
 
-                    if let Some(class_info) = self.classes.get_mut(class_name) {
+                    let impl_class_name = self
+                        .classes
+                        .get(class_name)
+                        .and_then(|class_info| class_info.method_impl_classes.get(method))
+                        .cloned()
+                        .unwrap_or_else(|| class_name.clone());
+                    if let Some(class_info) = self.classes.get_mut(&impl_class_name) {
                         if let Some(sig) = class_info.methods.get_mut(method) {
                             for (i, arg_ty) in arg_types.iter().enumerate() {
                                 if i < sig.params.len()
@@ -1927,7 +2268,7 @@ impl Checker {
                 Ok(PhpType::Int)
             }
             ExprKind::StaticMethodCall {
-                class_name,
+                receiver,
                 method,
                 args,
             } => {
@@ -1936,11 +2277,58 @@ impl Checker {
                 for arg in args {
                     arg_types.push(self.infer_type(arg, env)?);
                 }
+                let parent_call = matches!(receiver, StaticReceiver::Parent);
+                let self_call = matches!(receiver, StaticReceiver::Self_);
+                let resolved_class_name = match receiver {
+                    StaticReceiver::Named(class_name) => class_name.clone(),
+                    StaticReceiver::Self_ => {
+                        self.current_class.as_ref().cloned().ok_or_else(|| {
+                            CompileError::new(
+                                expr.span,
+                                "Cannot use self:: outside class method scope",
+                            )
+                        })?
+                    }
+                    StaticReceiver::Static => {
+                        self.current_class.as_ref().cloned().ok_or_else(|| {
+                            CompileError::new(
+                                expr.span,
+                                "Cannot use static:: outside class method scope",
+                            )
+                        })?
+                    }
+                    StaticReceiver::Parent => {
+                        let current_class = self.current_class.as_ref().ok_or_else(|| {
+                            CompileError::new(
+                                expr.span,
+                                "Cannot use parent:: outside class method scope",
+                            )
+                        })?;
+                        let current_info = self.classes.get(current_class).ok_or_else(|| {
+                            CompileError::new(
+                                expr.span,
+                                &format!("Undefined class: {}", current_class),
+                            )
+                        })?;
+                        current_info.parent.as_ref().cloned().ok_or_else(|| {
+                            CompileError::new(
+                                expr.span,
+                                &format!("Class {} has no parent class", current_class),
+                            )
+                        })?
+                    }
+                };
+                let class_name = resolved_class_name.as_str();
                 if let Some(class_info) = self.classes.get(class_name) {
                     if let Some(sig) = class_info.static_methods.get(method) {
                         if let Some(visibility) = class_info.static_method_visibilities.get(method)
                         {
-                            if !self.can_access_member(class_name, visibility) {
+                            let declaring_class = class_info
+                                .static_method_declaring_classes
+                                .get(method)
+                                .map(String::as_str)
+                                .unwrap_or(class_name);
+                            if !self.can_access_member(declaring_class, visibility) {
                                 return Err(CompileError::new(
                                     expr.span,
                                     &format!(
@@ -1954,6 +2342,48 @@ impl Checker {
                         }
                         self.check_call_arity(
                             "Static method",
+                            &format!("{}::{}", class_name, method),
+                            sig,
+                            args,
+                            expr.span,
+                        )?;
+                    } else if parent_call || self_call {
+                        if self.current_method_is_static {
+                            return Err(CompileError::new(
+                                expr.span,
+                                if parent_call {
+                                    "Cannot call parent instance method from a static method"
+                                } else {
+                                    "Cannot call self instance method from a static method"
+                                },
+                            ));
+                        }
+                        let sig = class_info.methods.get(method).ok_or_else(|| {
+                            CompileError::new(
+                                expr.span,
+                                &format!("Undefined method: {}::{}", class_name, method),
+                            )
+                        })?;
+                        if let Some(visibility) = class_info.method_visibilities.get(method) {
+                            let declaring_class = class_info
+                                .method_declaring_classes
+                                .get(method)
+                                .map(String::as_str)
+                                .unwrap_or(class_name);
+                            if !self.can_access_member(declaring_class, visibility) {
+                                return Err(CompileError::new(
+                                    expr.span,
+                                    &format!(
+                                        "Cannot access {} method: {}::{}",
+                                        Self::visibility_label(visibility),
+                                        class_name,
+                                        method
+                                    ),
+                                ));
+                            }
+                        }
+                        self.check_call_arity(
+                            if parent_call { "Parent method" } else { "Self method" },
                             &format!("{}::{}", class_name, method),
                             sig,
                             args,
@@ -1980,8 +2410,34 @@ impl Checker {
                     ));
                 }
 
+                let direct_impl_class_name = if parent_call || self_call {
+                    self.classes
+                        .get(class_name)
+                        .and_then(|class_info| class_info.method_impl_classes.get(method))
+                        .cloned()
+                        .unwrap_or_else(|| class_name.to_string())
+                } else {
+                    String::new()
+                };
                 if let Some(class_info) = self.classes.get_mut(class_name) {
                     if let Some(sig) = class_info.static_methods.get_mut(method) {
+                        for (i, arg_ty) in arg_types.iter().enumerate() {
+                            if i < sig.params.len()
+                                && sig.params[i].1 == PhpType::Int
+                                && *arg_ty != PhpType::Int
+                            {
+                                sig.params[i].1 = arg_ty.clone();
+                            }
+                        }
+                        return Ok(sig.return_type.clone());
+                    }
+                }
+                if parent_call || self_call {
+                    if let Some(sig) = self
+                        .classes
+                        .get_mut(&direct_impl_class_name)
+                        .and_then(|class_info| class_info.methods.get_mut(method))
+                    {
                         for (i, arg_ty) in arg_types.iter().enumerate() {
                             if i < sig.params.len()
                                 && sig.params[i].1 == PhpType::Int

@@ -6,7 +6,7 @@ mod system;
 
 use super::emit::Emitter;
 
-pub fn emit_runtime(emitter: &mut Emitter) {
+pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     // String runtime functions
     strings::emit_itoa(emitter);
     strings::emit_ftoa(emitter);
@@ -196,7 +196,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     pointers::emit_cstr_to_str(emitter);
 }
 
-pub fn emit_runtime_data(
+pub(crate) fn emit_runtime_data(
     global_var_names: &std::collections::HashSet<String>,
     static_vars: &std::collections::HashMap<(String, String), crate::types::PhpType>,
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
@@ -301,32 +301,75 @@ pub fn emit_runtime_data(
     for (_, class_info) in &sorted_classes {
         out.push_str(&format!("    .quad _class_gc_desc_{}\n", class_info.class_id));
     }
+    out.push_str("_class_vtable_ptrs:\n");
+    for (_, class_info) in &sorted_classes {
+        out.push_str(&format!("    .quad _class_vtable_{}\n", class_info.class_id));
+    }
+    out.push_str("_class_static_vtable_ptrs:\n");
+    for (_, class_info) in &sorted_classes {
+        out.push_str(&format!(
+            "    .quad _class_static_vtable_{}\n",
+            class_info.class_id
+        ));
+    }
     for (_, class_info) in sorted_classes {
         out.push_str(&format!("_class_gc_desc_{}:\n", class_info.class_id));
         if class_info.properties.is_empty() {
             out.push_str("    .byte 0\n");
+        } else {
+            out.push_str("    .byte ");
+            for (i, (_, prop_ty)) in class_info.properties.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                let tag = match prop_ty {
+                    crate::types::PhpType::Int => 0,
+                    crate::types::PhpType::Str => 1,
+                    crate::types::PhpType::Float => 2,
+                    crate::types::PhpType::Bool => 3,
+                    crate::types::PhpType::Array(_) => 4,
+                    crate::types::PhpType::AssocArray { .. } => 5,
+                    crate::types::PhpType::Object(_) => 6,
+                    crate::types::PhpType::Callable
+                    | crate::types::PhpType::Pointer(_)
+                    | crate::types::PhpType::Void => 0,
+                };
+                out.push_str(&tag.to_string());
+            }
+            out.push('\n');
+        }
+        out.push_str("    .p2align 3\n");
+        out.push_str(&format!("_class_vtable_{}:\n", class_info.class_id));
+        if class_info.vtable_methods.is_empty() {
+            out.push_str("    .quad 0\n");
+        } else {
+            for method_name in &class_info.vtable_methods {
+                let impl_class = class_info
+                    .method_impl_classes
+                    .get(method_name)
+                    .expect("codegen bug: missing method implementation class");
+                out.push_str(&format!(
+                    "    .quad _method_{}_{}\n",
+                    impl_class, method_name
+                ));
+            }
+        }
+        out.push_str("    .p2align 3\n");
+        out.push_str(&format!("_class_static_vtable_{}:\n", class_info.class_id));
+        if class_info.static_vtable_methods.is_empty() {
+            out.push_str("    .quad 0\n");
             continue;
         }
-        out.push_str("    .byte ");
-        for (i, (_, prop_ty)) in class_info.properties.iter().enumerate() {
-            if i > 0 {
-                out.push_str(", ");
-            }
-            let tag = match prop_ty {
-                crate::types::PhpType::Int => 0,
-                crate::types::PhpType::Str => 1,
-                crate::types::PhpType::Float => 2,
-                crate::types::PhpType::Bool => 3,
-                crate::types::PhpType::Array(_) => 4,
-                crate::types::PhpType::AssocArray { .. } => 5,
-                crate::types::PhpType::Object(_) => 6,
-                crate::types::PhpType::Callable
-                | crate::types::PhpType::Pointer(_)
-                | crate::types::PhpType::Void => 0,
-            };
-            out.push_str(&tag.to_string());
+        for method_name in &class_info.static_vtable_methods {
+            let impl_class = class_info
+                .static_method_impl_classes
+                .get(method_name)
+                .expect("codegen bug: missing static method implementation class");
+            out.push_str(&format!(
+                "    .quad _static_{}_{}\n",
+                impl_class, method_name
+            ));
         }
-        out.push('\n');
     }
     out
 }

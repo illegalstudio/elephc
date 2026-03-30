@@ -26,11 +26,12 @@ pub fn emit(
     emitter.instruction("mov x2, x0");                                          // move pad value to x2 (third arg)
     emitter.instruction("ldr x1, [sp], #16");                                   // pop target size into x1 (second arg)
     emitter.instruction("ldr x0, [sp], #16");                                   // pop array pointer into x0 (first arg)
-    emitter.instruction(if uses_refcounted_runtime {
+    let runtime_call = if uses_refcounted_runtime {
         "bl __rt_array_pad_refcounted"
     } else {
         "bl __rt_array_pad"
-    }); // call runtime: pad array → x0=new array
+    };
+    emitter.instruction(runtime_call);                                          // call runtime: pad array → x0=new array
 
     match arr_ty {
         PhpType::Array(inner) => Some(PhpType::Array(inner)),

@@ -9,6 +9,7 @@ use crate::span::Span;
 #[derive(Debug, Clone)]
 pub struct FlattenedClass {
     pub name: String,
+    pub extends: Option<String>,
     pub properties: Vec<ClassProperty>,
     pub methods: Vec<ClassMethod>,
 }
@@ -79,6 +80,7 @@ pub fn flatten_classes(program: &Program) -> Result<Vec<FlattenedClass>, Compile
     for stmt in program {
         if let StmtKind::ClassDecl {
             name,
+            extends,
             trait_uses,
             properties,
             methods,
@@ -99,6 +101,7 @@ pub fn flatten_classes(program: &Program) -> Result<Vec<FlattenedClass>, Compile
                 merge_methods(imported_methods, methods, stmt.span, &format!("class {}", name))?;
             flattened.push(FlattenedClass {
                 name: name.clone(),
+                extends: extends.clone(),
                 properties: merged_props,
                 methods: merged_methods,
             });

@@ -54,7 +54,7 @@ pub fn emit_decref_object(emitter: &mut Emitter) {
 
     // -- refcount reached zero: deep free the object --
     emitter.label("__rt_decref_object_free");
-    emitter.instruction("b __rt_object_free_deep");                              // tail-call to deep free object properties and storage
+    emitter.instruction("b __rt_object_free_deep");                             // tail-call to deep free object properties and storage
 
     emitter.label("__rt_decref_object_skip");
     emitter.instruction("ret");                                                 // return to caller

@@ -86,7 +86,10 @@ pub struct FunctionSig {
 #[derive(Debug, Clone)]
 pub struct ClassInfo {
     pub class_id: u64,
+    pub parent: Option<String>,
     pub properties: Vec<(String, PhpType)>,
+    pub property_offsets: HashMap<String, usize>,
+    pub property_declaring_classes: HashMap<String, String>,
     pub defaults: Vec<Option<crate::parser::ast::Expr>>,
     pub property_visibilities: HashMap<String, Visibility>,
     pub readonly_properties: HashSet<String>,
@@ -94,7 +97,15 @@ pub struct ClassInfo {
     pub methods: HashMap<String, FunctionSig>,
     pub static_methods: HashMap<String, FunctionSig>,
     pub method_visibilities: HashMap<String, Visibility>,
+    pub method_declaring_classes: HashMap<String, String>,
+    pub method_impl_classes: HashMap<String, String>,
+    pub vtable_methods: Vec<String>,
+    pub vtable_slots: HashMap<String, usize>,
     pub static_method_visibilities: HashMap<String, Visibility>,
+    pub static_method_declaring_classes: HashMap<String, String>,
+    pub static_method_impl_classes: HashMap<String, String>,
+    pub static_vtable_methods: Vec<String>,
+    pub static_vtable_slots: HashMap<String, usize>,
     /// Maps constructor param index → property name (for type propagation from new ClassName(args))
     pub constructor_param_to_prop: Vec<Option<String>>,
 }

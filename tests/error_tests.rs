@@ -1649,6 +1649,86 @@ fn test_error_wrong_constructor_args() {
     );
 }
 
+#[test]
+fn test_error_parent_outside_class_scope() {
+    expect_error(
+        "<?php parent::boot();",
+        "Cannot use parent:: outside class method scope",
+    );
+}
+
+#[test]
+fn test_error_self_outside_class_scope() {
+    expect_error(
+        "<?php self::boot();",
+        "Cannot use self:: outside class method scope",
+    );
+}
+
+#[test]
+fn test_error_static_outside_class_scope() {
+    expect_error(
+        "<?php static::boot();",
+        "Cannot use static:: outside class method scope",
+    );
+}
+
+#[test]
+fn test_error_parent_without_parent_class() {
+    expect_error(
+        "<?php class Solo { public function boot() { return parent::boot(); } } $s = new Solo(); $s->boot();",
+        "Class Solo has no parent class",
+    );
+}
+
+#[test]
+fn test_error_self_instance_method_from_static_method() {
+    expect_error(
+        "<?php class Box { public static function run() { return self::value(); } public function value() { return 1; } } echo Box::run();",
+        "Cannot call self instance method from a static method",
+    );
+}
+
+#[test]
+fn test_error_circular_inheritance() {
+    expect_error(
+        "<?php class A extends B {} class B extends A {}",
+        "Circular inheritance detected",
+    );
+}
+
+#[test]
+fn test_error_cannot_reduce_visibility_when_overriding_method() {
+    expect_error(
+        "<?php class Base { public function ping() { return 1; } } class Child extends Base { protected function ping() { return 2; } }",
+        "Cannot reduce visibility when overriding method: Child::ping",
+    );
+}
+
+#[test]
+fn test_error_subclass_cannot_access_parent_private_property() {
+    expect_error(
+        "<?php class Base { private $value = 1; } class Child extends Base { public function read() { return $this->value; } } $c = new Child(); echo $c->read();",
+        "Cannot access private property: Child::value",
+    );
+}
+
+#[test]
+fn test_error_override_cannot_change_parameter_count() {
+    expect_error(
+        "<?php class Base { public function ping($x) { return $x; } } class Child extends Base { public function ping() { return 1; } }",
+        "Cannot change parameter count when overriding method: Child::ping",
+    );
+}
+
+#[test]
+fn test_error_property_shadowing_across_inheritance_not_supported() {
+    expect_error(
+        "<?php class Base { public $value = 1; } class Child extends Base { public $value = 2; }",
+        "Property redeclaration across inheritance is not yet supported: Child::value",
+    );
+}
+
 // --- Date/time error tests ---
 
 #[test]

@@ -19,11 +19,11 @@ I made the project as modular as possible. Every function has its own codegen fi
 
 ### What you should not expect
 
-Don't expect to take any existing PHP project and magically compile it. There's no Composer, no inheritance, no interfaces. We support flat PHP classes with properties, traits, constructors, instance/static methods, and `public` / `protected` / `private` visibility — roughly at the level of that famous *PHP 4* book where my journey began, plus some PHP 8 features.
+Don't expect to take any existing PHP project and magically compile it. There's no Composer and no interfaces yet. We support PHP classes with single inheritance, traits, constructors, instance/static methods, `self::method()`, `parent::method()`, `static::method()` with late static binding, `readonly` properties, and `public` / `protected` / `private` visibility — roughly at the level of that famous *PHP 4* book where my journey began, plus some PHP 8 features.
 
 ### What you can expect
 
-You can write a PHP file using only the constructs documented in this project's [language reference](docs/language-reference.md). You can include other files with `include`, `require`, `include_once`, and `require_once`, compose classes with traits, and watch your code run at the speed of light after running:
+You can write a PHP file using only the constructs documented in this project's [language reference](docs/language-reference.md). You can include other files with `include`, `require`, `include_once`, and `require_once`, compose classes with traits, extend concrete classes with `extends`, and watch your code run at the speed of light after running:
 
 ```bash
 elephc myfile.php
@@ -193,7 +193,7 @@ if ($x === 3) {
 | Constants | `const MAX = 100;`, `define("PI", 3.14)` |
 | List unpacking | `[$a, $b] = [1, 2];` |
 | Include/Require | `include 'file.php';`, `require_once 'lib.php';` |
-| Classes | `class Foo { protected $x; private $y; public function get() { return $this->x; } }` |
+| Classes | `class Foo extends Base { public readonly $id; protected $x; private $y; public function get() { return parent::get() + $this->x; } }` |
 | Traits | `trait Named { public function name() { return "x"; } }`, `use Named { Named::name as protected; }` |
 | New / Property / Method | `$f = new Foo(); $f->x = 1; $f->get();` |
 | Static methods | `Foo::create()` |
@@ -329,7 +329,7 @@ ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 
 The `docs/` directory is a **complete wiki** covering every aspect of the compiler — from what a compiler is, to how each phase works, to the ARM64 instruction set. If you're new to compilers or assembly, **start from the top and work your way down**.
 
-For runnable language samples, start with `examples/classes`, `examples/traits`, `examples/arrays`, `examples/closures`, and `examples/ffi-memory`.
+For runnable language samples, start with `examples/classes`, `examples/inheritance`, `examples/traits`, `examples/arrays`, `examples/closures`, and `examples/ffi-memory`.
 
 | Guide | What you'll learn |
 |---|---|

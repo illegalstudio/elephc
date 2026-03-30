@@ -56,11 +56,12 @@ pub fn emit(
     if is_closure {
         emitter.instruction("add sp, sp, #16");                                 // discard saved callback address
     }
-    emitter.instruction(if uses_refcounted_runtime {
+    let runtime_call = if uses_refcounted_runtime {
         "bl __rt_array_filter_refcounted"
     } else {
         "bl __rt_array_filter"
-    }); // call runtime: filter array → x0=new array
+    };
+    emitter.instruction(runtime_call);                                          // call runtime: filter array → x0=new array
 
     match arr_ty {
         PhpType::Array(elem_ty) => Some(PhpType::Array(elem_ty)),
