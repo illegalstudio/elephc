@@ -509,7 +509,7 @@ pub fn parse_body(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Vec<Stmt>
     }
 }
 
-fn expect_semicolon(tokens: &[(Token, Span)], pos: &mut usize) -> Result<(), CompileError> {
+pub(crate) fn expect_semicolon(tokens: &[(Token, Span)], pos: &mut usize) -> Result<(), CompileError> {
     if *pos < tokens.len() && tokens[*pos].0 == Token::Semicolon {
         *pos += 1;
         Ok(())
@@ -1134,7 +1134,7 @@ fn parse_trait_adaptation_target(
     }
 }
 
-fn expect_token(
+pub(crate) fn expect_token(
     tokens: &[(Token, Span)],
     pos: &mut usize,
     expected: &Token,

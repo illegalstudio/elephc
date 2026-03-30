@@ -15,7 +15,7 @@ pub fn emit_function(
     sig: &FunctionSig,
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
-    constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
+    constants: &HashMap<String, (ExprKind, PhpType)>,
     all_global_var_names: &HashSet<String>,
     all_static_vars: &HashMap<(String, String), PhpType>,
     interfaces: &HashMap<String, InterfaceInfo>,
@@ -38,7 +38,7 @@ pub fn emit_closure(
     sig: &FunctionSig,
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
-    constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
+    constants: &HashMap<String, (ExprKind, PhpType)>,
 ) {
     let epilogue_label = format!("{}_epilogue", label);
     let empty_globals = HashSet::new();
@@ -61,7 +61,7 @@ pub fn emit_method(
     sig: &FunctionSig,
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
-    constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
+    constants: &HashMap<String, (ExprKind, PhpType)>,
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: &HashMap<String, ClassInfo>,
     class_name: &str,
@@ -85,7 +85,7 @@ fn emit_function_with_label(
     sig: &FunctionSig,
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
-    constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
+    constants: &HashMap<String, (ExprKind, PhpType)>,
     all_global_var_names: &HashSet<String>,
     all_static_vars: &HashMap<(String, String), PhpType>,
     interfaces: &HashMap<String, InterfaceInfo>,
@@ -110,7 +110,7 @@ fn emit_function_with_label_and_class(
     sig: &FunctionSig,
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
-    constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
+    constants: &HashMap<String, (ExprKind, PhpType)>,
     all_global_var_names: &HashSet<String>,
     all_static_vars: &HashMap<(String, String), PhpType>,
     interfaces: &HashMap<String, InterfaceInfo>,
@@ -235,7 +235,7 @@ fn emit_function_with_label_and_class(
     // Without this, the first free-on-reassign would see stale stack values
     // (left over from a previous function call at the same stack address)
     // and try to deep-free a random heap pointer.
-    let param_names: std::collections::HashSet<String> =
+    let param_names: HashSet<String> =
         sig.params.iter().map(|(n, _)| n.clone()).collect();
     for (name, var) in &ctx.variables {
         if param_names.contains(name) {

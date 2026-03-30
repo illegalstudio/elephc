@@ -151,7 +151,7 @@ pub struct ExternFieldInfo {
 }
 
 /// Convert a parser CType to a PhpType.
-pub fn ctype_to_php_type(ct: &crate::parser::ast::CType) -> PhpType {
+pub fn ctype_to_php_type(ct: &CType) -> PhpType {
     match ct {
         CType::Int => PhpType::Int,
         CType::Float => PhpType::Float,

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::errors::CompileError;
 use crate::lexer;
 use crate::parser;
-use crate::parser::ast::{Program, Stmt, StmtKind};
+use crate::parser::ast::{CatchClause, ClassMethod, Program, Stmt, StmtKind};
 use crate::span::Span;
 
 /// Resolves all include/require statements by inlining the referenced files.
@@ -209,7 +209,7 @@ fn resolve_stmts(
                         included,
                         include_chain,
                     )?;
-                    catches_resolved.push(crate::parser::ast::CatchClause {
+                    catches_resolved.push(CatchClause {
                         exception_types: catch_clause.exception_types.clone(),
                         variable: catch_clause.variable.clone(),
                         body: body_resolved,
@@ -255,7 +255,7 @@ fn resolve_stmts(
                 for method in methods {
                     let body_resolved =
                         resolve_stmts(method.body.clone(), base_dir, included, include_chain)?;
-                    methods_resolved.push(crate::parser::ast::ClassMethod {
+                    methods_resolved.push(ClassMethod {
                         body: body_resolved,
                         ..method.clone()
                     });
@@ -278,7 +278,7 @@ fn resolve_stmts(
                 for method in methods {
                     let body_resolved =
                         resolve_stmts(method.body.clone(), base_dir, included, include_chain)?;
-                    methods_resolved.push(crate::parser::ast::ClassMethod {
+                    methods_resolved.push(ClassMethod {
                         body: body_resolved,
                         ..method.clone()
                     });
@@ -302,7 +302,7 @@ fn resolve_stmts(
                 for method in methods {
                     let body_resolved =
                         resolve_stmts(method.body.clone(), base_dir, included, include_chain)?;
-                    methods_resolved.push(crate::parser::ast::ClassMethod {
+                    methods_resolved.push(ClassMethod {
                         body: body_resolved,
                         ..method.clone()
                     });

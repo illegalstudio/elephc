@@ -2,7 +2,7 @@ use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::parser::ast::{BinOp, CatchClause, Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::parse_expr;
-use crate::parser::stmt::{parse_block, parse_body};
+use crate::parser::stmt::{expect_semicolon, expect_token, parse_block, parse_body};
 use crate::span::Span;
 
 /// Parse: if (expr) { stmts } (elseif (expr) { stmts })* (else { stmts })?
@@ -405,27 +405,3 @@ pub fn parse_switch(
     ))
 }
 
-fn expect_semicolon(tokens: &[(Token, Span)], pos: &mut usize) -> Result<(), CompileError> {
-    if *pos < tokens.len() && tokens[*pos].0 == Token::Semicolon {
-        *pos += 1;
-        Ok(())
-    } else {
-        let span = if *pos < tokens.len() { tokens[*pos].1 } else { Span::dummy() };
-        Err(CompileError::new(span, "Expected ';'"))
-    }
-}
-
-fn expect_token(
-    tokens: &[(Token, Span)],
-    pos: &mut usize,
-    expected: &Token,
-    msg: &str,
-) -> Result<(), CompileError> {
-    if *pos < tokens.len() && tokens[*pos].0 == *expected {
-        *pos += 1;
-        Ok(())
-    } else {
-        let span = if *pos < tokens.len() { tokens[*pos].1 } else { Span::dummy() };
-        Err(CompileError::new(span, msg))
-    }
-}

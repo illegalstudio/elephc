@@ -57,7 +57,7 @@ pub fn generate(
             })
             .unwrap_or_else(|| panic!("codegen bug: function '{}' declared in signatures but body not found in AST", name));
 
-        self::functions::emit_function(
+        functions::emit_function(
             &mut emitter, &mut data, name, sig, body, functions,
             &global_constants, &all_global_var_names, &all_static_vars,
             interfaces,
@@ -123,7 +123,7 @@ pub fn generate(
                     (label, FunctionSig { params, defaults, return_type, ref_params, variadic: method.variadic.clone() })
                 };
                 let epilogue_label = format!("{}_epilogue", label);
-                self::functions::emit_method(
+                functions::emit_method(
                     &mut emitter, &mut data, &label, &epilogue_label, &sig, &method.body,
                     functions, &global_constants, interfaces, classes, class_name,
                 );
@@ -209,7 +209,7 @@ pub fn generate(
     abi::store_at_offset(&mut emitter, "x0", argv_offset);                      // $argv = array
 
     // -- zero-initialize local variables that may be decref'd on reassignment --
-    let main_skip = std::collections::HashSet::from(["argc".to_string(), "argv".to_string()]);
+    let main_skip = HashSet::from(["argc".to_string(), "argv".to_string()]);
     for (name, var) in &ctx.variables {
         if main_skip.contains(name) { continue; }
         if matches!(
@@ -238,7 +238,7 @@ pub fn generate(
     // -- epilogue: restore stack and exit(0) via syscall --
     emitter.blank();
     emitter.comment("epilogue + exit(0)");
-    self::functions::emit_owned_local_epilogue_cleanup(&mut emitter, &ctx);
+    functions::emit_owned_local_epilogue_cleanup(&mut emitter, &ctx);
     emit_main_activation_record_pop(&mut emitter, &ctx);
     if frame_size - 16 <= 504 {
         emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16)); // restore frame pointer & return address
@@ -332,7 +332,7 @@ fn emit_deferred_closures(
     while !ctx.deferred_closures.is_empty() {
         let closures: Vec<_> = ctx.deferred_closures.drain(..).collect();
         for closure in closures {
-            self::functions::emit_closure(
+            functions::emit_closure(
                 emitter,
                 data,
                 &closure.label,
@@ -624,7 +624,7 @@ fn emit_main_cleanup_callback(emitter: &mut Emitter, cleanup_label: &str, ctx: &
     emitter.instruction("sub sp, sp, #16");                                     // reserve callback spill space for x29/x30
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save the caller frame pointer and return address
     emitter.instruction("mov x29, x0");                                         // treat the unwound main frame pointer as our temporary base
-    self::functions::emit_owned_local_epilogue_cleanup(emitter, ctx);
+    functions::emit_owned_local_epilogue_cleanup(emitter, ctx);
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore the callback frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the callback spill space
     emitter.instruction("ret");                                                 // finish unwound-main cleanup callback before catch dispatch
