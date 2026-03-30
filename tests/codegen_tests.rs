@@ -10442,6 +10442,31 @@ fn test_new_object_codegen_sets_heap_kind() {
 }
 
 #[test]
+fn test_decref_hash_codegen_skips_gc_for_scalar_only_hashes() {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (asm, _) = compile_source_to_asm_with_options(
+        r#"<?php
+$map = ["a" => 1, "b" => 2];
+unset($map);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    assert!(asm.contains("__rt_hash_may_have_cyclic_values"), "{asm}");
+    assert!(asm.contains("bl __rt_hash_may_have_cyclic_values"), "{asm}");
+    assert!(asm.contains("cbz x0, __rt_decref_hash_skip"), "{asm}");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_log_base_2() {
     let out = compile_and_run(
         r#"<?php
