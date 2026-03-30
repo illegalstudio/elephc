@@ -151,11 +151,14 @@ pub(super) fn emit_array_value_type_stamp(
     elem_ty: &PhpType,
 ) {
     let value_type_tag = match elem_ty {
+        PhpType::Float => 2,
+        PhpType::Bool => 3,
         PhpType::Str => 1,
         PhpType::Array(_) => 4,
         PhpType::AssocArray { .. } => 5,
         PhpType::Object(_) => 6,
         PhpType::Mixed => 7,
+        PhpType::Void => 8,
         _ => return,
     };
     emitter.instruction(&format!("ldr x10, [{}, #-8]", array_reg));             // load the packed array kind word from the heap header

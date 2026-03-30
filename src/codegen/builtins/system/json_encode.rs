@@ -48,8 +48,8 @@ pub fn emit(
                     emitter.instruction("bl __rt_json_encode_array_str");       // encode string array → x1/x2
                 }
                 _ => {
-                    // Fallback: treat as int array
-                    emitter.instruction("bl __rt_json_encode_array_int");       // encode array → x1/x2
+                    // Fallback: inspect the packed runtime value_type tag per array
+                    emitter.instruction("bl __rt_json_encode_array_dynamic");   // encode array → x1/x2
                 }
             }
         }

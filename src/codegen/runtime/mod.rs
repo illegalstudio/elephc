@@ -74,6 +74,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     system::emit_json_encode_null(emitter);
     system::emit_json_encode_str(emitter);
     system::emit_json_encode_mixed(emitter);
+    system::emit_json_encode_array_dynamic(emitter);
     system::emit_json_encode_array_int(emitter);
     system::emit_json_encode_array_str(emitter);
     system::emit_json_encode_assoc(emitter);

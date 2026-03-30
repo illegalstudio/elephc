@@ -43,14 +43,7 @@ pub(crate) fn emit_json_encode_mixed(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_encode_mixed_array");
     emitter.instruction("ldr x0, [x0, #8]");                                      // load the boxed array pointer
-    emitter.instruction("ldr x9, [x0, #-8]");                                     // load the nested array kind word
-    emitter.instruction("lsr x9, x9, #8");                                        // move the nested array value_type tag into the low bits
-    emitter.instruction("and x9, x9, #0x7f");                                     // isolate the nested array value_type tag
-    emitter.instruction("cmp x9, #1");                                            // is the nested array a string array?
-    emitter.instruction("b.eq __rt_json_encode_mixed_array_str");                 // encode string arrays with the string-array helper
-    emitter.instruction("b __rt_json_encode_array_int");                          // fall back to the integer-array helper for non-string arrays
-    emitter.label("__rt_json_encode_mixed_array_str");
-    emitter.instruction("b __rt_json_encode_array_str");                          // tail-call to string-array JSON encoding
+    emitter.instruction("b __rt_json_encode_array_dynamic");                      // tail-call to the dynamic indexed-array JSON encoder
 
     emitter.label("__rt_json_encode_mixed_assoc");
     emitter.instruction("ldr x0, [x0, #8]");                                      // load the boxed associative-array pointer

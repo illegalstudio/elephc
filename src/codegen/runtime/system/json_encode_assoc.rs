@@ -103,8 +103,9 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
 
     // -- move concat_off to the current write position so nested encoders append safely --
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload the current output write position
-    emitter.instruction("ldr x10, [sp, #8]");                                   // reload the JSON output start pointer
-    emitter.instruction("sub x12, x11, x10");                                   // x12 = bytes already committed to the JSON output
+    emitter.instruction("adrp x10, _concat_buf@PAGE");                          // load page of concat buffer
+    emitter.instruction("add x10, x10, _concat_buf@PAGEOFF");                   // resolve concat buffer base address
+    emitter.instruction("sub x12, x11, x10");                                   // x12 = absolute concat offset for the current write position
     emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of concat offset
     emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve concat offset address
     emitter.instruction("str x12, [x9]");                                       // nested JSON/string encoders append after the existing key prefix
@@ -151,15 +152,7 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_assoc_value_array");
     emitter.instruction("ldr x0, [sp, #64]");                                   // load nested array pointer from value_lo
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the nested array kind word
-    emitter.instruction("lsr x9, x9, #8");                                      // move the nested array value_type tag into the low bits
-    emitter.instruction("and x9, x9, #0x7f");                                   // isolate the nested array value_type tag
-    emitter.instruction("cmp x9, #1");                                          // is the nested array a string array?
-    emitter.instruction("b.eq __rt_json_assoc_value_array_str");                 // encode string arrays with the string-array helper
-    emitter.instruction("bl __rt_json_encode_array_int");                        // fall back to the integer-array helper for non-string arrays
-    emitter.instruction("b __rt_json_assoc_value_copy");                         // copy the encoded nested array into concat_buf
-    emitter.label("__rt_json_assoc_value_array_str");
-    emitter.instruction("bl __rt_json_encode_array_str");                        // encode nested string arrays with the string-array helper
+    emitter.instruction("bl __rt_json_encode_array_dynamic");                    // encode nested indexed arrays through the dynamic array JSON helper
     emitter.instruction("b __rt_json_assoc_value_copy");                         // copy the encoded nested array into concat_buf
 
     emitter.label("__rt_json_assoc_value_assoc");
@@ -204,8 +197,9 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     // -- update concat_off --
     emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of concat offset
     emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve address
-    emitter.instruction("ldr x10, [x9]");                                       // load current offset
-    emitter.instruction("add x10, x10, x2");                                    // add result length
+    emitter.instruction("adrp x10, _concat_buf@PAGE");                          // load page of concat buffer
+    emitter.instruction("add x10, x10, _concat_buf@PAGEOFF");                   // resolve concat buffer base address
+    emitter.instruction("sub x10, x11, x10");                                   // compute the absolute concat offset after the closing brace
     emitter.instruction("str x10, [x9]");                                       // store updated offset
 
     // -- tear down and return --

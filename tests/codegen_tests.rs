@@ -7179,6 +7179,21 @@ fn test_json_encode_assoc_mixed_values() {
 }
 
 #[test]
+fn test_json_encode_assoc_nested_nonstring_indexed_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {}
+echo json_encode([
+    "floats" => [1.5, 2.25],
+    "bools" => [true, false],
+    "objects" => [new Box()],
+]);
+"#,
+    );
+    assert_eq!(out, r#"{"floats":[1.5,2.25],"bools":[true,false],"objects":[null]}"#);
+}
+
+#[test]
 fn test_json_encode_float() {
     let out = compile_and_run("<?php echo json_encode(3.14);");
     assert!(out.starts_with("3.14"), "Got: {}", out);
