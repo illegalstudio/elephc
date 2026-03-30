@@ -211,7 +211,9 @@ Offset  Size  Field
   0      8    count       (number of occupied entries)
   8      8    capacity    (number of slots)
  16      8    value_type  (0=int, 1=str, 2=float, 3=bool, 4=array, 5=assoc, 6=object)
- 24      ...  entries     (each entry is 40 bytes)
+ 24      8    head        (slot index of first inserted entry, or -1)
+ 32      8    tail        (slot index of last inserted entry, or -1)
+ 40      ...  entries     (each entry is 56 bytes)
 ```
 
 Each hash table entry:
@@ -223,9 +225,11 @@ Offset  Size  Field
  16      8    key_len    (key string length)
  24      8    value_lo   (value or pointer)
  32      8    value_hi   (string length, or unused for int)
+ 40      8    prev       (previous inserted slot, or -1)
+ 48      8    next       (next inserted slot, or -1)
 ```
 
-Uses FNV-1a hashing with linear probing for collision resolution.
+Lookups still use FNV-1a hashing with linear probing for collision resolution, but language-visible iteration follows the `head -> next -> ... -> tail` insertion-order chain. For the full runtime layout and iteration contract, see [Memory Model](memory-model.md).
 
 ### Object layout (heap-allocated)
 

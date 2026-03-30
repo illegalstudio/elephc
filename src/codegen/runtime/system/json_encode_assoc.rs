@@ -4,8 +4,8 @@ use crate::codegen::emit::Emitter;
 /// Input:  x0 = hash table pointer
 /// Output: x1 = result ptr (in concat_buf), x2 = result len
 ///
-/// Uses __rt_hash_iter to iterate the hash table entries.
-/// Hash table iter yields: x1=key_ptr, x2=key_len, x3=val_ptr, x4=val_len per entry.
+/// Uses __rt_hash_iter_next to iterate the hash table entries in insertion order.
+/// Hash table iter yields: x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi per entry.
 pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_assoc ---");
@@ -39,7 +39,7 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload hash ptr
     emitter.instruction("bl __rt_hash_count");                                  // get count → x0
     emitter.instruction("str x0, [sp, #24]");                                   // save count
-    emitter.instruction("str xzr, [sp, #32]");                                  // iterator index = 0
+    emitter.instruction("str xzr, [sp, #32]");                                  // iterator cursor = 0 (start from hash header head)
     emitter.instruction("str xzr, [sp, #40]");                                  // items written = 0
 
     // -- iterate hash table entries --
@@ -51,15 +51,15 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
 
     // -- get next entry via hash_iter --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload hash ptr
-    emitter.instruction("ldr x1, [sp, #32]");                                   // load iterator index
-    emitter.instruction("bl __rt_hash_iter_next");                              // get entry → x0=new_idx, x1=key_ptr, x2=key_len, x3=val_ptr, x4=val_len
-    emitter.instruction("str x0, [sp, #32]");                                   // save new iterator index
+    emitter.instruction("ldr x1, [sp, #32]");                                   // load iterator cursor
+    emitter.instruction("bl __rt_hash_iter_next");                              // get entry → x0=next_cursor, x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi
+    emitter.instruction("str x0, [sp, #32]");                                   // save next iterator cursor
 
     // -- save key and value on stack --
     emitter.instruction("str x1, [sp, #48]");                                   // save key ptr
     emitter.instruction("str x2, [sp, #56]");                                   // save key len
-    emitter.instruction("str x3, [sp, #64]");                                   // save val ptr
-    emitter.instruction("str x4, [sp, #72]");                                   // save val len
+    emitter.instruction("str x3, [sp, #64]");                                   // save val_lo
+    emitter.instruction("str x4, [sp, #72]");                                   // save val_hi
 
     // -- add comma if not first entry --
     emitter.instruction("ldr x5, [sp, #40]");                                   // load items written

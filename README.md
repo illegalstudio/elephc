@@ -23,7 +23,7 @@ Don't expect to take any existing PHP project and magically compile it. There's 
 
 ### What you can expect
 
-You can write a PHP file using only the constructs documented in this project's [language reference](docs/language-reference.md). You can include other files with `include`, `require`, `include_once`, and `require_once`, compose classes with traits, extend concrete classes with `extends`, implement interfaces, and rely on PHP-style copy-on-write arrays so by-value array assignments stay shared until the first write.
+You can write a PHP file using only the constructs documented in this project's [language reference](docs/language-reference.md). You can include other files with `include`, `require`, `include_once`, and `require_once`, compose classes with traits, extend concrete classes with `extends`, implement interfaces, and rely on PHP-style copy-on-write arrays so by-value array assignments stay shared until the first write. Associative arrays also preserve PHP insertion order for `foreach`, `array_keys()`, `array_values()`, `array_search()`, and `json_encode()`.
 
 Then watch your code run at the speed of light after running:
 
@@ -291,8 +291,10 @@ src/
 │
 ├── codegen/             # AST → ARM64 assembly
 │   ├── mod.rs           # Pipeline entry, main/global codegen orchestration
-│   ├── expr.rs          # Expression codegen
-│   ├── stmt.rs          # Statement codegen
+│   ├── expr.rs          # Expression codegen dispatcher
+│   ├── expr/            # Focused expression helpers (arrays, calls, objects, binops, ...)
+│   ├── stmt.rs          # Statement codegen dispatcher
+│   ├── stmt/            # Focused statement helpers (arrays, control_flow, io, storage, ...)
 │   ├── abi.rs           # Register conventions (load, store, write)
 │   ├── functions.rs     # User function emission
 │   ├── ffi.rs           # Extern function/global/class codegen
@@ -331,7 +333,7 @@ ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 
 The `docs/` directory is a **complete wiki** covering every aspect of the compiler — from what a compiler is, to how each phase works, to the ARM64 instruction set. If you're new to compilers or assembly, **start from the top and work your way down**.
 
-For runnable language samples, start with `examples/classes`, `examples/inheritance`, `examples/interfaces`, `examples/traits`, `examples/arrays`, `examples/cow`, `examples/closures`, and `examples/ffi-memory`.
+For runnable language samples, start with `examples/classes`, `examples/inheritance`, `examples/interfaces`, `examples/traits`, `examples/arrays`, `examples/assoc-arrays`, `examples/cow`, `examples/closures`, and `examples/ffi-memory`.
 
 | Guide | What you'll learn |
 |---|---|

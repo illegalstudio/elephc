@@ -209,9 +209,11 @@ Common copy-producing array/hash routines now also have dedicated `_refcounted` 
 | `__rt_hash_set` | Insert/update (grows at 75% load) | `x0`=hash, `x1`/`x2`=key, `x3`/`x4`=value | `x0` = hash |
 | `__rt_hash_insert_owned` | Reinsert an already-owned key/value pair during hash growth | `x0`=hash, `x1`/`x2`=key, `x3`/`x4`=value | `x0` = hash |
 | `__rt_hash_get` | Look up value by key | `x0`=hash, `x1`/`x2`=key | `x0`=found, `x1`=val_lo, `x2`=val_hi |
-| `__rt_hash_iter_next` | Iterate to next entry | `x0`=hash, `x1`=index | `x0`=next_idx, `x1`/`x2`=key, `x3`/`x4`=value |
+| `__rt_hash_iter_next` | Iterate to next entry in insertion order | `x0`=hash, `x1`=cursor | `x0`=next cursor, `x1`/`x2`=key, `x3`/`x4`=value |
 | `__rt_hash_count` | Count occupied entries | `x0`=hash | `x0`=count |
 | `__rt_hash_free_deep` | Free a hash table plus owned keys and nested heap-backed values | `x0`=hash | — |
+
+`__rt_hash_iter_next` uses a small cursor protocol rather than a raw slot index: `0` starts from the hash header's `head`, positive cursors encode `slot_index + 1`, `-2` marks the post-tail state after yielding the final entry, and `-1` means iteration is exhausted.
 
 See [Memory Model](memory-model.md) for the hash table memory layout.
 

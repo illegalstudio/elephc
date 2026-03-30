@@ -441,6 +441,18 @@ Builtin functions like `array_key_exists`, `in_array`, `array_keys`, `array_valu
 - `PhpType::Array` → use indexed runtime routines (e.g., bounds check, linear scan)
 - `PhpType::AssocArray` → use hash table routines (e.g., `__rt_hash_get`, `__rt_hash_iter_next`)
 
+### `foreach` over associative arrays
+
+When `foreach` iterates a `PhpType::AssocArray`, the lowering differs from indexed arrays:
+
+1. Save the hash pointer and an iteration cursor on the stack (`0` means "start from header.head")
+2. Call `__rt_hash_iter_next`
+3. If `x0 == -1`, exit the loop
+4. Otherwise save the returned cursor, store `x1`/`x2` into the optional key variable, and store `x3`/`x4` into the value variable according to the inferred element type
+5. Emit the loop body, then branch back to the iterator call
+
+This preserves PHP-style insertion order because `__rt_hash_iter_next` walks the hash table's linked insertion-order chain rather than scanning physical buckets.
+
 See [The Runtime](the-runtime.md) for details on hash table routines and [Memory Model](memory-model.md) for the hash table memory layout.
 
 ## Statement codegen
@@ -613,10 +625,14 @@ _end_for_1:                 ; ← break jumps here
 foreach ($arr as $v) { body }
 ```
 
+For indexed arrays:
+
 1. Save array pointer, length, and index counter on the stack (3 × 16-byte slots)
 2. Loop: load element at current index, store to `$v`, and classify heap-backed loop variables as borrowed aliases of the iterated container
 3. Branch back to condition check
 4. Cleanup: deallocate the 48 bytes
+
+For associative arrays, see [Associative array codegen](#associative-array-codegen): the loop stores a hash pointer plus cursor, then advances with `__rt_hash_iter_next`.
 
 ### Break / Continue
 
