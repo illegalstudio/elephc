@@ -16,8 +16,10 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
         Token::Variable(_) => parse_variable_stmt(tokens, pos, span),
         Token::This => parse_this_stmt(tokens, pos, span),
         Token::PlusPlus | Token::MinusMinus => parse_incdec_stmt(tokens, pos, span),
-        Token::Class => parse_class_decl(tokens, pos, span),
+        Token::Class => parse_class_decl(tokens, pos, span, false),
+        Token::Interface => parse_interface_decl(tokens, pos, span),
         Token::Trait => parse_trait_decl(tokens, pos, span),
+        Token::Abstract => parse_abstract_decl(tokens, pos, span),
         Token::Function => parse_function_decl(tokens, pos, span),
         Token::Return => parse_return(tokens, pos, span),
         Token::Include => parse_include(tokens, pos, span, false, false),
@@ -531,6 +533,7 @@ fn parse_class_decl(
     tokens: &[(Token, Span)],
     pos: &mut usize,
     span: Span,
+    is_abstract: bool,
 ) -> Result<Stmt, CompileError> {
     *pos += 1; // consume 'class'
 
@@ -558,6 +561,13 @@ fn parse_class_decl(
         None
     };
 
+    let implements = if *pos < tokens.len() && tokens[*pos].0 == Token::Implements {
+        *pos += 1;
+        parse_identifier_list(tokens, pos, span, "Expected interface name after 'implements'")?
+    } else {
+        Vec::new()
+    };
+
     expect_token(tokens, pos, &Token::LBrace, "Expected '{' after class name")?;
 
     let (trait_uses, properties, methods) = parse_class_like_body(tokens, pos, "class")?;
@@ -568,8 +578,62 @@ fn parse_class_decl(
         StmtKind::ClassDecl {
             name,
             extends,
+            implements,
+            is_abstract,
             trait_uses,
             properties,
+            methods,
+        },
+        span,
+    ))
+}
+
+fn parse_abstract_decl(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1; // consume 'abstract'
+    if *pos < tokens.len() && tokens[*pos].0 == Token::Class {
+        return parse_class_decl(tokens, pos, span, true);
+    }
+    Err(CompileError::new(
+        span,
+        "Expected 'class' after 'abstract' at statement position",
+    ))
+}
+
+fn parse_interface_decl(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1; // consume 'interface'
+
+    let name = match tokens.get(*pos).map(|(t, _)| t) {
+        Some(Token::Identifier(n)) => {
+            let n = n.clone();
+            *pos += 1;
+            n
+        }
+        _ => return Err(CompileError::new(span, "Expected interface name after 'interface'")),
+    };
+
+    let extends = if *pos < tokens.len() && tokens[*pos].0 == Token::Extends {
+        *pos += 1;
+        parse_identifier_list(tokens, pos, span, "Expected parent interface name after 'extends'")?
+    } else {
+        Vec::new()
+    };
+
+    expect_token(tokens, pos, &Token::LBrace, "Expected '{' after interface name")?;
+    let methods = parse_interface_body(tokens, pos)?;
+    expect_token(tokens, pos, &Token::RBrace, "Expected '}' at end of interface")?;
+
+    Ok(Stmt::new(
+        StmtKind::InterfaceDecl {
+            name,
+            extends,
             methods,
         },
         span,
@@ -624,22 +688,7 @@ fn parse_class_like_body(
             continue;
         }
 
-        let visibility = parse_visibility(tokens, pos);
-        let mut is_static = false;
-        let mut is_readonly = false;
-        loop {
-            if *pos < tokens.len() && tokens[*pos].0 == Token::Static {
-                is_static = true;
-                *pos += 1;
-                continue;
-            }
-            if *pos < tokens.len() && tokens[*pos].0 == Token::ReadOnly {
-                is_readonly = true;
-                *pos += 1;
-                continue;
-            }
-            break;
-        }
+        let modifiers = parse_member_modifiers(tokens, pos);
 
         if *pos >= tokens.len() {
             return Err(CompileError::new(
@@ -649,7 +698,7 @@ fn parse_class_like_body(
         }
 
         if tokens[*pos].0 == Token::Function {
-            if is_readonly {
+            if modifiers.is_readonly {
                 return Err(CompileError::new(
                     member_span,
                     "Readonly methods are not supported",
@@ -659,17 +708,24 @@ fn parse_class_like_body(
                 tokens,
                 pos,
                 member_span,
-                visibility,
-                is_static,
+                modifiers.visibility,
+                modifiers.is_static,
+                modifiers.is_abstract,
             )?);
             continue;
         }
 
         if let Some(Token::Variable(prop_name)) = tokens.get(*pos).map(|(t, _)| t.clone()) {
-            if is_static {
+            if modifiers.is_static {
                 return Err(CompileError::new(
                     member_span,
                     "Static properties are not supported",
+                ));
+            }
+            if modifiers.is_abstract {
+                return Err(CompileError::new(
+                    member_span,
+                    "Abstract properties are not supported",
                 ));
             }
             let prop_name = prop_name.clone();
@@ -683,8 +739,8 @@ fn parse_class_like_body(
             expect_semicolon(tokens, pos)?;
             properties.push(ClassProperty {
                 name: prop_name,
-                visibility,
-                readonly: is_readonly,
+                visibility: modifiers.visibility,
+                readonly: modifiers.is_readonly,
                 default,
                 span: member_span,
             });
@@ -703,21 +759,54 @@ fn parse_class_like_body(
     Ok((trait_uses, properties, methods))
 }
 
-fn parse_visibility(tokens: &[(Token, Span)], pos: &mut usize) -> Visibility {
-    match tokens.get(*pos).map(|(t, _)| t) {
-        Some(Token::Public) => {
-            *pos += 1;
-            Visibility::Public
+struct MemberModifiers {
+    visibility: Visibility,
+    is_static: bool,
+    is_readonly: bool,
+    is_abstract: bool,
+}
+
+fn parse_member_modifiers(tokens: &[(Token, Span)], pos: &mut usize) -> MemberModifiers {
+    let mut visibility = Visibility::Public;
+    let mut is_static = false;
+    let mut is_readonly = false;
+    let mut is_abstract = false;
+
+    loop {
+        match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Public) => {
+                visibility = Visibility::Public;
+                *pos += 1;
+            }
+            Some(Token::Protected) => {
+                visibility = Visibility::Protected;
+                *pos += 1;
+            }
+            Some(Token::Private) => {
+                visibility = Visibility::Private;
+                *pos += 1;
+            }
+            Some(Token::Static) => {
+                is_static = true;
+                *pos += 1;
+            }
+            Some(Token::ReadOnly) => {
+                is_readonly = true;
+                *pos += 1;
+            }
+            Some(Token::Abstract) => {
+                is_abstract = true;
+                *pos += 1;
+            }
+            _ => break,
         }
-        Some(Token::Protected) => {
-            *pos += 1;
-            Visibility::Protected
-        }
-        Some(Token::Private) => {
-            *pos += 1;
-            Visibility::Private
-        }
-        _ => Visibility::Public,
+    }
+
+    MemberModifiers {
+        visibility,
+        is_static,
+        is_readonly,
+        is_abstract,
     }
 }
 
@@ -727,6 +816,7 @@ fn parse_class_like_method(
     span: Span,
     visibility: Visibility,
     is_static: bool,
+    is_abstract: bool,
 ) -> Result<ClassMethod, CompileError> {
     *pos += 1; // consume 'function'
     let method_name = match tokens.get(*pos).map(|(t, _)| t) {
@@ -741,16 +831,82 @@ fn parse_class_like_method(
     expect_token(tokens, pos, &Token::LParen, "Expected '(' after method name")?;
     let (params, variadic) = parse_params(tokens, pos, span)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')'")?;
-    let body = parse_block(tokens, pos)?;
+    let (has_body, body) = if *pos < tokens.len() && tokens[*pos].0 == Token::Semicolon {
+        *pos += 1;
+        (false, Vec::new())
+    } else {
+        (true, parse_block(tokens, pos)?)
+    };
     Ok(ClassMethod {
         name: method_name,
         visibility,
         is_static,
+        is_abstract,
+        has_body,
         params,
         variadic,
         body,
         span,
     })
+}
+
+fn parse_interface_body(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+) -> Result<Vec<ClassMethod>, CompileError> {
+    let mut methods = Vec::new();
+
+    while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
+        let member_span = tokens[*pos].1;
+        let modifiers = parse_member_modifiers(tokens, pos);
+        if *pos >= tokens.len() || tokens[*pos].0 != Token::Function {
+            return Err(CompileError::new(
+                member_span,
+                "Interfaces may only contain method declarations",
+            ));
+        }
+        methods.push(parse_class_like_method(
+            tokens,
+            pos,
+            member_span,
+            modifiers.visibility,
+            modifiers.is_static,
+            true,
+        )?);
+    }
+
+    Ok(methods)
+}
+
+fn parse_identifier_list(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+    first_error: &str,
+) -> Result<Vec<String>, CompileError> {
+    let mut names = Vec::new();
+    loop {
+        match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Identifier(name)) => {
+                names.push(name.clone());
+                *pos += 1;
+            }
+            _ if names.is_empty() => return Err(CompileError::new(span, first_error)),
+            _ => {
+                return Err(CompileError::new(
+                    span,
+                    "Expected identifier after ',' in declaration list",
+                ))
+            }
+        }
+
+        if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
+            *pos += 1;
+            continue;
+        }
+        break;
+    }
+    Ok(names)
 }
 
 fn parse_params(

@@ -644,6 +644,7 @@ pub fn collect_local_vars(
             StmtKind::ArrayAssign { .. }
             | StmtKind::ArrayPush { .. }
             | StmtKind::ClassDecl { .. }
+            | StmtKind::InterfaceDecl { .. }
             | StmtKind::TraitDecl { .. } => {}
             StmtKind::PropertyAssign { value, .. } => {
                 // Just recurse into value to pick up any nested assignments

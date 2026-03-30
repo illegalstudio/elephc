@@ -84,9 +84,20 @@ pub struct FunctionSig {
 }
 
 #[derive(Debug, Clone)]
+pub struct InterfaceInfo {
+    pub interface_id: u64,
+    pub parents: Vec<String>,
+    pub methods: HashMap<String, FunctionSig>,
+    pub method_declaring_interfaces: HashMap<String, String>,
+    pub method_order: Vec<String>,
+    pub method_slots: HashMap<String, usize>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ClassInfo {
     pub class_id: u64,
     pub parent: Option<String>,
+    pub is_abstract: bool,
     pub properties: Vec<(String, PhpType)>,
     pub property_offsets: HashMap<String, usize>,
     pub property_declaring_classes: HashMap<String, String>,
@@ -106,6 +117,7 @@ pub struct ClassInfo {
     pub static_method_impl_classes: HashMap<String, String>,
     pub static_vtable_methods: Vec<String>,
     pub static_vtable_slots: HashMap<String, usize>,
+    pub interfaces: Vec<String>,
     /// Maps constructor param index → property name (for type propagation from new ClassName(args))
     pub constructor_param_to_prop: Vec<Option<String>>,
 }
@@ -167,6 +179,7 @@ pub fn ctype_stack_size(ct: &CType) -> usize {
 pub struct CheckResult {
     pub global_env: TypeEnv,
     pub functions: HashMap<String, FunctionSig>,
+    pub interfaces: HashMap<String, InterfaceInfo>,
     pub classes: HashMap<String, ClassInfo>,
     pub extern_functions: HashMap<String, ExternFunctionSig>,
     pub extern_classes: HashMap<String, ExternClassInfo>,

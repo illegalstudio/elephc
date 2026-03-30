@@ -100,7 +100,8 @@ Things that do something:
 | `ListUnpack { vars, value }` | `[$a, $b] = [1, 2];` |
 | `Global { vars }` | `global $x, $y;` — declares variables as referencing global storage |
 | `StaticVar { name, init }` | `static $count = 0;` — declares a variable that persists across function calls |
-| `ClassDecl { name, extends, trait_uses, properties, methods }` | `class Point extends Shape { use Named; ... }` |
+| `ClassDecl { name, extends, implements, is_abstract, trait_uses, properties, methods }` | `abstract class Point extends Shape implements Named { use NamedTrait; ... }` |
+| `InterfaceDecl { name, extends, methods }` | `interface Named extends Jsonable { public function name(); }` |
 | `TraitDecl { name, trait_uses, properties, methods }` | `trait Named { ... }` |
 | `PropertyAssign { object, property, value }` | `$p->x = 10;` |
 | `ExternFunctionDecl { name, params, return_type, library }` | `extern function foo(int $x): int;` or entries inside `extern "lib" { ... }` — `params` is `Vec<ExternParam>`, where each `ExternParam` stores `{ name, c_type }`, and `return_type` is a `CType` |
@@ -114,7 +115,8 @@ At statement level, `stmt.rs` selects the parser entry point from the current to
 
 | Current token | Parse as |
 |---|---|
-| `Class` | Class declaration |
+| `Class` / `Abstract Class` | Class declaration |
+| `Interface` | Interface declaration |
 | `Trait` | Trait declaration |
 | `Function` | Function declaration |
 | `Return` | Return statement |
@@ -141,7 +143,7 @@ NullCoalesce
 |---|---|---|
 | `Visibility` | `Public`, `Protected`, `Private` | Enum for property/method visibility |
 | `ClassProperty` | `name`, `visibility`, `readonly`, `default`, `span` | A property declaration inside a class |
-| `ClassMethod` | `name`, `visibility`, `is_static`, `params`, `variadic`, `body`, `span` | A method declaration inside a class |
+| `ClassMethod` | `name`, `visibility`, `is_static`, `is_abstract`, `has_body`, `params`, `variadic`, `body`, `span` | A method declaration inside a class, trait, or interface |
 | `StaticReceiver` | `Named(String)`, `Self_`, `Static`, `Parent` | Left-hand side of `ClassName::method()`, `self::method()`, `static::method()`, and `parent::method()` |
 | `TraitUse` | `trait_names`, `adaptations`, `span` | A `use TraitA, TraitB { ... }` clause inside a class or trait body |
 | `TraitAdaptation` | `Alias { trait_name: Option<String>, method, alias: Option<String>, visibility: Option<Visibility> }`, `InsteadOf { trait_name: Option<String>, method, instead_of: Vec<String> }` | PHP-style trait conflict resolution and aliasing |

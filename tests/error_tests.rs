@@ -1729,6 +1729,54 @@ fn test_error_property_shadowing_across_inheritance_not_supported() {
     );
 }
 
+#[test]
+fn test_error_missing_interface_method() {
+    expect_error(
+        "<?php interface Named { public function name(); } class User implements Named {}",
+        "Class User must implement interface method Named::name",
+    );
+}
+
+#[test]
+fn test_error_wrong_signature_vs_interface() {
+    expect_error(
+        "<?php interface Named { public function name($x); } class User implements Named { public function name() { return \"x\"; } }",
+        "Cannot change parameter count when implementing interface method: User::name",
+    );
+}
+
+#[test]
+fn test_error_instantiate_abstract_class() {
+    expect_error(
+        "<?php abstract class Base { abstract public function run(); } $x = new Base();",
+        "Cannot instantiate abstract class: Base",
+    );
+}
+
+#[test]
+fn test_error_abstract_method_with_body() {
+    expect_error(
+        "<?php abstract class Base { abstract public function run() { return 1; } }",
+        "Abstract method cannot have a body: Base::run",
+    );
+}
+
+#[test]
+fn test_error_interface_inheritance_cycle() {
+    expect_error(
+        "<?php interface A extends B {} interface B extends A {}",
+        "Circular interface inheritance detected",
+    );
+}
+
+#[test]
+fn test_error_class_cannot_extend_interface() {
+    expect_error(
+        "<?php interface Named { public function name(); } class User extends Named {}",
+        "Class User cannot extend interface Named; use implements instead",
+    );
+}
+
 // --- Date/time error tests ---
 
 #[test]

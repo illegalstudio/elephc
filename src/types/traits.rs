@@ -10,6 +10,8 @@ use crate::span::Span;
 pub struct FlattenedClass {
     pub name: String,
     pub extends: Option<String>,
+    pub implements: Vec<String>,
+    pub is_abstract: bool,
     pub properties: Vec<ClassProperty>,
     pub methods: Vec<ClassMethod>,
 }
@@ -62,11 +64,11 @@ pub fn flatten_classes(program: &Program) -> Result<Vec<FlattenedClass>, Compile
                     },
                 );
             }
-            StmtKind::ClassDecl { name, .. } => {
+            StmtKind::ClassDecl { name, .. } | StmtKind::InterfaceDecl { name, .. } => {
                 if trait_map.contains_key(name) || !class_names.insert(name.clone()) {
                     return Err(CompileError::new(
                         stmt.span,
-                        &format!("Duplicate class declaration: {}", name),
+                        &format!("Duplicate class or interface declaration: {}", name),
                     ));
                 }
             }
@@ -81,6 +83,8 @@ pub fn flatten_classes(program: &Program) -> Result<Vec<FlattenedClass>, Compile
         if let StmtKind::ClassDecl {
             name,
             extends,
+            implements,
+            is_abstract,
             trait_uses,
             properties,
             methods,
@@ -102,6 +106,8 @@ pub fn flatten_classes(program: &Program) -> Result<Vec<FlattenedClass>, Compile
             flattened.push(FlattenedClass {
                 name: name.clone(),
                 extends: extends.clone(),
+                implements: implements.clone(),
+                is_abstract: *is_abstract,
                 properties: merged_props,
                 methods: merged_methods,
             });

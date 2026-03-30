@@ -12,7 +12,9 @@ mod stmt;
 use std::collections::{HashMap, HashSet};
 
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
-use crate::types::{ClassInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, PhpType, TypeEnv};
+use crate::types::{
+    ClassInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PhpType, TypeEnv,
+};
 use context::Context;
 use data_section::DataSection;
 use emit::Emitter;
@@ -21,6 +23,7 @@ pub fn generate(
     program: &Program,
     global_env: &TypeEnv,
     functions: &HashMap<String, FunctionSig>,
+    interfaces: &HashMap<String, InterfaceInfo>,
     classes: &HashMap<String, ClassInfo>,
     extern_functions: &HashMap<String, ExternFunctionSig>,
     extern_classes: &HashMap<String, ExternClassInfo>,
@@ -66,6 +69,9 @@ pub fn generate(
     sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
     for (class_name, class_info) in sorted_classes {
         for method in &class_info.method_decls {
+                if method.is_abstract {
+                    continue;
+                }
                 let (label, sig) = if method.is_static {
                     let label = format!("_static_{}_{}", class_name, method.name);
                     // Use param types from ClassInfo sig (set by type checker)
@@ -199,7 +205,10 @@ pub fn generate(
     for s in program {
         if matches!(
             &s.kind,
-            StmtKind::FunctionDecl { .. } | StmtKind::ClassDecl { .. } | StmtKind::TraitDecl { .. }
+            StmtKind::FunctionDecl { .. }
+                | StmtKind::ClassDecl { .. }
+                | StmtKind::InterfaceDecl { .. }
+                | StmtKind::TraitDecl { .. }
         ) {
             continue;
         }
@@ -270,7 +279,8 @@ pub fn generate(
     let runtime_data = runtime::emit_runtime_data(
         &all_global_var_names,
         &all_static_vars,
-            classes,
+        interfaces,
+        classes,
         heap_size,
     );
 
