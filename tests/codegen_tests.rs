@@ -11694,6 +11694,31 @@ echo $child->reveal();
 }
 
 #[test]
+fn test_inherited_constructor_specializes_base_string_property_type() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public $name;
+
+    public function __construct($name) {
+        $this->name = $name;
+    }
+
+    public function greet() {
+        return $this->name;
+    }
+}
+
+class Child extends Base {}
+
+$child = new Child("Ada");
+echo $child->greet();
+"#,
+    );
+    assert_eq!(out, "Ada");
+}
+
+#[test]
 fn test_interface_contract_can_be_satisfied_by_concrete_class() {
     let out = compile_and_run(
         r#"<?php

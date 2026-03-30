@@ -1446,6 +1446,55 @@ impl Checker {
         None
     }
 
+    fn propagate_constructor_arg_type(
+        &mut self,
+        instantiated_class: &str,
+        param_index: usize,
+        arg_ty: &PhpType,
+    ) {
+        let Some((prop_name, declaring_class)) = self.classes.get(instantiated_class).and_then(|class_info| {
+            class_info
+                .constructor_param_to_prop
+                .get(param_index)
+                .and_then(|mapped| mapped.as_ref())
+                .map(|prop_name| {
+                    let declaring_class = class_info
+                        .property_declaring_classes
+                        .get(prop_name)
+                        .cloned()
+                        .unwrap_or_else(|| instantiated_class.to_string());
+                    (prop_name.clone(), declaring_class)
+                })
+        }) else {
+            return;
+        };
+
+        for class_info in self.classes.values_mut() {
+            let shares_inherited_property = class_info
+                .property_declaring_classes
+                .get(&prop_name)
+                .is_some_and(|owner| owner == &declaring_class);
+
+            if !shares_inherited_property {
+                continue;
+            }
+
+            if let Some(prop) = class_info
+                .properties
+                .iter_mut()
+                .find(|(name, _)| name == &prop_name)
+            {
+                prop.1 = arg_ty.clone();
+            }
+
+            if let Some(sig) = class_info.methods.get_mut("__construct") {
+                if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
+                    *param_ty = arg_ty.clone();
+                }
+            }
+        }
+    }
+
     fn normalize_pointer_target_type(&self, target_type: &str) -> Option<String> {
         match target_type {
             "int" | "integer" => Some("int".to_string()),
@@ -2596,17 +2645,10 @@ impl Checker {
                     .unwrap_or_default();
                 for (i, arg) in args.iter().enumerate() {
                     let arg_ty = self.infer_type(arg, env)?;
-                    // If this arg maps to a property, update the property type
-                    if let Some(Some(prop_name)) = param_to_prop.get(i) {
-                        if let Some(class_info) = self.classes.get_mut(class_name) {
-                            if let Some(prop) = class_info
-                                .properties
-                                .iter_mut()
-                                .find(|(n, _)| n == prop_name)
-                            {
-                                prop.1 = arg_ty;
-                            }
-                        }
+                    // If this arg maps to a property, keep inherited property metadata and
+                    // inherited constructor signatures in sync with the specialized arg type.
+                    if param_to_prop.get(i).is_some_and(|mapped| mapped.is_some()) {
+                        self.propagate_constructor_arg_type(class_name, i, &arg_ty);
                     }
                 }
                 Ok(PhpType::Object(class_name.clone()))
