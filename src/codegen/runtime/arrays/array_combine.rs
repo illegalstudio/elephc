@@ -15,8 +15,9 @@ pub fn emit_array_combine(emitter: &mut Emitter) {
     //   [sp, #8]  = values array pointer
     //   [sp, #16] = hash table pointer (result)
     //   [sp, #24] = loop index i
-    //   [sp, #32] = saved x29
-    //   [sp, #40] = saved x30
+    //   [sp, #32] = result value_tag
+    //   [sp, #48] = saved x29
+    //   [sp, #56] = saved x30
     emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #48");                                    // set up new frame pointer
