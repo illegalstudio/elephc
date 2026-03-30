@@ -136,14 +136,14 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
 
     // -- mixed traversal: boxed mixed values contribute at most one heap edge --
     emitter.label("__rt_gc_mark_reachable_mixed");
-    emitter.instruction("ldr x12, [x0]");                                        // load the boxed mixed runtime value_tag
-    emitter.instruction("cmp x12, #4");                                          // does the boxed value hold a heap-backed child?
-    emitter.instruction("b.lo __rt_gc_mark_reachable_return");                   // scalar/string/null mixed payloads contribute no graph edges
-    emitter.instruction("cmp x12, #7");                                          // do boxed mixed tags stay within the heap-backed range?
-    emitter.instruction("b.hi __rt_gc_mark_reachable_return");                   // unknown boxed tags are ignored by the collector
-    emitter.instruction("ldr x0, [x0, #8]");                                     // load the boxed heap child pointer
-    emitter.instruction("bl __rt_gc_mark_reachable");                            // recursively mark the boxed child reachable
-    emitter.instruction("b __rt_gc_mark_reachable_return");                      // mixed traversal is complete
+    emitter.instruction("ldr x12, [x0]");                                       // load the boxed mixed runtime value_tag
+    emitter.instruction("cmp x12, #4");                                         // does the boxed value hold a heap-backed child?
+    emitter.instruction("b.lo __rt_gc_mark_reachable_return");                  // scalar/string/null mixed payloads contribute no graph edges
+    emitter.instruction("cmp x12, #7");                                         // do boxed mixed tags stay within the heap-backed range?
+    emitter.instruction("b.hi __rt_gc_mark_reachable_return");                  // unknown boxed tags are ignored by the collector
+    emitter.instruction("ldr x0, [x0, #8]");                                    // load the boxed heap child pointer
+    emitter.instruction("bl __rt_gc_mark_reachable");                           // recursively mark the boxed child reachable
+    emitter.instruction("b __rt_gc_mark_reachable_return");                     // mixed traversal is complete
 
     // -- object traversal: consult the emitted per-class property descriptor table --
     emitter.label("__rt_gc_mark_reachable_object");

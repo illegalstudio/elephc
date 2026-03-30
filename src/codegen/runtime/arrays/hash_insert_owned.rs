@@ -98,11 +98,11 @@ pub fn emit_hash_insert_owned(emitter: &mut Emitter) {
     emitter.instruction("mov x15, #-1");                                        // sentinel index for end of the insertion-order chain
     emitter.instruction("str x15, [x12, #56]");                                 // store next = none on the new tail entry
     emitter.instruction("ldr x15, [x5, #24]");                                  // load the current head slot
-    emitter.instruction("cmp x15, #-1");                                         // is this the first inserted slot in the destination hash?
-    emitter.instruction("b.ne __rt_hash_insert_owned_link_tail");                // existing hashes append after the previous tail
+    emitter.instruction("cmp x15, #-1");                                        // is this the first inserted slot in the destination hash?
+    emitter.instruction("b.ne __rt_hash_insert_owned_link_tail");               // existing hashes append after the previous tail
     emitter.instruction("str x9, [x5, #24]");                                   // initialize head = inserted slot
     emitter.instruction("str x9, [x5, #32]");                                   // initialize tail = inserted slot
-    emitter.instruction("b __rt_hash_insert_owned_count");                       // skip the tail-link update for the first entry
+    emitter.instruction("b __rt_hash_insert_owned_count");                      // skip the tail-link update for the first entry
     emitter.label("__rt_hash_insert_owned_link_tail");
     emitter.instruction("mov x16, #64");                                        // x16 = hash entry size for tail-slot addressing
     emitter.instruction("mul x17, x14, x16");                                   // x17 = previous tail slot byte offset

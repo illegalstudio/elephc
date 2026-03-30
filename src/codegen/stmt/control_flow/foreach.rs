@@ -68,21 +68,21 @@ pub(super) fn emit_foreach_stmt(
                 crate::codegen::abi::store_at_offset_scratch(emitter, "x4", v_offset - 8, "x10");
             }
             PhpType::Mixed => {
-                emitter.instruction("str x3, [sp, #-16]!");                         // save iterated value_lo across the decref of the previous loop value
-                emitter.instruction("stp x4, x5, [sp, #-16]!");                     // save iterated value_hi and value_tag across the helper call
+                emitter.instruction("str x3, [sp, #-16]!");                     // save iterated value_lo across the decref of the previous loop value
+                emitter.instruction("stp x4, x5, [sp, #-16]!");                 // save iterated value_hi and value_tag across the helper call
                 crate::codegen::abi::load_at_offset_scratch(emitter, "x0", v_offset, "x10"); // load the previous boxed mixed loop value before overwrite
-                emitter.instruction("bl __rt_decref_mixed");                      // release the previous owned mixed loop value if one exists
-                emitter.instruction("ldp x4, x5, [sp], #16");                       // restore iterated value_hi and value_tag after decref
-                emitter.instruction("ldr x3, [sp], #16");                           // restore iterated value_lo after decref
-                emitter.instruction("cmp x5, #7");                                 // does this hash entry already store a boxed mixed value?
+                emitter.instruction("bl __rt_decref_mixed");                    // release the previous owned mixed loop value if one exists
+                emitter.instruction("ldp x4, x5, [sp], #16");                   // restore iterated value_hi and value_tag after decref
+                emitter.instruction("ldr x3, [sp], #16");                       // restore iterated value_lo after decref
+                emitter.instruction("cmp x5, #7");                              // does this hash entry already store a boxed mixed value?
                 let reuse_box = ctx.next_label("foreach_assoc_mixed_reuse");
                 let store_box = ctx.next_label("foreach_assoc_mixed_store");
-                emitter.instruction(&format!("b.eq {}", reuse_box));               // reuse existing mixed boxes instead of nesting them
+                emitter.instruction(&format!("b.eq {}", reuse_box));            // reuse existing mixed boxes instead of nesting them
                 super::super::super::emit_box_runtime_payload_as_mixed(emitter, "x5", "x3", "x4"); // box the borrowed entry payload into an owned mixed cell
-                emitter.instruction(&format!("b {}", store_box));                  // skip the mixed-box reuse path once boxing is done
+                emitter.instruction(&format!("b {}", store_box));               // skip the mixed-box reuse path once boxing is done
                 emitter.label(&reuse_box);
-                emitter.instruction("mov x0, x3");                                 // x0 = existing boxed mixed pointer from the hash entry
-                emitter.instruction("bl __rt_incref");                             // retain the shared mixed box for the foreach variable
+                emitter.instruction("mov x0, x3");                              // x0 = existing boxed mixed pointer from the hash entry
+                emitter.instruction("bl __rt_incref");                          // retain the shared mixed box for the foreach variable
                 emitter.label(&store_box);
                 crate::codegen::abi::store_at_offset_scratch(emitter, "x0", v_offset, "x10");
             }

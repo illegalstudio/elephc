@@ -32,7 +32,7 @@ pub(super) fn emit_cast(
                     emitter.instruction("ldr x0, [x0]");                        // load array length from header (first field)
                 }
                 PhpType::Mixed => {
-                    emitter.instruction("bl __rt_mixed_cast_int");               // cast the boxed mixed payload to int at runtime
+                    emitter.instruction("bl __rt_mixed_cast_int");              // cast the boxed mixed payload to int at runtime
                 }
                 PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {}
             }
@@ -90,7 +90,7 @@ pub(super) fn emit_cast(
                     emitter.instruction("cset x0, ne");                         // x0=1 if non-empty, 0 if empty
                 }
                 PhpType::Mixed => {
-                    emitter.instruction("bl __rt_mixed_cast_bool");              // cast the boxed mixed payload to bool at runtime
+                    emitter.instruction("bl __rt_mixed_cast_bool");             // cast the boxed mixed payload to bool at runtime
                 }
                 PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
                     emitter.instruction("cmp x0, #0");                          // test if callable/object address is zero
@@ -169,73 +169,73 @@ pub(super) fn emit_strict_compare(
 
             match &rt {
                 PhpType::Float => {
-                    emitter.instruction("str d0, [sp, #-16]!");                     // spill the right float before reloading the left operand into the same register
+                    emitter.instruction("str d0, [sp, #-16]!");                 // spill the right float before reloading the left operand into the same register
                 }
                 PhpType::Str => {
-                    emitter.instruction("stp x1, x2, [sp, #-16]!");                 // spill the right string payload before reloading the left operand into x1/x2
+                    emitter.instruction("stp x1, x2, [sp, #-16]!");             // spill the right string payload before reloading the left operand into x1/x2
                 }
                 _ => {
-                    emitter.instruction("str x0, [sp, #-16]!");                     // spill the right scalar/pointer/mixed box before reloading the left operand into x0
+                    emitter.instruction("str x0, [sp, #-16]!");                 // spill the right scalar/pointer/mixed box before reloading the left operand into x0
                 }
             }
 
             match &lt {
                 PhpType::Float => {
-                    emitter.instruction("ldr d0, [sp, #16]");                       // reload the saved left float operand from the lower comparison stack slot
+                    emitter.instruction("ldr d0, [sp, #16]");                   // reload the saved left float operand from the lower comparison stack slot
                     crate::codegen::emit_box_current_value_as_mixed(emitter, &lt);  // box the left float operand so mixed comparison can inspect its runtime tag
-                    emitter.instruction("str x0, [sp, #16]");                       // replace the old left comparison slot with the boxed left mixed pointer
+                    emitter.instruction("str x0, [sp, #16]");                   // replace the old left comparison slot with the boxed left mixed pointer
                 }
                 PhpType::Str => {
-                    emitter.instruction("ldp x1, x2, [sp, #16]");                   // reload the saved left string payload from the lower comparison stack slot
+                    emitter.instruction("ldp x1, x2, [sp, #16]");               // reload the saved left string payload from the lower comparison stack slot
                     crate::codegen::emit_box_current_value_as_mixed(emitter, &lt);  // box the left string payload so mixed comparison can inspect its runtime tag
-                    emitter.instruction("str x0, [sp, #16]");                       // replace the old left comparison slot with the boxed left mixed pointer
+                    emitter.instruction("str x0, [sp, #16]");                   // replace the old left comparison slot with the boxed left mixed pointer
                 }
                 _ => {
-                    emitter.instruction("ldr x0, [sp, #16]");                       // reload the saved left scalar/pointer operand from the lower comparison stack slot
+                    emitter.instruction("ldr x0, [sp, #16]");                   // reload the saved left scalar/pointer operand from the lower comparison stack slot
                     crate::codegen::emit_box_current_value_as_mixed(emitter, &lt);  // box the left operand when it is not already mixed
-                    emitter.instruction("str x0, [sp, #16]");                       // replace the old left comparison slot with the boxed left mixed pointer
+                    emitter.instruction("str x0, [sp, #16]");                   // replace the old left comparison slot with the boxed left mixed pointer
                 }
             }
 
             match &rt {
                 PhpType::Float => {
-                    emitter.instruction("ldr d0, [sp]");                            // restore the spilled right float operand after boxing the left operand
+                    emitter.instruction("ldr d0, [sp]");                        // restore the spilled right float operand after boxing the left operand
                 }
                 PhpType::Str => {
-                    emitter.instruction("ldp x1, x2, [sp]");                        // restore the spilled right string payload after boxing the left operand
+                    emitter.instruction("ldp x1, x2, [sp]");                    // restore the spilled right string payload after boxing the left operand
                 }
                 _ => {
-                    emitter.instruction("ldr x0, [sp]");                            // restore the spilled right scalar/pointer/mixed box after boxing the left operand
+                    emitter.instruction("ldr x0, [sp]");                        // restore the spilled right scalar/pointer/mixed box after boxing the left operand
                 }
             }
             crate::codegen::emit_box_current_value_as_mixed(emitter, &rt);          // box the right operand when it is not already mixed
-            emitter.instruction("sub sp, sp, #32");                                 // reserve scratch space for boxed operands and the boolean result
-            emitter.instruction("ldr x10, [sp, #48]");                              // reload the boxed left mixed pointer from the lower saved-comparison slot
-            emitter.instruction("str x10, [sp, #0]");                               // save the left boxed mixed pointer for cleanup after the helper call
-            emitter.instruction("str x0, [sp, #8]");                                // save the right boxed mixed pointer for cleanup after the helper call
-            emitter.instruction("mov x1, x0");                                      // move the right boxed mixed pointer into the second helper argument
-            emitter.instruction("mov x0, x10");                                     // move the left boxed mixed pointer into the first helper argument
-            emitter.instruction("bl __rt_mixed_strict_eq");                         // compare mixed values by runtime tag and payload
+            emitter.instruction("sub sp, sp, #32");                             // reserve scratch space for boxed operands and the boolean result
+            emitter.instruction("ldr x10, [sp, #48]");                          // reload the boxed left mixed pointer from the lower saved-comparison slot
+            emitter.instruction("str x10, [sp, #0]");                           // save the left boxed mixed pointer for cleanup after the helper call
+            emitter.instruction("str x0, [sp, #8]");                            // save the right boxed mixed pointer for cleanup after the helper call
+            emitter.instruction("mov x1, x0");                                  // move the right boxed mixed pointer into the second helper argument
+            emitter.instruction("mov x0, x10");                                 // move the left boxed mixed pointer into the first helper argument
+            emitter.instruction("bl __rt_mixed_strict_eq");                     // compare mixed values by runtime tag and payload
             if !is_eq {
-                emitter.instruction("eor x0, x0, #1");                              // invert the helper result for strict inequality
+                emitter.instruction("eor x0, x0, #1");                          // invert the helper result for strict inequality
             }
-            emitter.instruction("str x0, [sp, #16]");                               // preserve the boolean comparison result across decref cleanup
+            emitter.instruction("str x0, [sp, #16]");                           // preserve the boolean comparison result across decref cleanup
             if left_temp {
-                emitter.instruction("ldr x0, [sp, #0]");                            // reload the temporary left mixed box for cleanup
-                emitter.instruction("bl __rt_decref_mixed");                        // release the temporary left mixed box created for comparison
+                emitter.instruction("ldr x0, [sp, #0]");                        // reload the temporary left mixed box for cleanup
+                emitter.instruction("bl __rt_decref_mixed");                    // release the temporary left mixed box created for comparison
             }
             if right_temp {
-                emitter.instruction("ldr x0, [sp, #8]");                            // reload the temporary right mixed box for cleanup
-                emitter.instruction("bl __rt_decref_mixed");                        // release the temporary right mixed box created for comparison
+                emitter.instruction("ldr x0, [sp, #8]");                        // reload the temporary right mixed box for cleanup
+                emitter.instruction("bl __rt_decref_mixed");                    // release the temporary right mixed box created for comparison
             }
-            emitter.instruction("ldr x0, [sp, #16]");                               // restore the boolean comparison result after cleanup
-            emitter.instruction("add sp, sp, #64");                                 // release the boxed-operand scratch space plus the two comparison spill slots
+            emitter.instruction("ldr x0, [sp, #16]");                           // restore the boolean comparison result after cleanup
+            emitter.instruction("add sp, sp, #64");                             // release the boxed-operand scratch space plus the two comparison spill slots
             return PhpType::Bool;
         }
 
         if lt != rt && !matches!((&lt, &rt), (PhpType::Pointer(_), PhpType::Pointer(_))) {
             emitter.instruction("add sp, sp, #16");                             // discard saved left operand from stack
-            emitter.instruction(&format!("mov x0, #{}", if is_eq { 0 } else { 1 })); // === yields false, !== yields true
+            emitter.instruction(&format!("mov x0, #{}", if is_eq { 0 } else { 1 })); //=== yields false, !== yields true
             return PhpType::Bool;
         }
 
@@ -284,7 +284,7 @@ pub(super) fn emit_strict_compare(
         }
     } else {
         emit_expr(right, emitter, ctx, data);
-        emitter.instruction(&format!("mov x0, #{}", if is_eq { 0 } else { 1 })); // === always false, !== always true
+        emitter.instruction(&format!("mov x0, #{}", if is_eq { 0 } else { 1 })); //=== always false, !== always true
     }
 
     PhpType::Bool

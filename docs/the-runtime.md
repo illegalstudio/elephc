@@ -156,7 +156,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 ## Array routines
 
-**Source:** `src/codegen/runtime/arrays/` (89 files)
+**Source:** `src/codegen/runtime/arrays/` (100 files)
 
 ### Core allocation
 
@@ -271,7 +271,7 @@ Refcounts are stored as a 32-bit value in the uniform 16-byte heap header, at `[
 
 ## System routines
 
-**Source:** `src/codegen/runtime/system/` (25 files)
+**Source:** `src/codegen/runtime/system/` (26 files)
 
 ### `__rt_build_argv` — Build $argv array
 
@@ -304,7 +304,7 @@ At program start, the OS passes `argc` (argument count) in `x0` and `argv` (poin
 
 ### JSON routines
 
-**Files:** `system/json_data.rs`, `system/json_encode_bool.rs`, `system/json_encode_null.rs`, `system/json_encode_str.rs`, `system/json_encode_array_int.rs`, `system/json_encode_array_str.rs`, `system/json_encode_assoc.rs`, `system/json_decode.rs`
+**Files:** `system/json_data.rs`, `system/json_encode_bool.rs`, `system/json_encode_null.rs`, `system/json_encode_str.rs`, `system/json_encode_array_int.rs`, `system/json_encode_array_str.rs`, `system/json_encode_array_dynamic.rs`, `system/json_encode_assoc.rs`, `system/json_encode_mixed.rs`, `system/json_decode.rs`
 
 The `json_encode` implementation uses **type-aware dispatch** — the codegen calls a different runtime routine depending on the compile-time type of the value being encoded:
 
@@ -315,7 +315,9 @@ The `json_encode` implementation uses **type-aware dispatch** — the codegen ca
 | `__rt_json_encode_str` | Encode a string with JSON escaping (quotes, backslashes, control chars) | `x1`/`x2` = input string | `x1`/`x2` = JSON string |
 | `__rt_json_encode_array_int` | Encode an integer array as a JSON array (e.g., `[1,2,3]`) | `x0` = array ptr | `x1`/`x2` = JSON string |
 | `__rt_json_encode_array_str` | Encode a string array as a JSON array with quoted elements | `x0` = array ptr | `x1`/`x2` = JSON string |
+| `__rt_json_encode_array_dynamic` | Encode an indexed array by inspecting its packed runtime `value_type` tag at runtime (int, string, float, bool, nested array/hash, mixed, or null fallback) | `x0` = array ptr | `x1`/`x2` = JSON string |
 | `__rt_json_encode_assoc` | Encode an associative array as a JSON object (e.g., `{"key":"val"}`) | `x0` = hash ptr | `x1`/`x2` = JSON string |
+| `__rt_json_encode_mixed` | Encode a boxed mixed payload by unboxing its runtime tag and dispatching to the concrete JSON encoder | `x0` = mixed ptr | `x1`/`x2` = JSON string |
 | `__rt_json_decode` | Decode a JSON string value — strips surrounding quotes and unescapes JSON escape sequences | `x1`/`x2` = JSON string | `x1`/`x2` = decoded string |
 
 ### Regex routines

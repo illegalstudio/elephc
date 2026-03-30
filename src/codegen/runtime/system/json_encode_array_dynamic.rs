@@ -43,10 +43,10 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("ldr x4, [sp, #40]");                                   // reload the loop index
     emitter.instruction("ldr x3, [sp, #24]");                                   // reload the array length
     emitter.instruction("cmp x4, x3");                                          // have we encoded every element?
-    emitter.instruction("b.ge __rt_json_arr_dyn_close");                         // finish once the loop index reaches the array length
+    emitter.instruction("b.ge __rt_json_arr_dyn_close");                        // finish once the loop index reaches the array length
 
     // -- emit comma separators between elements --
-    emitter.instruction("cbz x4, __rt_json_arr_dyn_elem");                       // skip the comma before the first element
+    emitter.instruction("cbz x4, __rt_json_arr_dyn_elem");                      // skip the comma before the first element
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload the current write pointer
     emitter.instruction("mov w12, #44");                                        // ASCII ','
     emitter.instruction("strb w12, [x11]");                                     // write the comma separator
@@ -66,20 +66,20 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     // -- dispatch on the array value_type tag --
     emitter.instruction("ldr x12, [sp, #32]");                                  // reload the packed array value_type tag
     emitter.instruction("cmp x12, #0");                                         // does this array store ints?
-    emitter.instruction("b.eq __rt_json_arr_dyn_value_int");                     // ints encode through itoa
+    emitter.instruction("b.eq __rt_json_arr_dyn_value_int");                    // ints encode through itoa
     emitter.instruction("cmp x12, #1");                                         // does this array store strings?
-    emitter.instruction("b.eq __rt_json_arr_dyn_value_str");                     // strings encode through the JSON string helper
+    emitter.instruction("b.eq __rt_json_arr_dyn_value_str");                    // strings encode through the JSON string helper
     emitter.instruction("cmp x12, #2");                                         // does this array store floats?
-    emitter.instruction("b.eq __rt_json_arr_dyn_value_float");                   // floats encode through ftoa
+    emitter.instruction("b.eq __rt_json_arr_dyn_value_float");                  // floats encode through ftoa
     emitter.instruction("cmp x12, #3");                                         // does this array store bools?
-    emitter.instruction("b.eq __rt_json_arr_dyn_value_bool");                    // bools encode through the JSON bool helper
+    emitter.instruction("b.eq __rt_json_arr_dyn_value_bool");                   // bools encode through the JSON bool helper
     emitter.instruction("cmp x12, #4");                                         // does this array store nested indexed arrays?
-    emitter.instruction("b.eq __rt_json_arr_dyn_value_array");                   // nested arrays encode recursively
+    emitter.instruction("b.eq __rt_json_arr_dyn_value_array");                  // nested arrays encode recursively
     emitter.instruction("cmp x12, #5");                                         // does this array store nested associative arrays?
-    emitter.instruction("b.eq __rt_json_arr_dyn_value_assoc");                   // nested hashes encode through the assoc helper
+    emitter.instruction("b.eq __rt_json_arr_dyn_value_assoc");                  // nested hashes encode through the assoc helper
     emitter.instruction("cmp x12, #7");                                         // does this array store boxed mixed payloads?
-    emitter.instruction("b.eq __rt_json_arr_dyn_value_mixed");                   // boxed mixed payloads encode through the mixed helper
-    emitter.instruction("b __rt_json_arr_dyn_value_null");                       // null and unsupported object payloads encode as JSON null
+    emitter.instruction("b.eq __rt_json_arr_dyn_value_mixed");                  // boxed mixed payloads encode through the mixed helper
+    emitter.instruction("b __rt_json_arr_dyn_value_null");                      // null and unsupported object payloads encode as JSON null
 
     emitter.label("__rt_json_arr_dyn_value_int");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source array pointer
@@ -87,7 +87,7 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("add x4, x4, #3");                                      // skip the 24-byte array header
     emitter.instruction("ldr x0, [x0, x4, lsl #3]");                            // load the integer element payload
     emitter.instruction("bl __rt_itoa");                                        // encode the integer element as decimal digits
-    emitter.instruction("b __rt_json_arr_dyn_copy");                             // copy the encoded element into concat_buf
+    emitter.instruction("b __rt_json_arr_dyn_copy");                            // copy the encoded element into concat_buf
 
     emitter.label("__rt_json_arr_dyn_value_str");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source array pointer
@@ -98,7 +98,7 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("add x5, x5, #1");                                      // advance to the string length slot
     emitter.instruction("ldr x2, [x0, x5, lsl #3]");                            // load the string length
     emitter.instruction("bl __rt_json_encode_str");                             // encode the string element with JSON escaping
-    emitter.instruction("b __rt_json_arr_dyn_copy");                             // copy the encoded element into concat_buf
+    emitter.instruction("b __rt_json_arr_dyn_copy");                            // copy the encoded element into concat_buf
 
     emitter.label("__rt_json_arr_dyn_value_float");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source array pointer
@@ -107,7 +107,7 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x0, x4, lsl #3]");                            // load the float bits from the 8-byte array slot
     emitter.instruction("fmov d0, x9");                                         // move the float bits into the FP register file
     emitter.instruction("bl __rt_ftoa");                                        // encode the float element as decimal digits
-    emitter.instruction("b __rt_json_arr_dyn_copy");                             // copy the encoded element into concat_buf
+    emitter.instruction("b __rt_json_arr_dyn_copy");                            // copy the encoded element into concat_buf
 
     emitter.label("__rt_json_arr_dyn_value_bool");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source array pointer
@@ -115,45 +115,45 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("add x4, x4, #3");                                      // skip the 24-byte array header
     emitter.instruction("ldr x0, [x0, x4, lsl #3]");                            // load the bool payload from the 8-byte array slot
     emitter.instruction("bl __rt_json_encode_bool");                            // encode the bool element as true/false
-    emitter.instruction("b __rt_json_arr_dyn_copy");                             // copy the encoded element into concat_buf
+    emitter.instruction("b __rt_json_arr_dyn_copy");                            // copy the encoded element into concat_buf
 
     emitter.label("__rt_json_arr_dyn_value_array");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source array pointer
     emitter.instruction("ldr x4, [sp, #40]");                                   // reload the loop index
     emitter.instruction("add x4, x4, #3");                                      // skip the 24-byte array header
     emitter.instruction("ldr x0, [x0, x4, lsl #3]");                            // load the nested array pointer from the 8-byte array slot
-    emitter.instruction("bl __rt_json_encode_array_dynamic");                    // encode the nested indexed array recursively
-    emitter.instruction("b __rt_json_arr_dyn_copy");                             // copy the encoded nested array into concat_buf
+    emitter.instruction("bl __rt_json_encode_array_dynamic");                   // encode the nested indexed array recursively
+    emitter.instruction("b __rt_json_arr_dyn_copy");                            // copy the encoded nested array into concat_buf
 
     emitter.label("__rt_json_arr_dyn_value_assoc");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source array pointer
     emitter.instruction("ldr x4, [sp, #40]");                                   // reload the loop index
     emitter.instruction("add x4, x4, #3");                                      // skip the 24-byte array header
     emitter.instruction("ldr x0, [x0, x4, lsl #3]");                            // load the nested associative-array pointer from the 8-byte array slot
-    emitter.instruction("bl __rt_json_encode_assoc");                            // encode the nested associative array recursively
-    emitter.instruction("b __rt_json_arr_dyn_copy");                             // copy the encoded nested hash into concat_buf
+    emitter.instruction("bl __rt_json_encode_assoc");                           // encode the nested associative array recursively
+    emitter.instruction("b __rt_json_arr_dyn_copy");                            // copy the encoded nested hash into concat_buf
 
     emitter.label("__rt_json_arr_dyn_value_mixed");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source array pointer
     emitter.instruction("ldr x4, [sp, #40]");                                   // reload the loop index
     emitter.instruction("add x4, x4, #3");                                      // skip the 24-byte array header
     emitter.instruction("ldr x0, [x0, x4, lsl #3]");                            // load the boxed mixed pointer from the 8-byte array slot
-    emitter.instruction("bl __rt_json_encode_mixed");                            // encode the boxed mixed payload recursively
-    emitter.instruction("b __rt_json_arr_dyn_copy");                             // copy the encoded mixed payload into concat_buf
+    emitter.instruction("bl __rt_json_encode_mixed");                           // encode the boxed mixed payload recursively
+    emitter.instruction("b __rt_json_arr_dyn_copy");                            // copy the encoded mixed payload into concat_buf
 
     emitter.label("__rt_json_arr_dyn_value_null");
-    emitter.instruction("bl __rt_json_encode_null");                             // encode null/unsupported payloads as JSON null
+    emitter.instruction("bl __rt_json_encode_null");                            // encode null/unsupported payloads as JSON null
 
     emitter.label("__rt_json_arr_dyn_copy");
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload the current concat_buf write pointer
     emitter.instruction("mov x10, #0");                                         // initialize the copy index for the encoded element
     emitter.label("__rt_json_arr_dyn_copy_loop");
     emitter.instruction("cmp x10, x2");                                         // have we copied every encoded byte?
-    emitter.instruction("b.ge __rt_json_arr_dyn_next");                          // finish once the encoded element has been copied
+    emitter.instruction("b.ge __rt_json_arr_dyn_next");                         // finish once the encoded element has been copied
     emitter.instruction("ldrb w12, [x1, x10]");                                 // load the next encoded byte
     emitter.instruction("strb w12, [x11, x10]");                                // write the encoded byte into concat_buf
     emitter.instruction("add x10, x10, #1");                                    // advance the copy index
-    emitter.instruction("b __rt_json_arr_dyn_copy_loop");                        // continue copying the encoded element
+    emitter.instruction("b __rt_json_arr_dyn_copy_loop");                       // continue copying the encoded element
 
     emitter.label("__rt_json_arr_dyn_next");
     emitter.instruction("add x11, x11, x2");                                    // advance the concat_buf write pointer by the encoded element length
@@ -161,7 +161,7 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("ldr x4, [sp, #40]");                                   // reload the loop index
     emitter.instruction("add x4, x4, #1");                                      // advance to the next array element
     emitter.instruction("str x4, [sp, #40]");                                   // persist the updated loop index
-    emitter.instruction("b __rt_json_arr_dyn_loop");                             // continue encoding the remaining elements
+    emitter.instruction("b __rt_json_arr_dyn_loop");                            // continue encoding the remaining elements
 
     emitter.label("__rt_json_arr_dyn_close");
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload the current concat_buf write pointer

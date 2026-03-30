@@ -63,7 +63,7 @@ pub fn emit_array_intersect_key(emitter: &mut Emitter) {
     // -- copied hash values stay borrowed until we retain them for the result --
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload this entry's runtime value_tag
     emitter.instruction("cmp x9, #1");                                          // is the borrowed value a string?
-    emitter.instruction("b.eq __rt_array_isect_key_retain");                     // strings need retain via the uniform dispatcher
+    emitter.instruction("b.eq __rt_array_isect_key_retain");                    // strings need retain via the uniform dispatcher
     emitter.instruction("cmp x9, #4");                                          // is the borrowed value heap-backed?
     emitter.instruction("b.lt __rt_array_isect_key_copy");                      // scalar values need no retain
     emitter.instruction("cmp x9, #7");                                          // do heap-backed tags stay within range?

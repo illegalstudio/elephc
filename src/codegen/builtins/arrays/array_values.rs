@@ -58,24 +58,24 @@ pub fn emit(
                 emitter.instruction("add sp, sp, #16");                         // drop saved val
             }
             PhpType::Mixed => {
-                emitter.instruction("cmp x5, #7");                               // does this entry already store a boxed mixed value?
+                emitter.instruction("cmp x5, #7");                              // does this entry already store a boxed mixed value?
                 let reuse_box = ctx.next_label("avals_assoc_reuse_mixed");
                 let push_box = ctx.next_label("avals_assoc_push_mixed");
-                emitter.instruction(&format!("b.eq {}", reuse_box));             // reuse stored mixed boxes instead of nesting them
+                emitter.instruction(&format!("b.eq {}", reuse_box));            // reuse stored mixed boxes instead of nesting them
                 super::super::super::emit_box_runtime_payload_as_mixed(emitter, "x5", "x3", "x4"); // box the borrowed entry payload into a mixed cell
-                emitter.instruction(&format!("b {}", push_box));                 // skip the reuse path once boxing is done
+                emitter.instruction(&format!("b {}", push_box));                // skip the reuse path once boxing is done
                 emitter.label(&reuse_box);
-                emitter.instruction("mov x0, x3");                                // x0 = existing boxed mixed pointer from the hash entry
-                emitter.instruction("bl __rt_incref");                            // retain the shared mixed box for the result array
+                emitter.instruction("mov x0, x3");                              // x0 = existing boxed mixed pointer from the hash entry
+                emitter.instruction("bl __rt_incref");                          // retain the shared mixed box for the result array
                 emitter.label(&push_box);
-                emitter.instruction("str x0, [sp, #-16]!");                       // preserve the boxed mixed pointer across the push helper
-                emitter.instruction("ldr x0, [sp, #32]");                         // load result array pointer
-                emitter.instruction("ldr x1, [sp]");                              // reload boxed mixed pointer
-                emitter.instruction("bl __rt_array_push_refcounted");             // append the boxed mixed value and stamp array metadata
-                emitter.instruction("str x0, [sp, #32]");                         // persist the possibly-grown result array pointer after the push
-                emitter.instruction("ldr x0, [sp]");                              // reload the temporary owned mixed box after the push helper
-                emitter.instruction("bl __rt_decref_mixed");                      // drop the temporary owner now that the result array retained the mixed box
-                emitter.instruction("add sp, sp, #16");                           // drop saved boxed mixed pointer
+                emitter.instruction("str x0, [sp, #-16]!");                     // preserve the boxed mixed pointer across the push helper
+                emitter.instruction("ldr x0, [sp, #32]");                       // load result array pointer
+                emitter.instruction("ldr x1, [sp]");                            // reload boxed mixed pointer
+                emitter.instruction("bl __rt_array_push_refcounted");           // append the boxed mixed value and stamp array metadata
+                emitter.instruction("str x0, [sp, #32]");                       // persist the possibly-grown result array pointer after the push
+                emitter.instruction("ldr x0, [sp]");                            // reload the temporary owned mixed box after the push helper
+                emitter.instruction("bl __rt_decref_mixed");                    // drop the temporary owner now that the result array retained the mixed box
+                emitter.instruction("add sp, sp, #16");                         // drop saved boxed mixed pointer
             }
             _ => {
                 emitter.instruction("str x3, [sp, #-16]!");                     // save value

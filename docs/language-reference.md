@@ -1034,7 +1034,7 @@ Callback rules:
 | `date()` | `date($format [, $timestamp]): string` | Format a Unix timestamp. Format chars: Y, m, d, H, i, s, l, F, D, M, N, j, n, G, g, A, a, U. If the timestamp is omitted, uses current time. |
 | `mktime()` | `mktime($h, $m, $s, $mon, $day, $yr): int` | Create Unix timestamp from components |
 | `strtotime()` | `strtotime($datetime): int` | Parse "YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS" to timestamp |
-| `json_encode()` | `json_encode($value): string` | Encode value as JSON. Supports int, float, string, bool, null, arrays, assoc arrays. |
+| `json_encode()` | `json_encode($value): string` | Encode value as JSON. Supports int, float, string, bool, null, indexed arrays, associative arrays, and boxed `mixed` payloads. Heterogeneous indexed arrays are emitted through runtime tag dispatch rather than a single compile-time element encoder. |
 | `json_decode()` | `json_decode($json): string` | Decode a JSON string value (strips quotes, unescapes). Returns string representation. |
 | `json_last_error()` | `json_last_error(): int` | Always returns 0 (JSON_ERROR_NONE) |
 | `preg_match()` | `preg_match($pattern, $subject): int` | Test if regex matches subject. Returns 1 or 0. Uses POSIX extended regex via libc. |

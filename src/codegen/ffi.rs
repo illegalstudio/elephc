@@ -50,7 +50,7 @@ pub fn emit_extern_call(
                 ExprKind::StringLiteral(func_name) => {
                     let label = format!("_fn_{}", func_name);
                     emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page address of callback target
-                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); // resolve callback function address
+                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); //resolve callback function address
                     PhpType::Callable
                 }
                 _ => panic!(
@@ -95,7 +95,7 @@ pub fn emit_extern_call(
             // String args were already converted to char* (single x register)
             emitter.instruction(&format!("ldr x{}, [sp], #16", int_reg));       // pop int/ptr/cstr into x register
             if param_ty == PhpType::Str {
-                emitter.instruction(&format!("mov x{}, x{}", cleanup_reg, int_reg)); // preserve borrowed cstr pointer so it can be freed after the call
+                emitter.instruction(&format!("mov x{}, x{}", cleanup_reg, int_reg)); //preserve borrowed cstr pointer so it can be freed after the call
                 cleanup_reg += 1;
             }
             int_reg += 1;

@@ -55,35 +55,35 @@ pub(super) fn emit_new_object(
             match &prop_ty {
                 PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Pointer(_) => {
                     emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
-                    emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8)); // clear runtime property metadata slot
+                    emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8)); //clear runtime property metadata slot
                 }
                 PhpType::Mixed => {
                     emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store boxed mixed value
                     emitter.instruction("mov x10, #7");                         // runtime property tag 7 = mixed
-                    emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); // store runtime property metadata tag
+                    emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); //store runtime property metadata tag
                 }
                 PhpType::Array(_) => {
                     emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
                     emitter.instruction("mov x10, #4");                         // runtime property tag 4 = indexed array
-                    emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); // store runtime property metadata tag
+                    emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); //store runtime property metadata tag
                 }
                 PhpType::AssocArray { .. } => {
                     emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
                     emitter.instruction("mov x10, #5");                         // runtime property tag 5 = associative array
-                    emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); // store runtime property metadata tag
+                    emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); //store runtime property metadata tag
                 }
                 PhpType::Object(_) => {
                     emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
                     emitter.instruction("mov x10, #6");                         // runtime property tag 6 = object
-                    emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); // store runtime property metadata tag
+                    emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); //store runtime property metadata tag
                 }
                 PhpType::Float => {
                     emitter.instruction(&format!("str d0, [x9, #{}]", offset)); // store float default
-                    emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8)); // clear runtime property metadata slot
+                    emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8)); //clear runtime property metadata slot
                 }
                 PhpType::Str => {
                     emitter.instruction(&format!("str x1, [x9, #{}]", offset)); // store string pointer
-                    emitter.instruction(&format!("str x2, [x9, #{}]", offset + 8)); // store string length
+                    emitter.instruction(&format!("str x2, [x9, #{}]", offset + 8)); //store string length
                 }
                 PhpType::Void => {}
             }
@@ -143,10 +143,10 @@ pub(super) fn emit_new_object(
                 | PhpType::Callable
                 | PhpType::Object(_)
                 | PhpType::Pointer(_) => {
-                    emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop arg into register
+                    emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); //pop arg into register
                 }
                 PhpType::Float => {
-                    emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); // pop float arg
+                    emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); //pop float arg
                 }
                 PhpType::Str => {
                     emitter.instruction(&format!(                               // pop string constructor arg into consecutive registers
@@ -166,7 +166,7 @@ pub(super) fn emit_new_object(
             .get("__construct")
             .map(String::as_str)
             .unwrap_or(class_name);
-        emitter.instruction(&format!("bl _method_{}___construct", constructor_impl)); // call constructor
+        emitter.instruction(&format!("bl _method_{}___construct", constructor_impl)); //call constructor
         restore_concat_offset_after_nested_call(emitter, &PhpType::Void);
     }
 

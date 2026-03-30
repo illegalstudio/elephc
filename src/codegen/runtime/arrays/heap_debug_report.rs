@@ -124,7 +124,7 @@ pub fn emit_heap_debug_report(emitter: &mut Emitter) {
     emitter.label("__rt_heap_debug_report_leak_details");
     emitter.instruction("mov x0, #2");                                          // fd = stderr
     emitter.instruction("adrp x1, _heap_dbg_live_blocks_short_label@PAGE");     // load page of the short live-block label
-    emitter.instruction("add x1, x1, _heap_dbg_live_blocks_short_label@PAGEOFF"); // resolve the short live-block label address
+    emitter.instruction("add x1, x1, _heap_dbg_live_blocks_short_label@PAGEOFF"); //resolve the short live-block label address
     emitter.instruction("mov x2, #12");                                         // "live_blocks=" length
     emitter.instruction("mov x16, #4");                                         // syscall 4 = sys_write
     emitter.instruction("svc #0x80");                                           // write the short live-block label

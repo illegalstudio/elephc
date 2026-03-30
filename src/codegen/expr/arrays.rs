@@ -58,8 +58,8 @@ pub(super) fn emit_array_literal(
                 emitter.instruction(&format!("str d0, [x9, #{}]", 24 + i * 8)); // store float element at data offset
             }
             PhpType::Str => {
-                emitter.instruction(&format!("str x1, [x9, #{}]", 24 + i * 16)); // store string pointer at data offset
-                emitter.instruction(&format!("str x2, [x9, #{}]", 24 + i * 16 + 8)); // store string length right after pointer
+                emitter.instruction(&format!("str x1, [x9, #{}]", 24 + i * 16)); //store string pointer at data offset
+                emitter.instruction(&format!("str x2, [x9, #{}]", 24 + i * 16 + 8)); //store string length right after pointer
             }
             PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
                 emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); // store array/object pointer at data offset
@@ -181,7 +181,7 @@ pub(super) fn emit_assoc_array_literal(
     let first_value_ty = super::super::functions::infer_contextual_type(&pairs[0].1, ctx);
     let value_type_tag = super::super::runtime_value_tag(&first_value_ty);
 
-    emitter.instruction(&format!("mov x0, #{}", std::cmp::max(pairs.len() * 2, 16))); // initial capacity: max of pair count*2 or 16
+    emitter.instruction(&format!("mov x0, #{}", std::cmp::max(pairs.len() * 2, 16))); //initial capacity: max of pair count*2 or 16
     emitter.instruction(&format!("mov x1, #{}", value_type_tag));               // value type tag
     emitter.instruction("bl __rt_hash_new");                                    // create hash table → x0=ptr
     emitter.instruction("str x0, [sp, #-16]!");                                 // save hash table pointer
@@ -211,7 +211,7 @@ pub(super) fn emit_assoc_array_literal(
         };
         emitter.instruction(&format!("mov x3, {}", val_lo));                    // value_lo
         emitter.instruction(&format!("mov x4, {}", val_hi));                    // value_hi
-        emitter.instruction(&format!("mov x5, #{}", super::super::runtime_value_tag(&ty))); // value_tag for this specific assoc entry
+        emitter.instruction(&format!("mov x5, #{}", super::super::runtime_value_tag(&ty))); //value_tag for this specific assoc entry
         emitter.instruction("ldp x1, x2, [sp], #16");                           // pop key ptr/len
         emitter.instruction("ldr x0, [sp]");                                    // peek hash table pointer
         emitter.instruction("bl __rt_hash_set");                                // insert key-value pair (x0 = table, may be new)

@@ -63,7 +63,7 @@ pub(super) fn emit_array_assign_stmt(
         };
         emitter.instruction(&format!("mov x3, {}", val_lo));                    // value_lo
         emitter.instruction(&format!("mov x4, {}", val_hi));                    // value_hi
-        emitter.instruction(&format!("mov x5, #{}", super::super::super::runtime_value_tag(&val_ty))); // value_tag for this assoc entry
+        emitter.instruction(&format!("mov x5, #{}", super::super::super::runtime_value_tag(&val_ty))); //value_tag for this assoc entry
         emitter.instruction("ldp x1, x2, [sp], #16");                           // pop key ptr/len
         emitter.instruction("ldr x0, [sp], #16");                               // pop hash table pointer
         emitter.instruction("bl __rt_hash_set");                                // insert/update key-value pair (x0 = table)

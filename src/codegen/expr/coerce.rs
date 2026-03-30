@@ -30,7 +30,7 @@ pub(super) fn coerce_to_string(emitter: &mut Emitter, ty: &PhpType) {
         }
         PhpType::Mixed => {
             // -- mixed strings dispatch on the boxed payload at runtime --
-            emitter.instruction("bl __rt_mixed_cast_string");                    // cast the boxed mixed payload to string in x1/x2
+            emitter.instruction("bl __rt_mixed_cast_string");                   // cast the boxed mixed payload to string in x1/x2
         }
         PhpType::Str
         | PhpType::Array(_)
