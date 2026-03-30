@@ -117,6 +117,9 @@ pub fn emit_throw_current(emitter: &mut Emitter) {
     emitter.instruction("cbz x19, __rt_throw_current_uncaught");                 // fall back to a fatal uncaught-exception path when no handler exists
     emitter.instruction("ldr x0, [x19, #8]");                                    // x0 = activation record that should survive this catch
     emitter.instruction("bl __rt_exception_cleanup_frames");                     // run cleanup callbacks for every unwound activation frame
+    emitter.instruction("adrp x9, _concat_off@PAGE");                            // load page of the concat cursor before resuming via longjmp
+    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                      // resolve the concat cursor address
+    emitter.instruction("str xzr, [x9]");                                        // clear any partially-built concat state before catch/finally code resumes
     emitter.instruction("add x0, x19, #16");                                     // x0 = jmp_buf base stored inside the active handler record
     emitter.instruction("mov x1, #1");                                           // longjmp return value = 1 to indicate exceptional control flow
     emitter.instruction("bl _longjmp");                                          // transfer control directly back to the saved catch resume point

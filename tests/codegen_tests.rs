@@ -142,6 +142,14 @@ fn test_builtin_throwable_catches_exception() {
 }
 
 #[test]
+fn test_exception_throw_during_concat_resets_concat_cursor() {
+    let out = compile_and_run(
+        "<?php function boom() { throw new Exception(); } try { echo \"left-\" . boom(); } catch (Exception $e) { echo json_encode([\"ok\"]); }",
+    );
+    assert_eq!(out, "[\"ok\"]");
+}
+
+#[test]
 fn test_exception_try_catch_cross_function() {
     let out = compile_and_run(
         "<?php class MyException extends Exception {} function boom() { throw new MyException(); } try { boom(); } catch (MyException $e) { echo 7; }",
