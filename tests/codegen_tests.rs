@@ -236,6 +236,17 @@ fn test_exception_try_catch_inside_loop() {
 }
 
 #[test]
+fn test_gc_main_scope_cleanup_releases_owned_locals_on_exit() {
+    let baseline = compile_and_run_with_gc_stats("<?php");
+    let out = compile_and_run_with_gc_stats("<?php $items = [1, 2, 3];");
+    assert!(baseline.success, "baseline program failed: {}", baseline.stderr);
+    assert!(out.success, "program failed: {}", out.stderr);
+    let (baseline_allocs, baseline_frees) = parse_gc_stats(&baseline.stderr);
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs - baseline_allocs, frees - baseline_frees, "{}", out.stderr);
+}
+
+#[test]
 fn test_exception_finally_runs_on_return_break_continue() {
     let out = compile_and_run(
         "<?php function f() { try { return 5; } finally { echo 1; } } echo f(); for ($i = 0; $i < 1; $i++) { try { echo 2; break; } finally { echo 3; } } for ($j = 0; $j < 2; $j++) { try { echo $j; continue; } finally { echo 9; } }",

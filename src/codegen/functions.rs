@@ -399,7 +399,7 @@ fn epilogue_has_side_effects(ctx: &Context) -> bool {
         })
 }
 
-fn emit_owned_local_epilogue_cleanup(emitter: &mut Emitter, ctx: &Context) {
+pub(crate) fn emit_owned_local_epilogue_cleanup(emitter: &mut Emitter, ctx: &Context) {
     let mut cleanup_vars: Vec<_> = ctx
         .variables
         .iter()

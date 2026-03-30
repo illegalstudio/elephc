@@ -238,6 +238,7 @@ pub fn generate(
     // -- epilogue: restore stack and exit(0) via syscall --
     emitter.blank();
     emitter.comment("epilogue + exit(0)");
+    self::functions::emit_owned_local_epilogue_cleanup(&mut emitter, &ctx);
     emit_main_activation_record_pop(&mut emitter, &ctx);
     if frame_size - 16 <= 504 {
         emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16)); // restore frame pointer & return address
@@ -297,7 +298,7 @@ pub fn generate(
 
     // -- emit deferred closures --
     emit_deferred_closures(&mut emitter, &mut data, &mut ctx);
-    emit_main_cleanup_callback(&mut emitter, &main_cleanup_label);
+    emit_main_cleanup_callback(&mut emitter, &main_cleanup_label, &ctx);
 
     // -- emit runtime routines and data sections --
     runtime::emit_runtime(&mut emitter);
@@ -618,9 +619,15 @@ fn emit_main_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
     emitter.instruction("str x10, [x9]");                                          // restore the previous call-frame stack top before exiting
 }
 
-fn emit_main_cleanup_callback(emitter: &mut Emitter, cleanup_label: &str) {
+fn emit_main_cleanup_callback(emitter: &mut Emitter, cleanup_label: &str, ctx: &Context) {
     emitter.label(cleanup_label);
-    emitter.instruction("ret");                                                    // main-frame unwinds do not need extra local cleanup before catch dispatch
+    emitter.instruction("sub sp, sp, #16");                                        // reserve callback spill space for x29/x30
+    emitter.instruction("stp x29, x30, [sp, #0]");                                 // save the caller frame pointer and return address
+    emitter.instruction("mov x29, x0");                                            // treat the unwound main frame pointer as our temporary base
+    self::functions::emit_owned_local_epilogue_cleanup(emitter, ctx);
+    emitter.instruction("ldp x29, x30, [sp, #0]");                                 // restore the callback frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                        // release the callback spill space
+    emitter.instruction("ret");                                                    // finish unwound-main cleanup callback before catch dispatch
     emitter.blank();
 }
 
