@@ -333,6 +333,7 @@ Supported subset:
 
 - built-in `Exception` class and built-in `Throwable` interface are available without declaring them yourself
 - `throw <expr>;` where `<expr>` has an object type implementing `Throwable`
+- `throw <expr>` can also be used inside expressions such as `??` and ternaries
 - `try { ... } catch (ClassName $e) { ... }`
 - `catch (TypeA | TypeB $e)` for PHP-style multi-catch
 - `catch (Exception)` without binding the exception variable
@@ -341,10 +342,6 @@ Supported subset:
 - multiple `catch` clauses
 - `try { ... } finally { ... }`
 - `return`, `break`, and `continue` run enclosing `finally` blocks before leaving the `try`
-
-Current limitation:
-
-- `throw` is currently supported as a statement, not as a general expression
 
 ## Functions
 

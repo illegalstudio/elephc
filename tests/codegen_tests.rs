@@ -166,6 +166,22 @@ fn test_exception_catch_without_variable() {
 }
 
 #[test]
+fn test_throw_expression_in_null_coalesce() {
+    let out = compile_and_run(
+        "<?php $value = 42; echo $value ?? throw new Exception(); try { $missing = null; echo $missing ?? throw new Exception(); } catch (Exception) { echo 22; }",
+    );
+    assert_eq!(out, "4222");
+}
+
+#[test]
+fn test_throw_expression_in_ternary() {
+    let out = compile_and_run(
+        "<?php try { echo false ? 1 : throw new Exception(); } catch (Exception) { echo 23; }",
+    );
+    assert_eq!(out, "23");
+}
+
+#[test]
 fn test_exception_try_catch_cross_function() {
     let out = compile_and_run(
         "<?php class MyException extends Exception {} function boom() { throw new MyException(); } try { boom(); } catch (MyException $e) { echo 7; }",

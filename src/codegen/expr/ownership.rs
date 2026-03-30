@@ -10,6 +10,7 @@ pub(super) fn expr_result_heap_ownership(expr: &Expr) -> HeapOwnership {
         ExprKind::Spread(inner)
         | ExprKind::PtrCast { expr: inner, .. }
         | ExprKind::Cast { expr: inner, .. } => expr_result_heap_ownership(inner),
+        ExprKind::Throw(_) => HeapOwnership::NonHeap,
         ExprKind::NullCoalesce { value, default } => {
             expr_result_heap_ownership(value).merge(expr_result_heap_ownership(default))
         }

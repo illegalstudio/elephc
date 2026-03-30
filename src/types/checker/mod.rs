@@ -177,6 +177,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             let right_ty = infer_expr_type_syntactic(default);
             wider_type_syntactic(&left_ty, &right_ty)
         }
+        ExprKind::Throw(_) => PhpType::Void,
         ExprKind::Ternary {
             then_expr,
             else_expr,
@@ -2639,6 +2640,22 @@ impl Checker {
                     then_ty
                 };
                 Ok(result_ty)
+            }
+            ExprKind::Throw(inner) => {
+                let thrown_ty = self.infer_type(inner, env)?;
+                match thrown_ty {
+                    PhpType::Object(type_name) if self.object_type_implements_throwable(&type_name) => {
+                        Ok(PhpType::Void)
+                    }
+                    PhpType::Object(_) => Err(CompileError::new(
+                        expr.span,
+                        "Type error: throw requires an object implementing Throwable",
+                    )),
+                    _ => Err(CompileError::new(
+                        expr.span,
+                        "Type error: throw requires an object value",
+                    )),
+                }
             }
             ExprKind::Cast { target, expr } => {
                 self.infer_type(expr, env)?;

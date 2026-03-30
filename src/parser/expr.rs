@@ -227,6 +227,11 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
             let inner = parse_expr_bp(tokens, pos, 27)?;
             Ok(Expr::new(ExprKind::BitNot(Box::new(inner)), span))
         }
+        Token::Throw => {
+            *pos += 1;
+            let inner = parse_expr_bp(tokens, pos, 0)?;
+            Ok(Expr::new(ExprKind::Throw(Box::new(inner)), span))
+        }
         Token::True => {
             *pos += 1;
             Ok(Expr::new(ExprKind::BoolLiteral(true), span))

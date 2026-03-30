@@ -199,6 +199,17 @@ pub fn emit_expr(
             emitter.instruction("mvn x0, x0");                                  // bitwise complement of all 64 bits
             PhpType::Int
         }
+        ExprKind::Throw(inner) => {
+            let thrown_ty = emit_expr(inner, emitter, ctx, data);
+            if thrown_ty.is_refcounted() && expr_result_heap_ownership(inner) != HeapOwnership::Owned {
+                abi::emit_incref_if_refcounted(emitter, &thrown_ty);            // retain borrowed heap values before publishing them as the active exception
+            }
+            emitter.instruction("adrp x9, _exc_value@PAGE");                    // load page of the current exception slot
+            emitter.instruction("add x9, x9, _exc_value@PAGEOFF");              // resolve the current exception slot address
+            emitter.instruction("str x0, [x9]");                                // publish the thrown object pointer as the active exception
+            emitter.instruction("bl __rt_throw_current");                       // unwind to the nearest active exception handler
+            PhpType::Void
+        }
         ExprKind::NullCoalesce { value, default } => {
             emit_null_coalesce(value, default, emitter, ctx, data)
         }

@@ -104,6 +104,33 @@ fn test_parse_catch_without_variable() {
     );
 }
 
+#[test]
+fn test_parse_throw_expression_in_null_coalesce() {
+    let stmts = parse_source("<?php $value = $maybe ?? throw new Exception();");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::Assign { name, value } => {
+            assert_eq!(name, "value");
+            match &value.kind {
+                ExprKind::NullCoalesce { value, default } => {
+                    assert_eq!(value.kind, ExprKind::Variable("maybe".into()));
+                    match &default.kind {
+                        ExprKind::Throw(inner) => match &inner.kind {
+                            ExprKind::NewObject { class_name, .. } => {
+                                assert_eq!(class_name, "Exception");
+                            }
+                            other => panic!("expected throw new Exception(), got {:?}", other),
+                        },
+                        other => panic!("expected throw expression, got {:?}", other),
+                    }
+                }
+                other => panic!("expected null coalesce, got {:?}", other),
+            }
+        }
+        other => panic!("expected assignment, got {:?}", other),
+    }
+}
+
 // --- Assignment ---
 
 #[test]

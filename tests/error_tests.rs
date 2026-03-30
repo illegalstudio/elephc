@@ -119,6 +119,14 @@ fn test_error_throw_requires_throwable() {
 }
 
 #[test]
+fn test_error_throw_expression_requires_object() {
+    expect_error(
+        "<?php $value = null ?? throw 123;",
+        "throw requires an object value",
+    );
+}
+
+#[test]
 fn test_error_catch_requires_defined_class() {
     expect_error(
         "<?php try { echo 1; } catch (MissingException $e) { echo 2; }",
