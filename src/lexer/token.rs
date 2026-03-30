@@ -34,6 +34,7 @@ pub enum Token {
     Do,
     Foreach,
     As,
+    Extends,
     Inf,
     Nan,
     PhpIntMax,
@@ -66,6 +67,7 @@ pub enum Token {
     Global,         // global
     Static,         // static
     Trait,          // trait
+    Parent,         // parent
     InsteadOf,      // insteadof
     PhpEol,
     PhpOs,

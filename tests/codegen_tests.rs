@@ -11407,3 +11407,86 @@ echo SecretMath::answer();
     );
     assert_eq!(out, "42");
 }
+
+#[test]
+fn test_inheritance_dynamic_dispatch_uses_child_override() {
+    let out = compile_and_run(
+        r#"<?php
+class Animal {
+    public function speak() {
+        return "animal";
+    }
+
+    public function run() {
+        return $this->speak();
+    }
+}
+
+class Dog extends Animal {
+    public function speak() {
+        return "dog";
+    }
+}
+
+$dog = new Dog();
+echo $dog->run();
+"#,
+    );
+    assert_eq!(out, "dog");
+}
+
+#[test]
+fn test_inheritance_parent_method_call_and_inherited_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public $a = 40;
+
+    public function greet() {
+        return "hi";
+    }
+}
+
+class Child extends Base {
+    public $b = 2;
+
+    public function total() {
+        return $this->a + $this->b;
+    }
+
+    public function greet() {
+        return parent::greet() . "!";
+    }
+}
+
+$child = new Child();
+echo $child->total() . " " . $child->greet();
+"#,
+    );
+    assert_eq!(out, "42 hi!");
+}
+
+#[test]
+fn test_inheritance_protected_members_are_accessible_from_subclass() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    protected $value = 41;
+
+    protected function readValue() {
+        return $this->value;
+    }
+}
+
+class Child extends Base {
+    public function reveal() {
+        return $this->readValue() + 1;
+    }
+}
+
+$child = new Child();
+echo $child->reveal();
+"#,
+    );
+    assert_eq!(out, "42");
+}

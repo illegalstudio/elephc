@@ -271,7 +271,7 @@ Proper type system for PHP compatibility.
 ## v0.16.x — Language and runtime expansion
 
 - [x] Copy-on-write arrays — PHP-style shared-until-modified semantics with a COW flag in array headers and copy-on-mutation
-- [ ] Inheritance (`extends`) — vtable-based method dispatch, property layout chaining, and `parent::` calls
+- [x] Inheritance (`extends`) — vtable-based method dispatch, property layout chaining, and `parent::` calls
 - [ ] Interfaces / abstract classes — interface method tables and compile-time conformance checking
 - [x] Traits — compile-time method copying / inlining with `use`, `as`, `insteadof`, and trait properties
 - [ ] Exceptions (`try`/`catch`) — stack unwinding via `setjmp`/`longjmp` or DWARF-based infrastructure

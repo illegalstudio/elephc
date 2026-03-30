@@ -179,7 +179,7 @@ The runtime reserves a fixed set of global symbols in `emit_runtime_data()`:
 | I/O scratch | `_cstr_buf`, `_cstr_buf2`, `_eof_flags` | Syscall-oriented C-string scratch buffers and EOF bookkeeping |
 | String/regex tables | `_fmt_g`, `_b64_encode_tbl`, `_b64_decode_tbl`, `_pcre_*` | Formatting and lookup tables for runtime helpers |
 | JSON/date tables | `_json_true`, `_json_false`, `_json_null`, `_day_names`, `_month_names` | Static data used by JSON and date routines |
-| Class GC descriptors | `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>` | Per-class property traversal metadata for deep free and cycle collection |
+| Class metadata tables | `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>`, `_class_vtable_ptrs`, `_class_vtable_<id>` | Per-class property traversal metadata plus vtable pointers for inherited instance-method dispatch |
 
 ### Heap allocator
 
@@ -218,14 +218,15 @@ Offset  Size  Field
  ...    ...   ...
 ```
 
-Total size: `8 + (num_properties × 16)`. Properties are stored at fixed offsets determined at compile time. Property access is `base + 8 + (property_index × 16)`.
+Total size: `8 + (num_properties × 16)`. Properties are stored at fixed offsets determined at compile time in parent-first order across the inheritance chain. Property access is `base + resolved_property_offset`.
 
 ### Method dispatch
 
-- Instance methods: `bl _method_ClassName_methodName`. The object pointer is passed as the first argument in `x0` (as `$this`).
+- Instance methods: codegen resolves a stable slot number from the static class metadata, then uses the object's `class_id` to load the concrete class vtable entry and `blr` to the implementation. The object pointer is still passed as the first argument in `x0` (as `$this`).
 - Static methods: `bl _static_ClassName_methodName`. No object pointer is passed.
+- `parent::method()`: emitted as a direct branch to the parent implementation label, bypassing virtual dispatch for that call site.
 
-Traits are flattened into the owning class before `ClassInfo` is built. Trait properties therefore occupy ordinary fixed object slots, and trait methods are emitted under the owning class labels after `use` / `as` / `insteadof` resolution. This keeps the existing flat object layout and monomorphic method calls intact while still supporting PHP-like trait composition.
+Traits are flattened into the owning class before inheritance metadata is built. That means trait members participate in the same inherited property layout and vtable construction as ordinary class members after `use` / `as` / `insteadof` resolution.
 
 ### String buffer
 

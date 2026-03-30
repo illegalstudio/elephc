@@ -1,6 +1,6 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
-use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
 use crate::span::Span;
 
 pub fn parse_expr(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, CompileError> {
@@ -817,11 +817,59 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                     return Err(CompileError::new(span, "Expected ')' after arguments"));
                 }
                 *pos += 1;
-                Ok(Expr::new(ExprKind::StaticMethodCall { class_name: name, method, args }, span))
+                Ok(Expr::new(
+                    ExprKind::StaticMethodCall {
+                        receiver: StaticReceiver::Named(name),
+                        method,
+                        args,
+                    },
+                    span,
+                ))
             } else {
                 // Bare identifier — treat as constant reference (validated by type checker)
                 Ok(Expr::new(ExprKind::ConstRef(name), span))
             }
+        }
+        Token::Parent => {
+            *pos += 1;
+            if *pos >= tokens.len() || tokens[*pos].0 != Token::DoubleColon {
+                return Err(CompileError::new(span, "Expected '::' after 'parent'"));
+            }
+            *pos += 1; // consume ::
+            let method = match tokens.get(*pos).map(|(t, _)| t) {
+                Some(Token::Identifier(m)) => {
+                    let m = m.clone();
+                    *pos += 1;
+                    m
+                }
+                _ => return Err(CompileError::new(span, "Expected method name after 'parent::'")),
+            };
+            if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
+                return Err(CompileError::new(span, "Expected '(' after parent method name"));
+            }
+            *pos += 1;
+            let mut args = Vec::new();
+            while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
+                if !args.is_empty() {
+                    if tokens[*pos].0 != Token::Comma {
+                        return Err(CompileError::new(tokens[*pos].1, "Expected ',' between arguments"));
+                    }
+                    *pos += 1;
+                }
+                args.push(parse_expr(tokens, pos)?);
+            }
+            if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
+                return Err(CompileError::new(span, "Expected ')' after arguments"));
+            }
+            *pos += 1;
+            Ok(Expr::new(
+                ExprKind::StaticMethodCall {
+                    receiver: StaticReceiver::Parent,
+                    method,
+                    args,
+                },
+                span,
+            ))
         }
         Token::New => {
             *pos += 1; // consume 'new'

@@ -985,8 +985,24 @@ fn infer_local_type(
             }
             PhpType::Int
         }
-        ExprKind::StaticMethodCall { class_name, method, .. } => {
+        ExprKind::StaticMethodCall { receiver, method, .. } => {
             if let Some(c) = ctx {
+                let class_name = match receiver {
+                    crate::parser::ast::StaticReceiver::Named(class_name) => class_name,
+                    crate::parser::ast::StaticReceiver::Parent => {
+                        if let Some(current_class) = &c.current_class {
+                            if let Some(parent_name) =
+                                c.classes.get(current_class).and_then(|ci| ci.parent.as_ref())
+                            {
+                                parent_name
+                            } else {
+                                return PhpType::Int;
+                            }
+                        } else {
+                            return PhpType::Int;
+                        }
+                    }
+                };
                 if let Some(ci) = c.classes.get(class_name) {
                     if let Some(msig) = ci.static_methods.get(method) {
                         return msig.return_type.clone();

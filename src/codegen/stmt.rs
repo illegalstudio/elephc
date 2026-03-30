@@ -1353,19 +1353,25 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                             return;
                         }
                     };
-                    let (prop_idx, prop_ty) = match class_info
+                    let prop_ty = match class_info
                         .properties
                         .iter()
-                        .enumerate()
-                        .find(|(_, (n, _))| n == property)
+                        .find(|(n, _)| n == property)
                     {
-                        Some((i, (_, ty))) => (i, ty.clone()),
+                        Some((_, ty)) => ty.clone(),
                         None => {
                             emitter.comment(&format!("WARNING: undefined property {}", property));
                             return;
                         }
                     };
-                    (class_name.clone(), 8 + prop_idx * 16, prop_ty, false)
+                    let offset = match class_info.property_offsets.get(property) {
+                        Some(offset) => *offset,
+                        None => {
+                            emitter.comment(&format!("WARNING: missing property offset {}", property));
+                            return;
+                        }
+                    };
+                    (class_name.clone(), offset, prop_ty, false)
                 }
                 PhpType::Pointer(Some(class_name))
                     if ctx.extern_classes.contains_key(class_name) =>

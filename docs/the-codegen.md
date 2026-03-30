@@ -54,7 +54,7 @@ _float_0: .quad 0x400921FB54442D18
 .comm _heap_buf, 8388608, 3
 ```
 
-Trait composition does not add a separate runtime dispatch layer. Traits are flattened into each concrete class during type checking, so codegen still emits ordinary `_method_Class_method` / `_static_Class_method` labels and uses the same fixed object layout as non-trait classes.
+Trait composition does not add a separate runtime dispatch layer. Traits are flattened into each concrete class during type checking, then inheritance metadata is layered on top. Codegen still emits `_method_Class_method` / `_static_Class_method` labels, but instance calls now use vtable slots keyed by `class_id` so child overrides work through inherited methods.
 
 ## The Emitter
 
@@ -665,26 +665,26 @@ $result = match($x) {
 
 When the codegen encounters a `NewObject` expression:
 
-1. **Calculate object size**: `8 + (num_properties × 16)` — 8 bytes for the class ID, 16 bytes per property
+1. **Calculate object size**: `8 + (num_properties × 16)` — 8 bytes for the class ID, 16 bytes per property across the full inherited layout
 2. **Allocate heap memory**: call `__rt_heap_alloc` with the calculated size
 3. **Zero-initialize**: clear all property slots to zero
 4. **Store class ID**: write the class identifier at offset 0
 5. **Apply defaults**: for properties with default values, evaluate and store them at their fixed offsets
-6. **Call constructor**: if the class has a `__construct` method, pass the new object pointer as `x0` (`$this`) followed by the constructor arguments, then `bl _method_ClassName___construct`
+6. **Call constructor**: if the class exposes `__construct`, pass the new object pointer as `x0` (`$this`) followed by the constructor arguments, then branch to the implementation label recorded in class metadata (which may come from an inherited constructor)
 
 The result is the object pointer in `x0`.
 
 ### Property access (`$obj->prop`)
 
-Property access uses fixed offsets computed at compile time:
+Property access uses fixed offsets computed at compile time from `ClassInfo.property_offsets`:
 
 ```asm
-; $obj->prop where prop is property index 1
+; $obj->prop where prop resolved to offset 24
 ldur x0, [x29, #-offset]            ; load object pointer
-ldur x0, [x0, #24]                  ; load property at 8 + 1 * 16 = 24
+ldur x0, [x0, #24]                  ; load property at resolved inherited offset
 ```
 
-For property assignment (`$obj->prop = value`), the value is evaluated first, then stored at the computed offset.
+For property assignment (`$obj->prop = value`), the value is evaluated first, then stored at the resolved inherited offset.
 
 ### Method call (`$obj->method(args)`)
 
@@ -692,7 +692,7 @@ For property assignment (`$obj->prop = value`), the value is evaluated first, th
 2. Push the object pointer onto the stack
 3. Evaluate and push all arguments
 4. Pop arguments into ABI registers, with the object pointer as the first argument (`x0`)
-5. `bl _method_ClassName_methodName`
+5. Load the object's `class_id`, fetch the class vtable pointer from `_class_vtable_ptrs`, load the method slot, and `blr` to the resolved implementation
 6. Result is in the standard registers based on return type
 
 Inside the method body, `$this` is the first parameter and lives in the function's first stack slot.
@@ -705,6 +705,8 @@ Static methods are called like regular functions, but with the label `_static_Cl
 bl _static_Point_origin              ; call static method
 ; result in x0 (object pointer)
 ```
+
+`parent::method()` is handled as a direct call to the parent implementation label. For parent instance methods, codegen loads the implicit `$this` receiver and passes it in `x0`; for parent static methods it emits the resolved `_static_Parent_method` label.
 
 ## The ABI module
 

@@ -1,5 +1,7 @@
 use elephc::lexer::tokenize;
-use elephc::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind, TraitAdaptation, Visibility};
+use elephc::parser::ast::{
+    BinOp, Expr, ExprKind, StaticReceiver, Stmt, StmtKind, TraitAdaptation, Visibility,
+};
 use elephc::parser::parse;
 
 fn parse_source(src: &str) -> Vec<Stmt> {
@@ -871,11 +873,13 @@ fn test_parse_class_decl() {
     match &stmts[0].kind {
         StmtKind::ClassDecl {
             name,
+            extends,
             trait_uses,
             properties,
             methods,
         } => {
             assert_eq!(name, "Point");
+            assert_eq!(extends, &None);
             assert!(trait_uses.is_empty());
             assert_eq!(properties.len(), 2);
             assert_eq!(properties[0].name, "x");
@@ -916,11 +920,13 @@ fn test_parse_trait_decl_and_use_adaptations() {
     match &stmts[1].kind {
         StmtKind::ClassDecl {
             name,
+            extends,
             trait_uses,
             properties,
             methods,
         } => {
             assert_eq!(name, "Box");
+            assert_eq!(extends, &None);
             assert!(properties.is_empty());
             assert!(methods.is_empty());
             assert_eq!(trait_uses.len(), 1);
@@ -1055,13 +1061,52 @@ fn test_parse_static_method_call() {
     match &stmts[0].kind {
         StmtKind::ExprStmt(expr) => match &expr.kind {
             ExprKind::StaticMethodCall {
-                class_name,
+                receiver,
                 method,
                 args,
             } => {
-                assert_eq!(class_name, "Factory");
+                assert_eq!(receiver, &StaticReceiver::Named("Factory".to_string()));
                 assert_eq!(method, "make");
                 assert_eq!(args.len(), 1);
+            }
+            _ => panic!("Expected StaticMethodCall"),
+        },
+        _ => panic!("Expected ExprStmt"),
+    }
+}
+
+#[test]
+fn test_parse_class_decl_with_extends() {
+    let stmts = parse_source("<?php class Child extends Base { public function run() { return 1; } }");
+    match &stmts[0].kind {
+        StmtKind::ClassDecl {
+            name,
+            extends,
+            methods,
+            ..
+        } => {
+            assert_eq!(name, "Child");
+            assert_eq!(extends.as_deref(), Some("Base"));
+            assert_eq!(methods.len(), 1);
+            assert_eq!(methods[0].name, "run");
+        }
+        _ => panic!("Expected ClassDecl"),
+    }
+}
+
+#[test]
+fn test_parse_parent_static_receiver() {
+    let stmts = parse_source("<?php parent::boot();");
+    match &stmts[0].kind {
+        StmtKind::ExprStmt(expr) => match &expr.kind {
+            ExprKind::StaticMethodCall {
+                receiver,
+                method,
+                args,
+            } => {
+                assert_eq!(receiver, &StaticReceiver::Parent);
+                assert_eq!(method, "boot");
+                assert!(args.is_empty());
             }
             _ => panic!("Expected StaticMethodCall"),
         },

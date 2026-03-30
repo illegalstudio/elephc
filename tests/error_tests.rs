@@ -1649,6 +1649,46 @@ fn test_error_wrong_constructor_args() {
     );
 }
 
+#[test]
+fn test_error_parent_outside_class_scope() {
+    expect_error(
+        "<?php parent::boot();",
+        "Cannot use parent:: outside class method scope",
+    );
+}
+
+#[test]
+fn test_error_parent_without_parent_class() {
+    expect_error(
+        "<?php class Solo { public function boot() { return parent::boot(); } } $s = new Solo(); $s->boot();",
+        "Class Solo has no parent class",
+    );
+}
+
+#[test]
+fn test_error_circular_inheritance() {
+    expect_error(
+        "<?php class A extends B {} class B extends A {}",
+        "Circular inheritance detected",
+    );
+}
+
+#[test]
+fn test_error_cannot_reduce_visibility_when_overriding_method() {
+    expect_error(
+        "<?php class Base { public function ping() { return 1; } } class Child extends Base { protected function ping() { return 2; } }",
+        "Cannot reduce visibility when overriding method: Child::ping",
+    );
+}
+
+#[test]
+fn test_error_subclass_cannot_access_parent_private_property() {
+    expect_error(
+        "<?php class Base { private $value = 1; } class Child extends Base { public function read() { return $this->value; } } $c = new Child(); echo $c->read();",
+        "Cannot access private property: Child::value",
+    );
+}
+
 // --- Date/time error tests ---
 
 #[test]

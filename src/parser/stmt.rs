@@ -28,7 +28,7 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
         Token::Global => parse_global(tokens, pos, span),
         Token::Static => parse_static_var(tokens, pos, span),
         Token::LBracket => parse_list_unpack(tokens, pos, span),
-        Token::Identifier(_) => {
+        Token::Identifier(_) | Token::Parent => {
             let expr = parse_expr(tokens, pos)?;
             expect_semicolon(tokens, pos)?;
             Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
@@ -531,6 +531,25 @@ fn parse_class_decl(
         _ => return Err(CompileError::new(span, "Expected class name after 'class'")),
     };
 
+    let extends = if *pos < tokens.len() && tokens[*pos].0 == Token::Extends {
+        *pos += 1;
+        match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Identifier(n)) => {
+                let n = n.clone();
+                *pos += 1;
+                Some(n)
+            }
+            _ => {
+                return Err(CompileError::new(
+                    span,
+                    "Expected parent class name after 'extends'",
+                ))
+            }
+        }
+    } else {
+        None
+    };
+
     expect_token(tokens, pos, &Token::LBrace, "Expected '{' after class name")?;
 
     let (trait_uses, properties, methods) = parse_class_like_body(tokens, pos, "class")?;
@@ -540,6 +559,7 @@ fn parse_class_decl(
     Ok(Stmt::new(
         StmtKind::ClassDecl {
             name,
+            extends,
             trait_uses,
             properties,
             methods,

@@ -1287,13 +1287,15 @@ Both `include 'f';` and `include('f');` syntax are supported.
 
 ## Classes
 
-elephc supports PHP classes with properties, constructors, instance methods, static methods, traits, and `public` / `protected` / `private` visibility.
+elephc supports PHP classes with single inheritance, properties, constructors, instance methods, static methods, traits, `parent::method()`, and `public` / `protected` / `private` visibility.
 
 ### Class declaration
 
 ```php
 <?php
-class Point {
+class Shape {}
+
+class Point extends Shape {
     public $x;
     public $y;
 
@@ -1311,6 +1313,8 @@ class Point {
     }
 }
 ```
+
+Concrete classes may extend one parent class with `extends`. Method overrides use virtual dispatch, so an inherited method that calls `$this->otherMethod()` sees the child's override at runtime.
 
 ### Properties
 
@@ -1331,9 +1335,10 @@ class Config {
 ```
 
 - `public` properties can be accessed from outside the class via `->`.
-- `protected` properties are not accessible from outside the class. Because inheritance is not implemented yet, they currently behave like class-only members.
+- `protected` properties are not accessible from outside the class, but they are accessible inside subclasses.
 - `private` properties can only be accessed inside the class via `$this->`.
 - `readonly` properties can only be assigned inside `__construct`.
+- Property redeclaration across an inheritance chain is not supported yet.
 
 ### Constructor
 
@@ -1354,6 +1359,49 @@ $p = new Point(3, 4);
 echo $p->magnitude();  // 5
 ```
 
+Overrides on subclasses use runtime dispatch:
+
+```php
+<?php
+class Animal {
+    public function speak() {
+        return "animal";
+    }
+
+    public function run() {
+        return $this->speak();
+    }
+}
+
+class Dog extends Animal {
+    public function speak() {
+        return "dog";
+    }
+}
+
+$dog = new Dog();
+echo $dog->run();  // dog
+```
+
+### `parent::method()`
+
+Inside a subclass method, `parent::method()` directly calls the parent implementation:
+
+```php
+<?php
+class Base {
+    public function greet() {
+        return "hi";
+    }
+}
+
+class Child extends Base {
+    public function greet() {
+        return parent::greet() . "!";
+    }
+}
+```
+
 ### Static methods
 
 Static methods are called on the class itself using `::`, not on an instance:
@@ -1366,11 +1414,11 @@ echo $origin->x;  // 0
 
 Static methods do not have access to `$this`.
 
-Like instance methods, static methods honor `public`, `protected`, and `private` visibility. Without inheritance, non-`public` static methods are currently only callable from methods on that same class.
+Like instance methods, static methods honor `public`, `protected`, and `private` visibility. Inherited `public` and `protected` static methods remain callable through the child class; `private` static methods stay scoped to the declaring class.
 
 ### Traits
 
-Traits are flattened into the concrete class at compile time. Imported trait methods use the same fixed labels and object layout as ordinary class members, so there is no runtime trait identity or dynamic dispatch layer.
+Traits are flattened into the concrete class at compile time. There is no runtime trait identity: imported members become ordinary class members before inheritance metadata and vtable slots are built.
 
 ```php
 <?php
@@ -1431,15 +1479,15 @@ echo $p->magnitude(); // method call
 
 ### Limitations
 
-- No inheritance (`extends`)
 - No interfaces (`implements`)
 - No abstract or final classes/methods
 - No property type declarations
 - No constructor promotion
+- No `self::` or `static::` late static binding
 
 ## What elephc cannot do (by design)
 
-- No inheritance, interfaces, enums
+- No interfaces, enums
 - No exceptions (`try`/`catch`/`throw`)
 - No `eval()`
 - No dynamic `include`/`require` (path must be a string literal)
