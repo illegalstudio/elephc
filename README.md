@@ -291,6 +291,7 @@ src/
 │   ├── stmt.rs          # Statement codegen
 │   ├── abi.rs           # Register conventions (load, store, write)
 │   ├── functions.rs     # User function emission
+│   ├── ffi.rs           # Extern function/global/class codegen
 │   ├── context.rs       # Variables, labels, loop stack
 │   ├── data_section.rs  # String/float literal .data section
 │   ├── emit.rs          # Assembly text buffer
@@ -308,7 +309,7 @@ src/
 │       ├── strings/     # itoa, concat, ftoa, strpos, str_replace, ...
 │       ├── arrays/      # heap_alloc, array_new, array_push, sort, ...
 │       ├── io/          # fopen, fclose, fread, fwrite, file_ops, ...
-│       ├── pointers/    # ptoa, ptr_check_nonnull
+│       ├── pointers/    # ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str
 │       └── system/      # build_argv, time, getenv, shell_exec
 │
 └── errors/              # Error formatting with line:col

@@ -19,7 +19,7 @@ A guide to understanding how elephc works — from PHP source code to native ARM
 - **[The Type Checker](the-type-checker.md)** — How elephc infers and validates types at compile time, without PHP's runtime type system.
 - **[The Code Generator](the-codegen.md)** — How AST nodes become ARM64 assembly. Expressions, statements, function calls, and the push/pop pattern.
 - **[The Runtime](the-runtime.md)** — The hand-written assembly routines that handle string conversion, concatenation, arrays, and I/O at runtime.
-- **[Memory Model](memory-model.md)** — Stack frames, heap allocation, the string buffer, array layout, and how elephc manages memory without a garbage collector.
+- **[Memory Model](memory-model.md)** — Stack frames, heap allocation, the string buffer, array layout, and how elephc manages memory with reference counting plus targeted cycle collection.
 
 ## Reference
 

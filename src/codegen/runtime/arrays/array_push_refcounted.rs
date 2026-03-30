@@ -15,7 +15,13 @@ pub fn emit_array_push_refcounted(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save destination array pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save borrowed heap pointer
 
+    // -- split shared destination arrays before they retain/store a new child --
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the destination array pointer
+    emitter.instruction("bl __rt_array_ensure_unique");                          // split shared destination arrays before mutating storage
+    emitter.instruction("str x0, [sp, #0]");                                    // persist the unique destination array pointer
+
     // -- retain borrowed payload before destination takes ownership --
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload the borrowed heap pointer after ensure_unique
     emitter.instruction("mov x0, x1");                                          // move borrowed heap pointer into incref argument register
     emitter.instruction("bl __rt_incref");                                      // retain borrowed payload for the destination array
 
@@ -39,7 +45,8 @@ pub fn emit_array_push_refcounted(emitter: &mut Emitter) {
     emitter.label("__rt_array_push_refcounted_kind_hash");
     emitter.instruction("mov x10, #5");                                         // encode value_type 5 for nested associative arrays
     emitter.label("__rt_array_push_refcounted_kind_store");
-    emitter.instruction("and x9, x9, #0xff");                                   // keep only the low-byte indexed-array heap kind
+    emitter.instruction("mov x14, #0x80ff");                                    // preserve the indexed-array kind and the persistent COW flag
+    emitter.instruction("and x9, x9, x14");                                     // keep only the persistent indexed-array metadata bits
     emitter.instruction("lsl x10, x10, #8");                                    // move the value_type tag into the packed kind-word byte lane
     emitter.instruction("orr x9, x9, x10");                                     // combine heap kind + array value_type tag
     emitter.instruction("str x9, [x0, #-8]");                                   // persist the packed kind word on the destination array

@@ -25,6 +25,8 @@ pub fn emit_array_new(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #16");                                         // does the array store 16-byte string payloads?
     emitter.instruction("cset x9, eq");                                         // 16-byte arrays default to string value_type tag 1, others to 0
     emitter.instruction("lsl x9, x9, #8");                                      // move the value_type tag into the packed kind-word byte lane
+    emitter.instruction("mov x10, #0x8000");                                    // bit 15 marks heap containers that participate in copy-on-write
+    emitter.instruction("orr x9, x9, x10");                                     // preserve the persistent copy-on-write container flag in the kind word
     emitter.instruction("add x9, x9, #2");                                      // low byte 2 = indexed array heap kind
     emitter.instruction("str x9, [x0, #-8]");                                   // store the packed indexed-array kind word in the heap header
 

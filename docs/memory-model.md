@@ -170,7 +170,7 @@ Every allocation has a **16-byte header**: two 32-bit fields for block size and 
        header (16 bytes total)          ← pointer returned to caller
 ```
 
-The size is stored at header offset `+0`, the reference count at `+4`, and the heap kind tag at `+8`. New allocations start with refcount `1`; typed constructors then stamp the kind as `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, while raw helper buffers remain `0`.
+The size is stored at header offset `+0`, the reference count at `+4`, and the heap kind tag at `+8`. New allocations start with refcount `1`; typed constructors then stamp the kind as `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, while raw helper buffers remain `0`. For array/hash containers, the low 16 bits of the kind word are persistent metadata: the low byte is still the heap kind, indexed arrays still pack their runtime `value_type` in the next byte, and bit 15 is reserved as the persistent copy-on-write container flag. Higher bits remain transient collector metadata.
 
 The runtime routine `__rt_heap_alloc`:
 
@@ -267,12 +267,23 @@ Access: `base + 24 + (index × 16)` for pointer, `base + 24 + (index × 16) + 8`
 
 When `array_push` finds that `length >= capacity`, the array grows automatically:
 
-1. `__rt_array_grow` allocates a new array with **2× capacity** (minimum 8)
-2. Copies the 24-byte header and all elements to the new array
-3. Leaves the old storage in place for alias safety instead of freeing it immediately
-4. Returns the new array pointer
+1. `__rt_array_grow` first runs `__rt_array_ensure_unique`, so shared arrays split before reallocation
+2. Allocates a new array with **2× capacity** (minimum 8)
+3. Copies the 24-byte header and all elements to the new array
+4. Frees the previous unique storage and returns the new array pointer
 
 The caller updates its stored pointer to the new array. This means arrays are truly dynamic — you can push unlimited elements (limited only by heap size). Direct indexed writes into empty arrays now also grow the backing storage and extend `length` to cover the highest written index.
+
+### Copy-on-write containers
+
+Indexed arrays and associative arrays now follow **shared-until-modified** semantics:
+
+1. Plain assignment or by-value argument passing shares the existing heap container and bumps its refcount
+2. The first mutating write runs `__rt_array_ensure_unique` or `__rt_hash_ensure_unique`
+3. If the refcount is already 1, the write proceeds in place
+4. If the refcount is greater than 1, the runtime clones the container structure, retains nested heap-backed children (or re-persists immutable strings/keys), decrements the mutator's old owner slot, rewrites the mutating owner to the clone, and only then performs the write
+
+This is what lets PHP-style code such as `$b = $a; $b[0] = 9;` leave `$a` unchanged without requiring deep copies on every assignment. Nested arrays and hashes remain shallow-shared until their own first mutation.
 
 ## Hash table layout (associative arrays)
 
@@ -437,13 +448,14 @@ The naming pattern is `_static_FUNCNAME_VARNAME`. The init flag ensures the init
 elephc uses a **free-list allocator with reference counting plus a targeted cycle collector** — not pure bump-allocation, and not a whole-heap tracing runtime either. Memory is reclaimed in specific situations:
 
 1. **Reference counting** — every heap allocation carries a 32-bit refcount (initialized to 1). When a reference is shared, `__rt_incref` increments it. When a reference is dropped, `__rt_decref_array`, `__rt_decref_hash`, or `__rt_decref_object` decrements it and frees the block when it reaches zero
-2. **Codegen ownership tracking** — locals, globals, statics, `foreach` variables, `list(...)` targets, and call arguments are classified as owned or borrowed at compile time so new owners retain borrowed heap values before storing them
-3. **Variable reassignment** — when `$x = "new value"` overwrites a string or array, the old heap block is freed and returned to the free list for reuse
-4. **`unset($x)`** — explicitly frees the variable's heap allocation
-5. **FFI string-call cleanup** — temporary C strings created for `extern function foo(string $s)` calls are released immediately after the native call returns
-6. **String buffer reset** — the concat buffer resets at each statement, with strings that need to survive copied to heap via `__rt_str_persist`
-7. **Stack memory** — automatically reclaimed when functions return
-8. **Process exit** — all memory reclaimed by the OS
+2. **Copy-on-write splitting for arrays/hashes** — plain assignment still shares container storage, but the first mutating write clones a shared container before modifying it
+3. **Codegen ownership tracking** — locals, globals, statics, `foreach` variables, `list(...)` targets, and call arguments are classified as owned or borrowed at compile time so new owners retain borrowed heap values before storing them
+4. **Variable reassignment** — when `$x = "new value"` overwrites a string or array, the old heap block is freed or decreffed and returned to the allocator for reuse
+5. **`unset($x)`** — explicitly frees the variable's heap allocation
+6. **FFI string-call cleanup** — temporary C strings created for `extern function foo(string $s)` calls are released immediately after the native call returns
+7. **String buffer reset** — the concat buffer resets at each statement, with strings that need to survive copied to heap via `__rt_str_persist`
+8. **Stack memory** — automatically reclaimed when functions return
+9. **Process exit** — all memory reclaimed by the OS
 
 ### What is NOT freed
 

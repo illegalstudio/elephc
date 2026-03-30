@@ -29,7 +29,8 @@ fn stamp_indexed_array_value_type(emitter: &mut Emitter, array_reg: &str, elem_t
         _ => return,
     };
     emitter.instruction(&format!("ldr x12, [{}, #-8]", array_reg));              // load the packed array kind word from the heap header
-    emitter.instruction("and x12, x12, #0xff");                                  // keep only the low-byte indexed-array heap kind
+    emitter.instruction("mov x14, #0x80ff");                                     // preserve the indexed-array kind and persistent COW flag
+    emitter.instruction("and x12, x12, x14");                                    // keep only the persistent indexed-array metadata bits
     emitter.instruction(&format!("mov x13, #{}", value_type_tag));               // materialize the runtime array value_type tag
     emitter.instruction("lsl x13, x13, #8");                                     // move the value_type tag into the packed kind-word byte lane
     emitter.instruction("orr x12, x12, x13");                                    // combine the heap kind with the array value_type tag
@@ -398,6 +399,13 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                 } else {
                     abi::load_at_offset(emitter, "x0", offset); // load array heap pointer from stack frame
                 }
+                emitter.instruction("bl __rt_array_ensure_unique");              // split shared indexed arrays before direct indexed writes mutate storage
+                if is_ref {
+                    abi::load_at_offset(emitter, "x13", offset); // load ref pointer
+                    emitter.instruction("str x0, [x13]");                        // persist the unique array pointer through the reference slot
+                } else {
+                    abi::store_at_offset(emitter, "x0", offset); // persist the unique array pointer in the local slot
+                }
                 emitter.instruction("str x0, [sp, #-16]!");                     // push array pointer onto stack
                                                             // Evaluate index
                 emit_expr(index, emitter, ctx, data);
@@ -480,7 +488,8 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                         emitter.instruction("mov x12, #16");                     // string arrays need 16-byte slots for ptr+len payloads
                         emitter.instruction("str x12, [x10, #16]");              // persist the string slot size in the array header
                         emitter.instruction("ldr x12, [x10, #-8]");              // load the packed array kind word from the heap header
-                        emitter.instruction("and x12, x12, #0xff");              // keep only the low-byte indexed-array heap kind
+                        emitter.instruction("mov x14, #0x80ff");                 // preserve the indexed-array kind and persistent COW flag
+                        emitter.instruction("and x12, x12, x14");                // keep only the persistent indexed-array metadata bits
                         emitter.instruction("mov x13, #1");                      // runtime value_type 1 = string
                         emitter.instruction("lsl x13, x13, #8");                 // move the value_type tag into the packed kind-word byte lane
                         emitter.instruction("orr x12, x12, x13");                // combine heap kind + string value_type tag
@@ -494,7 +503,8 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                         emitter.instruction("mov x12, #8");                      // scalar indexed arrays use ordinary 8-byte slots
                         emitter.instruction("str x12, [x10, #16]");              // persist the scalar slot width in the array header
                         emitter.instruction("ldr x12, [x10, #-8]");              // load the packed array kind word from the heap header
-                        emitter.instruction("and x12, x12, #0xff");              // clear any stale value_type tag from an empty polymorphic array
+                        emitter.instruction("mov x14, #0x80ff");                 // preserve the indexed-array kind and persistent COW flag
+                        emitter.instruction("and x12, x12, x14");                // clear stale value_type bits while keeping the persistent container metadata
                         emitter.instruction("str x12, [x10, #-8]");              // persist the scalar-oriented packed kind word
                     }
                 }

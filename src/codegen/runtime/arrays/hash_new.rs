@@ -24,6 +24,8 @@ pub fn emit_hash_new(emitter: &mut Emitter) {
     emitter.instruction("add x0, x2, #24");                                     // x0 = total size (24-byte header + entries)
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate memory, x0 = pointer to hash table
     emitter.instruction("mov x9, #3");                                          // heap kind 3 = associative array / hash table
+    emitter.instruction("mov x10, #0x8000");                                    // bit 15 marks heap containers that participate in copy-on-write
+    emitter.instruction("orr x9, x9, x10");                                     // preserve the persistent copy-on-write container flag in the kind word
     emitter.instruction("str x9, [x0, #-8]");                                   // store hash-table kind in the uniform heap header
 
     // -- initialize header fields --

@@ -63,7 +63,7 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     // -- array traversal: only arrays tagged with refcounted element payloads contain graph edges --
     emitter.label("__rt_gc_mark_reachable_array");
     emitter.instruction("lsr x12, x11, #8");                                       // move the packed array value_type tag into the low bits
-    emitter.instruction("and x12, x12, #0xff");                                    // isolate the packed array value_type tag
+    emitter.instruction("and x12, x12, #0x7f");                                    // isolate the packed array value_type tag without the persistent COW flag
     emitter.instruction("cmp x12, #4");                                            // is this an array-of-arrays payload?
     emitter.instruction("b.eq __rt_gc_mark_reachable_array_setup");                // traverse nested array payloads
     emitter.instruction("cmp x12, #5");                                            // is this an array-of-hashes payload?

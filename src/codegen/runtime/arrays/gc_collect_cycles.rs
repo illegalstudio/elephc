@@ -87,7 +87,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
 
     emitter.label("__rt_gc_collect_cycles_count_array");
     emitter.instruction("lsr x15, x14, #8");                                       // move the packed array value_type tag into the low bits
-    emitter.instruction("and x15, x15, #0xff");                                    // isolate the packed array value_type tag
+    emitter.instruction("and x15, x15, #0x7f");                                    // isolate the packed array value_type tag without the persistent COW flag
     emitter.instruction("cmp x15, #4");                                            // is this an array-of-arrays payload?
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_array_setup");          // scan nested array child pointers
     emitter.instruction("cmp x15, #5");                                            // is this an array-of-hashes payload?
@@ -225,7 +225,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("cmp x14, #2");                                            // is this an indexed array candidate?
     emitter.instruction("b.ne __rt_gc_collect_cycles_root_refcounted");            // hashes/objects decide in their dedicated branches
     emitter.instruction("lsr x15, x13, #8");                                       // move the packed array value_type tag into the low bits
-    emitter.instruction("and x15, x15, #0xff");                                    // isolate the packed array value_type tag
+    emitter.instruction("and x15, x15, #0x7f");                                    // isolate the packed array value_type tag without the persistent COW flag
     emitter.instruction("cmp x15, #4");                                            // is this an array of indexed arrays?
     emitter.instruction("b.eq __rt_gc_collect_cycles_root_refcounted");            // refcounted array payloads participate in cycle collection
     emitter.instruction("cmp x15, #5");                                            // is this an array of associative arrays?
@@ -278,7 +278,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("cmp x14, #2");                                            // is this an indexed array candidate?
     emitter.instruction("b.ne __rt_gc_collect_cycles_free_refcounted");            // hashes/objects decide in their dedicated branches
     emitter.instruction("lsr x15, x13, #8");                                       // move the packed array value_type tag into the low bits
-    emitter.instruction("and x15, x15, #0xff");                                    // isolate the packed array value_type tag
+    emitter.instruction("and x15, x15, #0x7f");                                    // isolate the packed array value_type tag without the persistent COW flag
     emitter.instruction("cmp x15, #4");                                            // is this an array of indexed arrays?
     emitter.instruction("b.eq __rt_gc_collect_cycles_free_refcounted");            // refcounted array payloads participate in cycle collection
     emitter.instruction("cmp x15, #5");                                            // is this an array of associative arrays?

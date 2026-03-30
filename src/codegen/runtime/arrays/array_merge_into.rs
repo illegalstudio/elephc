@@ -29,7 +29,11 @@ pub fn emit_array_merge_into(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload current dest array pointer before growth
     emitter.instruction("bl __rt_array_grow");                                  // grow dest array storage until it can hold the merge result
     emitter.instruction("str x0, [sp, #0]");                                    // persist the possibly-moved dest array pointer
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload source array pointer after growth clobbers scratch regs
+    emitter.instruction("ldr x9, [x1]");                                        // reload source length after growth clobbers scratch regs
+    emitter.instruction("ldr x10, [x0]");                                       // reload dest length after growth clobbers scratch regs
     emitter.instruction("ldr x11, [x0, #8]");                                   // reload dest capacity after growth
+    emitter.instruction("add x12, x10, x9");                                    // recompute needed capacity after growth clobbers scratch regs
     emitter.instruction("b __rt_ami_grow_check");                               // keep growing until the required capacity fits
 
     emitter.label("__rt_ami_copy");

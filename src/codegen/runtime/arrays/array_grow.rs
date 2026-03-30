@@ -1,11 +1,9 @@
 use crate::codegen::emit::Emitter;
 
-/// array_grow: double the capacity of an array, copying all elements.
-/// Allocates a new array with 2x capacity, copies header + elements,
-/// and returns the new pointer without freeing the old array.
-///
-/// This intentionally prefers leaking over use-after-free: callers may still
-/// hold aliases to the previous storage after a growth-triggering mutation.
+/// array_grow: double the capacity of an array after copy-on-write splitting.
+/// Ensures the source array is unique, allocates a new array with 2x capacity,
+/// copies header + elements, frees the previous unique storage, and returns the
+/// new pointer.
 /// Input:  x0 = old array pointer
 /// Output: x0 = new array pointer (with doubled capacity)
 pub fn emit_array_grow(emitter: &mut Emitter) {
@@ -24,7 +22,8 @@ pub fn emit_array_grow(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // set up new frame pointer
-    emitter.instruction("str x0, [sp, #0]");                                    // save old array pointer
+    emitter.instruction("bl __rt_array_ensure_unique");                          // split shared arrays before the growth path reallocates storage
+    emitter.instruction("str x0, [sp, #0]");                                    // save the unique source array pointer
 
     // -- read old array header --
     emitter.instruction("ldr x9, [x0]");                                        // x9 = old length
@@ -47,7 +46,8 @@ pub fn emit_array_grow(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate new array → x0
     emitter.instruction("ldr x14, [sp, #0]");                                   // reload the previous array pointer after heap_alloc
     emitter.instruction("ldr x14, [x14, #-8]");                                 // copy the packed kind word from the previous array storage
-    emitter.instruction("str x14, [x0, #-8]");                                  // preserve heap kind, array value_type, and future metadata bits
+    emitter.instruction("and x14, x14, #0xffff");                               // preserve only persistent kind/value-type/COW bits on the grown array
+    emitter.instruction("str x14, [x0, #-8]");                                  // preserve heap kind, array value_type, and copy-on-write metadata
 
     // -- write new array header --
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload old length
@@ -72,8 +72,10 @@ pub fn emit_array_grow(emitter: &mut Emitter) {
     emitter.instruction("sub x3, x3, #1");                                      // decrement remaining
     emitter.instruction("b __rt_array_grow_copy");                              // continue copying
 
-    // -- return new array pointer --
+    // -- free the previous unique storage and return the grown array pointer --
     emitter.label("__rt_array_grow_done");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // x0 = previous unique array pointer
+    emitter.instruction("bl __rt_heap_free");                                   // release the old array storage now that the grown copy is live
     emitter.instruction("ldr x0, [sp, #24]");                                   // x0 = new array pointer
 
     // -- restore frame and return --
