@@ -366,6 +366,9 @@ fn resolve_catch_match_target(ctx: &Context, raw_name: &str) -> (u64, u64) {
     } else if let Some(interface_info) = ctx.interfaces.get(resolved_name) {
         (interface_info.interface_id, 1)
     } else {
-        (0, 0)
+        panic!(
+            "codegen bug: unresolved catch target after type checking: {}",
+            resolved_name
+        )
     }
 }
