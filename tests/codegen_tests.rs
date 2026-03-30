@@ -190,6 +190,52 @@ fn test_exception_try_catch_cross_function() {
 }
 
 #[test]
+fn test_exception_nested_try_catch() {
+    let out = compile_and_run(
+        "<?php class InnerException extends Exception {} try { try { throw new InnerException(); } catch (InnerException $e) { echo 31; } } catch (Exception $e) { echo 99; }",
+    );
+    assert_eq!(out, "31");
+}
+
+#[test]
+fn test_exception_throw_in_catch_rethrows() {
+    let out = compile_and_run(
+        "<?php class FirstException extends Exception {} class SecondException extends Exception {} try { try { throw new FirstException(); } catch (FirstException $e) { echo 32; throw new SecondException(); } } catch (SecondException $e) { echo 33; }",
+    );
+    assert_eq!(out, "3233");
+}
+
+#[test]
+fn test_exception_throw_in_finally_overrides_prior_exception() {
+    let out = compile_and_run(
+        "<?php class FirstException extends Exception {} class FinalException extends Exception {} try { try { throw new FirstException(); } finally { throw new FinalException(); } } catch (FinalException $e) { echo 34; }",
+    );
+    assert_eq!(out, "34");
+}
+
+#[test]
+fn test_exception_uncaught_reports_fatal_error() {
+    let err = compile_and_run_expect_failure("<?php throw new Exception();");
+    assert!(err.contains("Fatal error: uncaught exception"), "{err}");
+}
+
+#[test]
+fn test_exception_with_properties() {
+    let out = compile_and_run(
+        "<?php class HttpException extends Exception { public $status; public function __construct() { $this->status = 404; } } try { throw new HttpException(); } catch (HttpException $e) { echo $e->status; }",
+    );
+    assert_eq!(out, "404");
+}
+
+#[test]
+fn test_exception_try_catch_inside_loop() {
+    let out = compile_and_run(
+        "<?php class LoopException extends Exception {} for ($i = 0; $i < 3; $i++) { try { if ($i == 1) { throw new LoopException(); } echo $i; } catch (LoopException $e) { echo 9; } }",
+    );
+    assert_eq!(out, "092");
+}
+
+#[test]
 fn test_exception_finally_runs_on_return_break_continue() {
     let out = compile_and_run(
         "<?php function f() { try { return 5; } finally { echo 1; } } echo f(); for ($i = 0; $i < 1; $i++) { try { echo 2; break; } finally { echo 3; } } for ($j = 0; $j < 2; $j++) { try { echo $j; continue; } finally { echo 9; } }",
