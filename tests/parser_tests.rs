@@ -45,11 +45,36 @@ fn test_parse_try_catch_finally() {
                     elephc::span::Span::dummy(),
                 )],
                 catches: vec![CatchClause {
-                    exception_type: "MyException".into(),
+                    exception_types: vec!["MyException".into()],
                     variable: "err".into(),
                     body: vec![Stmt::echo(Expr::int_lit(1))],
                 }],
                 finally_body: Some(vec![Stmt::echo(Expr::int_lit(2))]),
+            },
+            elephc::span::Span::dummy(),
+        )]
+    );
+}
+
+#[test]
+fn test_parse_multi_catch() {
+    let stmts = parse_source(
+        "<?php try { throw $e; } catch (FooException | BarException $err) { echo 1; }",
+    );
+    assert_eq!(
+        stmts,
+        vec![Stmt::new(
+            StmtKind::Try {
+                try_body: vec![Stmt::new(
+                    StmtKind::Throw(Expr::var("e")),
+                    elephc::span::Span::dummy(),
+                )],
+                catches: vec![CatchClause {
+                    exception_types: vec!["FooException".into(), "BarException".into()],
+                    variable: "err".into(),
+                    body: vec![Stmt::echo(Expr::int_lit(1))],
+                }],
+                finally_body: None,
             },
             elephc::span::Span::dummy(),
         )]

@@ -150,6 +150,14 @@ fn test_exception_throw_during_concat_resets_concat_cursor() {
 }
 
 #[test]
+fn test_exception_multi_catch_matches_each_type() {
+    let out = compile_and_run(
+        "<?php class AException extends Exception {} class BException extends Exception {} function boom($flag) { if ($flag) { throw new AException(); } throw new BException(); } try { boom(true); } catch (AException | BException $e) { echo 1; } try { boom(false); } catch (AException | BException $e) { echo 2; }",
+    );
+    assert_eq!(out, "12");
+}
+
+#[test]
 fn test_exception_try_catch_cross_function() {
     let out = compile_and_run(
         "<?php class MyException extends Exception {} function boom() { throw new MyException(); } try { boom(); } catch (MyException $e) { echo 7; }",

@@ -173,7 +173,7 @@ pub fn parse_for(
     ))
 }
 
-/// Parse: try { stmts } (catch (Type $e) { stmts })+ (finally { stmts })?
+/// Parse: try { stmts } (catch (TypeA|TypeB $e) { stmts })+ (finally { stmts })?
 ///     or: try { stmts } finally { stmts }
 pub fn parse_try(
     tokens: &[(Token, Span)],
@@ -187,13 +187,27 @@ pub fn parse_try(
     while *pos < tokens.len() && tokens[*pos].0 == Token::Catch {
         *pos += 1;
         expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'catch'")?;
-        let exception_type = match tokens.get(*pos).map(|(t, _)| t) {
-            Some(Token::Identifier(name)) => name.clone(),
-            Some(Token::Self_) => "self".to_string(),
-            Some(Token::Parent) => "parent".to_string(),
-            _ => return Err(CompileError::new(span, "Expected exception class name in catch clause")),
-        };
-        *pos += 1;
+        let mut exception_types = Vec::new();
+        loop {
+            let exception_type = match tokens.get(*pos).map(|(t, _)| t) {
+                Some(Token::Identifier(name)) => name.clone(),
+                Some(Token::Self_) => "self".to_string(),
+                Some(Token::Parent) => "parent".to_string(),
+                _ => {
+                    return Err(CompileError::new(
+                        span,
+                        "Expected exception class name in catch clause",
+                    ))
+                }
+            };
+            exception_types.push(exception_type);
+            *pos += 1;
+            if *pos < tokens.len() && tokens[*pos].0 == Token::Pipe {
+                *pos += 1;
+                continue;
+            }
+            break;
+        }
         let variable = match tokens.get(*pos).map(|(t, _)| t) {
             Some(Token::Variable(name)) => name.clone(),
             _ => return Err(CompileError::new(span, "Expected catch variable after exception type")),
@@ -202,7 +216,7 @@ pub fn parse_try(
         expect_token(tokens, pos, &Token::RParen, "Expected ')' after catch clause")?;
         let body = parse_body(tokens, pos)?;
         catches.push(CatchClause {
-            exception_type,
+            exception_types,
             variable,
             body,
         });

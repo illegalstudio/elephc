@@ -210,7 +210,7 @@ fn resolve_stmts(
                         include_chain,
                     )?;
                     catches_resolved.push(crate::parser::ast::CatchClause {
-                        exception_type: catch_clause.exception_type.clone(),
+                        exception_types: catch_clause.exception_types.clone(),
                         variable: catch_clause.variable.clone(),
                         body: body_resolved,
                     });

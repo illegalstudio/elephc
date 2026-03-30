@@ -88,15 +88,26 @@ pub(super) fn emit_try_stmt(
         for catch_clause in catches {
             let catch_label = ctx.next_label("catch_body");
             let next_catch_label = ctx.next_label("catch_next");
-            let (catch_id, catch_kind) = resolve_catch_match_target(ctx, &catch_clause.exception_type);
+            for (idx, catch_type) in catch_clause.exception_types.iter().enumerate() {
+                let (catch_id, catch_kind) = resolve_catch_match_target(ctx, catch_type);
+                let mismatch_label = if idx + 1 == catch_clause.exception_types.len() {
+                    next_catch_label.clone()
+                } else {
+                    ctx.next_label("catch_type_next")
+                };
 
-            emitter.instruction("adrp x9, _exc_value@PAGE");                      // load page of the current exception slot
-            emitter.instruction("add x9, x9, _exc_value@PAGEOFF");                // resolve the current exception slot address
-            emitter.instruction("ldr x0, [x9]");                                  // load the active exception object for catch matching
-            emitter.instruction(&format!("mov x1, #{}", catch_id));               // materialize the catch target id for runtime matching
-            emitter.instruction(&format!("mov x2, #{}", catch_kind));             // tell the runtime whether this catch target is a class or interface
-            emitter.instruction("bl __rt_exception_matches");                      // test whether the current exception matches this catch clause
-            emitter.instruction(&format!("cbz x0, {}", next_catch_label));         // continue to the next catch when this clause does not match
+                emitter.instruction("adrp x9, _exc_value@PAGE");                  // load page of the current exception slot
+                emitter.instruction("add x9, x9, _exc_value@PAGEOFF");            // resolve the current exception slot address
+                emitter.instruction("ldr x0, [x9]");                              // load the active exception object for catch matching
+                emitter.instruction(&format!("mov x1, #{}", catch_id));           // materialize the catch target id for runtime matching
+                emitter.instruction(&format!("mov x2, #{}", catch_kind));         // tell the runtime whether this catch target is a class or interface
+                emitter.instruction("bl __rt_exception_matches");                  // test whether the current exception matches this catch target
+                emitter.instruction(&format!("cbz x0, {}", mismatch_label));      // move to the next type in this catch clause when it does not match
+                emitter.instruction(&format!("b {}", catch_label));               // jump into the shared catch body once any type matches
+                if idx + 1 != catch_clause.exception_types.len() {
+                    emitter.label(&mismatch_label);
+                }
+            }
 
             emitter.label(&catch_label);
             bind_catch_variable(catch_clause, emitter, ctx);

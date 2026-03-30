@@ -768,7 +768,10 @@ pub fn collect_local_vars(
             } => {
                 collect_local_vars(try_body, ctx, sig);
                 for catch_clause in catches {
-                    let catch_type_name = resolve_codegen_catch_type_name(ctx, &catch_clause.exception_type);
+                    let catch_type_name = resolve_codegen_catch_type_name(
+                        ctx,
+                        catch_clause.exception_types.first().map(String::as_str).unwrap_or("Throwable"),
+                    );
                     if !ctx.variables.contains_key(&catch_clause.variable) {
                         ctx.alloc_var(
                             &catch_clause.variable,

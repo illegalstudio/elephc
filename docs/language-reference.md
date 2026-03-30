@@ -334,6 +334,7 @@ Supported subset:
 - built-in `Exception` class and built-in `Throwable` interface are available without declaring them yourself
 - `throw <expr>;` where `<expr>` has an object type implementing `Throwable`
 - `try { ... } catch (ClassName $e) { ... }`
+- `catch (TypeA | TypeB $e)` for PHP-style multi-catch
 - catch types must extend or implement `Throwable`
 - `catch (Throwable $e)` matches objects implementing the built-in `Throwable` interface, including the built-in `Exception`
 - multiple `catch` clauses

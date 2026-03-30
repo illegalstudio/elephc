@@ -1517,6 +1517,21 @@ impl Checker {
         false
     }
 
+    fn common_catch_type_name(&self, type_names: &[String]) -> String {
+        let mut iter = type_names.iter();
+        let Some(first_name) = iter.next() else {
+            return "Throwable".to_string();
+        };
+        let mut common = first_name.clone();
+        for type_name in iter {
+            match self.common_object_type(&common, type_name) {
+                Some(PhpType::Object(next_common)) => common = next_common,
+                _ => return "Throwable".to_string(),
+            }
+        }
+        common
+    }
+
     fn resolve_catch_type_name(
         &self,
         raw_name: &str,
@@ -1583,6 +1598,12 @@ impl Checker {
     fn common_object_type(&self, left: &str, right: &str) -> Option<PhpType> {
         if left == right {
             return Some(PhpType::Object(left.to_string()));
+        }
+        if self.interfaces.contains_key(left) && self.interface_extends_interface(right, left) {
+            return Some(PhpType::Object(left.to_string()));
+        }
+        if self.interfaces.contains_key(right) && self.interface_extends_interface(left, right) {
+            return Some(PhpType::Object(right.to_string()));
         }
         if self.interfaces.contains_key(left) && self.class_implements_interface(right, left) {
             return Some(PhpType::Object(left.to_string()));
@@ -2271,28 +2292,32 @@ impl Checker {
                     self.check_stmt(s, env)?;
                 }
                 for catch_clause in catches {
-                    let exception_type =
-                        self.resolve_catch_type_name(&catch_clause.exception_type, stmt.span)?;
-                    if !self.classes.contains_key(&exception_type)
-                        && !self.interfaces.contains_key(&exception_type)
-                    {
-                        return Err(CompileError::new(
-                            stmt.span,
-                            &format!("Undefined class: {}", exception_type),
-                        ));
-                    }
-                    if !self.object_type_implements_throwable(&exception_type) {
-                        return Err(CompileError::new(
-                            stmt.span,
-                            &format!(
-                                "Catch type must extend or implement Throwable: {}",
-                                exception_type
-                            ),
-                        ));
+                    let mut resolved_types = Vec::new();
+                    for raw_exception_type in &catch_clause.exception_types {
+                        let exception_type =
+                            self.resolve_catch_type_name(raw_exception_type, stmt.span)?;
+                        if !self.classes.contains_key(&exception_type)
+                            && !self.interfaces.contains_key(&exception_type)
+                        {
+                            return Err(CompileError::new(
+                                stmt.span,
+                                &format!("Undefined class: {}", exception_type),
+                            ));
+                        }
+                        if !self.object_type_implements_throwable(&exception_type) {
+                            return Err(CompileError::new(
+                                stmt.span,
+                                &format!(
+                                    "Catch type must extend or implement Throwable: {}",
+                                    exception_type
+                                ),
+                            ));
+                        }
+                        resolved_types.push(exception_type);
                     }
                     env.insert(
                         catch_clause.variable.clone(),
-                        PhpType::Object(exception_type),
+                        PhpType::Object(self.common_catch_type_name(&resolved_types)),
                     );
                     for s in &catch_clause.body {
                         self.check_stmt(s, env)?;
