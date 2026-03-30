@@ -111,10 +111,26 @@ fn test_error_throw_requires_object() {
 }
 
 #[test]
+fn test_error_throw_requires_throwable() {
+    expect_error(
+        "<?php class PlainObject {} throw new PlainObject();",
+        "throw requires an object implementing Throwable",
+    );
+}
+
+#[test]
 fn test_error_catch_requires_defined_class() {
     expect_error(
         "<?php try { echo 1; } catch (MissingException $e) { echo 2; }",
         "Undefined class: MissingException",
+    );
+}
+
+#[test]
+fn test_error_catch_requires_throwable_type() {
+    expect_error(
+        "<?php class PlainObject {} try { throw new Exception(); } catch (PlainObject $e) { echo 2; }",
+        "Catch type must extend or implement Throwable: PlainObject",
     );
 }
 

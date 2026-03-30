@@ -124,7 +124,7 @@ fn assemble_and_run(
 #[test]
 fn test_exception_try_catch_same_function() {
     let out = compile_and_run(
-        "<?php class MyException {} try { throw new MyException(); } catch (MyException $e) { echo 42; }",
+        "<?php class MyException extends Exception {} try { throw new MyException(); } catch (MyException $e) { echo 42; }",
     );
     assert_eq!(out, "42");
 }
@@ -144,7 +144,7 @@ fn test_builtin_throwable_catches_exception() {
 #[test]
 fn test_exception_try_catch_cross_function() {
     let out = compile_and_run(
-        "<?php class MyException {} function boom() { throw new MyException(); } try { boom(); } catch (MyException $e) { echo 7; }",
+        "<?php class MyException extends Exception {} function boom() { throw new MyException(); } try { boom(); } catch (MyException $e) { echo 7; }",
     );
     assert_eq!(out, "7");
 }

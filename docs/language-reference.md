@@ -310,7 +310,7 @@ Exceptions work with object values:
 ```php
 <?php
 
-class DivisionByZeroException {}
+class DivisionByZeroException extends Exception {}
 
 function divide($left, $right) {
     if ($right == 0) {
@@ -332,8 +332,9 @@ try {
 Supported subset:
 
 - built-in `Exception` class and built-in `Throwable` interface are available without declaring them yourself
-- `throw <expr>;` where `<expr>` has an object type
+- `throw <expr>;` where `<expr>` has an object type implementing `Throwable`
 - `try { ... } catch (ClassName $e) { ... }`
+- catch types must extend or implement `Throwable`
 - `catch (Throwable $e)` matches objects implementing the built-in `Throwable` interface, including the built-in `Exception`
 - multiple `catch` clauses
 - `try { ... } finally { ... }`

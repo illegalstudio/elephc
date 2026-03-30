@@ -1484,6 +1484,39 @@ impl Checker {
             .is_some_and(|class_info| class_info.interfaces.iter().any(|name| name == interface_name))
     }
 
+    fn interface_extends_interface(&self, interface_name: &str, ancestor_name: &str) -> bool {
+        if interface_name == ancestor_name {
+            return true;
+        }
+        let mut stack = vec![interface_name.to_string()];
+        let mut seen = HashSet::new();
+        while let Some(current_name) = stack.pop() {
+            if !seen.insert(current_name.clone()) {
+                continue;
+            }
+            let Some(interface_info) = self.interfaces.get(&current_name) else {
+                continue;
+            };
+            for parent_name in &interface_info.parents {
+                if parent_name == ancestor_name {
+                    return true;
+                }
+                stack.push(parent_name.clone());
+            }
+        }
+        false
+    }
+
+    fn object_type_implements_throwable(&self, type_name: &str) -> bool {
+        if self.classes.contains_key(type_name) {
+            return self.class_implements_interface(type_name, "Throwable");
+        }
+        if self.interfaces.contains_key(type_name) {
+            return self.interface_extends_interface(type_name, "Throwable");
+        }
+        false
+    }
+
     fn resolve_catch_type_name(
         &self,
         raw_name: &str,
@@ -2216,7 +2249,13 @@ impl Checker {
             StmtKind::Throw(expr) => {
                 let thrown_ty = self.infer_type(expr, env)?;
                 match thrown_ty {
-                    PhpType::Object(_) => Ok(()),
+                    PhpType::Object(type_name) if self.object_type_implements_throwable(&type_name) => {
+                        Ok(())
+                    }
+                    PhpType::Object(_) => Err(CompileError::new(
+                        stmt.span,
+                        "Type error: throw requires an object implementing Throwable",
+                    )),
                     _ => Err(CompileError::new(
                         stmt.span,
                         "Type error: throw requires an object value",
@@ -2240,6 +2279,15 @@ impl Checker {
                         return Err(CompileError::new(
                             stmt.span,
                             &format!("Undefined class: {}", exception_type),
+                        ));
+                    }
+                    if !self.object_type_implements_throwable(&exception_type) {
+                        return Err(CompileError::new(
+                            stmt.span,
+                            &format!(
+                                "Catch type must extend or implement Throwable: {}",
+                                exception_type
+                            ),
                         ));
                     }
                     env.insert(

@@ -1,6 +1,6 @@
 <?php
 
-class DivisionByZeroException {}
+class DivisionByZeroException extends Exception {}
 
 function safe_divide($left, $right) {
     if ($right == 0) {
