@@ -49,17 +49,12 @@ jobs:
               json.dump({"total_uniques": total, "daily": dict(sorted(daily.items()))}, f, indent=2)
               f.write("\n")
 
-          with open(".github/traffic/clones-badge.json", "w") as f:
-              json.dump({
-                  "schemaVersion": 1,
-                  "label": "unique cloners",
-                  "message": str(total),
-                  "color": "blue",
-                  "namedLogo": "git",
-                  "style": "flat-square"
-              }, f, indent=2)
-              f.write("\n")
           PYEOF
+
+      - name: Download badge SVG
+        run: |
+          TOTAL=$(python3 -c "import json; print(json.load(open('.github/traffic/clones.json'))['total_uniques'])")
+          curl -s "https://img.shields.io/badge/cloners-${TOTAL}-blue?style=flat-square&logo=git" -o .github/traffic/clones-badge.svg
 
       - name: Commit updated stats
         run: |
