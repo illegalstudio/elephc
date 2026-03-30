@@ -32,8 +32,8 @@ pub(super) fn emit_do_while_stmt(
     emitter.label(&loop_cond);
     let cond_ty = emit_expr(condition, emitter, ctx, data);
     crate::codegen::expr::coerce_to_truthiness(emitter, ctx, &cond_ty);
-    emitter.instruction("cmp x0, #0");                                              // test if do-while condition is zero (falsy)
-    emitter.instruction(&format!("b.ne {}", loop_start));                           // loop back to start if condition is nonzero (truthy)
+    emitter.instruction("cmp x0, #0");                                          // test if do-while condition is zero (falsy)
+    emitter.instruction(&format!("b.ne {}", loop_start));                       // loop back to start if condition is nonzero (truthy)
     emitter.label(&loop_end);
 }
 
@@ -52,8 +52,8 @@ pub(super) fn emit_while_stmt(
     emitter.label(&loop_start);
     let cond_ty = emit_expr(condition, emitter, ctx, data);
     crate::codegen::expr::coerce_to_truthiness(emitter, ctx, &cond_ty);
-    emitter.instruction("cmp x0, #0");                                              // test if while condition is zero (falsy)
-    emitter.instruction(&format!("b.eq {}", loop_end));                             // exit loop if condition is false
+    emitter.instruction("cmp x0, #0");                                          // test if while condition is zero (falsy)
+    emitter.instruction(&format!("b.eq {}", loop_end));                         // exit loop if condition is false
 
     ctx.loop_stack.push(LoopLabels {
         continue_label: loop_start.clone(),
@@ -65,7 +65,7 @@ pub(super) fn emit_while_stmt(
     }
     ctx.loop_stack.pop();
 
-    emitter.instruction(&format!("b {}", loop_start));                              // unconditional branch back to loop start
+    emitter.instruction(&format!("b {}", loop_start));                          // unconditional branch back to loop start
     emitter.label(&loop_end);
 }
 
@@ -94,8 +94,8 @@ pub(super) fn emit_for_stmt(
     if let Some(cond) = condition {
         let cond_ty = emit_expr(cond, emitter, ctx, data);
         crate::codegen::expr::coerce_to_truthiness(emitter, ctx, &cond_ty);
-        emitter.instruction("cmp x0, #0");                                          // test if for-loop condition is zero (falsy)
-        emitter.instruction(&format!("b.eq {}", loop_end));                         // exit loop if condition is false
+        emitter.instruction("cmp x0, #0");                                      // test if for-loop condition is zero (falsy)
+        emitter.instruction(&format!("b.eq {}", loop_end));                     // exit loop if condition is false
     }
 
     ctx.loop_stack.push(LoopLabels {
@@ -112,7 +112,7 @@ pub(super) fn emit_for_stmt(
     if let Some(s) = update {
         super::super::emit_stmt(s, emitter, ctx, data);
     }
-    emitter.instruction(&format!("b {}", loop_start));                              // unconditional branch back to loop start
+    emitter.instruction(&format!("b {}", loop_start));                          // unconditional branch back to loop start
     emitter.label(&loop_end);
 }
 
@@ -121,7 +121,7 @@ pub(super) fn emit_break_stmt(emitter: &mut Emitter, ctx: &Context) {
         .loop_stack
         .last()
         .expect("codegen bug: break statement outside loop (should have been caught by type checker)");
-    emitter.instruction(&format!("b {}", labels.break_label));                      // unconditional branch to loop exit label
+    emitter.instruction(&format!("b {}", labels.break_label));                  // unconditional branch to loop exit label
 }
 
 pub(super) fn emit_return_stmt(
@@ -139,9 +139,9 @@ pub(super) fn emit_return_stmt(
     if let Some(label) = &ctx.return_label {
         let sp_total: usize = ctx.loop_stack.iter().map(|l| l.sp_adjust).sum();
         if sp_total > 0 {
-            emitter.instruction(&format!("add sp, sp, #{}", sp_total));             // pop switch subjects before returning
+            emitter.instruction(&format!("add sp, sp, #{}", sp_total));         // pop switch subjects before returning
         }
-        emitter.instruction(&format!("b {}", label));                               // branch to function epilogue for stack cleanup and ret
+        emitter.instruction(&format!("b {}", label));                           // branch to function epilogue for stack cleanup and ret
     }
 }
 
@@ -150,5 +150,5 @@ pub(super) fn emit_continue_stmt(emitter: &mut Emitter, ctx: &Context) {
         .loop_stack
         .last()
         .expect("codegen bug: continue statement outside loop (should have been caught by type checker)");
-    emitter.instruction(&format!("b {}", labels.continue_label));                   // unconditional branch to loop continue label
+    emitter.instruction(&format!("b {}", labels.continue_label));               // unconditional branch to loop continue label
 }

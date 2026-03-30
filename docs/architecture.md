@@ -36,7 +36,7 @@ PHP source (.php)
      ▼
 ┌─────────┐
 │ Codegen  │  src/codegen/
-│          │  mod.rs, expr.rs, stmt.rs, functions.rs, abi.rs
+│          │  mod.rs, expr.rs + expr/, stmt.rs + stmt/, functions.rs, abi.rs
 │          │  AST → ARM64 assembly string (.s file)
 └────┬─────┘
      │
@@ -81,7 +81,26 @@ src/
 ├── codegen/
 │   ├── mod.rs                 generate() orchestration
 │   ├── expr.rs                Expression codegen
+│   ├── expr/                  Expression submodules
+│   │   ├── arrays.rs          Indexed/assoc arrays, match, array access
+│   │   ├── binops.rs          Arithmetic, comparison, bitwise, null-coalesce helpers
+│   │   ├── calls.rs           Function / closure / indirect call dispatch
+│   │   ├── calls/             Call-specific helpers
+│   │   ├── coerce.rs          Truthiness / string / null coercions
+│   │   ├── compare.rs         Comparison and widening helpers
+│   │   ├── helpers.rs         Shared expression-codegen utilities
+│   │   ├── objects.rs         Object-expression dispatch
+│   │   ├── objects/           Allocation / property / method dispatch helpers
+│   │   └── ownership.rs       Result ownership classification
 │   ├── stmt.rs                Statement codegen
+│   ├── stmt/                  Statement submodules
+│   │   ├── assignments.rs     Variable / property assignment helpers
+│   │   ├── arrays.rs          Array statement dispatch
+│   │   ├── arrays/            Array assign / push / list-unpack helpers
+│   │   ├── control_flow.rs    Loop / branch dispatch
+│   │   ├── control_flow/      Branching / foreach / loop helpers
+│   │   ├── io.rs              Echo / print helpers
+│   │   └── storage.rs         Global / static / extern-global helpers
 │   ├── functions.rs           User function emission
 │   ├── abi.rs                 ARM64 register conventions
 │   ├── ffi.rs                 Extern function/global/class codegen

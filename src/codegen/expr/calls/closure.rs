@@ -131,8 +131,8 @@ pub(super) fn emit_closure(
     });
 
     emitter.comment("closure: load function address");
-    emitter.instruction(&format!("adrp x0, {}@PAGE", closure_label));               // load page base of closure function
-    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", closure_label));         // add page offset to get exact closure address
+    emitter.instruction(&format!("adrp x0, {}@PAGE", closure_label));           // load page base of closure function
+    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", closure_label));     // add page offset to get exact closure address
     PhpType::Callable
 }
 
@@ -210,16 +210,16 @@ pub(super) fn emit_closure_call(
             | PhpType::Object(_)
             | PhpType::Pointer(_) => {
                 crate::codegen::abi::load_at_offset(emitter, "x0", cap_offset);     // load captured int/bool/array value
-                emitter.instruction("str x0, [sp, #-16]!");                         // push captured value onto stack
+                emitter.instruction("str x0, [sp, #-16]!");                     // push captured value onto stack
             }
             PhpType::Float => {
                 crate::codegen::abi::load_at_offset(emitter, "d0", cap_offset);     // load captured float value
-                emitter.instruction("str d0, [sp, #-16]!");                         // push captured float onto stack
+                emitter.instruction("str d0, [sp, #-16]!");                     // push captured float onto stack
             }
             PhpType::Str => {
                 crate::codegen::abi::load_at_offset(emitter, "x1", cap_offset);     // load captured string pointer
                 crate::codegen::abi::load_at_offset(emitter, "x2", cap_offset - 8); // load captured string length
-                emitter.instruction("stp x1, x2, [sp, #-16]!");                     // push captured string ptr+len onto stack
+                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push captured string ptr+len onto stack
             }
             PhpType::Void => {}
         }
@@ -236,11 +236,11 @@ pub(super) fn emit_closure_call(
     };
     let var_offset = var_info.stack_offset;
     crate::codegen::abi::load_at_offset(emitter, "x9", var_offset);                // load closure function address from stack
-    emitter.instruction("str x9, [sp, #-16]!");                                     // push closure address temporarily
+    emitter.instruction("str x9, [sp, #-16]!");                                 // push closure address temporarily
 
     let assignments = args::build_arg_assignments(&arg_types, 0);
 
-    emitter.instruction("ldr x9, [sp], #16");                                       // pop closure function address into x9
+    emitter.instruction("ldr x9, [sp], #16");                                   // pop closure function address into x9
     args::load_arg_assignments(emitter, &assignments, total_args);
 
     let ret_ty = ctx
@@ -249,9 +249,9 @@ pub(super) fn emit_closure_call(
         .map(|s| s.return_type.clone())
         .unwrap_or(PhpType::Int);
 
-    emitter.instruction("mov x19, x9");                                             // preserve closure address across concat-offset save
+    emitter.instruction("mov x19, x9");                                         // preserve closure address across concat-offset save
     super::super::save_concat_offset_before_nested_call(emitter);
-    emitter.instruction("blr x19");                                                 // branch to closure via function pointer in x19
+    emitter.instruction("blr x19");                                             // branch to closure via function pointer in x19
     super::super::restore_concat_offset_after_nested_call(emitter, &ret_ty);
 
     ret_ty

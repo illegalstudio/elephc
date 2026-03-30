@@ -111,7 +111,10 @@ Things that do something:
 
 ### Statement dispatch
 
-At statement level, `stmt.rs` selects the parser entry point from the current token:
+At statement level, parsing is split between `parser/mod.rs` and `stmt.rs`:
+
+- `parse()` in `mod.rs` special-cases `extern` so one `extern "lib" { ... }` block can expand into multiple AST statements.
+- Everything else flows through `stmt::parse_stmt()`, which selects the parser entry point from the current token.
 
 | Current token | Parse as |
 |---|---|
@@ -295,7 +298,7 @@ parent::boot()   →  StaticMethodCall { receiver: Parent, method: "boot", args:
 
 **Files:** `src/parser/stmt.rs`, `src/parser/control.rs`
 
-Statement parsing is simpler — it looks at the current token to decide what kind of statement to parse:
+Statement parsing is simpler — after `parse()` has peeled off top-level `extern` blocks, `stmt.rs` looks at the current token to decide what kind of statement to parse:
 
 | Current token | Parse as |
 |---|---|
@@ -308,9 +311,10 @@ Statement parsing is simpler — it looks at the current token to decide what ki
 | `Foreach` | `Foreach` loop |
 | `Switch` | `Switch` statement with cases and optional default |
 | `Function` | Function declaration with parameters and body |
-| `Class` | Class declaration with properties and methods |
+| `Class` / `Abstract Class` | Class declaration with properties and methods |
+| `Interface` | Interface declaration |
 | `Trait` | Trait declaration with trait uses, properties, and methods |
-| `Extern` | Extern function / class / global declarations |
+| `Extern` | Handled one level up in `parser/mod.rs` via `parse_extern_stmts()` |
 | `Return` | Return with optional expression |
 | `Break` | Break statement |
 | `Continue` | Continue statement |

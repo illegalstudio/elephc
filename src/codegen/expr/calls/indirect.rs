@@ -24,12 +24,12 @@ pub(super) fn emit_expr_call(
     }
 
     let _callee_ty = super::super::emit_expr(callee, emitter, ctx, data);
-    emitter.instruction("mov x9, x0");                                              // save closure address to x9
-    emitter.instruction("str x9, [sp, #-16]!");                                     // push closure address temporarily
+    emitter.instruction("mov x9, x0");                                          // save closure address to x9
+    emitter.instruction("str x9, [sp, #-16]!");                                 // push closure address temporarily
 
     let assignments = args::build_arg_assignments(&arg_types, 0);
 
-    emitter.instruction("ldr x9, [sp], #16");                                       // pop closure function address into x9
+    emitter.instruction("ldr x9, [sp], #16");                                   // pop closure function address into x9
     args::load_arg_assignments(emitter, &assignments, args_exprs.len());
 
     let ret_ty = match &callee.kind {
@@ -55,9 +55,9 @@ pub(super) fn emit_expr_call(
         _ => PhpType::Int,
     };
 
-    emitter.instruction("mov x19, x9");                                             // preserve closure address across concat-offset save
+    emitter.instruction("mov x19, x9");                                         // preserve closure address across concat-offset save
     super::super::save_concat_offset_before_nested_call(emitter);
-    emitter.instruction("blr x19");                                                 // branch to closure via function pointer in x19
+    emitter.instruction("blr x19");                                             // branch to closure via function pointer in x19
     super::super::restore_concat_offset_after_nested_call(emitter, &ret_ty);
 
     ret_ty

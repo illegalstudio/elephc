@@ -76,7 +76,7 @@ pub(super) fn emit_property_access(
     };
 
     if needs_deref {
-        emitter.instruction("bl __rt_ptr_check_nonnull");                           // abort with fatal error on null pointer dereference
+        emitter.instruction("bl __rt_ptr_check_nonnull");                       // abort with fatal error on null pointer dereference
         emitter.comment(&format!(
             "->{} via ptr<{}> (offset {})",
             property, class_name, offset
@@ -87,21 +87,21 @@ pub(super) fn emit_property_access(
 
     match &prop_ty {
         PhpType::Str => {
-            emitter.instruction(&format!("ldr x1, [x0, #{}]", offset));             // load string pointer from property
-            emitter.instruction(&format!("ldr x2, [x0, #{}]", offset + 8));         // load string length from property
+            emitter.instruction(&format!("ldr x1, [x0, #{}]", offset));         // load string pointer from property
+            emitter.instruction(&format!("ldr x2, [x0, #{}]", offset + 8));     // load string length from property
         }
         PhpType::Float => {
-            emitter.instruction(&format!("ldr d0, [x0, #{}]", offset));             // load float from property
+            emitter.instruction(&format!("ldr d0, [x0, #{}]", offset));         // load float from property
         }
         PhpType::Bool | PhpType::Int | PhpType::Void => {
-            emitter.instruction(&format!("ldr x0, [x0, #{}]", offset));             // load int/bool from property
+            emitter.instruction(&format!("ldr x0, [x0, #{}]", offset));         // load int/bool from property
         }
         PhpType::Array(_)
         | PhpType::AssocArray { .. }
         | PhpType::Callable
         | PhpType::Object(_)
         | PhpType::Pointer(_) => {
-            emitter.instruction(&format!("ldr x0, [x0, #{}]", offset));             // load heap pointer from property
+            emitter.instruction(&format!("ldr x0, [x0, #{}]", offset));         // load heap pointer from property
         }
     }
 

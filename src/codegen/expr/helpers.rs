@@ -40,8 +40,8 @@ pub(super) fn coerce_result_to_type(
         && matches!(source_ty, PhpType::Int | PhpType::Bool | PhpType::Void)
     {
         if *source_ty == PhpType::Void {
-            emitter.instruction("mov x0, #0");                                      // null widens to numeric zero before float coercion
+            emitter.instruction("mov x0, #0");                                  // null widens to numeric zero before float coercion
         }
-        emitter.instruction("scvtf d0, x0");                                        // convert integer-like value to float for unified result type
+        emitter.instruction("scvtf d0, x0");                                    // convert integer-like value to float for unified result type
     }
 }

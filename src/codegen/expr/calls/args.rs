@@ -10,13 +10,13 @@ pub(super) fn push_arg_value(emitter: &mut Emitter, ty: &PhpType) {
         | PhpType::Callable
         | PhpType::Object(_)
         | PhpType::Pointer(_) => {
-            emitter.instruction("str x0, [sp, #-16]!");                             // push int/bool/array/callable/pointer arg onto stack
+            emitter.instruction("str x0, [sp, #-16]!");                         // push int/bool/array/callable/pointer arg onto stack
         }
         PhpType::Float => {
-            emitter.instruction("str d0, [sp, #-16]!");                             // push float arg onto stack
+            emitter.instruction("str d0, [sp, #-16]!");                         // push float arg onto stack
         }
         PhpType::Str => {
-            emitter.instruction("stp x1, x2, [sp, #-16]!");                         // push string ptr+len arg onto stack
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // push string ptr+len arg onto stack
         }
         PhpType::Void => {}
     }
@@ -56,13 +56,13 @@ pub(super) fn load_arg_assignments(
             | PhpType::Callable
             | PhpType::Object(_)
             | PhpType::Pointer(_) => {
-                emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg));     // pop int-like arg into register
+                emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop int-like arg into register
             }
             PhpType::Float => {
-                emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg));     // pop float arg into float register
+                emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); // pop float arg into float register
             }
             PhpType::Str => {
-                emitter.instruction(&format!(
+                emitter.instruction(&format!(                                   // pop string ptr+len arg into consecutive registers
                     "ldp x{}, x{}, [sp], #16",
                     start_reg,
                     start_reg + 1

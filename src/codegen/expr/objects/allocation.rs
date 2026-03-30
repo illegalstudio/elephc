@@ -29,20 +29,20 @@ pub(super) fn emit_new_object(
     emitter.comment(&format!("new {}()", class_name));
 
     // -- allocate object on heap --
-    emitter.instruction(&format!("mov x0, #{}", obj_size));                         // object size in bytes
-    emitter.instruction("bl __rt_heap_alloc");                                      // allocate object -> x0 = pointer
-    emitter.instruction("mov x9, #4");                                              // heap kind 4 = object instance
-    emitter.instruction("str x9, [x0, #-8]");                                       // store object kind in the uniform heap header
-    emitter.instruction(&format!("mov x10, #{}", class_info.class_id));             // load compile-time class id
-    emitter.instruction("str x10, [x0]");                                           // store class id at object header
-    emitter.instruction("str x0, [sp, #-16]!");                                     // save object pointer on stack
+    emitter.instruction(&format!("mov x0, #{}", obj_size));                     // object size in bytes
+    emitter.instruction("bl __rt_heap_alloc");                                  // allocate object -> x0 = pointer
+    emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
+    emitter.instruction("str x9, [x0, #-8]");                                   // store object kind in the uniform heap header
+    emitter.instruction(&format!("mov x10, #{}", class_info.class_id));         // load compile-time class id
+    emitter.instruction("str x10, [x0]");                                       // store class id at object header
+    emitter.instruction("str x0, [sp, #-16]!");                                 // save object pointer on stack
 
     // -- zero-initialize all property slots --
     for i in 0..num_props {
         let offset = 8 + i * 16;
-        emitter.instruction("ldr x9, [sp]");                                        // peek object pointer
-        emitter.instruction(&format!("str xzr, [x9, #{}]", offset));                // zero-init property lo
-        emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8));            // zero-init property hi
+        emitter.instruction("ldr x9, [sp]");                                    // peek object pointer
+        emitter.instruction(&format!("str xzr, [x9, #{}]", offset));            // zero-init property lo
+        emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8));        // zero-init property hi
     }
 
     // -- set default property values --
@@ -51,36 +51,36 @@ pub(super) fn emit_new_object(
             let default_expr = default_expr.clone();
             let offset = 8 + i * 16;
             let prop_ty = emit_expr(&default_expr, emitter, ctx, data);
-            emitter.instruction("ldr x9, [sp]");                                    // peek object pointer
+            emitter.instruction("ldr x9, [sp]");                                // peek object pointer
             match &prop_ty {
                 PhpType::Int
                 | PhpType::Bool
                 | PhpType::Callable
                 | PhpType::Pointer(_) => {
-                    emitter.instruction(&format!("str x0, [x9, #{}]", offset));     // store default value
+                    emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
                     emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8)); // clear runtime property metadata slot
                 }
                 PhpType::Array(_) => {
-                    emitter.instruction(&format!("str x0, [x9, #{}]", offset));     // store default value
-                    emitter.instruction("mov x10, #4");                             // runtime property tag 4 = indexed array
+                    emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
+                    emitter.instruction("mov x10, #4");                         // runtime property tag 4 = indexed array
                     emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); // store runtime property metadata tag
                 }
                 PhpType::AssocArray { .. } => {
-                    emitter.instruction(&format!("str x0, [x9, #{}]", offset));     // store default value
-                    emitter.instruction("mov x10, #5");                             // runtime property tag 5 = associative array
+                    emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
+                    emitter.instruction("mov x10, #5");                         // runtime property tag 5 = associative array
                     emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); // store runtime property metadata tag
                 }
                 PhpType::Object(_) => {
-                    emitter.instruction(&format!("str x0, [x9, #{}]", offset));     // store default value
-                    emitter.instruction("mov x10, #6");                             // runtime property tag 6 = object
+                    emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
+                    emitter.instruction("mov x10, #6");                         // runtime property tag 6 = object
                     emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); // store runtime property metadata tag
                 }
                 PhpType::Float => {
-                    emitter.instruction(&format!("str d0, [x9, #{}]", offset));     // store float default
+                    emitter.instruction(&format!("str d0, [x9, #{}]", offset)); // store float default
                     emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8)); // clear runtime property metadata slot
                 }
                 PhpType::Str => {
-                    emitter.instruction(&format!("str x1, [x9, #{}]", offset));     // store string pointer
+                    emitter.instruction(&format!("str x1, [x9, #{}]", offset)); // store string pointer
                     emitter.instruction(&format!("str x2, [x9, #{}]", offset + 8)); // store string length
                 }
                 PhpType::Void => {}
@@ -102,13 +102,13 @@ pub(super) fn emit_new_object(
                 | PhpType::Callable
                 | PhpType::Object(_)
                 | PhpType::Pointer(_) => {
-                    emitter.instruction("str x0, [sp, #-16]!");                     // push int/object arg onto stack
+                    emitter.instruction("str x0, [sp, #-16]!");                 // push int/object arg onto stack
                 }
                 PhpType::Float => {
-                    emitter.instruction("str d0, [sp, #-16]!");                     // push float arg onto stack
+                    emitter.instruction("str d0, [sp, #-16]!");                 // push float arg onto stack
                 }
                 PhpType::Str => {
-                    emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push string ptr+len onto stack
+                    emitter.instruction("stp x1, x2, [sp, #-16]!");             // push string ptr+len onto stack
                 }
                 PhpType::Void => {}
             }
@@ -145,7 +145,7 @@ pub(super) fn emit_new_object(
                     emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); // pop float arg
                 }
                 PhpType::Str => {
-                    emitter.instruction(&format!(
+                    emitter.instruction(&format!(                               // pop string constructor arg into consecutive registers
                         "ldp x{}, x{}, [sp], #16",
                         start_reg,
                         start_reg + 1
@@ -155,7 +155,7 @@ pub(super) fn emit_new_object(
             }
         }
 
-        emitter.instruction("ldr x0, [sp]");                                        // load $this pointer for constructor
+        emitter.instruction("ldr x0, [sp]");                                    // load $this pointer for constructor
         save_concat_offset_before_nested_call(emitter);
         let constructor_impl = class_info
             .method_impl_classes
@@ -166,6 +166,6 @@ pub(super) fn emit_new_object(
         restore_concat_offset_after_nested_call(emitter, &PhpType::Void);
     }
 
-    emitter.instruction("ldr x0, [sp], #16");                                       // pop object pointer into x0
+    emitter.instruction("ldr x0, [sp], #16");                                   // pop object pointer into x0
     PhpType::Object(class_name.to_string())
 }

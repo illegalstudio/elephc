@@ -72,7 +72,7 @@ pub(super) fn emit_function_call(
                 if ctx.global_vars.contains(var_name) {
                     let label = format!("_gvar_{}", var_name);
                     emitter.comment(&format!("ref arg: address of global ${}", var_name));
-                    emitter.instruction(&format!("adrp x0, {}@PAGE", label));       // load page of global var
+                    emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page of global var
                     emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); // add page offset
                 } else {
                     let var = match ctx.variables.get(var_name) {
@@ -84,12 +84,12 @@ pub(super) fn emit_function_call(
                     };
                     let offset = var.stack_offset;
                     emitter.comment(&format!("ref arg: address of ${}", var_name));
-                    emitter.instruction(&format!("sub x0, x29, #{}", offset));      // compute address of local variable
+                    emitter.instruction(&format!("sub x0, x29, #{}", offset));  // compute address of local variable
                 }
             } else {
                 super::super::emit_expr(arg, emitter, ctx, data);
             }
-            emitter.instruction("str x0, [sp, #-16]!");                             // push address onto stack
+            emitter.instruction("str x0, [sp, #-16]!");                         // push address onto stack
             arg_types.push(PhpType::Int);
         } else {
             let ty = super::super::emit_expr(arg, emitter, ctx, data);
@@ -115,26 +115,26 @@ pub(super) fn emit_function_call(
                 PhpType::Int
             };
 
-            emitter.instruction("mov x9, x0");                                      // save array pointer in x9
-            emitter.instruction("add x9, x9, #24");                                 // skip 24-byte array header to reach data
+            emitter.instruction("mov x9, x0");                                  // save array pointer in x9
+            emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header to reach data
             for idx in 0..remaining {
                 match &elem_ty {
                     PhpType::Int | PhpType::Bool => {
                         emitter.instruction(&format!("ldr x0, [x9, #{}]", idx * 8)); // load int element at offset index*8
-                        emitter.instruction("str x0, [sp, #-16]!");                 // push unpacked int arg onto stack
+                        emitter.instruction("str x0, [sp, #-16]!");             // push unpacked int arg onto stack
                     }
                     PhpType::Float => {
                         emitter.instruction(&format!("ldr d0, [x9, #{}]", idx * 8)); // load float element at offset index*8
-                        emitter.instruction("str d0, [sp, #-16]!");                 // push unpacked float arg onto stack
+                        emitter.instruction("str d0, [sp, #-16]!");             // push unpacked float arg onto stack
                     }
                     PhpType::Str => {
                         emitter.instruction(&format!("ldr x1, [x9, #{}]", idx * 16)); // load string pointer at offset index*16
                         emitter.instruction(&format!("ldr x2, [x9, #{}]", idx * 16 + 8)); // load string length at offset index*16+8
-                        emitter.instruction("stp x1, x2, [sp, #-16]!");             // push unpacked string arg onto stack
+                        emitter.instruction("stp x1, x2, [sp, #-16]!");         // push unpacked string arg onto stack
                     }
                     _ => {
                         emitter.instruction(&format!("ldr x0, [x9, #{}]", idx * 8)); // load element at offset index*8
-                        emitter.instruction("str x0, [sp, #-16]!");                 // push unpacked arg onto stack
+                        emitter.instruction("str x0, [sp, #-16]!");             // push unpacked arg onto stack
                     }
                 }
                 arg_types.push(elem_ty.clone());
@@ -147,13 +147,13 @@ pub(super) fn emit_function_call(
             emitter.comment("spread array as variadic param");
             let ty = super::super::emit_expr(spread_expr, emitter, ctx, data);
             super::super::retain_borrowed_heap_arg(emitter, spread_expr, &ty);
-            emitter.instruction("str x0, [sp, #-16]!");                             // push variadic array pointer onto stack
+            emitter.instruction("str x0, [sp, #-16]!");                         // push variadic array pointer onto stack
         } else if variadic_args.is_empty() {
             emitter.comment("empty variadic array");
-            emitter.instruction("mov x0, #4");                                      // initial capacity: 4 (grows dynamically)
-            emitter.instruction("mov x1, #8");                                      // element size: 8 bytes
-            emitter.instruction("bl __rt_array_new");                               // allocate empty array for variadic param
-            emitter.instruction("str x0, [sp, #-16]!");                             // push empty variadic array onto stack
+            emitter.instruction("mov x0, #4");                                  // initial capacity: 4 (grows dynamically)
+            emitter.instruction("mov x1, #8");                                  // element size: 8 bytes
+            emitter.instruction("bl __rt_array_new");                           // allocate empty array for variadic param
+            emitter.instruction("str x0, [sp, #-16]!");                         // push empty variadic array onto stack
         } else {
             let n = variadic_args.len();
             emitter.comment(&format!("build variadic array ({} elements)", n));
@@ -165,14 +165,14 @@ pub(super) fn emit_function_call(
                 PhpType::Str => 16,
                 _ => 8,
             };
-            emitter.instruction(&format!("mov x0, #{}", n));                        // capacity: exact element count (grows if needed)
-            emitter.instruction(&format!("mov x1, #{}", es));                       // element size in bytes
-            emitter.instruction("bl __rt_array_new");                               // allocate array for variadic args
-            emitter.instruction("str x0, [sp, #-16]!");                             // save variadic array pointer on stack
+            emitter.instruction(&format!("mov x0, #{}", n));                    // capacity: exact element count (grows if needed)
+            emitter.instruction(&format!("mov x1, #{}", es));                   // element size in bytes
+            emitter.instruction("bl __rt_array_new");                           // allocate array for variadic args
+            emitter.instruction("str x0, [sp, #-16]!");                         // save variadic array pointer on stack
 
             for (i, varg) in variadic_args.iter().enumerate() {
                 let ty = super::super::emit_expr(varg, emitter, ctx, data);
-                emitter.instruction("ldr x9, [sp]");                                // peek variadic array pointer from stack
+                emitter.instruction("ldr x9, [sp]");                            // peek variadic array pointer from stack
                 match &ty {
                     PhpType::Int | PhpType::Bool => {
                         emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); // store int element at data offset
@@ -189,8 +189,8 @@ pub(super) fn emit_function_call(
                     }
                     _ => {}
                 }
-                emitter.instruction(&format!("mov x10, #{}", i + 1));               // new length after adding this element
-                emitter.instruction("str x10, [x9]");                               // write updated length to array header
+                emitter.instruction(&format!("mov x10, #{}", i + 1));           // new length after adding this element
+                emitter.instruction("str x10, [x9]");                           // write updated length to array header
             }
         }
         arg_types.push(PhpType::Array(Box::new(PhpType::Int)));
@@ -206,7 +206,7 @@ pub(super) fn emit_function_call(
         .unwrap_or(PhpType::Void);
 
     super::super::save_concat_offset_before_nested_call(emitter);
-    emitter.instruction(&format!("bl _fn_{}", name));                               // branch-and-link to compiled PHP function
+    emitter.instruction(&format!("bl _fn_{}", name));                           // branch-and-link to compiled PHP function
     super::super::restore_concat_offset_after_nested_call(emitter, &ret_ty);
 
     ret_ty

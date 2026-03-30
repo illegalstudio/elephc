@@ -31,13 +31,13 @@ pub(super) fn emit_method_call(
             | PhpType::Callable
             | PhpType::Object(_)
             | PhpType::Pointer(_) => {
-                emitter.instruction("str x0, [sp, #-16]!");                         // push int/object arg
+                emitter.instruction("str x0, [sp, #-16]!");                     // push int/object arg
             }
             PhpType::Float => {
-                emitter.instruction("str d0, [sp, #-16]!");                         // push float arg
+                emitter.instruction("str d0, [sp, #-16]!");                     // push float arg
             }
             PhpType::Str => {
-                emitter.instruction("stp x1, x2, [sp, #-16]!");                     // push string ptr+len
+                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push string ptr+len
             }
             PhpType::Void => {}
         }
@@ -52,7 +52,7 @@ pub(super) fn emit_method_call(
             return PhpType::Int;
         }
     };
-    emitter.instruction("str x0, [sp, #-16]!");                                     // push $this pointer
+    emitter.instruction("str x0, [sp, #-16]!");                                 // push $this pointer
 
     let total_args = arg_types.len();
     let mut int_reg_idx = 1usize;
@@ -68,7 +68,7 @@ pub(super) fn emit_method_call(
         }
     }
 
-    emitter.instruction("ldr x0, [sp], #16");                                       // pop $this into x0
+    emitter.instruction("ldr x0, [sp], #16");                                   // pop $this into x0
 
     for i in (0..total_args).rev() {
         let (ty, start_reg, _) = &assignments[i];
@@ -80,13 +80,13 @@ pub(super) fn emit_method_call(
             | PhpType::Callable
             | PhpType::Object(_)
             | PhpType::Pointer(_) => {
-                emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg));     // pop arg into register
+                emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop arg into register
             }
             PhpType::Float => {
-                emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg));     // pop float arg
+                emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); // pop float arg
             }
             PhpType::Str => {
-                emitter.instruction(&format!(
+                emitter.instruction(&format!(                                   // pop string arg into consecutive registers for method call
                     "ldp x{}, x{}, [sp], #16",
                     start_reg,
                     start_reg + 1
@@ -130,14 +130,14 @@ pub(super) fn emit_method_call(
 
     save_concat_offset_before_nested_call(emitter);
     if let Some(slot) = slot {
-        emitter.instruction("ldr x10, [x0]");                                       // load dynamic class id from object header
-        emitter.instruction("adrp x11, _class_vtable_ptrs@PAGE");                   // load vtable pointer table page
-        emitter.instruction("add x11, x11, _class_vtable_ptrs@PAGEOFF");            // add vtable pointer table offset
-        emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // load class-specific vtable pointer
-        emitter.instruction(&format!("ldr x11, [x11, #{}]", slot * 8));             // load method entry from vtable slot
-        emitter.instruction("blr x11");                                             // call virtual method implementation
+        emitter.instruction("ldr x10, [x0]");                                   // load dynamic class id from object header
+        emitter.instruction("adrp x11, _class_vtable_ptrs@PAGE");               // load vtable pointer table page
+        emitter.instruction("add x11, x11, _class_vtable_ptrs@PAGEOFF");        // add vtable pointer table offset
+        emitter.instruction("ldr x11, [x11, x10, lsl #3]");                     // load class-specific vtable pointer
+        emitter.instruction(&format!("ldr x11, [x11, #{}]", slot * 8));         // load method entry from vtable slot
+        emitter.instruction("blr x11");                                         // call virtual method implementation
     } else if let Some(label) = direct_private_label {
-        emitter.instruction(&format!("bl {}", label));                              // call lexically-resolved private method directly
+        emitter.instruction(&format!("bl {}", label));                          // call lexically-resolved private method directly
     } else {
         emitter.comment(&format!(
             "WARNING: missing vtable slot for {}::{}",
@@ -150,7 +150,7 @@ pub(super) fn emit_method_call(
 }
 
 pub(super) fn emit_immediate_class_id(emitter: &mut Emitter, class_id: u64) {
-    emitter.instruction(&format!("mov x0, #{}", class_id));                         // load compile-time class id for static dispatch
+    emitter.instruction(&format!("mov x0, #{}", class_id));                     // load compile-time class id for static dispatch
 }
 
 pub(super) fn emit_forwarded_called_class_id(emitter: &mut Emitter, ctx: &Context) -> bool {
@@ -159,7 +159,7 @@ pub(super) fn emit_forwarded_called_class_id(emitter: &mut Emitter, ctx: &Contex
         true
     } else if let Some(var) = ctx.variables.get("this") {
         crate::codegen::abi::load_at_offset(emitter, "x0", var.stack_offset);       // load implicit $this pointer
-        emitter.instruction("ldr x0, [x0]");                                        // read dynamic class id from object header
+        emitter.instruction("ldr x0, [x0]");                                    // read dynamic class id from object header
         true
     } else {
         false
@@ -221,13 +221,13 @@ pub(super) fn emit_static_method_call(
             | PhpType::Callable
             | PhpType::Object(_)
             | PhpType::Pointer(_) => {
-                emitter.instruction("str x0, [sp, #-16]!");                         // push arg onto stack
+                emitter.instruction("str x0, [sp, #-16]!");                     // push arg onto stack
             }
             PhpType::Float => {
-                emitter.instruction("str d0, [sp, #-16]!");                         // push float arg
+                emitter.instruction("str d0, [sp, #-16]!");                     // push float arg
             }
             PhpType::Str => {
-                emitter.instruction("stp x1, x2, [sp, #-16]!");                     // push string ptr+len
+                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push string ptr+len
             }
             PhpType::Void => {}
         }
@@ -346,7 +346,7 @@ pub(super) fn emit_static_method_call(
             emitter.comment(&format!("WARNING: undefined class {}", class_name));
             return PhpType::Int;
         }
-        emitter.instruction("str x0, [sp, #-16]!");                                 // push hidden called-class id
+        emitter.instruction("str x0, [sp, #-16]!");                             // push hidden called-class id
     }
 
     if needs_this {
@@ -358,15 +358,15 @@ pub(super) fn emit_static_method_call(
             }
         };
         crate::codegen::abi::load_at_offset(emitter, "x0", this_var.stack_offset);  // load implicit $this for scoped instance call
-        emitter.instruction("str x0, [sp, #-16]!");                                 // push implicit receiver
+        emitter.instruction("str x0, [sp, #-16]!");                             // push implicit receiver
     }
 
     if needs_called_class_id {
-        emitter.instruction("ldr x0, [sp], #16");                                   // pop hidden called-class id into x0
+        emitter.instruction("ldr x0, [sp], #16");                               // pop hidden called-class id into x0
     }
     if needs_this {
         let this_reg = if needs_called_class_id { 1 } else { 0 };
-        emitter.instruction(&format!("ldr x{}, [sp], #16", this_reg));              // pop implicit $this into its assigned integer register
+        emitter.instruction(&format!("ldr x{}, [sp], #16", this_reg));          // pop implicit $this into its assigned integer register
     }
     for i in (0..total_args).rev() {
         let (ty, start_reg, _) = &assignments[i];
@@ -378,13 +378,13 @@ pub(super) fn emit_static_method_call(
             | PhpType::Callable
             | PhpType::Object(_)
             | PhpType::Pointer(_) => {
-                emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg));     // pop arg into assigned register
+                emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop arg into assigned register
             }
             PhpType::Float => {
-                emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg));     // pop float arg
+                emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); // pop float arg
             }
             PhpType::Str => {
-                emitter.instruction(&format!(
+                emitter.instruction(&format!(                                   // pop string arg into consecutive registers for static call
                     "ldp x{}, x{}, [sp], #16",
                     start_reg,
                     start_reg + 1
@@ -397,16 +397,16 @@ pub(super) fn emit_static_method_call(
     save_concat_offset_before_nested_call(emitter);
     if dynamic_static_dispatch {
         let slot = static_slot.expect("codegen bug: dynamic static dispatch without slot");
-        emitter.instruction("mov x10, x0");                                         // preserve forwarded called-class id for static-vtable lookup
-        emitter.instruction("adrp x11, _class_static_vtable_ptrs@PAGE");            // load static-vtable pointer table page
-        emitter.instruction("add x11, x11, _class_static_vtable_ptrs@PAGEOFF");     // add static-vtable pointer table offset
-        emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // load class-specific static-vtable pointer
-        emitter.instruction(&format!("ldr x11, [x11, #{}]", slot * 8));             // load static method entry from static-vtable slot
-        emitter.instruction("blr x11");                                             // call late-bound static method implementation
+        emitter.instruction("mov x10, x0");                                     // preserve forwarded called-class id for static-vtable lookup
+        emitter.instruction("adrp x11, _class_static_vtable_ptrs@PAGE");        // load static-vtable pointer table page
+        emitter.instruction("add x11, x11, _class_static_vtable_ptrs@PAGEOFF"); // add static-vtable pointer table offset
+        emitter.instruction("ldr x11, [x11, x10, lsl #3]");                     // load class-specific static-vtable pointer
+        emitter.instruction(&format!("ldr x11, [x11, #{}]", slot * 8));         // load static method entry from static-vtable slot
+        emitter.instruction("blr x11");                                         // call late-bound static method implementation
     } else if let Some(label) = direct_static_private_label {
-        emitter.instruction(&format!("bl {}", label));                              // call direct private static helper
+        emitter.instruction(&format!("bl {}", label));                          // call direct private static helper
     } else {
-        emitter.instruction(&format!("bl {}", label));                              // call resolved static or parent/self target
+        emitter.instruction(&format!("bl {}", label));                          // call resolved static or parent/self target
     }
     restore_concat_offset_after_nested_call(emitter, &ret_ty);
 

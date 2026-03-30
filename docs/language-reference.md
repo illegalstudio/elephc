@@ -693,7 +693,7 @@ foreach ($matrix as $row) {
 ### Limitations
 
 - No array union operator (`+`)
-- Arrays are homogeneous: all elements must be the same type
+- Indexed arrays are still homogeneous, except that object elements may widen to a shared parent class when all entries are related by inheritance (for example `Dog` + `Cat` can infer `Animal[]`)
 
 ## FFI
 
@@ -1281,7 +1281,7 @@ Both `include 'f';` and `include('f');` syntax are supported.
 - `strtotime()` only supports "YYYY-MM-DD" and "YYYY-MM-DD HH:MM:SS" formats. Relative time strings like "next Monday" or "+1 week" are not supported.
 - `json_decode()` returns a string. It strips quotes and unescapes JSON string values, but does not parse JSON objects into associative arrays or JSON arrays into PHP arrays.
 - `json_last_error()` always returns 0 — no actual error tracking is performed.
-- `preg_*` functions use POSIX extended regex (via libc `regcomp`/`regexec`), not PCRE. Lookahead, lookbehind, non-greedy quantifiers, and other PCRE-only features are not supported.
+- `preg_*` functions ultimately run on POSIX extended regex via libc `regcomp`/`regexec`, but elephc first translates a small set of common PCRE shorthands such as `\s`, `\d`, `\w` and their uppercase negations. Lookahead, lookbehind, non-greedy quantifiers, and other PCRE-only features are still not supported.
 - `preg_match()` does not support the `$matches` capture parameter.
 - `preg_replace()` does not support backreferences like `$1` in the replacement string.
 

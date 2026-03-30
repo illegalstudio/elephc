@@ -21,13 +21,13 @@ pub(super) fn emit_if_stmt(
     let cond_ty = emit_expr(condition, emitter, ctx, data);
     crate::codegen::expr::coerce_to_truthiness(emitter, ctx, &cond_ty);
     let mut next_label = ctx.next_label("if_else");
-    emitter.instruction("cmp x0, #0");                                              // test if condition result is zero (falsy)
-    emitter.instruction(&format!("b.eq {}", next_label));                           // branch to else/elseif if condition is false
+    emitter.instruction("cmp x0, #0");                                          // test if condition result is zero (falsy)
+    emitter.instruction(&format!("b.eq {}", next_label));                       // branch to else/elseif if condition is false
 
     for s in then_body {
         super::super::emit_stmt(s, emitter, ctx, data);
     }
-    emitter.instruction(&format!("b {}", end_label));                               // unconditional jump past all else/elseif branches
+    emitter.instruction(&format!("b {}", end_label));                           // unconditional jump past all else/elseif branches
 
     for (cond, body) in elseif_clauses {
         emitter.label(&next_label);
@@ -35,13 +35,13 @@ pub(super) fn emit_if_stmt(
         let cond_ty = emit_expr(cond, emitter, ctx, data);
         crate::codegen::expr::coerce_to_truthiness(emitter, ctx, &cond_ty);
         next_label = ctx.next_label("if_else");
-        emitter.instruction("cmp x0, #0");                                          // test if elseif condition is zero (falsy)
-        emitter.instruction(&format!("b.eq {}", next_label));                       // branch to next elseif/else if condition is false
+        emitter.instruction("cmp x0, #0");                                      // test if elseif condition is zero (falsy)
+        emitter.instruction(&format!("b.eq {}", next_label));                   // branch to next elseif/else if condition is false
 
         for s in body {
             super::super::emit_stmt(s, emitter, ctx, data);
         }
-        emitter.instruction(&format!("b {}", end_label));                           // unconditional jump past remaining branches
+        emitter.instruction(&format!("b {}", end_label));                       // unconditional jump past remaining branches
     }
 
     emitter.label(&next_label);
@@ -70,10 +70,10 @@ pub(super) fn emit_switch_stmt(
     let subj_ty = emit_expr(subject, emitter, ctx, data);
     match &subj_ty {
         PhpType::Str => {
-            emitter.instruction("stp x1, x2, [sp, #-16]!");                         // save string subject
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // save string subject
         }
         _ => {
-            emitter.instruction("str x0, [sp, #-16]!");                             // save int/bool subject
+            emitter.instruction("str x0, [sp, #-16]!");                         // save int/bool subject
         }
     }
 
@@ -84,18 +84,18 @@ pub(super) fn emit_switch_stmt(
             let val_ty = emit_expr(val, emitter, ctx, data);
             match &subj_ty {
                 PhpType::Str => {
-                    emitter.instruction("mov x3, x1");                              // pattern ptr
-                    emitter.instruction("mov x4, x2");                              // pattern len
-                    emitter.instruction("ldp x1, x2, [sp]");                        // peek subject string
-                    emitter.instruction("bl __rt_str_eq");                          // compare -> x0=1 if equal
+                    emitter.instruction("mov x3, x1");                          // pattern ptr
+                    emitter.instruction("mov x4, x2");                          // pattern len
+                    emitter.instruction("ldp x1, x2, [sp]");                    // peek subject string
+                    emitter.instruction("bl __rt_str_eq");                      // compare -> x0=1 if equal
                 }
                 _ => {
-                    emitter.instruction("ldr x9, [sp]");                            // peek subject
-                    emitter.instruction("cmp x9, x0");                              // compare
-                    emitter.instruction("cset x0, eq");                             // x0=1 if equal
+                    emitter.instruction("ldr x9, [sp]");                        // peek subject
+                    emitter.instruction("cmp x9, x0");                          // compare
+                    emitter.instruction("cset x0, eq");                         // x0=1 if equal
                 }
             }
-            emitter.instruction(&format!("cbnz x0, {}", body_label));               // jump to case body if match
+            emitter.instruction(&format!("cbnz x0, {}", body_label));           // jump to case body if match
             let _ = val_ty;
         }
         body_labels.push(body_label);
@@ -103,9 +103,9 @@ pub(super) fn emit_switch_stmt(
 
     let default_label = ctx.next_label("switch_default");
     if default.is_some() {
-        emitter.instruction(&format!("b {}", default_label));                       // jump to default case
+        emitter.instruction(&format!("b {}", default_label));                   // jump to default case
     } else {
-        emitter.instruction(&format!("b {}", switch_end));                          // jump to end (no default)
+        emitter.instruction(&format!("b {}", switch_end));                      // jump to end (no default)
     }
 
     ctx.loop_stack.push(LoopLabels {
@@ -129,5 +129,5 @@ pub(super) fn emit_switch_stmt(
 
     ctx.loop_stack.pop();
     emitter.label(&switch_end);
-    emitter.instruction("add sp, sp, #16");                                         // pop saved subject
+    emitter.instruction("add sp, sp, #16");                                     // pop saved subject
 }

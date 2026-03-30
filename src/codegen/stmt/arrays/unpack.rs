@@ -22,7 +22,7 @@ pub(super) fn emit_list_unpack_stmt(
         _ => PhpType::Int,
     };
 
-    emitter.instruction("str x0, [sp, #-16]!");                                     // push array pointer onto stack
+    emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer onto stack
 
     for (i, var_name) in vars.iter().enumerate() {
         let var = match ctx.variables.get(var_name) {
@@ -34,28 +34,28 @@ pub(super) fn emit_list_unpack_stmt(
         };
         let offset = var.stack_offset;
 
-        emitter.instruction("ldr x9, [sp]");                                        // peek array pointer from stack
+        emitter.instruction("ldr x9, [sp]");                                    // peek array pointer from stack
         match &elem_ty {
             PhpType::Int | PhpType::Bool => {
-                emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header
-                emitter.instruction(&format!("ldr x0, [x9, #{}]", i * 8));          // load element at index
+                emitter.instruction("add x9, x9, #24");                         // skip 24-byte array header
+                emitter.instruction(&format!("ldr x0, [x9, #{}]", i * 8));      // load element at index
                 abi::store_at_offset(emitter, "x0", offset);
             }
             PhpType::Str => {
-                emitter.instruction(&format!("add x9, x9, #{}", 24 + i * 16));      // offset to string slot
-                emitter.instruction("ldr x1, [x9]");                                // load string pointer
-                emitter.instruction("ldr x2, [x9, #8]");                            // load string length
+                emitter.instruction(&format!("add x9, x9, #{}", 24 + i * 16));  // offset to string slot
+                emitter.instruction("ldr x1, [x9]");                            // load string pointer
+                emitter.instruction("ldr x2, [x9, #8]");                        // load string length
                 abi::store_at_offset(emitter, "x1", offset);
                 abi::store_at_offset(emitter, "x2", offset - 8);
             }
             PhpType::Float => {
-                emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header
-                emitter.instruction(&format!("ldr d0, [x9, #{}]", i * 8));          // load float at index
+                emitter.instruction("add x9, x9, #24");                         // skip 24-byte array header
+                emitter.instruction(&format!("ldr d0, [x9, #{}]", i * 8));      // load float at index
                 abi::store_at_offset(emitter, "d0", offset);
             }
             _ => {
-                emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header
-                emitter.instruction(&format!("ldr x0, [x9, #{}]", i * 8));          // load element at index
+                emitter.instruction("add x9, x9, #24");                         // skip 24-byte array header
+                emitter.instruction(&format!("ldr x0, [x9, #{}]", i * 8));      // load element at index
                 abi::store_at_offset(emitter, "x0", offset);
             }
         }
@@ -66,5 +66,5 @@ pub(super) fn emit_list_unpack_stmt(
         );
     }
 
-    emitter.instruction("add sp, sp, #16");                                         // pop saved array pointer
+    emitter.instruction("add sp, sp, #16");                                     // pop saved array pointer
 }

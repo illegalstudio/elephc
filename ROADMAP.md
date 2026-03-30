@@ -353,4 +353,3 @@ Features that are fundamentally incompatible with a static ahead-of-time compile
 | `$$var` (variable variables) | Requires a runtime symbol table to resolve variable names dynamically. Incompatible with static stack-based variable allocation. |
 | `eval()` | Requires a full interpreter/compiler at runtime. Fundamentally impossible in an AOT compiler. |
 | Generators / `yield` | Requires coroutine suspension and stack switching, which is far beyond the current single-stack execution model. |
-| Exceptions / `try`-`catch` | Requires stack unwinding infrastructure (setjmp/longjmp or DWARF unwinding). May be reconsidered in the future. |
