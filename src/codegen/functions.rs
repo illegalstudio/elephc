@@ -641,7 +641,10 @@ pub fn collect_local_vars(
                     }
                 }
             }
-            StmtKind::ArrayAssign { .. } | StmtKind::ArrayPush { .. } | StmtKind::ClassDecl { .. } => {}
+            StmtKind::ArrayAssign { .. }
+            | StmtKind::ArrayPush { .. }
+            | StmtKind::ClassDecl { .. }
+            | StmtKind::TraitDecl { .. } => {}
             StmtKind::PropertyAssign { value, .. } => {
                 // Just recurse into value to pick up any nested assignments
                 if let ExprKind::Variable(_) = &value.kind {

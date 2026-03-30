@@ -4,7 +4,7 @@
 
 ---
 
-**Source:** `src/codegen/` — `mod.rs`, `expr.rs`, `stmt.rs`, `functions.rs`, `abi.rs`, `context.rs`, `data_section.rs`, `emit.rs`
+**Source:** `src/codegen/` — `mod.rs`, `expr.rs`, `stmt.rs`, `functions.rs`, `ffi.rs`, `abi.rs`, `context.rs`, `data_section.rs`, `emit.rs`
 
 The code generator (codegen) is the heart of the compiler. It takes the typed AST and produces ARM64 assembly text — the actual instructions the CPU will execute. For an introduction to ARM64, see [Introduction to ARM64 Assembly](arm64-assembly.md).
 
@@ -53,6 +53,8 @@ _float_0: .quad 0x400921FB54442D18
 .comm _concat_buf, 65536, 3
 .comm _heap_buf, 8388608, 3
 ```
+
+Trait composition does not add a separate runtime dispatch layer. Traits are flattened into each concrete class during type checking, so codegen still emits ordinary `_method_Class_method` / `_static_Class_method` labels and uses the same fixed object layout as non-trait classes.
 
 ## The Emitter
 

@@ -4,7 +4,7 @@
 
 ---
 
-**Source:** `src/types/` — `mod.rs`, `checker/mod.rs`, `checker/builtins.rs`, `checker/functions.rs`
+**Source:** `src/types/` — `mod.rs`, `traits.rs`, `checker/mod.rs`, `checker/builtins.rs`, `checker/functions.rs`
 
 PHP is dynamically typed — variables can change type at runtime. But elephc compiles to native code where every value must have a known size and location. The type checker bridges this gap by **inferring types at compile time**.
 
@@ -199,6 +199,8 @@ These correspond to PHP's `$argc` and `$argv` superglobals.
 
 ## Class type checking
 
+Before `ClassInfo` is built, the checker flattens trait composition through `src/types/traits.rs`. Trait methods and properties are merged into the concrete class, `insteadof` / `as` rules are resolved, and the rest of the checker only sees the final effective member set for each class.
+
 When the type checker encounters a `ClassDecl`, it:
 
 1. **Registers the class** in a `classes: HashMap<String, ClassInfo>` map
@@ -215,6 +217,7 @@ pub struct ClassInfo {
     pub defaults: Vec<Option<Expr>>,
     pub property_visibilities: HashMap<String, Visibility>,
     pub readonly_properties: HashSet<String>,
+    pub method_decls: Vec<ClassMethod>,
     pub methods: HashMap<String, FunctionSig>,
     pub static_methods: HashMap<String, FunctionSig>,
     pub method_visibilities: HashMap<String, Visibility>,
@@ -226,9 +229,9 @@ pub struct ClassInfo {
 When checking property access (`$obj->prop`), the type checker validates that:
 - The variable is an `Object` type
 - The class has a property with that name
-- The property is accessible (public, or private and accessed via `$this`)
+- The property is accessible (`public`, or a class-scoped `protected` / `private` member accessed from methods of that same class)
 
-When checking method calls, it verifies the method exists and validates argument count and types against the method's `FunctionSig`.
+When checking method calls, it verifies the method exists, enforces method visibility (`public` or same-class `protected` / `private` access for both instance and static methods), and validates argument count and types against the method's `FunctionSig`.
 
 ## Output: CheckResult
 

@@ -133,7 +133,8 @@ echo  if  else  elseif  while  do  for  foreach  as
 break  continue  function  return  include  require
 include_once  require_once  true  false  null  print
 switch  case  default  match  fn  use  extern  const
-global  static  class  new  public  private  readonly
+global  static  class  trait  new  public  protected  private  readonly
+insteadof
 ```
 
 Each keyword is a distinct token variant (e.g., `Token::If`, `Token::While`, `Token::Switch`).

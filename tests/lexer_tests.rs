@@ -218,6 +218,21 @@ fn test_keyword_if() {
 }
 
 #[test]
+fn test_keyword_trait() {
+    assert_eq!(tokens("<?php trait")[1], Token::Trait);
+}
+
+#[test]
+fn test_keyword_protected() {
+    assert_eq!(tokens("<?php protected")[1], Token::Protected);
+}
+
+#[test]
+fn test_keyword_insteadof() {
+    assert_eq!(tokens("<?php insteadof")[1], Token::InsteadOf);
+}
+
+#[test]
 fn test_keyword_else() {
     assert_eq!(tokens("<?php else")[1], Token::Else);
 }

@@ -170,6 +170,85 @@ fn test_error_wrong_arg_count() {
 }
 
 #[test]
+fn test_error_trait_method_conflict_requires_insteadof() {
+    expect_error(
+        r#"<?php
+trait A { public function foo() { return 1; } }
+trait B { public function foo() { return 2; } }
+class C { use A, B; }
+"#,
+        "ambiguous trait method 'foo'",
+    );
+}
+
+#[test]
+fn test_error_trait_property_conflict_must_be_compatible() {
+    expect_error(
+        r#"<?php
+trait A { public $value = 1; }
+trait B { private $value = 1; }
+class C { use A, B; }
+"#,
+        "incompatible duplicate property",
+    );
+}
+
+#[test]
+fn test_error_cannot_access_protected_trait_method_outside_class() {
+    expect_error(
+        r#"<?php
+trait A { public function foo() { return 1; } }
+class C { use A { A::foo as protected; } }
+$c = new C();
+echo $c->foo();
+"#,
+        "Cannot access protected method",
+    );
+}
+
+#[test]
+fn test_error_circular_trait_composition() {
+    expect_error(
+        r#"<?php
+trait A { use B; }
+trait B { use A; }
+class C { use A; }
+"#,
+        "Circular trait composition detected",
+    );
+}
+
+#[test]
+fn test_error_cannot_access_protected_property_outside_class() {
+    expect_error(
+        r#"<?php
+class Secret {
+    protected $value = 7;
+}
+$s = new Secret();
+echo $s->value;
+"#,
+        "Cannot access protected property: Secret::value",
+    );
+}
+
+#[test]
+fn test_error_cannot_access_protected_method_outside_class() {
+    expect_error(
+        r#"<?php
+class Secret {
+    protected function hidden() {
+        return 7;
+    }
+}
+$s = new Secret();
+echo $s->hidden();
+"#,
+        "Cannot access protected method: Secret::hidden",
+    );
+}
+
+#[test]
 fn test_error_increment_string() {
     expect_error("<?php $x = \"hi\"; $x++;", "Cannot increment/decrement");
 }

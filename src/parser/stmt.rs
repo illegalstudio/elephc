@@ -1,6 +1,9 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
-use crate::parser::ast::{CType, Expr, ExprKind, ExternField, ExternParam, Stmt, StmtKind, Visibility, ClassProperty, ClassMethod};
+use crate::parser::ast::{
+    CType, ClassMethod, ClassProperty, Expr, ExprKind, ExternField, ExternParam, Stmt, StmtKind,
+    TraitAdaptation, TraitUse, Visibility,
+};
 use crate::parser::control;
 use crate::parser::expr::parse_expr;
 use crate::span::Span;
@@ -14,6 +17,7 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
         Token::This => parse_this_stmt(tokens, pos, span),
         Token::PlusPlus | Token::MinusMinus => parse_incdec_stmt(tokens, pos, span),
         Token::Class => parse_class_decl(tokens, pos, span),
+        Token::Trait => parse_trait_decl(tokens, pos, span),
         Token::Function => parse_function_decl(tokens, pos, span),
         Token::Return => parse_return(tokens, pos, span),
         Token::Include => parse_include(tokens, pos, span, false, false),
@@ -514,7 +518,7 @@ fn parse_this_stmt(
     Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
 }
 
-/// Parse a class declaration: class Name { properties and methods }
+/// Parse a class declaration: class Name { use TraitName; properties and methods }
 fn parse_class_decl(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -529,41 +533,91 @@ fn parse_class_decl(
 
     expect_token(tokens, pos, &Token::LBrace, "Expected '{' after class name")?;
 
+    let (trait_uses, properties, methods) = parse_class_like_body(tokens, pos, "class")?;
+
+    expect_token(tokens, pos, &Token::RBrace, "Expected '}' at end of class")?;
+
+    Ok(Stmt::new(
+        StmtKind::ClassDecl {
+            name,
+            trait_uses,
+            properties,
+            methods,
+        },
+        span,
+    ))
+}
+
+/// Parse a trait declaration: trait Name { use OtherTrait; properties and methods }
+fn parse_trait_decl(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1; // consume 'trait'
+
+    let name = match tokens.get(*pos).map(|(t, _)| t) {
+        Some(Token::Identifier(n)) => {
+            let n = n.clone();
+            *pos += 1;
+            n
+        }
+        _ => return Err(CompileError::new(span, "Expected trait name after 'trait'")),
+    };
+
+    expect_token(tokens, pos, &Token::LBrace, "Expected '{' after trait name")?;
+    let (trait_uses, properties, methods) = parse_class_like_body(tokens, pos, "trait")?;
+    expect_token(tokens, pos, &Token::RBrace, "Expected '}' at end of trait")?;
+
+    Ok(Stmt::new(
+        StmtKind::TraitDecl {
+            name,
+            trait_uses,
+            properties,
+            methods,
+        },
+        span,
+    ))
+}
+
+fn parse_class_like_body(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    owner_kind: &str,
+) -> Result<(Vec<TraitUse>, Vec<ClassProperty>, Vec<ClassMethod>), CompileError> {
+    let mut trait_uses = Vec::new();
     let mut properties = Vec::new();
     let mut methods = Vec::new();
 
     while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
         let member_span = tokens[*pos].1;
-
-        // Read optional visibility (default: public)
-        let mut visibility = Visibility::Public;
-        if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Public | Token::Private)) {
-            visibility = match &tokens[*pos].0 {
-                Token::Public => Visibility::Public,
-                Token::Private => Visibility::Private,
-                _ => unreachable!(),
-            };
-            *pos += 1;
+        if tokens[*pos].0 == Token::Use {
+            trait_uses.push(parse_trait_use(tokens, pos, member_span)?);
+            continue;
         }
 
-        // Read optional modifiers
+        let visibility = parse_visibility(tokens, pos);
         let mut is_static = false;
         let mut is_readonly = false;
-
-        // Check for static and readonly in any order
-        for _ in 0..2 {
+        loop {
             if *pos < tokens.len() && tokens[*pos].0 == Token::Static {
                 is_static = true;
                 *pos += 1;
+                continue;
             }
             if *pos < tokens.len() && tokens[*pos].0 == Token::ReadOnly {
                 is_readonly = true;
                 *pos += 1;
+                continue;
             }
+            break;
         }
 
         if *pos >= tokens.len() {
-            return Err(CompileError::new(member_span, "Unexpected end of class body"));
+            return Err(CompileError::new(
+                member_span,
+                &format!("Unexpected end of {} body", owner_kind),
+            ));
         }
 
         if tokens[*pos].0 == Token::Function {
@@ -573,62 +627,17 @@ fn parse_class_decl(
                     "Readonly methods are not supported",
                 ));
             }
-            // Method declaration
-            *pos += 1; // consume 'function'
-            let method_name = match tokens.get(*pos).map(|(t, _)| t) {
-                Some(Token::Identifier(n)) => { let n = n.clone(); *pos += 1; n }
-                // __construct
-                _ => return Err(CompileError::new(member_span, "Expected method name")),
-            };
-
-            // Parse parameters (same as function decl)
-            expect_token(tokens, pos, &Token::LParen, "Expected '(' after method name")?;
-            let mut params = Vec::new();
-            let mut variadic = None;
-            while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
-                if !params.is_empty() {
-                    expect_token(tokens, pos, &Token::Comma, "Expected ',' between parameters")?;
-                }
-                // Check for &$param (reference)
-                let is_ref = *pos < tokens.len() && tokens[*pos].0 == Token::Ampersand;
-                if is_ref { *pos += 1; }
-                // Check for ...$param (variadic)
-                if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
-                    *pos += 1;
-                    if let Some(Token::Variable(vn)) = tokens.get(*pos).map(|(t, _)| t) {
-                        variadic = Some(vn.clone());
-                        *pos += 1;
-                    }
-                    break;
-                }
-                let pname = match tokens.get(*pos).map(|(t, _)| t) {
-                    Some(Token::Variable(n)) => { let n = n.clone(); *pos += 1; n }
-                    _ => return Err(CompileError::new(member_span, "Expected parameter name")),
-                };
-                // Optional default value
-                let default = if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
-                    *pos += 1;
-                    Some(parse_expr(tokens, pos)?)
-                } else {
-                    None
-                };
-                params.push((pname, default, is_ref));
-            }
-            expect_token(tokens, pos, &Token::RParen, "Expected ')'")?;
-
-            let body = parse_block(tokens, pos)?;
-
-            methods.push(ClassMethod {
-                name: method_name,
+            methods.push(parse_class_like_method(
+                tokens,
+                pos,
+                member_span,
                 visibility,
                 is_static,
-                params,
-                variadic,
-                body,
-                span: member_span,
-            });
-        } else if let Some(Token::Variable(prop_name)) = tokens.get(*pos).map(|(t, _)| t.clone()) {
-            // Property declaration
+            )?);
+            continue;
+        }
+
+        if let Some(Token::Variable(prop_name)) = tokens.get(*pos).map(|(t, _)| t.clone()) {
             if is_static {
                 return Err(CompileError::new(
                     member_span,
@@ -644,7 +653,6 @@ fn parse_class_decl(
                 None
             };
             expect_semicolon(tokens, pos)?;
-
             properties.push(ClassProperty {
                 name: prop_name,
                 visibility,
@@ -652,14 +660,281 @@ fn parse_class_decl(
                 default,
                 span: member_span,
             });
-        } else {
-            return Err(CompileError::new(member_span, "Expected property or method declaration in class body"));
+            continue;
         }
+
+        return Err(CompileError::new(
+            member_span,
+            &format!(
+                "Expected trait use, property, or method declaration in {} body",
+                owner_kind
+            ),
+        ));
     }
 
-    expect_token(tokens, pos, &Token::RBrace, "Expected '}' at end of class")?;
+    Ok((trait_uses, properties, methods))
+}
 
-    Ok(Stmt::new(StmtKind::ClassDecl { name, properties, methods }, span))
+fn parse_visibility(tokens: &[(Token, Span)], pos: &mut usize) -> Visibility {
+    match tokens.get(*pos).map(|(t, _)| t) {
+        Some(Token::Public) => {
+            *pos += 1;
+            Visibility::Public
+        }
+        Some(Token::Protected) => {
+            *pos += 1;
+            Visibility::Protected
+        }
+        Some(Token::Private) => {
+            *pos += 1;
+            Visibility::Private
+        }
+        _ => Visibility::Public,
+    }
+}
+
+fn parse_class_like_method(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+    visibility: Visibility,
+    is_static: bool,
+) -> Result<ClassMethod, CompileError> {
+    *pos += 1; // consume 'function'
+    let method_name = match tokens.get(*pos).map(|(t, _)| t) {
+        Some(Token::Identifier(n)) => {
+            let n = n.clone();
+            *pos += 1;
+            n
+        }
+        _ => return Err(CompileError::new(span, "Expected method name")),
+    };
+
+    expect_token(tokens, pos, &Token::LParen, "Expected '(' after method name")?;
+    let (params, variadic) = parse_params(tokens, pos, span)?;
+    expect_token(tokens, pos, &Token::RParen, "Expected ')'")?;
+    let body = parse_block(tokens, pos)?;
+    Ok(ClassMethod {
+        name: method_name,
+        visibility,
+        is_static,
+        params,
+        variadic,
+        body,
+        span,
+    })
+}
+
+fn parse_params(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<(Vec<(String, Option<Expr>, bool)>, Option<String>), CompileError> {
+    let mut params = Vec::new();
+    let mut variadic = None;
+    while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
+        if !params.is_empty() || variadic.is_some() {
+            expect_token(tokens, pos, &Token::Comma, "Expected ',' between parameters")?;
+        }
+        if variadic.is_some() {
+            return Err(CompileError::new(
+                span,
+                "Variadic parameter must be the last parameter",
+            ));
+        }
+        let is_ref = if *pos < tokens.len() && tokens[*pos].0 == Token::Ampersand {
+            *pos += 1;
+            true
+        } else {
+            false
+        };
+        if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
+            *pos += 1;
+            match tokens.get(*pos).map(|(t, _)| t) {
+                Some(Token::Variable(n)) => {
+                    variadic = Some(n.clone());
+                    *pos += 1;
+                }
+                _ => return Err(CompileError::new(span, "Expected variable after '...'")),
+            }
+            continue;
+        }
+        match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Variable(n)) => {
+                let n = n.clone();
+                *pos += 1;
+                let default = if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
+                    *pos += 1;
+                    Some(parse_expr(tokens, pos)?)
+                } else {
+                    None
+                };
+                params.push((n, default, is_ref));
+            }
+            _ => return Err(CompileError::new(span, "Expected parameter variable")),
+        }
+    }
+    Ok((params, variadic))
+}
+
+fn parse_trait_use(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<TraitUse, CompileError> {
+    *pos += 1; // consume 'use'
+    let mut trait_names = Vec::new();
+    loop {
+        match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Identifier(name)) => {
+                trait_names.push(name.clone());
+                *pos += 1;
+            }
+            _ => return Err(CompileError::new(span, "Expected trait name after 'use'")),
+        }
+        if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
+            *pos += 1;
+            continue;
+        }
+        break;
+    }
+
+    let mut adaptations = Vec::new();
+    if *pos < tokens.len() && tokens[*pos].0 == Token::LBrace {
+        *pos += 1;
+        while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
+            let (trait_name, method) = parse_trait_adaptation_target(tokens, pos, span)?;
+            if *pos >= tokens.len() {
+                return Err(CompileError::new(span, "Unexpected end of trait adaptation block"));
+            }
+            match &tokens[*pos].0 {
+                Token::As => {
+                    *pos += 1;
+                    let visibility = match tokens.get(*pos).map(|(t, _)| t) {
+                        Some(Token::Public) => {
+                            *pos += 1;
+                            Some(Visibility::Public)
+                        }
+                        Some(Token::Protected) => {
+                            *pos += 1;
+                            Some(Visibility::Protected)
+                        }
+                        Some(Token::Private) => {
+                            *pos += 1;
+                            Some(Visibility::Private)
+                        }
+                        _ => None,
+                    };
+                    let alias = match tokens.get(*pos).map(|(t, _)| t) {
+                        Some(Token::Identifier(name)) => {
+                            let name = name.clone();
+                            *pos += 1;
+                            Some(name)
+                        }
+                        _ => None,
+                    };
+                    if visibility.is_none() && alias.is_none() {
+                        return Err(CompileError::new(
+                            span,
+                            "Trait alias adaptation requires a visibility and/or alias name",
+                        ));
+                    }
+                    adaptations.push(TraitAdaptation::Alias {
+                        trait_name,
+                        method,
+                        alias,
+                        visibility,
+                    });
+                }
+                Token::InsteadOf => {
+                    *pos += 1;
+                    let mut instead_of = Vec::new();
+                    loop {
+                        match tokens.get(*pos).map(|(t, _)| t) {
+                            Some(Token::Identifier(name)) => {
+                                instead_of.push(name.clone());
+                                *pos += 1;
+                            }
+                            _ => {
+                                return Err(CompileError::new(
+                                    span,
+                                    "Expected trait name after 'insteadof'",
+                                ))
+                            }
+                        }
+                        if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
+                            *pos += 1;
+                            continue;
+                        }
+                        break;
+                    }
+                    if instead_of.is_empty() {
+                        return Err(CompileError::new(
+                            span,
+                            "Trait insteadof adaptation requires at least one suppressed trait",
+                        ));
+                    }
+                    adaptations.push(TraitAdaptation::InsteadOf {
+                        trait_name,
+                        method,
+                        instead_of,
+                    });
+                }
+                _ => {
+                    return Err(CompileError::new(
+                        span,
+                        "Expected 'as' or 'insteadof' inside trait adaptation block",
+                    ))
+                }
+            }
+            expect_semicolon(tokens, pos)?;
+        }
+        expect_token(tokens, pos, &Token::RBrace, "Expected '}' after trait adaptations")?;
+        if *pos < tokens.len() && tokens[*pos].0 == Token::Semicolon {
+            *pos += 1;
+        }
+    } else {
+        expect_semicolon(tokens, pos)?;
+    }
+    Ok(TraitUse {
+        trait_names,
+        adaptations,
+        span,
+    })
+}
+
+fn parse_trait_adaptation_target(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<(Option<String>, String), CompileError> {
+    let first = match tokens.get(*pos).map(|(t, _)| t) {
+        Some(Token::Identifier(name)) => {
+            let name = name.clone();
+            *pos += 1;
+            name
+        }
+        _ => return Err(CompileError::new(span, "Expected method or trait name in adaptation")),
+    };
+    if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleColon {
+        *pos += 1;
+        let method = match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Identifier(name)) => {
+                let name = name.clone();
+                *pos += 1;
+                name
+            }
+            _ => {
+                return Err(CompileError::new(
+                    span,
+                    "Expected method name after 'TraitName::' in adaptation",
+                ))
+            }
+        };
+        Ok((Some(first), method))
+    } else {
+        Ok((None, first))
+    }
 }
 
 fn expect_token(

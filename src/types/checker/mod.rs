@@ -8,8 +8,8 @@ use crate::parser::ast::{
     BinOp, CType, CastType, Expr, ExprKind, Program, Stmt, StmtKind, Visibility,
 };
 use crate::types::{
-    ctype_stack_size, ctype_to_php_type, CheckResult, ClassInfo, ExternClassInfo, ExternFieldInfo,
-    ExternFunctionSig, FunctionSig, PhpType, TypeEnv,
+    ctype_stack_size, ctype_to_php_type, traits::flatten_classes, CheckResult, ClassInfo,
+    ExternClassInfo, ExternFieldInfo, ExternFunctionSig, FunctionSig, PhpType, TypeEnv,
 };
 
 /// Infer a function's return type by scanning its body for Return statements.
@@ -278,19 +278,15 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         }
     }
 
-    // First pass: collect class declarations and build ClassInfo
+    let flattened_classes = flatten_classes(program)?;
+
+    // First pass: collect flattened class declarations and build ClassInfo
     let mut next_class_id = 0u64;
-    for stmt in program {
-        if let StmtKind::ClassDecl {
-            name,
-            properties,
-            methods,
-        } = &stmt.kind
-        {
+    for class in &flattened_classes {
             let mut prop_types = Vec::new();
             let mut property_visibilities = HashMap::new();
             let mut readonly_properties = std::collections::HashSet::new();
-            for prop in properties {
+            for prop in &class.properties {
                 let ty = if let Some(default) = &prop.default {
                     infer_expr_type_syntactic(default)
                 } else {
@@ -306,7 +302,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
             let mut static_sigs = HashMap::new();
             let mut method_visibilities = HashMap::new();
             let mut static_method_visibilities = HashMap::new();
-            for method in methods {
+            for method in &class.methods {
                 let params: Vec<(String, PhpType)> = method
                     .params
                     .iter()
@@ -335,7 +331,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
             // Build constructor param → property mapping
             // Scan __construct body for $this->prop = $param patterns
             let mut param_to_prop = Vec::new();
-            if let Some(constructor) = methods.iter().find(|m| m.name == "__construct") {
+            if let Some(constructor) = class.methods.iter().find(|m| m.name == "__construct") {
                 // For each constructor param, check if it's directly assigned to a property
                 param_to_prop = constructor
                     .params
@@ -359,15 +355,16 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
             }
 
             let defaults: Vec<Option<Expr>> =
-                properties.iter().map(|p| p.default.clone()).collect();
+                class.properties.iter().map(|p| p.default.clone()).collect();
             checker.classes.insert(
-                name.clone(),
+                class.name.clone(),
                 ClassInfo {
                     class_id: next_class_id,
                     properties: prop_types,
                     defaults,
                     property_visibilities,
                     readonly_properties,
+                    method_decls: class.methods.clone(),
                     methods: method_sigs,
                     static_methods: static_sigs,
                     method_visibilities,
@@ -376,7 +373,6 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 },
             );
             next_class_id += 1;
-        }
     }
 
     // Pre-scan: collect extern declarations
@@ -522,12 +518,11 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
     // Post-pass: type-check class method bodies NOW that property types
     // have been updated from new ClassName(args) calls in the main scope.
     // This ensures methods see correct property types (e.g., Str not Int).
-    for stmt in program {
-        if let StmtKind::ClassDecl { name, methods, .. } = &stmt.kind {
-            for method in methods {
+    for class in &flattened_classes {
+        for method in &class.methods {
                 let mut method_env: TypeEnv = global_env.clone();
                 if !method.is_static {
-                    method_env.insert("this".to_string(), PhpType::Object(name.clone()));
+                    method_env.insert("this".to_string(), PhpType::Object(class.name.clone()));
                 }
                 // Use param types from ClassInfo sig (updated by MethodCall inference)
                 let method_sig_key = if method.is_static {
@@ -539,13 +534,13 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 let sig_params = if method.is_static {
                     checker
                         .classes
-                        .get(name)
+                        .get(&class.name)
                         .and_then(|c| c.static_methods.get(&method.name))
                         .map(|s| s.params.clone())
                 } else {
                     checker
                         .classes
-                        .get(name)
+                        .get(&class.name)
                         .and_then(|c| c.methods.get(&method.name))
                         .map(|s| s.params.clone())
                 };
@@ -561,7 +556,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 // This updates both the env (for body type-checking) and the sig
                 // (for correct register assignment in codegen prologue)
                 if method.name == "__construct" {
-                    if let Some(ci) = checker.classes.get(name).cloned() {
+                    if let Some(ci) = checker.classes.get(&class.name).cloned() {
                         for (i, (pname, _, _)) in method.params.iter().enumerate() {
                             if let Some(Some(prop_name)) = ci.constructor_param_to_prop.get(i) {
                                 if let Some((_, ty)) =
@@ -570,7 +565,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                                     method_env.insert(pname.clone(), ty.clone());
                                     // Also update the sig in ClassInfo
                                     // (sig.params has user params only, $this added by codegen)
-                                    if let Some(ci_mut) = checker.classes.get_mut(name) {
+                                    if let Some(ci_mut) = checker.classes.get_mut(&class.name) {
                                         if let Some(sig) = ci_mut.methods.get_mut("__construct") {
                                             if i < sig.params.len() {
                                                 sig.params[i].1 = ty.clone();
@@ -582,7 +577,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                         }
                     }
                 }
-                checker.current_class = Some(name.clone());
+                checker.current_class = Some(class.name.clone());
                 checker.current_method = Some(method.name.clone());
                 checker.current_method_is_static = method.is_static;
                 for s in &method.body {
@@ -594,7 +589,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 if !method.is_static {
                     for s in &method.body {
                         if let Some(ty) = checker.find_return_type(s, &method_env) {
-                            if let Some(ci) = checker.classes.get_mut(name) {
+                            if let Some(ci) = checker.classes.get_mut(&class.name) {
                                 if let Some(sig) = ci.methods.get_mut(&method.name) {
                                     sig.return_type = ty;
                                 }
@@ -605,7 +600,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 } else {
                     for s in &method.body {
                         if let Some(ty) = checker.find_return_type(s, &method_env) {
-                            if let Some(ci) = checker.classes.get_mut(name) {
+                            if let Some(ci) = checker.classes.get_mut(&class.name) {
                                 if let Some(sig) = ci.static_methods.get_mut(&method.name) {
                                     sig.return_type = ty;
                                 }
@@ -617,7 +612,6 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 checker.current_class = None;
                 checker.current_method = None;
                 checker.current_method_is_static = false;
-            }
         }
     }
 
@@ -633,8 +627,21 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
 }
 
 impl Checker {
-    fn can_access_private_member(&self, class_name: &str) -> bool {
-        self.current_class.as_deref() == Some(class_name)
+    fn can_access_member(&self, class_name: &str, visibility: &Visibility) -> bool {
+        match visibility {
+            Visibility::Public => true,
+            Visibility::Protected | Visibility::Private => {
+                self.current_class.as_deref() == Some(class_name)
+            }
+        }
+    }
+
+    fn visibility_label(visibility: &Visibility) -> &'static str {
+        match visibility {
+            Visibility::Public => "public",
+            Visibility::Protected => "protected",
+            Visibility::Private => "private",
+        }
     }
 
     fn is_pointer_type(ty: &PhpType) -> bool {
@@ -1271,7 +1278,7 @@ impl Checker {
                 }
                 Ok(())
             }
-            StmtKind::ClassDecl { .. } => {
+            StmtKind::ClassDecl { .. } | StmtKind::TraitDecl { .. } => {
                 // Method bodies are type-checked in a post-pass (after all new ClassName()
                 // calls have updated property types from constructor arg types)
                 Ok(())
@@ -1297,18 +1304,18 @@ impl Checker {
                                 &format!("Undefined property: {}::{}", class_name, property),
                             ));
                         }
-                        if matches!(
-                            class_info.property_visibilities.get(property),
-                            Some(Visibility::Private)
-                        ) && !self.can_access_private_member(class_name)
-                        {
-                            return Err(CompileError::new(
-                                stmt.span,
-                                &format!(
-                                    "Cannot access private property: {}::{}",
-                                    class_name, property
-                                ),
-                            ));
+                        if let Some(visibility) = class_info.property_visibilities.get(property) {
+                            if !self.can_access_member(class_name, visibility) {
+                                return Err(CompileError::new(
+                                    stmt.span,
+                                    &format!(
+                                        "Cannot access {} property: {}::{}",
+                                        Self::visibility_label(visibility),
+                                        class_name,
+                                        property
+                                    ),
+                                ));
+                            }
                         }
                         if class_info.readonly_properties.contains(property)
                             && !(self.current_class.as_deref() == Some(class_name)
@@ -1821,18 +1828,18 @@ impl Checker {
                 let obj_ty = self.infer_type(object, env)?;
                 if let PhpType::Object(class_name) = &obj_ty {
                     if let Some(class_info) = self.classes.get(class_name) {
-                        if matches!(
-                            class_info.property_visibilities.get(property),
-                            Some(Visibility::Private)
-                        ) && !self.can_access_private_member(class_name)
-                        {
-                            return Err(CompileError::new(
-                                expr.span,
-                                &format!(
-                                    "Cannot access private property: {}::{}",
-                                    class_name, property
-                                ),
-                            ));
+                        if let Some(visibility) = class_info.property_visibilities.get(property) {
+                            if !self.can_access_member(class_name, visibility) {
+                                return Err(CompileError::new(
+                                    expr.span,
+                                    &format!(
+                                        "Cannot access {} property: {}::{}",
+                                        Self::visibility_label(visibility),
+                                        class_name,
+                                        property
+                                    ),
+                                ));
+                            }
                         }
                         if let Some((_, ty)) =
                             class_info.properties.iter().find(|(n, _)| n == property)
@@ -1875,18 +1882,18 @@ impl Checker {
                 if let PhpType::Object(class_name) = &obj_ty {
                     if let Some(class_info) = self.classes.get(class_name) {
                         if let Some(sig) = class_info.methods.get(method) {
-                            if matches!(
-                                class_info.method_visibilities.get(method),
-                                Some(Visibility::Private)
-                            ) && !self.can_access_private_member(class_name)
-                            {
-                                return Err(CompileError::new(
-                                    expr.span,
-                                    &format!(
-                                        "Cannot access private method: {}::{}",
-                                        class_name, method
-                                    ),
-                                ));
+                            if let Some(visibility) = class_info.method_visibilities.get(method) {
+                                if !self.can_access_member(class_name, visibility) {
+                                    return Err(CompileError::new(
+                                        expr.span,
+                                        &format!(
+                                            "Cannot access {} method: {}::{}",
+                                            Self::visibility_label(visibility),
+                                            class_name,
+                                            method
+                                        ),
+                                    ));
+                                }
                             }
                             self.check_call_arity(
                                 "Method",
@@ -1931,18 +1938,19 @@ impl Checker {
                 }
                 if let Some(class_info) = self.classes.get(class_name) {
                     if let Some(sig) = class_info.static_methods.get(method) {
-                        if matches!(
-                            class_info.static_method_visibilities.get(method),
-                            Some(Visibility::Private)
-                        ) && !self.can_access_private_member(class_name)
+                        if let Some(visibility) = class_info.static_method_visibilities.get(method)
                         {
-                            return Err(CompileError::new(
-                                expr.span,
-                                &format!(
-                                    "Cannot access private method: {}::{}",
-                                    class_name, method
-                                ),
-                            ));
+                            if !self.can_access_member(class_name, visibility) {
+                                return Err(CompileError::new(
+                                    expr.span,
+                                    &format!(
+                                        "Cannot access {} method: {}::{}",
+                                        Self::visibility_label(visibility),
+                                        class_name,
+                                        method
+                                    ),
+                                ));
+                            }
                         }
                         self.check_call_arity(
                             "Static method",
