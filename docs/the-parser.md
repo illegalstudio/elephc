@@ -71,7 +71,7 @@ Things that have a value:
 | `NewObject { class_name, args }` | `new Point(1, 2)` | Object instantiation |
 | `PropertyAccess { object, property }` | `$p->x` | Property access via `->` |
 | `MethodCall { object, method, args }` | `$p->move(1, 2)` | Instance method call |
-| `StaticMethodCall { receiver, method, args }` | `Point::origin()`, `parent::boot()` | Static-style call via `::`, where `receiver` is a named class or `Parent` |
+| `StaticMethodCall { receiver, method, args }` | `Point::origin()`, `self::boot()`, `parent::boot()`, `static::boot()` | Static-style call via `::`, where `receiver` is a named class, `Self_`, `Static`, or `Parent` |
 | `This` | `$this` | Reference to the current object inside a method |
 | `PtrCast { target_type, expr }` | `ptr_cast<Point>($p)` | Pointer-tag cast parsed specially after `ptr_cast<T>` |
 
@@ -121,7 +121,7 @@ At statement level, `stmt.rs` selects the parser entry point from the current to
 | `Echo` / `Print` | Echo/print statement |
 | `If` / `While` / `Do` / `For` / `Foreach` / `Switch` | Control-flow statement |
 | `Const` / `Global` / `Static` | Declaration-like statement |
-| `Variable` / `This` / `Identifier` / `Parent` | Assignment, property write, call, or generic expression statement |
+| `Variable` / `This` / `Identifier` / `Self_` / `Parent` / `Static::...` | Assignment, property write, call, or generic expression statement |
 
 ### Binary operators (`BinOp`)
 
@@ -142,7 +142,7 @@ NullCoalesce
 | `Visibility` | `Public`, `Protected`, `Private` | Enum for property/method visibility |
 | `ClassProperty` | `name`, `visibility`, `readonly`, `default`, `span` | A property declaration inside a class |
 | `ClassMethod` | `name`, `visibility`, `is_static`, `params`, `variadic`, `body`, `span` | A method declaration inside a class |
-| `StaticReceiver` | `Named(String)`, `Parent` | Left-hand side of `ClassName::method()` and `parent::method()` |
+| `StaticReceiver` | `Named(String)`, `Self_`, `Static`, `Parent` | Left-hand side of `ClassName::method()`, `self::method()`, `static::method()`, and `parent::method()` |
 | `TraitUse` | `trait_names`, `adaptations`, `span` | A `use TraitA, TraitB { ... }` clause inside a class or trait body |
 | `TraitAdaptation` | `Alias { trait_name: Option<String>, method, alias: Option<String>, visibility: Option<Visibility> }`, `InsteadOf { trait_name: Option<String>, method, instead_of: Vec<String> }` | PHP-style trait conflict resolution and aliasing |
 

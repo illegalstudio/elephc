@@ -1115,6 +1115,46 @@ fn test_parse_parent_static_receiver() {
 }
 
 #[test]
+fn test_parse_self_static_receiver() {
+    let stmts = parse_source("<?php self::boot();");
+    match &stmts[0].kind {
+        StmtKind::ExprStmt(expr) => match &expr.kind {
+            ExprKind::StaticMethodCall {
+                receiver,
+                method,
+                args,
+            } => {
+                assert_eq!(receiver, &StaticReceiver::Self_);
+                assert_eq!(method, "boot");
+                assert!(args.is_empty());
+            }
+            _ => panic!("Expected StaticMethodCall"),
+        },
+        _ => panic!("Expected ExprStmt"),
+    }
+}
+
+#[test]
+fn test_parse_static_static_receiver() {
+    let stmts = parse_source("<?php static::boot();");
+    match &stmts[0].kind {
+        StmtKind::ExprStmt(expr) => match &expr.kind {
+            ExprKind::StaticMethodCall {
+                receiver,
+                method,
+                args,
+            } => {
+                assert_eq!(receiver, &StaticReceiver::Static);
+                assert_eq!(method, "boot");
+                assert!(args.is_empty());
+            }
+            _ => panic!("Expected StaticMethodCall"),
+        },
+        _ => panic!("Expected ExprStmt"),
+    }
+}
+
+#[test]
 fn test_parse_property_assign() {
     let stmts = parse_source("<?php $obj->prop = 42;");
     match &stmts[0].kind {

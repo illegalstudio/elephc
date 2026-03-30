@@ -340,6 +340,7 @@ pub fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
         "const" => Ok(Token::Const),
         "global" => Ok(Token::Global),
         "static" => Ok(Token::Static),
+        "self" => Ok(Token::Self_),
         "trait" => Ok(Token::Trait),
         "parent" => Ok(Token::Parent),
         "insteadof" => Ok(Token::InsteadOf),

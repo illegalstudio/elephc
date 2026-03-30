@@ -1658,10 +1658,34 @@ fn test_error_parent_outside_class_scope() {
 }
 
 #[test]
+fn test_error_self_outside_class_scope() {
+    expect_error(
+        "<?php self::boot();",
+        "Cannot use self:: outside class method scope",
+    );
+}
+
+#[test]
+fn test_error_static_late_binding_not_supported_yet() {
+    expect_error(
+        "<?php class Base { public static function boot() { return 1; } public function run() { return static::boot(); } } $b = new Base(); echo $b->run();",
+        "Late static binding via static:: is not supported yet",
+    );
+}
+
+#[test]
 fn test_error_parent_without_parent_class() {
     expect_error(
         "<?php class Solo { public function boot() { return parent::boot(); } } $s = new Solo(); $s->boot();",
         "Class Solo has no parent class",
+    );
+}
+
+#[test]
+fn test_error_self_instance_method_from_static_method() {
+    expect_error(
+        "<?php class Box { public static function run() { return self::value(); } public function value() { return 1; } } echo Box::run();",
+        "Cannot call self instance method from a static method",
     );
 }
 

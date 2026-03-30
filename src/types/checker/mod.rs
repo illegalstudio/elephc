@@ -2265,8 +2265,26 @@ impl Checker {
                     arg_types.push(self.infer_type(arg, env)?);
                 }
                 let parent_call = matches!(receiver, StaticReceiver::Parent);
+                let self_call = matches!(receiver, StaticReceiver::Self_);
+                let static_call = matches!(receiver, StaticReceiver::Static);
                 let resolved_class_name = match receiver {
                     StaticReceiver::Named(class_name) => class_name.clone(),
+                    StaticReceiver::Self_ => {
+                        self.current_class.as_ref().cloned().ok_or_else(|| {
+                            CompileError::new(
+                                expr.span,
+                                "Cannot use self:: outside class method scope",
+                            )
+                        })?
+                    }
+                    StaticReceiver::Static => {
+                        self.current_class.as_ref().cloned().ok_or_else(|| {
+                            CompileError::new(
+                                expr.span,
+                                "Cannot use static:: outside class method scope",
+                            )
+                        })?
+                    }
                     StaticReceiver::Parent => {
                         let current_class = self.current_class.as_ref().ok_or_else(|| {
                             CompileError::new(
@@ -2288,6 +2306,12 @@ impl Checker {
                         })?
                     }
                 };
+                if static_call {
+                    return Err(CompileError::new(
+                        expr.span,
+                        "Late static binding via static:: is not supported yet",
+                    ));
+                }
                 let class_name = resolved_class_name.as_str();
                 if let Some(class_info) = self.classes.get(class_name) {
                     if let Some(sig) = class_info.static_methods.get(method) {
@@ -2317,11 +2341,15 @@ impl Checker {
                             args,
                             expr.span,
                         )?;
-                    } else if parent_call {
+                    } else if parent_call || self_call {
                         if self.current_method_is_static {
                             return Err(CompileError::new(
                                 expr.span,
-                                "Cannot call parent instance method from a static method",
+                                if parent_call {
+                                    "Cannot call parent instance method from a static method"
+                                } else {
+                                    "Cannot call self instance method from a static method"
+                                },
                             ));
                         }
                         let sig = class_info.methods.get(method).ok_or_else(|| {
@@ -2349,7 +2377,7 @@ impl Checker {
                             }
                         }
                         self.check_call_arity(
-                            "Parent method",
+                            if parent_call { "Parent method" } else { "Self method" },
                             &format!("{}::{}", class_name, method),
                             sig,
                             args,
@@ -2376,7 +2404,7 @@ impl Checker {
                     ));
                 }
 
-                let parent_impl_class_name = if parent_call {
+                let direct_impl_class_name = if parent_call || self_call {
                     self.classes
                         .get(class_name)
                         .and_then(|class_info| class_info.method_impl_classes.get(method))
@@ -2398,10 +2426,10 @@ impl Checker {
                         return Ok(sig.return_type.clone());
                     }
                 }
-                if parent_call {
+                if parent_call || self_call {
                     if let Some(sig) = self
                         .classes
-                        .get_mut(&parent_impl_class_name)
+                        .get_mut(&direct_impl_class_name)
                         .and_then(|class_info| class_info.methods.get_mut(method))
                     {
                         for (i, arg_ty) in arg_types.iter().enumerate() {

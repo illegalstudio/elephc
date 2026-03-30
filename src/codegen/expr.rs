@@ -934,8 +934,18 @@ fn emit_static_method_call(
     data: &mut DataSection,
 ) -> PhpType {
     let parent_call = matches!(receiver, crate::parser::ast::StaticReceiver::Parent);
+    let self_call = matches!(receiver, crate::parser::ast::StaticReceiver::Self_);
+    let static_call = matches!(receiver, crate::parser::ast::StaticReceiver::Static);
     let class_name = match receiver {
         crate::parser::ast::StaticReceiver::Named(class_name) => class_name.clone(),
+        crate::parser::ast::StaticReceiver::Self_
+        | crate::parser::ast::StaticReceiver::Static => match &ctx.current_class {
+            Some(class_name) => class_name.clone(),
+            None => {
+                emitter.comment("WARNING: self::/static:: used outside class scope");
+                return PhpType::Int;
+            }
+        },
         crate::parser::ast::StaticReceiver::Parent => {
             let current_class = match &ctx.current_class {
                 Some(class_name) => class_name.clone(),
@@ -953,6 +963,10 @@ fn emit_static_method_call(
             }
         }
     };
+    if static_call {
+        emitter.comment("WARNING: late static binding via static:: is not supported yet");
+        return PhpType::Int;
+    }
     emitter.comment(&format!("{}::{}()", class_name, method));
 
     // Evaluate args and push to stack
@@ -1003,11 +1017,14 @@ fn emit_static_method_call(
             format!("_static_{}_{}", impl_class, method),
             false,
         )
-    } else if parent_call {
+    } else if parent_call || self_call {
         let _sig = match class_info.methods.get(method) {
             Some(sig) => sig,
             None => {
-                emitter.comment(&format!("WARNING: undefined parent method {}::{}", class_name, method));
+                emitter.comment(&format!(
+                    "WARNING: undefined direct instance method {}::{}",
+                    class_name, method
+                ));
                 return PhpType::Int;
             }
         };
@@ -1051,7 +1068,7 @@ fn emit_static_method_call(
         let this_var = match ctx.variables.get("this") {
             Some(var) => var,
             None => {
-                emitter.comment("WARNING: parent instance call without $this");
+                emitter.comment("WARNING: direct scoped instance call without $this");
                 return PhpType::Int;
             }
         };

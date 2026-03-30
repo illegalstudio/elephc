@@ -830,46 +830,17 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                 Ok(Expr::new(ExprKind::ConstRef(name), span))
             }
         }
+        Token::Self_ => {
+            *pos += 1;
+            parse_scoped_static_call(tokens, pos, span, StaticReceiver::Self_, "self")
+        }
+        Token::Static => {
+            *pos += 1;
+            parse_scoped_static_call(tokens, pos, span, StaticReceiver::Static, "static")
+        }
         Token::Parent => {
             *pos += 1;
-            if *pos >= tokens.len() || tokens[*pos].0 != Token::DoubleColon {
-                return Err(CompileError::new(span, "Expected '::' after 'parent'"));
-            }
-            *pos += 1; // consume ::
-            let method = match tokens.get(*pos).map(|(t, _)| t) {
-                Some(Token::Identifier(m)) => {
-                    let m = m.clone();
-                    *pos += 1;
-                    m
-                }
-                _ => return Err(CompileError::new(span, "Expected method name after 'parent::'")),
-            };
-            if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
-                return Err(CompileError::new(span, "Expected '(' after parent method name"));
-            }
-            *pos += 1;
-            let mut args = Vec::new();
-            while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
-                if !args.is_empty() {
-                    if tokens[*pos].0 != Token::Comma {
-                        return Err(CompileError::new(tokens[*pos].1, "Expected ',' between arguments"));
-                    }
-                    *pos += 1;
-                }
-                args.push(parse_expr(tokens, pos)?);
-            }
-            if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
-                return Err(CompileError::new(span, "Expected ')' after arguments"));
-            }
-            *pos += 1;
-            Ok(Expr::new(
-                ExprKind::StaticMethodCall {
-                    receiver: StaticReceiver::Parent,
-                    method,
-                    args,
-                },
-                span,
-            ))
+            parse_scoped_static_call(tokens, pos, span, StaticReceiver::Parent, "parent")
         }
         Token::New => {
             *pos += 1; // consume 'new'
@@ -907,6 +878,67 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
             &format!("Unexpected token: {:?}", other),
         )),
     }
+}
+
+fn parse_scoped_static_call(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+    receiver: StaticReceiver,
+    receiver_name: &str,
+) -> Result<Expr, CompileError> {
+    if *pos >= tokens.len() || tokens[*pos].0 != Token::DoubleColon {
+        return Err(CompileError::new(
+            span,
+            &format!("Expected '::' after '{}'", receiver_name),
+        ));
+    }
+    *pos += 1;
+    let method = match tokens.get(*pos).map(|(t, _)| t) {
+        Some(Token::Identifier(method)) => {
+            let method = method.clone();
+            *pos += 1;
+            method
+        }
+        _ => {
+            return Err(CompileError::new(
+                span,
+                &format!("Expected method name after '{}::'", receiver_name),
+            ))
+        }
+    };
+    if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
+        return Err(CompileError::new(
+            span,
+            &format!("Expected '(' after {} method name", receiver_name),
+        ));
+    }
+    *pos += 1;
+    let mut args = Vec::new();
+    while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
+        if !args.is_empty() {
+            if tokens[*pos].0 != Token::Comma {
+                return Err(CompileError::new(
+                    tokens[*pos].1,
+                    "Expected ',' between arguments",
+                ));
+            }
+            *pos += 1;
+        }
+        args.push(parse_expr(tokens, pos)?);
+    }
+    if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
+        return Err(CompileError::new(span, "Expected ')' after arguments"));
+    }
+    *pos += 1;
+    Ok(Expr::new(
+        ExprKind::StaticMethodCall {
+            receiver,
+            method,
+            args,
+        },
+        span,
+    ))
 }
 
 /// Check if tokens at `pos` form a type cast: (int), (float), (string), (bool), (array)

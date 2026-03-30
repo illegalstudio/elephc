@@ -1287,7 +1287,7 @@ Both `include 'f';` and `include('f');` syntax are supported.
 
 ## Classes
 
-elephc supports PHP classes with single inheritance, properties, constructors, instance methods, static methods, traits, `parent::method()`, and `public` / `protected` / `private` visibility.
+elephc supports PHP classes with single inheritance, properties, constructors, instance methods, static methods, traits, `self::method()`, `parent::method()`, and `public` / `protected` / `private` visibility.
 
 ### Class declaration
 
@@ -1404,6 +1404,33 @@ class Child extends Base {
 }
 ```
 
+### `self::method()`
+
+Inside a class body, `self::method()` binds to the current lexical class rather than the runtime child override:
+
+```php
+<?php
+class Base {
+    public function reveal() {
+        return self::label();
+    }
+
+    public function label() {
+        return "base";
+    }
+}
+
+class Child extends Base {
+    public function label() {
+        return "child";
+    }
+}
+
+echo (new Child())->reveal(); // base
+```
+
+If `self::method()` resolves to an instance method, it is only allowed from a non-static method where `$this` exists.
+
 ### Static methods
 
 Static methods are called on the class itself using `::`, not on an instance:
@@ -1494,7 +1521,7 @@ echo $p->magnitude(); // method call
 - No abstract or final classes/methods
 - No property type declarations
 - No constructor promotion
-- No `self::` or `static::` late static binding
+- No `static::` late static binding
 - Property redeclaration across an inheritance chain is rejected for now
 
 ## What elephc cannot do (by design)

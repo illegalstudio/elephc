@@ -708,7 +708,7 @@ bl _static_Point_origin              ; call static method
 ; result in x0 (object pointer)
 ```
 
-`parent::method()` is handled as a direct call to the parent implementation label. For parent instance methods, codegen loads the implicit `$this` receiver and passes it in `x0`; for parent static methods it emits the resolved `_static_Parent_method` label.
+`self::method()` is handled as a direct call against the current lexical class. If it resolves to an instance method, codegen loads the implicit `$this` receiver and branches directly to the resolved `_method_Class_method` label. `parent::method()` works the same way against the immediate parent class. `static::method()` is parsed, but late static binding is still rejected during type checking.
 
 ## The ABI module
 

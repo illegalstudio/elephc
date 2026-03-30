@@ -110,6 +110,8 @@ pub enum CastType {
 #[derive(Debug, Clone, PartialEq)]
 pub enum StaticReceiver {
     Named(String),
+    Self_,
+    Static,
     Parent,
 }
 

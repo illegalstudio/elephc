@@ -989,6 +989,14 @@ fn infer_local_type(
             if let Some(c) = ctx {
                 let class_name = match receiver {
                     crate::parser::ast::StaticReceiver::Named(class_name) => class_name,
+                    crate::parser::ast::StaticReceiver::Self_
+                    | crate::parser::ast::StaticReceiver::Static => {
+                        if let Some(current_class) = &c.current_class {
+                            current_class
+                        } else {
+                            return PhpType::Int;
+                        }
+                    }
                     crate::parser::ast::StaticReceiver::Parent => {
                         if let Some(current_class) = &c.current_class {
                             if let Some(parent_name) =

@@ -11463,6 +11463,60 @@ echo $child->reveal();
 }
 
 #[test]
+fn test_self_static_call_uses_lexical_class() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public static function label() {
+        return "base";
+    }
+
+    public function reveal() {
+        return self::label();
+    }
+}
+
+class Child extends Base {
+    public static function label() {
+        return "child";
+    }
+}
+
+$child = new Child();
+echo $child->reveal();
+"#,
+    );
+    assert_eq!(out, "base");
+}
+
+#[test]
+fn test_self_instance_call_stays_lexically_bound() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public function reveal() {
+        return self::label();
+    }
+
+    public function label() {
+        return "base";
+    }
+}
+
+class Child extends Base {
+    public function label() {
+        return "child";
+    }
+}
+
+$child = new Child();
+echo $child->reveal();
+"#,
+    );
+    assert_eq!(out, "base");
+}
+
+#[test]
 fn test_inheritance_parent_method_call_and_inherited_properties() {
     let out = compile_and_run(
         r#"<?php

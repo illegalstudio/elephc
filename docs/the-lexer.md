@@ -133,7 +133,7 @@ echo  if  else  elseif  while  do  for  foreach  as
 break  continue  function  return  include  require
 include_once  require_once  true  false  null  print
 switch  case  default  match  fn  use  extern  const
-global  static  class  trait  extends  new  public  protected  private  readonly
+global  static  self  class  trait  extends  new  public  protected  private  readonly
 parent  insteadof
 ```
 

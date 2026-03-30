@@ -66,6 +66,7 @@ pub enum Token {
     Const,          // const
     Global,         // global
     Static,         // static
+    Self_,          // self
     Trait,          // trait
     Parent,         // parent
     InsteadOf,      // insteadof

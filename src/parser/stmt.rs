@@ -26,9 +26,17 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
         Token::RequireOnce => parse_include(tokens, pos, span, true, true),
         Token::Const => parse_const_decl(tokens, pos, span),
         Token::Global => parse_global(tokens, pos, span),
-        Token::Static => parse_static_var(tokens, pos, span),
+        Token::Static => {
+            if *pos + 1 < tokens.len() && tokens[*pos + 1].0 == Token::DoubleColon {
+                let expr = parse_expr(tokens, pos)?;
+                expect_semicolon(tokens, pos)?;
+                Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
+            } else {
+                parse_static_var(tokens, pos, span)
+            }
+        }
         Token::LBracket => parse_list_unpack(tokens, pos, span),
-        Token::Identifier(_) | Token::Parent => {
+        Token::Identifier(_) | Token::Self_ | Token::Parent => {
             let expr = parse_expr(tokens, pos)?;
             expect_semicolon(tokens, pos)?;
             Ok(Stmt::new(StmtKind::ExprStmt(expr), span))

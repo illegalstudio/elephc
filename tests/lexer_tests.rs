@@ -228,6 +228,11 @@ fn test_keyword_protected() {
 }
 
 #[test]
+fn test_keyword_self() {
+    assert_eq!(tokens("<?php self")[1], Token::Self_);
+}
+
+#[test]
 fn test_keyword_insteadof() {
     assert_eq!(tokens("<?php insteadof")[1], Token::InsteadOf);
 }
