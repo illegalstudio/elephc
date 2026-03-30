@@ -21,7 +21,7 @@ The compiler outputs a native binary next to the source file (e.g., `file.php` �
 ### Running tests
 
 ```bash
-cargo test                          # run all tests (slow — ~65s due to as+ld per test)
+cargo test                          # run all tests (slow — ~5-6 min due to as+ld per codegen test)
 cargo test -- --include-ignored     # run ALL tests including those requiring external libs
 cargo test --test codegen_tests     # run only end-to-end tests
 cargo test test_fizzbuzz            # run a specific test
@@ -31,7 +31,7 @@ Some tests are marked `#[ignore]` because they require external libraries (e.g.,
 
 ### Test strategy during development
 
-The full test suite is slow because each codegen test spawns `as` + `ld` + runs the binary. To avoid waiting 60+ seconds on every change:
+The full test suite is slow because each codegen test spawns `as` + `ld` + runs the binary. To avoid waiting several minutes on every change:
 
 1. **While developing a feature**: run only the tests for that feature (`cargo test test_my_feature`)
 2. **When the feature is complete**: run the full suite once (`cargo test`) to check for regressions
@@ -82,10 +82,18 @@ PHP source → Lexer (tokens) → Parser (AST) → Resolver (include/require) �
 | `src/lexer/` | `tokenize()` | Source → `Vec<(Token, Span)>` |
 | `src/parser/` | `parse()` | Tokens → `Program` (Vec of Stmt). Pratt parser for expressions |
 | `src/resolver.rs` | `resolve()` | Resolves `include`/`require` by inlining referenced files. Runs between parse and type check |
-| `src/types/` | `check()` | Type checking, returns `CheckResult` with `TypeEnv` + `FunctionSig` map |
-| `src/codegen/` | `generate()` | AST → ARM64 assembly string. Emits function bodies + `_main` |
+| `src/types/` | `check()` | Type checking, returns `CheckResult` with `TypeEnv`, function/class/interface/FFI metadata, and the internal `Mixed` type for heterogeneous assoc-array values |
+| `src/codegen/` | `generate()` | AST → ARM64 assembly string. Top-level orchestration lives in `mod.rs`, while most lowering lives under `expr/`, `stmt/`, and `runtime/` |
 | `src/errors/` | `report()` | Error formatting with line:col |
 | `src/span.rs` | `Span` | Source position (line, col) attached to all AST nodes |
+
+### Codegen layout
+
+- `src/codegen/expr.rs` is mainly a dispatcher; most expression lowering now lives in focused helpers under `src/codegen/expr/`
+- `src/codegen/stmt.rs` is mainly a dispatcher; most statement lowering now lives in focused helpers under `src/codegen/stmt/`
+- `src/codegen/runtime/mod.rs` emits runtime code (`__rt_*` routines)
+- `src/codegen/runtime/data.rs` emits runtime `.data` / `.bss` symbols and metadata tables
+- `src/codegen/context.rs` carries variable layout, ownership state, class metadata, and FFI metadata through codegen
 
 ### Adding a new operator
 
@@ -93,16 +101,16 @@ PHP source → Lexer (tokens) → Parser (AST) → Resolver (include/require) �
 2. Add scanning logic to `src/lexer/scan.rs`
 3. Add `BinOp` variant to `src/parser/ast.rs`
 4. Add one line to `infix_bp()` in `src/parser/expr.rs` (the Pratt parser binding power table)
-5. Add type checking in `src/types/checker.rs`
-6. Add ARM64 codegen in `src/codegen/expr.rs`
+5. Add type checking in `src/types/checker/mod.rs`
+6. Add ARM64 codegen in the relevant file under `src/codegen/expr/` (and only touch `src/codegen/expr.rs` if the dispatcher must learn about a new helper path)
 7. Add tests in all 4 test files
 
 ### Adding a new statement type
 
 1. Add `StmtKind` variant to `src/parser/ast.rs`
 2. Add parser logic in `src/parser/stmt.rs`
-3. Add type checking in `src/types/checker.rs`
-4. Add codegen in `src/codegen/stmt.rs`
+3. Add type checking in `src/types/checker/mod.rs`
+4. Add codegen in the relevant file under `src/codegen/stmt/` (and only touch `src/codegen/stmt.rs` if the dispatcher must learn about a new helper path)
 5. If it introduces variables, update `collect_local_vars` in `src/codegen/functions.rs`
 6. Add tests
 
@@ -110,12 +118,12 @@ PHP source → Lexer (tokens) → Parser (AST) → Resolver (include/require) �
 
 1. Add type signature in `src/types/checker/builtins.rs` (argument count, types, return type)
 2. Create a new file in `src/codegen/builtins/<category>/` (e.g., `strings/my_func.rs`)
-3. Add `pub mod my_func;` and a match arm in the category's `mod.rs`
+3. Add `mod my_func;` plus any needed re-export/dispatcher wiring in the category's `mod.rs`
 4. If the function needs an ARM64 runtime routine, create `src/codegen/runtime/strings/my_func.rs`
-5. Add `pub mod` and re-export in `runtime/strings/mod.rs`, call it from `runtime/mod.rs`
+5. Add module/re-export wiring in the relevant `runtime/<category>/mod.rs`, then call it from `runtime/mod.rs`
 6. Add codegen and error tests
 
-Each builtin and runtime file contains exactly **one function**. Never add to an existing file — always create a new one.
+Leaf builtin/runtime files contain exactly **one emitter function**. Keep dispatcher/re-export files (`mod.rs`) as orchestration-only files, and keep runtime data emission in `src/codegen/runtime/data.rs`.
 
 ### Codegen conventions (ARM64)
 
@@ -127,6 +135,7 @@ Each builtin and runtime file contains exactly **one function**. Never add to an
 - **Stack frame**: `x29` = frame pointer, `x30` = link register, locals at negative offsets from `x29`
 - **ABI helpers**: `src/codegen/abi.rs` centralizes load/store/write per type
 - **Labels**: use `ctx.next_label("prefix")` — global counter prevents collisions across functions
+- **Mixed values**: `PhpType::Mixed` is an internal boxed runtime shape used for heterogeneous associative-array values; codegen/runtime must preserve the boxed cell contract instead of treating it like a plain scalar
 
 ### Assembly comment policy
 
@@ -193,6 +202,7 @@ The `docs/` directory contains the project documentation:
 
 - `docs/language-reference.md` — What elephc supports: types, operators, control structures, functions, built-ins, limitations, and known incompatibilities with PHP. Includes examples of what works and what doesn't.
 - `docs/architecture.md` — Compiler internals: pipeline, module map, ARM64 conventions, memory layout.
+- `docs/the-runtime.md` / `docs/memory-model.md` — authoritative references for runtime routine inventory, heap layout, hash-table layout, and runtime metadata tables
 
 **Documentation must be kept up to date.** When adding a new feature:
 1. Add it to `docs/language-reference.md` — in the relevant section (operators, functions, built-ins, etc.)

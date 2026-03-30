@@ -35,6 +35,10 @@ pub fn emit(
             // -- null is always empty --
             emitter.instruction("mov x0, #1");                                  // null is always empty, return true
         }
+        PhpType::Mixed => {
+            // -- mixed values use PHP empty() semantics for the boxed payload --
+            emitter.instruction("bl __rt_mixed_is_empty");                      // inspect the boxed payload instead of the mixed box pointer
+        }
         PhpType::Str => {
             // -- string is empty if length is zero --
             emitter.instruction("cmp x2, #0");                                  // compare string length against zero

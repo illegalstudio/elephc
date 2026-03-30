@@ -2,7 +2,7 @@ use crate::codegen::emit::Emitter;
 
 /// hash_insert_owned: insert a key-value pair whose key/value ownership already
 /// belongs to the destination table. Used by hash_grow when moving entries.
-/// Input:  x0=hash_table_ptr, x1=key_ptr, x2=key_len, x3=value_lo, x4=value_hi
+/// Input:  x0=hash_table_ptr, x1=key_ptr, x2=key_len, x3=value_lo, x4=value_hi, x5=value_tag
 /// Output: x0=hash_table_ptr
 pub fn emit_hash_insert_owned(emitter: &mut Emitter) {
     emitter.blank();
@@ -16,17 +16,19 @@ pub fn emit_hash_insert_owned(emitter: &mut Emitter) {
     //   [sp, #16] = key_len
     //   [sp, #24] = value_lo
     //   [sp, #32] = value_hi
-    //   [sp, #40] = probe index
-    //   [sp, #48] = saved x29
-    //   [sp, #56] = saved x30
-    emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack
-    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #48");                                    // set up new frame pointer
+    //   [sp, #40] = value_tag
+    //   [sp, #48] = probe index
+    //   [sp, #64] = saved x29
+    //   [sp, #72] = saved x30
+    emitter.instruction("sub sp, sp, #80");                                     // allocate 80 bytes on the stack
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #64");                                    // set up new frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save hash_table_ptr
     emitter.instruction("str x1, [sp, #8]");                                    // save key_ptr
     emitter.instruction("str x2, [sp, #16]");                                   // save key_len
     emitter.instruction("str x3, [sp, #24]");                                   // save value_lo
     emitter.instruction("str x4, [sp, #32]");                                   // save value_hi
+    emitter.instruction("str x5, [sp, #40]");                                   // save value_tag
 
     // -- hash the existing owned key --
     emitter.instruction("bl __rt_hash_fnv1a");                                  // compute hash of the moved key
@@ -36,7 +38,7 @@ pub fn emit_hash_insert_owned(emitter: &mut Emitter) {
     emitter.instruction("ldr x6, [x5, #8]");                                    // load table capacity
     emitter.instruction("udiv x7, x0, x6");                                     // divide hash by capacity
     emitter.instruction("msub x8, x7, x6, x0");                                 // compute hash % capacity
-    emitter.instruction("str x8, [sp, #40]");                                   // save initial probe index
+    emitter.instruction("str x8, [sp, #48]");                                   // save initial probe index
     emitter.instruction("mov x10, #0");                                         // probe count = 0
 
     // -- linear probe until we find an empty slot --
@@ -44,8 +46,8 @@ pub fn emit_hash_insert_owned(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, x6");                                         // have we probed every slot?
     emitter.instruction("b.ge __rt_hash_insert_owned_done");                    // stop if the table is unexpectedly full
 
-    emitter.instruction("ldr x9, [sp, #40]");                                   // reload current probe index
-    emitter.instruction("mov x11, #56");                                        // entry size = 56 bytes with insertion-order links
+    emitter.instruction("ldr x9, [sp, #48]");                                   // reload current probe index
+    emitter.instruction("mov x11, #64");                                        // entry size = 64 bytes with per-entry tags and insertion-order links
     emitter.instruction("mul x12, x9, x11");                                    // compute byte offset for this slot
     emitter.instruction("add x12, x5, x12");                                    // advance from table base to slot
     emitter.instruction("add x12, x12, #40");                                   // skip hash header to entry storage
@@ -62,8 +64,8 @@ pub fn emit_hash_insert_owned(emitter: &mut Emitter) {
 
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload destination table after call clobbers regs
     emitter.instruction("ldr x6, [x5, #8]");                                    // reload capacity after call clobbers regs
-    emitter.instruction("ldr x9, [sp, #40]");                                   // reload probe index after call clobbers regs
-    emitter.instruction("mov x11, #56");                                        // entry size = 56 bytes with insertion-order links
+    emitter.instruction("ldr x9, [sp, #48]");                                   // reload probe index after call clobbers regs
+    emitter.instruction("mov x11, #64");                                        // entry size = 64 bytes with per-entry tags and insertion-order links
     emitter.instruction("mul x12, x9, x11");                                    // recompute byte offset for this slot
     emitter.instruction("add x12, x5, x12");                                    // advance from table base to slot
     emitter.instruction("add x12, x12, #40");                                   // skip hash header to entry storage
@@ -73,7 +75,7 @@ pub fn emit_hash_insert_owned(emitter: &mut Emitter) {
     emitter.instruction("add x9, x9, #1");                                      // increment probe index
     emitter.instruction("udiv x7, x9, x6");                                     // divide updated index by capacity
     emitter.instruction("msub x9, x7, x6, x9");                                 // wrap index with modulo capacity
-    emitter.instruction("str x9, [sp, #40]");                                   // save wrapped probe index
+    emitter.instruction("str x9, [sp, #48]");                                   // save wrapped probe index
     emitter.instruction("add x10, x10, #1");                                    // increment probe count
     emitter.instruction("b __rt_hash_insert_owned_probe");                      // continue probing
 
@@ -89,22 +91,24 @@ pub fn emit_hash_insert_owned(emitter: &mut Emitter) {
     emitter.instruction("str x13, [x12, #24]");                                 // store value_lo in slot
     emitter.instruction("ldr x13, [sp, #32]");                                  // reload moved value_hi
     emitter.instruction("str x13, [x12, #32]");                                 // store value_hi in slot
+    emitter.instruction("ldr x13, [sp, #40]");                                  // reload moved value_tag
+    emitter.instruction("str x13, [x12, #40]");                                 // store value_tag in slot
     emitter.instruction("ldr x14, [x5, #32]");                                  // load the previous tail slot for insertion-order linking
-    emitter.instruction("str x14, [x12, #40]");                                 // store prev = old tail on the new entry
+    emitter.instruction("str x14, [x12, #48]");                                 // store prev = old tail on the new entry
     emitter.instruction("mov x15, #-1");                                        // sentinel index for end of the insertion-order chain
-    emitter.instruction("str x15, [x12, #48]");                                 // store next = none on the new tail entry
+    emitter.instruction("str x15, [x12, #56]");                                 // store next = none on the new tail entry
     emitter.instruction("ldr x15, [x5, #24]");                                  // load the current head slot
-    emitter.instruction("cmp x15, #-1");                                         // is this the first inserted slot in the destination hash?
-    emitter.instruction("b.ne __rt_hash_insert_owned_link_tail");                // existing hashes append after the previous tail
+    emitter.instruction("cmp x15, #-1");                                        // is this the first inserted slot in the destination hash?
+    emitter.instruction("b.ne __rt_hash_insert_owned_link_tail");               // existing hashes append after the previous tail
     emitter.instruction("str x9, [x5, #24]");                                   // initialize head = inserted slot
     emitter.instruction("str x9, [x5, #32]");                                   // initialize tail = inserted slot
-    emitter.instruction("b __rt_hash_insert_owned_count");                       // skip the tail-link update for the first entry
+    emitter.instruction("b __rt_hash_insert_owned_count");                      // skip the tail-link update for the first entry
     emitter.label("__rt_hash_insert_owned_link_tail");
-    emitter.instruction("mov x16, #56");                                        // x16 = hash entry size for tail-slot addressing
+    emitter.instruction("mov x16, #64");                                        // x16 = hash entry size for tail-slot addressing
     emitter.instruction("mul x17, x14, x16");                                   // x17 = previous tail slot byte offset
     emitter.instruction("add x17, x5, x17");                                    // advance from table base to the previous tail slot
     emitter.instruction("add x17, x17, #40");                                   // skip the hash header to the previous tail entry
-    emitter.instruction("str x9, [x17, #48]");                                  // link old tail.next = inserted slot
+    emitter.instruction("str x9, [x17, #56]");                                  // link old tail.next = inserted slot
     emitter.instruction("str x9, [x5, #32]");                                   // update tail = inserted slot
     emitter.label("__rt_hash_insert_owned_count");
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload destination table pointer
@@ -119,10 +123,12 @@ pub fn emit_hash_insert_owned(emitter: &mut Emitter) {
     emitter.instruction("str x13, [x12, #24]");                                 // overwrite value_lo in existing slot
     emitter.instruction("ldr x13, [sp, #32]");                                  // reload moved value_hi
     emitter.instruction("str x13, [x12, #32]");                                 // overwrite value_hi in existing slot
+    emitter.instruction("ldr x13, [sp, #40]");                                  // reload moved value_tag
+    emitter.instruction("str x13, [x12, #40]");                                 // overwrite value_tag in existing slot
 
     emitter.label("__rt_hash_insert_owned_done");
     emitter.instruction("ldr x0, [sp, #0]");                                    // return destination table pointer
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 }

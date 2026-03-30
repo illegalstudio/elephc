@@ -276,10 +276,11 @@ Proper type system for PHP compatibility.
 - [x] Traits — compile-time method copying / inlining with `use`, `as`, `insteadof`, and trait properties
 - [ ] Exceptions (`try`/`catch`) — stack unwinding via `setjmp`/`longjmp` or DWARF-based infrastructure
 - [x] Hash table insertion order — preserve PHP associative-array insertion order with a secondary linked list through entries
-- [ ] Mixed-type associative arrays — per-entry type tags instead of one value type per table
+- [x] Mixed-type associative arrays — per-entry type tags instead of one value type per table
 - [ ] String indexing (`$str[$i]`) — lower to substring-style access as syntax sugar
 - [x] `protected` visibility — third visibility level between public and private
 - [ ] Magic methods (`__toString`, `__get`, `__set`) — implicit hooks on property access and string conversion
+- [ ] ifdef or similar support
 
 ## v0.17.x — Multi-platform and optimizations
 

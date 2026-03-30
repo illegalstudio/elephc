@@ -71,7 +71,11 @@ pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
         PhpType::Void => {
             store_at_offset(emitter, "x0", offset);                             // store null sentinel
         }
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+        PhpType::Mixed
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Callable
+        | PhpType::Object(_)
         | PhpType::Pointer(_) => {
             store_at_offset(emitter, "x0", offset);                             // store array/callable/object/pointer value
         }
@@ -90,6 +94,9 @@ pub fn emit_incref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
 /// Release the current value in x0 if it is runtime-refcounted.
 pub fn emit_decref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
+        PhpType::Mixed => {
+            emitter.instruction("bl __rt_decref_mixed");                        // release mixed cell reference
+        }
         PhpType::Array(_) => {
             emitter.instruction("bl __rt_decref_array");                        // release indexed array reference
         }
@@ -121,7 +128,11 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
         PhpType::Void => {
             load_at_offset(emitter, "x0", offset);                              // load null sentinel
         }
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_)
+        PhpType::Mixed
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Callable
+        | PhpType::Object(_)
         | PhpType::Pointer(_) => {
             load_at_offset(emitter, "x0", offset);                              // load array/callable/object/pointer value
         }
@@ -163,6 +174,9 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
             emitter.instruction("mov x0, #1");                                  // fd = stdout
             emitter.instruction("mov x16, #4");                                 // syscall 4 = write
             emitter.instruction("svc #0x80");                                   // invoke kernel
+        }
+        PhpType::Mixed => {
+            emitter.instruction("bl __rt_mixed_write_stdout");                  // inspect boxed mixed payload and print if scalar/string
         }
         PhpType::Void | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {} // null/array/callable/object: nothing to print
     }

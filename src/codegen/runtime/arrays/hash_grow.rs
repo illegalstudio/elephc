@@ -40,12 +40,12 @@ pub fn emit_hash_grow(emitter: &mut Emitter) {
     emitter.label("__rt_hash_grow_loop");
     emitter.instruction("mov x0, x20");                                         // x0 = old table pointer
     emitter.instruction("ldr x1, [sp, #0]");                                    // x1 = current insertion-order cursor
-    emitter.instruction("bl __rt_hash_iter_next");                              // get next owned entry in insertion order
+    emitter.instruction("bl __rt_hash_iter_next");                              // get next owned entry in insertion order, including its per-entry value tag
     emitter.instruction("cmn x0, #1");                                          // did the iterator signal end-of-walk?
     emitter.instruction("b.eq __rt_hash_grow_free");                            // finish once every entry has been moved
     emitter.instruction("str x0, [sp, #0]");                                    // save the next insertion-order cursor
     emitter.instruction("mov x0, x19");                                         // x0 = destination table
-    emitter.instruction("bl __rt_hash_insert_owned");                           // rehash and move existing key/value ownership
+    emitter.instruction("bl __rt_hash_insert_owned");                           // rehash and move existing key/value ownership with the original per-entry tag
     emitter.instruction("mov x19, x0");                                         // update new table ptr (hash_set returns it)
     emitter.instruction("b __rt_hash_grow_loop");                               // continue iterating
 

@@ -26,6 +26,7 @@ pub(super) fn emit_method_call(
         match &ty {
             PhpType::Bool
             | PhpType::Int
+            | PhpType::Mixed
             | PhpType::Array(_)
             | PhpType::AssocArray { .. }
             | PhpType::Callable
@@ -75,6 +76,7 @@ pub(super) fn emit_method_call(
         match ty {
             PhpType::Bool
             | PhpType::Int
+            | PhpType::Mixed
             | PhpType::Array(_)
             | PhpType::AssocArray { .. }
             | PhpType::Callable
@@ -216,6 +218,7 @@ pub(super) fn emit_static_method_call(
         match &ty {
             PhpType::Bool
             | PhpType::Int
+            | PhpType::Mixed
             | PhpType::Array(_)
             | PhpType::AssocArray { .. }
             | PhpType::Callable
@@ -373,6 +376,7 @@ pub(super) fn emit_static_method_call(
         match ty {
             PhpType::Bool
             | PhpType::Int
+            | PhpType::Mixed
             | PhpType::Array(_)
             | PhpType::AssocArray { .. }
             | PhpType::Callable

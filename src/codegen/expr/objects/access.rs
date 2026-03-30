@@ -96,7 +96,8 @@ pub(super) fn emit_property_access(
         PhpType::Bool | PhpType::Int | PhpType::Void => {
             emitter.instruction(&format!("ldr x0, [x0, #{}]", offset));         // load int/bool from property
         }
-        PhpType::Array(_)
+        PhpType::Mixed
+        | PhpType::Array(_)
         | PhpType::AssocArray { .. }
         | PhpType::Callable
         | PhpType::Object(_)

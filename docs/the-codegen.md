@@ -159,6 +159,7 @@ Floats are stored as their raw 64-bit IEEE 754 bit patterns (`.quad` directive).
 | `Float` | `d0` |
 | `Str` | `x1` (pointer), `x2` (length) |
 | `Array` / `AssocArray` | `x0` (heap pointer) |
+| `Mixed` | `x0` (pointer to boxed mixed cell) |
 | `Object` | `x0` (heap pointer) |
 | `Callable` / `Pointer` | `x0` |
 
@@ -432,8 +433,8 @@ $m["name"]
 
 1. Save hash table pointer on stack
 2. Evaluate key expression → `x1`/`x2` (string)
-3. Call `__rt_hash_get` → `x0` = found (0/1), `x1` = value_lo, `x2` = value_hi
-4. Move result to standard registers based on value type
+3. Call `__rt_hash_get` → `x0` = found (0/1), `x1` = value_lo, `x2` = value_hi, `x3` = per-entry value tag
+4. Move result to standard registers based on value type; if the static result is `Mixed`, box the payload into a heap cell first
 
 ### Functions on associative arrays
 
@@ -448,7 +449,7 @@ When `foreach` iterates a `PhpType::AssocArray`, the lowering differs from index
 1. Save the hash pointer and an iteration cursor on the stack (`0` means "start from header.head")
 2. Call `__rt_hash_iter_next`
 3. If `x0 == -1`, exit the loop
-4. Otherwise save the returned cursor, store `x1`/`x2` into the optional key variable, and store `x3`/`x4` into the value variable according to the inferred element type
+4. Otherwise save the returned cursor, store `x1`/`x2` into the optional key variable, and store `x3`/`x4`/`x5` into the value variable according to the inferred element type; `Mixed` loop variables reuse or allocate boxed mixed cells as needed
 5. Emit the loop body, then branch back to the iterator call
 
 This preserves PHP-style insertion order because `__rt_hash_iter_next` walks the hash table's linked insertion-order chain rather than scanning physical buckets.
@@ -770,6 +771,7 @@ Emits code to print a value to stdout:
 | `Float` | `bl __rt_ftoa` → then write |
 | `Bool` | `true` prints "1", `false` prints nothing |
 | `Pointer` | `bl __rt_ptoa` → then write |
+| `Mixed` | `bl __rt_mixed_write_stdout` → inspect boxed runtime tag, then write |
 | `Void`/`Array`/`AssocArray`/`Callable`/`Object` | Prints nothing |
 
 ## Function codegen

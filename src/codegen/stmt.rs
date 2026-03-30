@@ -32,6 +32,7 @@ fn stamp_indexed_array_value_type(emitter: &mut Emitter, array_reg: &str, elem_t
         PhpType::Array(_) => 4,
         PhpType::AssocArray { .. } => 5,
         PhpType::Object(_) => 6,
+        PhpType::Mixed => 7,
         _ => return,
     };
     emitter.instruction(&format!("ldr x12, [{}, #-8]", array_reg));             // load the packed array kind word from the heap header
@@ -221,7 +222,7 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
 
             // -- check if already initialized --
             emitter.instruction(&format!("adrp x9, {}@PAGE", init_label));      // load page of init flag
-            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", init_label)); // add page offset
+            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", init_label)); //add page offset
             emitter.instruction("ldr x10, [x9]");                               // load init flag value
             emitter.instruction(&format!("cbnz x10, {}", skip_label));          // skip init if already done
 
@@ -232,7 +233,7 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
             retain_borrowed_heap_result(emitter, init, &ty);
             // Store init value to static storage
             emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));      // load page of static var storage
-            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); // add page offset
+            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); //add page offset
             match &ty {
                 PhpType::Bool | PhpType::Int => {
                     emitter.instruction("str x0, [x9]");                        // store initial int/bool value
@@ -252,7 +253,7 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
 
             // -- load current value from static storage into local variable --
             emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));      // load page of static var storage
-            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); // add page offset
+            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); //add page offset
             let var_info = match ctx.variables.get(name) {
                 Some(v) => v,
                 None => {

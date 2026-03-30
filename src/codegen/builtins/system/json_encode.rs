@@ -48,14 +48,18 @@ pub fn emit(
                     emitter.instruction("bl __rt_json_encode_array_str");       // encode string array → x1/x2
                 }
                 _ => {
-                    // Fallback: treat as int array
-                    emitter.instruction("bl __rt_json_encode_array_int");       // encode array → x1/x2
+                    // Fallback: inspect the packed runtime value_type tag per array
+                    emitter.instruction("bl __rt_json_encode_array_dynamic");   // encode array → x1/x2
                 }
             }
         }
         PhpType::AssocArray { .. } => {
             // x0 = hash table pointer
             emitter.instruction("bl __rt_json_encode_assoc");                   // encode assoc array → x1/x2
+        }
+        PhpType::Mixed => {
+            // x0 = boxed mixed pointer
+            emitter.instruction("bl __rt_json_encode_mixed");                   // inspect boxed payload and encode it as JSON
         }
         _ => {
             // Fallback: encode as "null"

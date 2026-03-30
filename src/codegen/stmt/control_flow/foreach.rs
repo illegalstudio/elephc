@@ -31,7 +31,7 @@ pub(super) fn emit_foreach_stmt(
         emitter.label(&loop_start);
         emitter.instruction("ldr x0, [sp, #16]");                               // load hash table pointer
         emitter.instruction("ldr x1, [sp]");                                    // load current iterator cursor
-        emitter.instruction("bl __rt_hash_iter_next");                          // x0=next_cursor(-1=done), x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi
+        emitter.instruction("bl __rt_hash_iter_next");                          // x0=next_cursor(-1=done), x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi, x5=val_tag
         emitter.instruction("cmn x0, #1");                                      // compare x0 with -1 (end of iteration)
         emitter.instruction(&format!("b.eq {}", loop_end));                     // exit if done
         emitter.instruction("str x0, [sp]");                                    // store next iterator cursor
@@ -67,6 +67,25 @@ pub(super) fn emit_foreach_stmt(
                 crate::codegen::abi::store_at_offset_scratch(emitter, "x3", v_offset, "x10");
                 crate::codegen::abi::store_at_offset_scratch(emitter, "x4", v_offset - 8, "x10");
             }
+            PhpType::Mixed => {
+                emitter.instruction("str x3, [sp, #-16]!");                     // save iterated value_lo across the decref of the previous loop value
+                emitter.instruction("stp x4, x5, [sp, #-16]!");                 // save iterated value_hi and value_tag across the helper call
+                crate::codegen::abi::load_at_offset_scratch(emitter, "x0", v_offset, "x10"); // load the previous boxed mixed loop value before overwrite
+                emitter.instruction("bl __rt_decref_mixed");                    // release the previous owned mixed loop value if one exists
+                emitter.instruction("ldp x4, x5, [sp], #16");                   // restore iterated value_hi and value_tag after decref
+                emitter.instruction("ldr x3, [sp], #16");                       // restore iterated value_lo after decref
+                emitter.instruction("cmp x5, #7");                              // does this hash entry already store a boxed mixed value?
+                let reuse_box = ctx.next_label("foreach_assoc_mixed_reuse");
+                let store_box = ctx.next_label("foreach_assoc_mixed_store");
+                emitter.instruction(&format!("b.eq {}", reuse_box));            // reuse existing mixed boxes instead of nesting them
+                super::super::super::emit_box_runtime_payload_as_mixed(emitter, "x5", "x3", "x4"); // box the borrowed entry payload into an owned mixed cell
+                emitter.instruction(&format!("b {}", store_box));               // skip the mixed-box reuse path once boxing is done
+                emitter.label(&reuse_box);
+                emitter.instruction("mov x0, x3");                              // x0 = existing boxed mixed pointer from the hash entry
+                emitter.instruction("bl __rt_incref");                          // retain the shared mixed box for the foreach variable
+                emitter.label(&store_box);
+                crate::codegen::abi::store_at_offset_scratch(emitter, "x0", v_offset, "x10");
+            }
             _ => {
                 crate::codegen::abi::store_at_offset_scratch(emitter, "x3", v_offset, "x10");
             }
@@ -74,7 +93,11 @@ pub(super) fn emit_foreach_stmt(
         ctx.update_var_type_and_ownership(
             value_var,
             val_ty.clone(),
-            HeapOwnership::borrowed_alias_for_type(&val_ty),
+            if matches!(val_ty, PhpType::Mixed) {
+                HeapOwnership::local_owner_for_type(&val_ty)
+            } else {
+                HeapOwnership::borrowed_alias_for_type(&val_ty)
+            },
         );
 
         ctx.loop_stack.push(LoopLabels {
@@ -141,7 +164,7 @@ pub(super) fn emit_foreach_stmt(
                 crate::codegen::abi::store_at_offset(emitter, "x1", val_offset);
                 crate::codegen::abi::store_at_offset(emitter, "x2", val_offset - 8);
             }
-            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
                 emitter.instruction("add x9, x9, #24");                         // skip 24-byte array header to reach data
                 emitter.instruction("ldr x0, [x9, x0, lsl #3]");                // load nested array/object pointer at index
                 crate::codegen::abi::store_at_offset(emitter, "x0", val_offset);

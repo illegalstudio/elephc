@@ -59,7 +59,7 @@ Things that have a value:
 | `FunctionCall { name, args }` | `strlen($s)` | |
 | `ArrayLiteral(Vec<Expr>)` | `[1, 2, 3]`, `[...$arr, 4]` | Indexed array; elements may include `Spread` expressions |
 | `ArrayLiteralAssoc(Vec<(Expr, Expr)>)` | `["a" => 1]` | Associative array |
-| `Match { subject, arms, default }` | `match($x) { 1, 2 => "low", 3 => "high" }` | Match expression (returns a value). `arms` is `Vec<(Vec<Expr>, Expr)>`, so each arm can have multiple comma-separated patterns before `=>` |
+| `Match { subject, arms, default }` | `match($x) { 1, 2 => "low", 3 => "high" }` | Match expression (returns a value). `arms` is `Vec<(Vec<Expr>, Expr)>`, so each arm can have multiple comma-separated patterns before `=>`, and `default` is optional (`Option<Box<Expr>>`) |
 | `ArrayAccess { array, index }` | `$arr[0]` | |
 | `Ternary { condition, then_expr, else_expr }` | `$a ? $b : $c` | |
 | `Cast { target, expr }` | `(int)$x` | |
@@ -86,7 +86,7 @@ Things that do something:
 | `If { condition, then_body, elseif_clauses, else_body }` | `if (...) { } elseif (...) { } else { }` |
 | `While { condition, body }` | `while (...) { }` |
 | `DoWhile { body, condition }` | `do { } while (...);` |
-| `For { init, condition, update, body }` | `for (...; ...; ...) { }` |
+| `For { init, condition, update, body }` | `for (...; ...; ...) { }` — `init`, `condition`, and `update` are all optional, so `for (;;) { }` is valid |
 | `Foreach { array, key_var, value_var, body }` | `foreach ($arr as $v) { }` or `foreach ($arr as $k => $v) { }` |
 | `Switch { subject, cases, default }` | `switch ($x) { case 1: ...; default: ... }` |
 | `ArrayAssign { array, index, value }` | `$arr[0] = 5;` |

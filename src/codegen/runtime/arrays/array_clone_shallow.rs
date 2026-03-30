@@ -59,6 +59,8 @@ pub fn emit_array_clone_shallow(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_array_clone_shallow_refs");                  // nested refcounted payloads need retains
     emitter.instruction("cmp x9, #6");                                          // is this an array of objects?
     emitter.instruction("b.eq __rt_array_clone_shallow_refs");                  // nested refcounted payloads need retains
+    emitter.instruction("cmp x9, #7");                                          // is this an array of boxed mixed values?
+    emitter.instruction("b.eq __rt_array_clone_shallow_refs");                  // boxed mixed payloads also need retains
     emitter.instruction("b __rt_array_clone_shallow_done");                     // scalar payloads are already correct after the byte copy
 
     // -- string arrays must own their own persisted payloads after the split --

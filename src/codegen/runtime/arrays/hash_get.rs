@@ -2,7 +2,7 @@ use crate::codegen::emit::Emitter;
 
 /// hash_get: look up a value by string key in the hash table.
 /// Input:  x0=hash_table_ptr, x1=key_ptr, x2=key_len
-/// Output: x0=found (1 or 0), x1=value_lo, x2=value_hi
+/// Output: x0=found (1 or 0), x1=value_lo, x2=value_hi, x3=value_tag
 pub fn emit_hash_get(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_get ---");
@@ -43,11 +43,11 @@ pub fn emit_hash_get(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, x6");                                         // check if we've probed all slots
     emitter.instruction("b.ge __rt_hash_get_not_found");                        // if probed all, key not found
 
-    // -- compute entry address: base + 40 + index * 56 --
+    // -- compute entry address: base + 40 + index * 64 --
     emitter.instruction("ldr x9, [sp, #24]");                                   // load current probe index
-    emitter.instruction("mov x11, #56");                                        // entry size = 56 bytes with insertion-order links
-    emitter.instruction("mul x12, x9, x11");                                    // x12 = index * 56
-    emitter.instruction("add x12, x5, x12");                                    // x12 = table_ptr + index * 56
+    emitter.instruction("mov x11, #64");                                        // entry size = 64 bytes with per-entry tags and insertion-order links
+    emitter.instruction("mul x12, x9, x11");                                    // x12 = index * 64
+    emitter.instruction("add x12, x5, x12");                                    // x12 = table_ptr + index * 64
     emitter.instruction("add x12, x12, #40");                                   // x12 = entry address (skip header)
 
     // -- check occupied field --
@@ -84,14 +84,15 @@ pub fn emit_hash_get(emitter: &mut Emitter) {
     // -- recompute entry address (registers were clobbered by str_eq) --
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash_table_ptr
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload probe index
-    emitter.instruction("mov x11, #56");                                        // entry size = 56 bytes with insertion-order links
-    emitter.instruction("mul x12, x9, x11");                                    // x12 = index * 56
-    emitter.instruction("add x12, x5, x12");                                    // x12 = table_ptr + index * 56
+    emitter.instruction("mov x11, #64");                                        // entry size = 64 bytes with per-entry tags and insertion-order links
+    emitter.instruction("mul x12, x9, x11");                                    // x12 = index * 64
+    emitter.instruction("add x12, x5, x12");                                    // x12 = table_ptr + index * 64
     emitter.instruction("add x12, x12, #40");                                   // x12 = entry address
 
     emitter.instruction("mov x0, #1");                                          // found = 1
     emitter.instruction("ldr x1, [x12, #24]");                                  // x1 = value_lo
     emitter.instruction("ldr x2, [x12, #32]");                                  // x2 = value_hi
+    emitter.instruction("ldr x3, [x12, #40]");                                  // x3 = value_tag
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
@@ -101,6 +102,7 @@ pub fn emit_hash_get(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #0");                                          // found = 0
     emitter.instruction("mov x1, #0");                                          // value_lo = 0
     emitter.instruction("mov x2, #0");                                          // value_hi = 0
+    emitter.instruction("mov x3, #8");                                          // value_tag = null when lookup misses
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller

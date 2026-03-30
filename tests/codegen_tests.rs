@@ -2438,6 +2438,29 @@ echo $x;
     assert_eq!(out, "1");
 }
 
+#[test]
+fn test_strict_compare_mixed_uses_payload_type_and_value() {
+    let out = compile_and_run(
+        r#"<?php
+$map = [
+    "int_a" => 42,
+    "int_b" => 42,
+    "int_c" => 7,
+    "str_a" => "42",
+    "str_b" => "42",
+    "bool_t" => true,
+];
+echo $map["int_a"] === $map["int_b"] ? "1" : "0";
+echo $map["int_a"] === $map["int_c"] ? "1" : "0";
+echo $map["int_a"] === $map["str_a"] ? "1" : "0";
+echo $map["str_a"] === $map["str_b"] ? "1" : "0";
+echo $map["int_a"] !== $map["str_a"] ? "1" : "0";
+echo $map["bool_t"] === true ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "100111");
+}
+
 // --- Include / Require ---
 
 #[test]
@@ -2844,6 +2867,35 @@ fn test_cast_bool_from_string_nonempty() {
 }
 
 #[test]
+fn test_cast_mixed_unboxes_payload() {
+    let out = compile_and_run(
+        r#"<?php
+$map = [
+    "int" => 42,
+    "float" => 3.75,
+    "true" => true,
+    "false" => false,
+    "null" => null,
+    "text" => "27",
+];
+echo (int)$map["float"];
+echo "|";
+echo (int)$map["text"];
+echo "|";
+echo (bool)$map["int"] ? "1" : "0";
+echo (bool)$map["false"] ? "1" : "0";
+echo "|";
+echo (string)$map["true"];
+echo "|";
+echo (string)$map["null"];
+echo "|";
+echo (string)$map["int"];
+"#,
+    );
+    assert_eq!(out, "3|27|10|1||42");
+}
+
+#[test]
 fn test_cast_integer_alias() {
     let out = compile_and_run("<?php echo (integer)3.7;");
     assert_eq!(out, "3");
@@ -2893,6 +2945,31 @@ fn test_gettype_null() {
     assert_eq!(out, "NULL");
 }
 
+#[test]
+fn test_gettype_mixed_returns_concrete_payload_type() {
+    let out = compile_and_run(
+        r#"<?php
+$map = [
+    "i" => 42,
+    "s" => "hi",
+    "n" => null,
+    "a" => [1, 2],
+    "b" => true,
+];
+echo gettype($map["i"]);
+echo "|";
+echo gettype($map["s"]);
+echo "|";
+echo gettype($map["n"]);
+echo "|";
+echo gettype($map["a"]);
+echo "|";
+echo gettype($map["b"]);
+"#,
+    );
+    assert_eq!(out, "integer|string|NULL|array|boolean");
+}
+
 // --- empty ---
 
 #[test]
@@ -2935,6 +3012,29 @@ fn test_empty_false() {
 fn test_empty_true() {
     let out = compile_and_run("<?php echo empty(true);");
     assert_eq!(out, "");
+}
+
+#[test]
+fn test_empty_mixed_uses_boxed_payload_semantics() {
+    let out = compile_and_run(
+        r#"<?php
+$map = [
+    "zero" => 0,
+    "blank" => "",
+    "null" => null,
+    "arr" => [],
+    "one" => 1,
+    "text" => "hi",
+];
+echo empty($map["zero"]) ? "1" : "0";
+echo empty($map["blank"]) ? "1" : "0";
+echo empty($map["null"]) ? "1" : "0";
+echo empty($map["arr"]) ? "1" : "0";
+echo empty($map["one"]) ? "1" : "0";
+echo empty($map["text"]) ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "111100");
 }
 
 // --- unset ---
@@ -3902,6 +4002,35 @@ fn test_var_dump_null() {
 fn test_var_dump_float() {
     let out = compile_and_run("<?php var_dump(3.14);");
     assert_eq!(out, "float(3.14)\n");
+}
+
+#[test]
+fn test_var_dump_mixed_prints_concrete_payload() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {}
+
+$map = [
+    "i" => 42,
+    "s" => "hello",
+    "b" => true,
+    "n" => null,
+    "a" => [1, 2],
+    "o" => new Box(),
+];
+
+var_dump($map["i"]);
+var_dump($map["s"]);
+var_dump($map["b"]);
+var_dump($map["n"]);
+var_dump($map["a"]);
+var_dump($map["o"]);
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(42)\nstring(5) \"hello\"\nbool(true)\nNULL\narray(2) {\n}\nobject(Box)\n"
+    );
 }
 
 #[test]
@@ -5098,6 +5227,75 @@ echo $vals[0] + $vals[1] + $vals[2];
 "#,
     );
     assert_eq!(out, "60");
+}
+
+#[test]
+fn test_assoc_array_mixed_foreach() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["id" => 7, "name" => "Alice", "score" => 12];
+foreach ($m as $key => $value) {
+    echo $key;
+    echo "=";
+    echo $value;
+    echo ";";
+}
+"#,
+    );
+    assert_eq!(out, "id=7;name=Alice;score=12;");
+}
+
+#[test]
+fn test_assoc_array_values_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["id" => 7, "name" => "Alice", "score" => 12];
+$vals = array_values($m);
+$n = count($vals);
+for ($i = 0; $i < $n; $i++) {
+    echo $vals[$i];
+    echo ",";
+}
+"#,
+    );
+    assert_eq!(out, "7,Alice,12,");
+}
+
+#[test]
+fn test_assoc_in_array_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["id" => 7, "name" => "Alice", "score" => 12];
+if (in_array("Alice", $m)) { echo "name"; }
+if (in_array(12, $m)) { echo " score"; }
+if (!in_array("Bob", $m)) { echo " missing"; }
+"#,
+    );
+    assert_eq!(out, "name score missing");
+}
+
+#[test]
+fn test_assoc_array_search_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["id" => 7, "name" => "Alice", "score" => 12];
+echo array_search("Alice", $m);
+echo ":";
+echo array_search(12, $m);
+"#,
+    );
+    assert_eq!(out, "name:score");
+}
+
+#[test]
+fn test_assoc_array_access_mixed_echo() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["id" => 7, "name" => "Alice", "score" => 12];
+echo $m["name"];
+"#,
+    );
+    assert_eq!(out, "Alice");
 }
 
 #[test]
@@ -6970,6 +7168,29 @@ fn test_json_encode_single_element_array() {
 fn test_json_encode_assoc() {
     let out = compile_and_run(r#"<?php echo json_encode(["name" => "Alice", "age" => "30"]);"#);
     assert_eq!(out, r#"{"name":"Alice","age":"30"}"#, "Got: {}", out);
+}
+
+#[test]
+fn test_json_encode_assoc_mixed_values() {
+    let out = compile_and_run(
+        r#"<?php echo json_encode(["id" => 7, "name" => "Alice", "ok" => true, "note" => null]);"#,
+    );
+    assert_eq!(out, r#"{"id":7,"name":"Alice","ok":true,"note":null}"#);
+}
+
+#[test]
+fn test_json_encode_assoc_nested_nonstring_indexed_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {}
+echo json_encode([
+    "floats" => [1.5, 2.25],
+    "bools" => [true, false],
+    "objects" => [new Box()],
+]);
+"#,
+    );
+    assert_eq!(out, r#"{"floats":[1.5,2.25],"bools":[true,false],"objects":[null]}"#);
 }
 
 #[test]
@@ -10360,6 +10581,31 @@ fn test_new_object_codegen_sets_heap_kind() {
     );
     assert!(asm.contains("new Foo()"));
     assert!(asm.contains("str x9, [x0, #-8]"), "{asm}");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_decref_hash_codegen_skips_gc_for_scalar_only_hashes() {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (asm, _) = compile_source_to_asm_with_options(
+        r#"<?php
+$map = ["a" => 1, "b" => 2];
+unset($map);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    assert!(asm.contains("__rt_hash_may_have_cyclic_values"), "{asm}");
+    assert!(asm.contains("bl __rt_hash_may_have_cyclic_values"), "{asm}");
+    assert!(asm.contains("cbz x0, __rt_decref_hash_skip"), "{asm}");
 
     let _ = fs::remove_dir_all(&dir);
 }

@@ -193,8 +193,12 @@ fn emit_function_with_label_and_class(
                     int_reg_idx += 2;
                 }
                 PhpType::Void => {}
-                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable
-                | PhpType::Object(_) | PhpType::Pointer(_) => {
+                PhpType::Mixed
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Callable
+                | PhpType::Object(_)
+                | PhpType::Pointer(_) => {
                     emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
                     super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save array/callable/object/pointer param
                     int_reg_idx += 1;
@@ -213,7 +217,10 @@ fn emit_function_with_label_and_class(
         if param_names.contains(name) {
             continue; // Parameters are initialized by register stores above
         }
-        if matches!(&var.ty, PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)) {
+        if matches!(
+            &var.ty,
+            PhpType::Str | PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+        ) {
             super::abi::store_at_offset(emitter, "xzr", var.stack_offset);       // zero-init to prevent stale ptr free
         }
     }
@@ -242,39 +249,39 @@ fn emit_function_with_label_and_class(
             let ty = var.ty.clone();
             emitter.comment(&format!("save static ${} back", static_var));
             emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));      // load page of static var storage
-            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); // add page offset
+            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); //add page offset
             // Note: x9 holds the global storage address, so we use x8 as scratch for large offsets
             match &ty {
                 PhpType::Bool | PhpType::Int => {
                     if offset <= 255 {
-                        emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); // load local value
+                        emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); //load local value
                     } else {
-                        emitter.instruction(&format!("sub x8, x29, #{}", offset)); // compute stack address for large offset
+                        emitter.instruction(&format!("sub x8, x29, #{}", offset)); //compute stack address for large offset
                         emitter.instruction("ldr x10, [x8]");                   // load local value via computed address
                     }
                     emitter.instruction("str x10, [x9]");                       // save to static storage
                 }
                 PhpType::Float => {
                     if offset <= 255 {
-                        emitter.instruction(&format!("ldur d0, [x29, #-{}]", offset)); // load local float
+                        emitter.instruction(&format!("ldur d0, [x29, #-{}]", offset)); //load local float
                     } else {
-                        emitter.instruction(&format!("sub x8, x29, #{}", offset)); // compute stack address for large offset
+                        emitter.instruction(&format!("sub x8, x29, #{}", offset)); //compute stack address for large offset
                         emitter.instruction("ldr d0, [x8]");                    // load local float via computed address
                     }
                     emitter.instruction("str d0, [x9]");                        // save to static storage
                 }
                 PhpType::Str => {
                     if offset <= 255 {
-                        emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); // load string ptr
+                        emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); //load string ptr
                     } else {
-                        emitter.instruction(&format!("sub x8, x29, #{}", offset)); // compute stack address for large offset
+                        emitter.instruction(&format!("sub x8, x29, #{}", offset)); //compute stack address for large offset
                         emitter.instruction("ldr x10, [x8]");                   // load string ptr via computed address
                     }
                     let len_offset = offset - 8;
                     if len_offset <= 255 {
-                        emitter.instruction(&format!("ldur x11, [x29, #-{}]", len_offset)); // load string len
+                        emitter.instruction(&format!("ldur x11, [x29, #-{}]", len_offset)); //load string len
                     } else {
-                        emitter.instruction(&format!("sub x8, x29, #{}", len_offset)); // compute stack address for large offset
+                        emitter.instruction(&format!("sub x8, x29, #{}", len_offset)); //compute stack address for large offset
                         emitter.instruction("ldr x11, [x8]");                   // load string len via computed address
                     }
                     emitter.instruction("str x10, [x9]");                       // save ptr to static storage
@@ -282,9 +289,9 @@ fn emit_function_with_label_and_class(
                 }
                 _ => {
                     if offset <= 255 {
-                        emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); // load local value
+                        emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); //load local value
                     } else {
-                        emitter.instruction(&format!("sub x8, x29, #{}", offset)); // compute stack address for large offset
+                        emitter.instruction(&format!("sub x8, x29, #{}", offset)); //compute stack address for large offset
                         emitter.instruction("ldr x10, [x8]");                   // load local value via computed address
                     }
                     emitter.instruction("str x10, [x9]");                       // save to static storage

@@ -38,7 +38,7 @@ pub fn emit_decref_hash(emitter: &mut Emitter) {
     emitter.instruction("str w9, [x0, #-12]");                                  // store decremented refcount
     emitter.instruction("b.eq __rt_decref_hash_free");                          // zero refcount means the hash can be freed immediately
 
-    // -- non-zero refcount may indicate a now-unrooted cycle; run the targeted collector unless it is already active --
+    // -- non-zero refcount may indicate a now-unrooted cycle; only collect when this hash can still reach cyclic children --
     emitter.instruction("adrp x9, _gc_release_suppressed@PAGE");                // load page of the release-suppression flag
     emitter.instruction("add x9, x9, _gc_release_suppressed@PAGEOFF");          // resolve the release-suppression flag address
     emitter.instruction("ldr x9, [x9]");                                        // load the release-suppression flag
@@ -47,13 +47,10 @@ pub fn emit_decref_hash(emitter: &mut Emitter) {
     emitter.instruction("add x9, x9, _gc_collecting@PAGEOFF");                  // resolve the collector-active flag address
     emitter.instruction("ldr x9, [x9]");                                        // load the collector-active flag
     emitter.instruction("cbnz x9, __rt_decref_hash_skip");                      // nested decref calls during collection must not restart the collector
-    emitter.instruction("ldr x9, [x0, #16]");                                   // load the runtime hash value_type tag from the container header
-    emitter.instruction("cmp x9, #4");                                          // is this a hash of indexed arrays?
-    emitter.instruction("b.eq __rt_decref_hash_collect");                       // nested heap payloads can participate in cycles
-    emitter.instruction("cmp x9, #5");                                          // is this a hash of associative arrays?
-    emitter.instruction("b.eq __rt_decref_hash_collect");                       // nested heap payloads can participate in cycles
-    emitter.instruction("cmp x9, #6");                                          // is this a hash of objects?
-    emitter.instruction("b.ne __rt_decref_hash_skip");                          // scalar/string hashes cannot participate in heap cycles
+    emitter.instruction("str x30, [sp, #-16]!");                                // preserve the caller return address across helper calls
+    emitter.instruction("bl __rt_hash_may_have_cyclic_values");                 // inspect entry tags to see whether this hash can still participate in a cycle
+    emitter.instruction("ldr x30, [sp], #16");                                  // restore the caller return address after the helper returns
+    emitter.instruction("cbz x0, __rt_decref_hash_skip");                       // scalar-only hashes can skip the collector entirely
     emitter.label("__rt_decref_hash_collect");
     emitter.instruction("str x30, [sp, #-16]!");                                // preserve the caller return address across the collector call
     emitter.instruction("bl __rt_gc_collect_cycles");                           // reclaim any newly-unrooted refcounted graph components

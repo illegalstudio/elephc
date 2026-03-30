@@ -31,6 +31,7 @@ pub enum PhpType {
     Str,
     Bool,
     Void,                          // null
+    Mixed,                         // runtime-boxed heterogeneous assoc-array value
     Array(Box<PhpType>),           // e.g., Array(Int) = int[]
     AssocArray {                    // e.g., AssocArray { key: Str, value: Int }
         key: Box<PhpType>,
@@ -42,7 +43,7 @@ pub enum PhpType {
 }
 ```
 
-This is simpler than PHP's runtime types — no union types, no mixed, no nullable syntax. Each variable gets exactly one type for its lifetime. The distinction between `Array` (indexed) and `AssocArray` (key-value) is determined at compile time from the literal syntax (`[1, 2]` vs `["a" => 1]`).
+This is simpler than PHP's surface syntax — there are still no user-written union types or nullable annotations. Each variable gets exactly one static type for its lifetime, but associative-array values can widen to the internal `Mixed` type when later entries do not match the first value type. The distinction between `Array` (indexed) and `AssocArray` (key-value) is determined at compile time from the literal syntax (`[1, 2]` vs `["a" => 1]`).
 
 `Callable` is used for anonymous functions (closures) and arrow functions. A callable value is stored as a function pointer (8 bytes) on the stack, and is invoked via an indirect branch (`blr`).
 
@@ -76,6 +77,7 @@ The first assignment determines a variable's type. After that, reassignment is o
 | `Int` | `Str` | **No** — compile error |
 | `Void` | anything | Yes (null can become any type) |
 | anything | `Void` | Yes (any variable can become null) |
+| `AssocArray(_, T)` | `AssocArray(_, U)` | Yes, if `T` and `U` merge; heterogeneous values widen to `Mixed` |
 | `Pointer(None)` | `Pointer(Some("T"))` | Yes (merged to the more specific pointer tag) |
 | `Pointer(Some("A"))` | `Pointer(Some("B"))` | Yes, but merged to opaque `Pointer(None)` if tags differ |
 | `Pointer(*)` | `Int` / `Str` / `Array` | **No** — compile error |
@@ -104,6 +106,7 @@ The type checker computes the type of every expression:
 | `null` | `Void` |
 | `[1, 2, 3]` | `Array(Int)` |
 | `["a" => 1]` | `AssocArray { key: Str, value: Int }` |
+| `["a" => 1, "b" => "two"]` | `AssocArray { key: Str, value: Mixed }` |
 
 ### Binary operations
 

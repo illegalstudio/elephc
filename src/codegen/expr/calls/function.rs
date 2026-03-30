@@ -73,7 +73,7 @@ pub(super) fn emit_function_call(
                     let label = format!("_gvar_{}", var_name);
                     emitter.comment(&format!("ref arg: address of global ${}", var_name));
                     emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page of global var
-                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); // add page offset
+                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); //add page offset
                 } else {
                     let var = match ctx.variables.get(var_name) {
                         Some(v) => v,
@@ -120,20 +120,20 @@ pub(super) fn emit_function_call(
             for idx in 0..remaining {
                 match &elem_ty {
                     PhpType::Int | PhpType::Bool => {
-                        emitter.instruction(&format!("ldr x0, [x9, #{}]", idx * 8)); // load int element at offset index*8
+                        emitter.instruction(&format!("ldr x0, [x9, #{}]", idx * 8)); //load int element at offset index*8
                         emitter.instruction("str x0, [sp, #-16]!");             // push unpacked int arg onto stack
                     }
                     PhpType::Float => {
-                        emitter.instruction(&format!("ldr d0, [x9, #{}]", idx * 8)); // load float element at offset index*8
+                        emitter.instruction(&format!("ldr d0, [x9, #{}]", idx * 8)); //load float element at offset index*8
                         emitter.instruction("str d0, [sp, #-16]!");             // push unpacked float arg onto stack
                     }
                     PhpType::Str => {
-                        emitter.instruction(&format!("ldr x1, [x9, #{}]", idx * 16)); // load string pointer at offset index*16
-                        emitter.instruction(&format!("ldr x2, [x9, #{}]", idx * 16 + 8)); // load string length at offset index*16+8
+                        emitter.instruction(&format!("ldr x1, [x9, #{}]", idx * 16)); //load string pointer at offset index*16
+                        emitter.instruction(&format!("ldr x2, [x9, #{}]", idx * 16 + 8)); //load string length at offset index*16+8
                         emitter.instruction("stp x1, x2, [sp, #-16]!");         // push unpacked string arg onto stack
                     }
                     _ => {
-                        emitter.instruction(&format!("ldr x0, [x9, #{}]", idx * 8)); // load element at offset index*8
+                        emitter.instruction(&format!("ldr x0, [x9, #{}]", idx * 8)); //load element at offset index*8
                         emitter.instruction("str x0, [sp, #-16]!");             // push unpacked arg onto stack
                     }
                 }
@@ -175,17 +175,17 @@ pub(super) fn emit_function_call(
                 emitter.instruction("ldr x9, [sp]");                            // peek variadic array pointer from stack
                 match &ty {
                     PhpType::Int | PhpType::Bool => {
-                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); // store int element at data offset
+                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); //store int element at data offset
                     }
                     PhpType::Float => {
-                        emitter.instruction(&format!("str d0, [x9, #{}]", 24 + i * 8)); // store float element at data offset
+                        emitter.instruction(&format!("str d0, [x9, #{}]", 24 + i * 8)); //store float element at data offset
                     }
                     PhpType::Str => {
-                        emitter.instruction(&format!("str x1, [x9, #{}]", 24 + i * 16)); // store string pointer at data offset
-                        emitter.instruction(&format!("str x2, [x9, #{}]", 24 + i * 16 + 8)); // store string length right after pointer
+                        emitter.instruction(&format!("str x1, [x9, #{}]", 24 + i * 16)); //store string pointer at data offset
+                        emitter.instruction(&format!("str x2, [x9, #{}]", 24 + i * 16 + 8)); //store string length right after pointer
                     }
                     PhpType::Array(_) | PhpType::AssocArray { .. } => {
-                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); // store nested array pointer at data offset
+                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); //store nested array pointer at data offset
                     }
                     _ => {}
                 }

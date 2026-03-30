@@ -204,6 +204,7 @@ pub(super) fn emit_closure_call(
         match cap_ty {
             PhpType::Bool
             | PhpType::Int
+            | PhpType::Mixed
             | PhpType::Array(_)
             | PhpType::AssocArray { .. }
             | PhpType::Callable

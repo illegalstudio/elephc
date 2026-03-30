@@ -22,7 +22,7 @@ pub fn emit(
         // -- save hash table pointer, evaluate needle --
         emitter.instruction("str x0, [sp, #-16]!");                             // push hash table pointer
 
-        let _needle_ty = emit_expr(&args[0], emitter, ctx, data);
+        let needle_ty = emit_expr(&args[0], emitter, ctx, data);
 
         let found_label = ctx.next_label("asearch_assoc_found");
         let end_label = ctx.next_label("asearch_assoc_end");
@@ -33,6 +33,13 @@ pub fn emit(
             PhpType::Str => {
                 // -- needle is a string in x1/x2, save it --
                 emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push needle ptr+len
+            }
+            PhpType::Mixed if matches!(needle_ty, PhpType::Str) => {
+                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push string needle ptr+len for mixed-entry comparison
+            }
+            PhpType::Mixed if matches!(needle_ty, PhpType::Float) => {
+                emitter.instruction("fmov x0, d0");                             // move float needle bits into an integer register for mixed-entry comparison
+                emitter.instruction("str x0, [sp, #-16]!");                     // push float needle bits
             }
             _ => {
                 // -- needle is an integer/bool in x0, save it --
@@ -51,7 +58,7 @@ pub fn emit(
         emitter.label(&loop_label);
         emitter.instruction("ldr x0, [sp, #32]");                               // load hash table pointer
         emitter.instruction("ldr x1, [sp]");                                    // load current iteration cursor
-        emitter.instruction("bl __rt_hash_iter_next");                          // → x0=next_cursor, x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi
+        emitter.instruction("bl __rt_hash_iter_next");                          // → x0=next_cursor, x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi, x5=val_tag
         emitter.instruction("cmn x0, #1");                                      // check if done
         emitter.instruction(&format!("b.eq {}", end_label));                    // if done, not found
         emitter.instruction("str x0, [sp]");                                    // save updated iteration cursor
@@ -69,6 +76,31 @@ pub fn emit(
                 emitter.instruction("ldp x3, x4, [sp, #32]");                   // reload needle ptr+len
                 emitter.instruction("bl __rt_str_eq");                          // x0 = 1 if equal
                 emitter.instruction(&format!("cbnz x0, {}", found_label));      // if equal, found
+            }
+            PhpType::Mixed => {
+                let mixed_mismatch_label = ctx.next_label("asearch_assoc_mixed_mismatch");
+                let expected_tag = crate::codegen::runtime_value_tag(&needle_ty);
+                emitter.instruction(&format!("mov x6, #{}", expected_tag));     // materialize the expected mixed-entry value_tag for the needle
+                emitter.instruction("cmp x5, x6");                              // does this entry's runtime value_tag match the needle type?
+                emitter.instruction(&format!("b.ne {}", mixed_mismatch_label)); // skip entries whose runtime value kind differs from the needle
+                match &needle_ty {
+                    PhpType::Str => {
+                        emitter.instruction("mov x1, x3");                      // val ptr → x1
+                        emitter.instruction("mov x2, x4");                      // val len → x2
+                        emitter.instruction("ldp x3, x4, [sp, #32]");           // reload needle ptr+len
+                        emitter.instruction("bl __rt_str_eq");                  // x0 = 1 if equal
+                        emitter.instruction(&format!("cbnz x0, {}", found_label)); //if equal, found
+                    }
+                    PhpType::Void => {
+                        emitter.instruction(&format!("b {}", found_label));     // null needles match any entry tagged null
+                    }
+                    _ => {
+                        emitter.instruction("ldr x6, [sp, #32]");               // reload the saved needle payload for mixed-entry comparison
+                        emitter.instruction("cmp x3, x6");                      // compare entry value_lo against the needle payload
+                        emitter.instruction(&format!("b.eq {}", found_label));  // if equal, found
+                    }
+                }
+                emitter.label(&mixed_mismatch_label);
             }
             _ => {
                 emitter.instruction("ldr x5, [sp, #32]");                       // reload needle value

@@ -194,6 +194,7 @@ if ($x === 3) {
 | Pass by reference | `function inc(&$x) { $x++; }` |
 | Global / Static | `global $var;`, `static $counter = 0;` |
 | Closures / Arrow | `$fn = function($x) use ($y) { return $x * $y; };`, `fn($x) => $x * 2` |
+| FFI declarations | `extern function atoi(string $s): int;`, `extern "System" { function malloc(int $n): ptr; }`, `extern global ptr $environ;`, `extern class Point { public int $x; }` |
 | Constants | `const MAX = 100;`, `define("PI", 3.14)` |
 | List unpacking | `[$a, $b] = [1, 2];` |
 | Include/Require | `include 'file.php';`, `require_once 'lib.php';` |
@@ -246,6 +247,7 @@ The static type system tracks these runtime shapes at compile time:
 - **Void / null** — null sentinel value, coerces to 0/""
 - **Array** — indexed arrays with inferred element type
 - **AssocArray** — associative arrays with key/value types
+- **Mixed** — internal boxed runtime shape used when associative-array entries have heterogeneous value types
 - **Callable** — closures and callable function references
 - **Object** — heap-allocated class instances
 - **Pointer** — raw 64-bit addresses, optionally tagged via `ptr_cast<T>()`
