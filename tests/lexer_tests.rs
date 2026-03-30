@@ -82,6 +82,34 @@ fn test_open_tag() {
 }
 
 #[test]
+fn test_exception_keywords_tokens() {
+    let t = tokens("<?php try { throw $e; } catch (Exception $e) { } finally { }");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Try,
+            Token::LBrace,
+            Token::Throw,
+            Token::Variable("e".into()),
+            Token::Semicolon,
+            Token::RBrace,
+            Token::Catch,
+            Token::LParen,
+            Token::Identifier("Exception".into()),
+            Token::Variable("e".into()),
+            Token::RParen,
+            Token::LBrace,
+            Token::RBrace,
+            Token::Finally,
+            Token::LBrace,
+            Token::RBrace,
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
 fn test_echo_string() {
     let t = tokens("<?php echo \"hello\";");
     assert_eq!(

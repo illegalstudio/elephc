@@ -1,6 +1,6 @@
 use elephc::lexer::tokenize;
 use elephc::parser::ast::{
-    BinOp, Expr, ExprKind, StaticReceiver, Stmt, StmtKind, TraitAdaptation, Visibility,
+    BinOp, CatchClause, Expr, ExprKind, StaticReceiver, Stmt, StmtKind, TraitAdaptation, Visibility,
 };
 use elephc::parser::parse;
 
@@ -29,6 +29,31 @@ fn test_echo_string_literal() {
 fn test_echo_integer() {
     let stmts = parse_source("<?php echo 42;");
     assert_eq!(stmts, vec![Stmt::echo(Expr::int_lit(42))]);
+}
+
+#[test]
+fn test_parse_try_catch_finally() {
+    let stmts = parse_source(
+        "<?php try { throw $e; } catch (MyException $err) { echo 1; } finally { echo 2; }",
+    );
+    assert_eq!(
+        stmts,
+        vec![Stmt::new(
+            StmtKind::Try {
+                try_body: vec![Stmt::new(
+                    StmtKind::Throw(Expr::var("e")),
+                    elephc::span::Span::dummy(),
+                )],
+                catches: vec![CatchClause {
+                    exception_type: "MyException".into(),
+                    variable: "err".into(),
+                    body: vec![Stmt::echo(Expr::int_lit(1))],
+                }],
+                finally_body: Some(vec![Stmt::echo(Expr::int_lit(2))]),
+            },
+            elephc::span::Span::dummy(),
+        )]
+    );
 }
 
 // --- Assignment ---

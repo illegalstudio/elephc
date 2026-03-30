@@ -121,6 +121,30 @@ fn assemble_and_run(
     String::from_utf8(output.stdout).unwrap()
 }
 
+#[test]
+fn test_exception_try_catch_same_function() {
+    let out = compile_and_run(
+        "<?php class MyException {} try { throw new MyException(); } catch (MyException $e) { echo 42; }",
+    );
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_exception_try_catch_cross_function() {
+    let out = compile_and_run(
+        "<?php class MyException {} function boom() { throw new MyException(); } try { boom(); } catch (MyException $e) { echo 7; }",
+    );
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_exception_finally_runs_on_return_break_continue() {
+    let out = compile_and_run(
+        "<?php function f() { try { return 5; } finally { echo 1; } } echo f(); for ($i = 0; $i < 1; $i++) { try { echo 2; break; } finally { echo 3; } } for ($j = 0; $j < 2; $j++) { try { echo $j; continue; } finally { echo 9; } }",
+    );
+    assert_eq!(out, "15230919");
+}
+
 struct ProgramOutput {
     stdout: String,
     stderr: String,

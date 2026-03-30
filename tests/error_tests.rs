@@ -101,6 +101,24 @@ fn test_error_unexpected_token_in_stmt() {
 }
 
 #[test]
+fn test_error_try_requires_catch_or_finally() {
+    expect_error("<?php try { echo 1; }", "Expected at least one catch or a finally block after try");
+}
+
+#[test]
+fn test_error_throw_requires_object() {
+    expect_error("<?php throw 123;", "throw requires an object value");
+}
+
+#[test]
+fn test_error_catch_requires_defined_class() {
+    expect_error(
+        "<?php try { echo 1; } catch (MissingException $e) { echo 2; }",
+        "Undefined class: MissingException",
+    );
+}
+
+#[test]
 fn test_error_missing_function_name() {
     expect_error("<?php function () { }", "Expected function name");
 }
