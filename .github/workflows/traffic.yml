@@ -1,0 +1,71 @@
+name: Traffic Stats
+
+on:
+  schedule:
+    - cron: '0 23 * * *' # daily at 23:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch and accumulate clone stats
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api repos/${{ github.repository }}/traffic/clones > /tmp/api_clones.json
+
+          DATA_FILE=.github/traffic/clones.json
+          BADGE_FILE=.github/traffic/clones-badge.json
+          mkdir -p .github/traffic
+
+          if [ ! -f "$DATA_FILE" ]; then
+            echo '{"total_uniques":0,"daily":{}}' > "$DATA_FILE"
+          fi
+
+          python3 <<'PYEOF'
+          import json
+
+          with open("/tmp/api_clones.json") as f:
+              api = json.load(f)
+
+          with open(".github/traffic/clones.json") as f:
+              existing = json.load(f)
+
+          daily = existing.get("daily", {})
+
+          for entry in api.get("clones", []):
+              date = entry["timestamp"][:10]
+              daily[date] = entry["uniques"]
+
+          total = sum(daily.values())
+
+          with open(".github/traffic/clones.json", "w") as f:
+              json.dump({"total_uniques": total, "daily": dict(sorted(daily.items()))}, f, indent=2)
+              f.write("\n")
+
+          with open(".github/traffic/clones-badge.json", "w") as f:
+              json.dump({
+                  "schemaVersion": 1,
+                  "label": "unique cloners",
+                  "message": str(total),
+                  "color": "blue",
+                  "namedLogo": "git",
+                  "style": "flat-square"
+              }, f, indent=2)
+              f.write("\n")
+          PYEOF
+
+      - name: Commit updated stats
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .github/traffic/
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "update traffic stats"
+          git push
