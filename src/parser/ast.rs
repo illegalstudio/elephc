@@ -198,6 +198,13 @@ pub struct Stmt {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct CatchClause {
+    pub exception_type: String,
+    pub variable: String,
+    pub body: Vec<Stmt>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum StmtKind {
     Echo(Expr),
     Assign {
@@ -248,6 +255,12 @@ pub enum StmtKind {
         path: String,
         once: bool,
         required: bool,
+    },
+    Throw(Expr),
+    Try {
+        try_body: Vec<Stmt>,
+        catches: Vec<CatchClause>,
+        finally_body: Option<Vec<Stmt>>,
     },
     Break,
     Continue,

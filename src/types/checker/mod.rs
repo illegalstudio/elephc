@@ -68,6 +68,25 @@ fn collect_return_types_syntactic(stmt: &Stmt, types: &mut Vec<PhpType>) {
                 collect_return_types_syntactic(s, types);
             }
         }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            for s in try_body {
+                collect_return_types_syntactic(s, types);
+            }
+            for catch_clause in catches {
+                for s in &catch_clause.body {
+                    collect_return_types_syntactic(s, types);
+                }
+            }
+            if let Some(body) = finally_body {
+                for s in body {
+                    collect_return_types_syntactic(s, types);
+                }
+            }
+        }
         StmtKind::Switch { cases, default, .. } => {
             for (_, body) in cases {
                 for s in body {
@@ -1408,6 +1427,28 @@ impl Checker {
         false
     }
 
+    fn resolve_catch_type_name(
+        &self,
+        raw_name: &str,
+        span: crate::span::Span,
+    ) -> Result<String, CompileError> {
+        match raw_name {
+            "self" => self.current_class.clone().ok_or_else(|| {
+                CompileError::new(span, "Cannot use self in catch outside of a class context")
+            }),
+            "parent" => {
+                let current_class = self.current_class.as_ref().ok_or_else(|| {
+                    CompileError::new(span, "Cannot use parent in catch outside of a class context")
+                })?;
+                self.classes
+                    .get(current_class)
+                    .and_then(|class_info| class_info.parent.clone())
+                    .ok_or_else(|| CompileError::new(span, "Class has no parent class"))
+            }
+            _ => Ok(raw_name.to_string()),
+        }
+    }
+
     fn is_pointer_type(ty: &PhpType) -> bool {
         matches!(ty, PhpType::Pointer(_))
     }
@@ -2106,6 +2147,48 @@ impl Checker {
                 }
                 for s in body {
                     self.check_stmt(s, env)?;
+                }
+                Ok(())
+            }
+            StmtKind::Throw(expr) => {
+                let thrown_ty = self.infer_type(expr, env)?;
+                match thrown_ty {
+                    PhpType::Object(_) => Ok(()),
+                    _ => Err(CompileError::new(
+                        stmt.span,
+                        "Type error: throw requires an object value",
+                    )),
+                }
+            }
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                for s in try_body {
+                    self.check_stmt(s, env)?;
+                }
+                for catch_clause in catches {
+                    let exception_type =
+                        self.resolve_catch_type_name(&catch_clause.exception_type, stmt.span)?;
+                    if !self.classes.contains_key(&exception_type) {
+                        return Err(CompileError::new(
+                            stmt.span,
+                            &format!("Undefined class: {}", exception_type),
+                        ));
+                    }
+                    env.insert(
+                        catch_clause.variable.clone(),
+                        PhpType::Object(exception_type),
+                    );
+                    for s in &catch_clause.body {
+                        self.check_stmt(s, env)?;
+                    }
+                }
+                if let Some(body) = finally_body {
+                    for s in body {
+                        self.check_stmt(s, env)?;
+                    }
                 }
                 Ok(())
             }
@@ -3122,6 +3205,25 @@ impl Checker {
             | StmtKind::Foreach { body, .. } => {
                 for stmt in body {
                     self.collect_closure_return_types(stmt, env, return_types);
+                }
+            }
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                for stmt in try_body {
+                    self.collect_closure_return_types(stmt, env, return_types);
+                }
+                for catch_clause in catches {
+                    for stmt in &catch_clause.body {
+                        self.collect_closure_return_types(stmt, env, return_types);
+                    }
+                }
+                if let Some(body) = finally_body {
+                    for stmt in body {
+                        self.collect_closure_return_types(stmt, env, return_types);
+                    }
                 }
             }
             StmtKind::Switch { cases, default, .. } => {

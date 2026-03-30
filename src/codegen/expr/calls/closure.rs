@@ -43,6 +43,25 @@ fn infer_closure_return_type(body: &[Stmt], sig: &FunctionSig) -> PhpType {
                     collect_return_types(stmt, sig, return_types);
                 }
             }
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                for stmt in try_body {
+                    collect_return_types(stmt, sig, return_types);
+                }
+                for catch_clause in catches {
+                    for stmt in &catch_clause.body {
+                        collect_return_types(stmt, sig, return_types);
+                    }
+                }
+                if let Some(body) = finally_body {
+                    for stmt in body {
+                        collect_return_types(stmt, sig, return_types);
+                    }
+                }
+            }
             StmtKind::Switch { cases, default, .. } => {
                 for (_, body) in cases {
                     for stmt in body {

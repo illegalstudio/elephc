@@ -1,6 +1,6 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
-use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, CatchClause, Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::parse_expr;
 use crate::parser::stmt::{parse_block, parse_body};
 use crate::span::Span;
@@ -168,6 +168,65 @@ pub fn parse_for(
             condition,
             update,
             body,
+        },
+        span,
+    ))
+}
+
+/// Parse: try { stmts } (catch (Type $e) { stmts })+ (finally { stmts })?
+///     or: try { stmts } finally { stmts }
+pub fn parse_try(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1;
+    let try_body = parse_body(tokens, pos)?;
+
+    let mut catches = Vec::new();
+    while *pos < tokens.len() && tokens[*pos].0 == Token::Catch {
+        *pos += 1;
+        expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'catch'")?;
+        let exception_type = match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Identifier(name)) => name.clone(),
+            Some(Token::Self_) => "self".to_string(),
+            Some(Token::Parent) => "parent".to_string(),
+            _ => return Err(CompileError::new(span, "Expected exception class name in catch clause")),
+        };
+        *pos += 1;
+        let variable = match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Variable(name)) => name.clone(),
+            _ => return Err(CompileError::new(span, "Expected catch variable after exception type")),
+        };
+        *pos += 1;
+        expect_token(tokens, pos, &Token::RParen, "Expected ')' after catch clause")?;
+        let body = parse_body(tokens, pos)?;
+        catches.push(CatchClause {
+            exception_type,
+            variable,
+            body,
+        });
+    }
+
+    let finally_body = if *pos < tokens.len() && tokens[*pos].0 == Token::Finally {
+        *pos += 1;
+        Some(parse_body(tokens, pos)?)
+    } else {
+        None
+    };
+
+    if catches.is_empty() && finally_body.is_none() {
+        return Err(CompileError::new(
+            span,
+            "Expected at least one catch or a finally block after try",
+        ));
+    }
+
+    Ok(Stmt::new(
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
         },
         span,
     ))

@@ -134,6 +134,7 @@ pub fn generate(
     ctx.functions = functions.clone();
     ctx.constants = global_constants.clone();
     ctx.in_main = true;
+    ctx.return_type = PhpType::Void;
     ctx.all_global_var_names = all_global_var_names.clone();
     ctx.all_static_vars = all_static_vars.clone();
     ctx.classes = classes.clone();
@@ -151,6 +152,14 @@ pub fn generate(
     for (name, ty) in global_env {
         ctx.alloc_var(name, ty.clone());
     }
+    collect_main_try_slots(program, &mut ctx);
+    let main_cleanup_label = ctx.next_label("main_cleanup_frame");
+    ctx.activation_frame_base_offset = Some(ctx.alloc_hidden_slot(8));
+    ctx.activation_cleanup_offset = Some(ctx.alloc_hidden_slot(8));
+    ctx.activation_prev_offset = Some(ctx.alloc_hidden_slot(8));
+    ctx.pending_action_offset = Some(ctx.alloc_hidden_slot(8));
+    ctx.pending_target_offset = Some(ctx.alloc_hidden_slot(8));
+    ctx.pending_return_value_offset = Some(ctx.alloc_hidden_slot(16));
 
     let vars_size = ctx.stack_offset;
     let frame_size = align16(vars_size + 16);     // 16-byte aligned, +16 for saved x29/x30
@@ -162,7 +171,12 @@ pub fn generate(
     emitter.label("_main");
     emitter.comment("prologue");
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // grow stack for locals + saved regs
-    emitter.instruction(&format!("stp x29, x30, [sp, #{}]", frame_size - 16));  // save frame pointer & return address
+    if frame_size - 16 <= 504 {
+        emitter.instruction(&format!("stp x29, x30, [sp, #{}]", frame_size - 16)); // save frame pointer & return address
+    } else {
+        emitter.instruction(&format!("add x9, sp, #{}", frame_size - 16));      // compute address of the saved frame-link area for a large main frame
+        emitter.instruction("stp x29, x30, [x9]");                              // save frame pointer & return address through the computed address
+    }
     emitter.instruction(&format!("add x29, sp, #{}", frame_size - 16));         // set new frame pointer
 
     // -- save argc/argv to globals (for $argv runtime builder) --
@@ -203,6 +217,7 @@ pub fn generate(
             abi::store_at_offset(&mut emitter, "xzr", var.stack_offset);        // zero-init to prevent stale ptr free
         }
     }
+    emit_main_activation_record_push(&mut emitter, &ctx, &main_cleanup_label);
 
     // -- emit user statements --
     for s in program {
@@ -221,7 +236,13 @@ pub fn generate(
     // -- epilogue: restore stack and exit(0) via syscall --
     emitter.blank();
     emitter.comment("epilogue + exit(0)");
-    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16));  // restore frame pointer & return address
+    emit_main_activation_record_pop(&mut emitter, &ctx);
+    if frame_size - 16 <= 504 {
+        emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16)); // restore frame pointer & return address
+    } else {
+        emitter.instruction(&format!("add x9, sp, #{}", frame_size - 16));      // compute address of the saved frame-link area for a large main frame
+        emitter.instruction("ldp x29, x30, [x9]");                              // restore frame pointer & return address through the computed address
+    }
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
     // -- GC statistics (printed to stderr if --gc-stats flag was set) --
     if gc_stats {
@@ -274,6 +295,7 @@ pub fn generate(
 
     // -- emit deferred closures --
     emit_deferred_closures(&mut emitter, &mut data, &mut ctx);
+    emit_main_cleanup_callback(&mut emitter, &main_cleanup_label);
 
     // -- emit runtime routines and data sections --
     runtime::emit_runtime(&mut emitter);
@@ -391,6 +413,19 @@ fn collect_global_vars_in_body(stmts: &[Stmt], names: &mut HashSet<String>) {
             | StmtKind::Foreach { body, .. } => {
                 collect_global_vars_in_body(body, names);
             }
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                collect_global_vars_in_body(try_body, names);
+                for catch_clause in catches {
+                    collect_global_vars_in_body(&catch_clause.body, names);
+                }
+                if let Some(body) = finally_body {
+                    collect_global_vars_in_body(body, names);
+                }
+            }
             StmtKind::Switch { cases, default, .. } => {
                 for (_, body) in cases {
                     collect_global_vars_in_body(body, names);
@@ -451,6 +486,19 @@ fn collect_static_vars_in_body(
             | StmtKind::Foreach { body, .. } => {
                 collect_static_vars_in_body(func_name, body, statics, global_env);
             }
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                collect_static_vars_in_body(func_name, try_body, statics, global_env);
+                for catch_clause in catches {
+                    collect_static_vars_in_body(func_name, &catch_clause.body, statics, global_env);
+                }
+                if let Some(body) = finally_body {
+                    collect_static_vars_in_body(func_name, body, statics, global_env);
+                }
+            }
             StmtKind::Switch { cases, default, .. } => {
                 for (_, body) in cases {
                     collect_static_vars_in_body(func_name, body, statics, global_env);
@@ -463,6 +511,115 @@ fn collect_static_vars_in_body(
         }
     }
     let _ = global_env;
+}
+
+fn collect_main_try_slots(stmts: &[Stmt], ctx: &mut Context) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                let slot_offset = ctx.alloc_hidden_slot(208);
+                ctx.try_slot_offsets.push(slot_offset);
+                collect_main_try_slots(try_body, ctx);
+                for catch_clause in catches {
+                    collect_main_try_slots(&catch_clause.body, ctx);
+                }
+                if let Some(body) = finally_body {
+                    collect_main_try_slots(body, ctx);
+                }
+            }
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                collect_main_try_slots(then_body, ctx);
+                for (_, body) in elseif_clauses {
+                    collect_main_try_slots(body, ctx);
+                }
+                if let Some(body) = else_body {
+                    collect_main_try_slots(body, ctx);
+                }
+            }
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::Foreach { body, .. } => collect_main_try_slots(body, ctx),
+            StmtKind::For { init, update, body, .. } => {
+                if let Some(s) = init {
+                    collect_main_try_slots(&[*s.clone()], ctx);
+                }
+                if let Some(s) = update {
+                    collect_main_try_slots(&[*s.clone()], ctx);
+                }
+                collect_main_try_slots(body, ctx);
+            }
+            StmtKind::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    collect_main_try_slots(body, ctx);
+                }
+                if let Some(body) = default {
+                    collect_main_try_slots(body, ctx);
+                }
+            }
+            StmtKind::FunctionDecl { .. }
+            | StmtKind::ClassDecl { .. }
+            | StmtKind::InterfaceDecl { .. }
+            | StmtKind::TraitDecl { .. } => {}
+            _ => {}
+        }
+    }
+}
+
+fn emit_main_activation_record_push(emitter: &mut Emitter, ctx: &Context, cleanup_label: &str) {
+    let prev_offset = ctx
+        .activation_prev_offset
+        .expect("codegen bug: missing main activation prev slot");
+    let cleanup_offset = ctx
+        .activation_cleanup_offset
+        .expect("codegen bug: missing main activation cleanup slot");
+    let frame_base_offset = ctx
+        .activation_frame_base_offset
+        .expect("codegen bug: missing main activation frame-base slot");
+
+    emitter.comment("register main exception cleanup frame");
+    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                     // load page of the call-frame stack top
+    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");               // resolve the call-frame stack top address
+    emitter.instruction("ldr x10, [x9]");                                          // load the previous call-frame pointer
+    abi::store_at_offset(emitter, "x10", prev_offset);                             // save the previous call-frame pointer in the main activation record
+    emitter.instruction(&format!("adrp x10, {}@PAGE", cleanup_label));             // load page of the main cleanup callback label
+    emitter.instruction(&format!("add x10, x10, {}@PAGEOFF", cleanup_label));      // resolve the main cleanup callback label address
+    abi::store_at_offset(emitter, "x10", cleanup_offset);                          // save the main cleanup callback address in the activation record
+    emitter.instruction("mov x10, x29");                                           // x10 = current main frame pointer for cleanup callbacks
+    abi::store_at_offset(emitter, "x10", frame_base_offset);                       // save the main frame pointer in the activation record
+    abi::store_at_offset(emitter, "xzr", ctx.pending_action_offset.expect("codegen bug: missing main pending-action slot")); // clear any stale finally action before running main
+    emitter.instruction(&format!("sub x10, x29, #{}", prev_offset));               // x10 = address of the main activation record's first slot
+    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                      // reload page of the call-frame stack top after stack-slot stores may clobber x9
+    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");                // resolve the call-frame stack top address again
+    emitter.instruction("str x10, [x9]");                                          // publish the main activation record as the new call-frame stack top
+}
+
+fn emit_main_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
+    let prev_offset = ctx
+        .activation_prev_offset
+        .expect("codegen bug: missing main activation prev slot");
+
+    emitter.comment("unregister main exception cleanup frame");
+    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                      // load page of the call-frame stack top
+    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");                // resolve the call-frame stack top address
+    abi::load_at_offset(emitter, "x10", prev_offset);                              // reload the previous call-frame pointer from the main activation record
+    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                      // reload page of the call-frame stack top after the load helper may clobber x9
+    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");                // resolve the call-frame stack top address again
+    emitter.instruction("str x10, [x9]");                                          // restore the previous call-frame stack top before exiting
+}
+
+fn emit_main_cleanup_callback(emitter: &mut Emitter, cleanup_label: &str) {
+    emitter.label(cleanup_label);
+    emitter.instruction("ret");                                                    // main-frame unwinds do not need extra local cleanup before catch dispatch
+    emitter.blank();
 }
 
 pub(crate) fn runtime_value_tag(ty: &PhpType) -> u8 {

@@ -22,6 +22,7 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
         Token::Abstract => parse_abstract_decl(tokens, pos, span),
         Token::Function => parse_function_decl(tokens, pos, span),
         Token::Return => parse_return(tokens, pos, span),
+        Token::Throw => parse_throw(tokens, pos, span),
         Token::Include => parse_include(tokens, pos, span, false, false),
         Token::IncludeOnce => parse_include(tokens, pos, span, true, false),
         Token::Require => parse_include(tokens, pos, span, false, true),
@@ -46,6 +47,7 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
         // Control flow — delegated to control.rs
         Token::Switch => control::parse_switch(tokens, pos, span),
         Token::If => control::parse_if(tokens, pos, span),
+        Token::Try => control::parse_try(tokens, pos, span),
         Token::While => control::parse_while(tokens, pos, span),
         Token::Do => control::parse_do_while(tokens, pos, span),
         Token::For => control::parse_for(tokens, pos, span),
@@ -463,6 +465,17 @@ fn parse_return(
     let expr = parse_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     Ok(Stmt::new(StmtKind::Return(Some(expr)), span))
+}
+
+fn parse_throw(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1;
+    let expr = parse_expr(tokens, pos)?;
+    expect_semicolon(tokens, pos)?;
+    Ok(Stmt::new(StmtKind::Throw(expr), span))
 }
 
 pub fn parse_block(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Vec<Stmt>, CompileError> {

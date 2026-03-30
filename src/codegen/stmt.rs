@@ -146,6 +146,16 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
         } => {
             control_flow::emit_for_stmt(init, condition, update, body, emitter, ctx, data);
         }
+        StmtKind::Throw(expr) => {
+            control_flow::emit_throw_stmt(expr, emitter, ctx, data);
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            control_flow::emit_try_stmt(try_body, catches, finally_body, emitter, ctx, data);
+        }
         StmtKind::Break => {
             control_flow::emit_break_stmt(emitter, ctx);
         }

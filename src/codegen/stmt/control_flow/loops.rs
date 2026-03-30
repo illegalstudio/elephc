@@ -121,7 +121,11 @@ pub(super) fn emit_break_stmt(emitter: &mut Emitter, ctx: &Context) {
         .loop_stack
         .last()
         .expect("codegen bug: break statement outside loop (should have been caught by type checker)");
-    emitter.instruction(&format!("b {}", labels.break_label));                  // unconditional branch to loop exit label
+    if !ctx.finally_stack.is_empty() {
+        super::emit_branch_through_finally(emitter, ctx, &labels.break_label);
+    } else {
+        emitter.instruction(&format!("b {}", labels.break_label));              // unconditional branch to loop exit label
+    }
 }
 
 pub(super) fn emit_return_stmt(
@@ -141,7 +145,11 @@ pub(super) fn emit_return_stmt(
         if sp_total > 0 {
             emitter.instruction(&format!("add sp, sp, #{}", sp_total));         // pop switch subjects before returning
         }
-        emitter.instruction(&format!("b {}", label));                           // branch to function epilogue for stack cleanup and ret
+        if !ctx.finally_stack.is_empty() {
+            super::exceptions::emit_return_through_finally(emitter, ctx);
+        } else {
+            emitter.instruction(&format!("b {}", label));                       // branch to function epilogue for stack cleanup and ret
+        }
     }
 }
 
@@ -150,5 +158,9 @@ pub(super) fn emit_continue_stmt(emitter: &mut Emitter, ctx: &Context) {
         .loop_stack
         .last()
         .expect("codegen bug: continue statement outside loop (should have been caught by type checker)");
-    emitter.instruction(&format!("b {}", labels.continue_label));               // unconditional branch to loop continue label
+    if !ctx.finally_stack.is_empty() {
+        super::emit_branch_through_finally(emitter, ctx, &labels.continue_label);
+    } else {
+        emitter.instruction(&format!("b {}", labels.continue_label));           // unconditional branch to loop continue label
+    }
 }
