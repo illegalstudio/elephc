@@ -17,7 +17,7 @@ pub fn emit_array_push_refcounted(emitter: &mut Emitter) {
 
     // -- split shared destination arrays before they retain/store a new child --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the destination array pointer
-    emitter.instruction("bl __rt_array_ensure_unique");                          // split shared destination arrays before mutating storage
+    emitter.instruction("bl __rt_array_ensure_unique");                         // split shared destination arrays before mutating storage
     emitter.instruction("str x0, [sp, #0]");                                    // persist the unique destination array pointer
 
     // -- retain borrowed payload before destination takes ownership --
@@ -32,16 +32,16 @@ pub fn emit_array_push_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x1, #-8]");                                  // load the child heap kind word
     emitter.instruction("and x10, x10, #0xff");                                 // isolate the child's low-byte heap kind tag
     emitter.instruction("cmp x10, #2");                                         // is the child an indexed array?
-    emitter.instruction("b.eq __rt_array_push_refcounted_kind_array");           // encode value_type 4 for nested arrays
+    emitter.instruction("b.eq __rt_array_push_refcounted_kind_array");          // encode value_type 4 for nested arrays
     emitter.instruction("cmp x10, #3");                                         // is the child an associative array / hash?
-    emitter.instruction("b.eq __rt_array_push_refcounted_kind_hash");            // encode value_type 5 for nested hashes
+    emitter.instruction("b.eq __rt_array_push_refcounted_kind_hash");           // encode value_type 5 for nested hashes
     emitter.instruction("cmp x10, #4");                                         // is the child an object instance?
-    emitter.instruction("b.ne __rt_array_push_refcounted_push");                 // unexpected/non-refcounted children leave the existing tag unchanged
+    emitter.instruction("b.ne __rt_array_push_refcounted_push");                // unexpected/non-refcounted children leave the existing tag unchanged
     emitter.instruction("mov x10, #6");                                         // encode value_type 6 for nested objects
-    emitter.instruction("b __rt_array_push_refcounted_kind_store");              // store the packed array value_type tag
+    emitter.instruction("b __rt_array_push_refcounted_kind_store");             // store the packed array value_type tag
     emitter.label("__rt_array_push_refcounted_kind_array");
     emitter.instruction("mov x10, #4");                                         // encode value_type 4 for nested indexed arrays
-    emitter.instruction("b __rt_array_push_refcounted_kind_store");              // store the packed array value_type tag
+    emitter.instruction("b __rt_array_push_refcounted_kind_store");             // store the packed array value_type tag
     emitter.label("__rt_array_push_refcounted_kind_hash");
     emitter.instruction("mov x10, #5");                                         // encode value_type 5 for nested associative arrays
     emitter.label("__rt_array_push_refcounted_kind_store");

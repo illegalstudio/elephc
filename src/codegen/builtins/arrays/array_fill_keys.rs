@@ -28,11 +28,12 @@ pub fn emit(
     emitter.instruction(&format!("mov x2, #{}", value_type_tag));               // x2 = result hash value_type tag
     emitter.instruction("mov x1, x0");                                          // move fill value to x1 (second arg)
     emitter.instruction("ldr x0, [sp], #16");                                   // pop keys array pointer into x0 (first arg)
-    emitter.instruction(if uses_refcounted_runtime {
+    let runtime_call = if uses_refcounted_runtime {
         "bl __rt_array_fill_keys_refcounted"
     } else {
         "bl __rt_array_fill_keys"
-    }); // call runtime: fill keys → x0=new assoc array
+    };
+    emitter.instruction(runtime_call);                                          // call runtime: fill keys → x0=new assoc array
 
     Some(PhpType::AssocArray {
         key: Box::new(key_elem_ty),

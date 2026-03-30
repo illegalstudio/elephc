@@ -38,11 +38,12 @@ pub fn emit(
         emitter.instruction("mov x2, #-1");                                     // length = -1 signals "remove until end"
     }
     // -- call runtime to splice array --
-    emitter.instruction(if uses_refcounted_runtime {
+    let runtime_call = if uses_refcounted_runtime {
         "bl __rt_array_splice_refcounted"
     } else {
         "bl __rt_array_splice"
-    }); // call runtime: splice array → x0=removed elements array
+    };
+    emitter.instruction(runtime_call);                                          // call runtime: splice array → x0=removed elements array
 
     match arr_ty {
         PhpType::Array(inner) => Some(PhpType::Array(inner)),

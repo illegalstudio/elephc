@@ -25,11 +25,12 @@ pub fn emit(
     emitter.instruction("mov x2, x0");                                          // move fill value to x2 (third arg)
     emitter.instruction("ldr x1, [sp], #16");                                   // pop count into x1 (second arg)
     emitter.instruction("ldr x0, [sp], #16");                                   // pop start index into x0 (first arg)
-    emitter.instruction(if uses_refcounted_runtime {
+    let runtime_call = if uses_refcounted_runtime {
         "bl __rt_array_fill_refcounted"
     } else {
         "bl __rt_array_fill"
-    }); // call runtime: fill array → x0=new array
+    };
+    emitter.instruction(runtime_call);                                          // call runtime: fill array → x0=new array
 
     Some(PhpType::Array(Box::new(value_ty)))
 }

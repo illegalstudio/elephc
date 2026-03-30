@@ -22,7 +22,7 @@ pub fn emit_array_grow(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // set up new frame pointer
-    emitter.instruction("bl __rt_array_ensure_unique");                          // split shared arrays before the growth path reallocates storage
+    emitter.instruction("bl __rt_array_ensure_unique");                         // split shared arrays before the growth path reallocates storage
     emitter.instruction("str x0, [sp, #0]");                                    // save the unique source array pointer
 
     // -- read old array header --

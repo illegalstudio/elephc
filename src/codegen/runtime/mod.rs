@@ -6,7 +6,7 @@ mod system;
 
 use super::emit::Emitter;
 
-pub fn emit_runtime(emitter: &mut Emitter) {
+pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     // String runtime functions
     strings::emit_itoa(emitter);
     strings::emit_ftoa(emitter);
@@ -196,7 +196,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     pointers::emit_cstr_to_str(emitter);
 }
 
-pub fn emit_runtime_data(
+pub(crate) fn emit_runtime_data(
     global_var_names: &std::collections::HashSet<String>,
     static_vars: &std::collections::HashMap<(String, String), crate::types::PhpType>,
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,

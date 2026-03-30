@@ -19,7 +19,7 @@ I made the project as modular as possible. Every function has its own codegen fi
 
 ### What you should not expect
 
-Don't expect to take any existing PHP project and magically compile it. There's no Composer and no interfaces yet. We support PHP classes with single inheritance, traits, constructors, instance/static methods, `self::method()`, `parent::method()`, `static::method()` with late static binding, and `public` / `protected` / `private` visibility — roughly at the level of that famous *PHP 4* book where my journey began, plus some PHP 8 features.
+Don't expect to take any existing PHP project and magically compile it. There's no Composer and no interfaces yet. We support PHP classes with single inheritance, traits, constructors, instance/static methods, `self::method()`, `parent::method()`, `static::method()` with late static binding, `readonly` properties, and `public` / `protected` / `private` visibility — roughly at the level of that famous *PHP 4* book where my journey began, plus some PHP 8 features.
 
 ### What you can expect
 
@@ -193,7 +193,7 @@ if ($x === 3) {
 | Constants | `const MAX = 100;`, `define("PI", 3.14)` |
 | List unpacking | `[$a, $b] = [1, 2];` |
 | Include/Require | `include 'file.php';`, `require_once 'lib.php';` |
-| Classes | `class Foo extends Base { protected $x; private $y; public function get() { return parent::get() + $this->x; } }` |
+| Classes | `class Foo extends Base { public readonly $id; protected $x; private $y; public function get() { return parent::get() + $this->x; } }` |
 | Traits | `trait Named { public function name() { return "x"; } }`, `use Named { Named::name as protected; }` |
 | New / Property / Method | `$f = new Foo(); $f->x = 1; $f->get();` |
 | Static methods | `Foo::create()` |

@@ -170,10 +170,10 @@ pub fn generate(
 
     if heap_debug {
         emitter.comment("enable heap debug flag");
-        emitter.instruction("adrp x9, _heap_debug_enabled@PAGE");                // load page of the heap-debug runtime flag
-        emitter.instruction("add x9, x9, _heap_debug_enabled@PAGEOFF");          // resolve the heap-debug runtime flag address
-        emitter.instruction("mov x10, #1");                                      // compile-time option enables heap debug for this binary
-        emitter.instruction("str x10, [x9]");                                    // store enabled=1 into the BSS-backed runtime flag
+        emitter.instruction("adrp x9, _heap_debug_enabled@PAGE");               // load page of the heap-debug runtime flag
+        emitter.instruction("add x9, x9, _heap_debug_enabled@PAGEOFF");         // resolve the heap-debug runtime flag address
+        emitter.instruction("mov x10, #1");                                     // compile-time option enables heap debug for this binary
+        emitter.instruction("str x10, [x9]");                                   // store enabled=1 into the BSS-backed runtime flag
     }
 
     // -- store $argc in local variable --
@@ -253,7 +253,7 @@ pub fn generate(
 
     if heap_debug {
         emitter.comment("heap-debug: print allocator summary and leak report to stderr");
-        emitter.instruction("bl __rt_heap_debug_report");                        // emit the heap-debug summary at process exit
+        emitter.instruction("bl __rt_heap_debug_report");                       // emit the heap-debug summary at process exit
     }
 
     emitter.instruction("mov x0, #0");                                          // exit code 0

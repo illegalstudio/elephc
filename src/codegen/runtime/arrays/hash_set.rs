@@ -27,7 +27,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #16]");                                   // save key_len
     emitter.instruction("str x3, [sp, #24]");                                   // save value_lo
     emitter.instruction("str x4, [sp, #32]");                                   // save value_hi
-    emitter.instruction("bl __rt_hash_ensure_unique");                           // split shared hash tables before insert/update mutates storage
+    emitter.instruction("bl __rt_hash_ensure_unique");                          // split shared hash tables before insert/update mutates storage
     emitter.instruction("str x0, [sp, #0]");                                    // save the unique hash_table_ptr
 
     // -- check load factor: grow if count * 4 >= capacity * 3 (75%) --
@@ -129,30 +129,30 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ldr x13, [sp, #32]");                                  // load value_hi
     emitter.instruction("str x13, [x12, #32]");                                 // store value_hi in entry
     emitter.instruction("ldr x13, [sp, #24]");                                  // reload value_lo for dynamic value_type maintenance
-    emitter.instruction("cbz x13, __rt_hash_set_insert_header_done");            // null/scalar zero leaves the header value_type unchanged
-    emitter.instruction("mov x0, x13");                                          // inspect the inserted payload through the uniform heap-kind helper
-    emitter.instruction("bl __rt_heap_kind");                                    // x0 = heap kind for the inserted payload (0/1/2/3/4)
-    emitter.instruction("ldr x5, [sp, #0]");                                     // reload hash table pointer after helper call
-    emitter.instruction("cmp x0, #1");                                           // is the inserted payload a persisted string?
-    emitter.instruction("b.eq __rt_hash_set_insert_header_str");                 // keep the hash header aligned to string payloads
-    emitter.instruction("cmp x0, #2");                                           // is the inserted payload an indexed array?
-    emitter.instruction("b.eq __rt_hash_set_insert_header_array");               // keep the hash header aligned to indexed arrays
-    emitter.instruction("cmp x0, #3");                                           // is the inserted payload an associative array?
-    emitter.instruction("b.eq __rt_hash_set_insert_header_hash");                // keep the hash header aligned to associative arrays
-    emitter.instruction("cmp x0, #4");                                           // is the inserted payload an object?
-    emitter.instruction("b.ne __rt_hash_set_insert_header_done");                // scalars/non-heap payloads keep the current header value_type
-    emitter.instruction("mov x13, #6");                                          // runtime value_type 6 = object
-    emitter.instruction("b __rt_hash_set_insert_header_store");                  // store the upgraded hash header value_type
+    emitter.instruction("cbz x13, __rt_hash_set_insert_header_done");           // null/scalar zero leaves the header value_type unchanged
+    emitter.instruction("mov x0, x13");                                         // inspect the inserted payload through the uniform heap-kind helper
+    emitter.instruction("bl __rt_heap_kind");                                   // x0 = heap kind for the inserted payload (0/1/2/3/4)
+    emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash table pointer after helper call
+    emitter.instruction("cmp x0, #1");                                          // is the inserted payload a persisted string?
+    emitter.instruction("b.eq __rt_hash_set_insert_header_str");                // keep the hash header aligned to string payloads
+    emitter.instruction("cmp x0, #2");                                          // is the inserted payload an indexed array?
+    emitter.instruction("b.eq __rt_hash_set_insert_header_array");              // keep the hash header aligned to indexed arrays
+    emitter.instruction("cmp x0, #3");                                          // is the inserted payload an associative array?
+    emitter.instruction("b.eq __rt_hash_set_insert_header_hash");               // keep the hash header aligned to associative arrays
+    emitter.instruction("cmp x0, #4");                                          // is the inserted payload an object?
+    emitter.instruction("b.ne __rt_hash_set_insert_header_done");               // scalars/non-heap payloads keep the current header value_type
+    emitter.instruction("mov x13, #6");                                         // runtime value_type 6 = object
+    emitter.instruction("b __rt_hash_set_insert_header_store");                 // store the upgraded hash header value_type
     emitter.label("__rt_hash_set_insert_header_str");
-    emitter.instruction("mov x13, #1");                                          // runtime value_type 1 = string
-    emitter.instruction("b __rt_hash_set_insert_header_store");                  // store the upgraded hash header value_type
+    emitter.instruction("mov x13, #1");                                         // runtime value_type 1 = string
+    emitter.instruction("b __rt_hash_set_insert_header_store");                 // store the upgraded hash header value_type
     emitter.label("__rt_hash_set_insert_header_array");
-    emitter.instruction("mov x13, #4");                                          // runtime value_type 4 = indexed array
-    emitter.instruction("b __rt_hash_set_insert_header_store");                  // store the upgraded hash header value_type
+    emitter.instruction("mov x13, #4");                                         // runtime value_type 4 = indexed array
+    emitter.instruction("b __rt_hash_set_insert_header_store");                 // store the upgraded hash header value_type
     emitter.label("__rt_hash_set_insert_header_hash");
-    emitter.instruction("mov x13, #5");                                          // runtime value_type 5 = associative array
+    emitter.instruction("mov x13, #5");                                         // runtime value_type 5 = associative array
     emitter.label("__rt_hash_set_insert_header_store");
-    emitter.instruction("str x13, [x5, #16]");                                   // upgrade the hash header value_type to match the inserted heap payload
+    emitter.instruction("str x13, [x5, #16]");                                  // upgrade the hash header value_type to match the inserted heap payload
     emitter.label("__rt_hash_set_insert_header_done");
 
     // -- increment count --
@@ -208,30 +208,30 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ldr x13, [sp, #32]");                                  // load value_hi
     emitter.instruction("str x13, [x12, #32]");                                 // update value_hi in entry
     emitter.instruction("ldr x13, [sp, #24]");                                  // reload value_lo for dynamic value_type maintenance
-    emitter.instruction("cbz x13, __rt_hash_set_done");                          // null/scalar zero leaves the header value_type unchanged
-    emitter.instruction("mov x0, x13");                                          // inspect the updated payload through the uniform heap-kind helper
-    emitter.instruction("bl __rt_heap_kind");                                    // x0 = heap kind for the updated payload (0/1/2/3/4)
-    emitter.instruction("ldr x5, [sp, #0]");                                     // reload hash table pointer after helper call
-    emitter.instruction("cmp x0, #1");                                           // is the updated payload a persisted string?
-    emitter.instruction("b.eq __rt_hash_set_update_header_str");                 // keep the hash header aligned to string payloads
-    emitter.instruction("cmp x0, #2");                                           // is the updated payload an indexed array?
-    emitter.instruction("b.eq __rt_hash_set_update_header_array");               // keep the hash header aligned to indexed arrays
-    emitter.instruction("cmp x0, #3");                                           // is the updated payload an associative array?
-    emitter.instruction("b.eq __rt_hash_set_update_header_hash");                // keep the hash header aligned to associative arrays
-    emitter.instruction("cmp x0, #4");                                           // is the updated payload an object?
-    emitter.instruction("b.ne __rt_hash_set_done");                              // scalars/non-heap payloads keep the current header value_type
-    emitter.instruction("mov x13, #6");                                          // runtime value_type 6 = object
-    emitter.instruction("b __rt_hash_set_update_header_store");                  // store the upgraded hash header value_type
+    emitter.instruction("cbz x13, __rt_hash_set_done");                         // null/scalar zero leaves the header value_type unchanged
+    emitter.instruction("mov x0, x13");                                         // inspect the updated payload through the uniform heap-kind helper
+    emitter.instruction("bl __rt_heap_kind");                                   // x0 = heap kind for the updated payload (0/1/2/3/4)
+    emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash table pointer after helper call
+    emitter.instruction("cmp x0, #1");                                          // is the updated payload a persisted string?
+    emitter.instruction("b.eq __rt_hash_set_update_header_str");                // keep the hash header aligned to string payloads
+    emitter.instruction("cmp x0, #2");                                          // is the updated payload an indexed array?
+    emitter.instruction("b.eq __rt_hash_set_update_header_array");              // keep the hash header aligned to indexed arrays
+    emitter.instruction("cmp x0, #3");                                          // is the updated payload an associative array?
+    emitter.instruction("b.eq __rt_hash_set_update_header_hash");               // keep the hash header aligned to associative arrays
+    emitter.instruction("cmp x0, #4");                                          // is the updated payload an object?
+    emitter.instruction("b.ne __rt_hash_set_done");                             // scalars/non-heap payloads keep the current header value_type
+    emitter.instruction("mov x13, #6");                                         // runtime value_type 6 = object
+    emitter.instruction("b __rt_hash_set_update_header_store");                 // store the upgraded hash header value_type
     emitter.label("__rt_hash_set_update_header_str");
-    emitter.instruction("mov x13, #1");                                          // runtime value_type 1 = string
-    emitter.instruction("b __rt_hash_set_update_header_store");                  // store the upgraded hash header value_type
+    emitter.instruction("mov x13, #1");                                         // runtime value_type 1 = string
+    emitter.instruction("b __rt_hash_set_update_header_store");                 // store the upgraded hash header value_type
     emitter.label("__rt_hash_set_update_header_array");
-    emitter.instruction("mov x13, #4");                                          // runtime value_type 4 = indexed array
-    emitter.instruction("b __rt_hash_set_update_header_store");                  // store the upgraded hash header value_type
+    emitter.instruction("mov x13, #4");                                         // runtime value_type 4 = indexed array
+    emitter.instruction("b __rt_hash_set_update_header_store");                 // store the upgraded hash header value_type
     emitter.label("__rt_hash_set_update_header_hash");
-    emitter.instruction("mov x13, #5");                                          // runtime value_type 5 = associative array
+    emitter.instruction("mov x13, #5");                                         // runtime value_type 5 = associative array
     emitter.label("__rt_hash_set_update_header_store");
-    emitter.instruction("str x13, [x5, #16]");                                   // upgrade the hash header value_type to match the updated heap payload
+    emitter.instruction("str x13, [x5, #16]");                                  // upgrade the hash header value_type to match the updated heap payload
 
     // -- tear down stack frame and return --
     emitter.label("__rt_hash_set_done");

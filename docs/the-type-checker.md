@@ -207,7 +207,7 @@ When the type checker encounters a `ClassDecl`, it:
 2. **Resolves the parent chain** (`extends`) and merges inherited metadata
 3. **Records each property** with its type (inferred from default values or constructor assignments) and a fixed offset in the inherited object layout
 4. **Type-checks each method body** with `$this` bound to `Object(ClassName)`
-5. **Builds `ClassInfo`** containing property types, defaults, signatures, declaring/implementation class maps, vtable slots, and constructor-to-property mappings
+5. **Builds `ClassInfo`** containing property types, defaults, signatures, declaring/implementation class maps, instance/static vtable slots, and constructor-to-property mappings
 
 The `ClassInfo` struct:
 
@@ -232,9 +232,13 @@ pub struct ClassInfo {
     pub static_method_visibilities: HashMap<String, Visibility>,
     pub static_method_declaring_classes: HashMap<String, String>,
     pub static_method_impl_classes: HashMap<String, String>,
+    pub static_vtable_methods: Vec<String>,
+    pub static_vtable_slots: HashMap<String, usize>,
     pub constructor_param_to_prop: Vec<Option<String>>,
 }
 ```
+
+`vtable_methods` / `vtable_slots` drive ordinary inherited instance dispatch, while `static_vtable_methods` / `static_vtable_slots` carry the parallel metadata used by `static::method()` late static binding.
 
 When checking property access (`$obj->prop`), the type checker validates that:
 - The variable is an `Object` type
