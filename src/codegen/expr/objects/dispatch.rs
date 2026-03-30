@@ -9,6 +9,79 @@ use super::super::{
     save_concat_offset_before_nested_call,
 };
 
+/// Evaluate arguments, retain borrowed heap values, and push each onto the stack.
+/// Returns the list of types for later register assignment.
+fn eval_and_push_args(
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Vec<PhpType> {
+    let mut arg_types = Vec::new();
+    for arg in args {
+        let ty = emit_expr(arg, emitter, ctx, data);
+        retain_borrowed_heap_arg(emitter, arg, &ty);
+        match &ty {
+            PhpType::Float => {
+                emitter.instruction("str d0, [sp, #-16]!");                     // push float arg
+            }
+            PhpType::Str => {
+                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push string ptr+len
+            }
+            PhpType::Void => {}
+            _ => {
+                emitter.instruction("str x0, [sp, #-16]!");                     // push int/object/pointer arg
+            }
+        }
+        arg_types.push(ty);
+    }
+    arg_types
+}
+
+/// Compute register assignments for the given arg types, starting integer
+/// register numbering at `first_int_reg`. Returns (assignments, next_int_reg, next_float_reg).
+fn compute_register_assignments(
+    arg_types: &[PhpType],
+    first_int_reg: usize,
+) -> Vec<(PhpType, usize, bool)> {
+    let mut int_reg_idx = first_int_reg;
+    let mut float_reg_idx = 0usize;
+    let mut assignments = Vec::new();
+    for ty in arg_types {
+        if ty.is_float_reg() {
+            assignments.push((ty.clone(), float_reg_idx, true));
+            float_reg_idx += 1;
+        } else {
+            assignments.push((ty.clone(), int_reg_idx, false));
+            int_reg_idx += ty.register_count();
+        }
+    }
+    assignments
+}
+
+/// Pop arguments from the stack into their assigned registers (in reverse order).
+fn pop_args_to_registers(emitter: &mut Emitter, assignments: &[(PhpType, usize, bool)]) {
+    for i in (0..assignments.len()).rev() {
+        let (ty, start_reg, _) = &assignments[i];
+        match ty {
+            PhpType::Float => {
+                emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); // pop float arg
+            }
+            PhpType::Str => {
+                emitter.instruction(&format!(                                   // pop string arg pair
+                    "ldp x{}, x{}, [sp], #16",
+                    start_reg,
+                    start_reg + 1
+                ));
+            }
+            PhpType::Void => {}
+            _ => {
+                emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop arg into register
+            }
+        }
+    }
+}
+
 pub(super) fn emit_method_call(
     object: &Expr,
     method: &str,
@@ -19,31 +92,7 @@ pub(super) fn emit_method_call(
 ) -> PhpType {
     emitter.comment(&format!("->{}()", method));
 
-    let mut arg_types = Vec::new();
-    for arg in args {
-        let ty = emit_expr(arg, emitter, ctx, data);
-        retain_borrowed_heap_arg(emitter, arg, &ty);
-        match &ty {
-            PhpType::Bool
-            | PhpType::Int
-            | PhpType::Mixed
-            | PhpType::Array(_)
-            | PhpType::AssocArray { .. }
-            | PhpType::Callable
-            | PhpType::Object(_)
-            | PhpType::Pointer(_) => {
-                emitter.instruction("str x0, [sp, #-16]!");                     // push int/object arg
-            }
-            PhpType::Float => {
-                emitter.instruction("str d0, [sp, #-16]!");                     // push float arg
-            }
-            PhpType::Str => {
-                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push string ptr+len
-            }
-            PhpType::Void => {}
-        }
-        arg_types.push(ty);
-    }
+    let arg_types = eval_and_push_args(args, emitter, ctx, data);
 
     let obj_ty = emit_expr(object, emitter, ctx, data);
     let class_name = match &obj_ty {
@@ -55,48 +104,9 @@ pub(super) fn emit_method_call(
     };
     emitter.instruction("str x0, [sp, #-16]!");                                 // push $this pointer
 
-    let total_args = arg_types.len();
-    let mut int_reg_idx = 1usize;
-    let mut float_reg_idx = 0usize;
-    let mut assignments: Vec<(PhpType, usize, bool)> = Vec::new();
-    for ty in &arg_types {
-        if ty.is_float_reg() {
-            assignments.push((ty.clone(), float_reg_idx, true));
-            float_reg_idx += 1;
-        } else {
-            assignments.push((ty.clone(), int_reg_idx, false));
-            int_reg_idx += ty.register_count();
-        }
-    }
-
+    let assignments = compute_register_assignments(&arg_types, 1);
     emitter.instruction("ldr x0, [sp], #16");                                   // pop $this into x0
-
-    for i in (0..total_args).rev() {
-        let (ty, start_reg, _) = &assignments[i];
-        match ty {
-            PhpType::Bool
-            | PhpType::Int
-            | PhpType::Mixed
-            | PhpType::Array(_)
-            | PhpType::AssocArray { .. }
-            | PhpType::Callable
-            | PhpType::Object(_)
-            | PhpType::Pointer(_) => {
-                emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop arg into register
-            }
-            PhpType::Float => {
-                emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); // pop float arg
-            }
-            PhpType::Str => {
-                emitter.instruction(&format!(                                   // pop string arg into consecutive registers for method call
-                    "ldp x{}, x{}, [sp], #16",
-                    start_reg,
-                    start_reg + 1
-                ));
-            }
-            PhpType::Void => {}
-        }
-    }
+    pop_args_to_registers(emitter, &assignments);
 
     let class_info = ctx.classes.get(&class_name).cloned();
     let ret_ty = class_info
@@ -211,31 +221,7 @@ pub(super) fn emit_static_method_call(
     };
     emitter.comment(&format!("{}::{}()", class_name, method));
 
-    let mut arg_types = Vec::new();
-    for arg in args {
-        let ty = emit_expr(arg, emitter, ctx, data);
-        retain_borrowed_heap_arg(emitter, arg, &ty);
-        match &ty {
-            PhpType::Bool
-            | PhpType::Int
-            | PhpType::Mixed
-            | PhpType::Array(_)
-            | PhpType::AssocArray { .. }
-            | PhpType::Callable
-            | PhpType::Object(_)
-            | PhpType::Pointer(_) => {
-                emitter.instruction("str x0, [sp, #-16]!");                     // push arg onto stack
-            }
-            PhpType::Float => {
-                emitter.instruction("str d0, [sp, #-16]!");                     // push float arg
-            }
-            PhpType::Str => {
-                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push string ptr+len
-            }
-            PhpType::Void => {}
-        }
-        arg_types.push(ty);
-    }
+    let arg_types = eval_and_push_args(args, emitter, ctx, data);
 
     let class_info = match ctx.classes.get(&class_name).cloned() {
         Some(class_info) => class_info,
@@ -317,25 +303,9 @@ pub(super) fn emit_static_method_call(
             return PhpType::Int;
         };
 
-    let total_args = arg_types.len();
-    let mut int_reg_idx = 0usize;
-    if needs_called_class_id {
-        int_reg_idx += 1;
-    }
-    if needs_this {
-        int_reg_idx += 1;
-    }
-    let mut float_reg_idx = 0usize;
-    let mut assignments: Vec<(PhpType, usize, bool)> = Vec::new();
-    for ty in &arg_types {
-        if ty.is_float_reg() {
-            assignments.push((ty.clone(), float_reg_idx, true));
-            float_reg_idx += 1;
-        } else {
-            assignments.push((ty.clone(), int_reg_idx, false));
-            int_reg_idx += ty.register_count();
-        }
-    }
+    let first_int_reg = (if needs_called_class_id { 1 } else { 0 })
+        + (if needs_this { 1 } else { 0 });
+    let assignments = compute_register_assignments(&arg_types, first_int_reg);
 
     if needs_called_class_id {
         if forwarded_call {
@@ -371,32 +341,7 @@ pub(super) fn emit_static_method_call(
         let this_reg = if needs_called_class_id { 1 } else { 0 };
         emitter.instruction(&format!("ldr x{}, [sp], #16", this_reg));          // pop implicit $this into its assigned integer register
     }
-    for i in (0..total_args).rev() {
-        let (ty, start_reg, _) = &assignments[i];
-        match ty {
-            PhpType::Bool
-            | PhpType::Int
-            | PhpType::Mixed
-            | PhpType::Array(_)
-            | PhpType::AssocArray { .. }
-            | PhpType::Callable
-            | PhpType::Object(_)
-            | PhpType::Pointer(_) => {
-                emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop arg into assigned register
-            }
-            PhpType::Float => {
-                emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); // pop float arg
-            }
-            PhpType::Str => {
-                emitter.instruction(&format!(                                   // pop string arg into consecutive registers for static call
-                    "ldp x{}, x{}, [sp], #16",
-                    start_reg,
-                    start_reg + 1
-                ));
-            }
-            PhpType::Void => {}
-        }
-    }
+    pop_args_to_registers(emitter, &assignments);
 
     save_concat_offset_before_nested_call(emitter);
     if dynamic_static_dispatch {
