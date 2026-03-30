@@ -4,7 +4,7 @@
 
 ---
 
-**Source:** `src/codegen/runtime/` — `mod.rs`, `strings/`, `arrays/`, `io/`, `system/`, `pointers/`
+**Source:** `src/codegen/runtime/` — `mod.rs`, `strings/`, `arrays/`, `exceptions.rs`, `io/`, `system/`, `pointers/`
 
 The runtime is a collection of **hand-written assembly routines** that handle operations too complex for inline code generation. When the [code generator](the-codegen.md) needs to convert an integer to a string or concatenate two strings, it emits a `bl __rt_itoa` or `bl __rt_concat` — a call to a runtime routine.
 
@@ -30,6 +30,7 @@ __rt_ftoa          float → string
 __rt_concat        string + string → string
 __rt_str_eq        string == string → bool
 __rt_array_new     allocate a new array
+__rt_throw_current throw the active exception
 __rt_build_argv    build $argv from C strings
 ```
 
@@ -292,6 +293,21 @@ At program start, the OS passes `argc` (argument count) in `x0` and `argv` (poin
 | `__rt_getenv` | Get environment variable value via libc `getenv()` | `x1`/`x2` = name string | `x1`/`x2` = value string |
 | `__rt_shell_exec` | Execute shell command and capture output via libc `popen()`/`pclose()` | `x1`/`x2` = command string | `x1`/`x2` = output string |
 
+## Exception routines
+
+**Source:** `src/codegen/runtime/exceptions.rs`
+
+elephc lowers exceptions with a small runtime layer around `_setjmp` / `_longjmp`. Codegen publishes the current exception object into `_exc_value`, pushes a handler record into `_exc_handler_top`, and then uses these helpers to unwind, match catch clauses, and resume control flow through `catch` / `finally`.
+
+| Routine | What it does | Input | Output |
+|---|---|---|---|
+| `__rt_exception_cleanup_frames` | Walk the activation-record stack, run per-frame cleanup callbacks, and stop at the frame that should survive the catch | `x0` = surviving activation record | — |
+| `__rt_exception_matches` | Check whether the active exception matches a catch target by class id or interface id | `x0` = exception object, `x1` = target id, `x2` = 0 for class / 1 for interface | `x0` = 1 if it matches, 0 otherwise |
+| `__rt_throw_current` | Unwind to the nearest active handler or print the fatal uncaught-exception message and exit | reads `_exc_value`, `_exc_handler_top`, `_exc_call_frame_top` | does not return normally |
+| `__rt_rethrow_current` | Re-enter the ordinary throw path with the currently active exception | none (uses global exception state) | does not return normally |
+
+The fatal uncaught-exception path writes `Fatal error: uncaught exception` to stderr and exits with status 1. The runtime also resets the concat-buffer cursor before the final `longjmp`, so partially built string state from the throwing frame does not leak into the resumed catch/finally code.
+
 ### Date/time routines
 
 **Files:** `system/date.rs`, `system/date_data.rs`, `system/mktime.rs`, `system/strtotime.rs`
@@ -382,6 +398,7 @@ The `emit_runtime()` function calls every routine emitter in a fixed order:
 pub fn emit_runtime(emitter: &mut Emitter) {
     // strings: itoa, ftoa, concat, atoi, equality, formatting, trim/mask,
     // search/replace, explode/implode, hashing, encoding, sscanf, ...
+    // exceptions: cleanup walk, catch matching, throw/rethrow helpers
     // system: argv, time, getenv, shell, date/mktime/strtotime, JSON, regex
     // arrays: heap alloc/free, array/hash helpers, sort, callbacks, refcount
     // io: c-string buffers, file I/O, stat/fs helpers, scandir/glob/tempnam, CSV
@@ -389,7 +406,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
 }
 ```
 
-Notable runtime-only helpers emitted here include `__rt_heap_debug_fail`, `__rt_heap_kind`, `__rt_hash_insert_owned`, `__rt_hash_free_deep`, `__rt_array_column_ref`, `__rt_preg_strip`, `__rt_pcre_to_posix`, `__rt_str_to_cstr`, and `__rt_cstr_to_str` in addition to the more user-visible helpers.
+Notable runtime-only helpers emitted here include `__rt_exception_cleanup_frames`, `__rt_exception_matches`, `__rt_throw_current`, `__rt_heap_debug_fail`, `__rt_heap_kind`, `__rt_hash_insert_owned`, `__rt_hash_free_deep`, `__rt_array_column_ref`, `__rt_preg_strip`, `__rt_pcre_to_posix`, `__rt_str_to_cstr`, and `__rt_cstr_to_str` in addition to the more user-visible helpers.
 
 All routines are included in every binary, even if unused. This is simpler than dead-code elimination (a potential future optimization).
 
@@ -402,6 +419,9 @@ The runtime also declares global buffers using `.comm` and static data tables:
 .comm _concat_off, 8         ; current offset into string buffer
 .comm _global_argc, 8        ; saved argc from OS
 .comm _global_argv, 8        ; saved argv pointer from OS
+.comm _exc_handler_top, 8    ; top of the active exception-handler stack
+.comm _exc_call_frame_top, 8 ; top of the activation-record cleanup stack
+.comm _exc_value, 8          ; currently propagating exception object
 .comm _heap_buf, 8388608     ; 8MB heap by default (--heap-size overrides)
 .comm _heap_off, 8           ; current heap offset
 .comm _heap_free_list, 8     ; head of the general address-ordered free list
@@ -432,6 +452,7 @@ Additionally, the runtime emits static data tables:
 - `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` — fatal runtime error strings
 - `_heap_dbg_bad_refcount_msg`, `_heap_dbg_double_free_msg`, `_heap_dbg_free_list_msg` — fatal heap-debug error strings enabled by `--heap-debug`
 - `_heap_dbg_*` summary labels — fixed strings used by `__rt_heap_debug_report` for alloc/free/live/leak output
+- `_uncaught_exc_msg` — fatal exception string written by `__rt_throw_current` when no handler exists
 - `_pcre_space`, `_pcre_digit`, `_pcre_word`, `_pcre_nspace`, `_pcre_ndigit`, `_pcre_nword` — PCRE shorthand replacement strings for regex translation
 - `_json_true`, `_json_false`, `_json_null` — JSON keyword strings used by `__rt_json_encode_bool` and `__rt_json_encode_null`
 - `_day_names` — 7 entries (84 bytes), each 12 bytes: day name padded to 10 chars + 1 length byte + 1 padding byte. Used by `__rt_date` for `l` (full name) and `D` (abbreviated) format characters

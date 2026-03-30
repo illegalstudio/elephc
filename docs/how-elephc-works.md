@@ -99,13 +99,13 @@ It builds a **type environment** — a map from variable names to their types:
 { "x" → Int, "argc" → Int, "argv" → Array(Str) }
 ```
 
-If you tried `$x = "hello"` after `$x = 10`, the type checker would reject it — elephc doesn't allow variables to change type (except from `null`).
+If you tried `$x = "hello"` after `$x = 10`, the type checker would reject it — elephc doesn't allow variables to change type (except from `null`). The checker also resolves class/interface metadata for exception handling, so `throw` only accepts objects implementing `Throwable` and each `catch` target can be matched correctly later in codegen.
 
 ## Phase 5: Code generation
 
 **File:** `src/codegen/` — See [The Code Generator](the-codegen.md) for details.
 
-The code generator walks the typed AST and emits ARM64 assembly. Here's what our example produces (simplified, with comments):
+The code generator walks the typed AST and emits ARM64 assembly. For ordinary control flow this is mostly straight-line branches and labels; for `try` / `catch` / `finally`, the compiler additionally emits handler records and resume labels around `_setjmp` / `_longjmp`-based exception unwinding. Here's what our simple example produces (simplified, with comments):
 
 ```asm
 .global _main

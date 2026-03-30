@@ -21,11 +21,11 @@ I made the project as modular as possible. Every function has its own codegen fi
 
 ### What you should not expect
 
-Don't expect to take any existing PHP project and magically compile it. There's no Composer yet, but we do support PHP classes with single inheritance, interfaces, abstract classes, traits, constructors, instance/static methods, `self::method()`, `parent::method()`, `static::method()` with late static binding, `readonly` properties, and `public` / `protected` / `private` visibility — roughly at the level of that famous *PHP 4* book where my journey began, plus some PHP 8 features.
+Don't expect to take any existing PHP project and magically compile it. There's no Composer yet, but we do support PHP classes with single inheritance, interfaces, abstract classes, traits, constructors, instance/static methods, `self::method()`, `parent::method()`, `static::method()` with late static binding, `readonly` properties, `try` / `catch` / `finally` / `throw`, and `public` / `protected` / `private` visibility — roughly at the level of that famous *PHP 4* book where my journey began, plus some PHP 8 features.
 
 ### What you can expect
 
-You can write a PHP file using only the constructs documented in this project's [language reference](docs/language-reference.md). You can include other files with `include`, `require`, `include_once`, and `require_once`, compose classes with traits, extend concrete classes with `extends`, implement interfaces, and rely on PHP-style copy-on-write arrays so by-value array assignments stay shared until the first write. Associative arrays also preserve PHP insertion order for `foreach`, `array_keys()`, `array_values()`, `array_search()`, and `json_encode()`.
+You can write a PHP file using only the constructs documented in this project's [language reference](docs/language-reference.md). You can include other files with `include`, `require`, `include_once`, and `require_once`, compose classes with traits, extend concrete classes with `extends`, implement interfaces, throw and catch built-in or custom exceptions, and rely on PHP-style copy-on-write arrays so by-value array assignments stay shared until the first write. Associative arrays also preserve PHP insertion order for `foreach`, `array_keys()`, `array_values()`, `array_search()`, and `json_encode()`.
 
 Then watch your code run at the speed of light after running:
 
@@ -189,6 +189,7 @@ if ($x === 3) {
 | Switch | `switch ($x) { case 1: ...; break; default: ...; }` |
 | Match | `$r = match($x) { 1 => "one", default => "other" };` |
 | Break / Continue | `break;`, `continue;` |
+| Try / Catch / Finally / Throw | `try { ... } catch (Exception $e) { ... } finally { ... }`, `throw new Exception("boom");` |
 | Functions | `function foo($x, $y = 10) { return $x + $y; }` |
 | Variadic / Spread | `function sum(...$args) { }`, `func(...$arr)`, `[...$a, ...$b]` |
 | Pass by reference | `function inc(&$x) { $x++; }` |
@@ -318,6 +319,7 @@ src/
 │   └── runtime/         # ARM64 runtime routines (one file per language/runtime helper)
 │       ├── strings/     # itoa, concat, ftoa, strpos, str_replace, ...
 │       ├── arrays/      # heap_alloc, array_new, array_push, sort, ...
+│       ├── exceptions.rs # setjmp/longjmp-based exception helpers
 │       ├── io/          # fopen, fclose, fread, fwrite, file_ops, ...
 │       ├── pointers/    # ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str
 │       └── system/      # build_argv, time, getenv, shell_exec
@@ -337,7 +339,7 @@ ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 
 The `docs/` directory is a **complete wiki** covering every aspect of the compiler — from what a compiler is, to how each phase works, to the ARM64 instruction set. If you're new to compilers or assembly, **start from the top and work your way down**.
 
-For runnable language samples, start with `examples/classes`, `examples/inheritance`, `examples/interfaces`, `examples/traits`, `examples/arrays`, `examples/assoc-arrays`, `examples/cow`, `examples/closures`, and `examples/ffi-memory`.
+For runnable language samples, start with `examples/classes`, `examples/inheritance`, `examples/interfaces`, `examples/traits`, `examples/exceptions`, `examples/arrays`, `examples/assoc-arrays`, `examples/cow`, `examples/closures`, and `examples/ffi-memory`.
 
 | Guide | What you'll learn |
 |---|---|
@@ -347,7 +349,7 @@ For runnable language samples, start with `examples/classes`, `examples/inherita
 | [The Parser](docs/the-parser.md) | How tokens become an AST (with Pratt parsing) |
 | [The Type Checker](docs/the-type-checker.md) | Static types, inference, and error detection |
 | [The Codegen](docs/the-codegen.md) | How the AST becomes ARM64 assembly |
-| [The Runtime](docs/the-runtime.md) | Runtime routines: itoa, concat, hash tables, I/O |
+| [The Runtime](docs/the-runtime.md) | Runtime routines: strings, arrays, exceptions, hash tables, I/O |
 | [Memory Model](docs/memory-model.md) | Stack, heap, concat buffer, hash tables |
 | [ARM64 Assembly](docs/arm64-assembly.md) | ARM64 primer for people who've never seen assembly |
 | [ARM64 Instructions](docs/arm64-instructions.md) | Quick reference for every instruction elephc uses |
