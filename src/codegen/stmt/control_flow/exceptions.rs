@@ -77,10 +77,10 @@ pub(super) fn emit_try_stmt(
     if catches.is_empty() {
         if finally_label.is_some() {
             emit_set_pending_action(emitter, ctx, PENDING_RETHROW, None, false);
-            emitter.instruction(&format!(
-                "b {}",
-                finally_label.as_ref().expect("codegen bug: missing finally label")
-            ));                                                                   // defer rethrow until after finally
+            let finally_entry = finally_label
+                .as_ref()
+                .expect("codegen bug: missing finally label");
+            emitter.instruction(&format!("b {}", finally_entry));                   // defer rethrow until after finally
         } else {
             emitter.instruction("bl __rt_rethrow_current");                       // propagate an uncaught exception to the next enclosing try
         }
@@ -159,13 +159,12 @@ pub(super) fn emit_try_stmt(
 
 pub(super) fn emit_branch_through_finally(emitter: &mut Emitter, ctx: &Context, target_label: &str) {
     emit_set_pending_action(emitter, ctx, PENDING_BRANCH, Some(target_label), false);
-    emitter.instruction(&format!(
-        "b {}",
-        ctx.finally_stack
-            .last()
-            .expect("codegen bug: pending branch requested without an active finally")
-            .entry_label
-    ));                                                                           // transfer control to the innermost finally before branching onward
+    let finally_entry = &ctx
+        .finally_stack
+        .last()
+        .expect("codegen bug: pending branch requested without an active finally")
+        .entry_label;
+    emitter.instruction(&format!("b {}", finally_entry));                          // transfer control to the innermost finally before branching onward
 }
 
 pub(super) fn emit_return_through_finally(emitter: &mut Emitter, ctx: &Context) {
@@ -176,13 +175,12 @@ pub(super) fn emit_return_through_finally(emitter: &mut Emitter, ctx: &Context) 
         ctx.return_label.as_deref(),
         true,
     );
-    emitter.instruction(&format!(
-        "b {}",
-        ctx.finally_stack
-            .last()
-            .expect("codegen bug: pending return requested without an active finally")
-            .entry_label
-    ));                                                                           // transfer control to the innermost finally before returning
+    let finally_entry = &ctx
+        .finally_stack
+        .last()
+        .expect("codegen bug: pending return requested without an active finally")
+        .entry_label;
+    emitter.instruction(&format!("b {}", finally_entry));                          // transfer control to the innermost finally before returning
 }
 
 fn emit_set_pending_action(
@@ -332,21 +330,21 @@ fn bind_catch_variable(catch_clause: &CatchClause, emitter: &mut Emitter, ctx: &
 
     emitter.comment(&format!("bind catch ${}", variable));
     if matches!(var.ty, PhpType::Str) {
-        abi::load_at_offset(emitter, "x0", var.stack_offset);                      // load the previous string pointer before overwriting the catch variable
-        emitter.instruction("bl __rt_heap_free_safe");                             // release the previous owned string value in the catch slot
+        abi::load_at_offset(emitter, "x0", var.stack_offset);                   // load the previous string pointer before overwriting the catch variable
+        emitter.instruction("bl __rt_heap_free_safe");                          // release the previous owned string value in the catch slot
     } else if var.ty.is_refcounted() {
-        abi::load_at_offset(emitter, "x0", var.stack_offset);                      // load the previous heap-backed catch-slot value before overwriting it
-        abi::emit_decref_if_refcounted(emitter, &var.ty);                          // release the previous owned heap value in the catch slot
+        abi::load_at_offset(emitter, "x0", var.stack_offset);                   // load the previous heap-backed catch-slot value before overwriting it
+        abi::emit_decref_if_refcounted(emitter, &var.ty);                       // release the previous owned heap value in the catch slot
     }
-    emitter.instruction("adrp x9, _exc_value@PAGE");                               // load page of the current exception slot
-    emitter.instruction("add x9, x9, _exc_value@PAGEOFF");                         // resolve the current exception slot address
-    emitter.instruction("ldr x0, [x9]");                                           // load the current exception object pointer for the matching catch
-    emitter.instruction("str xzr, [x9]");                                          // clear the global current exception slot now that catch owns it
-    abi::emit_store(emitter, &var.ty, var.stack_offset);                           // move the caught exception into the catch variable slot
+    emitter.instruction("adrp x9, _exc_value@PAGE");                            // load page of the current exception slot
+    emitter.instruction("add x9, x9, _exc_value@PAGEOFF");                      // resolve the current exception slot address
+    emitter.instruction("ldr x0, [x9]");                                        // load the current exception object pointer for the matching catch
+    emitter.instruction("str xzr, [x9]");                                       // clear the global current exception slot now that catch owns it
+    abi::emit_store(emitter, &var.ty, var.stack_offset);                        // move the caught exception into the catch variable slot
 }
 
 fn emit_label_address(emitter: &mut Emitter, label: &str, dest_reg: &str) {
-    emitter.instruction(&format!("adrp {}, {}@PAGE", dest_reg, label));            // load page of the local control-flow target label
+    emitter.instruction(&format!("adrp {}, {}@PAGE", dest_reg, label));         // load page of the local control-flow target label
     emitter.instruction(&format!("add {}, {}, {}@PAGEOFF", dest_reg, dest_reg, label)); // resolve the local control-flow target address
 }
 

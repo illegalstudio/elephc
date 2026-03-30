@@ -589,20 +589,20 @@ fn emit_main_activation_record_push(emitter: &mut Emitter, ctx: &Context, cleanu
         .expect("codegen bug: missing main activation frame-base slot");
 
     emitter.comment("register main exception cleanup frame");
-    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                     // load page of the call-frame stack top
-    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");               // resolve the call-frame stack top address
-    emitter.instruction("ldr x10, [x9]");                                          // load the previous call-frame pointer
-    abi::store_at_offset(emitter, "x10", prev_offset);                             // save the previous call-frame pointer in the main activation record
-    emitter.instruction(&format!("adrp x10, {}@PAGE", cleanup_label));             // load page of the main cleanup callback label
-    emitter.instruction(&format!("add x10, x10, {}@PAGEOFF", cleanup_label));      // resolve the main cleanup callback label address
-    abi::store_at_offset(emitter, "x10", cleanup_offset);                          // save the main cleanup callback address in the activation record
-    emitter.instruction("mov x10, x29");                                           // x10 = current main frame pointer for cleanup callbacks
-    abi::store_at_offset(emitter, "x10", frame_base_offset);                       // save the main frame pointer in the activation record
+    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                  // load page of the call-frame stack top
+    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");            // resolve the call-frame stack top address
+    emitter.instruction("ldr x10, [x9]");                                       // load the previous call-frame pointer
+    abi::store_at_offset(emitter, "x10", prev_offset);                          // save the previous call-frame pointer in the main activation record
+    emitter.instruction(&format!("adrp x10, {}@PAGE", cleanup_label));          // load page of the main cleanup callback label
+    emitter.instruction(&format!("add x10, x10, {}@PAGEOFF", cleanup_label));   // resolve the main cleanup callback label address
+    abi::store_at_offset(emitter, "x10", cleanup_offset);                       // save the main cleanup callback address in the activation record
+    emitter.instruction("mov x10, x29");                                        // x10 = current main frame pointer for cleanup callbacks
+    abi::store_at_offset(emitter, "x10", frame_base_offset);                    // save the main frame pointer in the activation record
     abi::store_at_offset(emitter, "xzr", ctx.pending_action_offset.expect("codegen bug: missing main pending-action slot")); // clear any stale finally action before running main
-    emitter.instruction(&format!("sub x10, x29, #{}", prev_offset));               // x10 = address of the main activation record's first slot
-    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                      // reload page of the call-frame stack top after stack-slot stores may clobber x9
-    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");                // resolve the call-frame stack top address again
-    emitter.instruction("str x10, [x9]");                                          // publish the main activation record as the new call-frame stack top
+    emitter.instruction(&format!("sub x10, x29, #{}", prev_offset));            // x10 = address of the main activation record's first slot
+    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                   // reload page of the call-frame stack top after stack-slot stores may clobber x9
+    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");             // resolve the call-frame stack top address again
+    emitter.instruction("str x10, [x9]");                                       // publish the main activation record as the new call-frame stack top
 }
 
 fn emit_main_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
@@ -611,23 +611,23 @@ fn emit_main_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
         .expect("codegen bug: missing main activation prev slot");
 
     emitter.comment("unregister main exception cleanup frame");
-    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                      // load page of the call-frame stack top
-    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");                // resolve the call-frame stack top address
-    abi::load_at_offset(emitter, "x10", prev_offset);                              // reload the previous call-frame pointer from the main activation record
-    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                      // reload page of the call-frame stack top after the load helper may clobber x9
-    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");                // resolve the call-frame stack top address again
-    emitter.instruction("str x10, [x9]");                                          // restore the previous call-frame stack top before exiting
+    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                   // load page of the call-frame stack top
+    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");             // resolve the call-frame stack top address
+    abi::load_at_offset(emitter, "x10", prev_offset);                           // reload the previous call-frame pointer from the main activation record
+    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                   // reload page of the call-frame stack top after the load helper may clobber x9
+    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");             // resolve the call-frame stack top address again
+    emitter.instruction("str x10, [x9]");                                       // restore the previous call-frame stack top before exiting
 }
 
 fn emit_main_cleanup_callback(emitter: &mut Emitter, cleanup_label: &str, ctx: &Context) {
     emitter.label(cleanup_label);
-    emitter.instruction("sub sp, sp, #16");                                        // reserve callback spill space for x29/x30
-    emitter.instruction("stp x29, x30, [sp, #0]");                                 // save the caller frame pointer and return address
-    emitter.instruction("mov x29, x0");                                            // treat the unwound main frame pointer as our temporary base
+    emitter.instruction("sub sp, sp, #16");                                     // reserve callback spill space for x29/x30
+    emitter.instruction("stp x29, x30, [sp, #0]");                              // save the caller frame pointer and return address
+    emitter.instruction("mov x29, x0");                                         // treat the unwound main frame pointer as our temporary base
     self::functions::emit_owned_local_epilogue_cleanup(emitter, ctx);
-    emitter.instruction("ldp x29, x30, [sp, #0]");                                 // restore the callback frame pointer and return address
-    emitter.instruction("add sp, sp, #16");                                        // release the callback spill space
-    emitter.instruction("ret");                                                    // finish unwound-main cleanup callback before catch dispatch
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore the callback frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the callback spill space
+    emitter.instruction("ret");                                                 // finish unwound-main cleanup callback before catch dispatch
     emitter.blank();
 }
 

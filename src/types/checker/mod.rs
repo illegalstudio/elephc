@@ -534,6 +534,9 @@ fn validate_override_signature(
 ) -> Result<(), CompileError> {
     let kind = if is_static { "static method" } else { "method" };
     let child_sig = build_method_sig(method);
+    if method.name == "__construct" {
+        return Ok(());
+    }
     validate_signature_compatibility(
         method.span,
         class_name,
