@@ -271,6 +271,54 @@ fn test_error_buffer_len_requires_buffer_argument() {
 }
 
 #[test]
+fn test_error_buffer_free_requires_buffer_argument() {
+    expect_error(
+        "<?php buffer_free(42);",
+        "buffer_free() argument must be buffer<T>",
+    );
+}
+
+#[test]
+fn test_error_buffer_free_wrong_arg_count() {
+    expect_error(
+        "<?php buffer<int> $b = buffer_new<int>(1); buffer_free($b, $b);",
+        "buffer_free() takes exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_buffer_free_requires_local_variable() {
+    expect_error(
+        "<?php buffer_free(buffer_new<int>(1));",
+        "buffer_free() argument must be a local variable",
+    );
+}
+
+#[test]
+fn test_error_buffer_free_rejects_ref_param() {
+    expect_error(
+        "<?php function drop(&$buf) { buffer_free($buf); } buffer<int> $buf = buffer_new<int>(1); drop($buf);",
+        "buffer_free() argument must be a local variable",
+    );
+}
+
+#[test]
+fn test_error_buffer_free_rejects_global_alias() {
+    expect_error(
+        "<?php buffer<int> $buf = buffer_new<int>(1); function drop() { global $buf; buffer_free($buf); } drop();",
+        "buffer_free() argument must be a local variable",
+    );
+}
+
+#[test]
+fn test_error_buffer_free_rejects_static_slot() {
+    expect_error(
+        "<?php function drop() { static $buf = buffer_new<int>(1); buffer_free($buf); } drop();",
+        "buffer_free() argument must be a local variable",
+    );
+}
+
+#[test]
 fn test_error_cannot_redeclare_builtin_exception_type() {
     expect_error(
         "<?php class Exception {}",

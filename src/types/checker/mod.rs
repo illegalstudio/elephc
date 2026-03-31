@@ -260,6 +260,14 @@ pub(crate) struct Checker {
     pub extern_globals: HashMap<String, PhpType>,
     /// Libraries required by extern blocks.
     pub required_libraries: Vec<String>,
+    /// Best-known top-level variable types visible to `global` statements.
+    pub top_level_env: TypeEnv,
+    /// Names that are by-ref parameters in the current local scope.
+    pub active_ref_params: HashSet<String>,
+    /// Names introduced via `global` in the current local scope.
+    pub active_globals: HashSet<String>,
+    /// Names introduced via `static` in the current local scope.
+    pub active_statics: HashSet<String>,
 }
 
 #[derive(Clone)]
@@ -1314,6 +1322,10 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         packed_classes: HashMap::new(),
         extern_globals: HashMap::new(),
         required_libraries: Vec::new(),
+        top_level_env: HashMap::new(),
+        active_ref_params: HashSet::new(),
+        active_globals: HashSet::new(),
+        active_statics: HashSet::new(),
     };
 
     for stmt in program {
@@ -1553,6 +1565,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         global_env.insert(name.clone(), ty.clone());
     }
     for stmt in program {
+        checker.top_level_env = global_env.clone();
         checker.check_stmt(stmt, &mut global_env)?;
     }
 
@@ -1654,9 +1667,18 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 checker.current_class = Some(class.name.clone());
                 checker.current_method = Some(method.name.clone());
                 checker.current_method_is_static = method.is_static;
-                for s in &method.body {
-                    checker.check_stmt(s, &mut method_env)?;
-                }
+                let method_ref_params: Vec<String> = method
+                    .params
+                    .iter()
+                    .filter(|(_, _, is_ref)| *is_ref)
+                    .map(|(name, _, _)| name.clone())
+                    .collect();
+                checker.with_local_storage_context(method_ref_params, |checker| {
+                    for s in &method.body {
+                        checker.check_stmt(s, &mut method_env)?;
+                    }
+                    Ok(())
+                })?;
 
                 // Update method return type from full type inference
                 // (must run while current_class is still set so $this resolves)
@@ -1700,6 +1722,31 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
 }
 
 impl Checker {
+    fn with_local_storage_context<T, F>(
+        &mut self,
+        ref_param_names: Vec<String>,
+        f: F,
+    ) -> Result<T, CompileError>
+    where
+        F: FnOnce(&mut Self) -> Result<T, CompileError>,
+    {
+        let saved_ref_params = self.active_ref_params.clone();
+        let saved_globals = self.active_globals.clone();
+        let saved_statics = self.active_statics.clone();
+
+        self.active_ref_params = ref_param_names.into_iter().collect();
+        self.active_globals.clear();
+        self.active_statics.clear();
+
+        let result = f(self);
+
+        self.active_ref_params = saved_ref_params;
+        self.active_globals = saved_globals;
+        self.active_statics = saved_statics;
+
+        result
+    }
+
     fn can_access_member(&self, declaring_class: &str, visibility: &Visibility) -> bool {
         match visibility {
             Visibility::Public => true,
@@ -2754,15 +2801,21 @@ impl Checker {
                 // global vars are accessible; they reference variables from the outer scope
                 // Mark them in the environment if not already present
                 for var in vars {
+                    self.active_globals.insert(var.clone());
                     if !env.contains_key(var) {
-                        // Default to Int — will be refined by actual usage
-                        env.insert(var.clone(), PhpType::Int);
+                        if let Some(global_ty) = self.top_level_env.get(var) {
+                            env.insert(var.clone(), global_ty.clone());
+                        } else {
+                            // Default to Int — will be refined by actual usage
+                            env.insert(var.clone(), PhpType::Int);
+                        }
                     }
                 }
                 Ok(())
             }
             StmtKind::StaticVar { name, init } => {
                 let ty = self.infer_type(init, env)?;
+                self.active_statics.insert(name.clone());
                 env.insert(name.clone(), ty);
                 Ok(())
             }
@@ -3164,9 +3217,17 @@ impl Checker {
                 if let Some(vp) = variadic {
                     closure_env.insert(vp.clone(), PhpType::Array(Box::new(PhpType::Int)));
                 }
-                for stmt in body {
-                    self.check_stmt(stmt, &mut closure_env)?;
-                }
+                let closure_ref_params: Vec<String> = params
+                    .iter()
+                    .filter(|(_, _, is_ref)| *is_ref)
+                    .map(|(name, _, _)| name.clone())
+                    .collect();
+                self.with_local_storage_context(closure_ref_params, |checker| {
+                    for stmt in body {
+                        checker.check_stmt(stmt, &mut closure_env)?;
+                    }
+                    Ok(())
+                })?;
                 Ok(PhpType::Callable)
             }
             ExprKind::Spread(inner) => {

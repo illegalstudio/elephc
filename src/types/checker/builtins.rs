@@ -203,6 +203,44 @@ impl Checker {
                 }
                 Ok(Some(PhpType::Int))
             }
+            "buffer_free" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "buffer_free() takes exactly 1 argument"));
+                }
+                // Restrict to plain local variables — ref params, globals, and statics
+                // have aliased storage that buffer_free cannot safely nullify.
+                match &args[0].kind {
+                    ExprKind::Variable(name) => {
+                        if self.current_class.is_some() && name == "this" {
+                            return Err(CompileError::new(span, "buffer_free() cannot free $this"));
+                        }
+                        if self.active_ref_params.contains(name)
+                            || self.active_globals.contains(name)
+                            || self.active_statics.contains(name)
+                        {
+                            return Err(CompileError::new(
+                                span,
+                                "buffer_free() argument must be a local variable",
+                            ));
+                        }
+                    }
+                    _ => {
+                        let ty = self.infer_type(&args[0], env)?;
+                        if !matches!(ty, PhpType::Buffer(_)) {
+                            return Err(CompileError::new(span, "buffer_free() argument must be buffer<T>"));
+                        }
+                        return Err(CompileError::new(
+                            span,
+                            "buffer_free() argument must be a local variable",
+                        ));
+                    }
+                }
+                let ty = self.infer_type(&args[0], env)?;
+                if !matches!(ty, PhpType::Buffer(_)) {
+                    return Err(CompileError::new(span, "buffer_free() argument must be buffer<T>"));
+                }
+                Ok(Some(PhpType::Void))
+            }
             "array_pop" => {
                 if args.len() != 1 {
                     return Err(CompileError::new(span, "array_pop() takes exactly 1 argument"));
