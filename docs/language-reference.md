@@ -671,6 +671,20 @@ foreach ($arr as $v) {
 }
 ```
 
+### String indexing
+
+String indexing is supported as one-character slice syntax on strings:
+
+```php
+<?php
+$s = "hello";
+echo $s[1];    // e
+echo $s[-1];   // o
+echo "[" . $s[99] . "]";  // []
+```
+
+The index must be an integer. Negative indices count from the end of the string, and out-of-bounds indices evaluate to an empty string. Read access is supported; string offset assignment such as `$s[0] = "x"` is not supported.
+
 ### String arrays
 
 ```php

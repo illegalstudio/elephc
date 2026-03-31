@@ -127,6 +127,22 @@ fn test_error_throw_expression_requires_object() {
 }
 
 #[test]
+fn test_error_string_index_requires_integer() {
+    expect_error(
+        "<?php $s = \"hello\"; echo $s[\"x\"];",
+        "String index must be integer",
+    );
+}
+
+#[test]
+fn test_error_string_offset_assignment_is_not_supported() {
+    expect_error(
+        "<?php $s = \"hello\"; $s[0] = \"H\";",
+        "String offset assignment is not supported",
+    );
+}
+
+#[test]
 fn test_error_catch_requires_defined_class() {
     expect_error(
         "<?php try { echo 1; } catch (MissingException $e) { echo 2; }",

@@ -589,8 +589,8 @@ fn emit_main_activation_record_push(emitter: &mut Emitter, ctx: &Context, cleanu
         .expect("codegen bug: missing main activation frame-base slot");
 
     emitter.comment("register main exception cleanup frame");
-    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                  // load page of the call-frame stack top
-    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");            // resolve the call-frame stack top address
+    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                   // load page of the call-frame stack top
+    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");             // resolve the call-frame stack top address
     emitter.instruction("ldr x10, [x9]");                                       // load the previous call-frame pointer
     abi::store_at_offset(emitter, "x10", prev_offset);                          // save the previous call-frame pointer in the main activation record
     emitter.instruction(&format!("adrp x10, {}@PAGE", cleanup_label));          // load page of the main cleanup callback label

@@ -277,7 +277,7 @@ Proper type system for PHP compatibility.
 - [x] Exceptions (`try`/`catch`) — stack unwinding via `setjmp`/`longjmp` with runtime frame cleanup and `finally` support
 - [x] Hash table insertion order — preserve PHP associative-array insertion order with a secondary linked list through entries
 - [x] Mixed-type associative arrays — per-entry type tags instead of one value type per table
-- [ ] String indexing (`$str[$i]`) — lower to substring-style access as syntax sugar
+- [x] String indexing (`$str[$i]`) — lower to one-character slice syntax as sugar for string reads
 - [x] `protected` visibility — third visibility level between public and private
 - [ ] Magic methods (`__toString`, `__get`, `__set`) — implicit hooks on property access and string conversion
 - [ ] ifdef or similar support

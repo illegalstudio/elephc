@@ -105,6 +105,22 @@ fn test_parse_catch_without_variable() {
 }
 
 #[test]
+fn test_parse_string_indexing_uses_array_access_ast() {
+    let stmts = parse_source("<?php echo $name[1];");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::ArrayAccess { array, index } => {
+                assert_eq!(array.kind, ExprKind::Variable("name".into()));
+                assert_eq!(index.kind, ExprKind::IntLiteral(1));
+            }
+            other => panic!("expected array access, got {:?}", other),
+        },
+        other => panic!("expected echo, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_parse_throw_expression_in_null_coalesce() {
     let stmts = parse_source("<?php $value = $maybe ?? throw new Exception();");
     assert_eq!(stmts.len(), 1);
