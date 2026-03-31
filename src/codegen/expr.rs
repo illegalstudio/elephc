@@ -656,7 +656,7 @@ fn widen_codegen_type(a: &PhpType, b: &PhpType) -> PhpType {
     helpers::widen_codegen_type(a, b)
 }
 
-fn coerce_result_to_type(
+pub(crate) fn coerce_result_to_type(
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,

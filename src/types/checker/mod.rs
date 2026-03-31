@@ -1609,25 +1609,19 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 // Update method return type from full type inference
                 // (must run while current_class is still set so $this resolves)
                 if !method.is_static {
-                    for s in &method.body {
-                        if let Some(ty) = checker.find_return_type(s, &method_env) {
-                            if let Some(ci) = checker.classes.get_mut(&class.name) {
-                                if let Some(sig) = ci.methods.get_mut(&method.name) {
-                                    sig.return_type = ty;
-                                }
+                    if let Some(ty) = checker.find_return_type_in_body(&method.body, &method_env) {
+                        if let Some(ci) = checker.classes.get_mut(&class.name) {
+                            if let Some(sig) = ci.methods.get_mut(&method.name) {
+                                sig.return_type = ty;
                             }
-                            break;
                         }
                     }
                 } else {
-                    for s in &method.body {
-                        if let Some(ty) = checker.find_return_type(s, &method_env) {
-                            if let Some(ci) = checker.classes.get_mut(&class.name) {
-                                if let Some(sig) = ci.static_methods.get_mut(&method.name) {
-                                    sig.return_type = ty;
-                                }
+                    if let Some(ty) = checker.find_return_type_in_body(&method.body, &method_env) {
+                        if let Some(ci) = checker.classes.get_mut(&class.name) {
+                            if let Some(sig) = ci.static_methods.get_mut(&method.name) {
+                                sig.return_type = ty;
                             }
-                            break;
                         }
                     }
                 }

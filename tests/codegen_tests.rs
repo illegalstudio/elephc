@@ -9019,6 +9019,27 @@ echo $b->title . "|" . $b->slug;
 }
 
 #[test]
+fn test_magic_get_merges_return_types_across_top_level_branches() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag {
+    public $flip = false;
+    public function __get($name) {
+        if ($this->flip) {
+            return "[" . $name . "]";
+        }
+        $this->flip = true;
+        return 123;
+    }
+}
+$b = new Bag();
+echo $b->id . "|" . $b->slug;
+"#,
+    );
+    assert_eq!(out, "123|[slug]");
+}
+
+#[test]
 fn test_magic_set_handles_missing_property_writes() {
     let out = compile_and_run(
         r#"<?php
