@@ -218,6 +218,11 @@ pub enum StmtKind {
         elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
         else_body: Option<Vec<Stmt>>,
     },
+    IfDef {
+        symbol: String,
+        then_body: Vec<Stmt>,
+        else_body: Option<Vec<Stmt>>,
+    },
     While {
         condition: Expr,
         body: Vec<Stmt>,

@@ -89,6 +89,9 @@ elephc --heap-debug heavy.php
 # Print allocation/free counters to stderr while debugging GC behavior
 elephc --gc-stats heavy.php
 
+# Enable compile-time feature branches
+elephc --define DEBUG app.php
+
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 ```
@@ -134,7 +137,7 @@ Notes:
 
 ## What it compiles
 
-elephc supports a growing subset of PHP and aims to match PHP behavior for the language features it implements. Most supported programs are ordinary PHP, but elephc also includes compiler-specific pointer builtins such as `ptr()` and `ptr_cast<T>()` that intentionally extend PHP syntax.
+elephc supports a growing subset of PHP and aims to match PHP behavior for the language features it implements. Most supported programs are ordinary PHP, but elephc also includes compiler-specific extensions such as build-time `ifdef` branches and pointer builtins like `ptr()` / `ptr_cast<T>()` that intentionally extend PHP syntax.
 
 ```php
 <?php
@@ -185,6 +188,7 @@ if ($x === 3) {
 | Ternary | `$x > 0 ? "yes" : "no"` |
 | Array / String access | `$arr[0]`, `$map["name"]`, `$str[-1]` |
 | If / elseif / else | `if (...) { } elseif (...) { } else { }` |
+| Ifdef (elephc extension) | `ifdef DEBUG { ... } else { ... }` |
 | While / Do-while | `while (...) { }`, `do { } while (...);` |
 | For / Foreach | `for (;;) { }`, `foreach ($arr as $v) { }`, `foreach ($arr as $k => $v) { }` |
 | Switch | `switch ($x) { case 1: ...; break; default: ...; }` |
@@ -341,7 +345,7 @@ ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 
 The `docs/` directory is a **complete wiki** covering every aspect of the compiler — from what a compiler is, to how each phase works, to the ARM64 instruction set. If you're new to compilers or assembly, **start from the top and work your way down**.
 
-For runnable language samples, start with `examples/classes`, `examples/inheritance`, `examples/interfaces`, `examples/traits`, `examples/exceptions`, `examples/magic-methods`, `examples/arrays`, `examples/assoc-arrays`, `examples/cow`, `examples/closures`, and `examples/ffi-memory`.
+For runnable language samples, start with `examples/classes`, `examples/inheritance`, `examples/interfaces`, `examples/traits`, `examples/exceptions`, `examples/magic-methods`, `examples/ifdef`, `examples/arrays`, `examples/assoc-arrays`, `examples/cow`, `examples/closures`, and `examples/ffi-memory`.
 
 | Guide | What you'll learn |
 |---|---|

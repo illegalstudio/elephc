@@ -1,4 +1,5 @@
 mod codegen;
+mod conditional;
 mod errors;
 mod lexer;
 mod parser;
@@ -8,6 +9,7 @@ mod types;
 
 use std::env;
 use std::fs;
+use std::collections::HashSet;
 use std::path::Path;
 use std::process::{self, Command};
 
@@ -40,7 +42,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: elephc [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] <source.php>");
+        eprintln!("Usage: elephc [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] <source.php>");
         process::exit(1);
     }
 
@@ -52,6 +54,7 @@ fn main() {
     let mut extra_link_libs: Vec<String> = Vec::new();
     let mut extra_link_paths: Vec<String> = Vec::new();
     let mut extra_frameworks: Vec<String> = Vec::new();
+    let mut defines: HashSet<String> = HashSet::new();
 
     let mut i = 1;
     while i < args.len() {
@@ -68,6 +71,20 @@ fn main() {
             gc_stats = true;
         } else if arg == "--heap-debug" {
             heap_debug = true;
+        } else if arg == "--define" {
+            i += 1;
+            if i < args.len() {
+                defines.insert(args[i].clone());
+            } else {
+                eprintln!("Missing symbol after --define");
+                process::exit(1);
+            }
+        } else if let Some(symbol) = arg.strip_prefix("--define=") {
+            if symbol.is_empty() {
+                eprintln!("Invalid --define: symbol cannot be empty");
+                process::exit(1);
+            }
+            defines.insert(symbol.to_string());
         } else if arg == "--link" || arg == "-l" {
             i += 1;
             if i < args.len() {
@@ -108,7 +125,7 @@ fn main() {
     let filename = match filename_arg {
         Some(f) => f,
         None => {
-            eprintln!("Usage: elephc [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] <source.php>");
+            eprintln!("Usage: elephc [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] <source.php>");
             process::exit(1);
         }
     };
@@ -144,6 +161,8 @@ fn main() {
             process::exit(1);
         }
     };
+
+    let parsed = conditional::apply(parsed, &defines);
 
     let ast = match resolver::resolve(parsed, parent) {
         Ok(resolved) => resolved,

@@ -47,6 +47,7 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
         // Control flow — delegated to control.rs
         Token::Switch => control::parse_switch(tokens, pos, span),
         Token::If => control::parse_if(tokens, pos, span),
+        Token::IfDef => control::parse_ifdef(tokens, pos, span),
         Token::Try => control::parse_try(tokens, pos, span),
         Token::While => control::parse_while(tokens, pos, span),
         Token::Do => control::parse_do_while(tokens, pos, span),

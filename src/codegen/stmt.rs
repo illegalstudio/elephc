@@ -92,6 +92,9 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
     emitter.instruction("str xzr, [x9]");                                       // reset concat buffer offset to 0
 
     match &stmt.kind {
+        StmtKind::IfDef { .. } => {
+            emitter.comment("WARNING: unresolved ifdef reached codegen");
+        }
         StmtKind::Echo(expr) => {
             io::emit_echo_stmt(expr, emitter, ctx, data);
         }

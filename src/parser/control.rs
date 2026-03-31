@@ -52,6 +52,38 @@ pub fn parse_if(
     ))
 }
 
+/// Parse: ifdef SYMBOL { stmts } (else { stmts })?
+pub fn parse_ifdef(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1;
+
+    let symbol = match tokens.get(*pos).map(|(t, _)| t) {
+        Some(Token::Identifier(name)) => name.clone(),
+        _ => return Err(CompileError::new(span, "Expected symbol name after 'ifdef'")),
+    };
+    *pos += 1;
+
+    let then_body = parse_block(tokens, pos)?;
+    let else_body = if *pos < tokens.len() && tokens[*pos].0 == Token::Else {
+        *pos += 1;
+        Some(parse_block(tokens, pos)?)
+    } else {
+        None
+    };
+
+    Ok(Stmt::new(
+        StmtKind::IfDef {
+            symbol,
+            then_body,
+            else_body,
+        },
+        span,
+    ))
+}
+
 /// Parse: while (expr) { stmts }
 pub fn parse_while(
     tokens: &[(Token, Span)],
