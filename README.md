@@ -341,7 +341,7 @@ ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 
 The `docs/` directory is a **complete wiki** covering every aspect of the compiler — from what a compiler is, to how each phase works, to the ARM64 instruction set. If you're new to compilers or assembly, **start from the top and work your way down**.
 
-For runnable language samples, start with `examples/classes`, `examples/inheritance`, `examples/interfaces`, `examples/traits`, `examples/exceptions`, `examples/arrays`, `examples/assoc-arrays`, `examples/cow`, `examples/closures`, and `examples/ffi-memory`.
+For runnable language samples, start with `examples/classes`, `examples/inheritance`, `examples/interfaces`, `examples/traits`, `examples/exceptions`, `examples/magic-methods`, `examples/arrays`, `examples/assoc-arrays`, `examples/cow`, `examples/closures`, and `examples/ffi-memory`.
 
 | Guide | What you'll learn |
 |---|---|

@@ -132,6 +132,8 @@ At statement level, parsing is split between `parser/mod.rs` and `stmt.rs`:
 | `Const` / `Global` / `Static` | Declaration-like statement |
 | `Variable` / `This` / `Identifier` / `Self_` / `Parent` / `Static::...` | Assignment, property write, call, or generic expression statement |
 
+This is intentionally narrower than full PHP statement syntax. In the current subset, expression statements only enter through the token arms handled by `stmt::parse_stmt()` above; starting a statement with tokens such as `match`, `new`, `fn`, a literal, `(`, or a unary operator still produces an "unexpected token at statement position" parser error unless that construct appears inside another statement form.
+
 ### Binary operators (`BinOp`)
 
 ```
