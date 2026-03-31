@@ -2,15 +2,18 @@
 
 namespace Demo\App;
 
-require "support.php";
+require "vendor/autoload.php";
 
-use Demo\Lib\User;
-use function Demo\Lib\render as paint;
-use const Demo\Lib\APP_NAME;
+use Demo\Domain\User;
+use Demo\Http\Controller\HomeController;
+use function Demo\Support\format_user as formatUser;
+use const Demo\Support\APP_ENV;
 
-$user = new User("nahime");
+$controller = new HomeController();
+$user = new User("nahime", "admin");
 
-echo APP_NAME . "\n";
-echo paint($user->label()) . "\n";
-echo function_exists("paint") . "\n";
-echo call_user_func("paint", "ready") . "\n";
+echo "env=" . APP_ENV . "\n";
+echo $controller->index($user) . "\n";
+echo formatUser($user) . "\n";
+echo function_exists("formatUser") . "\n";
+echo call_user_func("formatUser", $user) . "\n";
