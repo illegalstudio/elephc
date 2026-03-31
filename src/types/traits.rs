@@ -12,6 +12,7 @@ pub struct FlattenedClass {
     pub extends: Option<String>,
     pub implements: Vec<String>,
     pub is_abstract: bool,
+    pub is_readonly_class: bool,
     pub properties: Vec<ClassProperty>,
     pub methods: Vec<ClassMethod>,
 }
@@ -85,6 +86,7 @@ pub fn flatten_classes(program: &Program) -> Result<Vec<FlattenedClass>, Compile
             extends,
             implements,
             is_abstract,
+            is_readonly_class,
             trait_uses,
             properties,
             methods,
@@ -108,6 +110,7 @@ pub fn flatten_classes(program: &Program) -> Result<Vec<FlattenedClass>, Compile
                 extends: extends.as_ref().map(|name| name.as_str().to_string()),
                 implements: implements.iter().map(|name| name.as_str().to_string()).collect(),
                 is_abstract: *is_abstract,
+                    is_readonly_class: *is_readonly_class,
                 properties: merged_props,
                 methods: merged_methods,
             });

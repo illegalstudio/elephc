@@ -5,11 +5,11 @@ use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
 use crate::parser::ast::{
-    BinOp, CType, CastType, ClassMethod, ClassProperty, Expr, ExprKind, Program, StaticReceiver,
-    Stmt, StmtKind, Visibility,
+    BinOp, CallableTarget, CType, CastType, ClassMethod, ClassProperty, Expr, ExprKind, Program,
+    StaticReceiver, Stmt, StmtKind, Visibility,
 };
 use crate::types::{
-    ctype_stack_size, ctype_to_php_type, packed_type_size,
+    ctype_stack_size, ctype_to_php_type, first_class_callable_builtin_sig, packed_type_size,
     traits::{flatten_classes, FlattenedClass}, CheckResult, ClassInfo, ExternClassInfo,
     ExternFieldInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo,
     PackedFieldInfo, PhpType, TypeEnv,
@@ -203,6 +203,17 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                 then_ty
             }
         }
+        ExprKind::Match { arms, default, .. } => {
+            let mut result_ty = default
+                .as_ref()
+                .map(|expr| infer_expr_type_syntactic(expr))
+                .unwrap_or(PhpType::Void);
+            for (_, arm_expr) in arms {
+                let arm_ty = infer_expr_type_syntactic(arm_expr);
+                result_ty = wider_type_syntactic(&result_ty, &arm_ty);
+            }
+            result_ty
+        }
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.as_str().to_string()),
         ExprKind::This => PhpType::Object(String::new()),
         ExprKind::PtrCast { target_type, .. } => PhpType::Pointer(Some(target_type.clone())),
@@ -240,6 +251,8 @@ pub(crate) struct Checker {
     pub constants: HashMap<String, PhpType>,
     /// Tracks the return type of closures assigned to variables.
     pub closure_return_types: HashMap<String, PhpType>,
+    /// Tracks known callable signatures assigned to variables.
+    pub callable_sigs: HashMap<String, FunctionSig>,
     /// Interface definitions collected during first pass.
     pub interfaces: HashMap<String, InterfaceInfo>,
     /// Class definitions collected during first pass.
@@ -316,6 +329,7 @@ fn inject_builtin_throwables(
             extends: None,
             implements: vec!["Throwable".to_string()],
             is_abstract: false,
+            is_readonly_class: false,
             properties: vec![builtin_exception_message_property()],
             methods: vec![
                 builtin_exception_constructor_method(),
@@ -859,6 +873,20 @@ fn build_class_info_recursive(
         None
     };
 
+    if let (Some(parent), Some(parent_name)) = (&parent_info, class.extends.as_ref()) {
+        if class.is_readonly_class != parent.is_readonly_class {
+            let relation = if class.is_readonly_class {
+                "readonly class cannot extend non-readonly parent"
+            } else {
+                "non-readonly class cannot extend readonly parent"
+            };
+            return Err(CompileError::new(
+                crate::span::Span::dummy(),
+                &format!("{}: {} extends {}", relation, class.name, parent_name),
+            ));
+        }
+    }
+
     let mut prop_types = Vec::new();
     let mut property_offsets = HashMap::new();
     let mut property_declaring_classes = HashMap::new();
@@ -956,7 +984,7 @@ fn build_class_info_recursive(
         property_declaring_classes.insert(prop.name.clone(), class.name.clone());
         defaults.push(prop.default.clone());
         property_visibilities.insert(prop.name.clone(), prop.visibility.clone());
-        if prop.readonly {
+        if class.is_readonly_class || prop.readonly {
             readonly_properties.insert(prop.name.clone());
         }
     }
@@ -1221,6 +1249,7 @@ fn build_class_info_recursive(
             class_id: *next_class_id,
             parent: class.extends.clone(),
             is_abstract: class.is_abstract,
+            is_readonly_class: class.is_readonly_class,
             properties: prop_types,
             property_offsets,
             property_declaring_classes,
@@ -1312,6 +1341,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         functions: HashMap::new(),
         constants: HashMap::new(),
         closure_return_types: HashMap::new(),
+        callable_sigs: HashMap::new(),
         interfaces: HashMap::new(),
         classes: HashMap::new(),
         current_class: None,
@@ -2341,6 +2371,168 @@ impl Checker {
         Ok(())
     }
 
+    fn resolve_first_class_callable_sig(
+        &mut self,
+        target: &CallableTarget,
+        span: crate::span::Span,
+        env: &TypeEnv,
+    ) -> Result<FunctionSig, CompileError> {
+        match target {
+            CallableTarget::Function(name) => {
+                let function_name = name.as_str();
+                if let Some(sig) = self.functions.get(function_name) {
+                    return Ok(sig.clone());
+                }
+                if let Some(decl) = self.fn_decls.get(function_name) {
+                    return Ok(FunctionSig {
+                        params: decl
+                            .params
+                            .iter()
+                            .cloned()
+                            .map(|name| (name, PhpType::Int))
+                            .collect(),
+                        defaults: decl.defaults.clone(),
+                        return_type: infer_return_type_syntactic(&decl.body),
+                        ref_params: decl.ref_params.clone(),
+                        variadic: decl.variadic.clone(),
+                    });
+                }
+                if let Some(sig) = self.extern_functions.get(function_name) {
+                    return Ok(FunctionSig {
+                        params: sig.params.clone(),
+                        defaults: vec![None; sig.params.len()],
+                        return_type: sig.return_type.clone(),
+                        ref_params: vec![false; sig.params.len()],
+                        variadic: None,
+                    });
+                }
+                if crate::name_resolver::is_builtin_function(function_name) {
+                    return first_class_callable_builtin_sig(function_name).ok_or_else(|| {
+                        CompileError::new(
+                            span,
+                            &format!(
+                                "First-class callable syntax does not support builtin '{}' yet",
+                                function_name
+                            ),
+                        )
+                    });
+                }
+                Err(CompileError::new(
+                    span,
+                    &format!("Undefined function for first-class callable: {}", function_name),
+                ))
+            }
+            CallableTarget::StaticMethod { receiver, method } => {
+                let resolved_class_name = match receiver {
+                    StaticReceiver::Named(class_name) => class_name.as_str().to_string(),
+                    StaticReceiver::Self_ => {
+                        self.current_class.as_ref().cloned().ok_or_else(|| {
+                            CompileError::new(
+                                span,
+                                "Cannot use self:: in first-class callable outside class method scope",
+                            )
+                        })?
+                    }
+                    StaticReceiver::Static => {
+                        return Err(CompileError::new(
+                            span,
+                            "First-class callable syntax does not support static:: targets yet",
+                        ));
+                    }
+                    StaticReceiver::Parent => {
+                        let current_class = self.current_class.as_ref().ok_or_else(|| {
+                            CompileError::new(
+                                span,
+                                "Cannot use parent:: in first-class callable outside class method scope",
+                            )
+                        })?;
+                        let current_info = self.classes.get(current_class).ok_or_else(|| {
+                            CompileError::new(
+                                span,
+                                &format!("Undefined class: {}", current_class),
+                            )
+                        })?;
+                        current_info.parent.as_ref().cloned().ok_or_else(|| {
+                            CompileError::new(
+                                span,
+                                &format!("Class {} has no parent class", current_class),
+                            )
+                        })?
+                    }
+                };
+
+                let class_info = self.classes.get(&resolved_class_name).ok_or_else(|| {
+                    CompileError::new(span, &format!("Undefined class: {}", resolved_class_name))
+                })?;
+                let sig = class_info.static_methods.get(method).ok_or_else(|| {
+                    if class_info.methods.contains_key(method) {
+                        CompileError::new(
+                            span,
+                            &format!(
+                                "First-class callable syntax only supports static methods here: {}::{}",
+                                resolved_class_name, method
+                            ),
+                        )
+                    } else {
+                        CompileError::new(
+                            span,
+                            &format!(
+                                "Undefined static method for first-class callable: {}::{}",
+                                resolved_class_name, method
+                            ),
+                        )
+                    }
+                })?;
+                if let Some(visibility) = class_info.static_method_visibilities.get(method) {
+                    let declaring_class = class_info
+                        .static_method_declaring_classes
+                        .get(method)
+                        .map(String::as_str)
+                        .unwrap_or(resolved_class_name.as_str());
+                    if !self.can_access_member(declaring_class, visibility) {
+                        return Err(CompileError::new(
+                            span,
+                            &format!(
+                                "Cannot access {} method: {}::{}",
+                                Self::visibility_label(visibility),
+                                resolved_class_name,
+                                method
+                            ),
+                        ));
+                    }
+                }
+                Ok(sig.clone())
+            }
+            CallableTarget::Method { object, method } => {
+                let object_ty = self.infer_type(object, env)?;
+                match object_ty {
+                    PhpType::Object(class_name) => Err(CompileError::new(
+                        span,
+                        &format!(
+                            "First-class instance method callables are not supported yet: {}->{}(...)",
+                            class_name, method
+                        ),
+                    )),
+                    _ => Err(CompileError::new(
+                        span,
+                        "First-class method callable requires an object receiver",
+                    )),
+                }
+            }
+        }
+    }
+
+    fn infer_first_class_callable_target(
+        &mut self,
+        target: &CallableTarget,
+        span: crate::span::Span,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        Ok(self
+            .resolve_first_class_callable_sig(target, span, env)?
+            .return_type)
+    }
+
     fn check_extern_function_call(
         &mut self,
         name: &str,
@@ -2463,6 +2655,11 @@ impl Checker {
                 if let ExprKind::Closure { body, .. } = &value.kind {
                     let ret_ty = self.infer_closure_return_type(body, env);
                     self.closure_return_types.insert(name.clone(), ret_ty);
+                } else if let ExprKind::FirstClassCallable(target) = &value.kind {
+                    let sig = self.resolve_first_class_callable_sig(target, stmt.span, env)?;
+                    self.closure_return_types
+                        .insert(name.clone(), sig.return_type.clone());
+                    self.callable_sigs.insert(name.clone(), sig);
                 }
                 if let Some(existing) = env.get(name) {
                     let merged_ty = self.merged_assignment_type(existing, &ty);
@@ -3192,6 +3389,10 @@ impl Checker {
             ExprKind::ConstRef(name) => self.constants.get(name.as_str()).cloned().ok_or_else(|| {
                 CompileError::new(expr.span, &format!("Undefined constant: {}", name))
             }),
+            ExprKind::FirstClassCallable(target) => {
+                self.infer_first_class_callable_target(target, expr.span, env)?;
+                Ok(PhpType::Callable)
+            }
             ExprKind::Closure {
                 params,
                 variadic,
@@ -3250,16 +3451,23 @@ impl Checker {
                         &format!("Cannot call ${} — not a callable (got {:?})", var, var_ty),
                     ));
                 }
+                if let Some(sig) = self.callable_sigs.get(var).cloned() {
+                    return self.check_known_callable_call(
+                        &sig,
+                        args,
+                        expr.span,
+                        env,
+                        &format!("callable ${}", var),
+                    );
+                }
                 for arg in args {
                     self.infer_type(arg, env)?;
                 }
-                // Use tracked return type if available, otherwise default to Int.
-                let ret_ty = self
+                Ok(self
                     .closure_return_types
                     .get(var)
                     .cloned()
-                    .unwrap_or(PhpType::Int);
-                Ok(ret_ty)
+                    .unwrap_or(PhpType::Int))
             }
             ExprKind::ExprCall { callee, args } => {
                 let callee_ty = self.infer_type(callee, env)?;
@@ -3271,6 +3479,30 @@ impl Checker {
                             callee_ty
                         ),
                     ));
+                }
+                match &callee.kind {
+                    ExprKind::Variable(var_name) => {
+                        if let Some(sig) = self.callable_sigs.get(var_name).cloned() {
+                            return self.check_known_callable_call(
+                                &sig,
+                                args,
+                                expr.span,
+                                env,
+                                &format!("callable ${}", var_name),
+                            );
+                        }
+                    }
+                    ExprKind::FirstClassCallable(target) => {
+                        let sig = self.resolve_first_class_callable_sig(target, expr.span, env)?;
+                        return self.check_known_callable_call(
+                            &sig,
+                            args,
+                            expr.span,
+                            env,
+                            "first-class callable",
+                        );
+                    }
+                    _ => {}
                 }
                 for arg in args {
                     self.infer_type(arg, env)?;

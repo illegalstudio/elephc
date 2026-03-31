@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::parser::ast::{CatchClause, Expr, ExprKind, Program, Stmt, StmtKind};
+use crate::parser::ast::{CallableTarget, CatchClause, Expr, ExprKind, Program, Stmt, StmtKind};
 
 pub fn apply(program: Program, defines: &HashSet<String>) -> Program {
     apply_stmts(program, defines)
@@ -183,6 +183,7 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             extends,
             implements,
             is_abstract,
+            is_readonly_class,
             trait_uses,
             properties,
             methods,
@@ -191,6 +192,7 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             extends,
             implements,
             is_abstract,
+            is_readonly_class,
             trait_uses,
             properties,
             methods: methods
@@ -412,6 +414,16 @@ fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
                 .map(|arg| rewrite_expr(arg, defines))
                 .collect(),
         },
+        ExprKind::FirstClassCallable(target) => ExprKind::FirstClassCallable(match target {
+            CallableTarget::Function(name) => CallableTarget::Function(name),
+            CallableTarget::StaticMethod { receiver, method } => {
+                CallableTarget::StaticMethod { receiver, method }
+            }
+            CallableTarget::Method { object, method } => CallableTarget::Method {
+                object: Box::new(rewrite_expr(*object, defines)),
+                method,
+            },
+        }),
         ExprKind::PtrCast { target_type, expr } => ExprKind::PtrCast {
             target_type,
             expr: Box::new(rewrite_expr(*expr, defines)),
