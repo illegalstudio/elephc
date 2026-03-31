@@ -2226,6 +2226,12 @@ impl Checker {
                 })?;
                 self.infer_type(index, env)?;
                 let val_ty = self.infer_type(value, env)?;
+                if arr_ty == PhpType::Str {
+                    return Err(CompileError::new(
+                        stmt.span,
+                        "String offset assignment is not supported",
+                    ));
+                }
                 if let PhpType::Array(elem_ty) = &arr_ty {
                     if **elem_ty != val_ty {
                         // Upgrade array element type when assigning a

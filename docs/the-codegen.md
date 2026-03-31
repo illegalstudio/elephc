@@ -471,6 +471,18 @@ This preserves PHP-style insertion order because `__rt_hash_iter_next` walks the
 
 See [The Runtime](the-runtime.md) for details on hash table routines and [Memory Model](memory-model.md) for the hash table memory layout.
 
+## String indexing codegen
+
+The same `ArrayAccess` AST node also covers string indexing such as `$str[1]` or `$str[-1]`. In `src/codegen/expr/arrays.rs`, `emit_array_access()` checks for `PhpType::Str` and lowers the operation inline:
+
+1. Save the string pointer/length while evaluating the index expression
+2. Adjust negative indices relative to the end of the string
+3. Clamp offsets below `-len` to the start and offsets past the end to the end
+4. Advance the string pointer to the selected byte
+5. Return either a one-character string (`x1` + `x2 = 1`) or an empty string when the offset is out of bounds
+
+So the behavior is slice-like, but it does not call `substr()` or a dedicated runtime helper.
+
 ## Statement codegen
 
 **Files:** `src/codegen/stmt.rs`, `src/codegen/stmt/`

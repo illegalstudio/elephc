@@ -61,7 +61,7 @@ Things that have a value:
 | `ArrayLiteral(Vec<Expr>)` | `[1, 2, 3]`, `[...$arr, 4]` | Indexed array; elements may include `Spread` expressions |
 | `ArrayLiteralAssoc(Vec<(Expr, Expr)>)` | `["a" => 1]` | Associative array |
 | `Match { subject, arms, default }` | `match($x) { 1, 2 => "low", 3 => "high" }` | Match expression (returns a value). `arms` is `Vec<(Vec<Expr>, Expr)>`, so each arm can have multiple comma-separated patterns before `=>`, and `default` is optional (`Option<Box<Expr>>`) |
-| `ArrayAccess { array, index }` | `$arr[0]` | |
+| `ArrayAccess { array, index }` | `$arr[0]`, `$str[-1]` | Same AST node is used for indexed arrays, associative-array lookups, and string indexing |
 | `Ternary { condition, then_expr, else_expr }` | `$a ? $b : $c` | |
 | `Cast { target, expr }` | `(int)$x` | |
 | `Closure { params, variadic, body, is_arrow, captures }` | `function($x) use ($y) { ... }` or `fn($x) => ...` | Anonymous function / arrow function. Params is `Vec<(String, Option<Expr>, bool)>` — name, default, is_ref. `variadic` is an optional parameter name. `captures` is `Vec<String>` — variables captured via an explicit `use (...)` clause. Arrow functions are still represented as `Closure`, but parse with `is_arrow = true` and `captures = []`. |

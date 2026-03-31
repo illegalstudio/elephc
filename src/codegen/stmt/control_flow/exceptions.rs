@@ -20,10 +20,10 @@ pub(super) fn emit_throw_stmt(
     emitter.comment("throw");
     let thrown_ty = emit_expr(expr, emitter, ctx, data);
     super::super::retain_borrowed_heap_result(emitter, expr, &thrown_ty);
-    emitter.instruction("adrp x9, _exc_value@PAGE");                              // load page of the current exception slot
-    emitter.instruction("add x9, x9, _exc_value@PAGEOFF");                        // resolve the current exception slot address
-    emitter.instruction("str x0, [x9]");                                          // publish the thrown object pointer as the active exception
-    emitter.instruction("bl __rt_throw_current");                                 // unwind to the nearest active exception handler
+    emitter.instruction("adrp x9, _exc_value@PAGE");                            // load page of the current exception slot
+    emitter.instruction("add x9, x9, _exc_value@PAGEOFF");                      // resolve the current exception slot address
+    emitter.instruction("str x0, [x9]");                                        // publish the thrown object pointer as the active exception
+    emitter.instruction("bl __rt_throw_current");                               // unwind to the nearest active exception handler
 }
 
 pub(super) fn emit_try_stmt(
@@ -47,8 +47,8 @@ pub(super) fn emit_try_stmt(
     emitter.comment("try");
     emit_try_handler_push(emitter, ctx, handler_offset);
     emit_handler_jmpbuf_address(emitter, handler_offset, "x0");
-    emitter.instruction("bl _setjmp");                                            // snapshot the current stack/register state for this try handler
-    emitter.instruction(&format!("cbnz x0, {}", handler_resume));                  // resume at catch dispatch after a longjmp into this handler
+    emitter.instruction("bl _setjmp");                                          // snapshot the current stack/register state for this try handler
+    emitter.instruction(&format!("cbnz x0, {}", handler_resume));               // resume at catch dispatch after a longjmp into this handler
 
     if let Some(label) = &finally_label {
         ctx.finally_stack.push(FinallyContext {
@@ -66,9 +66,9 @@ pub(super) fn emit_try_stmt(
 
     emit_try_handler_pop(emitter, handler_offset);
     if let Some(label) = &finally_label {
-        emitter.instruction(&format!("b {}", label));                             // run finally after the try body completes normally
+        emitter.instruction(&format!("b {}", label));                           // run finally after the try body completes normally
     } else {
-        emitter.instruction(&format!("b {}", end_label));                         // skip catch dispatch after a normal try-body completion
+        emitter.instruction(&format!("b {}", end_label));                       // skip catch dispatch after a normal try-body completion
     }
 
     emitter.label(&handler_resume);
@@ -80,9 +80,9 @@ pub(super) fn emit_try_stmt(
             let finally_entry = finally_label
                 .as_ref()
                 .expect("codegen bug: missing finally label");
-            emitter.instruction(&format!("b {}", finally_entry));                   // defer rethrow until after finally
+            emitter.instruction(&format!("b {}", finally_entry));               // defer rethrow until after finally
         } else {
-            emitter.instruction("bl __rt_rethrow_current");                       // propagate an uncaught exception to the next enclosing try
+            emitter.instruction("bl __rt_rethrow_current");                     // propagate an uncaught exception to the next enclosing try
         }
     } else {
         for catch_clause in catches {
@@ -96,14 +96,14 @@ pub(super) fn emit_try_stmt(
                     ctx.next_label("catch_type_next")
                 };
 
-                emitter.instruction("adrp x9, _exc_value@PAGE");                  // load page of the current exception slot
-                emitter.instruction("add x9, x9, _exc_value@PAGEOFF");            // resolve the current exception slot address
-                emitter.instruction("ldr x0, [x9]");                              // load the active exception object for catch matching
-                emitter.instruction(&format!("mov x1, #{}", catch_id));           // materialize the catch target id for runtime matching
-                emitter.instruction(&format!("mov x2, #{}", catch_kind));         // tell the runtime whether this catch target is a class or interface
-                emitter.instruction("bl __rt_exception_matches");                  // test whether the current exception matches this catch target
-                emitter.instruction(&format!("cbz x0, {}", mismatch_label));      // move to the next type in this catch clause when it does not match
-                emitter.instruction(&format!("b {}", catch_label));               // jump into the shared catch body once any type matches
+                emitter.instruction("adrp x9, _exc_value@PAGE");                // load page of the current exception slot
+                emitter.instruction("add x9, x9, _exc_value@PAGEOFF");          // resolve the current exception slot address
+                emitter.instruction("ldr x0, [x9]");                            // load the active exception object for catch matching
+                emitter.instruction(&format!("mov x1, #{}", catch_id));         // materialize the catch target id for runtime matching
+                emitter.instruction(&format!("mov x2, #{}", catch_kind));       // tell the runtime whether this catch target is a class or interface
+                emitter.instruction("bl __rt_exception_matches");               // test whether the current exception matches this catch target
+                emitter.instruction(&format!("cbz x0, {}", mismatch_label));    // move to the next type in this catch clause when it does not match
+                emitter.instruction(&format!("b {}", catch_label));             // jump into the shared catch body once any type matches
                 if idx + 1 != catch_clause.exception_types.len() {
                     emitter.label(&mismatch_label);
                 }
@@ -115,23 +115,23 @@ pub(super) fn emit_try_stmt(
                 super::super::emit_stmt(stmt, emitter, ctx, data);
             }
             if let Some(label) = &finally_label {
-                emitter.instruction(&format!("b {}", label));                     // run finally after the matching catch body completes
+                emitter.instruction(&format!("b {}", label));                   // run finally after the matching catch body completes
             } else {
-                emitter.instruction(&format!("b {}", catch_end_label));           // leave the try/catch after the matching catch completes
+                emitter.instruction(&format!("b {}", catch_end_label));         // leave the try/catch after the matching catch completes
             }
             emitter.label(&next_catch_label);
         }
 
         if let Some(label) = &finally_label {
             emit_set_pending_action(emitter, ctx, PENDING_RETHROW, None, false);
-            emitter.instruction(&format!("b {}", label));                         // no catch matched, so run finally before rethrowing
+            emitter.instruction(&format!("b {}", label));                       // no catch matched, so run finally before rethrowing
         } else {
-            emitter.instruction("bl __rt_rethrow_current");                       // no catch matched and there is no finally to run first
+            emitter.instruction("bl __rt_rethrow_current");                     // no catch matched and there is no finally to run first
         }
     }
 
     emitter.label(&catch_end_label);
-    emitter.instruction(&format!("b {}", end_label));                              // join point after try/catch when no finally is present
+    emitter.instruction(&format!("b {}", end_label));                           // join point after try/catch when no finally is present
 
     if let Some(label) = finally_label {
         let dispatch_return = ctx.next_label("finally_dispatch_return");
@@ -164,7 +164,7 @@ pub(super) fn emit_branch_through_finally(emitter: &mut Emitter, ctx: &Context, 
         .last()
         .expect("codegen bug: pending branch requested without an active finally")
         .entry_label;
-    emitter.instruction(&format!("b {}", finally_entry));                          // transfer control to the innermost finally before branching onward
+    emitter.instruction(&format!("b {}", finally_entry));                       // transfer control to the innermost finally before branching onward
 }
 
 pub(super) fn emit_return_through_finally(emitter: &mut Emitter, ctx: &Context) {
@@ -180,7 +180,7 @@ pub(super) fn emit_return_through_finally(emitter: &mut Emitter, ctx: &Context) 
         .last()
         .expect("codegen bug: pending return requested without an active finally")
         .entry_label;
-    emitter.instruction(&format!("b {}", finally_entry));                          // transfer control to the innermost finally before returning
+    emitter.instruction(&format!("b {}", finally_entry));                       // transfer control to the innermost finally before returning
 }
 
 fn emit_set_pending_action(
@@ -197,7 +197,7 @@ fn emit_set_pending_action(
         .pending_target_offset
         .expect("codegen bug: missing pending-target slot");
 
-    emitter.instruction(&format!("mov x10, #{}", action));                        // materialize the pending control-flow action kind
+    emitter.instruction(&format!("mov x10, #{}", action));                      // materialize the pending control-flow action kind
     abi::store_at_offset(emitter, "x10", action_offset);                          // record the pending action kind for finally dispatch
     if let Some(label) = target_label {
         emit_label_address(emitter, label, "x10");
@@ -239,34 +239,34 @@ fn emit_finally_dispatch(
     let parent_finally = ctx.finally_stack.last().map(|info| info.entry_label.clone());
 
     abi::load_at_offset(emitter, "x10", action_offset);                           // reload the pending control-flow action after finally body execution
-    emitter.instruction(&format!("cbz x10, {}", normal_resume_label));             // ordinary finally completion falls through to the local continuation
+    emitter.instruction(&format!("cbz x10, {}", normal_resume_label));          // ordinary finally completion falls through to the local continuation
     if let Some(parent_label) = parent_finally {
-        emitter.instruction(&format!("b {}", parent_label));                       // outer finally blocks must observe the same pending action first
+        emitter.instruction(&format!("b {}", parent_label));                    // outer finally blocks must observe the same pending action first
         return;
     }
 
-    emitter.instruction("cmp x10, #1");                                            // is the pending action a return?
-    emitter.instruction(&format!("b.eq {}", dispatch_return));                     // restore the return value then continue to the return target
-    emitter.instruction("cmp x10, #2");                                            // is the pending action a branch (break/continue)?
-    emitter.instruction(&format!("b.eq {}", dispatch_branch));                     // jump to the recorded target after finally
-    emitter.instruction("cmp x10, #3");                                            // is the pending action an exception rethrow?
-    emitter.instruction(&format!("b.eq {}", dispatch_rethrow));                    // resume propagating the current exception after finally
-    emitter.instruction(&format!("b {}", normal_resume_label));                    // unknown action kinds fall back to ordinary completion
+    emitter.instruction("cmp x10, #1");                                         // is the pending action a return?
+    emitter.instruction(&format!("b.eq {}", dispatch_return));                  // restore the return value then continue to the return target
+    emitter.instruction("cmp x10, #2");                                         // is the pending action a branch (break/continue)?
+    emitter.instruction(&format!("b.eq {}", dispatch_branch));                  // jump to the recorded target after finally
+    emitter.instruction("cmp x10, #3");                                         // is the pending action an exception rethrow?
+    emitter.instruction(&format!("b.eq {}", dispatch_rethrow));                 // resume propagating the current exception after finally
+    emitter.instruction(&format!("b {}", normal_resume_label));                 // unknown action kinds fall back to ordinary completion
 
     emitter.label(&dispatch_return);
     restore_pending_return_value(emitter, ctx);
     abi::store_at_offset(emitter, "xzr", action_offset);                           // clear the pending action before leaving finally
     abi::load_at_offset(emitter, "x10", target_offset);                            // reload the recorded return target address
-    emitter.instruction("br x10");                                                 // branch indirectly to the function epilogue
+    emitter.instruction("br x10");                                              // branch indirectly to the function epilogue
 
     emitter.label(&dispatch_branch);
     abi::store_at_offset(emitter, "xzr", action_offset);                           // clear the pending action before leaving finally
     abi::load_at_offset(emitter, "x10", target_offset);                            // reload the recorded branch target address
-    emitter.instruction("br x10");                                                 // branch indirectly to the loop target after finally
+    emitter.instruction("br x10");                                              // branch indirectly to the loop target after finally
 
     emitter.label(&dispatch_rethrow);
     abi::store_at_offset(emitter, "xzr", action_offset);                           // clear the pending action before resuming exception propagation
-    emitter.instruction("bl __rt_rethrow_current");                                // keep unwinding the current exception after finally
+    emitter.instruction("bl __rt_rethrow_current");                             // keep unwinding the current exception after finally
 }
 
 fn restore_pending_return_value(emitter: &mut Emitter, ctx: &Context) {
@@ -293,26 +293,26 @@ fn emit_try_handler_push(emitter: &mut Emitter, ctx: &Context, handler_offset: u
         .expect("codegen bug: missing activation prev slot");
 
     emitter.comment("push exception handler");
-    emitter.instruction("adrp x9, _exc_handler_top@PAGE");                         // load page of the exception-handler stack top
-    emitter.instruction("add x9, x9, _exc_handler_top@PAGEOFF");                   // resolve the exception-handler stack top address
-    emitter.instruction("ldr x10, [x9]");                                          // load the previous exception handler pointer
+    emitter.instruction("adrp x9, _exc_handler_top@PAGE");                      // load page of the exception-handler stack top
+    emitter.instruction("add x9, x9, _exc_handler_top@PAGEOFF");                // resolve the exception-handler stack top address
+    emitter.instruction("ldr x10, [x9]");                                       // load the previous exception handler pointer
     abi::store_at_offset(emitter, "x10", handler_offset);                          // save the previous handler pointer in this try slot
-    emitter.instruction(&format!("sub x10, x29, #{}", activation_prev_offset));    // x10 = address of the current activation record
+    emitter.instruction(&format!("sub x10, x29, #{}", activation_prev_offset)); // x10 = address of the current activation record
     abi::store_at_offset(emitter, "x10", handler_offset - 8);                      // remember which activation frame should survive this catch
-    emitter.instruction(&format!("sub x10, x29, #{}", handler_offset));            // x10 = address of this try slot's handler header
-    emitter.instruction("adrp x9, _exc_handler_top@PAGE");                         // reload page of the exception-handler stack top after stack-slot stores may clobber x9
-    emitter.instruction("add x9, x9, _exc_handler_top@PAGEOFF");                   // resolve the exception-handler stack top address again
-    emitter.instruction("str x10, [x9]");                                          // publish this handler as the current exception target
+    emitter.instruction(&format!("sub x10, x29, #{}", handler_offset));         // x10 = address of this try slot's handler header
+    emitter.instruction("adrp x9, _exc_handler_top@PAGE");                      // reload page of the exception-handler stack top after stack-slot stores may clobber x9
+    emitter.instruction("add x9, x9, _exc_handler_top@PAGEOFF");                // resolve the exception-handler stack top address again
+    emitter.instruction("str x10, [x9]");                                       // publish this handler as the current exception target
 }
 
 fn emit_try_handler_pop(emitter: &mut Emitter, handler_offset: usize) {
     emitter.comment("pop exception handler");
-    emitter.instruction("adrp x9, _exc_handler_top@PAGE");                         // load page of the exception-handler stack top
-    emitter.instruction("add x9, x9, _exc_handler_top@PAGEOFF");                   // resolve the exception-handler stack top address
+    emitter.instruction("adrp x9, _exc_handler_top@PAGE");                      // load page of the exception-handler stack top
+    emitter.instruction("add x9, x9, _exc_handler_top@PAGEOFF");                // resolve the exception-handler stack top address
     abi::load_at_offset(emitter, "x10", handler_offset);                           // reload the previous handler pointer from this try slot
-    emitter.instruction("adrp x9, _exc_handler_top@PAGE");                         // reload page of the exception-handler stack top after the load helper may clobber x9
-    emitter.instruction("add x9, x9, _exc_handler_top@PAGEOFF");                   // resolve the exception-handler stack top address again
-    emitter.instruction("str x10, [x9]");                                          // restore the previous exception handler pointer
+    emitter.instruction("adrp x9, _exc_handler_top@PAGE");                      // reload page of the exception-handler stack top after the load helper may clobber x9
+    emitter.instruction("add x9, x9, _exc_handler_top@PAGEOFF");                // resolve the exception-handler stack top address again
+    emitter.instruction("str x10, [x9]");                                       // restore the previous exception handler pointer
 }
 
 fn emit_handler_jmpbuf_address(emitter: &mut Emitter, handler_offset: usize, dest_reg: &str) {
