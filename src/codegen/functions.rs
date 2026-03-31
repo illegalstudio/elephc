@@ -221,8 +221,10 @@ fn emit_function_with_label_and_class(
                 PhpType::Mixed
                 | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
+                | PhpType::Buffer(_)
                 | PhpType::Callable
                 | PhpType::Object(_)
+                | PhpType::Packed(_)
                 | PhpType::Pointer(_) => {
                     emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
                     super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save array/callable/object/pointer param
@@ -971,6 +973,10 @@ fn infer_local_type(
             PhpType::Str => PhpType::Str,
             PhpType::Array(t) => *t,
             PhpType::AssocArray { value, .. } => *value,
+            PhpType::Buffer(t) => match *t {
+                PhpType::Packed(name) => PhpType::Pointer(Some(name)),
+                other => other,
+            },
             _ => PhpType::Int,
         },
         ExprKind::Negate(inner) => {
@@ -1097,6 +1103,7 @@ fn infer_local_type(
                 }
                 // Pointer-returning builtins
                 "ptr" | "ptr_null" => PhpType::Pointer(None),
+                "buffer_len" => PhpType::Int,
                 "ptr_offset" => {
                     if let Some(first_arg) = args.first() {
                         match infer_local_type(first_arg, sig, ctx) {
@@ -1164,6 +1171,43 @@ fn infer_local_type(
         ExprKind::ConstRef(_) => PhpType::Int, // constants resolved at emit time
         ExprKind::Spread(inner) => infer_local_type(inner, sig, ctx),
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.as_str().to_string()),
+        ExprKind::BufferNew { element_type, .. } => {
+            if let Some(c) = ctx {
+                let elem_ty = match element_type {
+                    crate::parser::ast::TypeExpr::Int => PhpType::Int,
+                    crate::parser::ast::TypeExpr::Float => PhpType::Float,
+                    crate::parser::ast::TypeExpr::Bool => PhpType::Bool,
+                    crate::parser::ast::TypeExpr::Ptr(target) => {
+                        PhpType::Pointer(target.as_ref().map(|name| name.as_str().to_string()))
+                    }
+                    crate::parser::ast::TypeExpr::Buffer(inner) => match inner.as_ref() {
+                        crate::parser::ast::TypeExpr::Int => {
+                            PhpType::Buffer(Box::new(PhpType::Int))
+                        }
+                        crate::parser::ast::TypeExpr::Float => {
+                            PhpType::Buffer(Box::new(PhpType::Float))
+                        }
+                        crate::parser::ast::TypeExpr::Bool => {
+                            PhpType::Buffer(Box::new(PhpType::Bool))
+                        }
+                        crate::parser::ast::TypeExpr::Named(name) => {
+                            PhpType::Buffer(Box::new(PhpType::Packed(name.as_str().to_string())))
+                        }
+                        _ => PhpType::Buffer(Box::new(PhpType::Int)),
+                    },
+                    crate::parser::ast::TypeExpr::Named(name) => {
+                        if c.packed_classes.contains_key(name.as_str()) {
+                            PhpType::Packed(name.as_str().to_string())
+                        } else {
+                            PhpType::Int
+                        }
+                    }
+                };
+                PhpType::Buffer(Box::new(elem_ty))
+            } else {
+                PhpType::Buffer(Box::new(PhpType::Int))
+            }
+        }
         ExprKind::PropertyAccess { object, property } => {
             if let Some(c) = ctx {
                 let obj_ty = infer_local_type(object, sig, Some(c));
@@ -1179,6 +1223,11 @@ fn infer_local_type(
                 }
                 if let PhpType::Pointer(Some(cn)) = &obj_ty {
                     if let Some(ci) = c.extern_classes.get(cn) {
+                        if let Some(field) = ci.fields.iter().find(|field| field.name == *property) {
+                            return field.php_type.clone();
+                        }
+                    }
+                    if let Some(ci) = c.packed_classes.get(cn) {
                         if let Some(field) = ci.fields.iter().find(|field| field.name == *property) {
                             return field.php_type.clone();
                         }

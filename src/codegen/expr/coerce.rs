@@ -60,6 +60,8 @@ pub(super) fn coerce_to_string(
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
         | PhpType::Callable
+        | PhpType::Buffer(_)
+        | PhpType::Packed(_)
         | PhpType::Pointer(_) => {}
     }
 }

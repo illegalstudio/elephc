@@ -151,6 +151,45 @@ fn test_namespace_and_backslash_tokens() {
 }
 
 #[test]
+fn test_packed_class_and_buffer_type_tokens() {
+    let t = tokens("<?php packed class Vec2 { public float $x; public float $y; } buffer<int> $points = buffer_new<int>(2);");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Packed,
+            Token::Class,
+            Token::Identifier("Vec2".into()),
+            Token::LBrace,
+            Token::Public,
+            Token::Identifier("float".into()),
+            Token::Variable("x".into()),
+            Token::Semicolon,
+            Token::Public,
+            Token::Identifier("float".into()),
+            Token::Variable("y".into()),
+            Token::Semicolon,
+            Token::RBrace,
+            Token::Identifier("buffer".into()),
+            Token::Less,
+            Token::Identifier("int".into()),
+            Token::Greater,
+            Token::Variable("points".into()),
+            Token::Assign,
+            Token::Identifier("buffer_new".into()),
+            Token::Less,
+            Token::Identifier("int".into()),
+            Token::Greater,
+            Token::LParen,
+            Token::IntLiteral(2),
+            Token::RParen,
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
 fn test_echo_string() {
     let t = tokens("<?php echo \"hello\";");
     assert_eq!(

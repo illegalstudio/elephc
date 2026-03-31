@@ -103,6 +103,8 @@ pub fn emit(
         PhpType::Callable => "callable",
         PhpType::Object(_) => "object",
         PhpType::Pointer(_) => "pointer",
+        PhpType::Buffer(_) => "buffer",
+        PhpType::Packed(_) => "packed",
         PhpType::Mixed => unreachable!("mixed handled above"),
     };
     let (label, len) = data.add_string(type_str.as_bytes());

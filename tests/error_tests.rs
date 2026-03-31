@@ -223,6 +223,54 @@ fn test_error_duplicate_use_alias_is_rejected() {
 }
 
 #[test]
+fn test_error_packed_class_rejects_non_pod_field() {
+    expect_error(
+        "<?php packed class Bad { public string $name; }",
+        "Packed class fields must use POD scalars, pointers, or packed classes",
+    );
+}
+
+#[test]
+fn test_error_typed_local_decl_currently_requires_buffer() {
+    expect_error(
+        "<?php int $value = 1;",
+        "Typed local declarations currently support only buffer<T>",
+    );
+}
+
+#[test]
+fn test_error_buffer_new_rejects_non_pod_element_type() {
+    expect_error(
+        "<?php buffer<string> $names = buffer_new<string>(2);",
+        "buffer<T> requires a POD scalar, pointer, or packed class element type",
+    );
+}
+
+#[test]
+fn test_error_buffer_scalar_assign_type_mismatch() {
+    expect_error(
+        "<?php buffer<int> $values = buffer_new<int>(2); $values[0] = true;",
+        "Buffer element type mismatch",
+    );
+}
+
+#[test]
+fn test_error_buffer_packed_element_requires_field_assignment() {
+    expect_error(
+        "<?php packed class Vec2 { public float $x; public float $y; } buffer<Vec2> $points = buffer_new<Vec2>(1); $points[0] = 1;",
+        "Assign packed buffer elements through field access like $buf[$i]->field",
+    );
+}
+
+#[test]
+fn test_error_buffer_len_requires_buffer_argument() {
+    expect_error(
+        "<?php echo buffer_len(1);",
+        "buffer_len() argument must be buffer<T>",
+    );
+}
+
+#[test]
 fn test_error_cannot_redeclare_builtin_exception_type() {
     expect_error(
         "<?php class Exception {}",

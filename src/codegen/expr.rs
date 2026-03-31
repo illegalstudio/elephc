@@ -72,7 +72,12 @@ pub fn emit_expr(
             if let Some(ty) = ctx.extern_globals.get(name).cloned() {
                 emitter.comment(&format!("load extern global ${}", name));
                 match &ty {
-                    PhpType::Bool | PhpType::Int | PhpType::Pointer(_) | PhpType::Callable => {
+                    PhpType::Bool
+                    | PhpType::Int
+                    | PhpType::Pointer(_)
+                    | PhpType::Buffer(_)
+                    | PhpType::Packed(_)
+                    | PhpType::Callable => {
                         emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); //load page of extern global GOT entry
                         emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); //resolve extern global address
                         emitter.instruction("ldr x0, [x9]");                    // load extern integer/pointer value
@@ -172,6 +177,9 @@ pub fn emit_expr(
         } => emit_match_expr(subject, arms, default, emitter, ctx, data),
         ExprKind::ArrayAccess { array, index } => {
             emit_array_access(array, index, emitter, ctx, data)
+        }
+        ExprKind::BufferNew { element_type, len } => {
+            arrays::emit_buffer_new(element_type, len, emitter, ctx, data)
         }
         ExprKind::Not(inner) => {
             let ty = emit_expr(inner, emitter, ctx, data);

@@ -196,6 +196,7 @@ fn main() {
         &check_result.functions,
         &check_result.interfaces,
         &check_result.classes,
+        &check_result.packed_classes,
         &check_result.extern_functions,
         &check_result.extern_classes,
         &check_result.extern_globals,

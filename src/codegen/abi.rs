@@ -74,8 +74,10 @@ pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
         PhpType::Mixed
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
+        | PhpType::Buffer(_)
         | PhpType::Callable
         | PhpType::Object(_)
+        | PhpType::Packed(_)
         | PhpType::Pointer(_) => {
             store_at_offset(emitter, "x0", offset);                             // store array/callable/object/pointer value
         }
@@ -131,8 +133,10 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
         PhpType::Mixed
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
+        | PhpType::Buffer(_)
         | PhpType::Callable
         | PhpType::Object(_)
+        | PhpType::Packed(_)
         | PhpType::Pointer(_) => {
             load_at_offset(emitter, "x0", offset);                              // load array/callable/object/pointer value
         }
@@ -168,7 +172,7 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
             emitter.instruction("mov x16, #4");                                 // syscall 4 = write
             emitter.instruction("svc #0x80");                                   // invoke kernel
         }
-        PhpType::Pointer(_) => {
+        PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_) => {
             // Convert pointer address in x0 to hex string, then write
             emitter.instruction("bl __rt_ptoa");                                // x0 → x1=ptr, x2=len
             emitter.instruction("mov x0, #1");                                  // fd = stdout

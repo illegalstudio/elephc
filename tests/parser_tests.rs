@@ -1,8 +1,8 @@
 use elephc::lexer::tokenize;
 use elephc::names::Name;
 use elephc::parser::ast::{
-    BinOp, CatchClause, Expr, ExprKind, StaticReceiver, Stmt, StmtKind, TraitAdaptation, UseKind,
-    Visibility,
+    BinOp, CatchClause, Expr, ExprKind, StaticReceiver, Stmt, StmtKind, TraitAdaptation, TypeExpr,
+    UseKind, Visibility,
 };
 use elephc::parser::parse;
 
@@ -253,6 +253,70 @@ fn test_parse_namespace_block_with_qualified_names() {
             }
         }
         other => panic!("expected namespace block, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_packed_class_and_typed_buffer_decl() {
+    let stmts = parse_source(
+        "<?php packed class Vec2 { public float $x; public float $y; } buffer<Vec2> $points = buffer_new<Vec2>(4);",
+    );
+    assert_eq!(stmts.len(), 2);
+
+    match &stmts[0].kind {
+        StmtKind::PackedClassDecl { name, fields } => {
+            assert_eq!(name, "Vec2");
+            assert_eq!(fields.len(), 2);
+            assert_eq!(fields[0].name, "x");
+            assert_eq!(fields[0].type_expr, TypeExpr::Float);
+            assert_eq!(fields[1].name, "y");
+            assert_eq!(fields[1].type_expr, TypeExpr::Float);
+        }
+        other => panic!("expected packed class decl, got {:?}", other),
+    }
+
+    match &stmts[1].kind {
+        StmtKind::TypedAssign {
+            type_expr,
+            name,
+            value,
+        } => {
+            assert_eq!(name, "points");
+            assert_eq!(
+                type_expr,
+                &TypeExpr::Buffer(Box::new(TypeExpr::Named(Name::unqualified("Vec2"))))
+            );
+            match &value.kind {
+                ExprKind::BufferNew { element_type, len } => {
+                    assert_eq!(element_type, &TypeExpr::Named(Name::unqualified("Vec2")));
+                    assert_eq!(len.kind, ExprKind::IntLiteral(4));
+                }
+                other => panic!("expected buffer_new, got {:?}", other),
+            }
+        }
+        other => panic!("expected typed assign, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_buffer_packed_element_field_access() {
+    let stmts = parse_source("<?php echo $points[0]->x;");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::PropertyAccess { object, property } => {
+                assert_eq!(property, "x");
+                match &object.kind {
+                    ExprKind::ArrayAccess { array, index } => {
+                        assert_eq!(array.kind, ExprKind::Variable("points".into()));
+                        assert_eq!(index.kind, ExprKind::IntLiteral(0));
+                    }
+                    other => panic!("expected packed buffer element access, got {:?}", other),
+                }
+            }
+            other => panic!("expected property access, got {:?}", other),
+        },
+        other => panic!("expected echo, got {:?}", other),
     }
 }
 

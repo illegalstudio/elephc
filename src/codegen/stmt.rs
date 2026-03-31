@@ -106,6 +106,13 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
         StmtKind::Assign { name, value } => {
             assignments::emit_assign_stmt(name, value, emitter, ctx, data);
         }
+        StmtKind::TypedAssign {
+            type_expr: _,
+            name,
+            value,
+        } => {
+            assignments::emit_assign_stmt(name, value, emitter, ctx, data);
+        }
         StmtKind::If {
             condition,
             then_body,
@@ -169,6 +176,9 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
         }
         StmtKind::FunctionDecl { .. } => {
             // Emitted separately in codegen/mod.rs
+        }
+        StmtKind::PackedClassDecl { .. } => {
+            // Packed classes only contribute static layout metadata.
         }
         StmtKind::Return(expr) => {
             control_flow::emit_return_stmt(expr, emitter, ctx, data);

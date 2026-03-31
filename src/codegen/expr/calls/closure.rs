@@ -226,8 +226,10 @@ pub(super) fn emit_closure_call(
             | PhpType::Mixed
             | PhpType::Array(_)
             | PhpType::AssocArray { .. }
+            | PhpType::Buffer(_)
             | PhpType::Callable
             | PhpType::Object(_)
+            | PhpType::Packed(_)
             | PhpType::Pointer(_) => {
                 crate::codegen::abi::load_at_offset(emitter, "x0", cap_offset);     // load captured int/bool/array value
                 emitter.instruction("str x0, [sp, #-16]!");                     // push captured value onto stack

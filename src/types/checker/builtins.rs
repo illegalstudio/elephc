@@ -193,6 +193,16 @@ impl Checker {
                 }
                 Ok(Some(PhpType::Int))
             }
+            "buffer_len" => {
+                if args.len() != 1 {
+                    return Err(CompileError::new(span, "buffer_len() takes exactly 1 argument"));
+                }
+                let ty = self.infer_type(&args[0], env)?;
+                if !matches!(ty, PhpType::Buffer(_)) {
+                    return Err(CompileError::new(span, "buffer_len() argument must be buffer<T>"));
+                }
+                Ok(Some(PhpType::Int))
+            }
             "array_pop" => {
                 if args.len() != 1 {
                     return Err(CompileError::new(span, "array_pop() takes exactly 1 argument"));

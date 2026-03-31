@@ -8,8 +8,10 @@ pub(super) fn push_arg_value(emitter: &mut Emitter, ty: &PhpType) {
         | PhpType::Mixed
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
+        | PhpType::Buffer(_)
         | PhpType::Callable
         | PhpType::Object(_)
+        | PhpType::Packed(_)
         | PhpType::Pointer(_) => {
             emitter.instruction("str x0, [sp, #-16]!");                         // push int/bool/array/callable/pointer arg onto stack
         }
@@ -55,8 +57,10 @@ pub(super) fn load_arg_assignments(
             | PhpType::Mixed
             | PhpType::Array(_)
             | PhpType::AssocArray { .. }
+            | PhpType::Buffer(_)
             | PhpType::Callable
             | PhpType::Object(_)
+            | PhpType::Packed(_)
             | PhpType::Pointer(_) => {
                 emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop int-like arg into register
             }

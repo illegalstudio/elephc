@@ -2,8 +2,8 @@ use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::names::{Name, NameKind};
 use crate::parser::ast::{
-    CType, ClassMethod, ClassProperty, Expr, ExprKind, ExternField, ExternParam, Stmt, StmtKind,
-    TraitAdaptation, TraitUse, UseItem, UseKind, Visibility,
+    CType, ClassMethod, ClassProperty, Expr, ExprKind, ExternField, ExternParam, PackedField,
+    Stmt, StmtKind, TraitAdaptation, TraitUse, TypeExpr, UseItem, UseKind, Visibility,
 };
 use crate::parser::control;
 use crate::parser::expr::parse_expr;
@@ -18,6 +18,7 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
         Token::This => parse_this_stmt(tokens, pos, span),
         Token::PlusPlus | Token::MinusMinus => parse_incdec_stmt(tokens, pos, span),
         Token::Class => parse_class_decl(tokens, pos, span, false),
+        Token::Packed => parse_packed_decl(tokens, pos, span),
         Token::Interface => parse_interface_decl(tokens, pos, span),
         Token::Trait => parse_trait_decl(tokens, pos, span),
         Token::Abstract => parse_abstract_decl(tokens, pos, span),
@@ -43,6 +44,9 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
         }
         Token::LBracket => parse_list_unpack(tokens, pos, span),
         Token::Identifier(_) | Token::Self_ | Token::Parent | Token::Backslash => {
+            if looks_like_typed_assign(tokens, *pos) {
+                return parse_typed_assign(tokens, pos, span);
+            }
             let expr = parse_expr(tokens, pos)?;
             expect_semicolon(tokens, pos)?;
             Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
@@ -210,6 +214,7 @@ fn parse_variable_stmt(
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
+    let start_pos = *pos;
     let name = match &tokens[*pos].0 {
         Token::Variable(n) => n.clone(),
         _ => unreachable!(),
@@ -254,6 +259,22 @@ fn parse_variable_stmt(
             return Err(CompileError::new(span, "Expected ']'"));
         }
         *pos += 1;
+
+        if *pos < tokens.len() && tokens[*pos].0 == Token::Arrow {
+            *pos = start_pos;
+            let expr = parse_expr(tokens, pos)?;
+            if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
+                *pos += 1;
+                let value = parse_expr(tokens, pos)?;
+                expect_semicolon(tokens, pos)?;
+                if let ExprKind::PropertyAccess { object, property } = expr.kind {
+                    return Ok(Stmt::new(StmtKind::PropertyAssign { object, property, value }, span));
+                }
+                return Err(CompileError::new(span, "Invalid assignment target"));
+            }
+            expect_semicolon(tokens, pos)?;
+            return Ok(Stmt::new(StmtKind::ExprStmt(expr), span));
+        }
 
         if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
             *pos += 1;
@@ -542,6 +563,92 @@ fn parse_function_decl(
     Ok(Stmt::new(StmtKind::FunctionDecl { name, params, variadic, body }, span))
 }
 
+fn looks_like_typed_assign(tokens: &[(Token, Span)], pos: usize) -> bool {
+    let mut probe = pos;
+    match parse_type_expr(tokens, &mut probe, tokens[pos].1) {
+        Ok(_) => matches!(tokens.get(probe).map(|(t, _)| t), Some(Token::Variable(_))),
+        Err(_) => false,
+    }
+}
+
+fn parse_typed_assign(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    let type_expr = parse_type_expr(tokens, pos, span)?;
+    let name = match tokens.get(*pos).map(|(t, _)| t) {
+        Some(Token::Variable(name)) => {
+            let name = name.clone();
+            *pos += 1;
+            name
+        }
+        _ => return Err(CompileError::new(span, "Expected variable after type annotation")),
+    };
+    expect_token(tokens, pos, &Token::Assign, "Expected '=' after typed variable")?;
+    let value = parse_expr(tokens, pos)?;
+    expect_semicolon(tokens, pos)?;
+    Ok(Stmt::new(
+        StmtKind::TypedAssign {
+            type_expr,
+            name,
+            value,
+        },
+        span,
+    ))
+}
+
+pub(crate) fn parse_type_expr(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<TypeExpr, CompileError> {
+    match tokens.get(*pos).map(|(t, _)| t) {
+        Some(Token::Identifier(name)) if matches!(name.as_str(), "int" | "integer") => {
+            *pos += 1;
+            Ok(TypeExpr::Int)
+        }
+        Some(Token::Identifier(name)) if matches!(name.as_str(), "float" | "double" | "real") => {
+            *pos += 1;
+            Ok(TypeExpr::Float)
+        }
+        Some(Token::Identifier(name)) if matches!(name.as_str(), "bool" | "boolean") => {
+            *pos += 1;
+            Ok(TypeExpr::Bool)
+        }
+        Some(Token::Identifier(name)) if matches!(name.as_str(), "ptr" | "pointer") => {
+            *pos += 1;
+            if *pos < tokens.len() && tokens[*pos].0 == Token::Less {
+                *pos += 1;
+                let target = parse_name(
+                    tokens,
+                    pos,
+                    span,
+                    "Expected pointer target type inside ptr<...>",
+                )?;
+                expect_token(tokens, pos, &Token::Greater, "Expected '>' after ptr target type")?;
+                Ok(TypeExpr::Ptr(Some(target)))
+            } else {
+                Ok(TypeExpr::Ptr(None))
+            }
+        }
+        Some(Token::Identifier(name)) if name == "buffer" => {
+            *pos += 1;
+            expect_token(tokens, pos, &Token::Less, "Expected '<' after buffer")?;
+            let inner = parse_type_expr(tokens, pos, span)?;
+            expect_token(tokens, pos, &Token::Greater, "Expected '>' after buffer element type")?;
+            Ok(TypeExpr::Buffer(Box::new(inner)))
+        }
+        Some(Token::Identifier(_)) | Some(Token::Backslash) => Ok(TypeExpr::Named(parse_name(
+            tokens,
+            pos,
+            span,
+            "Expected type name",
+        )?)),
+        _ => Err(CompileError::new(span, "Expected type expression")),
+    }
+}
+
 fn parse_return(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -684,6 +791,70 @@ fn parse_class_decl(
         },
         span,
     ))
+}
+
+fn parse_packed_decl(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1; // consume 'packed'
+    expect_token(tokens, pos, &Token::Class, "Expected 'class' after 'packed'")?;
+
+    let name = match tokens.get(*pos).map(|(t, _)| t) {
+        Some(Token::Identifier(n)) => {
+            let n = n.clone();
+            *pos += 1;
+            n
+        }
+        _ => return Err(CompileError::new(span, "Expected class name after 'packed class'")),
+    };
+
+    expect_token(tokens, pos, &Token::LBrace, "Expected '{' after packed class name")?;
+    let mut fields = Vec::new();
+    while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
+        let field_span = tokens[*pos].1;
+        match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Public) => *pos += 1,
+            Some(Token::Protected | Token::Private | Token::Static | Token::ReadOnly | Token::Abstract) => {
+                return Err(CompileError::new(
+                    field_span,
+                    "Packed class fields may only use public visibility",
+                ))
+            }
+            _ => {}
+        }
+
+        let type_expr = parse_type_expr(tokens, pos, field_span)?;
+        let field_name = match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Variable(name)) => {
+                let name = name.clone();
+                *pos += 1;
+                name
+            }
+            _ => {
+                return Err(CompileError::new(
+                    field_span,
+                    "Expected $field after packed field type",
+                ))
+            }
+        };
+        if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
+            return Err(CompileError::new(
+                field_span,
+                "Packed class fields cannot have default values",
+            ));
+        }
+        expect_semicolon(tokens, pos)?;
+        fields.push(PackedField {
+            name: field_name,
+            type_expr,
+            span: field_span,
+        });
+    }
+
+    expect_token(tokens, pos, &Token::RBrace, "Expected '}' at end of packed class")?;
+    Ok(Stmt::new(StmtKind::PackedClassDecl { name, fields }, span))
 }
 
 fn parse_abstract_decl(
