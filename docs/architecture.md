@@ -34,6 +34,13 @@ PHP source (.php)
 └────┬─────┘
      │
      ▼
+┌──────────────┐
+│ NameResolver │  src/name_resolver.rs
+│              │  Flattens namespace/use scopes and rewrites names to
+│              │  canonical fully-qualified names before semantic passes.
+└─────┬────────┘
+      │
+      ▼
 ┌─────────┐
 │  Type    │  src/types/
 │  Checker │  traits.rs, checker/mod.rs, checker/builtins.rs, checker/functions.rs
@@ -63,6 +70,8 @@ src/
 ├── span.rs                    Source position (line, col)
 ├── conditional.rs             Build-time `ifdef` pass
 ├── resolver.rs                Include/require file resolution
+├── names.rs                   Qualified/FQN name model + assembly symbol mangling
+├── name_resolver.rs           Namespace/use resolution to canonical names
 │
 ├── lexer/
 │   ├── mod.rs                 tokenize() → Vec<(Token, Span)>
@@ -182,7 +191,25 @@ Extern calls differ from ordinary elephc function calls in four important ways:
 3. `string` return values are converted with `__rt_cstr_to_str`, which treats the returned `char *` as borrowed and copies bytes back into an owned elephc string.
 4. `extern class` layouts are available to pointer-oriented codegen too, so `ptr_sizeof("StructName")` and `ptr_cast<StructName>($p)->field` use the same checked layout metadata recorded by the type checker.
 
-`callable` FFI parameters pass a user-defined elephc function by address. The function name is provided as a string literal at the call site, and codegen loads the address of the compiled `_fn_<name>` symbol before branching into C.
+`callable` FFI parameters pass a user-defined elephc function by address. The function name is provided as a string literal at the call site, and codegen loads the address of the compiled mangled function symbol before branching into C. Namespaced functions therefore still map to unique assembly labels after canonicalization.
+
+## Namespace resolution and symbol mangling
+
+Namespace syntax is preserved through parsing and include resolution, then normalized by `src/name_resolver.rs` before type checking or codegen sees the program. That pass:
+
+- tracks the current `namespace` scope
+- applies `use`, `use function`, and `use const` aliases, including group-use forms
+- resolves class/interface/trait/function/constant references to canonical fully-qualified names
+- rewrites supported string-literal callbacks such as `function_exists("name")` and `call_user_func("name", ...)` to the resolved target name
+- flattens namespace-only AST statements so downstream passes operate on a simpler canonical AST
+
+`src/names.rs` is the shared utility layer for this work. It defines the internal `Name` representation plus common helpers for:
+
+- canonical declaration names
+- namespace qualification rules
+- assembly symbol mangling for functions, methods, and static storage
+
+Because codegen receives canonical names, namespaces do not require special cases in most later passes: mangled labels are derived centrally from the final fully-qualified name.
 
 ## Runtime memory layout
 

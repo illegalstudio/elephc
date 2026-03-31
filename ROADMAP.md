@@ -285,7 +285,7 @@ Proper type system for PHP compatibility.
 ## v0.17.x — Language maturity and compiler ergonomics
 
 - [ ] Hot-path data type
-- [ ] Full namespace support
+- [x] Full namespace support
 - [ ] Comprehensive error recovery (multiple errors per compilation)
 - [ ] Warning system (unused variables, unreachable code)
 - [ ] Generators / `yield` — compile-time state machine transformation (struct holds locals + state index, `next()` dispatches via switch)

@@ -87,7 +87,7 @@ For each token, the scanner looks at the current character and decides:
 
 6. **Operator characters** (`+`, `-`, `*`, `/`, `=`, `<`, `>`, `!`, `.`, `%`, `&`, `|`, `^`, `~`) → Look ahead to handle multi-character operators (`==`, `===`, `!=`, `!==`, `<=`, `>=`, `<=>`, `<<`, `>>`, `&&`, `||`, `**`, `++`, `--`, `+=`, `-=`, `*=`, `/=`, `.=`, `%=`). Note that `<` may lead to `<=`, `<=>`, `<<`, or `<<<` (heredoc/nowdoc — see [below](#heredoc-and-nowdoc)).
 
-7. **Structural characters** (`(`, `)`, `{`, `}`, `[`, `]`, `;`, `,`, `?`, `:`) → Single-character tokens. Note that `?` followed by another `?` produces the `??` (null coalescing) token instead.
+7. **Structural characters** (`(`, `)`, `{`, `}`, `[`, `]`, `;`, `,`, `?`, `:`, `\`) → Single-character tokens. Note that `?` followed by another `?` produces the `??` (null coalescing) token instead. `\` is tokenized separately so the parser can build qualified and fully-qualified namespace names.
 
 ### Whitespace and comments
 
@@ -132,7 +132,7 @@ The full set of tokens elephc recognizes:
 echo  if  else  elseif  while  do  for  foreach  as
 break  continue  function  return  include  require
 include_once  require_once  true  false  null  print
-switch  case  default  match  try  catch  finally  throw  fn  use  extern  const
+switch  case  default  match  try  catch  finally  throw  fn  use  namespace  extern  const
 global  static  self  class  abstract  interface  trait  extends  implements  new
 public  protected  private  readonly  parent  insteadof
 ```
@@ -166,7 +166,7 @@ These are recognized as distinct tokens by the lexer, not as identifiers.
 ### Structural
 
 ```
-(  )  {  }  [  ]  ;  ,  ?  :
+(  )  {  }  [  ]  ;  ,  ?  :  \
 ```
 
 ### Special
