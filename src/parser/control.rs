@@ -2,7 +2,7 @@ use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::parser::ast::{BinOp, CatchClause, Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::parse_expr;
-use crate::parser::stmt::{expect_semicolon, expect_token, parse_block, parse_body};
+use crate::parser::stmt::{expect_semicolon, expect_token, name_starts_at, parse_block, parse_body, parse_name};
 use crate::span::Span;
 
 /// Parse: if (expr) { stmts } (elseif (expr) { stmts })* (else { stmts })?
@@ -221,19 +221,25 @@ pub fn parse_try(
         expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'catch'")?;
         let mut exception_types = Vec::new();
         loop {
-            let exception_type = match tokens.get(*pos).map(|(t, _)| t) {
-                Some(Token::Identifier(name)) => name.clone(),
-                Some(Token::Self_) => "self".to_string(),
-                Some(Token::Parent) => "parent".to_string(),
-                _ => {
-                    return Err(CompileError::new(
-                        span,
-                        "Expected exception class name in catch clause",
-                    ))
-                }
-            };
-            exception_types.push(exception_type);
-            *pos += 1;
+            if *pos < tokens.len() && tokens[*pos].0 == Token::Self_ {
+                exception_types.push(crate::names::Name::unqualified("self"));
+                *pos += 1;
+            } else if *pos < tokens.len() && tokens[*pos].0 == Token::Parent {
+                exception_types.push(crate::names::Name::unqualified("parent"));
+                *pos += 1;
+            } else if name_starts_at(tokens, *pos) {
+                exception_types.push(parse_name(
+                    tokens,
+                    pos,
+                    span,
+                    "Expected exception class name in catch clause",
+                )?);
+            } else {
+                return Err(CompileError::new(
+                    span,
+                    "Expected exception class name in catch clause",
+                ));
+            }
             if *pos < tokens.len() && tokens[*pos].0 == Token::Pipe {
                 *pos += 1;
                 continue;

@@ -1,6 +1,7 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
+use crate::names::{method_symbol, static_method_symbol};
 use crate::parser::ast::{Expr, StaticReceiver, Visibility};
 use crate::types::PhpType;
 
@@ -113,7 +114,7 @@ fn resolve_instance_method_dispatch(
                 .get(method)
                 .map(String::as_str)
                 .unwrap_or(class_name);
-            Some(format!("_method_{}_{}", impl_class, method))
+            Some(method_symbol(impl_class, method))
         } else {
             None
         }
@@ -222,7 +223,7 @@ pub(super) fn emit_static_method_call(
         StaticReceiver::Parent | StaticReceiver::Self_ | StaticReceiver::Static
     );
     let class_name = match receiver {
-        StaticReceiver::Named(class_name) => class_name.clone(),
+        StaticReceiver::Named(class_name) => class_name.as_str().to_string(),
         StaticReceiver::Self_ | StaticReceiver::Static => match &ctx.current_class {
             Some(class_name) => class_name.clone(),
             None => {
@@ -267,7 +268,7 @@ pub(super) fn emit_static_method_call(
             .get(method)
             .map(String::as_str)
             .unwrap_or(class_name.as_str());
-        Some(format!("_static_{}_{}", impl_class, method))
+        Some(static_method_symbol(impl_class, method))
     } else {
         None
     };
@@ -285,7 +286,7 @@ pub(super) fn emit_static_method_call(
                     .and_then(|impl_info| impl_info.static_methods.get(method))
                     .map(|sig| sig.return_type.clone())
                     .unwrap_or(PhpType::Int),
-                format!("_static_{}_{}", impl_class, method),
+                static_method_symbol(impl_class, method),
                 false,
                 true,
                 static_call && static_slot.is_some(),
@@ -318,7 +319,7 @@ pub(super) fn emit_static_method_call(
                     .and_then(|impl_info| impl_info.methods.get(method))
                     .map(|sig| sig.return_type.clone())
                     .unwrap_or(PhpType::Int),
-                format!("_method_{}_{}", impl_class, method),
+                method_symbol(impl_class, method),
                 true,
                 false,
                 false,

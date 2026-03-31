@@ -89,7 +89,7 @@ pub(super) fn emit_try_stmt(
             let catch_label = ctx.next_label("catch_body");
             let next_catch_label = ctx.next_label("catch_next");
             for (idx, catch_type) in catch_clause.exception_types.iter().enumerate() {
-                let (catch_id, catch_kind) = resolve_catch_match_target(ctx, catch_type);
+                let (catch_id, catch_kind) = resolve_catch_match_target(ctx, catch_type.as_str());
                 let mismatch_label = if idx + 1 == catch_clause.exception_types.len() {
                     next_catch_label.clone()
                 } else {

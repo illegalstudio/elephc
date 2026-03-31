@@ -33,7 +33,8 @@ fn has_includes(stmts: &[Stmt]) -> bool {
         | StmtKind::DoWhile { body, .. }
         | StmtKind::For { body, .. }
         | StmtKind::Foreach { body, .. }
-        | StmtKind::FunctionDecl { body, .. } => has_includes(body),
+        | StmtKind::FunctionDecl { body, .. }
+        | StmtKind::NamespaceBlock { body, .. } => has_includes(body),
         StmtKind::Try { try_body, catches, finally_body } => {
             has_includes(try_body)
                 || catches.iter().any(|catch_clause| has_includes(&catch_clause.body))
@@ -46,6 +47,7 @@ fn has_includes(stmts: &[Stmt]) -> bool {
         }
         StmtKind::ConstDecl { .. } | StmtKind::ListUnpack { .. }
         | StmtKind::Global { .. } | StmtKind::StaticVar { .. } => false,
+        StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. } => false,
         StmtKind::Switch { cases, default, .. } => {
             cases.iter().any(|(_, body)| has_includes(body))
                 || default.as_ref().is_some_and(|b| has_includes(b))
@@ -242,6 +244,17 @@ fn resolve_stmts(
                     stmt.span,
                 ));
             }
+            StmtKind::NamespaceBlock { name, body } => {
+                let body_resolved =
+                    resolve_stmts(body.clone(), base_dir, included, include_chain)?;
+                result.push(Stmt::new(
+                    StmtKind::NamespaceBlock {
+                        name: name.clone(),
+                        body: body_resolved,
+                    },
+                    stmt.span,
+                ));
+            }
             StmtKind::ClassDecl {
                 name,
                 extends,
@@ -272,6 +285,9 @@ fn resolve_stmts(
                     },
                     stmt.span,
                 ));
+            }
+            StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. } => {
+                result.push(stmt);
             }
             StmtKind::InterfaceDecl { name, extends, methods } => {
                 let mut methods_resolved = Vec::new();

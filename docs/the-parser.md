@@ -57,7 +57,7 @@ Things that have a value:
 | `PostIncrement(String)` | `$i++` | Returns old value |
 | `PreDecrement(String)` | `--$i` | |
 | `PostDecrement(String)` | `$i--` | |
-| `FunctionCall { name, args }` | `strlen($s)` | |
+| `FunctionCall { name, args }` | `strlen($s)`, `Tools\fmt($s)`, `\strlen($s)` | Parsed as a structured name so later phases can resolve namespace aliases and fully-qualified names |
 | `ArrayLiteral(Vec<Expr>)` | `[1, 2, 3]`, `[...$arr, 4]` | Indexed array; elements may include `Spread` expressions |
 | `ArrayLiteralAssoc(Vec<(Expr, Expr)>)` | `["a" => 1]` | Associative array |
 | `Match { subject, arms, default }` | `match($x) { 1, 2 => "low", 3 => "high" }` | Match expression (returns a value). `arms` is `Vec<(Vec<Expr>, Expr)>`, so each arm can have multiple comma-separated patterns before `=>`, and `default` is optional (`Option<Box<Expr>>`) |
@@ -68,8 +68,8 @@ Things that have a value:
 | `ClosureCall { var, args }` | `$fn(1, 2)` | Calling a closure stored in a variable |
 | `ExprCall { callee, args }` | `$arr[0](1, 2)` | Calling the result of an expression (e.g., array access returning a callable) |
 | `Spread(Expr)` | `...$arr` | Spread/unpack operator — expands an array into individual arguments or elements |
-| `ConstRef(String)` | `MAX_RETRIES` | Reference to a user-defined constant |
-| `NewObject { class_name, args }` | `new Point(1, 2)` | Object instantiation |
+| `ConstRef(Name)` | `MAX_RETRIES`, `Config\PORT`, `\App\Config\PORT` | Reference to a user-defined constant |
+| `NewObject { class_name, args }` | `new Point(1, 2)`, `new App\Model\User()` | Object instantiation |
 | `PropertyAccess { object, property }` | `$p->x` | Property access via `->` |
 | `MethodCall { object, method, args }` | `$p->move(1, 2)` | Instance method call |
 | `StaticMethodCall { receiver, method, args }` | `Point::origin()`, `self::boot()`, `parent::boot()`, `static::boot()` | Static-style call via `::`, where `receiver` is a named class, `Self_`, `Static`, or `Parent` |
@@ -100,6 +100,10 @@ Things that do something:
 | `Throw(Expr)` | `throw new Exception("boom");` |
 | `Try { try_body, catches, finally_body }` | `try { ... } catch (Exception $e) { ... } finally { ... }` |
 | `ConstDecl { name, value }` | `const MAX = 100;` |
+| `IfDef { symbol, then_body, else_body }` | `ifdef DEBUG { ... } else { ... }` |
+| `NamespaceDecl { name: Option<Name> }` | `namespace App\Core;`, `namespace;` |
+| `NamespaceBlock { name: Option<Name>, body }` | `namespace App\Core { ... }`, `namespace { ... }` |
+| `UseDecl { imports }` | `use App\Lib\Tool;`, `use function App\fn as helper;`, `use Vendor\Pkg\{Thing, Other as Alias};` |
 | `ListUnpack { vars, value }` | `[$a, $b] = [1, 2];` |
 | `Global { vars }` | `global $x, $y;` — declares variables as referencing global storage |
 | `StaticVar { name, init }` | `static $count = 0;` — declares a variable that persists across function calls |
@@ -125,12 +129,14 @@ At statement level, parsing is split between `parser/mod.rs` and `stmt.rs`:
 | `Interface` | Interface declaration |
 | `Trait` | Trait declaration |
 | `Function` | Function declaration |
+| `Namespace` | Namespace declaration |
+| `Use` | Namespace import declaration |
 | `Return` | Return statement |
 | `Throw` | Throw statement |
 | `Echo` / `Print` | Echo/print statement |
 | `If` / `While` / `Do` / `For` / `Foreach` / `Switch` / `Try` | Control-flow statement |
 | `Const` / `Global` / `Static` | Declaration-like statement |
-| `Variable` / `This` / `Identifier` / `Self_` / `Parent` / `Static::...` | Assignment, property write, call, or generic expression statement |
+| `Variable` / `This` / `Identifier` / `Backslash` / `Self_` / `Parent` / `Static::...` | Assignment, property write, call, or generic expression statement |
 
 This is intentionally narrower than full PHP statement syntax. In the current subset, expression statements only enter through the token arms handled by `stmt::parse_stmt()` above; starting a statement with tokens such as `match`, `new`, `fn`, a literal, `(`, or a unary operator still produces an "unexpected token at statement position" parser error unless that construct appears inside another statement form.
 
@@ -154,9 +160,10 @@ NullCoalesce
 | `ClassProperty` | `name`, `visibility`, `readonly`, `default`, `span` | A property declaration inside a class |
 | `ClassMethod` | `name`, `visibility`, `is_static`, `is_abstract`, `has_body`, `params`, `variadic`, `body`, `span` | A method declaration inside a class, trait, or interface |
 | `CatchClause` | `exception_types`, `variable`, `body` | A catch arm. `exception_types` supports both single-type and PHP-style multi-catch (`TypeA | TypeB`), and `variable` is optional for PHP 8-style `catch (Exception)` |
-| `StaticReceiver` | `Named(String)`, `Self_`, `Static`, `Parent` | Left-hand side of `ClassName::method()`, `self::method()`, `static::method()`, and `parent::method()` |
+| `StaticReceiver` | `Named(Name)`, `Self_`, `Static`, `Parent` | Left-hand side of `ClassName::method()`, `self::method()`, `static::method()`, and `parent::method()` |
 | `TraitUse` | `trait_names`, `adaptations`, `span` | A `use TraitA, TraitB { ... }` clause inside a class or trait body |
-| `TraitAdaptation` | `Alias { trait_name: Option<String>, method, alias: Option<String>, visibility: Option<Visibility> }`, `InsteadOf { trait_name: Option<String>, method, instead_of: Vec<String> }` | PHP-style trait conflict resolution and aliasing |
+| `TraitAdaptation` | `Alias { trait_name: Option<Name>, method, alias: Option<String>, visibility: Option<Visibility> }`, `InsteadOf { trait_name: Option<Name>, method, instead_of: Vec<Name> }` | PHP-style trait conflict resolution and aliasing |
+| `UseItem` / `UseKind` | `kind`, `name`, `alias` | Namespace import entries for `use`, `use function`, `use const`, and group-use declarations |
 
 Every AST node carries a `Span` (line + column) from the source, so error messages in later phases can point to the right location.
 
@@ -273,11 +280,11 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `(int)` / `(float)` / ... | Parse inner expr, return `Cast` |
 | `(` | Parse inner expr, expect `)`, return inner expr (and allow a later postfix call like `(expr)(args)`) |
 | `[` | Parse comma-separated exprs, expect `]`, return `ArrayLiteral` |
-| `Identifier` + `(` | Parse as function call with arguments |
-| `Identifier` (no `(`) | Parse as constant reference → `ConstRef` |
+| `Identifier` / `\Identifier` / qualified name + `(` | Parse as function call with arguments |
+| `Identifier` / `\Identifier` / qualified name (no `(`) | Parse as constant reference → `ConstRef` |
 | `function` + `(` | Parse anonymous function (closure) → `Closure` |
 | `fn` + `(` | Parse arrow function → `Closure` (with `is_arrow = true`) |
-| `new` + `Identifier` | Parse object instantiation → `NewObject` |
+| `new` + qualified name | Parse object instantiation → `NewObject` |
 | `$this` | Return `This` node |
 | `...` + expr | Parse spread/unpack → `Spread` |
 | `ptr_cast` + `<Type>` + `(` | Parse pointer cast syntax → `PtrCast` |
@@ -289,7 +296,7 @@ After parsing a prefix, the parser checks for postfix operators:
 - `(` for calling the result of an expression (`ExprCall`)
 - `[` for array access
 - `->` for property access or method call
-- `::` for static method call (when the prefix is an identifier)
+- `::` for static method call (when the prefix is a parsed name)
 
 At statement level, `stmt.rs` also parses `trait` declarations and class/trait-body `use` clauses. That `use` handling is intentionally context-sensitive so it does not interfere with closure capture lists like `function () use ($x) { ... }`.
 
@@ -299,6 +306,7 @@ $arr[$i + 1]     →  ArrayAccess { array: Variable("arr"), index: BinaryOp(Add,
 $p->x            →  PropertyAccess { object: Variable("p"), property: "x" }
 $p->move(1, 2)   →  MethodCall { object: Variable("p"), method: "move", args: [...] }
 Point::origin()  →  StaticMethodCall { receiver: Named("Point"), method: "origin", args: [] }
+\Lib\Factory::make() → StaticMethodCall { receiver: Named("\\Lib\\Factory"), method: "make", args: [] }
 parent::boot()   →  StaticMethodCall { receiver: Parent, method: "boot", args: [] }
 ```
 
@@ -312,6 +320,7 @@ Statement parsing is simpler — after `parse()` has peeled off top-level `exter
 |---|---|
 | `Echo` / `Print` | `Echo` statement — parse expression, expect `;` |
 | `Throw` | `Throw` statement — parse one expression, expect `;` |
+| `IfDef` | Build-time conditional statement |
 | `Variable` | Assignment, compound assignment, array assign/push, or expression statement |
 | `If` | `If` with optional `elseif` chain and `else` |
 | `Try` | `Try` with one or more `catch` clauses and optional `finally` |
@@ -330,6 +339,8 @@ Statement parsing is simpler — after `parse()` has peeled off top-level `exter
 | `Continue` | Continue statement |
 | `Include`/`Require` | Include statement (path must be a string literal) |
 | `Const` | Constant declaration (`const NAME = value;`) |
+| `Namespace` | Namespace declaration (`namespace App\Core;` or `namespace App\Core { ... }`) |
+| `Use` | Namespace import declaration (`use Foo\Bar;`, `use function Foo\bar as baz;`) |
 | `Global` | Global variable declaration (`global $x, $y;`) |
 | `Static` | Static variable declaration (`static $count = 0;`) |
 | `[` | List unpacking (`[$a, $b] = expr;`) |
@@ -369,10 +380,10 @@ Each `catch` becomes a `CatchClause { exception_types, variable, body }`. `excep
 
 ## How it connects
 
-The parser's output — `Program` (which is `Vec<Stmt>`) — first feeds into elephc's build-time conditional pass for `ifdef`, then into the [resolver](how-elephc-works.md), and then the [type checker](the-type-checker.md):
+The parser's output — `Program` (which is `Vec<Stmt>`) — first feeds into elephc's build-time conditional pass for `ifdef`, then into the [resolver](how-elephc-works.md), then into the dedicated name-resolution pass that canonicalizes namespace-aware names, and finally into the [type checker](the-type-checker.md):
 
 ```
-[(Token, Span), ...] → Parser → Program (Vec<Stmt>) → Conditional → Resolver → Type Checker
+[(Token, Span), ...] → Parser → Program (Vec<Stmt>) → Conditional → Resolver → NameResolver → Type Checker
 ```
 
 ---

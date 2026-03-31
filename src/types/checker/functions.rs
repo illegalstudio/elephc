@@ -281,7 +281,12 @@ impl Checker {
         Some(widest)
     }
 
-    fn collect_return_types(&mut self, stmt: &Stmt, env: &TypeEnv, types: &mut Vec<PhpType>) {
+    pub(crate) fn collect_return_types(
+        &mut self,
+        stmt: &Stmt,
+        env: &TypeEnv,
+        types: &mut Vec<PhpType>,
+    ) {
         match &stmt.kind {
             StmtKind::Return(Some(expr)) => {
                 if let Ok(ty) = self.infer_type(expr, env) {

@@ -1036,7 +1036,7 @@ Callback rules:
 | `call_user_func()` | `call_user_func("name", ...): mixed` | Call a function by name with arguments |
 | `call_user_func_array()` | `call_user_func_array("name", $args): mixed` | Call a function with arguments from an array |
 | `function_exists()` | `function_exists("name"): bool` | Check if a function is defined |
-> **Note:** Callback arguments can be string literals containing the function name (e.g., `"double"`), anonymous functions, or arrow functions. The checker has the strongest callback-shape awareness for string-literal function names; closure support is documented separately below, including the `use (...)` limitation.
+> **Note:** Callback arguments can be string literals containing the function name (e.g., `"double"`), anonymous functions, or arrow functions. String-literal callback names are resolved with the same namespace rules as ordinary function calls, including the current namespace and `use function` aliases. Closure support is documented separately below, including the `use (...)` limitation.
 
 > **Type checker note:** `array_push()` only accepts indexed arrays as its first argument, and `array_column()` requires an indexed array whose elements are associative arrays.
 
@@ -1362,6 +1362,72 @@ Both `include 'f';` and `include('f');` syntax are supported.
 **Limitations:**
 - Path must be a string literal (no variables or expressions)
 - Included files must start with `<?php`
+
+## Namespaces
+
+elephc supports PHP-style namespaces for functions, classes, interfaces, traits, and constants.
+
+### Declaring a namespace
+
+You can declare a file-wide namespace with a semicolon:
+
+```php
+<?php
+namespace App\Core;
+
+function version() {
+    return "1.0";
+}
+```
+
+You can also use block form:
+
+```php
+<?php
+namespace App\Core {
+    class Clock {
+        public static function now() {
+            return "tick";
+        }
+    }
+}
+```
+
+### Importing names with `use`
+
+```php
+<?php
+namespace App\Http;
+
+use App\Support\Response;
+use function App\Support\render as render_page;
+use const App\Support\STATUS_OK;
+
+echo STATUS_OK;
+$resp = new Response();
+echo render_page("home");
+```
+
+Supported import forms:
+
+- `use Foo\Bar;`
+- `use Foo\Bar as Baz;`
+- `use function Foo\bar;`
+- `use function Foo\bar as baz;`
+- `use const Foo\BAR;`
+- group use: `use Vendor\Pkg\{Thing, Other as Alias};`
+- mixed group use kinds: `use Vendor\Pkg\{function render, const VERSION, Tool};`
+
+### Name resolution rules
+
+- Unqualified class-like names (`Thing`) honor `use` aliases, otherwise resolve relative to the current namespace.
+- Unqualified function and constant names first honor `use function` / `use const` aliases, then try the current namespace, then fall back to the global symbol if no namespaced declaration exists.
+- Fully-qualified names like `\Lib\Tool` always refer to the global canonical name directly.
+- Included files keep their own declared namespace. `require "lib.php";` does not force the included file into the caller's namespace.
+
+### Namespaces and callbacks
+
+String-literal callback names passed to namespace-aware builtins such as `function_exists()`, `call_user_func()`, `call_user_func_array()`, `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, and `uasort()` follow the same resolution rules as normal function calls.
 
 ### Known limitations in current JSON / regex / date support
 
@@ -1741,7 +1807,6 @@ echo $p->magnitude(); // method call
 - No enums
 - No `eval()`
 - No dynamic `include`/`require` (path must be a string literal)
-- No namespaces
 - No generators/yield
 - No fibers
 - No attributes

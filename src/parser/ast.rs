@@ -1,3 +1,4 @@
+use crate::names::Name;
 use crate::span::Span;
 
 // --- Expressions ---
@@ -34,7 +35,7 @@ pub enum ExprKind {
     PreDecrement(String),
     PostDecrement(String),
     FunctionCall {
-        name: String,
+        name: Name,
         args: Vec<Expr>,
     },
     ArrayLiteral(Vec<Expr>),
@@ -73,9 +74,9 @@ pub enum ExprKind {
         callee: Box<Expr>,
         args: Vec<Expr>,
     },
-    ConstRef(String),
+    ConstRef(Name),
     NewObject {
-        class_name: String,
+        class_name: Name,
         args: Vec<Expr>,
     },
     PropertyAccess {
@@ -110,7 +111,7 @@ pub enum CastType {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum StaticReceiver {
-    Named(String),
+    Named(Name),
     Self_,
     Static,
     Parent,
@@ -200,9 +201,23 @@ pub struct Stmt {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CatchClause {
-    pub exception_types: Vec<String>,
+    pub exception_types: Vec<Name>,
     pub variable: Option<String>,
     pub body: Vec<Stmt>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UseKind {
+    Class,
+    Function,
+    Const,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UseItem {
+    pub kind: UseKind,
+    pub name: Name,
+    pub alias: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -271,6 +286,16 @@ pub enum StmtKind {
     Break,
     Continue,
     ExprStmt(Expr),
+    NamespaceDecl {
+        name: Option<Name>,
+    },
+    NamespaceBlock {
+        name: Option<Name>,
+        body: Vec<Stmt>,
+    },
+    UseDecl {
+        imports: Vec<UseItem>,
+    },
     FunctionDecl {
         name: String,
         params: Vec<(String, Option<Expr>, bool)>,
@@ -295,8 +320,8 @@ pub enum StmtKind {
     },
     ClassDecl {
         name: String,
-        extends: Option<String>,
-        implements: Vec<String>,
+        extends: Option<Name>,
+        implements: Vec<Name>,
         is_abstract: bool,
         trait_uses: Vec<TraitUse>,
         properties: Vec<ClassProperty>,
@@ -304,7 +329,7 @@ pub enum StmtKind {
     },
     InterfaceDecl {
         name: String,
-        extends: Vec<String>,
+        extends: Vec<Name>,
         methods: Vec<ClassMethod>,
     },
     TraitDecl {
@@ -403,7 +428,7 @@ pub enum Visibility {
 
 #[derive(Debug, Clone)]
 pub struct TraitUse {
-    pub trait_names: Vec<String>,
+    pub trait_names: Vec<Name>,
     pub adaptations: Vec<TraitAdaptation>,
     // Used for trait-flattening diagnostics.
     pub span: Span,
@@ -418,15 +443,15 @@ impl PartialEq for TraitUse {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TraitAdaptation {
     Alias {
-        trait_name: Option<String>,
+        trait_name: Option<Name>,
         method: String,
         alias: Option<String>,
         visibility: Option<Visibility>,
     },
     InsteadOf {
-        trait_name: Option<String>,
+        trait_name: Option<Name>,
         method: String,
-        instead_of: Vec<String>,
+        instead_of: Vec<Name>,
     },
 }
 

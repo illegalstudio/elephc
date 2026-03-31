@@ -11,6 +11,7 @@ mod stmt;
 
 use std::collections::{HashMap, HashSet};
 
+use crate::names::{method_symbol, static_method_symbol};
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
 use crate::types::{
     ClassInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PhpType, TypeEnv,
@@ -74,7 +75,7 @@ pub fn generate(
                     continue;
                 }
                 let (label, sig) = if method.is_static {
-                    let label = format!("_static_{}_{}", class_name, method.name);
+                    let label = static_method_symbol(class_name, &method.name);
                     // Use param types from ClassInfo sig (set by type checker)
                     let class_static_sig = class_info.static_methods.get(&method.name);
                     let mut params: Vec<(String, PhpType)> =
@@ -97,7 +98,7 @@ pub fn generate(
                         .unwrap_or(PhpType::Int);
                     (label, FunctionSig { params, defaults, return_type, ref_params, variadic: method.variadic.clone() })
                 } else {
-                    let label = format!("_method_{}_{}", class_name, method.name);
+                    let label = method_symbol(class_name, &method.name);
                     // $this is the first parameter
                     let mut params: Vec<(String, PhpType)> = vec![
                         ("this".to_string(), PhpType::Object(class_name.clone())),
@@ -362,7 +363,7 @@ fn collect_constants(program: &Program) -> HashMap<String, (ExprKind, PhpType)> 
             }
             StmtKind::ExprStmt(expr) => {
                 if let ExprKind::FunctionCall { name, args } = &expr.kind {
-                    if name == "define" && args.len() == 2 {
+                    if name.as_str() == "define" && args.len() == 2 {
                         if let ExprKind::StringLiteral(const_name) = &args[0].kind {
                             let ty = match &args[1].kind {
                                 ExprKind::IntLiteral(_) => PhpType::Int,

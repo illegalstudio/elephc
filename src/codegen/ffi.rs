@@ -2,6 +2,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::names::function_symbol;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
@@ -48,7 +49,7 @@ pub fn emit_extern_call(
         let actual_ty = if param_ty == PhpType::Callable {
             match &arg.kind {
                 ExprKind::StringLiteral(func_name) => {
-                    let label = format!("_fn_{}", func_name);
+                    let label = function_symbol(func_name);
                     emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page address of callback target
                     emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); //resolve callback function address
                     PhpType::Callable

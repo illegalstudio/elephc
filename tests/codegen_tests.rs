@@ -378,6 +378,7 @@ fn compile_source_to_asm_with_defines(
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
     let ast = elephc::conditional::apply(ast, defines);
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
+    let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let check_result = elephc::types::check(&resolved).expect("type check failed");
     let asm = elephc::codegen::generate(
         &resolved,
@@ -684,6 +685,7 @@ fn compile_and_run_files_with_defines(
     let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();
     let ast = elephc::conditional::apply(ast, &define_set);
     let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
+    let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let check_result = elephc::types::check(&resolved).expect("type check failed");
     let asm = elephc::codegen::generate(
         &resolved,
@@ -744,6 +746,7 @@ fn compile_files_fails_with_defines(
         let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();
         let ast = elephc::conditional::apply(ast, &define_set);
         let resolved = elephc::resolver::resolve(ast, base_dir)?;
+        let resolved = elephc::name_resolver::resolve(resolved)?;
         elephc::types::check(&resolved)?;
         Ok(())
     })();
@@ -873,6 +876,121 @@ echo "safe";
     assert_eq!(out, "safe");
 }
 
+#[test]
+fn test_namespace_use_function_and_global_builtin_resolution() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo\Util;
+function render($value) { echo $value; }
+
+namespace Demo\App;
+use function Demo\Util\render as paint;
+
+paint("A");
+echo strlen("bc");
+"#,
+    );
+    assert_eq!(out, "A2");
+}
+
+#[test]
+fn test_namespace_include_preserves_class_namespace_context() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+namespace Demo\App;
+require "lib.php";
+
+use Demo\Lib\User;
+
+$user = new User();
+echo $user->label();
+"#,
+            ),
+            (
+                "lib.php",
+                r#"<?php
+namespace Demo\Lib;
+
+class User {
+    public function label() {
+        return "ok";
+    }
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_namespace_use_const_and_fully_qualified_constant_resolution() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo\Values;
+const ANSWER = 42;
+
+namespace Demo\App;
+use const Demo\Values\ANSWER;
+
+echo ANSWER;
+echo \Demo\Values\ANSWER;
+"#,
+    );
+    assert_eq!(out, "4242");
+}
+
+#[test]
+fn test_namespace_callback_string_literals_resolve_current_namespace() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo\Callbacks;
+
+function triple($value) {
+    return $value * 3;
+}
+
+echo function_exists("triple");
+echo call_user_func("triple", 4);
+"#,
+    );
+    assert_eq!(out, "112");
+}
+
+#[test]
+fn test_namespace_group_use_resolves_class_function_and_const() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo\Lib;
+
+const ANSWER = 7;
+
+function render($value) {
+    return "<" . $value . ">";
+}
+
+class User {
+    public static function label() {
+        return "ok";
+    }
+}
+
+namespace Demo\App;
+
+use Demo\Lib\{User, function render as paint, const ANSWER};
+
+echo User::label();
+echo ANSWER;
+echo paint("x");
+"#,
+    );
+    assert_eq!(out, "ok7<x>");
+}
+
 /// Compile a PHP source string and run with piped stdin data.
 fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
@@ -884,6 +1002,7 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
     let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
+    let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let check_result = elephc::types::check(&resolved).expect("type check failed");
     let asm = elephc::codegen::generate(
         &resolved,
@@ -952,6 +1071,7 @@ fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
     let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
+    let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let check_result = elephc::types::check(&resolved).expect("type check failed");
     let asm = elephc::codegen::generate(
         &resolved,

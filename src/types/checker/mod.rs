@@ -35,6 +35,12 @@ pub fn infer_return_type_syntactic(body: &[Stmt]) -> PhpType {
 
 fn collect_return_types_syntactic(stmt: &Stmt, types: &mut Vec<PhpType>) {
     match &stmt.kind {
+        StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. } => {}
+        StmtKind::NamespaceBlock { body, .. } => {
+            for inner in body {
+                collect_return_types_syntactic(inner, types);
+            }
+        }
         StmtKind::Return(Some(expr)) => {
             types.push(infer_expr_type_syntactic(expr));
         }
@@ -196,7 +202,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                 then_ty
             }
         }
-        ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.clone()),
+        ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.as_str().to_string()),
         ExprKind::This => PhpType::Object(String::new()),
         ExprKind::PtrCast { target_type, .. } => PhpType::Pointer(Some(target_type.clone())),
         ExprKind::BinaryOp { left, op, right } => match op {
@@ -1355,7 +1361,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 name.clone(),
                 InterfaceDeclInfo {
                     name: name.clone(),
-                    extends: extends.clone(),
+                    extends: extends.iter().map(|name| name.as_str().to_string()).collect(),
                     methods: methods.clone(),
                     span: stmt.span,
                 },
@@ -1736,10 +1742,10 @@ impl Checker {
 
     fn resolve_catch_type_name(
         &self,
-        raw_name: &str,
+        raw_name: &crate::names::Name,
         span: crate::span::Span,
     ) -> Result<String, CompileError> {
-        match raw_name {
+        match raw_name.as_str() {
             "self" => self.current_class.clone().ok_or_else(|| {
                 CompileError::new(span, "Cannot use self in catch outside of a class context")
             }),
@@ -2283,6 +2289,12 @@ impl Checker {
             StmtKind::IfDef { .. } => Err(CompileError::new(
                 stmt.span,
                 "Unresolved ifdef statement",
+            )),
+            StmtKind::NamespaceDecl { .. }
+            | StmtKind::NamespaceBlock { .. }
+            | StmtKind::UseDecl { .. } => Err(CompileError::new(
+                stmt.span,
+                "Unresolved namespace/use statement",
             )),
             StmtKind::Echo(expr) => {
                 self.infer_type(expr, env)?;
@@ -2892,15 +2904,15 @@ impl Checker {
                 })
             }
             ExprKind::FunctionCall { name, args } => {
-                let name = name.clone();
+                let name = name.as_str().to_string();
                 let args = args.clone();
-                if self.extern_functions.contains_key(&name) {
-                    return self.check_extern_function_call(&name, &args, expr.span, env);
+                if self.extern_functions.contains_key(name.as_str()) {
+                    return self.check_extern_function_call(name.as_str(), &args, expr.span, env);
                 }
-                if let Some(ty) = self.check_builtin(&name, &args, expr.span, env)? {
+                if let Some(ty) = self.check_builtin(name.as_str(), &args, expr.span, env)? {
                     return Ok(ty);
                 }
-                self.check_function_call(&name, &args, expr.span, env)
+                self.check_function_call(name.as_str(), &args, expr.span, env)
             }
             ExprKind::BitNot(inner) => {
                 let ty = self.infer_type(inner, env)?;
@@ -2917,7 +2929,7 @@ impl Checker {
                 let dt = self.infer_type(default, env)?;
                 Ok(wider_type_syntactic(&vt, &dt))
             }
-            ExprKind::ConstRef(name) => self.constants.get(name).cloned().ok_or_else(|| {
+            ExprKind::ConstRef(name) => self.constants.get(name.as_str()).cloned().ok_or_else(|| {
                 CompileError::new(expr.span, &format!("Undefined constant: {}", name))
             }),
             ExprKind::Closure {
@@ -3136,19 +3148,20 @@ impl Checker {
                 }
             }
             ExprKind::NewObject { class_name, args } => {
-                if self.interfaces.contains_key(class_name) {
+                let class_name = class_name.as_str().to_string();
+                if self.interfaces.contains_key(class_name.as_str()) {
                     return Err(CompileError::new(
                         expr.span,
                         &format!("Cannot instantiate interface: {}", class_name),
                     ));
                 }
-                if !self.classes.contains_key(class_name) {
+                if !self.classes.contains_key(class_name.as_str()) {
                     return Err(CompileError::new(
                         expr.span,
                         &format!("Undefined class: {}", class_name),
                     ));
                 }
-                if let Some(class_info) = self.classes.get(class_name) {
+                if let Some(class_info) = self.classes.get(class_name.as_str()) {
                     if class_info.is_abstract {
                         return Err(CompileError::new(
                             expr.span,
@@ -3177,7 +3190,7 @@ impl Checker {
                 // Infer arg types and propagate to property types via constructor mapping
                 let param_to_prop = self
                     .classes
-                    .get(class_name)
+                    .get(class_name.as_str())
                     .map(|c| c.constructor_param_to_prop.clone())
                     .unwrap_or_default();
                 for (i, arg) in args.iter().enumerate() {
@@ -3185,10 +3198,10 @@ impl Checker {
                     // If this arg maps to a property, keep inherited property metadata and
                     // inherited constructor signatures in sync with the specialized arg type.
                     if param_to_prop.get(i).is_some_and(|mapped| mapped.is_some()) {
-                        self.propagate_constructor_arg_type(class_name, i, &arg_ty);
+                        self.propagate_constructor_arg_type(class_name.as_str(), i, &arg_ty);
                     }
                 }
-                Ok(PhpType::Object(class_name.clone()))
+                Ok(PhpType::Object(class_name))
             }
             ExprKind::PropertyAccess { object, property } => {
                 let obj_ty = self.infer_type(object, env)?;
@@ -3324,7 +3337,7 @@ impl Checker {
                 let parent_call = matches!(receiver, StaticReceiver::Parent);
                 let self_call = matches!(receiver, StaticReceiver::Self_);
                 let resolved_class_name = match receiver {
-                    StaticReceiver::Named(class_name) => class_name.clone(),
+                    StaticReceiver::Named(class_name) => class_name.as_str().to_string(),
                     StaticReceiver::Self_ => {
                         self.current_class.as_ref().cloned().ok_or_else(|| {
                             CompileError::new(
@@ -3553,6 +3566,12 @@ impl Checker {
         return_types: &mut Vec<PhpType>,
     ) {
         match &stmt.kind {
+            StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. } => {}
+            StmtKind::NamespaceBlock { body, .. } => {
+                for inner in body {
+                    self.collect_return_types(inner, env, return_types);
+                }
+            }
             StmtKind::Return(Some(expr)) => {
                 let ty = self
                     .infer_type(expr, env)

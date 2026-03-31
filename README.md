@@ -25,7 +25,7 @@ Don't expect to take any existing PHP project and magically compile it. There's 
 
 ### What you can expect
 
-You can write a PHP file using only the constructs documented in this project's [language reference](docs/language-reference.md). You can include other files with `include`, `require`, `include_once`, and `require_once`, compose classes with traits, extend concrete classes with `extends`, implement interfaces, throw and catch built-in or custom exceptions, and rely on PHP-style copy-on-write arrays so by-value array assignments stay shared until the first write. Associative arrays also preserve PHP insertion order for `foreach`, `array_keys()`, `array_values()`, `array_search()`, and `json_encode()`.
+You can write a PHP file using only the constructs documented in this project's [language reference](docs/language-reference.md). You can include other files with `include`, `require`, `include_once`, and `require_once`, organize code with PHP-style `namespace` / `use` imports, compose classes with traits, extend concrete classes with `extends`, implement interfaces, throw and catch built-in or custom exceptions, and rely on PHP-style copy-on-write arrays so by-value array assignments stay shared until the first write. Associative arrays also preserve PHP insertion order for `foreach`, `array_keys()`, `array_values()`, `array_search()`, and `json_encode()`.
 
 Then watch your code run at the speed of light after running:
 
@@ -202,6 +202,7 @@ if ($x === 3) {
 | Closures / Arrow | `$fn = function($x) use ($y) { return $x * $y; };`, `fn($x) => $x * 2` |
 | FFI declarations | `extern function atoi(string $s): int;`, `extern "System" { function malloc(int $n): ptr; }`, `extern global ptr $environ;`, `extern class Point { public int $x; }` |
 | Constants | `const MAX = 100;`, `define("PI", 3.14)` |
+| Namespaces / Imports | `namespace App\Core;`, `use App\Lib\Tool;`, `use function App\fmt as paint;` |
 | List unpacking | `[$a, $b] = [1, 2];` |
 | Include/Require | `include 'file.php';`, `require_once 'lib.php';` |
 | Classes | `abstract class Foo extends Base implements Named { public readonly $id; protected $x; private $y; abstract public function name(); }` |
@@ -233,7 +234,7 @@ User-defined constants are also supported via `const NAME = value;` and `define(
 ## How it works
 
 ```
-PHP source → Lexer → Parser (AST) → Conditional (ifdef/--define) → Resolver (include) → Type Checker → Codegen → as + ld → Mach-O binary
+PHP source → Lexer → Parser (AST) → Conditional (ifdef/--define) → Resolver (include) → NameResolver (namespaces/use/FQNs) → Type Checker → Codegen → as + ld → Mach-O binary
 ```
 
 The compiler emits human-readable ARM64 assembly. You can inspect the `.s` file to see exactly what your PHP becomes:
@@ -280,6 +281,8 @@ src/
 ├── span.rs              # Source position tracking (line, col)
 ├── conditional.rs       # Build-time `ifdef` pass driven by --define
 ├── resolver.rs          # Include/require file resolution
+├── names.rs             # Qualified/FQN name model + symbol mangling helpers
+├── name_resolver.rs     # Namespace/use resolution to canonical names
 │
 ├── lexer/               # Source text → token stream
 │   ├── token.rs         # Token enum
@@ -326,7 +329,8 @@ src/
 │   └── runtime/         # ARM64 runtime routines (one file per language/runtime helper)
 │       ├── strings/     # itoa, concat, ftoa, strpos, str_replace, ...
 │       ├── arrays/      # heap_alloc, array_new, array_push, sort, ...
-│       ├── exceptions.rs # setjmp/longjmp-based exception helpers
+│       ├── exceptions.rs # exception runtime orchestration / re-exports
+│       ├── exceptions/  # setjmp/longjmp-based exception helpers
 │       ├── io/          # fopen, fclose, fread, fwrite, file_ops, ...
 │       ├── pointers/    # ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str
 │       └── system/      # build_argv, time, getenv, shell_exec
@@ -346,7 +350,7 @@ ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 
 The `docs/` directory is a **complete wiki** covering every aspect of the compiler — from what a compiler is, to how each phase works, to the ARM64 instruction set. If you're new to compilers or assembly, **start from the top and work your way down**.
 
-For runnable language samples, start with `examples/classes`, `examples/inheritance`, `examples/interfaces`, `examples/traits`, `examples/exceptions`, `examples/magic-methods`, `examples/ifdef`, `examples/arrays`, `examples/assoc-arrays`, `examples/cow`, `examples/closures`, and `examples/ffi-memory`.
+For runnable language samples, start with `examples/classes`, `examples/inheritance`, `examples/interfaces`, `examples/traits`, `examples/exceptions`, `examples/magic-methods`, `examples/namespaces`, `examples/ifdef`, `examples/arrays`, `examples/assoc-arrays`, `examples/cow`, `examples/closures`, and `examples/ffi-memory`.
 
 | Guide | What you'll learn |
 |---|---|

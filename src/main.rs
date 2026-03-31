@@ -2,6 +2,8 @@ mod codegen;
 mod conditional;
 mod errors;
 mod lexer;
+mod names;
+mod name_resolver;
 mod parser;
 mod resolver;
 mod span;
@@ -165,6 +167,14 @@ fn main() {
     let parsed = conditional::apply(parsed, &defines);
 
     let ast = match resolver::resolve(parsed, parent) {
+        Ok(resolved) => resolved,
+        Err(e) => {
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+
+    let ast = match name_resolver::resolve(ast) {
         Ok(resolved) => resolved,
         Err(e) => {
             errors::report(&e);

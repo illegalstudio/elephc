@@ -4,6 +4,7 @@ use super::context::{Context, HeapOwnership};
 use super::data_section::DataSection;
 use super::emit::Emitter;
 use super::stmt;
+use crate::names::{function_epilogue_symbol, function_symbol};
 use crate::parser::ast::{ExprKind, StmtKind};
 use crate::types::{ClassInfo, FunctionSig, InterfaceInfo, PhpType};
 
@@ -21,8 +22,8 @@ pub fn emit_function(
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: Option<&HashMap<String, ClassInfo>>,
 ) {
-    let label = format!("_fn_{}", name);
-    let epilogue_label = format!("_fn_{}_epilogue", name);
+    let label = function_symbol(name);
+    let epilogue_label = function_epilogue_symbol(name);
     emit_function_with_label(
         emitter, data, &label, &epilogue_label, sig, body,
         all_functions, constants, all_global_var_names, all_static_vars,
@@ -770,7 +771,11 @@ pub fn collect_local_vars(
                 for catch_clause in catches {
                     let catch_type_name = resolve_codegen_catch_type_name(
                         ctx,
-                        catch_clause.exception_types.first().map(String::as_str).unwrap_or("Throwable"),
+                        catch_clause
+                            .exception_types
+                            .first()
+                            .map(|name| name.as_str())
+                            .unwrap_or("Throwable"),
                     );
                     if let Some(variable) = &catch_clause.variable {
                         if !ctx.variables.contains_key(variable) {
@@ -1035,9 +1040,13 @@ fn infer_local_type(
                 | "array_map" | "array_filter" | "range" | "array_rand"
                 | "sscanf" | "fgetcsv" | "preg_split" => {
                     // Try to infer element type from arguments
-                    if name == "explode" || name == "str_split" || name == "file"
-                        || name == "scandir" || name == "glob" || name == "fgetcsv"
-                        || name == "preg_split"
+                    if name.as_str() == "explode"
+                        || name.as_str() == "str_split"
+                        || name.as_str() == "file"
+                        || name.as_str() == "scandir"
+                        || name.as_str() == "glob"
+                        || name.as_str() == "fgetcsv"
+                        || name.as_str() == "preg_split"
                     {
                         PhpType::Array(Box::new(PhpType::Str))
                     } else if !args.is_empty() {
@@ -1102,7 +1111,7 @@ fn infer_local_type(
                 // User-defined functions — check signature if available
                 _ => {
                     if let Some(c) = ctx {
-                        if let Some(fn_sig) = c.functions.get(name) {
+                        if let Some(fn_sig) = c.functions.get(name.as_str()) {
                             return fn_sig.return_type.clone();
                         }
                     }
@@ -1154,7 +1163,7 @@ fn infer_local_type(
         }
         ExprKind::ConstRef(_) => PhpType::Int, // constants resolved at emit time
         ExprKind::Spread(inner) => infer_local_type(inner, sig, ctx),
-        ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.clone()),
+        ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.as_str().to_string()),
         ExprKind::PropertyAccess { object, property } => {
             if let Some(c) = ctx {
                 let obj_ty = infer_local_type(object, sig, Some(c));
@@ -1194,11 +1203,13 @@ fn infer_local_type(
         ExprKind::StaticMethodCall { receiver, method, .. } => {
             if let Some(c) = ctx {
                 let class_name = match receiver {
-                    crate::parser::ast::StaticReceiver::Named(class_name) => class_name,
+                    crate::parser::ast::StaticReceiver::Named(class_name) => {
+                        class_name.as_str().to_string()
+                    }
                     crate::parser::ast::StaticReceiver::Self_
                     | crate::parser::ast::StaticReceiver::Static => {
                         if let Some(current_class) = &c.current_class {
-                            current_class
+                            current_class.clone()
                         } else {
                             return PhpType::Int;
                         }
@@ -1208,7 +1219,7 @@ fn infer_local_type(
                             if let Some(parent_name) =
                                 c.classes.get(current_class).and_then(|ci| ci.parent.as_ref())
                             {
-                                parent_name
+                                parent_name.clone()
                             } else {
                                 return PhpType::Int;
                             }
@@ -1217,7 +1228,7 @@ fn infer_local_type(
                         }
                     }
                 };
-                if let Some(ci) = c.classes.get(class_name) {
+                if let Some(ci) = c.classes.get(&class_name) {
                     if let Some(msig) = ci.static_methods.get(method) {
                         return msig.return_type.clone();
                     }

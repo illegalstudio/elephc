@@ -345,6 +345,7 @@ pub fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
         "STDERR" => Ok(Token::Stderr),
         "fn" => Ok(Token::Fn),
         "use" => Ok(Token::Use),
+        "namespace" => Ok(Token::Namespace),
         "const" => Ok(Token::Const),
         "global" => Ok(Token::Global),
         "static" => Ok(Token::Static),

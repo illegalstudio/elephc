@@ -3,6 +3,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::names::function_symbol;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
@@ -45,7 +46,7 @@ pub fn emit(
             ExprKind::StringLiteral(name) => name.clone(),
             _ => panic!("array_filter() callback must be a string literal, closure, or callable variable"),
         };
-        let label = format!("_fn_{}", func_name);
+        let label = function_symbol(&func_name);
         emitter.instruction(&format!("adrp x19, {}@PAGE", label));              // load page address of callback function
         emitter.instruction(&format!("add x19, x19, {}@PAGEOFF", label));       // resolve full address of callback function
     }

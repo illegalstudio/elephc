@@ -95,6 +95,7 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
     match ch {
         ';' => { cursor.advance(); Ok(Token::Semicolon) }
         ',' => { cursor.advance(); Ok(Token::Comma) }
+        '\\' => { cursor.advance(); Ok(Token::Backslash) }
         '?' => {
             cursor.advance();
             if cursor.peek() == Some('?') { cursor.advance(); Ok(Token::QuestionQuestion) }

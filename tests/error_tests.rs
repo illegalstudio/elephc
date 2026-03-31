@@ -13,6 +13,7 @@ fn check_source_with_defines(src: &str, defines: &[&str]) -> Result<(), String> 
     let ast = parse(&tokens).map_err(|e| e.message.clone())?;
     let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();
     let ast = elephc::conditional::apply(ast, &define_set);
+    let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
     types::check(&ast).map_err(|e| e.message.clone())?;
     Ok(())
 }
@@ -210,6 +211,14 @@ fn test_error_catch_requires_throwable_type() {
     expect_error(
         "<?php class PlainObject {} try { throw new Exception(); } catch (PlainObject $e) { echo 2; }",
         "Catch type must extend or implement Throwable: PlainObject",
+    );
+}
+
+#[test]
+fn test_error_duplicate_use_alias_is_rejected() {
+    expect_error(
+        "<?php namespace App; use Lib\\One as Tool; use Lib\\Two as Tool; echo 1;",
+        "Duplicate import alias: Tool",
     );
 }
 
@@ -2131,6 +2140,11 @@ fn test_error_ptr_is_null_wrong_args() {
         "<?php ptr_is_null();",
         "ptr_is_null() takes exactly 1 argument",
     );
+}
+
+#[test]
+fn test_error_is_null_wrong_args() {
+    expect_error("<?php is_null();", "is_null() takes exactly 1 argument");
 }
 
 #[test]
