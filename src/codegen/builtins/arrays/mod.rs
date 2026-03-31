@@ -33,6 +33,8 @@ mod array_values;
 mod array_walk;
 mod arsort;
 mod asort;
+mod buffer_free;
+mod buffer_len;
 mod call_user_func;
 mod call_user_func_array;
 mod count;
@@ -112,6 +114,8 @@ pub fn emit(
         "array_filter" => array_filter::emit(name, args, emitter, ctx, data),
         "array_reduce" => array_reduce::emit(name, args, emitter, ctx, data),
         "array_walk" => array_walk::emit(name, args, emitter, ctx, data),
+        "buffer_free" => buffer_free::emit(name, args, emitter, ctx, data),
+        "buffer_len" => buffer_len::emit(name, args, emitter, ctx, data),
         "usort" => usort::emit(name, args, emitter, ctx, data),
         "uksort" => uksort::emit(name, args, emitter, ctx, data),
         "uasort" => uasort::emit(name, args, emitter, ctx, data),

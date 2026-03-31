@@ -223,7 +223,7 @@ pub fn emit(
         }
         PhpType::Callable => emit_var_dump_callable(emitter, data),
         PhpType::Object(class_name) => emit_var_dump_object_name(emitter, data, class_name),
-        PhpType::Pointer(_) => {
+        PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_) => {
             // -- print pointer as hex address followed by newline --
             emitter.instruction("bl __rt_ptoa");                                // x0 → x1=ptr, x2=len
             emitter.instruction("mov x0, #1");                                  // fd = stdout

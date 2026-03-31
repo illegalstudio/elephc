@@ -153,8 +153,10 @@ pub(super) fn emit_property_assign_stmt(
         | PhpType::Mixed
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
+        | PhpType::Buffer(_)
         | PhpType::Callable
         | PhpType::Object(_)
+        | PhpType::Packed(_)
         | PhpType::Pointer(_) => {
             emitter.instruction("str x0, [sp, #-16]!");                         // save value on stack
         }
@@ -221,6 +223,23 @@ pub(super) fn emit_property_assign_stmt(
             };
             (class_name.clone(), field.offset, field.php_type, true)
         }
+        PhpType::Pointer(Some(class_name)) if ctx.packed_classes.contains_key(class_name) => {
+            let class_info = match ctx.packed_classes.get(class_name).cloned() {
+                Some(c) => c,
+                None => {
+                    emitter.comment(&format!("WARNING: undefined packed class {}", class_name));
+                    return;
+                }
+            };
+            let field = match class_info.fields.iter().find(|field| field.name == property) {
+                Some(field) => field.clone(),
+                None => {
+                    emitter.comment(&format!("WARNING: undefined packed field {}", property));
+                    return;
+                }
+            };
+            (class_name.clone(), field.offset, field.php_type, true)
+        }
         _ => {
             emitter.comment("WARNING: property assign on non-object");
             return;
@@ -251,7 +270,12 @@ pub(super) fn emit_property_assign_stmt(
     }
 
     match &val_ty {
-        PhpType::Bool | PhpType::Int | PhpType::Callable | PhpType::Pointer(_) => {
+        PhpType::Bool
+        | PhpType::Int
+        | PhpType::Callable
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_)
+        | PhpType::Packed(_) => {
             emitter.instruction("ldr x10, [sp], #16");                          // pop saved value
             emitter.instruction(&format!("str x10, [x9, #{}]", offset));        // store value into property
             emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8));    // clear runtime property metadata slot

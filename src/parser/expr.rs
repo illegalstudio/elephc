@@ -1,7 +1,7 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
-use crate::parser::stmt::parse_name;
+use crate::parser::stmt::{parse_name, parse_type_expr};
 use crate::span::Span;
 
 pub fn parse_expr(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, CompileError> {
@@ -706,6 +706,34 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
         }
         Token::Identifier(_) | Token::Backslash => {
             let name = parse_name(tokens, pos, span, "Expected name")?;
+            if name.parts.len() == 1
+                && name.parts[0] == "buffer_new"
+                && *pos < tokens.len()
+                && tokens[*pos].0 == Token::Less
+            {
+                *pos += 1; // consume <
+                let element_type = parse_type_expr(tokens, pos, span)?;
+                if *pos >= tokens.len() || tokens[*pos].0 != Token::Greater {
+                    return Err(CompileError::new(span, "Expected '>' after buffer_new<T"));
+                }
+                *pos += 1; // consume >
+                if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
+                    return Err(CompileError::new(span, "Expected '(' after buffer_new<T>"));
+                }
+                *pos += 1; // consume (
+                let len = parse_expr(tokens, pos)?;
+                if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
+                    return Err(CompileError::new(span, "Expected ')' after buffer_new length"));
+                }
+                *pos += 1; // consume )
+                return Ok(Expr::new(
+                    ExprKind::BufferNew {
+                        element_type,
+                        len: Box::new(len),
+                    },
+                    span,
+                ));
+            }
             // ptr_cast<T>(expr) — generic pointer cast
             if name.parts.len() == 1
                 && name.parts[0] == "ptr_cast"

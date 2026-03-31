@@ -123,7 +123,12 @@ pub(super) fn emit_extern_global_store(emitter: &mut Emitter, name: &str, ty: &P
     emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name));                // load page of extern global GOT entry
     emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name));        // resolve extern global address
     match ty {
-        PhpType::Bool | PhpType::Int | PhpType::Pointer(_) | PhpType::Callable => {
+        PhpType::Bool
+        | PhpType::Int
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_)
+        | PhpType::Packed(_)
+        | PhpType::Callable => {
             emitter.instruction("str x0, [x9]");                                // store integer/pointer into extern global
         }
         PhpType::Float => {
@@ -133,7 +138,11 @@ pub(super) fn emit_extern_global_store(emitter: &mut Emitter, name: &str, ty: &P
             emitter.instruction("bl __rt_str_to_cstr");                         // allocate null-terminated copy for C global
             emitter.instruction("str x0, [x9]");                                // store char* into extern global
         }
-        PhpType::Void | PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+        PhpType::Void
+        | PhpType::Mixed
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Object(_) => {
             emitter.comment(&format!(
                 "WARNING: unsupported extern global store for ${}",
                 name
@@ -147,7 +156,12 @@ pub(super) fn emit_extern_global_load(emitter: &mut Emitter, name: &str, ty: &Ph
     emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name));                // load page of extern global GOT entry
     emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name));        // resolve extern global address
     match ty {
-        PhpType::Bool | PhpType::Int | PhpType::Pointer(_) | PhpType::Callable => {
+        PhpType::Bool
+        | PhpType::Int
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_)
+        | PhpType::Packed(_)
+        | PhpType::Callable => {
             emitter.instruction("ldr x0, [x9]");                                // load integer/pointer from extern global
         }
         PhpType::Float => {
@@ -157,7 +171,11 @@ pub(super) fn emit_extern_global_load(emitter: &mut Emitter, name: &str, ty: &Ph
             emitter.instruction("ldr x0, [x9]");                                // load char* from extern global
             emitter.instruction("bl __rt_cstr_to_str");                         // convert C string to elephc string
         }
-        PhpType::Void | PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+        PhpType::Void
+        | PhpType::Mixed
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Object(_) => {
             emitter.comment(&format!(
                 "WARNING: unsupported extern global load for ${}",
                 name

@@ -14,7 +14,8 @@ use std::collections::{HashMap, HashSet};
 use crate::names::{method_symbol, static_method_symbol};
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
 use crate::types::{
-    ClassInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PhpType, TypeEnv,
+    ClassInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo,
+    PhpType, TypeEnv,
 };
 use context::Context;
 use data_section::DataSection;
@@ -26,6 +27,7 @@ pub fn generate(
     functions: &HashMap<String, FunctionSig>,
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: &HashMap<String, ClassInfo>,
+    packed_classes: &HashMap<String, PackedClassInfo>,
     extern_functions: &HashMap<String, ExternFunctionSig>,
     extern_classes: &HashMap<String, ExternClassInfo>,
     extern_globals: &HashMap<String, PhpType>,
@@ -141,6 +143,7 @@ pub fn generate(
     ctx.all_static_vars = all_static_vars.clone();
     ctx.classes = classes.clone();
     ctx.interfaces = interfaces.clone();
+    ctx.packed_classes = packed_classes.clone();
     ctx.extern_functions = extern_functions.clone();
     ctx.extern_classes = extern_classes.clone();
     ctx.extern_globals = extern_globals.clone();
@@ -643,7 +646,7 @@ pub(crate) fn runtime_value_tag(ty: &PhpType) -> u8 {
         PhpType::Object(_) => 6,
         PhpType::Mixed => 7,
         PhpType::Void => 8,
-        PhpType::Callable | PhpType::Pointer(_) => 0,
+        PhpType::Callable | PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_) => 0,
     }
 }
 
@@ -684,7 +687,7 @@ pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpTyp
             emitter.instruction(&format!("mov x0, #{}", runtime_value_tag(ty))); //materialize the heap payload tag for the mixed helper
             emitter.instruction("bl __rt_mixed_from_value");                    // retain the heap child and box it into a mixed cell
         }
-        PhpType::Callable | PhpType::Pointer(_) => {
+        PhpType::Callable | PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_) => {
             emitter.instruction("mov x1, x0");                                  // move the raw pointer into the mixed helper payload register
             emitter.instruction("mov x2, xzr");                                 // raw pointers only use the low word
             emitter.instruction("mov x0, #0");                                  // treat unsupported raw pointers as integer-like payloads for now

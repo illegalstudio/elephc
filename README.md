@@ -25,7 +25,7 @@ Don't expect to take any existing PHP project and magically compile it. There's 
 
 ### What you can expect
 
-You can write a PHP file using only the constructs documented in this project's [language reference](docs/language-reference.md). You can include other files with `include`, `require`, `include_once`, and `require_once`, organize code with PHP-style `namespace` / `use` imports, compose classes with traits, extend concrete classes with `extends`, implement interfaces, throw and catch built-in or custom exceptions, and rely on PHP-style copy-on-write arrays so by-value array assignments stay shared until the first write. Associative arrays also preserve PHP insertion order for `foreach`, `array_keys()`, `array_values()`, `array_search()`, and `json_encode()`.
+You can write a PHP file using only the constructs documented in this project's [language reference](docs/language-reference.md). You can include other files with `include`, `require`, `include_once`, and `require_once`, organize code with PHP-style `namespace` / `use` imports, compose classes with traits, extend concrete classes with `extends`, implement interfaces, throw and catch built-in or custom exceptions, and rely on PHP-style copy-on-write arrays so by-value array assignments stay shared until the first write. Associative arrays also preserve PHP insertion order for `foreach`, `array_keys()`, `array_values()`, `array_search()`, and `json_encode()`. For performance-oriented code, elephc also exposes hot-path extensions such as `packed class` and `buffer<T>` for contiguous POD-style data.
 
 Then watch your code run at the speed of light after running:
 
@@ -137,7 +137,7 @@ Notes:
 
 ## What it compiles
 
-elephc supports a growing subset of PHP and aims to match PHP behavior for the language features it implements. Most supported programs are ordinary PHP, but elephc also includes compiler-specific extensions such as build-time `ifdef` branches and pointer builtins like `ptr()` / `ptr_cast<T>()` that intentionally extend PHP syntax.
+elephc supports a growing subset of PHP and aims to match PHP behavior for the language features it implements. Most supported programs are ordinary PHP, but elephc also includes compiler-specific extensions such as build-time `ifdef` branches, pointer builtins like `ptr()` / `ptr_cast<T>()`, and hot-path data primitives like `packed class`, `buffer<T>`, `buffer_new<T>()`, and `buffer_len()` that intentionally extend PHP syntax.
 
 ```php
 <?php
@@ -169,6 +169,8 @@ if ($x === 3) {
 | `array` | `[1, 2, 3]`, `["key" => "value"]`, `[[1,2],[3,4]]` (indexed, associative, multi-dimensional, copy-on-write) |
 | `object` | `new Foo()`, `$user->name` |
 | `pointer` | `ptr($x)`, `ptr_null()`, `ptr_cast<int>($p)` |
+| `buffer<T>` | `buffer<int> $xs = buffer_new<int>(256)` |
+| `packed class` | `packed class Vec2 { public float $x; public float $y; }` |
 
 ### Supported constructs
 
@@ -350,7 +352,7 @@ ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 
 The `docs/` directory is a **complete wiki** covering every aspect of the compiler — from what a compiler is, to how each phase works, to the ARM64 instruction set. If you're new to compilers or assembly, **start from the top and work your way down**.
 
-For runnable language samples, start with `examples/classes`, `examples/inheritance`, `examples/interfaces`, `examples/traits`, `examples/exceptions`, `examples/magic-methods`, `examples/namespaces`, `examples/ifdef`, `examples/arrays`, `examples/assoc-arrays`, `examples/cow`, `examples/closures`, and `examples/ffi-memory`.
+For runnable language samples, start with `examples/classes`, `examples/inheritance`, `examples/interfaces`, `examples/traits`, `examples/exceptions`, `examples/magic-methods`, `examples/namespaces`, `examples/ifdef`, `examples/arrays`, `examples/assoc-arrays`, `examples/cow`, `examples/closures`, `examples/hot-path`, and `examples/ffi-memory`. For a focused perf-oriented comparison, see `benchmarks/hot-path-buffer-vs-arrays`.
 
 | Guide | What you'll learn |
 |---|---|

@@ -44,7 +44,7 @@ PHP source (.php)
 ┌─────────┐
 │  Type    │  src/types/
 │  Checker │  traits.rs, checker/mod.rs, checker/builtins.rs, checker/functions.rs
-│          │  Validates types, returns CheckResult (TypeEnv + FunctionSig map)
+│          │  Validates types, computes packed layouts, returns CheckResult
 └────┬─────┘
      │
      ▼
@@ -88,7 +88,7 @@ src/
 │   └── control.rs             if, while, for, do-while, foreach, try/catch/finally
 │
 ├── types/
-│   ├── mod.rs                 PhpType enum, TypeEnv, FunctionSig, CheckResult
+│   ├── mod.rs                 PhpType enum, TypeEnv, packed layout metadata, CheckResult
 │   ├── traits.rs              Trait flattening and conflict-resolution helpers
 │   └── checker/
 │       ├── mod.rs             check_stmt(), infer_type()
@@ -128,7 +128,7 @@ src/
 │   ├── builtins/              Built-in function codegen (one file per language function)
 │   │   ├── mod.rs             Dispatcher — chains to category modules
 │   │   ├── strings/           strlen, substr, strpos, explode, sprintf, md5, ... (57 files)
-│   │   ├── arrays/            count, array_push, sort, array_map, usort, ... (56 files)
+│   │   ├── arrays/            count, array_push, buffer_len, sort, array_map, usort, ... (57 files)
 │   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, round, min, max, sin, cos, ... (32 files)
 │   │   ├── types/             is_*, gettype, empty, unset, settype, ... (16 files)
 │   │   ├── io/                fopen, fwrite, file_get_contents, scandir, ... (36 files)
@@ -141,6 +141,7 @@ src/
 │       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, str_persist, ... (53 files)
 │       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, sort, usort, refcount, gc/decref dispatch, ... (100 files)
 │       ├── io/                fopen, fgets, fread, stat, scandir, ... (17 files)
+│       ├── buffers/           buffer_new, buffer_len, bounds_fail
 │       ├── exceptions.rs      Exception runtime module root / re-exports
 │       ├── exceptions/        cleanup_frames, matches, throw_current, rethrow_current helpers
 │       ├── system/            build_argv, time, getenv, shell_exec, date, mktime, strtotime, json_encode_*, json_decode, preg_*, ... (26 files)
@@ -162,8 +163,8 @@ src/
 | Array result | `x0` (heap ptr) | After emit_expr for Array/AssocArray |
 | Mixed result | `x0` (heap ptr) | Pointer to boxed mixed cell |
 | Object result | `x0` (heap ptr) | After emit_expr for Object |
-| Pointer / Callable result | `x0` | Raw address or function pointer |
-| Function args (int) | `x0`-`x7` | Int/Bool/Array/AssocArray/Mixed/Object/Pointer/Callable = 1 reg, Str = 2 regs |
+| Pointer / Buffer / Packed / Callable result | `x0` | Raw address, contiguous buffer pointer, packed-record pointer, or function pointer |
+| Function args (int) | `x0`-`x7` | Int/Bool/Array/AssocArray/Mixed/Object/Pointer/Buffer/Packed/Callable = 1 reg, Str = 2 regs |
 | Function args (float) | `d0`-`d7` | Separate index from int regs |
 | Frame pointer | `x29` | Saved in prologue |
 | Link register | `x30` | Saved in prologue |
@@ -223,6 +224,17 @@ Offset  Size  Field
  24      ...  elements  (contiguous)
 ```
 
+### Buffer header (heap-allocated, for `buffer<T>`)
+
+```
+Offset  Size  Field
+  0      8    length    (logical number of elements)
+  8      8    stride    (bytes per element)
+ 16      ...  elements  (contiguous POD payload)
+```
+
+`buffer<T>` is deliberately separate from the PHP array/hash runtime path. Codegen uses the checked static element type plus the stored stride to emit direct address arithmetic and direct scalar loads/stores, or typed packed-field access for `buffer<PackedType>`.
+
 ### Runtime BSS and data symbols
 
 The runtime reserves a fixed set of global symbols in `src/codegen/runtime/data.rs` via `emit_runtime_data()`:
@@ -232,7 +244,7 @@ The runtime reserves a fixed set of global symbols in `src/codegen/runtime/data.
 | String scratch | `_concat_buf`, `_concat_off` | Temporary string results for expression evaluation |
 | CLI globals | `_global_argc`, `_global_argv` | Saved OS argument state used to build `$argv` |
 | Heap allocator | `_heap_buf`, `_heap_off`, `_heap_free_list`, `_heap_small_bins`, `_heap_debug_enabled`, `_heap_max` | Heap storage plus general/small-bin allocator metadata and heap-debug toggle |
-| Runtime diagnostics | `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg`, `_uncaught_exc_msg`, `_heap_dbg_*` | Fatal error messages plus heap-debug summary/failure strings |
+| Runtime diagnostics | `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg`, `_buffer_bounds_msg`, `_uncaught_exc_msg`, `_heap_dbg_*` | Fatal error messages plus heap-debug summary/failure strings |
 | GC statistics and cycle state | `_gc_allocs`, `_gc_frees`, `_gc_live`, `_gc_peak`, `_gc_collecting`, `_gc_release_suppressed` | Allocation/free/live-byte counters plus targeted-cycle-collector coordination flags |
 | Exception state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_class_parent_ids` | Active handler stack, activation cleanup stack, current exception object, and parent links used for catch matching |
 | I/O scratch | `_cstr_buf`, `_cstr_buf2`, `_eof_flags` | Syscall-oriented C-string scratch buffers and EOF bookkeeping |

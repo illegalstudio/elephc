@@ -34,7 +34,11 @@ pub(super) fn emit_cast(
                 PhpType::Mixed => {
                     emitter.instruction("bl __rt_mixed_cast_int");              // cast the boxed mixed payload to int at runtime
                 }
-                PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {}
+                PhpType::Callable
+                | PhpType::Object(_)
+                | PhpType::Buffer(_)
+                | PhpType::Packed(_)
+                | PhpType::Pointer(_) => {}
             }
             PhpType::Int
         }
@@ -57,6 +61,8 @@ pub(super) fn emit_cast(
                 | PhpType::Mixed
                 | PhpType::Callable
                 | PhpType::Object(_)
+                | PhpType::Buffer(_)
+                | PhpType::Packed(_)
                 | PhpType::Pointer(_) => {
                     emitter.instruction("mov x0, #0");                          // load zero integer
                     emitter.instruction("scvtf d0, x0");                        // convert to 0.0 double
@@ -92,7 +98,11 @@ pub(super) fn emit_cast(
                 PhpType::Mixed => {
                     emitter.instruction("bl __rt_mixed_cast_bool");             // cast the boxed mixed payload to bool at runtime
                 }
-                PhpType::Callable | PhpType::Object(_) | PhpType::Pointer(_) => {
+                PhpType::Callable
+                | PhpType::Object(_)
+                | PhpType::Buffer(_)
+                | PhpType::Packed(_)
+                | PhpType::Pointer(_) => {
                     emitter.instruction("cmp x0, #0");                          // test if callable/object address is zero
                     emitter.instruction("cset x0, ne");                         // x0=1 if nonzero (truthy)
                 }
@@ -104,7 +114,7 @@ pub(super) fn emit_cast(
                 PhpType::Array(_) | PhpType::AssocArray { .. } => {
                     return src_ty;
                 }
-                PhpType::Int | PhpType::Bool | PhpType::Callable => {
+                PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Buffer(_) | PhpType::Packed(_) => {
                     emitter.instruction("str x0, [sp, #-16]!");                 // save scalar value during allocation
                     emitter.instruction("mov x0, #1");                          // capacity: 1 element (exact fit)
                     emitter.instruction("mov x1, #8");                          // element size: 8 bytes
@@ -233,7 +243,13 @@ pub(super) fn emit_strict_compare(
             return PhpType::Bool;
         }
 
-        if lt != rt && !matches!((&lt, &rt), (PhpType::Pointer(_), PhpType::Pointer(_))) {
+        if lt != rt
+            && !matches!(
+                (&lt, &rt),
+                (PhpType::Pointer(_), PhpType::Pointer(_))
+                    | (PhpType::Buffer(_), PhpType::Buffer(_))
+            )
+        {
             emitter.instruction("add sp, sp, #16");                             // discard saved left operand from stack
             emitter.instruction(&format!("mov x0, #{}", if is_eq { 0 } else { 1 })); //=== yields false, !== yields true
             return PhpType::Bool;
@@ -265,6 +281,8 @@ pub(super) fn emit_strict_compare(
             | PhpType::AssocArray { .. }
             | PhpType::Callable
             | PhpType::Object(_)
+            | PhpType::Buffer(_)
+            | PhpType::Packed(_)
             | PhpType::Pointer(_) => {
                 emitter.instruction("ldr x1, [sp], #16");                       // pop saved left array/callable/object pointer
                 emitter.instruction("cmp x1, x0");                              // compare pointers (reference equality)

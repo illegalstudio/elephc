@@ -98,6 +98,10 @@ pub enum ExprKind {
         target_type: String,
         expr: Box<Expr>,
     },
+    BufferNew {
+        element_type: TypeExpr,
+        len: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -261,6 +265,11 @@ pub enum StmtKind {
         array: String,
         value: Expr,
     },
+    TypedAssign {
+        type_expr: TypeExpr,
+        name: String,
+        value: Expr,
+    },
     Foreach {
         array: Expr,
         key_var: Option<String>,
@@ -327,6 +336,10 @@ pub enum StmtKind {
         properties: Vec<ClassProperty>,
         methods: Vec<ClassMethod>,
     },
+    PackedClassDecl {
+        name: String,
+        fields: Vec<PackedField>,
+    },
     InterfaceDecl {
         name: String,
         extends: Vec<Name>,
@@ -388,6 +401,16 @@ impl Stmt {
 
 pub type Program = Vec<Stmt>;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeExpr {
+    Int,
+    Float,
+    Bool,
+    Ptr(Option<Name>),
+    Buffer(Box<TypeExpr>),
+    Named(Name),
+}
+
 // --- FFI ---
 
 /// C type annotation for extern declarations
@@ -415,6 +438,19 @@ pub struct ExternParam {
 pub struct ExternField {
     pub name: String,
     pub c_type: CType,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackedField {
+    pub name: String,
+    pub type_expr: TypeExpr,
+    pub span: Span,
+}
+
+impl PartialEq for PackedField {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.type_expr == other.type_expr
+    }
 }
 
 // --- OOP ---

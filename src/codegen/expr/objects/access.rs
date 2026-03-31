@@ -81,6 +81,29 @@ pub(super) fn emit_property_access(
 
             (class_name.clone(), field.php_type, field.offset, true)
         }
+        PhpType::Pointer(Some(class_name)) if ctx.packed_classes.contains_key(class_name) => {
+            let class_info = match ctx.packed_classes.get(class_name).cloned() {
+                Some(c) => c,
+                None => {
+                    emitter.comment(&format!("WARNING: undefined packed class {}", class_name));
+                    return PhpType::Int;
+                }
+            };
+
+            let field = match class_info
+                .fields
+                .iter()
+                .find(|field| field.name == property)
+            {
+                Some(field) => field.clone(),
+                None => {
+                    emitter.comment(&format!("WARNING: undefined packed field {}", property));
+                    return PhpType::Int;
+                }
+            };
+
+            (class_name.clone(), field.php_type, field.offset, true)
+        }
         _ => {
             emitter.comment("WARNING: property access on non-object");
             return PhpType::Int;
@@ -111,8 +134,10 @@ pub(super) fn emit_property_access(
         PhpType::Mixed
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
+        | PhpType::Buffer(_)
         | PhpType::Callable
         | PhpType::Object(_)
+        | PhpType::Packed(_)
         | PhpType::Pointer(_) => {
             emitter.instruction(&format!("ldr x0, [x0, #{}]", offset));         // load heap pointer from property
         }

@@ -284,7 +284,7 @@ Proper type system for PHP compatibility.
 
 ## v0.17.x — Language maturity and compiler ergonomics
 
-- [ ] Hot-path data type
+- [x] Hot-path data type
 - [x] Full namespace support
 - [ ] Comprehensive error recovery (multiple errors per compilation)
 - [ ] Warning system (unused variables, unreachable code)

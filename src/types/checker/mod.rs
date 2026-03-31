@@ -9,9 +9,10 @@ use crate::parser::ast::{
     Stmt, StmtKind, Visibility,
 };
 use crate::types::{
-    ctype_stack_size, ctype_to_php_type, traits::{flatten_classes, FlattenedClass}, CheckResult,
-    ClassInfo, ExternClassInfo, ExternFieldInfo, ExternFunctionSig, FunctionSig, InterfaceInfo,
-    PhpType, TypeEnv,
+    ctype_stack_size, ctype_to_php_type, packed_type_size,
+    traits::{flatten_classes, FlattenedClass}, CheckResult, ClassInfo, ExternClassInfo,
+    ExternFieldInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo,
+    PackedFieldInfo, PhpType, TypeEnv,
 };
 
 /// Infer a function's return type by scanning its body for Return statements.
@@ -253,10 +254,20 @@ pub(crate) struct Checker {
     pub extern_functions: HashMap<String, ExternFunctionSig>,
     /// Extern class (C struct) declarations.
     pub extern_classes: HashMap<String, ExternClassInfo>,
+    /// Packed layout-only records.
+    pub packed_classes: HashMap<String, PackedClassInfo>,
     /// Extern global variable declarations.
     pub extern_globals: HashMap<String, PhpType>,
     /// Libraries required by extern blocks.
     pub required_libraries: Vec<String>,
+    /// Best-known top-level variable types visible to `global` statements.
+    pub top_level_env: TypeEnv,
+    /// Names that are by-ref parameters in the current local scope.
+    pub active_ref_params: HashSet<String>,
+    /// Names introduced via `global` in the current local scope.
+    pub active_globals: HashSet<String>,
+    /// Names introduced via `static` in the current local scope.
+    pub active_statics: HashSet<String>,
 }
 
 #[derive(Clone)]
@@ -1308,8 +1319,13 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         current_method_is_static: false,
         extern_functions: HashMap::new(),
         extern_classes: HashMap::new(),
+        packed_classes: HashMap::new(),
         extern_globals: HashMap::new(),
         required_libraries: Vec::new(),
+        top_level_env: HashMap::new(),
+        active_ref_params: HashSet::new(),
+        active_globals: HashSet::new(),
+        active_statics: HashSet::new(),
     };
 
     for stmt in program {
@@ -1490,6 +1506,48 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                     },
                 );
             }
+            StmtKind::PackedClassDecl { name, fields } => {
+                if checker.packed_classes.contains_key(name)
+                    || checker.classes.contains_key(name)
+                    || checker.extern_classes.contains_key(name)
+                {
+                    return Err(CompileError::new(
+                        stmt.span,
+                        &format!("Duplicate packed class declaration: {}", name),
+                    ));
+                }
+                let mut packed_fields = Vec::new();
+                let mut offset = 0usize;
+                let mut seen_fields = std::collections::HashSet::new();
+                for field in fields {
+                    if !seen_fields.insert(field.name.clone()) {
+                        return Err(CompileError::new(
+                            field.span,
+                            &format!("Duplicate packed field: {}::{}", name, field.name),
+                        ));
+                    }
+                    let php_type = checker.resolve_type_expr(&field.type_expr, field.span)?;
+                    let size = packed_type_size(&php_type, &checker.packed_classes).ok_or_else(|| {
+                        CompileError::new(
+                            field.span,
+                            "Packed class fields must use POD scalars, pointers, or packed classes",
+                        )
+                    })?;
+                    packed_fields.push(PackedFieldInfo {
+                        name: field.name.clone(),
+                        php_type,
+                        offset,
+                    });
+                    offset += size;
+                }
+                checker.packed_classes.insert(
+                    name.clone(),
+                    PackedClassInfo {
+                        fields: packed_fields,
+                        total_size: offset,
+                    },
+                );
+            }
             StmtKind::ExternGlobalDecl { name, c_type } => {
                 checker.validate_extern_global_decl(name, c_type, stmt.span)?;
                 let php_type = ctype_to_php_type(c_type);
@@ -1507,6 +1565,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         global_env.insert(name.clone(), ty.clone());
     }
     for stmt in program {
+        checker.top_level_env = global_env.clone();
         checker.check_stmt(stmt, &mut global_env)?;
     }
 
@@ -1608,9 +1667,18 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 checker.current_class = Some(class.name.clone());
                 checker.current_method = Some(method.name.clone());
                 checker.current_method_is_static = method.is_static;
-                for s in &method.body {
-                    checker.check_stmt(s, &mut method_env)?;
-                }
+                let method_ref_params: Vec<String> = method
+                    .params
+                    .iter()
+                    .filter(|(_, _, is_ref)| *is_ref)
+                    .map(|(name, _, _)| name.clone())
+                    .collect();
+                checker.with_local_storage_context(method_ref_params, |checker| {
+                    for s in &method.body {
+                        checker.check_stmt(s, &mut method_env)?;
+                    }
+                    Ok(())
+                })?;
 
                 // Update method return type from full type inference
                 // (must run while current_class is still set so $this resolves)
@@ -1645,6 +1713,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         functions: checker.functions,
         interfaces: checker.interfaces,
         classes: checker.classes,
+        packed_classes: checker.packed_classes,
         extern_functions: checker.extern_functions,
         extern_classes: checker.extern_classes,
         extern_globals: checker.extern_globals,
@@ -1653,6 +1722,31 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
 }
 
 impl Checker {
+    fn with_local_storage_context<T, F>(
+        &mut self,
+        ref_param_names: Vec<String>,
+        f: F,
+    ) -> Result<T, CompileError>
+    where
+        F: FnOnce(&mut Self) -> Result<T, CompileError>,
+    {
+        let saved_ref_params = self.active_ref_params.clone();
+        let saved_globals = self.active_globals.clone();
+        let saved_statics = self.active_statics.clone();
+
+        self.active_ref_params = ref_param_names.into_iter().collect();
+        self.active_globals.clear();
+        self.active_statics.clear();
+
+        let result = f(self);
+
+        self.active_ref_params = saved_ref_params;
+        self.active_globals = saved_globals;
+        self.active_statics = saved_statics;
+
+        result
+    }
+
     fn can_access_member(&self, declaring_class: &str, visibility: &Visibility) -> bool {
         match visibility {
             Visibility::Public => true,
@@ -1921,6 +2015,7 @@ impl Checker {
             "string" => Some("string".to_string()),
             "ptr" | "pointer" => Some("ptr".to_string()),
             class_name if self.classes.contains_key(class_name) => Some(class_name.to_string()),
+            class_name if self.packed_classes.contains_key(class_name) => Some(class_name.to_string()),
             class_name if self.extern_classes.contains_key(class_name) => {
                 Some(class_name.to_string())
             }
@@ -1928,8 +2023,68 @@ impl Checker {
         }
     }
 
+    fn resolve_type_expr(
+        &self,
+        type_expr: &crate::parser::ast::TypeExpr,
+        span: crate::span::Span,
+    ) -> Result<PhpType, CompileError> {
+        match type_expr {
+            crate::parser::ast::TypeExpr::Int => Ok(PhpType::Int),
+            crate::parser::ast::TypeExpr::Float => Ok(PhpType::Float),
+            crate::parser::ast::TypeExpr::Bool => Ok(PhpType::Bool),
+            crate::parser::ast::TypeExpr::Ptr(target) => {
+                let normalized = match target {
+                    Some(name) => self.normalize_pointer_target_type(name.as_str()).ok_or_else(|| {
+                        CompileError::new(
+                            span,
+                            &format!("Unknown pointer target type: {}", name.as_str()),
+                        )
+                    })?,
+                    None => return Ok(PhpType::Pointer(None)),
+                };
+                Ok(PhpType::Pointer(Some(normalized)))
+            }
+            crate::parser::ast::TypeExpr::Buffer(inner) => {
+                let inner_ty = self.resolve_type_expr(inner, span)?;
+                if packed_type_size(&inner_ty, &self.packed_classes).is_none() {
+                    return Err(CompileError::new(
+                        span,
+                        "buffer<T> requires a POD scalar, pointer, or packed class element type",
+                    ));
+                }
+                Ok(PhpType::Buffer(Box::new(inner_ty)))
+            }
+            crate::parser::ast::TypeExpr::Named(name) => {
+                match name.as_str() {
+                    "string" => Ok(PhpType::Str),
+                    "mixed" => Ok(PhpType::Mixed),
+                    "callable" => Ok(PhpType::Callable),
+                    "void" => Ok(PhpType::Void),
+                    "array" => Ok(PhpType::Array(Box::new(PhpType::Int))),
+                    _ if self.packed_classes.contains_key(name.as_str()) => {
+                        Ok(PhpType::Packed(name.as_str().to_string()))
+                    }
+                    _ => Err(CompileError::new(
+                        span,
+                        &format!("Unknown packed type: {}", name.as_str()),
+                    )),
+                }
+            }
+        }
+    }
+
     fn extern_field_type(&self, class_name: &str, field_name: &str) -> Option<PhpType> {
         self.extern_classes.get(class_name).and_then(|class_info| {
+            class_info
+                .fields
+                .iter()
+                .find(|field| field.name == field_name)
+                .map(|field| field.php_type.clone())
+        })
+    }
+
+    fn packed_field_type(&self, class_name: &str, field_name: &str) -> Option<PhpType> {
+        self.packed_classes.get(class_name).and_then(|class_info| {
             class_info
                 .fields
                 .iter()
@@ -2004,6 +2159,7 @@ impl Checker {
                 | PhpType::Int
                 | PhpType::Bool
                 | PhpType::Pointer(_)
+                | PhpType::Buffer(_)
                 | PhpType::Callable => {
                     int_regs += 1;
                 }
@@ -2011,7 +2167,8 @@ impl Checker {
                 | PhpType::Mixed
                 | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
-                | PhpType::Object(_) => {
+                | PhpType::Object(_)
+                | PhpType::Packed(_) => {
                     return Err(CompileError::new(
                         span,
                         &format!("Unsupported extern parameter type in {}()", name),
@@ -2367,6 +2524,28 @@ impl Checker {
                             value: Box::new(merged_value),
                         },
                     );
+                } else if let PhpType::Buffer(elem_ty) = &arr_ty {
+                    if !matches!(self.infer_type(index, env)?, PhpType::Int) {
+                        return Err(CompileError::new(stmt.span, "Buffer index must be integer"));
+                    }
+                    match elem_ty.as_ref() {
+                        PhpType::Packed(_) => {
+                            return Err(CompileError::new(
+                                stmt.span,
+                                "Assign packed buffer elements through field access like $buf[$i]->field",
+                            ))
+                        }
+                        inner if inner != &val_ty => {
+                            return Err(CompileError::new(
+                                stmt.span,
+                                &format!(
+                                    "Buffer element type mismatch: expected {:?}, got {:?}",
+                                    inner, val_ty
+                                ),
+                            ));
+                        }
+                        _ => {}
+                    }
                 }
                 Ok(())
             }
@@ -2385,7 +2564,37 @@ impl Checker {
                             .unwrap_or(val_ty);
                         env.insert(array.clone(), PhpType::Array(Box::new(merged_ty)));
                     }
+                } else if matches!(arr_ty, PhpType::Buffer(_)) {
+                    return Err(CompileError::new(
+                        stmt.span,
+                        "buffer<T> does not support push; allocate with buffer_new<T>(len)",
+                    ));
                 }
+                Ok(())
+            }
+            StmtKind::TypedAssign {
+                type_expr,
+                name,
+                value,
+            } => {
+                let declared_ty = self.resolve_type_expr(type_expr, stmt.span)?;
+                if !matches!(declared_ty, PhpType::Buffer(_)) {
+                    return Err(CompileError::new(
+                        stmt.span,
+                        "Typed local declarations currently support only buffer<T>",
+                    ));
+                }
+                let value_ty = self.infer_type(value, env)?;
+                if value_ty != declared_ty {
+                    return Err(CompileError::new(
+                        stmt.span,
+                        &format!(
+                            "Type error: cannot initialize ${} as {:?} with {:?}",
+                            name, declared_ty, value_ty
+                        ),
+                    ));
+                }
+                env.insert(name.clone(), declared_ty);
                 Ok(())
             }
             StmtKind::Foreach {
@@ -2560,6 +2769,7 @@ impl Checker {
                 // Should have been resolved before type checking
                 Err(CompileError::new(stmt.span, "Unresolved include statement"))
             }
+            StmtKind::PackedClassDecl { .. } => Ok(()),
             StmtKind::Break | StmtKind::Continue => Ok(()),
             StmtKind::ExprStmt(expr) => {
                 self.infer_type(expr, env)?;
@@ -2591,15 +2801,21 @@ impl Checker {
                 // global vars are accessible; they reference variables from the outer scope
                 // Mark them in the environment if not already present
                 for var in vars {
+                    self.active_globals.insert(var.clone());
                     if !env.contains_key(var) {
-                        // Default to Int — will be refined by actual usage
-                        env.insert(var.clone(), PhpType::Int);
+                        if let Some(global_ty) = self.top_level_env.get(var) {
+                            env.insert(var.clone(), global_ty.clone());
+                        } else {
+                            // Default to Int — will be refined by actual usage
+                            env.insert(var.clone(), PhpType::Int);
+                        }
                     }
                 }
                 Ok(())
             }
             StmtKind::StaticVar { name, init } => {
                 let ty = self.infer_type(init, env)?;
+                self.active_statics.insert(name.clone());
                 env.insert(name.clone(), ty);
                 Ok(())
             }
@@ -2700,10 +2916,25 @@ impl Checker {
                                 ),
                             ));
                         }
+                    } else if let Some(field_ty) = self.packed_field_type(class_name, property) {
+                        if field_ty != val_ty {
+                            return Err(CompileError::new(
+                                stmt.span,
+                                &format!(
+                                    "Type error: cannot assign {:?} to packed field {}::{} of type {:?}",
+                                    val_ty, class_name, property, field_ty
+                                ),
+                            ));
+                        }
                     } else if self.extern_classes.contains_key(class_name) {
                         return Err(CompileError::new(
                             stmt.span,
                             &format!("Undefined extern field: {}::{}", class_name, property),
+                        ));
+                    } else if self.packed_classes.contains_key(class_name) {
+                        return Err(CompileError::new(
+                            stmt.span,
+                            &format!("Undefined packed field: {}::{}", class_name, property),
                         ));
                     }
                 }
@@ -2854,6 +3085,18 @@ impl Checker {
                         // Assoc arrays accept string or int keys
                         Ok(*value.clone())
                     }
+                    PhpType::Buffer(elem_ty) => {
+                        if idx_ty != PhpType::Int {
+                            return Err(CompileError::new(
+                                expr.span,
+                                "Buffer index must be integer",
+                            ));
+                        }
+                        match elem_ty.as_ref() {
+                            PhpType::Packed(name) => Ok(PhpType::Pointer(Some(name.clone()))),
+                            _ => Ok(*elem_ty.clone()),
+                        }
+                    }
                     _ => Err(CompileError::new(expr.span, "Cannot index non-array")),
                 }
             }
@@ -2914,6 +3157,23 @@ impl Checker {
                 }
                 self.check_function_call(name.as_str(), &args, expr.span, env)
             }
+            ExprKind::BufferNew { element_type, len } => {
+                let len_ty = self.infer_type(len, env)?;
+                if len_ty != PhpType::Int {
+                    return Err(CompileError::new(
+                        expr.span,
+                        "buffer_new<T>() length must be integer",
+                    ));
+                }
+                let elem_ty = self.resolve_type_expr(element_type, expr.span)?;
+                if packed_type_size(&elem_ty, &self.packed_classes).is_none() {
+                    return Err(CompileError::new(
+                        expr.span,
+                        "buffer_new<T>() requires a POD scalar, pointer, or packed class element type",
+                    ));
+                }
+                Ok(PhpType::Buffer(Box::new(elem_ty)))
+            }
             ExprKind::BitNot(inner) => {
                 let ty = self.infer_type(inner, env)?;
                 if !matches!(ty, PhpType::Int | PhpType::Bool | PhpType::Void) {
@@ -2957,9 +3217,17 @@ impl Checker {
                 if let Some(vp) = variadic {
                     closure_env.insert(vp.clone(), PhpType::Array(Box::new(PhpType::Int)));
                 }
-                for stmt in body {
-                    self.check_stmt(stmt, &mut closure_env)?;
-                }
+                let closure_ref_params: Vec<String> = params
+                    .iter()
+                    .filter(|(_, _, is_ref)| *is_ref)
+                    .map(|(name, _, _)| name.clone())
+                    .collect();
+                self.with_local_storage_context(closure_ref_params, |checker| {
+                    for stmt in body {
+                        checker.check_stmt(stmt, &mut closure_env)?;
+                    }
+                    Ok(())
+                })?;
                 Ok(PhpType::Callable)
             }
             ExprKind::Spread(inner) => {
@@ -3243,16 +3511,25 @@ impl Checker {
                     if let Some(field_ty) = self.extern_field_type(class_name, property) {
                         return Ok(field_ty);
                     }
+                    if let Some(field_ty) = self.packed_field_type(class_name, property) {
+                        return Ok(field_ty);
+                    }
                     if self.extern_classes.contains_key(class_name) {
                         return Err(CompileError::new(
                             expr.span,
                             &format!("Undefined extern field: {}::{}", class_name, property),
                         ));
                     }
+                    if self.packed_classes.contains_key(class_name) {
+                        return Err(CompileError::new(
+                            expr.span,
+                            &format!("Undefined packed field: {}::{}", class_name, property),
+                        ));
+                    }
                 }
                 Err(CompileError::new(
                     expr.span,
-                    "Property access requires an object or typed extern pointer",
+                    "Property access requires an object or typed pointer",
                 ))
             }
             ExprKind::MethodCall {

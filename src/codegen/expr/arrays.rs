@@ -1,6 +1,8 @@
 use super::super::context::Context;
 use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
+use crate::parser::ast::TypeExpr;
+use crate::types::packed_type_size;
 use super::{emit_expr, retain_borrowed_heap_arg, Expr, ExprKind, PhpType};
 
 pub(super) fn emit_array_literal(
@@ -311,6 +313,41 @@ pub(super) fn emit_array_access(
 ) -> PhpType {
     let arr_ty = emit_expr(array, emitter, ctx, data);
 
+    if let PhpType::Buffer(elem_ty) = &arr_ty {
+        emitter.instruction("str x0, [sp, #-16]!");                                 // push buffer pointer while evaluating the index expression
+        emit_expr(index, emitter, ctx, data);
+        emitter.instruction("ldr x9, [sp], #16");                                   // pop buffer pointer into scratch register x9
+        emitter.comment("buffer access");
+        emitter.instruction("cbz x9, __rt_buffer_use_after_free");                  // abort if the buffer was freed (null pointer)
+        let elem_ty = *elem_ty.clone();
+        let bounds_ok = ctx.next_label("buffer_idx_ok");
+        emitter.instruction("cmp x0, #0");                                          // reject negative buffer indexes
+        emitter.instruction("b.lt __rt_buffer_bounds_fail");                        // abort on negative buffer index
+        emitter.instruction("ldr x10, [x9]");                                       // load buffer length from header
+        emitter.instruction("cmp x0, x10");                                         // compare index against logical buffer length
+        emitter.instruction(&format!("b.lo {}", bounds_ok));                        // continue once the index is in range
+        emitter.instruction("mov x1, x10");                                         // pass buffer length to the bounds-failure helper
+        emitter.instruction("bl __rt_buffer_bounds_fail");                          // abort with a dedicated buffer bounds message
+        emitter.label(&bounds_ok);
+        emitter.instruction("ldr x12, [x9, #8]");                                   // load element stride from the buffer header
+        emitter.instruction("add x9, x9, #16");                                     // skip the buffer header to reach the payload base
+        emitter.instruction("madd x9, x0, x12, x9");                                // compute payload base + index*stride
+        match &elem_ty {
+            PhpType::Float => {
+                emitter.instruction("ldr d0, [x9]");                                // load scalar float element from the contiguous payload
+                return PhpType::Float;
+            }
+            PhpType::Packed(name) => {
+                emitter.instruction("mov x0, x9");                                  // expose the packed element address as a typed pointer
+                return PhpType::Pointer(Some(name.clone()));
+            }
+            _ => {
+                emitter.instruction("ldr x0, [x9]");                                // load scalar/pointer element from the contiguous payload
+                return elem_ty;
+            }
+        }
+    }
+
     if arr_ty == PhpType::Str {
         emitter.instruction("stp x1, x2, [sp, #-16]!");                         // save string ptr/len while evaluating the index expression
         emit_expr(index, emitter, ctx, data);
@@ -427,4 +464,41 @@ pub(super) fn emit_array_access(
     emitter.label(&ok_label);
 
     elem_ty
+}
+
+pub(super) fn emit_buffer_new(
+    element_type: &TypeExpr,
+    len: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let len_ty = emit_expr(len, emitter, ctx, data);
+    let elem_ty = resolve_buffer_element_type(element_type, ctx);
+    let stride = packed_type_size(&elem_ty, &ctx.packed_classes).unwrap_or(8);
+    if len_ty != PhpType::Int {
+        emitter.comment("WARNING: buffer_new length was not statically typed as int");
+    }
+    emitter.instruction(&format!("mov x1, #{}", stride));                           // pass element stride to the buffer allocation helper
+    emitter.instruction("bl __rt_buffer_new");                                      // allocate the buffer header + contiguous payload
+    PhpType::Buffer(Box::new(elem_ty))
+}
+
+fn resolve_buffer_element_type(type_expr: &TypeExpr, ctx: &Context) -> PhpType {
+    match type_expr {
+        TypeExpr::Int => PhpType::Int,
+        TypeExpr::Float => PhpType::Float,
+        TypeExpr::Bool => PhpType::Bool,
+        TypeExpr::Ptr(target) => {
+            PhpType::Pointer(target.as_ref().map(|name| name.as_str().to_string()))
+        }
+        TypeExpr::Named(name) => {
+            if ctx.packed_classes.contains_key(name.as_str()) {
+                PhpType::Packed(name.as_str().to_string())
+            } else {
+                PhpType::Int
+            }
+        }
+        TypeExpr::Buffer(inner) => PhpType::Buffer(Box::new(resolve_buffer_element_type(inner, ctx))),
+    }
 }

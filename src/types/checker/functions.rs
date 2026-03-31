@@ -240,12 +240,22 @@ impl Checker {
 
         let mut return_type = PhpType::Void;
         let mut all_return_types: Vec<PhpType> = Vec::new();
-        for stmt in &decl.body {
-            self.check_stmt(stmt, &mut local_env)?;
-            if let Some(rt) = self.find_return_type(stmt, &local_env) {
-                all_return_types.push(rt);
+        let ref_param_names: Vec<String> = decl
+            .params
+            .iter()
+            .zip(decl.ref_params.iter())
+            .filter(|(_, is_ref)| **is_ref)
+            .map(|(name, _)| name.clone())
+            .collect();
+        self.with_local_storage_context(ref_param_names, |checker| {
+            for stmt in &decl.body {
+                checker.check_stmt(stmt, &mut local_env)?;
+                if let Some(rt) = checker.find_return_type(stmt, &local_env) {
+                    all_return_types.push(rt);
+                }
             }
-        }
+            Ok(())
+        })?;
 
         // Pick the widest return type across all branches
         if !all_return_types.is_empty() {

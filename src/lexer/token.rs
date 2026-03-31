@@ -90,6 +90,7 @@ pub enum Token {
     ReadOnly,       // readonly
     This,           // $this
     Extern,         // extern
+    Packed,         // packed
 
     // Operators
     Assign,         // =

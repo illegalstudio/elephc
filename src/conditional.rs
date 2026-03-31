@@ -79,6 +79,15 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             array,
             value: rewrite_expr(value, defines),
         },
+        StmtKind::TypedAssign {
+            type_expr,
+            name,
+            value,
+        } => StmtKind::TypedAssign {
+            type_expr,
+            name,
+            value: rewrite_expr(value, defines),
+        },
         StmtKind::Foreach {
             array,
             key_var,
@@ -263,6 +272,7 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             body: apply_stmts(body, defines),
         },
         StmtKind::UseDecl { imports } => StmtKind::UseDecl { imports },
+        StmtKind::PackedClassDecl { name, fields } => StmtKind::PackedClassDecl { name, fields },
     }
 }
 
@@ -405,6 +415,10 @@ fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
         ExprKind::PtrCast { target_type, expr } => ExprKind::PtrCast {
             target_type,
             expr: Box::new(rewrite_expr(*expr, defines)),
+        },
+        ExprKind::BufferNew { element_type, len } => ExprKind::BufferNew {
+            element_type,
+            len: Box::new(rewrite_expr(*len, defines)),
         },
         other => other,
     };

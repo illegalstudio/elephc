@@ -20,8 +20,10 @@ pub enum PhpType {
         key: Box<PhpType>,
         value: Box<PhpType>,
     },
+    Buffer(Box<PhpType>),
     Callable,
     Object(String),
+    Packed(String),
     Pointer(Option<String>), // None = opaque ptr, Some("Class") = typed ptr<Class>
 }
 
@@ -37,8 +39,10 @@ impl PhpType {
             PhpType::Mixed => 8,             // pointer to heap-tagged mixed cell
             PhpType::Array(_) => 8,          // pointer to heap
             PhpType::AssocArray { .. } => 8, // pointer to heap
+            PhpType::Buffer(_) => 8,         // pointer to buffer header
             PhpType::Callable => 8,          // function address
             PhpType::Object(_) => 8,         // pointer to heap
+            PhpType::Packed(_) => 8,         // metadata-only nominal type, usually accessed by pointer
             PhpType::Pointer(_) => 8,        // 64-bit address
         }
     }
@@ -54,8 +58,10 @@ impl PhpType {
             PhpType::Mixed => 1,
             PhpType::Array(_) => 1,
             PhpType::AssocArray { .. } => 1,
+            PhpType::Buffer(_) => 1,
             PhpType::Callable => 1,
             PhpType::Object(_) => 1,
+            PhpType::Packed(_) => 1,
             PhpType::Pointer(_) => 1,
         }
     }
@@ -150,6 +156,19 @@ pub struct ExternFieldInfo {
     pub offset: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct PackedClassInfo {
+    pub fields: Vec<PackedFieldInfo>,
+    pub total_size: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackedFieldInfo {
+    pub name: String,
+    pub php_type: PhpType,
+    pub offset: usize,
+}
+
 /// Convert a parser CType to a PhpType.
 pub fn ctype_to_php_type(ct: &CType) -> PhpType {
     match ct {
@@ -184,10 +203,22 @@ pub struct CheckResult {
     pub functions: HashMap<String, FunctionSig>,
     pub interfaces: HashMap<String, InterfaceInfo>,
     pub classes: HashMap<String, ClassInfo>,
+    pub packed_classes: HashMap<String, PackedClassInfo>,
     pub extern_functions: HashMap<String, ExternFunctionSig>,
     pub extern_classes: HashMap<String, ExternClassInfo>,
     pub extern_globals: HashMap<String, PhpType>,
     pub required_libraries: Vec<String>,
+}
+
+pub fn packed_type_size(
+    ty: &PhpType,
+    packed_classes: &HashMap<String, PackedClassInfo>,
+) -> Option<usize> {
+    match ty {
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Pointer(_) => Some(8),
+        PhpType::Packed(name) => packed_classes.get(name).map(|info| info.total_size),
+        _ => None,
+    }
 }
 
 pub fn check(program: &Program) -> Result<CheckResult, CompileError> {

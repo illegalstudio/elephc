@@ -33,6 +33,8 @@ pub(crate) fn emit_runtime_data(
     out.push_str("_heap_dbg_double_free_msg:\n    .ascii \"Fatal error: heap debug detected double free\\n\"\n");
     out.push_str("_heap_dbg_free_list_msg:\n    .ascii \"Fatal error: heap debug detected free-list corruption\\n\"\n");
     out.push_str("_arr_cap_err_msg:\n    .ascii \"Fatal error: array capacity exceeded\\n\"\n");
+    out.push_str("_buffer_bounds_msg:\n    .ascii \"Fatal error: buffer index out of bounds\\n\"\n");
+    out.push_str("_buffer_uaf_msg:\n    .ascii \"Fatal error: use of buffer after buffer_free()\\n\"\n");
     out.push_str("_ptr_null_err_msg:\n    .ascii \"Fatal error: null pointer dereference\\n\"\n");
     out.push_str("_uncaught_exc_msg:\n    .ascii \"Fatal error: uncaught exception\\n\"\n");
     out.push_str(".comm _gc_allocs, 8, 3\n");
@@ -230,7 +232,11 @@ pub(crate) fn emit_runtime_data(
                     PhpType::AssocArray { .. } => 5,
                     PhpType::Object(_) => 6,
                     PhpType::Mixed => 7,
-                    PhpType::Callable | PhpType::Pointer(_) | PhpType::Void => 0,
+                    PhpType::Callable
+                    | PhpType::Pointer(_)
+                    | PhpType::Buffer(_)
+                    | PhpType::Packed(_)
+                    | PhpType::Void => 0,
                 };
                 out.push_str(&tag.to_string());
             }

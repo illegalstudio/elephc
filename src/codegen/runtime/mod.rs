@@ -1,4 +1,5 @@
 mod arrays;
+mod buffers;
 mod data;
 mod exceptions;
 mod io;
@@ -192,6 +193,12 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_mixed_write_stdout(emitter);
     arrays::emit_object_free_deep(emitter);
     arrays::emit_refcount(emitter);
+
+    // Buffer runtime functions
+    buffers::emit_buffer_new(emitter);
+    buffers::emit_buffer_len(emitter);
+    buffers::emit_buffer_bounds_fail(emitter);
+    buffers::emit_buffer_use_after_free(emitter);
 
     // I/O runtime functions
     io::emit_cstr(emitter);

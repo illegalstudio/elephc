@@ -24,4 +24,5 @@ A guide to understanding how elephc works — from PHP source code to native ARM
 ## Reference
 
 - **[Language Reference](language-reference.md)** — What PHP features elephc supports: types, operators, control flow, functions, built-ins.
+- **[Compiler Extensions](compiler-extensions.md)** — Features beyond PHP: pointers, FFI, hot-path data (`buffer<T>`, `packed class`), `ifdef`, and CLI flags. Complete guide with examples, best practices, and pitfalls.
 - **[Architecture](architecture.md)** — Module map, calling conventions, pipeline diagram (technical reference).
