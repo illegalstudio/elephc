@@ -57,6 +57,7 @@ pub(super) fn emit_array_assign_stmt(
         }
         emitter.instruction("ldr x9, [sp, #16]");                                   // reload the target index without disturbing the saved value
         emitter.instruction("ldr x10, [sp, #32]");                                  // reload the buffer header pointer without disturbing the saved value
+        emitter.instruction("cbz x10, __rt_buffer_use_after_free");                 // abort if the buffer was freed (null pointer)
         let bounds_ok = ctx.next_label("buffer_store_ok");
         emitter.instruction("cmp x9, #0");                                          // reject negative buffer indexes
         emitter.instruction("b.lt __rt_buffer_bounds_fail");                        // abort on negative buffer index

@@ -317,6 +317,37 @@ buffer<float> $data = buffer_new<float>(512);
 echo buffer_len($data);   // 512
 ```
 
+### Freeing buffers
+
+```php
+<?php
+buffer<int> $buf = buffer_new<int>(1000);
+// ... use the buffer ...
+buffer_free($buf);   // release heap memory, nullify the variable
+```
+
+`buffer_free` releases the heap allocation and zeros the stack slot. Any subsequent read or write to the freed buffer produces a deterministic fatal error instead of a silent crash:
+
+```
+Fatal error: use of buffer after buffer_free()
+```
+
+Use it when allocating buffers inside loops or when a buffer is no longer needed:
+
+```php
+<?php
+for ($i = 0; $i < 100; $i++) {
+    buffer<int> $tmp = buffer_new<int>(10000);
+    // ... use $tmp ...
+    buffer_free($tmp);   // prevents heap exhaustion
+}
+```
+
+**Restrictions:**
+- `buffer_free` only accepts plain local variables — not ref params, globals, statics, or expressions
+- If you have aliases (`$b = $a`), freeing `$a` does **not** invalidate `$b` — accessing `$b` after `buffer_free($a)` is undefined behavior, like `free()` in C
+- Freeing the same buffer twice is undefined behavior
+
 ### Bounds checking
 
 Buffer access is bounds-checked at runtime. Out-of-bounds access (including negative indices) terminates the program:
@@ -373,12 +404,12 @@ for ($i = 0; $i < buffer_len($particles); $i++) {
 ### Limitations (v1)
 
 - Fixed size — no `push`, `pop`, or dynamic resize
-- No automatic cleanup — buffers are not freed when they go out of scope
+- No automatic scope cleanup — use `buffer_free($buf)` to release memory explicitly
 - No conversion to/from PHP arrays
 - No copy-on-write semantics
 - No iteration with `foreach`
 - No mixed element types
-- Payload is not zero-initialized (in practice, freshly allocated heap memory is zeroed, but this is not guaranteed after heap reuse)
+- Payload is zero-initialized by `buffer_new`, but re-reading after `buffer_free` and re-allocation is undefined
 
 ---
 
@@ -633,21 +664,9 @@ function calculate_damage($hp) {
 // caller: calculate_damage($enemies[$i]->hp)
 ```
 
-### Do not assume buffer memory is initialized
+### Buffer memory is zero-initialized
 
-Although freshly allocated heap memory is usually zeroed, this is not guaranteed after heap blocks have been recycled. Always initialize before reading:
-
-```php
-<?php
-buffer<int> $buf = buffer_new<int>(100);
-// BAD: reading before writing
-echo $buf[50];   // might be 0, might be garbage
-
-// GOOD: initialize first
-for ($i = 0; $i < 100; $i++) {
-    $buf[$i] = 0;
-}
-```
+`buffer_new<T>(n)` zero-fills the entire payload before returning. Reading an element before writing it is safe and returns 0 (int/bool), 0.0 (float), or null (ptr).
 
 ### Do not pass buffers to PHP array functions
 

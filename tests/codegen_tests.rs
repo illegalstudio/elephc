@@ -645,6 +645,61 @@ fn test_buffer_bounds_check_traps() {
     assert!(err.contains("buffer index out of bounds"), "{}", err);
 }
 
+#[test]
+fn test_buffer_free_releases_memory() {
+    let out = compile_and_run(r#"<?php
+buffer<int> $buf = buffer_new<int>(10);
+$buf[0] = 42;
+echo $buf[0] . " ";
+buffer_free($buf);
+echo "ok";
+"#);
+    assert_eq!(out, "42 ok");
+}
+
+#[test]
+fn test_buffer_free_in_loop_does_not_exhaust_heap() {
+    let out = compile_and_run(r#"<?php
+for ($i = 0; $i < 100; $i++) {
+    buffer<int> $tmp = buffer_new<int>(1000);
+    $tmp[0] = $i;
+    buffer_free($tmp);
+}
+echo "survived";
+"#);
+    assert_eq!(out, "survived");
+}
+
+#[test]
+fn test_buffer_use_after_free_read_is_fatal() {
+    let err = compile_and_run_expect_failure(r#"<?php
+buffer<int> $buf = buffer_new<int>(5);
+buffer_free($buf);
+echo $buf[0];
+"#);
+    assert!(err.contains("use of buffer after buffer_free()"), "{}", err);
+}
+
+#[test]
+fn test_buffer_use_after_free_write_is_fatal() {
+    let err = compile_and_run_expect_failure(r#"<?php
+buffer<int> $buf = buffer_new<int>(5);
+buffer_free($buf);
+$buf[0] = 1;
+"#);
+    assert!(err.contains("use of buffer after buffer_free()"), "{}", err);
+}
+
+#[test]
+fn test_buffer_len_after_free_is_fatal() {
+    let err = compile_and_run_expect_failure(r#"<?php
+buffer<int> $buf = buffer_new<int>(5);
+buffer_free($buf);
+echo buffer_len($buf);
+"#);
+    assert!(err.contains("use of buffer after buffer_free()"), "{}", err);
+}
+
 fn compile_and_run_with_defines(source: &str, defines: &[&str]) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();

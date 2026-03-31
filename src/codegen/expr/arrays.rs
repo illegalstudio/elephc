@@ -318,6 +318,7 @@ pub(super) fn emit_array_access(
         emit_expr(index, emitter, ctx, data);
         emitter.instruction("ldr x9, [sp], #16");                                   // pop buffer pointer into scratch register x9
         emitter.comment("buffer access");
+        emitter.instruction("cbz x9, __rt_buffer_use_after_free");                  // abort if the buffer was freed (null pointer)
         let elem_ty = *elem_ty.clone();
         let bounds_ok = ctx.next_label("buffer_idx_ok");
         emitter.instruction("cmp x0, #0");                                          // reject negative buffer indexes

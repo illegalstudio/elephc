@@ -198,6 +198,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     buffers::emit_buffer_new(emitter);
     buffers::emit_buffer_len(emitter);
     buffers::emit_buffer_bounds_fail(emitter);
+    buffers::emit_buffer_use_after_free(emitter);
 
     // I/O runtime functions
     io::emit_cstr(emitter);
