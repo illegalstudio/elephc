@@ -129,6 +129,28 @@ fn test_ifdef_keyword_token() {
 }
 
 #[test]
+fn test_namespace_and_backslash_tokens() {
+    let t = tokens("<?php namespace Foo\\Bar; use Baz\\Qux;");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Namespace,
+            Token::Identifier("Foo".into()),
+            Token::Backslash,
+            Token::Identifier("Bar".into()),
+            Token::Semicolon,
+            Token::Use,
+            Token::Identifier("Baz".into()),
+            Token::Backslash,
+            Token::Identifier("Qux".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
 fn test_echo_string() {
     let t = tokens("<?php echo \"hello\";");
     assert_eq!(
