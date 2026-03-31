@@ -183,6 +183,7 @@ if ($x === 3) {
 | Increment/Decrement | `$i++`, `++$i`, `$i--`, `--$i` |
 | Type casting | `(int)`, `(float)`, `(string)`, `(bool)`, `(array)` |
 | Ternary | `$x > 0 ? "yes" : "no"` |
+| Array / String access | `$arr[0]`, `$map["name"]`, `$str[-1]` |
 | If / elseif / else | `if (...) { } elseif (...) { } else { }` |
 | While / Do-while | `while (...) { }`, `do { } while (...);` |
 | For / Foreach | `for (;;) { }`, `foreach ($arr as $v) { }`, `foreach ($arr as $k => $v) { }` |

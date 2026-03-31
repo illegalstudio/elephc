@@ -671,6 +671,20 @@ foreach ($arr as $v) {
 }
 ```
 
+### String indexing
+
+String indexing is supported as syntax sugar over substring-style access:
+
+```php
+<?php
+$s = "hello";
+echo $s[1];    // e
+echo $s[-1];   // o
+echo "[" . $s[99] . "]";  // []
+```
+
+The index must be an integer. Negative indices count from the end of the string, and out-of-bounds indices evaluate to an empty string.
+
 ### String arrays
 
 ```php

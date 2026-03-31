@@ -15,6 +15,9 @@ echo "\n--- Extract ---\n";
 echo "substr(7): " . substr($str, 7) . "\n";
 echo "substr(0, 5): " . substr($str, 0, 5) . "\n";
 echo "strstr(@): " . strstr("user@example.com", "@") . "\n";
+echo "index[1]: " . $str[1] . "\n";
+echo "index[-1]: " . $str[-1] . "\n";
+echo "index[99]: [" . $str[99] . "]\n";
 
 // Case
 echo "\n--- Case ---\n";

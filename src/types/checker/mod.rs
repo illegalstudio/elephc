@@ -2711,6 +2711,15 @@ impl Checker {
                 let arr_ty = self.infer_type(array, env)?;
                 let idx_ty = self.infer_type(index, env)?;
                 match &arr_ty {
+                    PhpType::Str => {
+                        if idx_ty != PhpType::Int {
+                            return Err(CompileError::new(
+                                expr.span,
+                                "String index must be integer",
+                            ));
+                        }
+                        Ok(PhpType::Str)
+                    }
                     PhpType::Array(elem_ty) => {
                         if idx_ty != PhpType::Int {
                             return Err(CompileError::new(

@@ -1857,6 +1857,24 @@ fn test_array_access_variable_index() {
 }
 
 #[test]
+fn test_string_indexing_returns_single_character() {
+    let out = compile_and_run(r#"<?php $s = "hello"; echo $s[1];"#);
+    assert_eq!(out, "e");
+}
+
+#[test]
+fn test_string_indexing_out_of_bounds_returns_empty_string() {
+    let out = compile_and_run(r#"<?php $s = "hello"; echo "[" . $s[99] . "]";"#);
+    assert_eq!(out, "[]");
+}
+
+#[test]
+fn test_string_indexing_negative_offset_counts_from_end() {
+    let out = compile_and_run(r#"<?php $s = "hello"; echo $s[-1];"#);
+    assert_eq!(out, "o");
+}
+
+#[test]
 fn test_array_assign() {
     let out = compile_and_run("<?php $a = [1, 2, 3]; $a[1] = 99; echo $a[1];");
     assert_eq!(out, "99");

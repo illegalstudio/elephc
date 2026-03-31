@@ -963,6 +963,7 @@ fn infer_local_type(
             PhpType::Array(Box::new(elem_ty))
         }
         ExprKind::ArrayAccess { array, .. } => match infer_local_type(array, sig, ctx) {
+            PhpType::Str => PhpType::Str,
             PhpType::Array(t) => *t,
             PhpType::AssocArray { value, .. } => *value,
             _ => PhpType::Int,

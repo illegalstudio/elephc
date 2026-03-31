@@ -311,6 +311,34 @@ pub(super) fn emit_array_access(
 ) -> PhpType {
     let arr_ty = emit_expr(array, emitter, ctx, data);
 
+    if arr_ty == PhpType::Str {
+        emitter.instruction("stp x1, x2, [sp, #-16]!");                           // save string ptr/len while evaluating the index expression
+        emit_expr(index, emitter, ctx, data);
+        emitter.instruction("ldp x1, x2, [sp], #16");                             // restore the indexed string after the index expression
+        emitter.comment("string indexing");
+
+        let non_negative = ctx.next_label("str_index_non_negative");
+        let done = ctx.next_label("str_index_done");
+
+        // -- lower $str[$i] to substr-style access with length 1 --
+        emitter.instruction("cmp x0, #0");                                        // check whether the requested string offset is negative
+        emitter.instruction(&format!("b.ge {}", non_negative));                   // keep non-negative offsets as-is
+        emitter.instruction("add x0, x2, x0");                                    // convert negative offsets to length + offset
+        emitter.instruction("cmp x0, #0");                                        // check whether the adjusted offset still points before the string
+        emitter.instruction("csel x0, xzr, x0, lt");                              // clamp offsets below -len to the start of the string
+        emitter.label(&non_negative);
+        emitter.instruction("cmp x0, x2");                                        // compare the offset against the string length
+        emitter.instruction("csel x0, x2, x0, gt");                               // clamp oversized offsets to the end of the string
+        emitter.instruction("add x1, x1, x0");                                    // advance the string pointer to the selected character
+        emitter.instruction("sub x2, x2, x0");                                    // compute the remaining character count after the offset
+        emitter.instruction("cmp x2, #0");                                        // check whether at least one character remains
+        emitter.instruction(&format!("b.eq {}", done));                           // out-of-bounds offsets return an empty string
+        emitter.instruction("mov x2, #1");                                        // string indexing returns exactly one character when in bounds
+        emitter.label(&done);
+
+        return PhpType::Str;
+    }
+
     if let PhpType::AssocArray { value, .. } = &arr_ty {
         let val_ty = *value.clone();
         emitter.instruction("str x0, [sp, #-16]!");                             // push hash table pointer
