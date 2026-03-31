@@ -34,7 +34,7 @@ pub(super) fn emit_property_access(
                 None => {
                     if class_info.methods.contains_key("__get") {
                         emitter.comment(&format!("magic __get('{}')", property));
-                        push_property_name_arg(property, emitter, data);
+                        super::push_magic_property_name_arg(property, emitter, data);
                         emitter.instruction("str x0, [sp, #-16]!");             // push $this pointer for __get dispatch
                         return super::emit_method_call_with_pushed_args(
                             class_name,
@@ -119,12 +119,4 @@ pub(super) fn emit_property_access(
     }
 
     prop_ty
-}
-
-fn push_property_name_arg(property: &str, emitter: &mut Emitter, data: &mut DataSection) {
-    let (label, len) = data.add_string(property.as_bytes());
-    emitter.instruction(&format!("adrp x1, {}@PAGE", label));                   // load page of the magic-property name string
-    emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", label));             // resolve the magic-property name string address
-    emitter.instruction(&format!("mov x2, #{}", len));                          // pass the magic-property name length
-    emitter.instruction("stp x1, x2, [sp, #-16]!");                             // push the magic-property name argument
 }

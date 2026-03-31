@@ -530,6 +530,14 @@ pub(crate) fn emit_method_call_with_pushed_args(
     objects::emit_method_call_with_pushed_args(class_name, method, arg_types, emitter, ctx)
 }
 
+pub(crate) fn push_magic_property_name_arg(
+    property: &str,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) {
+    objects::push_magic_property_name_arg(property, emitter, data)
+}
+
 fn emit_static_method_call(
     receiver: &crate::parser::ast::StaticReceiver,
     method: &str,

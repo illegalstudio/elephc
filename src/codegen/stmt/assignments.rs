@@ -312,14 +312,6 @@ fn resolve_magic_set_target(object: &Expr, property: &str, ctx: &Context) -> Opt
         .then_some(class_name)
 }
 
-fn push_property_name_arg(property: &str, emitter: &mut Emitter, data: &mut DataSection) {
-    let (label, len) = data.add_string(property.as_bytes());
-    emitter.instruction(&format!("adrp x1, {}@PAGE", label));                   // load page of the magic-property name string
-    emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", label));             // resolve the magic-property name string address
-    emitter.instruction(&format!("mov x2, #{}", len));                          // pass the magic-property name length
-    emitter.instruction("stp x1, x2, [sp, #-16]!");                             // push the magic-property name argument
-}
-
 fn emit_magic_set_call(
     class_name: &str,
     property: &str,
@@ -360,7 +352,7 @@ fn emit_magic_set_call(
     }
 
     emitter.instruction("mov x11, x0");                                         // keep the boxed Mixed value across property-name setup
-    push_property_name_arg(property, emitter, data);
+    super::super::expr::push_magic_property_name_arg(property, emitter, data);
     emitter.instruction("str x11, [sp, #-16]!");                                // push the boxed Mixed $value argument
     emitter.instruction("str x10, [sp, #-16]!");                                // push $this pointer for __set dispatch
     super::super::expr::emit_method_call_with_pushed_args(
