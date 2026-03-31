@@ -105,8 +105,8 @@ pub fn flatten_classes(program: &Program) -> Result<Vec<FlattenedClass>, Compile
                 merge_methods(imported_methods, methods, stmt.span, &format!("class {}", name))?;
             flattened.push(FlattenedClass {
                 name: name.clone(),
-                extends: extends.clone(),
-                implements: implements.clone(),
+                extends: extends.as_ref().map(|name| name.as_str().to_string()),
+                implements: implements.iter().map(|name| name.as_str().to_string()).collect(),
                 is_abstract: *is_abstract,
                 properties: merged_props,
                 methods: merged_methods,
@@ -191,10 +191,14 @@ fn resolve_trait_uses(
         let mut imported_properties = Vec::new();
         let mut candidates: HashMap<String, Vec<ImportedMethod>> = HashMap::new();
         let mut method_order = Vec::new();
-        let listed_trait_names: HashSet<String> = trait_use.trait_names.iter().cloned().collect();
+        let listed_trait_names: HashSet<String> = trait_use
+            .trait_names
+            .iter()
+            .map(|name| name.as_str().to_string())
+            .collect();
 
         for trait_name in &trait_use.trait_names {
-            let expanded = expand_trait(trait_name, trait_map, cache, stack).map_err(|err| {
+            let expanded = expand_trait(trait_name.as_str(), trait_map, cache, stack).map_err(|err| {
                 CompileError::new(
                     trait_use.span,
                     &format!("{} references unknown or invalid trait '{}': {}", owner_label, trait_name, err.message),
@@ -216,7 +220,7 @@ fn resolve_trait_uses(
                     .entry(method.name.clone())
                     .or_default()
                     .push(ImportedMethod {
-                        source_trait: trait_name.clone(),
+                        source_trait: trait_name.to_string(),
                         decl: method,
                     });
             }
@@ -234,13 +238,13 @@ fn resolve_trait_uses(
                     instead_of,
                 } => {
                     let selected_trait = resolve_adaptation_source(
-                        trait_name.as_deref(),
+                        trait_name.as_ref().map(|name| name.as_str()),
                         method,
                         &candidates,
                         trait_use.span,
                     )?;
                     for loser in instead_of {
-                        if !listed_trait_names.contains(loser) {
+                        if !listed_trait_names.contains(loser.as_str()) {
                             return Err(CompileError::new(
                                 trait_use.span,
                                 &format!(
@@ -249,7 +253,7 @@ fn resolve_trait_uses(
                                 ),
                             ));
                         }
-                        if loser == &selected_trait {
+                        if loser.as_str() == selected_trait {
                             return Err(CompileError::new(
                                 trait_use.span,
                                 &format!(
@@ -261,7 +265,7 @@ fn resolve_trait_uses(
                         suppressed
                             .entry(method.clone())
                             .or_default()
-                            .insert(loser.clone());
+                            .insert(loser.to_string());
                     }
                 }
                 TraitAdaptation::Alias {
@@ -271,7 +275,7 @@ fn resolve_trait_uses(
                     visibility,
                 } => {
                     let selected_trait = resolve_adaptation_source(
-                        trait_name.as_deref(),
+                        trait_name.as_ref().map(|name| name.as_str()),
                         method,
                         &candidates,
                         trait_use.span,

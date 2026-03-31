@@ -1,6 +1,7 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
+use crate::names::function_symbol;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
@@ -206,7 +207,7 @@ pub(super) fn emit_function_call(
         .unwrap_or(PhpType::Void);
 
     super::super::save_concat_offset_before_nested_call(emitter);
-    emitter.instruction(&format!("bl _fn_{}", name));                           // branch-and-link to compiled PHP function
+    emitter.instruction(&format!("bl {}", function_symbol(name)));             // branch-and-link to compiled PHP function
     super::super::restore_concat_offset_after_nested_call(emitter, &ret_ty);
 
     ret_ty

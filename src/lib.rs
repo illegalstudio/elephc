@@ -2,6 +2,8 @@ pub mod codegen;
 pub mod conditional;
 pub mod errors;
 pub mod lexer;
+pub mod names;
+pub mod name_resolver;
 pub mod parser;
 pub mod resolver;
 pub mod span;

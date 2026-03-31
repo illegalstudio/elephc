@@ -416,13 +416,15 @@ pub fn emit_expr(
         }
         ExprKind::Cast { target, expr } => emit_cast(target, expr, emitter, ctx, data),
         ExprKind::FunctionCall { name, args } => {
-            if ctx.extern_functions.contains_key(name) {
-                return super::ffi::emit_extern_call(name, args, emitter, ctx, data);
+            if ctx.extern_functions.contains_key(name.as_str()) {
+                return super::ffi::emit_extern_call(name.as_str(), args, emitter, ctx, data);
             }
-            if let Some(ty) = super::builtins::emit_builtin_call(name, args, emitter, ctx, data) {
+            if let Some(ty) =
+                super::builtins::emit_builtin_call(name.as_str(), args, emitter, ctx, data)
+            {
                 return ty;
             }
-            emit_function_call(name, args, emitter, ctx, data)
+            emit_function_call(name.as_str(), args, emitter, ctx, data)
         }
         ExprKind::Closure {
             params,
@@ -434,7 +436,7 @@ pub fn emit_expr(
         ExprKind::ClosureCall { var, args } => emit_closure_call(var, args, emitter, ctx, data),
         ExprKind::ExprCall { callee, args } => emit_expr_call(callee, args, emitter, ctx, data),
         ExprKind::ConstRef(name) => {
-            let (value, _ty) = match ctx.constants.get(name) {
+            let (value, _ty) = match ctx.constants.get(name.as_str()) {
                 Some(c) => c.clone(),
                 None => {
                     emitter.comment(&format!("WARNING: undefined constant {}", name));
@@ -451,7 +453,7 @@ pub fn emit_expr(
             emit_expr(inner, emitter, ctx, data)
         }
         ExprKind::NewObject { class_name, args } => {
-            emit_new_object(class_name, args, emitter, ctx, data)
+            emit_new_object(class_name.as_str(), args, emitter, ctx, data)
         }
         ExprKind::PropertyAccess { object, property } => {
             emit_property_access(object, property, emitter, ctx, data)

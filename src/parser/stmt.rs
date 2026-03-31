@@ -1,8 +1,9 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
+use crate::names::{Name, NameKind};
 use crate::parser::ast::{
     CType, ClassMethod, ClassProperty, Expr, ExprKind, ExternField, ExternParam, Stmt, StmtKind,
-    TraitAdaptation, TraitUse, Visibility,
+    TraitAdaptation, TraitUse, UseItem, UseKind, Visibility,
 };
 use crate::parser::control;
 use crate::parser::expr::parse_expr;
@@ -21,6 +22,8 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
         Token::Trait => parse_trait_decl(tokens, pos, span),
         Token::Abstract => parse_abstract_decl(tokens, pos, span),
         Token::Function => parse_function_decl(tokens, pos, span),
+        Token::Namespace => parse_namespace_stmt(tokens, pos, span),
+        Token::Use => parse_use_stmt(tokens, pos, span),
         Token::Return => parse_return(tokens, pos, span),
         Token::Throw => parse_throw(tokens, pos, span),
         Token::Include => parse_include(tokens, pos, span, false, false),
@@ -39,7 +42,7 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
             }
         }
         Token::LBracket => parse_list_unpack(tokens, pos, span),
-        Token::Identifier(_) | Token::Self_ | Token::Parent => {
+        Token::Identifier(_) | Token::Self_ | Token::Parent | Token::Backslash => {
             let expr = parse_expr(tokens, pos)?;
             expect_semicolon(tokens, pos)?;
             Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
@@ -111,6 +114,94 @@ fn parse_echo(
     let expr = parse_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     Ok(Stmt::new(StmtKind::Echo(expr), span))
+}
+
+fn parse_namespace_stmt(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1; // consume namespace
+
+    let name = if *pos < tokens.len() && tokens[*pos].0 == Token::LBrace {
+        None
+    } else {
+        Some(parse_name(
+            tokens,
+            pos,
+            span,
+            "Expected namespace name after 'namespace'",
+        )?)
+    };
+
+    if *pos < tokens.len() && tokens[*pos].0 == Token::Semicolon {
+        *pos += 1;
+        return Ok(Stmt::new(StmtKind::NamespaceDecl { name }, span));
+    }
+
+    expect_token(tokens, pos, &Token::LBrace, "Expected ';' or '{' after namespace name")?;
+    let mut body = Vec::new();
+    while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
+        body.push(parse_stmt(tokens, pos)?);
+    }
+    expect_token(tokens, pos, &Token::RBrace, "Expected '}' after namespace block")?;
+    Ok(Stmt::new(StmtKind::NamespaceBlock { name, body }, span))
+}
+
+fn parse_use_stmt(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1; // consume use
+
+    let default_kind = if *pos < tokens.len() && tokens[*pos].0 == Token::Function {
+        *pos += 1;
+        UseKind::Function
+    } else if *pos < tokens.len() && tokens[*pos].0 == Token::Const {
+        *pos += 1;
+        UseKind::Const
+    } else {
+        UseKind::Class
+    };
+
+    let prefix = parse_use_prefix(tokens, pos, span)?;
+
+    let imports = if *pos < tokens.len() && tokens[*pos].0 == Token::LBrace {
+        parse_group_use_items(tokens, pos, span, prefix, default_kind.clone())?
+    } else {
+        vec![parse_single_use_item_after_name(
+            tokens,
+            pos,
+            span,
+            prefix,
+            default_kind.clone(),
+        )?]
+    };
+
+    let mut all_imports = imports;
+    while *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
+        *pos += 1;
+        let item_kind = if *pos < tokens.len() && tokens[*pos].0 == Token::Function {
+            *pos += 1;
+            UseKind::Function
+        } else if *pos < tokens.len() && tokens[*pos].0 == Token::Const {
+            *pos += 1;
+            UseKind::Const
+        } else {
+            default_kind.clone()
+        };
+        let name = parse_name(
+            tokens,
+            pos,
+            span,
+            "Expected imported name after ',' in use declaration",
+        )?;
+        all_imports.push(parse_single_use_item_after_name(tokens, pos, span, name, item_kind)?);
+    }
+
+    expect_semicolon(tokens, pos)?;
+    Ok(Stmt::new(StmtKind::UseDecl { imports: all_imports }, span))
 }
 
 /// Handle statements starting with $variable: assignment, array ops, or post-increment.
@@ -558,26 +649,19 @@ fn parse_class_decl(
 
     let extends = if *pos < tokens.len() && tokens[*pos].0 == Token::Extends {
         *pos += 1;
-        match tokens.get(*pos).map(|(t, _)| t) {
-            Some(Token::Identifier(n)) => {
-                let n = n.clone();
-                *pos += 1;
-                Some(n)
-            }
-            _ => {
-                return Err(CompileError::new(
-                    span,
-                    "Expected parent class name after 'extends'",
-                ))
-            }
-        }
+        Some(parse_name(
+            tokens,
+            pos,
+            span,
+            "Expected parent class name after 'extends'",
+        )?)
     } else {
         None
     };
 
     let implements = if *pos < tokens.len() && tokens[*pos].0 == Token::Implements {
         *pos += 1;
-        parse_identifier_list(tokens, pos, span, "Expected interface name after 'implements'")?
+        parse_name_list(tokens, pos, span, "Expected interface name after 'implements'")?
     } else {
         Vec::new()
     };
@@ -635,7 +719,7 @@ fn parse_interface_decl(
 
     let extends = if *pos < tokens.len() && tokens[*pos].0 == Token::Extends {
         *pos += 1;
-        parse_identifier_list(tokens, pos, span, "Expected parent interface name after 'extends'")?
+        parse_name_list(tokens, pos, span, "Expected parent interface name after 'extends'")?
     } else {
         Vec::new()
     };
@@ -892,27 +976,183 @@ fn parse_interface_body(
     Ok(methods)
 }
 
-fn parse_identifier_list(
+pub(crate) fn name_starts_at(tokens: &[(Token, Span)], pos: usize) -> bool {
+    matches!(
+        tokens.get(pos).map(|(t, _)| t),
+        Some(Token::Identifier(_)) | Some(Token::Backslash)
+    )
+}
+
+pub(crate) fn parse_name(
     tokens: &[(Token, Span)],
     pos: &mut usize,
     span: Span,
     first_error: &str,
-) -> Result<Vec<String>, CompileError> {
-    let mut names = Vec::new();
+) -> Result<Name, CompileError> {
+    let mut kind = NameKind::Unqualified;
+    if *pos < tokens.len() && tokens[*pos].0 == Token::Backslash {
+        kind = NameKind::FullyQualified;
+        *pos += 1;
+    }
+
+    let mut parts = Vec::new();
     loop {
         match tokens.get(*pos).map(|(t, _)| t) {
             Some(Token::Identifier(name)) => {
-                names.push(name.clone());
+                parts.push(name.clone());
                 *pos += 1;
             }
-            _ if names.is_empty() => return Err(CompileError::new(span, first_error)),
+            _ if parts.is_empty() => return Err(CompileError::new(span, first_error)),
             _ => {
                 return Err(CompileError::new(
                     span,
-                    "Expected identifier after ',' in declaration list",
+                    "Expected identifier after '\\' in qualified name",
                 ))
             }
         }
+
+        if *pos < tokens.len() && tokens[*pos].0 == Token::Backslash {
+            if kind != NameKind::FullyQualified {
+                kind = NameKind::Qualified;
+            }
+            *pos += 1;
+            continue;
+        }
+        break;
+    }
+
+    Ok(Name::from_parts(kind, parts))
+}
+
+fn parse_optional_alias(tokens: &[(Token, Span)], pos: &mut usize) -> Option<String> {
+    if *pos < tokens.len() && tokens[*pos].0 == Token::As {
+        *pos += 1;
+        if let Some(Token::Identifier(alias)) = tokens.get(*pos).map(|(t, _)| t) {
+            let alias = alias.clone();
+            *pos += 1;
+            return Some(alias);
+        }
+    }
+    None
+}
+
+fn parse_single_use_item_after_name(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+    name: Name,
+    kind: UseKind,
+) -> Result<UseItem, CompileError> {
+    let alias = parse_optional_alias(tokens, pos)
+        .or_else(|| name.last_segment().map(str::to_string))
+        .ok_or_else(|| CompileError::new(span, "Imported name cannot be empty"))?;
+    Ok(UseItem { kind, name, alias })
+}
+
+fn parse_group_use_items(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+    prefix: Name,
+    default_kind: UseKind,
+) -> Result<Vec<UseItem>, CompileError> {
+    expect_token(tokens, pos, &Token::LBrace, "Expected '{' in group use declaration")?;
+    let mut imports = Vec::new();
+    while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
+        if !imports.is_empty() {
+            expect_token(tokens, pos, &Token::Comma, "Expected ',' in group use declaration")?;
+        }
+
+        let kind = if *pos < tokens.len() && tokens[*pos].0 == Token::Function {
+            *pos += 1;
+            UseKind::Function
+        } else if *pos < tokens.len() && tokens[*pos].0 == Token::Const {
+            *pos += 1;
+            UseKind::Const
+        } else {
+            default_kind.clone()
+        };
+
+        let suffix = parse_name(
+            tokens,
+            pos,
+            span,
+            "Expected imported name inside group use declaration",
+        )?;
+        if suffix.is_fully_qualified() {
+            return Err(CompileError::new(
+                span,
+                "Group use items must be relative to the shared prefix",
+            ));
+        }
+        let mut parts = prefix.parts.clone();
+        parts.extend(suffix.parts);
+        let name = Name::qualified(parts);
+        imports.push(parse_single_use_item_after_name(tokens, pos, span, name, kind)?);
+    }
+    expect_token(tokens, pos, &Token::RBrace, "Expected '}' after group use declaration")?;
+    Ok(imports)
+}
+
+fn parse_use_prefix(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Name, CompileError> {
+    let mut kind = NameKind::Unqualified;
+    if *pos < tokens.len() && tokens[*pos].0 == Token::Backslash {
+        kind = NameKind::FullyQualified;
+        *pos += 1;
+    }
+
+    let mut parts = Vec::new();
+    loop {
+        match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Identifier(name)) => {
+                parts.push(name.clone());
+                *pos += 1;
+            }
+            _ if parts.is_empty() => {
+                return Err(CompileError::new(span, "Expected imported name after 'use'"))
+            }
+            _ => break,
+        }
+
+        if *pos < tokens.len() && tokens[*pos].0 == Token::Backslash {
+            if *pos + 1 < tokens.len() && tokens[*pos + 1].0 == Token::LBrace {
+                *pos += 1;
+                break;
+            }
+            if kind != NameKind::FullyQualified {
+                kind = NameKind::Qualified;
+            }
+            *pos += 1;
+            continue;
+        }
+        break;
+    }
+
+    Ok(Name::from_parts(kind, parts))
+}
+
+fn parse_name_list(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+    first_error: &str,
+) -> Result<Vec<Name>, CompileError> {
+    let mut names = Vec::new();
+    loop {
+        if !name_starts_at(tokens, *pos) {
+            if names.is_empty() {
+                return Err(CompileError::new(span, first_error));
+            }
+            return Err(CompileError::new(
+                span,
+                "Expected name after ',' in declaration list",
+            ));
+        }
+        names.push(parse_name(tokens, pos, span, first_error)?);
 
         if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
             *pos += 1;
@@ -983,13 +1223,7 @@ fn parse_trait_use(
     *pos += 1; // consume 'use'
     let mut trait_names = Vec::new();
     loop {
-        match tokens.get(*pos).map(|(t, _)| t) {
-            Some(Token::Identifier(name)) => {
-                trait_names.push(name.clone());
-                *pos += 1;
-            }
-            _ => return Err(CompileError::new(span, "Expected trait name after 'use'")),
-        }
+        trait_names.push(parse_name(tokens, pos, span, "Expected trait name after 'use'")?);
         if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
             *pos += 1;
             continue;
@@ -1049,9 +1283,13 @@ fn parse_trait_use(
                     let mut instead_of = Vec::new();
                     loop {
                         match tokens.get(*pos).map(|(t, _)| t) {
-                            Some(Token::Identifier(name)) => {
-                                instead_of.push(name.clone());
-                                *pos += 1;
+                            Some(Token::Identifier(_)) | Some(Token::Backslash) => {
+                                instead_of.push(parse_name(
+                                    tokens,
+                                    pos,
+                                    span,
+                                    "Expected trait name after 'insteadof'",
+                                )?);
                             }
                             _ => {
                                 return Err(CompileError::new(
@@ -1105,15 +1343,8 @@ fn parse_trait_adaptation_target(
     tokens: &[(Token, Span)],
     pos: &mut usize,
     span: Span,
-) -> Result<(Option<String>, String), CompileError> {
-    let first = match tokens.get(*pos).map(|(t, _)| t) {
-        Some(Token::Identifier(name)) => {
-            let name = name.clone();
-            *pos += 1;
-            name
-        }
-        _ => return Err(CompileError::new(span, "Expected method or trait name in adaptation")),
-    };
+) -> Result<(Option<Name>, String), CompileError> {
+    let first = parse_name(tokens, pos, span, "Expected method or trait name in adaptation")?;
     if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleColon {
         *pos += 1;
         let method = match tokens.get(*pos).map(|(t, _)| t) {
@@ -1131,7 +1362,11 @@ fn parse_trait_adaptation_target(
         };
         Ok((Some(first), method))
     } else {
-        Ok((None, first))
+        let method = first
+            .last_segment()
+            .map(str::to_string)
+            .ok_or_else(|| CompileError::new(span, "Expected method name in adaptation"))?;
+        Ok((None, method))
     }
 }
 

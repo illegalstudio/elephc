@@ -257,6 +257,12 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             StmtKind::ExternGlobalDecl { name, c_type }
         }
         StmtKind::IfDef { .. } => unreachable!("ifdefs are flattened in apply_stmts"),
+        StmtKind::NamespaceDecl { name } => StmtKind::NamespaceDecl { name },
+        StmtKind::NamespaceBlock { name, body } => StmtKind::NamespaceBlock {
+            name,
+            body: apply_stmts(body, defines),
+        },
+        StmtKind::UseDecl { imports } => StmtKind::UseDecl { imports },
     }
 }
 

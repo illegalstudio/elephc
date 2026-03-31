@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::names::{mangle_fqn, method_symbol, static_method_symbol};
 use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 
 use super::system;
@@ -91,11 +92,13 @@ pub(crate) fn emit_runtime_data(
     for (func_name, var_name) in sorted_statics {
         out.push_str(&format!(
             ".comm _static_{}_{}, 16, 3\n",
-            func_name, var_name
+            mangle_fqn(func_name),
+            var_name
         ));
         out.push_str(&format!(
             ".comm _static_{}_{}_init, 8, 3\n",
-            func_name, var_name
+            mangle_fqn(func_name),
+            var_name
         ));
     }
 
@@ -202,10 +205,7 @@ pub(crate) fn emit_runtime_data(
             }
             for method_name in &interface_info.method_order {
                 if let Some(impl_class) = class_info.method_impl_classes.get(method_name) {
-                    out.push_str(&format!(
-                        "    .quad _method_{}_{}\n",
-                        impl_class, method_name
-                    ));
+                    out.push_str(&format!("    .quad {}\n", method_symbol(impl_class, method_name)));
                 } else {
                     out.push_str("    .quad 0\n");
                 }
@@ -244,10 +244,7 @@ pub(crate) fn emit_runtime_data(
         } else {
             for method_name in &class_info.vtable_methods {
                 if let Some(impl_class) = class_info.method_impl_classes.get(method_name) {
-                    out.push_str(&format!(
-                        "    .quad _method_{}_{}\n",
-                        impl_class, method_name
-                    ));
+                    out.push_str(&format!("    .quad {}\n", method_symbol(impl_class, method_name)));
                 } else {
                     out.push_str("    .quad 0\n");
                 }
@@ -262,10 +259,7 @@ pub(crate) fn emit_runtime_data(
         }
         for method_name in &class_info.static_vtable_methods {
             if let Some(impl_class) = class_info.static_method_impl_classes.get(method_name) {
-                out.push_str(&format!(
-                    "    .quad _static_{}_{}\n",
-                    impl_class, method_name
-                ));
+                out.push_str(&format!("    .quad {}\n", static_method_symbol(impl_class, method_name)));
             } else {
                 out.push_str("    .quad 0\n");
             }

@@ -2,6 +2,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::names::function_symbol;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
@@ -19,7 +20,7 @@ pub fn emit(
         ExprKind::StringLiteral(name) => name.clone(),
         _ => panic!("call_user_func() callback must be a string literal"),
     };
-    let label = format!("_fn_{}", func_name);
+    let label = function_symbol(&func_name);
 
     // -- evaluate remaining arguments and push onto stack --
     let mut arg_types = Vec::new();

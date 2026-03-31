@@ -1,6 +1,7 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
+use crate::parser::stmt::parse_name;
 use crate::span::Span;
 
 pub fn parse_expr(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, CompileError> {
@@ -703,16 +704,17 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                 span,
             ))
         }
-        Token::Identifier(name) => {
-            let name = name.clone();
-            *pos += 1;
+        Token::Identifier(_) | Token::Backslash => {
+            let name = parse_name(tokens, pos, span, "Expected name")?;
             // ptr_cast<T>(expr) — generic pointer cast
-            if name == "ptr_cast" && *pos < tokens.len() && tokens[*pos].0 == Token::Less {
+            if name.parts.len() == 1
+                && name.parts[0] == "ptr_cast"
+                && *pos < tokens.len()
+                && tokens[*pos].0 == Token::Less
+            {
                 *pos += 1; // consume <
-                let target_type = match tokens.get(*pos).map(|(t, _)| t) {
-                    Some(Token::Identifier(t)) => { let t = t.clone(); *pos += 1; t }
-                    _ => return Err(CompileError::new(span, "Expected type name after 'ptr_cast<'")),
-                };
+                let target_type = parse_name(tokens, pos, span, "Expected type name after 'ptr_cast<'")?
+                    .as_canonical();
                 if *pos >= tokens.len() || tokens[*pos].0 != Token::Greater {
                     return Err(CompileError::new(span, "Expected '>' after ptr_cast<T"));
                 }
@@ -772,10 +774,7 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
         }
         Token::New => {
             *pos += 1; // consume 'new'
-            let class_name = match tokens.get(*pos).map(|(t, _)| t) {
-                Some(Token::Identifier(n)) => { let n = n.clone(); *pos += 1; n }
-                _ => return Err(CompileError::new(span, "Expected class name after 'new'")),
-            };
+            let class_name = parse_name(tokens, pos, span, "Expected class name after 'new'")?;
             // Parse constructor arguments
             if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
                 return Err(CompileError::new(span, "Expected '(' after class name"));

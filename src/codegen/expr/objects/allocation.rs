@@ -1,6 +1,7 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
+use crate::names::method_symbol;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -166,7 +167,7 @@ pub(super) fn emit_new_object(
             .get("__construct")
             .map(String::as_str)
             .unwrap_or(class_name);
-        emitter.instruction(&format!("bl _method_{}___construct", constructor_impl)); //call constructor
+        emitter.instruction(&format!("bl {}", method_symbol(constructor_impl, "__construct"))); // call constructor
         restore_concat_offset_after_nested_call(emitter, &PhpType::Void);
     }
 

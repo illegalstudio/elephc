@@ -71,6 +71,7 @@ pub enum Token {
     Stderr,
     Fn,             // fn (arrow functions)
     Use,            // use (closure captures — reserved for future)
+    Namespace,      // namespace
     Const,          // const
     Global,         // global
     Static,         // static
@@ -101,6 +102,7 @@ pub enum Token {
     Percent,        // %
     Dot,            // .
     Comma,          // ,
+    Backslash,      // \
     LBracket,       // [
     RBracket,       // ]
     Question,       // ?
