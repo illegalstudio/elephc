@@ -5,7 +5,7 @@ use super::data_section::DataSection;
 use super::emit::Emitter;
 use super::stmt;
 use crate::parser::ast::{ExprKind, StmtKind};
-use crate::types::{ClassInfo, FunctionSig, PhpType};
+use crate::types::{ClassInfo, FunctionSig, InterfaceInfo, PhpType};
 
 #[allow(clippy::too_many_arguments)]
 pub fn emit_function(
@@ -15,9 +15,10 @@ pub fn emit_function(
     sig: &FunctionSig,
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
-    constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
+    constants: &HashMap<String, (ExprKind, PhpType)>,
     all_global_var_names: &HashSet<String>,
     all_static_vars: &HashMap<(String, String), PhpType>,
+    interfaces: &HashMap<String, InterfaceInfo>,
     classes: Option<&HashMap<String, ClassInfo>>,
 ) {
     let label = format!("_fn_{}", name);
@@ -25,6 +26,7 @@ pub fn emit_function(
     emit_function_with_label(
         emitter, data, &label, &epilogue_label, sig, body,
         all_functions, constants, all_global_var_names, all_static_vars,
+        interfaces,
         classes,
     );
 }
@@ -36,14 +38,16 @@ pub fn emit_closure(
     sig: &FunctionSig,
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
-    constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
+    constants: &HashMap<String, (ExprKind, PhpType)>,
 ) {
     let epilogue_label = format!("{}_epilogue", label);
     let empty_globals = HashSet::new();
     let empty_statics = HashMap::new();
+    let empty_interfaces = HashMap::new();
     emit_function_with_label(
         emitter, data, label, &epilogue_label, sig, body,
         all_functions, constants, &empty_globals, &empty_statics,
+        &empty_interfaces,
         None,
     );
 }
@@ -57,7 +61,8 @@ pub fn emit_method(
     sig: &FunctionSig,
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
-    constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
+    constants: &HashMap<String, (ExprKind, PhpType)>,
+    interfaces: &HashMap<String, InterfaceInfo>,
     classes: &HashMap<String, ClassInfo>,
     class_name: &str,
 ) {
@@ -66,6 +71,7 @@ pub fn emit_method(
     emit_function_with_label_and_class(
         emitter, data, label, epilogue_label, sig, body,
         all_functions, constants, &empty_globals, &empty_statics,
+        interfaces,
         Some((classes, class_name)),
     );
 }
@@ -79,9 +85,10 @@ fn emit_function_with_label(
     sig: &FunctionSig,
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
-    constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
+    constants: &HashMap<String, (ExprKind, PhpType)>,
     all_global_var_names: &HashSet<String>,
     all_static_vars: &HashMap<(String, String), PhpType>,
+    interfaces: &HashMap<String, InterfaceInfo>,
     classes: Option<&HashMap<String, ClassInfo>>,
 ) {
     // Pass classes to regular functions so they can resolve Object types
@@ -89,6 +96,7 @@ fn emit_function_with_label(
     emit_function_with_label_and_class(
         emitter, data, label, epilogue_label, sig, body,
         all_functions, constants, all_global_var_names, all_static_vars,
+        interfaces,
         class_ctx,
     );
 }
@@ -102,18 +110,21 @@ fn emit_function_with_label_and_class(
     sig: &FunctionSig,
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
-    constants: &HashMap<String, (crate::parser::ast::ExprKind, PhpType)>,
+    constants: &HashMap<String, (ExprKind, PhpType)>,
     all_global_var_names: &HashSet<String>,
     all_static_vars: &HashMap<(String, String), PhpType>,
+    interfaces: &HashMap<String, InterfaceInfo>,
     class_context: Option<(&HashMap<String, ClassInfo>, &str)>,
 ) {
 
     let mut ctx = Context::new();
     ctx.return_label = Some(epilogue_label.to_string());
+    ctx.return_type = sig.return_type.clone();
     ctx.functions = all_functions.clone();
     ctx.constants = constants.clone();
     ctx.all_global_var_names = all_global_var_names.clone();
     ctx.all_static_vars = all_static_vars.clone();
+    ctx.interfaces = interfaces.clone();
     if let Some((classes, class_name)) = class_context {
         ctx.classes = classes.clone();
         ctx.current_class = Some(class_name.to_string());
@@ -147,7 +158,15 @@ fn emit_function_with_label_and_class(
     // (They'll be filled with default values at the call site or by the function prologue)
 
     collect_local_vars(body, &mut ctx, sig);
+    collect_try_slots(body, &mut ctx);
     mark_control_flow_epilogue_unsafe(body, &mut ctx, sig, false);
+    let cleanup_label = ctx.next_label("cleanup_frame");
+    ctx.activation_frame_base_offset = Some(ctx.alloc_hidden_slot(8));
+    ctx.activation_cleanup_offset = Some(ctx.alloc_hidden_slot(8));
+    ctx.activation_prev_offset = Some(ctx.alloc_hidden_slot(8));
+    ctx.pending_action_offset = Some(ctx.alloc_hidden_slot(8));
+    ctx.pending_target_offset = Some(ctx.alloc_hidden_slot(8));
+    ctx.pending_return_value_offset = Some(ctx.alloc_hidden_slot(16));
 
     let vars_size = ctx.stack_offset;
     let frame_size = super::align16(vars_size + 16);
@@ -157,7 +176,12 @@ fn emit_function_with_label_and_class(
     emitter.label(label);
     emitter.comment("prologue");
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for locals
-    emitter.instruction(&format!("stp x29, x30, [sp, #{}]", frame_size - 16));  // save caller's frame ptr & return addr
+    if frame_size - 16 <= 504 {
+        emitter.instruction(&format!("stp x29, x30, [sp, #{}]", frame_size - 16)); // save caller's frame ptr & return addr
+    } else {
+        emitter.instruction(&format!("add x9, sp, #{}", frame_size - 16));      // compute address of the saved frame-link area for large frames
+        emitter.instruction("stp x29, x30, [x9]");                              // save caller's frame ptr & return addr through the computed address
+    }
     emitter.instruction(&format!("add x29, sp, #{}", frame_size - 16));         // set new frame pointer
 
     // -- save parameters from registers to local stack slots --
@@ -211,7 +235,7 @@ fn emit_function_with_label_and_class(
     // Without this, the first free-on-reassign would see stale stack values
     // (left over from a previous function call at the same stack address)
     // and try to deep-free a random heap pointer.
-    let param_names: std::collections::HashSet<String> =
+    let param_names: HashSet<String> =
         sig.params.iter().map(|(n, _)| n.clone()).collect();
     for (name, var) in &ctx.variables {
         if param_names.contains(name) {
@@ -224,6 +248,7 @@ fn emit_function_with_label_and_class(
             super::abi::store_at_offset(emitter, "xzr", var.stack_offset);       // zero-init to prevent stale ptr free
         }
     }
+    emit_activation_record_push(emitter, &ctx, &cleanup_label);
 
     // -- emit function body statements --
     for s in body {
@@ -300,15 +325,22 @@ fn emit_function_with_label_and_class(
         }
     }
 
+    emit_activation_record_pop(emitter, &ctx);
     emit_owned_local_epilogue_cleanup(emitter, &ctx);
 
     if needs_return_preserve {
         restore_return_registers(emitter, &sig.return_type);
     }
-    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16));  // restore frame ptr & return addr
+    if frame_size - 16 <= 504 {
+        emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16)); // restore frame ptr & return addr
+    } else {
+        emitter.instruction(&format!("add x9, sp, #{}", frame_size - 16));      // compute address of the saved frame-link area for large frames
+        emitter.instruction("ldp x29, x30, [x9]");                              // restore frame ptr & return addr through the computed address
+    }
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
     emitter.blank();
+    emit_frame_cleanup_callback(emitter, &ctx, &cleanup_label);
 
     // -- emit any closures deferred during this function's body --
     while !ctx.deferred_closures.is_empty() {
@@ -367,7 +399,7 @@ fn epilogue_has_side_effects(ctx: &Context) -> bool {
         })
 }
 
-fn emit_owned_local_epilogue_cleanup(emitter: &mut Emitter, ctx: &Context) {
+pub(crate) fn emit_owned_local_epilogue_cleanup(emitter: &mut Emitter, ctx: &Context) {
     let mut cleanup_vars: Vec<_> = ctx
         .variables
         .iter()
@@ -396,6 +428,60 @@ fn emit_owned_local_epilogue_cleanup(emitter: &mut Emitter, ctx: &Context) {
             _ => {}
         }
     }
+}
+
+fn emit_activation_record_push(emitter: &mut Emitter, ctx: &Context, cleanup_label: &str) {
+    let prev_offset = ctx
+        .activation_prev_offset
+        .expect("codegen bug: missing activation prev slot");
+    let cleanup_offset = ctx
+        .activation_cleanup_offset
+        .expect("codegen bug: missing activation cleanup slot");
+    let frame_base_offset = ctx
+        .activation_frame_base_offset
+        .expect("codegen bug: missing activation frame-base slot");
+
+    emitter.comment("register exception cleanup frame");
+    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                  // load page of the call-frame stack top
+    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");            // resolve the call-frame stack top address
+    emitter.instruction("ldr x10, [x9]");                                       // load the previous call-frame pointer
+    super::abi::store_at_offset(emitter, "x10", prev_offset);                   // save the previous call-frame pointer in this frame record
+    emitter.instruction(&format!("adrp x10, {}@PAGE", cleanup_label));          // load page of the cleanup callback label
+    emitter.instruction(&format!("add x10, x10, {}@PAGEOFF", cleanup_label));   // resolve the cleanup callback label address
+    super::abi::store_at_offset(emitter, "x10", cleanup_offset);                // save the cleanup callback address in this frame record
+    emitter.instruction("mov x10, x29");                                        // x10 = current frame pointer for cleanup callbacks
+    super::abi::store_at_offset(emitter, "x10", frame_base_offset);             // save the current frame pointer in this frame record
+    super::abi::store_at_offset(emitter, "xzr", ctx.pending_action_offset.expect("codegen bug: missing pending-action slot")); // clear pending finally action for this activation
+    emitter.instruction(&format!("sub x10, x29, #{}", prev_offset));            // x10 = address of this activation record's first slot
+    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                   // reload page of the call-frame stack top after stack-slot stores may clobber x9
+    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");             // resolve the call-frame stack top address again
+    emitter.instruction("str x10, [x9]");                                       // publish this activation record as the new call-frame stack top
+}
+
+fn emit_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
+    let prev_offset = ctx
+        .activation_prev_offset
+        .expect("codegen bug: missing activation prev slot");
+
+    emitter.comment("unregister exception cleanup frame");
+    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                   // load page of the call-frame stack top
+    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");             // resolve the call-frame stack top address
+    super::abi::load_at_offset(emitter, "x10", prev_offset);                    // reload the previous call-frame pointer from this activation
+    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                   // reload page of the call-frame stack top after the load helper may clobber x9
+    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");             // resolve the call-frame stack top address again
+    emitter.instruction("str x10, [x9]");                                       // restore the previous call-frame stack top before returning
+}
+
+fn emit_frame_cleanup_callback(emitter: &mut Emitter, ctx: &Context, cleanup_label: &str) {
+    emitter.label(cleanup_label);
+    emitter.instruction("sub sp, sp, #16");                                     // reserve callback spill space for x29/x30
+    emitter.instruction("stp x29, x30, [sp, #0]");                              // save the caller frame pointer and return address
+    emitter.instruction("mov x29, x0");                                         // treat the unwound activation's frame pointer as our temporary base
+    emit_owned_local_epilogue_cleanup(emitter, ctx);
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore the callback frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the callback spill space
+    emitter.instruction("ret");                                                 // finish unwound-frame cleanup callback
+    emitter.blank();
 }
 
 fn mark_control_flow_epilogue_unsafe(
@@ -492,6 +578,76 @@ fn mark_control_flow_epilogue_unsafe(
                 }
                 if let Some(body) = default {
                     mark_control_flow_epilogue_unsafe(body, ctx, sig, true);
+                }
+            }
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                mark_control_flow_epilogue_unsafe(try_body, ctx, sig, true);
+                for catch_clause in catches {
+                    mark_control_flow_epilogue_unsafe(&catch_clause.body, ctx, sig, true);
+                }
+                if let Some(body) = finally_body {
+                    mark_control_flow_epilogue_unsafe(body, ctx, sig, true);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_try_slots(stmts: &[crate::parser::ast::Stmt], ctx: &mut Context) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                let slot_offset = ctx.alloc_hidden_slot(208);
+                ctx.try_slot_offsets.push(slot_offset);
+                collect_try_slots(try_body, ctx);
+                for catch_clause in catches {
+                    collect_try_slots(&catch_clause.body, ctx);
+                }
+                if let Some(body) = finally_body {
+                    collect_try_slots(body, ctx);
+                }
+            }
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                collect_try_slots(then_body, ctx);
+                for (_, body) in elseif_clauses {
+                    collect_try_slots(body, ctx);
+                }
+                if let Some(body) = else_body {
+                    collect_try_slots(body, ctx);
+                }
+            }
+            StmtKind::Foreach { body, .. }
+            | StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. } => collect_try_slots(body, ctx),
+            StmtKind::For { init, update, body, .. } => {
+                if let Some(s) = init {
+                    collect_try_slots(&[*s.clone()], ctx);
+                }
+                if let Some(s) = update {
+                    collect_try_slots(&[*s.clone()], ctx);
+                }
+                collect_try_slots(body, ctx);
+            }
+            StmtKind::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    collect_try_slots(body, ctx);
+                }
+                if let Some(body) = default {
+                    collect_try_slots(body, ctx);
                 }
             }
             _ => {}
@@ -605,6 +761,31 @@ pub fn collect_local_vars(
                     collect_local_vars(body, ctx, sig);
                 }
             }
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                collect_local_vars(try_body, ctx, sig);
+                for catch_clause in catches {
+                    let catch_type_name = resolve_codegen_catch_type_name(
+                        ctx,
+                        catch_clause.exception_types.first().map(String::as_str).unwrap_or("Throwable"),
+                    );
+                    if let Some(variable) = &catch_clause.variable {
+                        if !ctx.variables.contains_key(variable) {
+                            ctx.alloc_var(
+                                variable,
+                                PhpType::Object(catch_type_name),
+                            );
+                        }
+                    }
+                    collect_local_vars(&catch_clause.body, ctx, sig);
+                }
+                if let Some(body) = finally_body {
+                    collect_local_vars(body, ctx, sig);
+                }
+            }
             StmtKind::Foreach { value_var, body, array, key_var, .. } => {
                 let arr_ty = infer_local_type(array, sig, Some(ctx));
                 if let Some(k) = key_var {
@@ -675,6 +856,19 @@ pub fn collect_local_vars(
             }
             _ => {}
         }
+    }
+}
+
+fn resolve_codegen_catch_type_name(ctx: &Context, raw_name: &str) -> String {
+    match raw_name {
+        "self" => ctx.current_class.clone().unwrap_or_else(|| raw_name.to_string()),
+        "parent" => ctx
+            .current_class
+            .as_ref()
+            .and_then(|class_name| ctx.classes.get(class_name))
+            .and_then(|class_info| class_info.parent.clone())
+            .unwrap_or_else(|| raw_name.to_string()),
+        _ => raw_name.to_string(),
     }
 }
 

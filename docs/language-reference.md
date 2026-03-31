@@ -303,6 +303,47 @@ $result = match($x) {
 echo $result; // two
 ```
 
+### try / catch / finally / throw
+
+Exceptions work with object values:
+
+```php
+<?php
+
+class DivisionByZeroException extends Exception {}
+
+function divide($left, $right) {
+    if ($right == 0) {
+        throw new DivisionByZeroException();
+    }
+    return intdiv($left, $right);
+}
+
+try {
+    echo divide(10, 2) . PHP_EOL;
+    echo divide(10, 0) . PHP_EOL;
+} catch (DivisionByZeroException $e) {
+    echo "caught" . PHP_EOL;
+} finally {
+    echo "cleanup" . PHP_EOL;
+}
+```
+
+Supported subset:
+
+- built-in `Exception` class and built-in `Throwable` interface are available without declaring them yourself
+- built-in `Exception` currently provides a minimal PHP-style API: public `$message`, `__construct($message = "")`, and `getMessage()`
+- `throw <expr>;` where `<expr>` has an object type implementing `Throwable`
+- `throw <expr>` can also be used inside expressions such as `??` and ternaries
+- `try { ... } catch (ClassName $e) { ... }`
+- `catch (TypeA | TypeB $e)` for PHP-style multi-catch
+- `catch (Exception)` without binding the exception variable
+- catch types must extend or implement `Throwable`
+- `catch (Throwable $e)` matches objects implementing the built-in `Throwable` interface, including the built-in `Exception`
+- multiple `catch` clauses
+- `try { ... } finally { ... }`
+- `return`, `break`, and `continue` run enclosing `finally` blocks before leaving the `try`
+
 ## Functions
 
 ### Declaration and calls
@@ -1612,7 +1653,6 @@ echo $p->magnitude(); // method call
 ## What elephc cannot do (by design)
 
 - No enums
-- No exceptions (`try`/`catch`/`throw`)
 - No `eval()`
 - No dynamic `include`/`require` (path must be a string literal)
 - No namespaces

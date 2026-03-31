@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::errors::CompileError;
 use crate::lexer;
 use crate::parser;
-use crate::parser::ast::{Program, Stmt, StmtKind};
+use crate::parser::ast::{CatchClause, ClassMethod, Program, Stmt, StmtKind};
 use crate::span::Span;
 
 /// Resolves all include/require statements by inlining the referenced files.
@@ -34,6 +34,11 @@ fn has_includes(stmts: &[Stmt]) -> bool {
         | StmtKind::For { body, .. }
         | StmtKind::Foreach { body, .. }
         | StmtKind::FunctionDecl { body, .. } => has_includes(body),
+        StmtKind::Try { try_body, catches, finally_body } => {
+            has_includes(try_body)
+                || catches.iter().any(|catch_clause| has_includes(&catch_clause.body))
+                || finally_body.as_ref().is_some_and(|body| has_includes(body))
+        }
         StmtKind::ClassDecl { methods, .. }
         | StmtKind::InterfaceDecl { methods, .. }
         | StmtKind::TraitDecl { methods, .. } => {
@@ -189,6 +194,41 @@ fn resolve_stmts(
                     stmt.span,
                 ));
             }
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                let try_body_resolved =
+                    resolve_stmts(try_body.clone(), base_dir, included, include_chain)?;
+                let mut catches_resolved = Vec::new();
+                for catch_clause in catches {
+                    let body_resolved = resolve_stmts(
+                        catch_clause.body.clone(),
+                        base_dir,
+                        included,
+                        include_chain,
+                    )?;
+                    catches_resolved.push(CatchClause {
+                        exception_types: catch_clause.exception_types.clone(),
+                        variable: catch_clause.variable.clone(),
+                        body: body_resolved,
+                    });
+                }
+                let finally_resolved = if let Some(body) = finally_body {
+                    Some(resolve_stmts(body.clone(), base_dir, included, include_chain)?)
+                } else {
+                    None
+                };
+                result.push(Stmt::new(
+                    StmtKind::Try {
+                        try_body: try_body_resolved,
+                        catches: catches_resolved,
+                        finally_body: finally_resolved,
+                    },
+                    stmt.span,
+                ));
+            }
             StmtKind::FunctionDecl { name, params, variadic, body } => {
                 let body_resolved =
                     resolve_stmts(body.clone(), base_dir, included, include_chain)?;
@@ -215,7 +255,7 @@ fn resolve_stmts(
                 for method in methods {
                     let body_resolved =
                         resolve_stmts(method.body.clone(), base_dir, included, include_chain)?;
-                    methods_resolved.push(crate::parser::ast::ClassMethod {
+                    methods_resolved.push(ClassMethod {
                         body: body_resolved,
                         ..method.clone()
                     });
@@ -238,7 +278,7 @@ fn resolve_stmts(
                 for method in methods {
                     let body_resolved =
                         resolve_stmts(method.body.clone(), base_dir, included, include_chain)?;
-                    methods_resolved.push(crate::parser::ast::ClassMethod {
+                    methods_resolved.push(ClassMethod {
                         body: body_resolved,
                         ..method.clone()
                     });
@@ -262,7 +302,7 @@ fn resolve_stmts(
                 for method in methods {
                     let body_resolved =
                         resolve_stmts(method.body.clone(), base_dir, included, include_chain)?;
-                    methods_resolved.push(crate::parser::ast::ClassMethod {
+                    methods_resolved.push(ClassMethod {
                         body: body_resolved,
                         ..method.clone()
                     });

@@ -7,6 +7,37 @@ pub fn parse_expr(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Com
     parse_expr_bp(tokens, pos, 0)
 }
 
+/// Parse a comma-separated argument list. The opening `(` must already be consumed.
+/// Consumes through the closing `)`.
+pub(crate) fn parse_args(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    err_span: Span,
+) -> Result<Vec<Expr>, CompileError> {
+    let mut args = Vec::new();
+    while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
+        if !args.is_empty() {
+            if tokens[*pos].0 != Token::Comma {
+                return Err(CompileError::new(tokens[*pos].1, "Expected ',' between arguments"));
+            }
+            *pos += 1;
+        }
+        if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
+            let spread_span = tokens[*pos].1;
+            *pos += 1;
+            let inner = parse_expr(tokens, pos)?;
+            args.push(Expr::new(ExprKind::Spread(Box::new(inner)), spread_span));
+        } else {
+            args.push(parse_expr(tokens, pos)?);
+        }
+    }
+    if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
+        return Err(CompileError::new(err_span, "Expected ')' after arguments"));
+    }
+    *pos += 1;
+    Ok(args)
+}
+
 /// Pratt parser: parses expressions with binding power `min_bp` or higher.
 fn parse_expr_bp(
     tokens: &[(Token, Span)],
@@ -44,20 +75,7 @@ fn parse_expr_bp(
         // Check if method call: ->method(args)
         if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
             *pos += 1;
-            let mut args = Vec::new();
-            while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
-                if !args.is_empty() {
-                    if tokens[*pos].0 != Token::Comma {
-                        return Err(CompileError::new(tokens[*pos].1, "Expected ',' between arguments"));
-                    }
-                    *pos += 1;
-                }
-                args.push(parse_expr(tokens, pos)?);
-            }
-            if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
-                return Err(CompileError::new(arrow_span, "Expected ')' after method arguments"));
-            }
-            *pos += 1;
+            let args = parse_args(tokens, pos, arrow_span)?;
             lhs = Expr::new(
                 ExprKind::MethodCall { object: Box::new(lhs), method: member_name, args },
                 arrow_span,
@@ -76,27 +94,7 @@ fn parse_expr_bp(
         if matches!(lhs.kind, ExprKind::ArrayAccess { .. } | ExprKind::ExprCall { .. } | ExprKind::ClosureCall { .. } | ExprKind::FunctionCall { .. }) {
             let call_span = tokens[*pos].1;
             *pos += 1;
-            let mut args = Vec::new();
-            while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
-                if !args.is_empty() {
-                    if tokens[*pos].0 != Token::Comma {
-                        return Err(CompileError::new(tokens[*pos].1, "Expected ',' between arguments"));
-                    }
-                    *pos += 1;
-                }
-                if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
-                    let spread_span = tokens[*pos].1;
-                    *pos += 1;
-                    let inner = parse_expr(tokens, pos)?;
-                    args.push(Expr::new(ExprKind::Spread(Box::new(inner)), spread_span));
-                } else {
-                    args.push(parse_expr(tokens, pos)?);
-                }
-            }
-            if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
-                return Err(CompileError::new(call_span, "Expected ')' after arguments"));
-            }
-            *pos += 1;
+            let args = parse_args(tokens, pos, call_span)?;
             lhs = Expr::new(
                 ExprKind::ExprCall { callee: Box::new(lhs), args },
                 call_span,
@@ -226,6 +224,11 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
             *pos += 1;
             let inner = parse_expr_bp(tokens, pos, 27)?;
             Ok(Expr::new(ExprKind::BitNot(Box::new(inner)), span))
+        }
+        Token::Throw => {
+            *pos += 1;
+            let inner = parse_expr_bp(tokens, pos, 0)?;
+            Ok(Expr::new(ExprKind::Throw(Box::new(inner)), span))
         }
         Token::True => {
             *pos += 1;
@@ -373,28 +376,7 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                     // Closure call: $fn(args)
                     Token::LParen => {
                         *pos += 1;
-                        let mut args = Vec::new();
-                        while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
-                            if !args.is_empty() {
-                                if tokens[*pos].0 != Token::Comma {
-                                    return Err(CompileError::new(tokens[*pos].1, "Expected ',' between arguments"));
-                                }
-                                *pos += 1;
-                            }
-                            // Check for spread operator: ...expr
-                            if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
-                                let spread_span = tokens[*pos].1;
-                                *pos += 1;
-                                let inner = parse_expr(tokens, pos)?;
-                                args.push(Expr::new(ExprKind::Spread(Box::new(inner)), spread_span));
-                            } else {
-                                args.push(parse_expr(tokens, pos)?);
-                            }
-                        }
-                        if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
-                            return Err(CompileError::new(span, "Expected ')' after arguments"));
-                        }
-                        *pos += 1;
+                        let args = parse_args(tokens, pos, span)?;
                         return Ok(Expr::new(ExprKind::ClosureCall { var: name, args }, span));
                     }
                     _ => {}
@@ -422,27 +404,7 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
             if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
                 let call_span = tokens[*pos].1;
                 *pos += 1;
-                let mut args = Vec::new();
-                while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
-                    if !args.is_empty() {
-                        if tokens[*pos].0 != Token::Comma {
-                            return Err(CompileError::new(tokens[*pos].1, "Expected ',' between arguments"));
-                        }
-                        *pos += 1;
-                    }
-                    if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
-                        let spread_span = tokens[*pos].1;
-                        *pos += 1;
-                        let spread_inner = parse_expr(tokens, pos)?;
-                        args.push(Expr::new(ExprKind::Spread(Box::new(spread_inner)), spread_span));
-                    } else {
-                        args.push(parse_expr(tokens, pos)?);
-                    }
-                }
-                if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
-                    return Err(CompileError::new(call_span, "Expected ')' after arguments"));
-                }
-                *pos += 1;
+                let args = parse_args(tokens, pos, call_span)?;
                 return Ok(Expr::new(
                     ExprKind::ExprCall { callee: Box::new(inner), args },
                     call_span,
@@ -769,28 +731,7 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
             // Function call: name(...)
             if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
                 *pos += 1;
-                let mut args = Vec::new();
-                while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
-                    if !args.is_empty() {
-                        if tokens[*pos].0 != Token::Comma {
-                            return Err(CompileError::new(tokens[*pos].1, "Expected ',' between arguments"));
-                        }
-                        *pos += 1;
-                    }
-                    // Check for spread operator: ...expr
-                    if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
-                        let spread_span = tokens[*pos].1;
-                        *pos += 1;
-                        let inner = parse_expr(tokens, pos)?;
-                        args.push(Expr::new(ExprKind::Spread(Box::new(inner)), spread_span));
-                    } else {
-                        args.push(parse_expr(tokens, pos)?);
-                    }
-                }
-                if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
-                    return Err(CompileError::new(span, "Expected ')' after arguments"));
-                }
-                *pos += 1;
+                let args = parse_args(tokens, pos, span)?;
                 Ok(Expr::new(ExprKind::FunctionCall { name, args }, span))
             } else if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleColon {
                 // Static method call: ClassName::method(args)
@@ -803,20 +744,7 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                     return Err(CompileError::new(span, "Expected '(' after static method name"));
                 }
                 *pos += 1;
-                let mut args = Vec::new();
-                while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
-                    if !args.is_empty() {
-                        if tokens[*pos].0 != Token::Comma {
-                            return Err(CompileError::new(tokens[*pos].1, "Expected ',' between arguments"));
-                        }
-                        *pos += 1;
-                    }
-                    args.push(parse_expr(tokens, pos)?);
-                }
-                if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
-                    return Err(CompileError::new(span, "Expected ')' after arguments"));
-                }
-                *pos += 1;
+                let args = parse_args(tokens, pos, span)?;
                 Ok(Expr::new(
                     ExprKind::StaticMethodCall {
                         receiver: StaticReceiver::Named(name),
@@ -853,20 +781,7 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                 return Err(CompileError::new(span, "Expected '(' after class name"));
             }
             *pos += 1;
-            let mut args = Vec::new();
-            while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
-                if !args.is_empty() {
-                    if tokens[*pos].0 != Token::Comma {
-                        return Err(CompileError::new(tokens[*pos].1, "Expected ',' between arguments"));
-                    }
-                    *pos += 1;
-                }
-                args.push(parse_expr(tokens, pos)?);
-            }
-            if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
-                return Err(CompileError::new(span, "Expected ')' after constructor arguments"));
-            }
-            *pos += 1;
+            let args = parse_args(tokens, pos, span)?;
             Ok(Expr::new(ExprKind::NewObject { class_name, args }, span))
         }
         Token::This => {
@@ -914,23 +829,7 @@ fn parse_scoped_static_call(
         ));
     }
     *pos += 1;
-    let mut args = Vec::new();
-    while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
-        if !args.is_empty() {
-            if tokens[*pos].0 != Token::Comma {
-                return Err(CompileError::new(
-                    tokens[*pos].1,
-                    "Expected ',' between arguments",
-                ));
-            }
-            *pos += 1;
-        }
-        args.push(parse_expr(tokens, pos)?);
-    }
-    if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
-        return Err(CompileError::new(span, "Expected ')' after arguments"));
-    }
-    *pos += 1;
+    let args = parse_args(tokens, pos, span)?;
     Ok(Expr::new(
         ExprKind::StaticMethodCall {
             receiver,

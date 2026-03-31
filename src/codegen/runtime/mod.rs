@@ -1,5 +1,6 @@
 mod arrays;
 mod data;
+mod exceptions;
 mod io;
 mod pointers;
 mod strings;
@@ -87,6 +88,12 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     system::emit_preg_match_all(emitter);
     system::emit_preg_replace(emitter);
     system::emit_preg_split(emitter);
+
+    // Exception runtime functions
+    exceptions::emit_exception_cleanup_frames(emitter);
+    exceptions::emit_exception_matches(emitter);
+    exceptions::emit_throw_current(emitter);
+    exceptions::emit_rethrow_current(emitter);
 
     // Array runtime functions
     arrays::emit_heap_alloc(emitter);

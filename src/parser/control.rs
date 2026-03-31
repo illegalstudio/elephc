@@ -1,8 +1,8 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
-use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, CatchClause, Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::parse_expr;
-use crate::parser::stmt::{parse_block, parse_body};
+use crate::parser::stmt::{expect_semicolon, expect_token, parse_block, parse_body};
 use crate::span::Span;
 
 /// Parse: if (expr) { stmts } (elseif (expr) { stmts })* (else { stmts })?
@@ -173,6 +173,87 @@ pub fn parse_for(
     ))
 }
 
+/// Parse: try { stmts } (catch (TypeA|TypeB $e) { stmts })+ (finally { stmts })?
+///     or: try { stmts } finally { stmts }
+pub fn parse_try(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1;
+    let try_body = parse_body(tokens, pos)?;
+
+    let mut catches = Vec::new();
+    while *pos < tokens.len() && tokens[*pos].0 == Token::Catch {
+        *pos += 1;
+        expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'catch'")?;
+        let mut exception_types = Vec::new();
+        loop {
+            let exception_type = match tokens.get(*pos).map(|(t, _)| t) {
+                Some(Token::Identifier(name)) => name.clone(),
+                Some(Token::Self_) => "self".to_string(),
+                Some(Token::Parent) => "parent".to_string(),
+                _ => {
+                    return Err(CompileError::new(
+                        span,
+                        "Expected exception class name in catch clause",
+                    ))
+                }
+            };
+            exception_types.push(exception_type);
+            *pos += 1;
+            if *pos < tokens.len() && tokens[*pos].0 == Token::Pipe {
+                *pos += 1;
+                continue;
+            }
+            break;
+        }
+        let variable = match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Variable(name)) => {
+                *pos += 1;
+                Some(name.clone())
+            }
+            Some(Token::RParen) => None,
+            _ => {
+                return Err(CompileError::new(
+                    span,
+                    "Expected catch variable or ')' after exception type",
+                ))
+            }
+        };
+        expect_token(tokens, pos, &Token::RParen, "Expected ')' after catch clause")?;
+        let body = parse_body(tokens, pos)?;
+        catches.push(CatchClause {
+            exception_types,
+            variable,
+            body,
+        });
+    }
+
+    let finally_body = if *pos < tokens.len() && tokens[*pos].0 == Token::Finally {
+        *pos += 1;
+        Some(parse_body(tokens, pos)?)
+    } else {
+        None
+    };
+
+    if catches.is_empty() && finally_body.is_none() {
+        return Err(CompileError::new(
+            span,
+            "Expected at least one catch or a finally block after try",
+        ));
+    }
+
+    Ok(Stmt::new(
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        },
+        span,
+    ))
+}
+
 /// Parse a simple statement without trailing semicolon (for use inside for-loops).
 pub fn parse_assign_inline(
     tokens: &[(Token, Span)],
@@ -324,27 +405,3 @@ pub fn parse_switch(
     ))
 }
 
-fn expect_semicolon(tokens: &[(Token, Span)], pos: &mut usize) -> Result<(), CompileError> {
-    if *pos < tokens.len() && tokens[*pos].0 == Token::Semicolon {
-        *pos += 1;
-        Ok(())
-    } else {
-        let span = if *pos < tokens.len() { tokens[*pos].1 } else { Span::dummy() };
-        Err(CompileError::new(span, "Expected ';'"))
-    }
-}
-
-fn expect_token(
-    tokens: &[(Token, Span)],
-    pos: &mut usize,
-    expected: &Token,
-    msg: &str,
-) -> Result<(), CompileError> {
-    if *pos < tokens.len() && tokens[*pos].0 == *expected {
-        *pos += 1;
-        Ok(())
-    } else {
-        let span = if *pos < tokens.len() { tokens[*pos].1 } else { Span::dummy() };
-        Err(CompileError::new(span, msg))
-    }
-}

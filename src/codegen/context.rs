@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::parser::ast::{ExprKind, Stmt};
-use crate::types::{ClassInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, PhpType};
+use crate::types::{ClassInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PhpType};
 
 static GLOBAL_LABEL_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -88,6 +88,8 @@ pub struct Context {
     pub closure_captures: HashMap<String, Vec<(String, PhpType)>>,
     /// Class definitions for OOP support.
     pub classes: HashMap<String, ClassInfo>,
+    /// Interface definitions for OOP support.
+    pub interfaces: HashMap<String, InterfaceInfo>,
     /// Name of the class currently being compiled (for $this resolution).
     pub current_class: Option<String>,
     /// Extern function declarations (FFI).
@@ -96,6 +98,21 @@ pub struct Context {
     pub extern_classes: HashMap<String, ExternClassInfo>,
     /// Extern global variable declarations (FFI).
     pub extern_globals: HashMap<String, PhpType>,
+    /// Current function return type for return/finally control-flow handling.
+    pub return_type: PhpType,
+    /// Hidden activation-record slot offsets: prev frame / cleanup callback / frame base.
+    pub activation_prev_offset: Option<usize>,
+    pub activation_cleanup_offset: Option<usize>,
+    pub activation_frame_base_offset: Option<usize>,
+    /// Hidden control-flow continuation state used to route return/break/continue through finally blocks.
+    pub pending_action_offset: Option<usize>,
+    pub pending_target_offset: Option<usize>,
+    pub pending_return_value_offset: Option<usize>,
+    /// Pre-allocated exception handler slots for try/catch lowering.
+    pub try_slot_offsets: Vec<usize>,
+    pub next_try_slot_idx: usize,
+    /// Stack of active finally regions (innermost last).
+    pub finally_stack: Vec<FinallyContext>,
 }
 
 pub struct VarInfo {
@@ -111,6 +128,11 @@ pub struct LoopLabels {
     /// If true, this loop entry is a switch that pushed 16 bytes to the stack.
     /// Return statements inside need to pop this before jumping to epilogue.
     pub sp_adjust: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct FinallyContext {
+    pub entry_label: String,
 }
 
 impl Default for Context {
@@ -138,10 +160,21 @@ impl Context {
             closure_sigs: HashMap::new(),
             closure_captures: HashMap::new(),
             classes: HashMap::new(),
+            interfaces: HashMap::new(),
             current_class: None,
             extern_functions: HashMap::new(),
             extern_classes: HashMap::new(),
             extern_globals: HashMap::new(),
+            return_type: PhpType::Void,
+            activation_prev_offset: None,
+            activation_cleanup_offset: None,
+            activation_frame_base_offset: None,
+            pending_action_offset: None,
+            pending_target_offset: None,
+            pending_return_value_offset: None,
+            try_slot_offsets: Vec::new(),
+            next_try_slot_idx: 0,
+            finally_stack: Vec::new(),
         }
     }
 
@@ -159,6 +192,11 @@ impl Context {
             },
         );
         offset
+    }
+
+    pub fn alloc_hidden_slot(&mut self, size: usize) -> usize {
+        self.stack_offset += size;
+        self.stack_offset
     }
 
     pub fn set_var_ownership(&mut self, name: &str, ownership: HeapOwnership) {
@@ -194,6 +232,15 @@ impl Context {
     pub fn next_label(&mut self, prefix: &str) -> String {
         let id = GLOBAL_LABEL_COUNTER.fetch_add(1, Ordering::SeqCst);
         format!("_{}_{}", prefix, id)
+    }
+
+    pub fn next_try_slot(&mut self) -> usize {
+        let offset = *self
+            .try_slot_offsets
+            .get(self.next_try_slot_idx)
+            .expect("codegen bug: missing pre-allocated try handler slot");
+        self.next_try_slot_idx += 1;
+        offset
     }
 }
 

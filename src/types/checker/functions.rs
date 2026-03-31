@@ -304,6 +304,25 @@ impl Checker {
                     self.collect_return_types(s, env, types);
                 }
             }
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                for s in try_body {
+                    self.collect_return_types(s, env, types);
+                }
+                for catch_clause in catches {
+                    for s in &catch_clause.body {
+                        self.collect_return_types(s, env, types);
+                    }
+                }
+                if let Some(body) = finally_body {
+                    for s in body {
+                        self.collect_return_types(s, env, types);
+                    }
+                }
+            }
             StmtKind::Switch { cases, default, .. } => {
                 for (_, body) in cases {
                     for s in body {

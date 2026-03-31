@@ -67,8 +67,8 @@ src/
 │   ├── mod.rs                 parse() → Program
 │   ├── ast.rs                 ExprKind, StmtKind, BinOp, CastType
 │   ├── expr.rs                Pratt parser for expressions
-│   ├── stmt.rs                Statement parsing, assignment, functions
-│   └── control.rs             if, while, for, do-while, foreach
+│   ├── stmt.rs                Statement parsing, assignment, functions, throw
+│   └── control.rs             if, while, for, do-while, foreach, try/catch/finally
 │
 ├── types/
 │   ├── mod.rs                 PhpType enum, TypeEnv, FunctionSig, CheckResult
@@ -97,14 +97,14 @@ src/
 │   │   ├── assignments.rs     Variable / property assignment helpers
 │   │   ├── arrays.rs          Array statement dispatch
 │   │   ├── arrays/            Array assign / push / list-unpack helpers
-│   │   ├── control_flow.rs    Loop / branch dispatch
-│   │   ├── control_flow/      Branching / foreach / loop helpers
+│   │   ├── control_flow.rs    Loop / branch / exception dispatch
+│   │   ├── control_flow/      Branching / foreach / loop / exception helpers
 │   │   ├── io.rs              Echo / print helpers
 │   │   └── storage.rs         Global / static / extern-global helpers
 │   ├── functions.rs           User function emission
 │   ├── abi.rs                 ARM64 register conventions
 │   ├── ffi.rs                 Extern function/global/class codegen
-│   ├── context.rs             Variables, labels, loop stack, ownership lattice
+│   ├── context.rs             Variables, labels, loop/finally stacks, ownership lattice
 │   ├── data_section.rs        String/float literal .data section
 │   ├── emit.rs                Assembly text buffer
 │   │
@@ -123,6 +123,7 @@ src/
 │       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, str_persist, ... (53 files)
 │       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, sort, usort, refcount, gc/decref dispatch, ... (100 files)
 │       ├── io/                fopen, fgets, fread, stat, scandir, ... (17 files)
+│       ├── exceptions.rs      Handler stack, frame cleanup, catch matching, throw/rethrow
 │       ├── system/            build_argv, time, getenv, shell_exec, date, mktime, strtotime, json_encode_*, json_decode, preg_*, ... (26 files)
 │       └── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ... (5 files)
 │
@@ -194,8 +195,9 @@ The runtime reserves a fixed set of global symbols in `emit_runtime_data()`:
 | String scratch | `_concat_buf`, `_concat_off` | Temporary string results for expression evaluation |
 | CLI globals | `_global_argc`, `_global_argv` | Saved OS argument state used to build `$argv` |
 | Heap allocator | `_heap_buf`, `_heap_off`, `_heap_free_list`, `_heap_small_bins`, `_heap_debug_enabled`, `_heap_max` | Heap storage plus general/small-bin allocator metadata and heap-debug toggle |
-| Runtime diagnostics | `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg`, `_heap_dbg_*` | Fatal error messages plus heap-debug summary/failure strings |
+| Runtime diagnostics | `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg`, `_uncaught_exc_msg`, `_heap_dbg_*` | Fatal error messages plus heap-debug summary/failure strings |
 | GC statistics and cycle state | `_gc_allocs`, `_gc_frees`, `_gc_live`, `_gc_peak`, `_gc_collecting`, `_gc_release_suppressed` | Allocation/free/live-byte counters plus targeted-cycle-collector coordination flags |
+| Exception state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_class_parent_ids` | Active handler stack, activation cleanup stack, current exception object, and parent links used for catch matching |
 | I/O scratch | `_cstr_buf`, `_cstr_buf2`, `_eof_flags` | Syscall-oriented C-string scratch buffers and EOF bookkeeping |
 | String/regex tables | `_fmt_g`, `_b64_encode_tbl`, `_b64_decode_tbl`, `_pcre_*` | Formatting and lookup tables for runtime helpers |
 | JSON/date tables | `_json_true`, `_json_false`, `_json_null`, `_day_names`, `_month_names` | Static data used by JSON and date routines |

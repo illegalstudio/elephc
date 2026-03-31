@@ -24,6 +24,7 @@ pub enum ExprKind {
     Negate(Box<Expr>),
     Not(Box<Expr>),
     BitNot(Box<Expr>),
+    Throw(Box<Expr>),
     NullCoalesce {
         value: Box<Expr>,
         default: Box<Expr>,
@@ -198,6 +199,13 @@ pub struct Stmt {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct CatchClause {
+    pub exception_types: Vec<String>,
+    pub variable: Option<String>,
+    pub body: Vec<Stmt>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum StmtKind {
     Echo(Expr),
     Assign {
@@ -248,6 +256,12 @@ pub enum StmtKind {
         path: String,
         once: bool,
         required: bool,
+    },
+    Throw(Expr),
+    Try {
+        try_body: Vec<Stmt>,
+        catches: Vec<CatchClause>,
+        finally_body: Option<Vec<Stmt>>,
     },
     Break,
     Continue,

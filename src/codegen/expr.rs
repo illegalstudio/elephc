@@ -105,24 +105,18 @@ pub fn emit_expr(
                 || (ctx.in_main && ctx.all_global_var_names.contains(name))
             {
                 // Load from global storage
-                let var = match ctx.variables.get(name) {
-                    Some(v) => v,
-                    None => {
-                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                        return PhpType::Int;
-                    }
+                let Some(var) = ctx.variables.get(name) else {
+                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                    return PhpType::Int;
                 };
                 let ty = var.ty.clone();
                 super::stmt::emit_global_load(emitter, ctx, name, &ty);
                 ty
             } else if ctx.ref_params.contains(name) {
                 // Load through reference pointer
-                let var = match ctx.variables.get(name) {
-                    Some(v) => v,
-                    None => {
-                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                        return PhpType::Int;
-                    }
+                let Some(var) = ctx.variables.get(name) else {
+                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                    return PhpType::Int;
                 };
                 let offset = var.stack_offset;
                 let ty = var.ty.clone();
@@ -145,12 +139,9 @@ pub fn emit_expr(
                 }
                 ty
             } else {
-                let var = match ctx.variables.get(name) {
-                    Some(v) => v,
-                    None => {
-                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                        return PhpType::Int;
-                    }
+                let Some(var) = ctx.variables.get(name) else {
+                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                    return PhpType::Int;
                 };
                 let offset = var.stack_offset;
                 let ty = var.ty.clone();
@@ -199,17 +190,25 @@ pub fn emit_expr(
             emitter.instruction("mvn x0, x0");                                  // bitwise complement of all 64 bits
             PhpType::Int
         }
+        ExprKind::Throw(inner) => {
+            let thrown_ty = emit_expr(inner, emitter, ctx, data);
+            if thrown_ty.is_refcounted() && expr_result_heap_ownership(inner) != HeapOwnership::Owned {
+                abi::emit_incref_if_refcounted(emitter, &thrown_ty);            // retain borrowed heap values before publishing them as the active exception
+            }
+            emitter.instruction("adrp x9, _exc_value@PAGE");                    // load page of the current exception slot
+            emitter.instruction("add x9, x9, _exc_value@PAGEOFF");              // resolve the current exception slot address
+            emitter.instruction("str x0, [x9]");                                // publish the thrown object pointer as the active exception
+            emitter.instruction("bl __rt_throw_current");                       // unwind to the nearest active exception handler
+            PhpType::Void
+        }
         ExprKind::NullCoalesce { value, default } => {
             emit_null_coalesce(value, default, emitter, ctx, data)
         }
         ExprKind::PreIncrement(name) => {
             if ctx.global_vars.contains(name) {
-                let var = match ctx.variables.get(name) {
-                    Some(v) => v,
-                    None => {
-                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                        return PhpType::Int;
-                    }
+                let Some(var) = ctx.variables.get(name) else {
+                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                    return PhpType::Int;
                 };
                 let ty = var.ty.clone();
                 emitter.comment(&format!("++${} (global)", name));
@@ -218,12 +217,9 @@ pub fn emit_expr(
                 emit_global_store_inline(emitter, name);
                 PhpType::Int
             } else if ctx.ref_params.contains(name) {
-                let var = match ctx.variables.get(name) {
-                    Some(v) => v,
-                    None => {
-                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                        return PhpType::Int;
-                    }
+                let Some(var) = ctx.variables.get(name) else {
+                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                    return PhpType::Int;
                 };
                 let offset = var.stack_offset;
                 emitter.comment(&format!("++${} (ref)", name));
@@ -233,12 +229,9 @@ pub fn emit_expr(
                 emitter.instruction("str x0, [x9]");                            // store back through pointer
                 PhpType::Int
             } else {
-                let var = match ctx.variables.get(name) {
-                    Some(v) => v,
-                    None => {
-                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                        return PhpType::Int;
-                    }
+                let Some(var) = ctx.variables.get(name) else {
+                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                    return PhpType::Int;
                 };
                 let offset = var.stack_offset;
                 emitter.comment(&format!("++${}", name));
@@ -254,12 +247,9 @@ pub fn emit_expr(
         }
         ExprKind::PostIncrement(name) => {
             if ctx.global_vars.contains(name) {
-                let var = match ctx.variables.get(name) {
-                    Some(v) => v,
-                    None => {
-                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                        return PhpType::Int;
-                    }
+                let Some(var) = ctx.variables.get(name) else {
+                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                    return PhpType::Int;
                 };
                 let ty = var.ty.clone();
                 emitter.comment(&format!("${}++ (global)", name));
@@ -272,12 +262,9 @@ pub fn emit_expr(
                 emitter.instruction("str x1, [x9]");                            // store incremented value to global
                 PhpType::Int
             } else if ctx.ref_params.contains(name) {
-                let var = match ctx.variables.get(name) {
-                    Some(v) => v,
-                    None => {
-                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                        return PhpType::Int;
-                    }
+                let Some(var) = ctx.variables.get(name) else {
+                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                    return PhpType::Int;
                 };
                 let offset = var.stack_offset;
                 emitter.comment(&format!("${}++ (ref)", name));
@@ -287,12 +274,9 @@ pub fn emit_expr(
                 emitter.instruction("str x1, [x9]");                            // store back through pointer
                 PhpType::Int
             } else {
-                let var = match ctx.variables.get(name) {
-                    Some(v) => v,
-                    None => {
-                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                        return PhpType::Int;
-                    }
+                let Some(var) = ctx.variables.get(name) else {
+                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                    return PhpType::Int;
                 };
                 let offset = var.stack_offset;
                 emitter.comment(&format!("${}++", name));
@@ -312,12 +296,9 @@ pub fn emit_expr(
         }
         ExprKind::PreDecrement(name) => {
             if ctx.global_vars.contains(name) {
-                let var = match ctx.variables.get(name) {
-                    Some(v) => v,
-                    None => {
-                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                        return PhpType::Int;
-                    }
+                let Some(var) = ctx.variables.get(name) else {
+                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                    return PhpType::Int;
                 };
                 let ty = var.ty.clone();
                 emitter.comment(&format!("--${} (global)", name));
@@ -326,12 +307,9 @@ pub fn emit_expr(
                 emit_global_store_inline(emitter, name);
                 PhpType::Int
             } else if ctx.ref_params.contains(name) {
-                let var = match ctx.variables.get(name) {
-                    Some(v) => v,
-                    None => {
-                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                        return PhpType::Int;
-                    }
+                let Some(var) = ctx.variables.get(name) else {
+                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                    return PhpType::Int;
                 };
                 let offset = var.stack_offset;
                 emitter.comment(&format!("--${} (ref)", name));
@@ -341,12 +319,9 @@ pub fn emit_expr(
                 emitter.instruction("str x0, [x9]");                            // store back through pointer
                 PhpType::Int
             } else {
-                let var = match ctx.variables.get(name) {
-                    Some(v) => v,
-                    None => {
-                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                        return PhpType::Int;
-                    }
+                let Some(var) = ctx.variables.get(name) else {
+                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                    return PhpType::Int;
                 };
                 let offset = var.stack_offset;
                 emitter.comment(&format!("--${}", name));
@@ -359,12 +334,9 @@ pub fn emit_expr(
         }
         ExprKind::PostDecrement(name) => {
             if ctx.ref_params.contains(name) {
-                let var = match ctx.variables.get(name) {
-                    Some(v) => v,
-                    None => {
-                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                        return PhpType::Int;
-                    }
+                let Some(var) = ctx.variables.get(name) else {
+                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                    return PhpType::Int;
                 };
                 let offset = var.stack_offset;
                 emitter.comment(&format!("${}-- (ref)", name));
@@ -374,12 +346,9 @@ pub fn emit_expr(
                 emitter.instruction("str x1, [x9]");                            // store back through pointer
                 PhpType::Int
             } else {
-                let var = match ctx.variables.get(name) {
-                    Some(v) => v,
-                    None => {
-                        emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                        return PhpType::Int;
-                    }
+                let Some(var) = ctx.variables.get(name) else {
+                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                    return PhpType::Int;
                 };
                 let offset = var.stack_offset;
                 emitter.comment(&format!("${}--", name));
@@ -507,7 +476,7 @@ pub fn emit_expr(
                 }
             };
             let offset = var.stack_offset;
-            super::abi::load_at_offset(emitter, "x0", offset); // load $this object pointer
+            abi::load_at_offset(emitter, "x0", offset);          // load $this object pointer
             let class_name = ctx.current_class.clone().unwrap_or_default();
             PhpType::Object(class_name)
         }

@@ -22,7 +22,9 @@ echo "\n";
 // Nested arrays still split lazily when the nested container itself is mutated.
 $outerA = [[10, 20], [30, 40]];
 $outerB = $outerA;
-$outerB[0][1] = 77;
+$inner = $outerB[0];
+$inner[1] = 77;
+$outerB[0] = $inner;
 
 echo "outerA inner: ";
 foreach ($outerA[0] as $value) {

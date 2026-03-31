@@ -1,4 +1,5 @@
 mod branching;
+mod exceptions;
 mod foreach;
 mod loops;
 
@@ -6,6 +7,7 @@ use super::super::context::Context;
 use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
 use crate::parser::ast::{Expr, Stmt};
+use crate::parser::ast::CatchClause;
 
 pub(super) fn emit_if_stmt(
     condition: &Expr,
@@ -75,6 +77,10 @@ pub(super) fn emit_break_stmt(emitter: &mut Emitter, ctx: &Context) {
     loops::emit_break_stmt(emitter, ctx)
 }
 
+pub(super) fn emit_branch_through_finally(emitter: &mut Emitter, ctx: &Context, target_label: &str) {
+    exceptions::emit_branch_through_finally(emitter, ctx, target_label)
+}
+
 pub(super) fn emit_return_stmt(
     expr: &Option<Expr>,
     emitter: &mut Emitter,
@@ -82,6 +88,26 @@ pub(super) fn emit_return_stmt(
     data: &mut DataSection,
 ) {
     loops::emit_return_stmt(expr, emitter, ctx, data)
+}
+
+pub(super) fn emit_throw_stmt(
+    expr: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    exceptions::emit_throw_stmt(expr, emitter, ctx, data)
+}
+
+pub(super) fn emit_try_stmt(
+    try_body: &[Stmt],
+    catches: &[CatchClause],
+    finally_body: &Option<Vec<Stmt>>,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    exceptions::emit_try_stmt(try_body, catches, finally_body, emitter, ctx, data)
 }
 
 pub(super) fn emit_continue_stmt(emitter: &mut Emitter, ctx: &Context) {

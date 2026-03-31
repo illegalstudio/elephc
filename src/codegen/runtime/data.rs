@@ -16,6 +16,9 @@ pub(crate) fn emit_runtime_data(
     out.push_str(".comm _concat_off, 8, 3\n");
     out.push_str(".comm _global_argc, 8, 3\n");
     out.push_str(".comm _global_argv, 8, 3\n");
+    out.push_str(".comm _exc_handler_top, 8, 3\n");
+    out.push_str(".comm _exc_call_frame_top, 8, 3\n");
+    out.push_str(".comm _exc_value, 8, 3\n");
     out.push_str(&format!(".comm _heap_buf, {}, 3\n", heap_size));
     out.push_str(".comm _heap_off, 8, 3\n");
     out.push_str(".comm _heap_free_list, 8, 3\n");
@@ -30,6 +33,7 @@ pub(crate) fn emit_runtime_data(
     out.push_str("_heap_dbg_free_list_msg:\n    .ascii \"Fatal error: heap debug detected free-list corruption\\n\"\n");
     out.push_str("_arr_cap_err_msg:\n    .ascii \"Fatal error: array capacity exceeded\\n\"\n");
     out.push_str("_ptr_null_err_msg:\n    .ascii \"Fatal error: null pointer dereference\\n\"\n");
+    out.push_str("_uncaught_exc_msg:\n    .ascii \"Fatal error: uncaught exception\\n\"\n");
     out.push_str(".comm _gc_allocs, 8, 3\n");
     out.push_str(".comm _gc_frees, 8, 3\n");
     out.push_str(".comm _gc_live, 8, 3\n");
@@ -99,6 +103,10 @@ pub(crate) fn emit_runtime_data(
     sorted_interfaces.sort_by_key(|(_, interface_info)| interface_info.interface_id);
     let mut sorted_classes: Vec<(&String, &ClassInfo)> = classes.iter().collect();
     sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
+    let class_id_by_name: HashMap<String, u64> = sorted_classes
+        .iter()
+        .map(|(name, class_info)| ((*name).clone(), class_info.class_id))
+        .collect();
 
     out.push_str(".data\n");
     out.push_str(".p2align 3\n");
@@ -118,6 +126,17 @@ pub(crate) fn emit_runtime_data(
             "    .quad _class_interfaces_{}\n",
             class_info.class_id
         ));
+    }
+
+    out.push_str("_class_parent_ids:\n");
+    for (_, class_info) in &sorted_classes {
+        let parent_id = class_info
+            .parent
+            .as_ref()
+            .and_then(|parent_name| class_id_by_name.get(parent_name))
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| "-1".to_string());
+        out.push_str(&format!("    .quad {}\n", parent_id));
     }
 
     out.push_str("_class_gc_desc_count:\n");

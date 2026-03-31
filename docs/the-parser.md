@@ -51,6 +51,7 @@ Things that have a value:
 | `Negate(Expr)` | `-$x` | Unary minus |
 | `Not(Expr)` | `!$x` | Logical NOT |
 | `BitNot(Expr)` | `~$x` | Bitwise NOT (complement) |
+| `Throw(Expr)` | `throw new Exception("boom")` | Throw expression node used both in statements and expression positions such as `??` or ternaries |
 | `NullCoalesce { value, default }` | `$x ?? $y` | Returns `$x` if non-null, otherwise `$y` |
 | `PreIncrement(String)` | `++$i` | Returns new value |
 | `PostIncrement(String)` | `$i++` | Returns old value |
@@ -96,6 +97,8 @@ Things that do something:
 | `Break` | `break;` |
 | `Continue` | `continue;` |
 | `Include { path, once, required }` | `include 'file.php';` |
+| `Throw(Expr)` | `throw new Exception("boom");` |
+| `Try { try_body, catches, finally_body }` | `try { ... } catch (Exception $e) { ... } finally { ... }` |
 | `ConstDecl { name, value }` | `const MAX = 100;` |
 | `ListUnpack { vars, value }` | `[$a, $b] = [1, 2];` |
 | `Global { vars }` | `global $x, $y;` — declares variables as referencing global storage |
@@ -123,8 +126,9 @@ At statement level, parsing is split between `parser/mod.rs` and `stmt.rs`:
 | `Trait` | Trait declaration |
 | `Function` | Function declaration |
 | `Return` | Return statement |
+| `Throw` | Throw statement |
 | `Echo` / `Print` | Echo/print statement |
-| `If` / `While` / `Do` / `For` / `Foreach` / `Switch` | Control-flow statement |
+| `If` / `While` / `Do` / `For` / `Foreach` / `Switch` / `Try` | Control-flow statement |
 | `Const` / `Global` / `Static` | Declaration-like statement |
 | `Variable` / `This` / `Identifier` / `Self_` / `Parent` / `Static::...` | Assignment, property write, call, or generic expression statement |
 
@@ -147,6 +151,7 @@ NullCoalesce
 | `Visibility` | `Public`, `Protected`, `Private` | Enum for property/method visibility |
 | `ClassProperty` | `name`, `visibility`, `readonly`, `default`, `span` | A property declaration inside a class |
 | `ClassMethod` | `name`, `visibility`, `is_static`, `is_abstract`, `has_body`, `params`, `variadic`, `body`, `span` | A method declaration inside a class, trait, or interface |
+| `CatchClause` | `exception_types`, `variable`, `body` | A catch arm. `exception_types` supports both single-type and PHP-style multi-catch (`TypeA | TypeB`), and `variable` is optional for PHP 8-style `catch (Exception)` |
 | `StaticReceiver` | `Named(String)`, `Self_`, `Static`, `Parent` | Left-hand side of `ClassName::method()`, `self::method()`, `static::method()`, and `parent::method()` |
 | `TraitUse` | `trait_names`, `adaptations`, `span` | A `use TraitA, TraitB { ... }` clause inside a class or trait body |
 | `TraitAdaptation` | `Alias { trait_name: Option<String>, method, alias: Option<String>, visibility: Option<Visibility> }`, `InsteadOf { trait_name: Option<String>, method, instead_of: Vec<String> }` | PHP-style trait conflict resolution and aliasing |
@@ -258,6 +263,7 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `true` / `false` | Return `BoolLiteral` node |
 | `null` | Return `Null` node |
 | `Variable` | Return `Variable` node (with postfix `++`/`--` check) |
+| `throw` | Parse the following expression and wrap it in `ExprKind::Throw` |
 | `-` (minus) | Parse inner expr at bp=27, return `Negate` |
 | `!` (not) | Parse inner expr at bp=27, return `Not` |
 | `~` (bitwise not) | Parse inner expr at bp=27, return `BitNot` |
@@ -303,8 +309,10 @@ Statement parsing is simpler — after `parse()` has peeled off top-level `exter
 | Current token | Parse as |
 |---|---|
 | `Echo` / `Print` | `Echo` statement — parse expression, expect `;` |
+| `Throw` | `Throw` statement — parse one expression, expect `;` |
 | `Variable` | Assignment, compound assignment, array assign/push, or expression statement |
 | `If` | `If` with optional `elseif` chain and `else` |
+| `Try` | `Try` with one or more `catch` clauses and optional `finally` |
 | `While` | `While` loop |
 | `Do` | `DoWhile` loop |
 | `For` | `For` loop with init/condition/update |
@@ -338,6 +346,24 @@ $x++;            →  ExprStmt(PostIncrement("x"))
 ```
 
 Compound assignments (`+=`, `-=`, `*=`, `/=`, `.=`, `%=`) are desugared into regular assignments with binary operations.
+
+### `try` / `catch` / `finally`
+
+`control.rs` parses exception handling statements with this general shape:
+
+```php
+try {
+    // body
+} catch (TypeA | TypeB $e) {
+    // handler
+} catch (Exception) {
+    // optional variable binding omitted
+} finally {
+    // cleanup
+}
+```
+
+Each `catch` becomes a `CatchClause { exception_types, variable, body }`. `exception_types` always stores a vector, so single-type catches are just a one-element list.
 
 ## How it connects
 

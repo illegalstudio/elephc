@@ -39,6 +39,8 @@ _closure_1:
     ret
 
 ; --- runtime routines ---
+__rt_throw_current:
+    ...
 __rt_itoa:
     ...
 __rt_concat:
@@ -96,10 +98,21 @@ pub struct Context {
     pub closure_sigs: HashMap<String, FunctionSig>,
     pub closure_captures: HashMap<String, Vec<(String, PhpType)>>,
     pub classes: HashMap<String, ClassInfo>,
+    pub interfaces: HashMap<String, InterfaceInfo>,
     pub current_class: Option<String>,
     pub extern_functions: HashMap<String, ExternFunctionSig>,
     pub extern_classes: HashMap<String, ExternClassInfo>,
     pub extern_globals: HashMap<String, PhpType>,
+    pub return_type: PhpType,
+    pub activation_prev_offset: Option<usize>,
+    pub activation_cleanup_offset: Option<usize>,
+    pub activation_frame_base_offset: Option<usize>,
+    pub pending_action_offset: Option<usize>,
+    pub pending_target_offset: Option<usize>,
+    pub pending_return_value_offset: Option<usize>,
+    pub try_slot_offsets: Vec<usize>,
+    pub next_try_slot_idx: usize,
+    pub finally_stack: Vec<FinallyContext>,
 }
 ```
 
@@ -122,6 +135,8 @@ pub struct VarInfo {
 - `MaybeOwned` — control flow merged heap-backed paths with different ownership states
 
 The lattice is now threaded through the main local-variable paths. Function epilogues re-enable cleanup only for slots classified as `Owned` and still marked `epilogue_cleanup_safe`; locals coming from still-ambiguous control-flow or aliasing paths are intentionally skipped. Special aliases such as `$this`, by-reference params, globals, and statics are explicitly kept out of epilogue cleanup because the current frame does not own their storage. Builtins that duplicate containers now also dispatch to dedicated `_refcounted` runtime helpers when their element/value types are heap-backed, so nested array/hash/object/string payloads are retained before the new container becomes an owner.
+
+The exception-related fields let codegen thread `try` / `catch` / `finally` through non-local control flow. Function and `_main` frames publish activation records into the runtime cleanup stack, pre-allocate handler slots for `setjmp` buffers, and use `finally_stack` plus the `pending_*` slots to defer `return`, `break`, and `continue` until the innermost `finally` body has run.
 
 ### Label generation
 
@@ -642,6 +657,18 @@ For associative arrays, see [Associative array codegen](#associative-array-codeg
 
 The `loop_stack` in the Context tracks which labels to jump to for nested loops. Each `LoopLabels` entry also carries an `sp_adjust` field so returns inside switch/loop-driven control flow can undo any temporary stack slots before jumping to the shared function epilogue.
 
+### Exceptions and `finally`
+
+Exception lowering lives in `src/codegen/stmt/control_flow/exceptions.rs`. The basic strategy is:
+
+1. Evaluate the thrown object and publish it to `_exc_value`
+2. Call `__rt_throw_current`, which unwinds activation records and `longjmp`s into the nearest handler
+3. For `try`, emit a `_setjmp` resume point plus a linked handler record in `_exc_handler_top`
+4. Test each catch target by class id or interface id through `__rt_exception_matches`
+5. Route `return`, `break`, `continue`, and rethrow through `finally_stack` so every enclosing `finally` runs before control leaves the protected region
+
+This means `finally` is part of ordinary control-flow lowering, not a separate runtime pass. The runtime only unwinds frames and chooses the landing pad; the compiler-generated labels still decide whether execution resumes in a matching `catch`, in a `finally`, or in an outer handler.
+
 ### Switch
 
 ```php
@@ -850,8 +877,9 @@ The `generate()` function orchestrates everything:
    - Prologue (stack frame for global variables)
    - Save `argc` and `argv` from OS (they arrive in `x0` and `x1`)
    - Build `$argv` array via `__rt_build_argv` runtime call
+   - Register the main activation record so exceptions can unwind through top-level code too
    - Emit all non-function statements
-   - Epilogue: `exit(0)` syscall
+   - Epilogue: clean up owned locals, unregister the activation record, then `exit(0)`
 4. **Emit deferred closures** — closure bodies recorded during earlier expression codegen
 5. **Emit runtime routines** — all `__rt_*` helper functions
 6. **Emit data section** — string and float literals

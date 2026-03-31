@@ -274,7 +274,7 @@ Proper type system for PHP compatibility.
 - [x] Inheritance (`extends`) — vtable-based method dispatch, property layout chaining, and `self::` / `parent::` / `static::` calls
 - [x] Interfaces / abstract classes — interface method tables and compile-time conformance checking
 - [x] Traits — compile-time method copying / inlining with `use`, `as`, `insteadof`, and trait properties
-- [ ] Exceptions (`try`/`catch`) — stack unwinding via `setjmp`/`longjmp` or DWARF-based infrastructure
+- [x] Exceptions (`try`/`catch`) — stack unwinding via `setjmp`/`longjmp` with runtime frame cleanup and `finally` support
 - [x] Hash table insertion order — preserve PHP associative-array insertion order with a secondary linked list through entries
 - [x] Mixed-type associative arrays — per-entry type tags instead of one value type per table
 - [ ] String indexing (`$str[$i]`) — lower to substring-style access as syntax sugar

@@ -5,7 +5,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
 use crate::parser::ast::{
-    BinOp, CType, CastType, Expr, ExprKind, Program, StaticReceiver, Stmt, StmtKind, Visibility,
+    BinOp, CType, CastType, ClassMethod, ClassProperty, Expr, ExprKind, Program, StaticReceiver,
+    Stmt, StmtKind, Visibility,
 };
 use crate::types::{
     ctype_stack_size, ctype_to_php_type, traits::{flatten_classes, FlattenedClass}, CheckResult,
@@ -66,6 +67,25 @@ fn collect_return_types_syntactic(stmt: &Stmt, types: &mut Vec<PhpType>) {
         | StmtKind::Foreach { body, .. } => {
             for s in body {
                 collect_return_types_syntactic(s, types);
+            }
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            for s in try_body {
+                collect_return_types_syntactic(s, types);
+            }
+            for catch_clause in catches {
+                for s in &catch_clause.body {
+                    collect_return_types_syntactic(s, types);
+                }
+            }
+            if let Some(body) = finally_body {
+                for s in body {
+                    collect_return_types_syntactic(s, types);
+                }
             }
         }
         StmtKind::Switch { cases, default, .. } => {
@@ -158,6 +178,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             let right_ty = infer_expr_type_syntactic(default);
             wider_type_syntactic(&left_ty, &right_ty)
         }
+        ExprKind::Throw(_) => PhpType::Void,
         ExprKind::Ternary {
             then_expr,
             else_expr,
@@ -247,6 +268,143 @@ struct InterfaceDeclInfo {
     extends: Vec<String>,
     methods: Vec<crate::parser::ast::ClassMethod>,
     span: crate::span::Span,
+}
+
+fn inject_builtin_throwables(
+    interface_map: &mut HashMap<String, InterfaceDeclInfo>,
+    class_map: &mut HashMap<String, FlattenedClass>,
+) -> Result<(), CompileError> {
+    for builtin_name in ["Throwable", "Exception"] {
+        if interface_map.contains_key(builtin_name) || class_map.contains_key(builtin_name) {
+            return Err(CompileError::new(
+                crate::span::Span::dummy(),
+                &format!("Cannot redeclare built-in exception type: {}", builtin_name),
+            ));
+        }
+    }
+
+    interface_map.insert(
+        "Throwable".to_string(),
+        InterfaceDeclInfo {
+            name: "Throwable".to_string(),
+            extends: Vec::new(),
+            methods: vec![builtin_throwable_get_message_method()],
+            span: crate::span::Span::dummy(),
+        },
+    );
+    class_map.insert(
+        "Exception".to_string(),
+        FlattenedClass {
+            name: "Exception".to_string(),
+            extends: None,
+            implements: vec!["Throwable".to_string()],
+            is_abstract: false,
+            properties: vec![builtin_exception_message_property()],
+            methods: vec![
+                builtin_exception_constructor_method(),
+                builtin_exception_get_message_method(),
+            ],
+        },
+    );
+
+    Ok(())
+}
+
+fn builtin_exception_message_property() -> ClassProperty {
+    ClassProperty {
+        name: "message".to_string(),
+        visibility: Visibility::Public,
+        readonly: false,
+        default: Some(Expr::new(
+            ExprKind::StringLiteral(String::new()),
+            crate::span::Span::dummy(),
+        )),
+        span: crate::span::Span::dummy(),
+    }
+}
+
+fn builtin_exception_constructor_method() -> ClassMethod {
+    ClassMethod {
+        name: "__construct".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        has_body: true,
+        params: vec![(
+            "message".to_string(),
+            Some(Expr::new(
+                ExprKind::StringLiteral(String::new()),
+                crate::span::Span::dummy(),
+            )),
+            false,
+        )],
+        variadic: None,
+        body: vec![Stmt::new(
+            StmtKind::PropertyAssign {
+                object: Box::new(Expr::new(ExprKind::This, crate::span::Span::dummy())),
+                property: "message".to_string(),
+                value: Expr::new(ExprKind::Variable("message".to_string()), crate::span::Span::dummy()),
+            },
+            crate::span::Span::dummy(),
+        )],
+        span: crate::span::Span::dummy(),
+    }
+}
+
+fn builtin_exception_get_message_method() -> ClassMethod {
+    ClassMethod {
+        name: "getMessage".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        has_body: true,
+        params: Vec::new(),
+        variadic: None,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::PropertyAccess {
+                    object: Box::new(Expr::new(ExprKind::This, crate::span::Span::dummy())),
+                    property: "message".to_string(),
+                },
+                crate::span::Span::dummy(),
+            ))),
+            crate::span::Span::dummy(),
+        )],
+        span: crate::span::Span::dummy(),
+    }
+}
+
+fn builtin_throwable_get_message_method() -> ClassMethod {
+    ClassMethod {
+        name: "getMessage".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: true,
+        has_body: false,
+        params: Vec::new(),
+        variadic: None,
+        body: Vec::new(),
+        span: crate::span::Span::dummy(),
+    }
+}
+
+fn patch_builtin_exception_signatures(checker: &mut Checker) {
+    if let Some(interface_info) = checker.interfaces.get_mut("Throwable") {
+        if let Some(sig) = interface_info.methods.get_mut("getMessage") {
+            sig.return_type = PhpType::Str;
+        }
+    }
+    if let Some(class_info) = checker.classes.get_mut("Exception") {
+        if let Some(sig) = class_info.methods.get_mut("__construct") {
+            if let Some(param) = sig.params.get_mut(0) {
+                param.1 = PhpType::Str;
+            }
+            sig.return_type = PhpType::Void;
+        }
+        if let Some(sig) = class_info.methods.get_mut("getMessage") {
+            sig.return_type = PhpType::Str;
+        }
+    }
 }
 
 fn build_method_sig(method: &crate::parser::ast::ClassMethod) -> FunctionSig {
@@ -376,6 +534,9 @@ fn validate_override_signature(
 ) -> Result<(), CompileError> {
     let kind = if is_static { "static method" } else { "method" };
     let child_sig = build_method_sig(method);
+    if method.name == "__construct" {
+        return Ok(());
+    }
     validate_signature_compatibility(
         method.span,
         class_name,
@@ -859,7 +1020,18 @@ fn build_class_info_recursive(
                 .expect("type checker bug: missing interface method signature");
             let actual_sig = match method_sigs.get(method_name) {
                 Some(sig) => sig,
-                None if class.is_abstract => continue,
+                None if class.is_abstract => {
+                    method_sigs.insert(method_name.clone(), required_sig.clone());
+                    method_visibilities.insert(method_name.clone(), Visibility::Public);
+                    method_declaring_classes.insert(method_name.clone(), class.name.clone());
+                    method_impl_classes.remove(method_name);
+                    if !vtable_slots.contains_key(method_name) {
+                        let slot = vtable_methods.len();
+                        vtable_slots.insert(method_name.clone(), slot);
+                        vtable_methods.push(method_name.clone());
+                    }
+                    continue;
+                }
                 None => {
                     return Err(CompileError::new(
                         crate::span::Span::dummy(),
@@ -1064,6 +1236,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         .cloned()
         .map(|class| (class.name.clone(), class))
         .collect();
+    let mut class_map = class_map;
     let mut interface_map = HashMap::new();
     for stmt in program {
         if let StmtKind::InterfaceDecl {
@@ -1089,6 +1262,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
             );
         }
     }
+    inject_builtin_throwables(&mut interface_map, &mut class_map)?;
 
     let mut next_interface_id = 0u64;
     let mut building_interfaces = HashSet::new();
@@ -1107,15 +1281,17 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
     // First pass: collect flattened class declarations and build ClassInfo
     let mut next_class_id = 0u64;
     let mut building = HashSet::new();
-    for class in &flattened_classes {
+    let class_names: Vec<String> = class_map.keys().cloned().collect();
+    for class_name in class_names {
         build_class_info_recursive(
-            &class.name,
+            &class_name,
             &class_map,
             &mut checker,
             &mut next_class_id,
             &mut building,
         )?;
     }
+    patch_builtin_exception_signatures(&mut checker);
 
     // Pre-scan: collect extern declarations
     for stmt in program {
@@ -1408,6 +1584,82 @@ impl Checker {
         false
     }
 
+    fn class_implements_interface(&self, class_name: &str, interface_name: &str) -> bool {
+        self.classes
+            .get(class_name)
+            .is_some_and(|class_info| class_info.interfaces.iter().any(|name| name == interface_name))
+    }
+
+    fn interface_extends_interface(&self, interface_name: &str, ancestor_name: &str) -> bool {
+        if interface_name == ancestor_name {
+            return true;
+        }
+        let mut stack = vec![interface_name.to_string()];
+        let mut seen = HashSet::new();
+        while let Some(current_name) = stack.pop() {
+            if !seen.insert(current_name.clone()) {
+                continue;
+            }
+            let Some(interface_info) = self.interfaces.get(&current_name) else {
+                continue;
+            };
+            for parent_name in &interface_info.parents {
+                if parent_name == ancestor_name {
+                    return true;
+                }
+                stack.push(parent_name.clone());
+            }
+        }
+        false
+    }
+
+    fn object_type_implements_throwable(&self, type_name: &str) -> bool {
+        if self.classes.contains_key(type_name) {
+            return self.class_implements_interface(type_name, "Throwable");
+        }
+        if self.interfaces.contains_key(type_name) {
+            return self.interface_extends_interface(type_name, "Throwable");
+        }
+        false
+    }
+
+    fn common_catch_type_name(&self, type_names: &[String]) -> String {
+        let mut iter = type_names.iter();
+        let Some(first_name) = iter.next() else {
+            return "Throwable".to_string();
+        };
+        let mut common = first_name.clone();
+        for type_name in iter {
+            match self.common_object_type(&common, type_name) {
+                Some(PhpType::Object(next_common)) => common = next_common,
+                _ => return "Throwable".to_string(),
+            }
+        }
+        common
+    }
+
+    fn resolve_catch_type_name(
+        &self,
+        raw_name: &str,
+        span: crate::span::Span,
+    ) -> Result<String, CompileError> {
+        match raw_name {
+            "self" => self.current_class.clone().ok_or_else(|| {
+                CompileError::new(span, "Cannot use self in catch outside of a class context")
+            }),
+            "parent" => {
+                let current_class = self.current_class.as_ref().ok_or_else(|| {
+                    CompileError::new(span, "Cannot use parent in catch outside of a class context")
+                })?;
+                self.classes
+                    .get(current_class)
+                    .and_then(|class_info| class_info.parent.clone())
+                    .ok_or_else(|| CompileError::new(span, "Class has no parent class"))
+            }
+            _ => Ok(raw_name.to_string()),
+        }
+    }
+
     fn is_pointer_type(ty: &PhpType) -> bool {
         matches!(ty, PhpType::Pointer(_))
     }
@@ -1452,6 +1704,18 @@ impl Checker {
     fn common_object_type(&self, left: &str, right: &str) -> Option<PhpType> {
         if left == right {
             return Some(PhpType::Object(left.to_string()));
+        }
+        if self.interfaces.contains_key(left) && self.interface_extends_interface(right, left) {
+            return Some(PhpType::Object(left.to_string()));
+        }
+        if self.interfaces.contains_key(right) && self.interface_extends_interface(left, right) {
+            return Some(PhpType::Object(right.to_string()));
+        }
+        if self.interfaces.contains_key(left) && self.class_implements_interface(right, left) {
+            return Some(PhpType::Object(left.to_string()));
+        }
+        if self.interfaces.contains_key(right) && self.class_implements_interface(left, right) {
+            return Some(PhpType::Object(right.to_string()));
         }
         if self.is_subclass_of(left, right) {
             return Some(PhpType::Object(right.to_string()));
@@ -2109,6 +2373,71 @@ impl Checker {
                 }
                 Ok(())
             }
+            StmtKind::Throw(expr) => {
+                let thrown_ty = self.infer_type(expr, env)?;
+                match thrown_ty {
+                    PhpType::Object(type_name) if self.object_type_implements_throwable(&type_name) => {
+                        Ok(())
+                    }
+                    PhpType::Object(_) => Err(CompileError::new(
+                        stmt.span,
+                        "Type error: throw requires an object implementing Throwable",
+                    )),
+                    _ => Err(CompileError::new(
+                        stmt.span,
+                        "Type error: throw requires an object value",
+                    )),
+                }
+            }
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                for s in try_body {
+                    self.check_stmt(s, env)?;
+                }
+                for catch_clause in catches {
+                    let mut resolved_types = Vec::new();
+                    for raw_exception_type in &catch_clause.exception_types {
+                        let exception_type =
+                            self.resolve_catch_type_name(raw_exception_type, stmt.span)?;
+                        if !self.classes.contains_key(&exception_type)
+                            && !self.interfaces.contains_key(&exception_type)
+                        {
+                            return Err(CompileError::new(
+                                stmt.span,
+                                &format!("Undefined class: {}", exception_type),
+                            ));
+                        }
+                        if !self.object_type_implements_throwable(&exception_type) {
+                            return Err(CompileError::new(
+                                stmt.span,
+                                &format!(
+                                    "Catch type must extend or implement Throwable: {}",
+                                    exception_type
+                                ),
+                            ));
+                        }
+                        resolved_types.push(exception_type);
+                    }
+                    if let Some(variable) = &catch_clause.variable {
+                        env.insert(
+                            variable.clone(),
+                            PhpType::Object(self.common_catch_type_name(&resolved_types)),
+                        );
+                    }
+                    for s in &catch_clause.body {
+                        self.check_stmt(s, env)?;
+                    }
+                }
+                if let Some(body) = finally_body {
+                    for s in body {
+                        self.check_stmt(s, env)?;
+                    }
+                }
+                Ok(())
+            }
             StmtKind::Include { .. } => {
                 // Should have been resolved before type checking
                 Err(CompileError::new(stmt.span, "Unresolved include statement"))
@@ -2416,6 +2745,22 @@ impl Checker {
                     then_ty
                 };
                 Ok(result_ty)
+            }
+            ExprKind::Throw(inner) => {
+                let thrown_ty = self.infer_type(inner, env)?;
+                match thrown_ty {
+                    PhpType::Object(type_name) if self.object_type_implements_throwable(&type_name) => {
+                        Ok(PhpType::Void)
+                    }
+                    PhpType::Object(_) => Err(CompileError::new(
+                        expr.span,
+                        "Type error: throw requires an object implementing Throwable",
+                    )),
+                    _ => Err(CompileError::new(
+                        expr.span,
+                        "Type error: throw requires an object value",
+                    )),
+                }
             }
             ExprKind::Cast { target, expr } => {
                 self.infer_type(expr, env)?;
@@ -3122,6 +3467,25 @@ impl Checker {
             | StmtKind::Foreach { body, .. } => {
                 for stmt in body {
                     self.collect_closure_return_types(stmt, env, return_types);
+                }
+            }
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                for stmt in try_body {
+                    self.collect_closure_return_types(stmt, env, return_types);
+                }
+                for catch_clause in catches {
+                    for stmt in &catch_clause.body {
+                        self.collect_closure_return_types(stmt, env, return_types);
+                    }
+                }
+                if let Some(body) = finally_body {
+                    for stmt in body {
+                        self.collect_closure_return_types(stmt, env, return_types);
+                    }
                 }
             }
             StmtKind::Switch { cases, default, .. } => {

@@ -101,6 +101,64 @@ fn test_error_unexpected_token_in_stmt() {
 }
 
 #[test]
+fn test_error_try_requires_catch_or_finally() {
+    expect_error("<?php try { echo 1; }", "Expected at least one catch or a finally block after try");
+}
+
+#[test]
+fn test_error_throw_requires_object() {
+    expect_error("<?php throw 123;", "throw requires an object value");
+}
+
+#[test]
+fn test_error_throw_requires_throwable() {
+    expect_error(
+        "<?php class PlainObject {} throw new PlainObject();",
+        "throw requires an object implementing Throwable",
+    );
+}
+
+#[test]
+fn test_error_throw_expression_requires_object() {
+    expect_error(
+        "<?php $value = null ?? throw 123;",
+        "throw requires an object value",
+    );
+}
+
+#[test]
+fn test_error_catch_requires_defined_class() {
+    expect_error(
+        "<?php try { echo 1; } catch (MissingException $e) { echo 2; }",
+        "Undefined class: MissingException",
+    );
+}
+
+#[test]
+fn test_error_catch_requires_throwable_type() {
+    expect_error(
+        "<?php class PlainObject {} try { throw new Exception(); } catch (PlainObject $e) { echo 2; }",
+        "Catch type must extend or implement Throwable: PlainObject",
+    );
+}
+
+#[test]
+fn test_error_cannot_redeclare_builtin_exception_type() {
+    expect_error(
+        "<?php class Exception {}",
+        "Cannot redeclare built-in exception type: Exception",
+    );
+}
+
+#[test]
+fn test_error_cannot_instantiate_throwable_interface() {
+    expect_error(
+        "<?php $e = new Throwable();",
+        "Cannot instantiate interface: Throwable",
+    );
+}
+
+#[test]
 fn test_error_missing_function_name() {
     expect_error("<?php function () { }", "Expected function name");
 }
