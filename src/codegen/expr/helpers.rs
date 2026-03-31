@@ -1,3 +1,5 @@
+use super::super::context::Context;
+use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
 use super::{expr_result_heap_ownership, Expr, HeapOwnership, PhpType};
 
@@ -28,6 +30,8 @@ pub(super) fn widen_codegen_type(a: &PhpType, b: &PhpType) -> PhpType {
 
 pub(super) fn coerce_result_to_type(
     emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
     source_ty: &PhpType,
     target_ty: &PhpType,
 ) {
@@ -35,7 +39,7 @@ pub(super) fn coerce_result_to_type(
         return;
     }
     if *target_ty == PhpType::Str {
-        super::coerce_to_string(emitter, source_ty);
+        super::coerce_to_string(emitter, ctx, data, source_ty);
     } else if *target_ty == PhpType::Float
         && matches!(source_ty, PhpType::Int | PhpType::Bool | PhpType::Void)
     {

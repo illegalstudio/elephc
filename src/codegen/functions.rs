@@ -1163,6 +1163,9 @@ fn infer_local_type(
                         if let Some((_, ty)) = ci.properties.iter().find(|(n, _)| n == property) {
                             return ty.clone();
                         }
+                        if let Some(sig) = ci.methods.get("__get") {
+                            return sig.return_type.clone();
+                        }
                     }
                 }
                 if let PhpType::Pointer(Some(cn)) = &obj_ty {

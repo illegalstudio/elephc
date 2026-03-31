@@ -203,6 +203,7 @@ if ($x === 3) {
 | Classes | `abstract class Foo extends Base implements Named { public readonly $id; protected $x; private $y; abstract public function name(); }` |
 | Traits | `trait Named { public function name() { return "x"; } }`, `use Named { Named::name as protected; }` |
 | New / Property / Method | `$f = new Foo(); $f->x = 1; $f->get();` |
+| Magic methods | `__toString()`, `__get($name)`, `__set($name, $value)` |
 | Static methods | `Foo::create()` |
 | String interpolation | `"Hello $name"` |
 | Heredoc / Nowdoc | `<<<EOT ... EOT;`, `<<<'EOT' ... EOT;` |

@@ -39,6 +39,16 @@ pub(super) fn emit_method_call(
     dispatch::emit_method_call(object, method, args, emitter, ctx, data)
 }
 
+pub(super) fn emit_method_call_with_pushed_args(
+    class_name: &str,
+    method: &str,
+    arg_types: &[PhpType],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) -> PhpType {
+    dispatch::emit_method_call_with_pushed_args(class_name, method, arg_types, emitter, ctx)
+}
+
 pub(super) fn emit_static_method_call(
     receiver: &StaticReceiver,
     method: &str,

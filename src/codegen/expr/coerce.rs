@@ -1,10 +1,16 @@
 use crate::codegen::context::Context;
+use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::types::PhpType;
 
 /// Coerce a value to string (x1=ptr, x2=len) for concatenation.
 /// PHP behavior: false -> "", true -> "1", null -> "", int -> itoa
-pub(super) fn coerce_to_string(emitter: &mut Emitter, ty: &PhpType) {
+pub(super) fn coerce_to_string(
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+    ty: &PhpType,
+) {
     match ty {
         PhpType::Int => {
             // -- convert integer in x0 to string in x1/x2 --
@@ -32,13 +38,47 @@ pub(super) fn coerce_to_string(emitter: &mut Emitter, ty: &PhpType) {
             // -- mixed strings dispatch on the boxed payload at runtime --
             emitter.instruction("bl __rt_mixed_cast_string");                   // cast the boxed mixed payload to string in x1/x2
         }
+        PhpType::Object(class_name) => {
+            if ctx
+                .classes
+                .get(class_name)
+                .is_some_and(|class_info| class_info.methods.contains_key("__toString"))
+            {
+                emitter.instruction("str x0, [sp, #-16]!");                     // push $this pointer for __toString dispatch
+                super::objects::emit_method_call_with_pushed_args(
+                    class_name,
+                    "__toString",
+                    &[],
+                    emitter,
+                    ctx,
+                );
+            } else {
+                emit_missing_tostring_fatal(emitter, data, class_name);
+            }
+        }
         PhpType::Str
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
         | PhpType::Callable
-        | PhpType::Object(_)
         | PhpType::Pointer(_) => {}
     }
+}
+
+fn emit_missing_tostring_fatal(emitter: &mut Emitter, data: &mut DataSection, class_name: &str) {
+    let message = format!(
+        "Fatal error: Object of class {} could not be converted to string\n",
+        class_name
+    );
+    let (label, len) = data.add_string(message.as_bytes());
+    emitter.instruction("mov x0, #2");                                          // fd = stderr for fatal conversion diagnostics
+    emitter.instruction(&format!("adrp x1, {}@PAGE", label));                   // load page of the fatal conversion message
+    emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", label));             // resolve the fatal conversion message address
+    emitter.instruction(&format!("mov x2, #{}", len));                          // pass the fatal conversion message length
+    emitter.instruction("mov x16, #4");                                         // syscall 4 = write on macOS
+    emitter.instruction("svc #0x80");                                           // print the fatal object-to-string error
+    emitter.instruction("mov x0, #1");                                          // exit status 1 indicates abnormal termination
+    emitter.instruction("mov x16, #1");                                         // syscall 1 = exit on macOS
+    emitter.instruction("svc #0x80");                                           // terminate immediately after the fatal conversion error
 }
 
 /// Replace null sentinel with 0 in x0 (for arithmetic/comparison with null).

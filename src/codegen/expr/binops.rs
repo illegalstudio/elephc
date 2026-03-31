@@ -3,7 +3,7 @@ use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
 use super::{
     coerce_null_to_zero, coerce_to_string, coerce_to_truthiness, emit_expr, emit_null_coalesce,
-    emit_strict_compare, BinOp, Expr, PhpType,
+    emit_strict_compare, expr_result_heap_ownership, BinOp, Expr, HeapOwnership, PhpType,
 };
 
 /// PHP loose comparison coerces both sides to a common type.
@@ -284,11 +284,14 @@ pub(super) fn emit_binop(
         }
         BinOp::Concat => {
             let left_ty = emit_expr(left, emitter, ctx, data);
-            coerce_to_string(emitter, &left_ty);
+            coerce_to_string(emitter, ctx, data, &left_ty);
+            if expr_result_heap_ownership(left) == HeapOwnership::NonHeap {
+                emitter.instruction("bl __rt_str_persist");                     // persist transient left strings before the right operand can reuse concat buffers
+            }
             // -- save left string while evaluating right operand --
             emitter.instruction("stp x1, x2, [sp, #-16]!");                     // push left string ptr+len onto stack
             let right_ty = emit_expr(right, emitter, ctx, data);
-            coerce_to_string(emitter, &right_ty);
+            coerce_to_string(emitter, ctx, data, &right_ty);
             // -- set up concat(left_ptr, left_len, right_ptr, right_len) --
             emitter.instruction("mov x3, x1");                                  // move right string pointer to 3rd arg
             emitter.instruction("mov x4, x2");                                  // move right string length to 4th arg

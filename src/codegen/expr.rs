@@ -395,7 +395,7 @@ pub fn emit_expr(
             // -- coerce then-branch to result type if needed --
             if result_ty != then_ty {
                 if result_ty == PhpType::Str {
-                    coerce_to_string(emitter, &then_ty);
+                    coerce_to_string(emitter, ctx, data, &then_ty);
                 } else if result_ty == PhpType::Float && then_ty == PhpType::Int {
                     emitter.instruction("scvtf d0, x0");                        // convert int to float for unified result type
                 }
@@ -406,7 +406,7 @@ pub fn emit_expr(
             // -- coerce else-branch to result type if needed --
             if result_ty != else_ty {
                 if result_ty == PhpType::Str {
-                    coerce_to_string(emitter, &else_ty);
+                    coerce_to_string(emitter, ctx, data, &else_ty);
                 } else if result_ty == PhpType::Float && else_ty == PhpType::Int {
                     emitter.instruction("scvtf d0, x0");                        // convert int to float for unified result type
                 }
@@ -520,6 +520,16 @@ fn emit_method_call(
     objects::emit_method_call(object, method, args, emitter, ctx, data)
 }
 
+pub(crate) fn emit_method_call_with_pushed_args(
+    class_name: &str,
+    method: &str,
+    arg_types: &[PhpType],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) -> PhpType {
+    objects::emit_method_call_with_pushed_args(class_name, method, arg_types, emitter, ctx)
+}
+
 fn emit_static_method_call(
     receiver: &crate::parser::ast::StaticReceiver,
     method: &str,
@@ -571,10 +581,14 @@ fn emit_array_access(
 }
 
 /// Coerce a value to string (x1=ptr, x2=len) for concatenation.
-/// Coerce a value to string (x1=ptr, x2=len) for concatenation.
 /// PHP behavior: false → "", true → "1", null → "", int → itoa
-pub fn coerce_to_string(emitter: &mut Emitter, ty: &PhpType) {
-    coerce::coerce_to_string(emitter, ty)
+pub fn coerce_to_string(
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+    ty: &PhpType,
+) {
+    coerce::coerce_to_string(emitter, ctx, data, ty)
 }
 
 /// Replace null sentinel with 0 in x0 (for arithmetic/comparison with null).
@@ -642,8 +656,14 @@ fn widen_codegen_type(a: &PhpType, b: &PhpType) -> PhpType {
     helpers::widen_codegen_type(a, b)
 }
 
-fn coerce_result_to_type(emitter: &mut Emitter, source_ty: &PhpType, target_ty: &PhpType) {
-    helpers::coerce_result_to_type(emitter, source_ty, target_ty)
+fn coerce_result_to_type(
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+    source_ty: &PhpType,
+    target_ty: &PhpType,
+) {
+    helpers::coerce_result_to_type(emitter, ctx, data, source_ty, target_ty)
 }
 
 fn emit_closure(

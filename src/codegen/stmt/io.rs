@@ -2,7 +2,7 @@ use super::super::abi;
 use super::super::context::Context;
 use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
-use super::super::expr::emit_expr;
+use super::super::expr::{coerce_to_string, emit_expr};
 use super::PhpType;
 use crate::parser::ast::Expr;
 
@@ -36,6 +36,10 @@ pub(super) fn emit_echo_stmt(
         }
         PhpType::Float => {
             abi::emit_write_stdout(emitter, &ty);
+        }
+        PhpType::Object(_) => {
+            coerce_to_string(emitter, ctx, data, &ty);
+            abi::emit_write_stdout(emitter, &PhpType::Str);
         }
         _ => {
             abi::emit_write_stdout(emitter, &ty);
