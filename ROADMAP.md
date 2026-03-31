@@ -282,7 +282,25 @@ Proper type system for PHP compatibility.
 - [ ] Magic methods (`__toString`, `__get`, `__set`) — implicit hooks on property access and string conversion
 - [ ] ifdef or similar support
 
-## v0.17.x — Multi-platform and optimizations
+## v0.17.x — Language maturity and compiler ergonomics
+
+- [ ] Hot-path data type
+- [ ] Full namespace support
+- [ ] Comprehensive error recovery (multiple errors per compilation)
+- [ ] Warning system (unused variables, unreachable code)
+- [ ] Generators / `yield` — compile-time state machine transformation (struct holds locals + state index, `next()` dispatches via switch)
+- [ ] `yield from` delegation — forward iteration to an inner generator
+- [ ] Enums (`enum Color { Red; Green; Blue; }`) — backed enums with `->value`, `::from()`, `::cases()`
+- [ ] Named arguments (`foo(name: "Alice", age: 30)`) — reorder args at compile time based on parameter names
+- [ ] First-class callable syntax (`strlen(...)`) — create closures from function names without string indirection
+- [ ] Union types (`int|string`) — tagged union with runtime type dispatch
+- [ ] Nullable types (`?int`) — sugar for `int|null`
+- [ ] `match` with no-match error — runtime fatal when no arm matches and no default
+- [ ] Readonly classes (`readonly class Point {}`) — all properties implicitly readonly
+- [ ] Constructor promotion (`public function __construct(public int $x)`) — declare + assign properties in constructor signature
+- [ ] Fibers — cooperative multitasking via `Fiber::start()`, `Fiber::suspend()`, `Fiber::resume()` (heap-allocated stack frames)
+
+## v0.18.x — Multi-platform and optimizations
 
 - [ ] Linux x86_64 target
 - [ ] Linux ARM64 target
@@ -296,8 +314,6 @@ Proper type system for PHP compatibility.
 
 ## v1.0.x — Production-ready
 
-- [ ] Comprehensive error recovery (multiple errors per compilation)
-- [ ] Warning system (unused variables, unreachable code)
 - [ ] Source maps (assembly ↔ PHP line mapping)
 - [ ] `--emit-asm`, `--check` flags
 - [ ] Benchmark suite (vs C, vs PHP interpreter)
@@ -340,20 +356,6 @@ Proper type system for PHP compatibility.
 - [ ] Proof of concept with one extension (e.g., `mbstring` or `curl`)
 - [ ] `--ext` flag to specify extension libraries at compile time
 - [ ] Documentation: how to bridge a PHP extension
-
-## v1.5.x — Advanced language features
-
-- [ ] Generators / `yield` — compile-time state machine transformation (struct holds locals + state index, `next()` dispatches via switch)
-- [ ] `yield from` delegation — forward iteration to an inner generator
-- [ ] Enums (`enum Color { Red; Green; Blue; }`) — backed enums with `->value`, `::from()`, `::cases()`
-- [ ] Named arguments (`foo(name: "Alice", age: 30)`) — reorder args at compile time based on parameter names
-- [ ] First-class callable syntax (`strlen(...)`) — create closures from function names without string indirection
-- [ ] Union types (`int|string`) — tagged union with runtime type dispatch
-- [ ] Nullable types (`?int`) — sugar for `int|null`
-- [ ] `match` with no-match error — runtime fatal when no arm matches and no default
-- [ ] Readonly classes (`readonly class Point {}`) — all properties implicitly readonly
-- [ ] Constructor promotion (`public function __construct(public int $x)`) — declare + assign properties in constructor signature
-- [ ] Fibers — cooperative multitasking via `Fiber::start()`, `Fiber::suspend()`, `Fiber::resume()` (heap-allocated stack frames)
 
 ---
 
