@@ -38,7 +38,7 @@ pub enum PhpType {
         value: Box<PhpType>,
     },
     Callable,                      // closures and function references
-    Object(String),                // class instance, e.g., Object("Point")
+    Object(String),                // class instance, e.g., Object("Point") or Object("App\\Point")
     Pointer(Option<String>),       // opaque ptr or typed ptr<Class>
 }
 ```
@@ -47,7 +47,7 @@ This is simpler than PHP's surface syntax — there are still no user-written un
 
 `Callable` is used for anonymous functions (closures) and arrow functions. A callable value is stored as a function pointer (8 bytes) on the stack, and is invoked via an indirect branch (`blr`).
 
-`Object(String)` represents a class instance. The string carries the class name (e.g., `"Point"`). Objects are heap-allocated pointers (8 bytes on the stack).
+`Object(String)` represents a class instance. The string carries the canonical class name after name resolution (for example `"Point"` or `"App\\Point"`). Objects are heap-allocated pointers (8 bytes on the stack).
 
 `Pointer(Option<String>)` represents a raw 64-bit address. `Pointer(None)` is an opaque pointer, while `Pointer(Some("Point"))` is a pointer tagged with a checked pointee type. The tag affects static checking, but the runtime value is still just an address in `x0`.
 

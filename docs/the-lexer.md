@@ -132,7 +132,7 @@ The full set of tokens elephc recognizes:
 echo  if  else  elseif  while  do  for  foreach  as
 break  continue  function  return  include  require
 include_once  require_once  true  false  null  print
-switch  case  default  match  try  catch  finally  throw  fn  use  namespace  extern  const
+switch  case  default  match  try  catch  finally  throw  fn  use  namespace  ifdef  extern  const
 global  static  self  class  abstract  interface  trait  extends  implements  new
 public  protected  private  readonly  parent  insteadof
 ```

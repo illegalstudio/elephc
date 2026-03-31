@@ -100,8 +100,9 @@ Things that do something:
 | `Throw(Expr)` | `throw new Exception("boom");` |
 | `Try { try_body, catches, finally_body }` | `try { ... } catch (Exception $e) { ... } finally { ... }` |
 | `ConstDecl { name, value }` | `const MAX = 100;` |
-| `NamespaceDecl { name }` | `namespace App\Core;` |
-| `NamespaceBlock { name, body }` | `namespace App\Core { ... }` |
+| `IfDef { symbol, then_body, else_body }` | `ifdef DEBUG { ... } else { ... }` |
+| `NamespaceDecl { name: Option<Name> }` | `namespace App\Core;`, `namespace;` |
+| `NamespaceBlock { name: Option<Name>, body }` | `namespace App\Core { ... }`, `namespace { ... }` |
 | `UseDecl { imports }` | `use App\Lib\Tool;`, `use function App\fn as helper;`, `use Vendor\Pkg\{Thing, Other as Alias};` |
 | `ListUnpack { vars, value }` | `[$a, $b] = [1, 2];` |
 | `Global { vars }` | `global $x, $y;` — declares variables as referencing global storage |
@@ -161,7 +162,7 @@ NullCoalesce
 | `CatchClause` | `exception_types`, `variable`, `body` | A catch arm. `exception_types` supports both single-type and PHP-style multi-catch (`TypeA | TypeB`), and `variable` is optional for PHP 8-style `catch (Exception)` |
 | `StaticReceiver` | `Named(Name)`, `Self_`, `Static`, `Parent` | Left-hand side of `ClassName::method()`, `self::method()`, `static::method()`, and `parent::method()` |
 | `TraitUse` | `trait_names`, `adaptations`, `span` | A `use TraitA, TraitB { ... }` clause inside a class or trait body |
-| `TraitAdaptation` | `Alias { trait_name: Option<String>, method, alias: Option<String>, visibility: Option<Visibility> }`, `InsteadOf { trait_name: Option<String>, method, instead_of: Vec<String> }` | PHP-style trait conflict resolution and aliasing |
+| `TraitAdaptation` | `Alias { trait_name: Option<Name>, method, alias: Option<String>, visibility: Option<Visibility> }`, `InsteadOf { trait_name: Option<Name>, method, instead_of: Vec<Name> }` | PHP-style trait conflict resolution and aliasing |
 | `UseItem` / `UseKind` | `kind`, `name`, `alias` | Namespace import entries for `use`, `use function`, `use const`, and group-use declarations |
 
 Every AST node carries a `Span` (line + column) from the source, so error messages in later phases can point to the right location.
@@ -319,6 +320,7 @@ Statement parsing is simpler — after `parse()` has peeled off top-level `exter
 |---|---|
 | `Echo` / `Print` | `Echo` statement — parse expression, expect `;` |
 | `Throw` | `Throw` statement — parse one expression, expect `;` |
+| `IfDef` | Build-time conditional statement |
 | `Variable` | Assignment, compound assignment, array assign/push, or expression statement |
 | `If` | `If` with optional `elseif` chain and `else` |
 | `Try` | `Try` with one or more `catch` clauses and optional `finally` |
