@@ -1,7 +1,7 @@
 use crate::codegen::context::{Context, DeferredClosure};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::parser::ast::{Expr, Stmt, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::types::{FunctionSig, PhpType};
 
 use super::args;
@@ -183,18 +183,62 @@ pub(super) fn emit_closure_call(
     let default_refs: Vec<&Expr> = default_exprs.iter().collect();
     all_args.extend(default_refs);
 
+    let ref_params = sig
+        .as_ref()
+        .map(|s| s.ref_params.clone())
+        .unwrap_or_default();
+
     let mut arg_types = Vec::new();
-    for arg in &all_args {
-        let ty = super::super::emit_expr(arg, emitter, ctx, data);
-        args::push_arg_value(emitter, &ty);
-        arg_types.push(ty);
+    for (i, arg) in all_args.iter().enumerate() {
+        let is_ref = ref_params.get(i).copied().unwrap_or(false);
+        if is_ref {
+            if let ExprKind::Variable(var_name) = &arg.kind {
+                if ctx.global_vars.contains(var_name) {
+                    let label = format!("_gvar_{}", var_name);
+                    emitter.comment(&format!("closure ref arg: address of global ${}", var_name));
+                    emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page of global var
+                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); // resolve global var address
+                } else if ctx.ref_params.contains(var_name) {
+                    let cap_info = match ctx.variables.get(var_name) {
+                        Some(v) => v,
+                        None => {
+                            emitter.comment(&format!("WARNING: undefined ref variable ${}", var_name));
+                            continue;
+                        }
+                    };
+                    emitter.comment(&format!("closure ref arg: forward underlying reference for ${}", var_name));
+                    crate::codegen::abi::load_at_offset(emitter, "x0", cap_info.stack_offset); // load existing reference pointer
+                } else {
+                    let cap_info = match ctx.variables.get(var_name) {
+                        Some(v) => v,
+                        None => {
+                            emitter.comment(&format!("WARNING: undefined variable ${}", var_name));
+                            continue;
+                        }
+                    };
+                    emitter.comment(&format!("closure ref arg: address of ${}", var_name));
+                    emitter.instruction(&format!("sub x0, x29, #{}", cap_info.stack_offset)); // compute address of local variable
+                }
+            } else {
+                let ty = super::super::emit_expr(arg, emitter, ctx, data);
+                super::super::retain_borrowed_heap_arg(emitter, arg, &ty);
+            }
+            emitter.instruction("str x0, [sp, #-16]!");                             // push address for by-ref argument
+            arg_types.push(PhpType::Int);
+        } else {
+            let ty = super::super::emit_expr(arg, emitter, ctx, data);
+            args::push_arg_value(emitter, &ty);
+            arg_types.push(ty);
+        }
     }
 
     if let Some(cached_sig) = ctx.closure_sigs.get(var).cloned() {
         for deferred in &mut ctx.deferred_closures {
             if deferred.sig.params == cached_sig.params {
                 for (i, ty) in arg_types.iter().enumerate() {
-                    if i < deferred.sig.params.len() {
+                    if i < deferred.sig.params.len()
+                        && !deferred.sig.ref_params.get(i).copied().unwrap_or(false)
+                    {
                         deferred.sig.params[i].1 = ty.clone();
                     }
                 }
@@ -203,7 +247,7 @@ pub(super) fn emit_closure_call(
         }
         if let Some(cached) = ctx.closure_sigs.get_mut(var) {
             for (i, ty) in arg_types.iter().enumerate() {
-                if i < cached.params.len() {
+                if i < cached.params.len() && !cached.ref_params.get(i).copied().unwrap_or(false) {
                     cached.params[i].1 = ty.clone();
                 }
             }

@@ -35,6 +35,7 @@ pub(crate) fn emit_runtime_data(
     out.push_str("_arr_cap_err_msg:\n    .ascii \"Fatal error: array capacity exceeded\\n\"\n");
     out.push_str("_buffer_bounds_msg:\n    .ascii \"Fatal error: buffer index out of bounds\\n\"\n");
     out.push_str("_buffer_uaf_msg:\n    .ascii \"Fatal error: use of buffer after buffer_free()\\n\"\n");
+    out.push_str("_match_unhandled_msg:\n    .ascii \"Fatal error: unhandled match case\\n\"\n");
     out.push_str("_ptr_null_err_msg:\n    .ascii \"Fatal error: null pointer dereference\\n\"\n");
     out.push_str("_uncaught_exc_msg:\n    .ascii \"Fatal error: uncaught exception\\n\"\n");
     out.push_str(".comm _gc_allocs, 8, 3\n");

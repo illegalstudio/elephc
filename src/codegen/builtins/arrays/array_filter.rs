@@ -17,7 +17,10 @@ pub fn emit(
     emitter.comment("array_filter()");
 
     // -- evaluate the callback argument (may be a string literal or closure) --
-    let is_closure = matches!(&args[1].kind, ExprKind::Closure { .. });
+    let is_closure = matches!(
+        &args[1].kind,
+        ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_)
+    );
     if is_closure {
         // Evaluate closure → x0 = function address
         emit_expr(&args[1], emitter, ctx, data);
@@ -44,7 +47,7 @@ pub fn emit(
         // String literal — resolve at compile time
         let func_name = match &args[1].kind {
             ExprKind::StringLiteral(name) => name.clone(),
-            _ => panic!("array_filter() callback must be a string literal, closure, or callable variable"),
+            _ => panic!("array_filter() callback must be a string literal, callable expression, or callable variable"),
         };
         let label = function_symbol(&func_name);
         emitter.instruction(&format!("adrp x19, {}@PAGE", label));              // load page address of callback function

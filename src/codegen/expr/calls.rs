@@ -1,5 +1,6 @@
 mod args;
 mod closure;
+mod first_class;
 mod function;
 mod indirect;
 
@@ -48,4 +49,20 @@ pub(super) fn emit_expr_call(
     data: &mut DataSection,
 ) -> PhpType {
     indirect::emit_expr_call(callee, args, emitter, ctx, data)
+}
+
+pub(super) fn emit_first_class_callable(
+    target: &crate::parser::ast::CallableTarget,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    first_class::emit_first_class_callable(target, emitter, ctx, data)
+}
+
+pub(super) fn first_class_callable_sig(
+    target: &crate::parser::ast::CallableTarget,
+    ctx: &Context,
+) -> Option<crate::types::FunctionSig> {
+    first_class::first_class_callable_sig(target, ctx)
 }

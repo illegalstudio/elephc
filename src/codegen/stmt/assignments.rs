@@ -109,7 +109,10 @@ pub(super) fn emit_assign_stmt(
         }
     }
 
-    if matches!(&value.kind, ExprKind::Closure { .. }) {
+    if matches!(
+        &value.kind,
+        ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_)
+    ) {
         if let Some(deferred) = ctx.deferred_closures.last() {
             ctx.closure_sigs.insert(name.to_string(), deferred.sig.clone());
             if !deferred.captures.is_empty() {

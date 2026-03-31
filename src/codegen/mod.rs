@@ -344,6 +344,8 @@ fn emit_deferred_closures(
                 &closure.body,
                 &ctx.functions,
                 &ctx.constants,
+                &ctx.interfaces,
+                &ctx.classes,
             );
         }
     }
