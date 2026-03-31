@@ -2,7 +2,7 @@
 
 [![GitHub Stars](https://img.shields.io/github/stars/illegalstudio/elephc?style=flat-square&logo=github&label=stars)](https://github.com/illegalstudio/elephc/stargazers)
 [![GitHub Downloads](https://img.shields.io/github/downloads/illegalstudio/elephc/total?style=flat-square&logo=github&label=downloads)](https://github.com/illegalstudio/elephc/releases)
-[![Unique Cloners](.github/traffic/clones-badge.svg?v=0.16.6)](https://github.com/illegalstudio/elephc)
+[![Unique Cloners](.github/traffic/clones-badge.svg)](https://github.com/illegalstudio/elephc)
 [![License: MIT](https://img.shields.io/github/license/illegalstudio/elephc?style=flat-square)](LICENSE)
 
 A PHP-to-native compiler. Takes a subset of PHP and compiles it directly to **ARM64 assembly**, producing **standalone macOS binaries**. No interpreter, no VM, no runtime dependencies.
