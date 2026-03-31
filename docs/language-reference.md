@@ -1,6 +1,6 @@
 # elephc Language Reference
 
-This document describes the PHP subset supported by elephc. The language aims to stay PHP-compatible, but elephc also exposes compiler-specific pointer features such as `ptr()` and `ptr_cast<T>()` that are intentionally outside standard PHP syntax.
+This document describes the PHP subset supported by elephc. The language aims to stay PHP-compatible, but elephc also exposes compiler-specific pointer features such as `ptr()` and `ptr_cast<T>()`, plus hot-path data extensions such as `packed class` and `buffer<T>`, that are intentionally outside standard PHP syntax.
 
 ## Data Types
 
@@ -15,6 +15,8 @@ This document describes the PHP subset supported by elephc. The language aims to
 | `mixed` | Internal | Static helper type used when an associative array stores heterogeneous values. Runtime values are boxed with a per-entry tag, but PHP source code does not spell this type explicitly. |
 | `object` | Yes | Class instances. Heap-allocated, fixed-layout. `new ClassName(...)` |
 | `pointer` | Yes | 64-bit memory address. `ptr($var)`, `ptr_null()`. Echo prints `0x...` hex. |
+| `buffer<T>` | Extension | Contiguous heap buffer for POD scalars, pointers, or packed classes. Allocate with `buffer_new<T>(len)` and query with `buffer_len($buf)`. |
+| `packed class` | Extension | Nominal POD record type with fixed compile-time field offsets. Intended for hot-path storage and typed pointer access. |
 | `resource` | No | File handles are currently modeled as integer file descriptors (`int`), not as a separate runtime resource type. |
 
 ### Null behavior
@@ -68,6 +70,38 @@ Rules:
 - `ifdef` is an elephc extension and is not PHP-compatible syntax
 
 The existing pointer helpers such as `ptr()` and `ptr_cast<T>()` remain elephc-specific as well.
+
+### Hot-path data: `packed class` and `buffer<T>`
+
+These features are intended for performance-sensitive code that needs predictable layouts and contiguous storage:
+
+```php
+<?php
+packed class Vec2 {
+    public float $x;
+    public float $y;
+}
+
+buffer<Vec2> $points = buffer_new<Vec2>(1024);
+$points[0]->x = 10.0;
+$points[0]->y = 20.0;
+
+echo buffer_len($points); // 1024
+echo (int) $points[0]->x; // 10
+```
+
+Rules in v1:
+- `packed class` fields must be POD scalars (`int`, `float`, `bool`), `ptr`, or other `packed class` types.
+- `buffer<T>` only accepts POD scalars, `ptr`, or `packed class` element types.
+- Allocate buffers explicitly with `buffer_new<T>(len)`.
+- Read scalar elements with `$buf[$i]`; access packed elements with `$buf[$i]->field`.
+- `buffer_len($buf)` returns the logical element count.
+- Bounds checks are always enabled; out-of-range access aborts with a fatal error.
+- `packed class` is metadata-only in v1: no inheritance, traits, methods, constructors, magic methods, or non-`public` fields.
+- `buffer<T>` is fixed-size in v1: no push/pop, no implicit conversion to PHP arrays, and no copy-on-write behavior.
+- This syntax is an elephc extension and is not valid in standard PHP.
+
+See `examples/hot-path` for a runnable sample and `benchmarks/hot-path-buffer-vs-arrays` for a simple micro-benchmark.
 
 ## Operators
 
@@ -1253,7 +1287,7 @@ Notes:
 - `ptr_get()` and `ptr_set()` only accept pointers. Dereferencing `ptr_null()` aborts with `Fatal error: null pointer dereference`.
 - `ptr_set()` currently writes a single 8-byte word. It is intended for `int`, `bool`, `null`, and pointer values.
 - `ptr_read8()`, `ptr_read32()`, `ptr_write8()`, and `ptr_write32()` are intended for raw buffers and packed native data.
-- `ptr_cast<T>()` preserves the address and only changes the static pointer tag. `T` must be a known builtin pointee type (`int`, `float`, `bool`, `string`, `ptr`) or a declared class / extern class name.
+- `ptr_cast<T>()` preserves the address and only changes the static pointer tag. `T` must be a known builtin pointee type (`int`, `float`, `bool`, `string`, `ptr`) or a declared class, `packed class`, or `extern class` name.
 - `ptr_sizeof()` accepts builtin pointee names plus declared PHP class names and `extern class` names.
 - Use `===` and `!==` for pointer comparison. Loose comparison with `==` / `!=` is rejected.
 
