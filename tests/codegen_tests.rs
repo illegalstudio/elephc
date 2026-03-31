@@ -1887,6 +1887,30 @@ fn test_string_indexing_empty_string_returns_empty_string() {
 }
 
 #[test]
+fn test_string_indexing_negative_beyond_length_returns_empty() {
+    let out = compile_and_run(r#"<?php $s = "hi"; echo "[" . $s[-10] . "]";"#);
+    assert_eq!(out, "[]");
+}
+
+#[test]
+fn test_string_indexing_exactly_negative_length_returns_first() {
+    let out = compile_and_run(r#"<?php $s = "abc"; echo $s[-3];"#);
+    assert_eq!(out, "a");
+}
+
+#[test]
+fn test_string_indexing_at_length_returns_empty() {
+    let out = compile_and_run(r#"<?php $s = "ab"; echo "[" . $s[2] . "]";"#);
+    assert_eq!(out, "[]");
+}
+
+#[test]
+fn test_string_indexing_last_valid_index() {
+    let out = compile_and_run(r#"<?php $s = "abc"; echo $s[2];"#);
+    assert_eq!(out, "c");
+}
+
+#[test]
 fn test_array_assign() {
     let out = compile_and_run("<?php $a = [1, 2, 3]; $a[1] = 99; echo $a[1];");
     assert_eq!(out, "99");
