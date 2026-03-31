@@ -369,10 +369,10 @@ Each `catch` becomes a `CatchClause { exception_types, variable, body }`. `excep
 
 ## How it connects
 
-The parser's output — `Program` (which is `Vec<Stmt>`) — feeds into the [resolver](how-elephc-works.md) and then the [type checker](the-type-checker.md):
+The parser's output — `Program` (which is `Vec<Stmt>`) — first feeds into elephc's build-time conditional pass for `ifdef`, then into the [resolver](how-elephc-works.md), and then the [type checker](the-type-checker.md):
 
 ```
-[(Token, Span), ...] → Parser → Program (Vec<Stmt>) → Resolver → Type Checker
+[(Token, Span), ...] → Parser → Program (Vec<Stmt>) → Conditional → Resolver → Type Checker
 ```
 
 ---

@@ -233,7 +233,7 @@ User-defined constants are also supported via `const NAME = value;` and `define(
 ## How it works
 
 ```
-PHP source → Lexer → Parser (AST) → Resolver (include) → Type Checker → Codegen → as + ld → Mach-O binary
+PHP source → Lexer → Parser (AST) → Conditional (ifdef/--define) → Resolver (include) → Type Checker → Codegen → as + ld → Mach-O binary
 ```
 
 The compiler emits human-readable ARM64 assembly. You can inspect the `.s` file to see exactly what your PHP becomes:
@@ -278,6 +278,7 @@ src/
 ├── main.rs              # CLI entry point, assembler + linker invocation
 ├── lib.rs               # Public module exports
 ├── span.rs              # Source position tracking (line, col)
+├── conditional.rs       # Build-time `ifdef` pass driven by --define
 ├── resolver.rs          # Include/require file resolution
 │
 ├── lexer/               # Source text → token stream

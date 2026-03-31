@@ -599,6 +599,41 @@ fn compile_and_run_with_defines(source: &str, defines: &[&str]) -> String {
     elephc_out
 }
 
+fn compile_cli_file_and_run(source: &str, defines: &[&str]) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_cli_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, source).unwrap();
+
+    let elephc_bin =
+        std::env::var("CARGO_BIN_EXE_elephc").expect("CARGO_BIN_EXE_elephc not set by cargo test");
+    let mut compile_cmd = Command::new(elephc_bin);
+    for define in defines {
+        compile_cmd.arg("--define").arg(define);
+    }
+    compile_cmd.arg(&php_path).current_dir(&dir);
+    let compile_out = compile_cmd.output().expect("failed to run elephc CLI");
+    assert!(
+        compile_out.status.success(),
+        "elephc CLI failed: {}",
+        String::from_utf8_lossy(&compile_out.stderr)
+    );
+
+    let bin_path = dir.join("main");
+    let output = Command::new(&bin_path)
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run compiled CLI binary");
+    assert!(output.status.success(), "CLI-compiled binary exited with error");
+
+    let _ = fs::remove_dir_all(&dir);
+    String::from_utf8(output.stdout).unwrap()
+}
+
 /// Compile a PHP source string and assert the generated binary fails at runtime.
 fn compile_and_run_expect_failure(source: &str) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
@@ -779,6 +814,23 @@ ifdef OUTER {
         &["OUTER"],
     );
     assert_eq!(out, "outer");
+}
+
+#[test]
+fn test_ifdef_cli_define_flag_controls_branch_selection() {
+    let source = r#"<?php
+ifdef DEBUG {
+    echo "debug";
+} else {
+    echo "release";
+}
+"#;
+
+    let release_out = compile_cli_file_and_run(source, &[]);
+    assert_eq!(release_out, "release");
+
+    let debug_out = compile_cli_file_and_run(source, &["DEBUG"]);
+    assert_eq!(debug_out, "debug");
 }
 
 #[test]
