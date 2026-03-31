@@ -89,7 +89,15 @@ In this example, there are no `ifdef` blocks, so the AST passes through unchange
 
 If the program had `include` or `require` statements, the resolver would parse those files and inline their ASTs. In this example, there's nothing to resolve — the AST passes through unchanged.
 
-## Phase 5: Type checking
+## Phase 5: Name resolution
+
+**File:** `src/name_resolver.rs`
+
+After includes are flattened, elephc resolves namespace-aware names. This pass applies the current `namespace`, any `use` / `use function` / `use const` imports, and rewrites references to their canonical fully-qualified names before semantic analysis.
+
+In this example there are no namespaces or imports, so the AST still passes through unchanged.
+
+## Phase 6: Type checking
 
 **File:** `src/types/` — See [The Type Checker](the-type-checker.md) for details.
 
@@ -109,7 +117,7 @@ It builds a **type environment** — a map from variable names to their types:
 
 If you tried `$x = "hello"` after `$x = 10`, the type checker would reject it — elephc doesn't allow variables to change type (except from `null`). The checker also resolves class/interface metadata for exception handling, so `throw` only accepts objects implementing `Throwable` and each `catch` target can be matched correctly later in codegen.
 
-## Phase 6: Code generation
+## Phase 7: Code generation
 
 **File:** `src/codegen/` — See [The Code Generator](the-codegen.md) for details.
 
@@ -159,7 +167,7 @@ Key observations:
 - `echo "big\n"` → load string address + length, then `svc` to write to stdout
 - The string literal lives in the `.data` section, referenced by label `_str_0`
 
-## Phase 7: Assembly and linking
+## Phase 8: Assembly and linking
 
 **Tools:** macOS `as` and `ld`
 
@@ -175,7 +183,7 @@ ld -arch arm64 -e _main -o file file.o -lSystem -syslibroot /path/to/sdk
 
 The `.o` file is deleted after linking. The result is a standalone executable.
 
-## Phase 8: Execution
+## Phase 9: Execution
 
 ```bash
 ./file
@@ -198,6 +206,8 @@ The binary runs directly on the CPU. There is no PHP interpreter or VM at runtim
                     ▼ Conditional (ifdef no-op here)
                     │
                     ▼ Resolver (no-op here)
+                    │
+                    ▼ NameResolver (no-op here)
                     │
                     ▼ Type Checker
     { x: Int } — all types consistent ✓

@@ -72,7 +72,7 @@ Each test runs in an isolated temp directory. Tests run in parallel — the `com
 ## Architecture
 
 ```
-PHP source → Lexer (tokens) → Parser (AST) → Resolver (include/require) → Type Checker → Codegen (ARM64 asm) → as + ld → binary
+PHP source → Lexer (tokens) → Parser (AST) → Resolver (include/require) → NameResolver (namespace/use/FQN canonicalization) → Type Checker → Codegen (ARM64 asm) → as + ld → binary
 ```
 
 ### Key modules
@@ -81,7 +81,8 @@ PHP source → Lexer (tokens) → Parser (AST) → Resolver (include/require) �
 |---|---|---|
 | `src/lexer/` | `tokenize()` | Source → `Vec<(Token, Span)>` |
 | `src/parser/` | `parse()` | Tokens → `Program` (Vec of Stmt). Pratt parser for expressions |
-| `src/resolver.rs` | `resolve()` | Resolves `include`/`require` by inlining referenced files. Runs between parse and type check |
+| `src/resolver.rs` | `resolve()` | Resolves `include`/`require` by inlining referenced files. Runs before namespace/name canonicalization |
+| `src/name_resolver.rs` | `resolve()` | Applies namespace/use rules, rewrites references to canonical fully-qualified names, and flattens namespace-only AST nodes before type checking |
 | `src/types/` | `check()` | Type checking, returns `CheckResult` with `TypeEnv`, function/class/interface/FFI metadata, and the internal `Mixed` type for heterogeneous assoc-array values |
 | `src/codegen/` | `generate()` | AST → ARM64 assembly string. Top-level orchestration lives in `mod.rs`, while most lowering lives under `expr/`, `stmt/`, and `runtime/` |
 | `src/errors/` | `report()` | Error formatting with line:col |

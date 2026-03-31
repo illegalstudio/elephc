@@ -2143,6 +2143,11 @@ fn test_error_ptr_is_null_wrong_args() {
 }
 
 #[test]
+fn test_error_is_null_wrong_args() {
+    expect_error("<?php is_null();", "is_null() takes exactly 1 argument");
+}
+
+#[test]
 fn test_error_ptr_is_null_requires_pointer() {
     expect_error(
         "<?php ptr_is_null(123);",

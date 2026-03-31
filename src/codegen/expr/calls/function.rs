@@ -207,7 +207,7 @@ pub(super) fn emit_function_call(
         .unwrap_or(PhpType::Void);
 
     super::super::save_concat_offset_before_nested_call(emitter);
-    emitter.instruction(&format!("bl {}", function_symbol(name)));             // branch-and-link to compiled PHP function
+    emitter.instruction(&format!("bl {}", function_symbol(name)));              // branch-and-link to compiled PHP function
     super::super::restore_concat_offset_after_nested_call(emitter, &ret_ty);
 
     ret_ty
