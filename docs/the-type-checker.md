@@ -139,7 +139,7 @@ Every built-in function has a registered type signature:
 strlen($str: Str) → Int
 substr($str: Str, $start: Int, $len?: Int) → Str
 strpos($hay: Str, $needle: Str) → Int
-count($arr: Array) → Int
+count($arr: Array|AssocArray) → Int
 abs($val: Int|Float) → Int|Float
 floor($val: Int|Float) → Float
 rand($min?: Int, $max?: Int) → Int

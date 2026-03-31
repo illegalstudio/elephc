@@ -4,7 +4,7 @@
 
 ---
 
-**Source:** `src/codegen/runtime/` — `mod.rs`, `strings/`, `arrays/`, `exceptions.rs`, `io/`, `system/`, `pointers/`
+**Source:** `src/codegen/runtime/` — `mod.rs`, `data.rs`, `strings/`, `arrays/`, `exceptions.rs`, `exceptions/`, `io/`, `system/`, `pointers/`
 
 The runtime is a collection of **hand-written assembly routines** that handle operations too complex for inline code generation. When the [code generator](the-codegen.md) needs to convert an integer to a string or concatenate two strings, it emits a `bl __rt_itoa` or `bl __rt_concat` — a call to a runtime routine.
 
@@ -398,8 +398,8 @@ The `emit_runtime()` function calls every routine emitter in a fixed order:
 pub fn emit_runtime(emitter: &mut Emitter) {
     // strings: itoa, ftoa, concat, atoi, equality, formatting, trim/mask,
     // search/replace, explode/implode, hashing, encoding, sscanf, ...
-    // exceptions: cleanup walk, catch matching, throw/rethrow helpers
     // system: argv, time, getenv, shell, date/mktime/strtotime, JSON, regex
+    // exceptions: cleanup walk, catch matching, throw/rethrow helpers
     // arrays: heap alloc/free, array/hash helpers, sort, callbacks, refcount
     // io: c-string buffers, file I/O, stat/fs helpers, scandir/glob/tempnam, CSV
     // pointers: ptoa, null check, str_to_cstr, cstr_to_str

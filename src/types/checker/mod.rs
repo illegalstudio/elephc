@@ -407,6 +407,106 @@ fn patch_builtin_exception_signatures(checker: &mut Checker) {
     }
 }
 
+fn patch_magic_method_signatures(checker: &mut Checker) {
+    for class_info in checker.classes.values_mut() {
+        if let Some(sig) = class_info.methods.get_mut("__get") {
+            if let Some(param) = sig.params.get_mut(0) {
+                param.1 = PhpType::Str;
+            }
+        }
+        if let Some(sig) = class_info.methods.get_mut("__set") {
+            if let Some(param) = sig.params.get_mut(0) {
+                param.1 = PhpType::Str;
+            }
+            if let Some(param) = sig.params.get_mut(1) {
+                param.1 = PhpType::Mixed;
+            }
+        }
+    }
+}
+
+fn validate_magic_method_contracts(checker: &Checker) -> Result<(), CompileError> {
+    for (class_name, class_info) in &checker.classes {
+        for method in &class_info.method_decls {
+            match method.name.as_str() {
+                "__toString" => {
+                    if method.is_static {
+                        return Err(CompileError::new(
+                            method.span,
+                            &format!("Magic method must be non-static: {}::__toString", class_name),
+                        ));
+                    }
+                    if method.visibility != Visibility::Public {
+                        return Err(CompileError::new(
+                            method.span,
+                            &format!("Magic method must be public: {}::__toString", class_name),
+                        ));
+                    }
+                    if !method.params.is_empty() || method.variadic.is_some() {
+                        return Err(CompileError::new(
+                            method.span,
+                            &format!("Magic method must take 0 arguments: {}::__toString", class_name),
+                        ));
+                    }
+                    if class_info
+                        .methods
+                        .get("__toString")
+                        .map(|sig| sig.return_type.clone())
+                        != Some(PhpType::Str)
+                    {
+                        return Err(CompileError::new(
+                            method.span,
+                            &format!("Magic method must return string: {}::__toString", class_name),
+                        ));
+                    }
+                }
+                "__get" => {
+                    if method.is_static {
+                        return Err(CompileError::new(
+                            method.span,
+                            &format!("Magic method must be non-static: {}::__get", class_name),
+                        ));
+                    }
+                    if method.visibility != Visibility::Public {
+                        return Err(CompileError::new(
+                            method.span,
+                            &format!("Magic method must be public: {}::__get", class_name),
+                        ));
+                    }
+                    if method.params.len() != 1 || method.variadic.is_some() {
+                        return Err(CompileError::new(
+                            method.span,
+                            &format!("Magic method must take 1 argument: {}::__get", class_name),
+                        ));
+                    }
+                }
+                "__set" => {
+                    if method.is_static {
+                        return Err(CompileError::new(
+                            method.span,
+                            &format!("Magic method must be non-static: {}::__set", class_name),
+                        ));
+                    }
+                    if method.visibility != Visibility::Public {
+                        return Err(CompileError::new(
+                            method.span,
+                            &format!("Magic method must be public: {}::__set", class_name),
+                        ));
+                    }
+                    if method.params.len() != 2 || method.variadic.is_some() {
+                        return Err(CompileError::new(
+                            method.span,
+                            &format!("Magic method must take 2 arguments: {}::__set", class_name),
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
 fn build_method_sig(method: &crate::parser::ast::ClassMethod) -> FunctionSig {
     let params: Vec<(String, PhpType)> = method
         .params
@@ -1292,6 +1392,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         )?;
     }
     patch_builtin_exception_signatures(&mut checker);
+    patch_magic_method_signatures(&mut checker);
 
     // Pre-scan: collect extern declarations
     for stmt in program {
@@ -1508,25 +1609,19 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 // Update method return type from full type inference
                 // (must run while current_class is still set so $this resolves)
                 if !method.is_static {
-                    for s in &method.body {
-                        if let Some(ty) = checker.find_return_type(s, &method_env) {
-                            if let Some(ci) = checker.classes.get_mut(&class.name) {
-                                if let Some(sig) = ci.methods.get_mut(&method.name) {
-                                    sig.return_type = ty;
-                                }
+                    if let Some(ty) = checker.find_return_type_in_body(&method.body, &method_env) {
+                        if let Some(ci) = checker.classes.get_mut(&class.name) {
+                            if let Some(sig) = ci.methods.get_mut(&method.name) {
+                                sig.return_type = ty;
                             }
-                            break;
                         }
                     }
                 } else {
-                    for s in &method.body {
-                        if let Some(ty) = checker.find_return_type(s, &method_env) {
-                            if let Some(ci) = checker.classes.get_mut(&class.name) {
-                                if let Some(sig) = ci.static_methods.get_mut(&method.name) {
-                                    sig.return_type = ty;
-                                }
+                    if let Some(ty) = checker.find_return_type_in_body(&method.body, &method_env) {
+                        if let Some(ci) = checker.classes.get_mut(&class.name) {
+                            if let Some(sig) = ci.static_methods.get_mut(&method.name) {
+                                sig.return_type = ty;
                             }
-                            break;
                         }
                     }
                 }
@@ -1537,6 +1632,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
     }
 
     propagate_abstract_return_types(&mut checker);
+    validate_magic_method_contracts(&checker)?;
 
     Ok(CheckResult {
         global_env,
@@ -2521,6 +2617,9 @@ impl Checker {
                 if let PhpType::Object(class_name) = &obj_ty {
                     if let Some(class_info) = self.classes.get(class_name) {
                         if !class_info.properties.iter().any(|(n, _)| n == property) {
+                            if class_info.methods.contains_key("__set") {
+                                return Ok(());
+                            }
                             return Err(CompileError::new(
                                 stmt.span,
                                 &format!("Undefined property: {}::{}", class_name, property),
@@ -3113,6 +3212,9 @@ impl Checker {
                             class_info.properties.iter().find(|(n, _)| n == property)
                         {
                             return Ok(ty.clone());
+                        }
+                        if let Some(sig) = class_info.methods.get("__get") {
+                            return Ok(sig.return_type.clone());
                         }
                         return Err(CompileError::new(
                             expr.span,

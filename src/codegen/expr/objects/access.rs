@@ -32,6 +32,18 @@ pub(super) fn emit_property_access(
             {
                 Some(v) => v,
                 None => {
+                    if class_info.methods.contains_key("__get") {
+                        emitter.comment(&format!("magic __get('{}')", property));
+                        super::push_magic_property_name_arg(property, emitter, data);
+                        emitter.instruction("str x0, [sp, #-16]!");             // push $this pointer for __get dispatch
+                        return super::emit_method_call_with_pushed_args(
+                            class_name,
+                            "__get",
+                            &[PhpType::Str],
+                            emitter,
+                            ctx,
+                        );
+                    }
                     emitter.comment(&format!("WARNING: undefined property {}", property));
                     return PhpType::Int;
                 }

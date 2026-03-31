@@ -65,7 +65,7 @@ pub(super) fn emit_cast(
             PhpType::Float
         }
         CastType::String => {
-            coerce_to_string(emitter, &src_ty);
+            coerce_to_string(emitter, ctx, data, &src_ty);
             PhpType::Str
         }
         CastType::Bool => {
@@ -333,10 +333,10 @@ pub(super) fn emit_null_coalesce(
     emitter.instruction(&format!("b.ne {}", use_value_label));                  // if not null, skip default branch and keep value
 
     let default_runtime_ty = emit_expr(default, emitter, ctx, data);
-    coerce_result_to_type(emitter, &default_runtime_ty, &result_ty);
+    coerce_result_to_type(emitter, ctx, data, &default_runtime_ty, &result_ty);
     emitter.instruction(&format!("b {}", end_label));                           // skip non-null branch after evaluating default
     emitter.label(&use_value_label);
-    coerce_result_to_type(emitter, &val_ty, &result_ty);
+    coerce_result_to_type(emitter, ctx, data, &val_ty, &result_ty);
     emitter.label(&end_label);
 
     result_ty

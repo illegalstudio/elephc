@@ -186,7 +186,7 @@ cargo run -- examples/fizzbuzz/main.php
 
 ## PHP compatibility
 
-**The syntax must be 100% compatible with PHP.** Any valid elephc program must also be valid PHP and produce the same output when run with `php`. This means:
+**PHP-derived syntax must be 100% compatible with PHP.** When elephc implements a PHP construct (variables, operators, keywords, built-ins), it must behave identically to PHP. This means:
 
 - Variable names, keywords, operators, and built-in function names must match PHP exactly
 - Superglobals (`$argc`, `$argv`) must use PHP's syntax (e.g., `$argv[0]`, not `argv(0)`)
@@ -195,6 +195,8 @@ cargo run -- examples/fizzbuzz/main.php
 - Built-in function signatures must match PHP (argument count, order, types)
 
 When in doubt, test with `php -r '...'` to verify behavior.
+
+**elephc also provides compiler-specific extensions** beyond standard PHP (e.g., `ptr`, `extern`, `buffer<T>`, `packed class`). These features have no PHP equivalent and are not expected to run under the PHP interpreter. They are clearly distinguishable from PHP syntax and exist to enable use cases (FFI, game development, low-level memory access) that PHP cannot address.
 
 ## Documentation
 

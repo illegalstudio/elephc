@@ -120,10 +120,12 @@ src/
 │   │
 │   └── runtime/               ARM64 runtime routines (one file per language/runtime helper)
 │       ├── mod.rs             Emits all runtime functions into assembly
+│       ├── data.rs            Emits runtime .data / .bss symbols and metadata tables
 │       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, str_persist, ... (53 files)
 │       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, sort, usort, refcount, gc/decref dispatch, ... (100 files)
 │       ├── io/                fopen, fgets, fread, stat, scandir, ... (17 files)
-│       ├── exceptions.rs      Handler stack, frame cleanup, catch matching, throw/rethrow
+│       ├── exceptions.rs      Exception runtime module root / re-exports
+│       ├── exceptions/        cleanup_frames, matches, throw_current, rethrow_current helpers
 │       ├── system/            build_argv, time, getenv, shell_exec, date, mktime, strtotime, json_encode_*, json_decode, preg_*, ... (26 files)
 │       └── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ... (5 files)
 │
@@ -188,7 +190,7 @@ Offset  Size  Field
 
 ### Runtime BSS and data symbols
 
-The runtime reserves a fixed set of global symbols in `emit_runtime_data()`:
+The runtime reserves a fixed set of global symbols in `src/codegen/runtime/data.rs` via `emit_runtime_data()`:
 
 | Symbol group | Symbols | Purpose |
 |---|---|---|
@@ -255,6 +257,8 @@ Total size: `8 + (num_properties × 16)`. Properties are stored at fixed offsets
 - Static methods: `bl _static_ClassName_methodName`. No object pointer is passed.
 - `self::method()` / `parent::method()`: emitted as direct lexical calls, but static targets still forward the current "called class" id for later `static::` lookups.
 - `static::method()`: uses a per-class static-method table keyed by the forwarded called-class id, so late static binding works across inherited static overrides.
+- Undefined property reads can fall back to `__get($name)`, and undefined property writes can fall back to `__set($name, $value)`, reusing the same instance-method dispatch path once the type checker has validated those magic methods.
+- Object values used in string contexts can fall back to `__toString()`, which is enforced by the type checker and lowered through the same instance-method dispatch machinery.
 
 Traits are flattened into the owning class before inheritance metadata is built. That means trait members participate in the same inherited property layout and vtable construction as ordinary class members after `use` / `as` / `insteadof` resolution.
 

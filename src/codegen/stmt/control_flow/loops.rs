@@ -1,7 +1,7 @@
 use crate::codegen::context::{Context, LoopLabels};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
+use crate::codegen::expr::{coerce_result_to_type, emit_expr};
 use crate::parser::ast::{Expr, Stmt};
 
 pub(super) fn emit_do_while_stmt(
@@ -138,7 +138,11 @@ pub(super) fn emit_return_stmt(
     emitter.comment("return");
     if let Some(e) = expr {
         let ty = emit_expr(e, emitter, ctx, data);
-        super::super::retain_borrowed_heap_result(emitter, e, &ty);
+        let target_ty = ctx.return_type.clone();
+        coerce_result_to_type(emitter, ctx, data, &ty, &target_ty);
+        if ty == target_ty {
+            super::super::retain_borrowed_heap_result(emitter, e, &ty);
+        }
     }
     if let Some(label) = &ctx.return_label {
         let sp_total: usize = ctx.loop_stack.iter().map(|l| l.sp_adjust).sum();

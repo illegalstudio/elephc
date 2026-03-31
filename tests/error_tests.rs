@@ -143,6 +143,54 @@ fn test_error_string_offset_assignment_is_not_supported() {
 }
 
 #[test]
+fn test_error_magic_tostring_must_be_public() {
+    expect_error(
+        "<?php class User { private function __toString() { return \"x\"; } }",
+        "Magic method must be public: User::__toString",
+    );
+}
+
+#[test]
+fn test_error_magic_tostring_must_take_zero_arguments() {
+    expect_error(
+        "<?php class User { public function __toString($x) { return \"x\"; } }",
+        "Magic method must take 0 arguments: User::__toString",
+    );
+}
+
+#[test]
+fn test_error_magic_tostring_must_return_string() {
+    expect_error(
+        "<?php class User { public function __toString() { return 123; } }",
+        "Magic method must return string: User::__toString",
+    );
+}
+
+#[test]
+fn test_error_magic_get_must_take_one_argument() {
+    expect_error(
+        "<?php class Bag { public function __get() { return 1; } }",
+        "Magic method must take 1 argument: Bag::__get",
+    );
+}
+
+#[test]
+fn test_error_magic_set_must_be_public() {
+    expect_error(
+        "<?php class Bag { private function __set($name, $value) { } }",
+        "Magic method must be public: Bag::__set",
+    );
+}
+
+#[test]
+fn test_error_magic_set_must_take_two_arguments() {
+    expect_error(
+        "<?php class Bag { public function __set($name) { } }",
+        "Magic method must take 2 arguments: Bag::__set",
+    );
+}
+
+#[test]
 fn test_error_catch_requires_defined_class() {
     expect_error(
         "<?php try { echo 1; } catch (MissingException $e) { echo 2; }",

@@ -7,6 +7,21 @@ use crate::types::{FunctionSig, PhpType, TypeEnv};
 use super::{Checker, FnDecl};
 
 impl Checker {
+    pub fn find_return_type_in_body(&mut self, body: &[Stmt], env: &TypeEnv) -> Option<PhpType> {
+        let mut types = Vec::new();
+        for stmt in body {
+            self.collect_return_types(stmt, env, &mut types);
+        }
+        if types.is_empty() {
+            return None;
+        }
+        let mut widest = types[0].clone();
+        for ty in &types[1..] {
+            widest = Self::wider_type(&widest, ty);
+        }
+        Some(widest)
+    }
+
     pub(crate) fn types_compatible(expected: &PhpType, actual: &PhpType) -> bool {
         if expected == actual {
             return true;

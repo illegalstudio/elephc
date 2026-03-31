@@ -43,7 +43,7 @@ This is a reference for the ARM64 instructions elephc uses most often, organized
 | `fmsub` | `fmsub d0, d1, d2, d3` | d0 = d3 - (d1 × d2). Float modulo |
 | `frintm` | `frintm d0, d0` | d0 = floor(d0) |
 | `frintp` | `frintp d0, d0` | d0 = ceil(d0) |
-| `frintn` | `frintn d0, d0` | d0 = round(d0) |
+| `frinta` | `frinta d0, d0` | d0 = round(d0) using the current FP rounding rule that elephc emits for `round()` |
 | `fmax` | `fmax d0, d0, d1` | d0 = max(d0, d1) |
 | `fmin` | `fmin d0, d0, d1` | d0 = min(d0, d1) |
 
@@ -155,7 +155,6 @@ After `cmp`, these codes test the result:
 | `b.hs` | `b.hs _label` | Jump if higher or same (unsigned compare) |
 | `b.hi` | `b.hi _label` | Jump if higher (unsigned compare) |
 | `b.ls` | `b.ls _label` | Jump if lower or same (unsigned compare) |
-| `b.mi` | `b.mi _label` | Jump if negative |
 | `cbz` | `cbz x0, _label` | Jump if x0 == 0 |
 | `cbnz` | `cbnz x0, _label` | Jump if x0 != 0 |
 | `bl` | `bl _fn_add` | Branch with link — call a function (saves return address in x30) |

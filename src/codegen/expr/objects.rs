@@ -28,6 +28,18 @@ pub(super) fn emit_property_access(
     access::emit_property_access(object, property, emitter, ctx, data)
 }
 
+pub(super) fn push_magic_property_name_arg(
+    property: &str,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) {
+    let (label, len) = data.add_string(property.as_bytes());
+    emitter.instruction(&format!("adrp x1, {}@PAGE", label));                   // load page of the magic-property name string
+    emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", label));             // resolve the magic-property name string address
+    emitter.instruction(&format!("mov x2, #{}", len));                          // pass the magic-property name length
+    emitter.instruction("stp x1, x2, [sp, #-16]!");                             // push the magic-property name argument
+}
+
 pub(super) fn emit_method_call(
     object: &Expr,
     method: &str,
@@ -37,6 +49,16 @@ pub(super) fn emit_method_call(
     data: &mut DataSection,
 ) -> PhpType {
     dispatch::emit_method_call(object, method, args, emitter, ctx, data)
+}
+
+pub(super) fn emit_method_call_with_pushed_args(
+    class_name: &str,
+    method: &str,
+    arg_types: &[PhpType],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) -> PhpType {
+    dispatch::emit_method_call_with_pushed_args(class_name, method, arg_types, emitter, ctx)
 }
 
 pub(super) fn emit_static_method_call(

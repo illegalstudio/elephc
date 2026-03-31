@@ -1342,7 +1342,7 @@ Both `include 'f';` and `include('f');` syntax are supported.
 
 ## Classes
 
-elephc supports PHP classes with single inheritance, interfaces, abstract classes, properties, constructors, instance methods, static methods, traits, `self::method()`, `parent::method()`, `static::method()`, and `public` / `protected` / `private` visibility.
+elephc supports PHP classes with single inheritance, interfaces, abstract classes, properties, constructors, instance methods, static methods, traits, `self::method()`, `parent::method()`, `static::method()`, magic methods `__toString()` / `__get()` / `__set()`, and `public` / `protected` / `private` visibility.
 
 ### Class declaration
 
@@ -1443,6 +1443,46 @@ class Config {
     }
 }
 ```
+
+### Magic methods
+
+elephc supports three PHP magic methods:
+
+- `__toString()` is invoked when an object is coerced to string, including `echo $obj`, string concatenation, `(string)$obj`, and `settype($obj, "string")`
+- `__get($name)` is invoked when reading an undefined property such as `$obj->title`
+- `__set($name, $value)` is invoked when writing an undefined property such as `$obj->title = "hello"`
+
+```php
+<?php
+class Post {
+    public $log = "";
+
+    public function __toString() {
+        return "<post>";
+    }
+
+    public function __get($name) {
+        return "[" . $name . "]";
+    }
+
+    public function __set($name, $value) {
+        $this->log = $name . "=" . $value;
+    }
+}
+
+$post = new Post();
+$post->title = "Hello";
+echo $post;         // <post>
+echo $post->title;  // [title]
+echo $post->log;    // title=Hello
+```
+
+Rules:
+
+- `__toString()` must be `public`, non-static, take zero arguments, and return a string
+- `__get()` must be `public`, non-static, and take exactly one argument
+- `__set()` must be `public`, non-static, and take exactly two arguments
+- If an object without `__toString()` is used in string context, elephc raises a runtime fatal error
 
 - `public` properties can be accessed from outside the class via `->`.
 - `protected` properties are not accessible from outside the class, but they are accessible inside subclasses.

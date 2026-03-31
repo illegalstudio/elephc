@@ -82,6 +82,88 @@ fn pop_args_to_registers(emitter: &mut Emitter, assignments: &[(PhpType, usize, 
     }
 }
 
+fn resolve_instance_method_dispatch(
+    ctx: &Context,
+    class_name: &str,
+    method: &str,
+) -> (PhpType, Option<usize>, Option<String>) {
+    let class_info = ctx.classes.get(class_name).cloned();
+    let ret_ty = class_info
+        .as_ref()
+        .and_then(|ci| {
+            let impl_class = ci
+                .method_impl_classes
+                .get(method)
+                .map(String::as_str)
+                .unwrap_or(class_name);
+            ctx.classes
+                .get(impl_class)
+                .and_then(|impl_info| impl_info.methods.get(method))
+                .cloned()
+        })
+        .map(|sig| sig.return_type)
+        .unwrap_or(PhpType::Int);
+    let slot = class_info
+        .as_ref()
+        .and_then(|ci| ci.vtable_slots.get(method).copied());
+    let direct_private_label = class_info.as_ref().and_then(|ci| {
+        if ci.method_visibilities.get(method) == Some(&Visibility::Private) {
+            let impl_class = ci
+                .method_impl_classes
+                .get(method)
+                .map(String::as_str)
+                .unwrap_or(class_name);
+            Some(format!("_method_{}_{}", impl_class, method))
+        } else {
+            None
+        }
+    });
+    (ret_ty, slot, direct_private_label)
+}
+
+pub(super) fn emit_dispatch_instance_method(
+    class_name: &str,
+    method: &str,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) -> PhpType {
+    let (ret_ty, slot, direct_private_label) =
+        resolve_instance_method_dispatch(ctx, class_name, method);
+
+    save_concat_offset_before_nested_call(emitter);
+    if let Some(slot) = slot {
+        emitter.instruction("ldr x10, [x0]");                                   // load dynamic class id from object header
+        emitter.instruction("adrp x11, _class_vtable_ptrs@PAGE");               // load vtable pointer table page
+        emitter.instruction("add x11, x11, _class_vtable_ptrs@PAGEOFF");        // add vtable pointer table offset
+        emitter.instruction("ldr x11, [x11, x10, lsl #3]");                     // load class-specific vtable pointer
+        emitter.instruction(&format!("ldr x11, [x11, #{}]", slot * 8));         // load method entry from vtable slot
+        emitter.instruction("blr x11");                                         // call virtual method implementation
+    } else if let Some(label) = direct_private_label {
+        emitter.instruction(&format!("bl {}", label));                          // call lexically-resolved private method directly
+    } else {
+        emitter.comment(&format!(
+            "WARNING: missing vtable slot for {}::{}",
+            class_name, method
+        ));
+    }
+    restore_concat_offset_after_nested_call(emitter, &ret_ty);
+
+    ret_ty
+}
+
+pub(super) fn emit_method_call_with_pushed_args(
+    class_name: &str,
+    method: &str,
+    arg_types: &[PhpType],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) -> PhpType {
+    let assignments = compute_register_assignments(arg_types, 1);
+    emitter.instruction("ldr x0, [sp], #16");                                   // pop $this into x0
+    pop_args_to_registers(emitter, &assignments);
+    emit_dispatch_instance_method(class_name, method, emitter, ctx)
+}
+
 pub(super) fn emit_method_call(
     object: &Expr,
     method: &str,
@@ -104,61 +186,7 @@ pub(super) fn emit_method_call(
     };
     emitter.instruction("str x0, [sp, #-16]!");                                 // push $this pointer
 
-    let assignments = compute_register_assignments(&arg_types, 1);
-    emitter.instruction("ldr x0, [sp], #16");                                   // pop $this into x0
-    pop_args_to_registers(emitter, &assignments);
-
-    let class_info = ctx.classes.get(&class_name).cloned();
-    let ret_ty = class_info
-        .as_ref()
-        .and_then(|ci| {
-            let impl_class = ci
-                .method_impl_classes
-                .get(method)
-                .map(String::as_str)
-                .unwrap_or(class_name.as_str());
-            ctx.classes
-                .get(impl_class)
-                .and_then(|impl_info| impl_info.methods.get(method))
-                .cloned()
-        })
-        .map(|sig| sig.return_type)
-        .unwrap_or(PhpType::Int);
-    let slot = class_info
-        .as_ref()
-        .and_then(|ci| ci.vtable_slots.get(method).copied());
-    let direct_private_label = class_info.as_ref().and_then(|ci| {
-        if ci.method_visibilities.get(method) == Some(&Visibility::Private) {
-            let impl_class = ci
-                .method_impl_classes
-                .get(method)
-                .map(String::as_str)
-                .unwrap_or(class_name.as_str());
-            Some(format!("_method_{}_{}", impl_class, method))
-        } else {
-            None
-        }
-    });
-
-    save_concat_offset_before_nested_call(emitter);
-    if let Some(slot) = slot {
-        emitter.instruction("ldr x10, [x0]");                                   // load dynamic class id from object header
-        emitter.instruction("adrp x11, _class_vtable_ptrs@PAGE");               // load vtable pointer table page
-        emitter.instruction("add x11, x11, _class_vtable_ptrs@PAGEOFF");        // add vtable pointer table offset
-        emitter.instruction("ldr x11, [x11, x10, lsl #3]");                     // load class-specific vtable pointer
-        emitter.instruction(&format!("ldr x11, [x11, #{}]", slot * 8));         // load method entry from vtable slot
-        emitter.instruction("blr x11");                                         // call virtual method implementation
-    } else if let Some(label) = direct_private_label {
-        emitter.instruction(&format!("bl {}", label));                          // call lexically-resolved private method directly
-    } else {
-        emitter.comment(&format!(
-            "WARNING: missing vtable slot for {}::{}",
-            class_name, method
-        ));
-    }
-    restore_concat_offset_after_nested_call(emitter, &ret_ty);
-
-    ret_ty
+    emit_method_call_with_pushed_args(&class_name, method, &arg_types, emitter, ctx)
 }
 
 pub(super) fn emit_immediate_class_id(emitter: &mut Emitter, class_id: u64) {

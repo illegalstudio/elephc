@@ -734,7 +734,7 @@ The result is the object pointer in `x0`.
 
 ### Property access (`$obj->prop`)
 
-Property access uses fixed offsets computed at compile time from `ClassInfo.property_offsets`:
+Property access usually uses fixed offsets computed at compile time from `ClassInfo.property_offsets`:
 
 ```asm
 ; $obj->prop where prop resolved to offset 24
@@ -742,7 +742,9 @@ ldur x0, [x29, #-offset]            ; load object pointer
 ldur x0, [x0, #24]                  ; load property at resolved inherited offset
 ```
 
-For property assignment (`$obj->prop = value`), the value is evaluated first, then stored at the resolved inherited offset.
+If the property does not exist but the class exposes `__get($name)`, codegen materializes the property name as a string literal, pushes it as an argument, and dispatches the instance method through the normal object-call path. The returned value then flows back through the ordinary result registers based on the inferred return type.
+
+For property assignment (`$obj->prop = value`), the value is evaluated first, then stored at the resolved inherited offset. If the property is missing but the class exposes `__set($name, $value)`, codegen boxes the value as `Mixed`, materializes the property name, and dispatches `__set` instead of emitting a direct store.
 
 ### Method call (`$obj->method(args)`)
 
@@ -792,8 +794,10 @@ Stores the current result to a stack variable. Uses `store_at_offset()` internal
 | `Int` / `Bool` | `stur x0, [x29, #-offset]` (or 2-insn sequence for large offsets) |
 | `Float` | `stur d0, [x29, #-offset]` |
 | `Str` | `bl __rt_str_persist`, then `stur x1, [x29, #-offset]` + `stur x2, [x29, #-(offset-8)]` |
-| `Array` | `stur x0, [x29, #-offset]` |
+| `Array` / `AssocArray` | `stur x0, [x29, #-offset]` |
+| `Mixed` | `stur x0, [x29, #-offset]` |
 | `Object` | `stur x0, [x29, #-offset]` |
+| `Callable` / `Pointer` | `stur x0, [x29, #-offset]` |
 
 ### `emit_load(emitter, type, offset)`
 

@@ -37,7 +37,7 @@ pub fn emit(
                     PhpType::Float
                 }
                 "string" => {
-                    crate::codegen::expr::coerce_to_string(emitter, &old_ty);
+                    crate::codegen::expr::coerce_to_string(emitter, ctx, _data, &old_ty);
                     PhpType::Str
                 }
                 "bool" | "boolean" => {
