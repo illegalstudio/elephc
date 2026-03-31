@@ -12919,3 +12919,130 @@ fn test_example_interfaces_compiles_and_runs() {
     let out = compile_and_run(include_str!("../examples/interfaces/main.php"));
     assert_eq!(out, "WIDGET\n");
 }
+
+#[test]
+fn test_match_without_default_is_fatal() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+$value = 3;
+echo match($value) {
+    1 => "one",
+    2 => "two",
+};
+"#,
+    );
+    assert!(err.contains("unhandled match case"), "{err}");
+}
+
+#[test]
+fn test_readonly_class_constructor_initialization() {
+    let out = compile_and_run(
+        r#"<?php
+readonly class User {
+    public $id;
+
+    public function __construct($id) {
+        $this->id = $id;
+    }
+}
+
+$user = new User(42);
+echo $user->id;
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_first_class_callable_named_function_indirect_call() {
+    let out = compile_and_run(
+        r#"<?php
+function triple($n) {
+    return $n * 3;
+}
+
+$fn = triple(...);
+echo $fn(7);
+"#,
+    );
+    assert_eq!(out, "21");
+}
+
+#[test]
+fn test_first_class_callable_static_method_indirect_call() {
+    let out = compile_and_run(
+        r#"<?php
+class MathBox {
+    public static function double($n) {
+        return $n * 2;
+    }
+}
+
+$fn = MathBox::double(...);
+echo $fn(9);
+"#,
+    );
+    assert_eq!(out, "18");
+}
+
+#[test]
+fn test_first_class_callable_builtin_used_in_array_map() {
+    let out = compile_and_run(
+        r#"<?php
+$len = strlen(...);
+echo $len("tool");
+"#,
+    );
+    assert_eq!(out, "4");
+}
+
+#[test]
+fn test_first_class_callable_preserves_by_ref_params() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(&$n) {
+    $n = $n + 1;
+}
+
+$fn = bump(...);
+$value = 7;
+$fn($value);
+echo $value;
+"#,
+    );
+    assert_eq!(out, "8");
+}
+
+#[test]
+fn test_first_class_callable_variable_used_in_array_map() {
+    let out = compile_and_run(
+        r#"<?php
+function double($n) {
+    return $n * 2;
+}
+
+$fn = double(...);
+$values = array_map($fn, [1, 2, 3]);
+echo $values[0];
+echo ":";
+echo $values[2];
+"#,
+    );
+    assert_eq!(out, "2:6");
+}
+
+#[test]
+fn test_first_class_callable_direct_call_user_func() {
+    let out = compile_and_run(
+        r#"<?php
+echo call_user_func(strlen(...), "hello");
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+#[test]
+fn test_example_v017_trio_compiles_and_runs() {
+    let out = compile_and_run(include_str!("../examples/v017-trio/main.php"));
+    assert_eq!(out, "health:[ok]:missing");
+}

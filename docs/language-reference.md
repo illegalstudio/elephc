@@ -369,6 +369,8 @@ $result = match($x) {
 echo $result; // two
 ```
 
+If no arm matches and there is no `default`, elephc aborts with a fatal runtime error, matching PHP 8's "unhandled match case" behavior.
+
 ### try / catch / finally / throw
 
 Exceptions work with object values:
@@ -530,6 +532,40 @@ usort($nums, fn($a, $b) => $b - $a);
 ```
 
 Arrow functions are single-expression closures — the body is implicitly returned, no `return` keyword needed.
+
+### First-class callable syntax
+
+elephc supports PHP 8.1 style first-class callable syntax for named functions and static methods:
+
+```php
+<?php
+function triple($n) {
+    return $n * 3;
+}
+
+class MathBox {
+    public static function double($n) {
+        return $n * 2;
+    }
+}
+
+$triple = triple(...);
+$double = MathBox::double(...);
+
+echo $triple(4); // 12
+echo $double(5); // 10
+```
+
+Supported forms in the current compiler:
+- `functionName(...)`
+- `ClassName::method(...)`
+- `self::method(...)`
+- `parent::method(...)`
+
+Current limits:
+- `static::method(...)` is rejected for first-class callable creation
+- Instance-method callables such as `$obj->method(...)` are not supported yet
+- Built-in functions are supported when their callable ABI is modeled directly (for example `strlen(...)`)
 
 ### Global variables
 
@@ -1576,6 +1612,19 @@ class Config {
 }
 ```
 
+`readonly class` is also supported and makes every instance property implicitly readonly:
+
+```php
+<?php
+readonly class User {
+    public $id;
+
+    public function __construct($id) {
+        $this->id = $id;
+    }
+}
+```
+
 ### Magic methods
 
 elephc supports three PHP magic methods:
@@ -1620,6 +1669,8 @@ Rules:
 - `protected` properties are not accessible from outside the class, but they are accessible inside subclasses.
 - `private` properties can only be accessed inside the class via `$this->`.
 - `readonly` properties can only be assigned inside `__construct`.
+- `readonly class` applies that same rule to every instance property in the class.
+- Readonly and non-readonly classes cannot extend each other.
 - Property redeclaration across an inheritance chain is not supported yet.
 
 ### Constructor

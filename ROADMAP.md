@@ -292,11 +292,11 @@ Proper type system for PHP compatibility.
 - [ ] `yield from` delegation — forward iteration to an inner generator
 - [ ] Enums (`enum Color { Red; Green; Blue; }`) — backed enums with `->value`, `::from()`, `::cases()`
 - [ ] Named arguments (`foo(name: "Alice", age: 30)`) — reorder args at compile time based on parameter names
-- [ ] First-class callable syntax (`strlen(...)`) — create closures from function names without string indirection
+- [x] First-class callable syntax (`strlen(...)`) — create closures from function names without string indirection
 - [ ] Union types (`int|string`) — tagged union with runtime type dispatch
 - [ ] Nullable types (`?int`) — sugar for `int|null`
-- [ ] `match` with no-match error — runtime fatal when no arm matches and no default
-- [ ] Readonly classes (`readonly class Point {}`) — all properties implicitly readonly
+- [x] `match` with no-match error — runtime fatal when no arm matches and no default
+- [x] Readonly classes (`readonly class Point {}`) — all properties implicitly readonly
 - [ ] Constructor promotion (`public function __construct(public int $x)`) — declare + assign properties in constructor signature
 - [ ] Fibers — cooperative multitasking via `Fiber::start()`, `Fiber::suspend()`, `Fiber::resume()` (heap-allocated stack frames)
 
