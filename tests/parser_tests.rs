@@ -147,6 +147,38 @@ fn test_parse_throw_expression_in_null_coalesce() {
     }
 }
 
+#[test]
+fn test_parse_ifdef_statement() {
+    let stmts = parse_source("<?php ifdef DEBUG { echo 1; }");
+    assert_eq!(
+        stmts,
+        vec![Stmt::new(
+            StmtKind::IfDef {
+                symbol: "DEBUG".into(),
+                then_body: vec![Stmt::echo(Expr::int_lit(1))],
+                else_body: None,
+            },
+            elephc::span::Span::dummy(),
+        )]
+    );
+}
+
+#[test]
+fn test_parse_ifdef_else_statement() {
+    let stmts = parse_source("<?php ifdef DEBUG { echo 1; } else { echo 2; }");
+    assert_eq!(
+        stmts,
+        vec![Stmt::new(
+            StmtKind::IfDef {
+                symbol: "DEBUG".into(),
+                then_body: vec![Stmt::echo(Expr::int_lit(1))],
+                else_body: Some(vec![Stmt::echo(Expr::int_lit(2))]),
+            },
+            elephc::span::Span::dummy(),
+        )]
+    );
+}
+
 // --- Assignment ---
 
 #[test]

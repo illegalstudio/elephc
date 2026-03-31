@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
@@ -362,8 +363,20 @@ fn compile_source_to_asm_with_options(
     gc_stats: bool,
     heap_debug: bool,
 ) -> (String, Vec<String>) {
+    compile_source_to_asm_with_defines(source, dir, &HashSet::new(), heap_size, gc_stats, heap_debug)
+}
+
+fn compile_source_to_asm_with_defines(
+    source: &str,
+    dir: &Path,
+    defines: &HashSet<String>,
+    heap_size: usize,
+    gc_stats: bool,
+    heap_debug: bool,
+) -> (String, Vec<String>) {
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
+    let ast = elephc::conditional::apply(ast, defines);
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
     let check_result = elephc::types::check(&resolved).expect("type check failed");
     let asm = elephc::codegen::generate(
@@ -564,6 +577,63 @@ fn compile_and_run(source: &str) -> String {
     compile_and_run_with_heap_size(source, 8_388_608)
 }
 
+fn compile_and_run_with_defines(source: &str, defines: &[&str]) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();
+    let (asm, required_libraries) =
+        compile_source_to_asm_with_defines(source, &dir, &define_set, 8_388_608, false, false);
+    let elephc_out = assemble_and_run(
+        &asm,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    elephc_out
+}
+
+fn compile_cli_file_and_run(source: &str, defines: &[&str]) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_cli_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, source).unwrap();
+
+    let elephc_bin =
+        std::env::var("CARGO_BIN_EXE_elephc").expect("CARGO_BIN_EXE_elephc not set by cargo test");
+    let mut compile_cmd = Command::new(elephc_bin);
+    for define in defines {
+        compile_cmd.arg("--define").arg(define);
+    }
+    compile_cmd.arg(&php_path).current_dir(&dir);
+    let compile_out = compile_cmd.output().expect("failed to run elephc CLI");
+    assert!(
+        compile_out.status.success(),
+        "elephc CLI failed: {}",
+        String::from_utf8_lossy(&compile_out.stderr)
+    );
+
+    let bin_path = dir.join("main");
+    let output = Command::new(&bin_path)
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run compiled CLI binary");
+    assert!(output.status.success(), "CLI-compiled binary exited with error");
+
+    let _ = fs::remove_dir_all(&dir);
+    String::from_utf8(output.stdout).unwrap()
+}
+
 /// Compile a PHP source string and assert the generated binary fails at runtime.
 fn compile_and_run_expect_failure(source: &str) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
@@ -583,6 +653,14 @@ fn compile_and_run_expect_failure(source: &str) -> String {
 
 /// Compile a PHP project with multiple files using the library directly.
 fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> String {
+    compile_and_run_files_with_defines(files, main_file, &[])
+}
+
+fn compile_and_run_files_with_defines(
+    files: &[(&str, &str)],
+    main_file: &str,
+    defines: &[&str],
+) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -603,6 +681,8 @@ fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> String {
 
     let tokens = elephc::lexer::tokenize(&source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
+    let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();
+    let ast = elephc::conditional::apply(ast, &define_set);
     let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
     let check_result = elephc::types::check(&resolved).expect("type check failed");
     let asm = elephc::codegen::generate(
@@ -632,6 +712,14 @@ fn compile_and_run_files(files: &[(&str, &str)], main_file: &str) -> String {
 
 /// Write multiple files and attempt compilation. Returns true if compilation fails.
 fn compile_files_fails(files: &[(&str, &str)], main_file: &str) -> bool {
+    compile_files_fails_with_defines(files, main_file, &[])
+}
+
+fn compile_files_fails_with_defines(
+    files: &[(&str, &str)],
+    main_file: &str,
+    defines: &[&str],
+) -> bool {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -653,6 +741,8 @@ fn compile_files_fails(files: &[(&str, &str)], main_file: &str) -> bool {
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
         let tokens = elephc::lexer::tokenize(&source)?;
         let ast = elephc::parser::parse(&tokens)?;
+        let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();
+        let ast = elephc::conditional::apply(ast, &define_set);
         let resolved = elephc::resolver::resolve(ast, base_dir)?;
         elephc::types::check(&resolved)?;
         Ok(())
@@ -660,6 +750,127 @@ fn compile_files_fails(files: &[(&str, &str)], main_file: &str) -> bool {
 
     let _ = fs::remove_dir_all(&dir);
     result.is_err()
+}
+
+#[test]
+fn test_ifdef_selects_then_branch_when_symbol_is_defined() {
+    let out = compile_and_run_with_defines(
+        r#"<?php
+ifdef DEBUG {
+    echo "debug";
+} else {
+    echo "release";
+}
+"#,
+        &["DEBUG"],
+    );
+    assert_eq!(out, "debug");
+}
+
+#[test]
+fn test_ifdef_selects_else_branch_when_symbol_is_missing() {
+    let out = compile_and_run_with_defines(
+        r#"<?php
+ifdef DEBUG {
+    echo "debug";
+} else {
+    echo "release";
+}
+"#,
+        &[],
+    );
+    assert_eq!(out, "release");
+}
+
+#[test]
+fn test_ifdef_without_else_can_erase_statement() {
+    let out = compile_and_run_with_defines(
+        r#"<?php
+echo "a";
+ifdef DEBUG {
+    echo "b";
+}
+echo "c";
+"#,
+        &[],
+    );
+    assert_eq!(out, "ac");
+}
+
+#[test]
+fn test_ifdef_supports_nested_branches() {
+    let out = compile_and_run_with_defines(
+        r#"<?php
+ifdef OUTER {
+    ifdef INNER {
+        echo "both";
+    } else {
+        echo "outer";
+    }
+} else {
+    echo "none";
+}
+"#,
+        &["OUTER"],
+    );
+    assert_eq!(out, "outer");
+}
+
+#[test]
+fn test_ifdef_cli_define_flag_controls_branch_selection() {
+    let source = r#"<?php
+ifdef DEBUG {
+    echo "debug";
+} else {
+    echo "release";
+}
+"#;
+
+    let release_out = compile_cli_file_and_run(source, &[]);
+    assert_eq!(release_out, "release");
+
+    let debug_out = compile_cli_file_and_run(source, &["DEBUG"]);
+    assert_eq!(debug_out, "debug");
+}
+
+#[test]
+fn test_ifdef_active_branch_resolves_includes() {
+    let out = compile_and_run_files_with_defines(
+        &[
+            (
+                "main.php",
+                r#"<?php
+ifdef FEATURE {
+    require "part.php";
+}
+"#,
+            ),
+            ("part.php", "<?php echo \"ok\";"),
+        ],
+        "main.php",
+        &["FEATURE"],
+    );
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_ifdef_inactive_branch_skips_missing_include_resolution() {
+    let out = compile_and_run_files_with_defines(
+        &[
+            (
+                "main.php",
+                r#"<?php
+ifdef FEATURE {
+    require "missing.php";
+}
+echo "safe";
+"#,
+            ),
+        ],
+        "main.php",
+        &[],
+    );
+    assert_eq!(out, "safe");
 }
 
 /// Compile a PHP source string and run with piped stdin data.

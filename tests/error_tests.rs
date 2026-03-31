@@ -2,10 +2,17 @@ use elephc::lexer::tokenize;
 use elephc::parser::parse;
 use elephc::types;
 use elephc::types::PhpType;
+use std::collections::HashSet;
 
 fn check_source(src: &str) -> Result<(), String> {
+    check_source_with_defines(src, &[])
+}
+
+fn check_source_with_defines(src: &str, defines: &[&str]) -> Result<(), String> {
     let tokens = tokenize(src).map_err(|e| e.message.clone())?;
     let ast = parse(&tokens).map_err(|e| e.message.clone())?;
+    let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();
+    let ast = elephc::conditional::apply(ast, &define_set);
     types::check(&ast).map_err(|e| e.message.clone())?;
     Ok(())
 }
@@ -235,6 +242,16 @@ fn test_error_missing_function_paren() {
 #[test]
 fn test_error_missing_if_paren() {
     expect_error("<?php if 1 { }", "Expected '(' after 'if'");
+}
+
+#[test]
+fn test_error_ifdef_requires_symbol_name() {
+    expect_error("<?php ifdef { echo 1; }", "Expected symbol name after 'ifdef'");
+}
+
+#[test]
+fn test_error_ifdef_requires_braced_body() {
+    expect_error("<?php ifdef DEBUG echo 1;", "Expected '{'");
 }
 
 #[test]

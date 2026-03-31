@@ -20,6 +20,7 @@ pub enum Token {
     // Keywords
     Echo,
     If,
+    IfDef,
     Else,
     ElseIf,
     While,

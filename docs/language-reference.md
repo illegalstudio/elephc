@@ -37,6 +37,38 @@ $x = 42;              // reassignment from null works
 - Integer overflow wraps instead of promoting to float. In PHP, `PHP_INT_MAX + 1` returns a float (`9.2233720368548E+18`); in elephc it wraps to `-9223372036854775808` (native 64-bit signed integer behavior). This is by design — runtime overflow detection would require checking the CPU overflow flag after every arithmetic operation, which is incompatible with the ahead-of-time compilation model.
 - Loose comparison (`==`) between different types coerces both sides to integer. PHP has more nuanced type juggling rules (e.g., numeric strings compared as numbers). elephc simplifies this: strings are parsed as integers (empty string and non-numeric strings become `0`).
 
+## Compiler-specific extensions
+
+elephc keeps ordinary supported syntax PHP-compatible, but it also exposes a few build-time or native-interop extensions that are not valid PHP source.
+
+### `ifdef`
+
+`ifdef` is a build-time conditional statement controlled by compiler flags:
+
+```php
+<?php
+ifdef DEBUG {
+    echo "debug\n";
+} else {
+    echo "release\n";
+}
+```
+
+Compile with:
+
+```bash
+elephc --define DEBUG app.php
+```
+
+Rules:
+- Syntax is `ifdef SYMBOL { ... }` with optional `else { ... }`
+- Bodies must be braced
+- Symbols come only from compiler `--define` flags, not from PHP `const` or `define()`
+- Inactive branches are removed before `include` / `require` resolution, type checking, and code generation
+- `ifdef` is an elephc extension and is not PHP-compatible syntax
+
+The existing pointer helpers such as `ptr()` and `ptr_cast<T>()` remain elephc-specific as well.
+
 ## Operators
 
 ### Arithmetic

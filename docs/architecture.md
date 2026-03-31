@@ -20,6 +20,13 @@ PHP source (.php)
 └────┬─────┘
      │
      ▼
+┌─────────────┐
+│ Conditional │  src/conditional.rs
+│             │  Applies CLI `--define` symbols to `ifdef` branches.
+│             │  Removes inactive AST branches before include resolution.
+└────┬────────┘
+     │
+     ▼
 ┌─────────┐
 │ Resolver │  src/resolver.rs
 │          │  Resolves include/require by inlining referenced files.
@@ -54,6 +61,7 @@ src/
 ├── main.rs                    CLI entry point
 ├── lib.rs                     Public module exports
 ├── span.rs                    Source position (line, col)
+├── conditional.rs             Build-time `ifdef` pass
 ├── resolver.rs                Include/require file resolution
 │
 ├── lexer/

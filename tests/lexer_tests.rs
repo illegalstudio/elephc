@@ -110,6 +110,25 @@ fn test_exception_keywords_tokens() {
 }
 
 #[test]
+fn test_ifdef_keyword_token() {
+    let t = tokens("<?php ifdef DEBUG { echo 1; }");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::IfDef,
+            Token::Identifier("DEBUG".into()),
+            Token::LBrace,
+            Token::Echo,
+            Token::IntLiteral(1),
+            Token::Semicolon,
+            Token::RBrace,
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
 fn test_echo_string() {
     let t = tokens("<?php echo \"hello\";");
     assert_eq!(

@@ -2280,6 +2280,10 @@ impl Checker {
 
     pub fn check_stmt(&mut self, stmt: &Stmt, env: &mut TypeEnv) -> Result<(), CompileError> {
         match &stmt.kind {
+            StmtKind::IfDef { .. } => Err(CompileError::new(
+                stmt.span,
+                "Unresolved ifdef statement",
+            )),
             StmtKind::Echo(expr) => {
                 self.infer_type(expr, env)?;
                 Ok(())

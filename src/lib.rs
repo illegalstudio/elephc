@@ -1,4 +1,5 @@
 pub mod codegen;
+pub mod conditional;
 pub mod errors;
 pub mod lexer;
 pub mod parser;
