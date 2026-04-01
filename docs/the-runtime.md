@@ -272,7 +272,7 @@ Refcounts are stored as a 32-bit value in the uniform 16-byte heap header, at `[
 
 ## System routines
 
-**Source:** `src/codegen/runtime/system/` (26 files)
+**Source:** `src/codegen/runtime/system/` (27 files)
 
 ### `__rt_build_argv` — Build $argv array
 

@@ -15,8 +15,10 @@ This document describes the PHP subset supported by elephc. The language aims to
 | `mixed` | Internal | Static helper type used when an associative array stores heterogeneous values. Runtime values are boxed with a per-entry tag, but PHP source code does not spell this type explicitly. |
 | `object` | Yes | Class instances. Heap-allocated, fixed-layout. `new ClassName(...)` |
 | `pointer` | Yes | 64-bit memory address. `ptr($var)`, `ptr_null()`. Echo prints `0x...` hex. |
-| `buffer<T>` | Extension | Contiguous heap buffer for POD scalars, pointers, or packed classes. Allocate with `buffer_new<T>(len)` and query with `buffer_len($buf)`. |
+| `buffer<T>` | Extension | Contiguous heap buffer for POD scalars, pointers, or packed classes. `buffer_new<T>(len)`, `buffer_len($buf)`, `buffer_free($buf)`. |
 | `packed class` | Extension | Nominal POD record type with fixed compile-time field offsets. Intended for hot-path storage and typed pointer access. |
+| `int\|string` | Yes | Union type — variable accepts any of the listed types. Lowered to Mixed at runtime. `int\|string $x = 42;` |
+| `?int` | Yes | Nullable shorthand — sugar for `int\|null`. `?int $x = null;` |
 | `resource` | No | File handles are currently modeled as integer file descriptors (`int`), not as a separate runtime resource type. |
 
 ### Typed local declarations

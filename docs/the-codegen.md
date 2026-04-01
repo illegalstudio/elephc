@@ -177,6 +177,8 @@ Floats are stored as their raw 64-bit IEEE 754 bit patterns (`.quad` directive).
 | `Mixed` | `x0` (pointer to boxed mixed cell) |
 | `Object` | `x0` (heap pointer) |
 | `Callable` / `Pointer` | `x0` |
+| `Buffer` / `Packed` | `x0` (heap pointer) |
+| `Union` | `x0` (same as Mixed — boxed runtime-tagged payload) |
 
 ### Literals
 
@@ -798,6 +800,7 @@ Stores the current result to a stack variable. Uses `store_at_offset()` internal
 | `Mixed` | `stur x0, [x29, #-offset]` |
 | `Object` | `stur x0, [x29, #-offset]` |
 | `Callable` / `Pointer` | `stur x0, [x29, #-offset]` |
+| `Buffer` / `Packed` / `Union` | `stur x0, [x29, #-offset]` |
 
 ### `emit_load(emitter, type, offset)`
 

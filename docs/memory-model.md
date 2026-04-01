@@ -82,6 +82,9 @@ For heap-backed values, stack slots also carry compile-time ownership metadata i
 | `Object` | 8 bytes | Pointer to heap-allocated object |
 | `Callable` | 8 bytes | Function pointer |
 | `Pointer` | 8 bytes | Raw 64-bit address |
+| `Buffer` | 8 bytes | Pointer to buffer header |
+| `Packed` | 8 bytes | Metadata-only nominal type, accessed via pointer |
+| `Union` | 8 bytes | Boxed runtime-tagged payload (same storage as Mixed) |
 
 ### The null sentinel
 
