@@ -323,6 +323,7 @@ Proper type system for PHP compatibility.
 - [ ] Apple notarization for direct downloads (codesign + notarytool)
 - [ ] Performance within 2x of C -O0 on compute benchmarks
 - [ ] Real-world CLI tools compiled as validation
+- [ ] Runtime object cache — pre-assemble the runtime into `~/.cache/elephc/runtime-<version>.o` and reuse across compilations, invalidating on compiler version change. Cuts repeated compile time by ~50%.
 
 ---
 
