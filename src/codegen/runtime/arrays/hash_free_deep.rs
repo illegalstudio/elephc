@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_free_deep ---");
-    emitter.label("__rt_hash_free_deep");
+    emitter.label_global("__rt_hash_free_deep");
 
     // -- null and heap-range check --
     emitter.instruction("cbz x0, __rt_hash_free_deep_done");                    // skip if null

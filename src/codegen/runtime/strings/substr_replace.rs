@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_substr_replace(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: substr_replace ---");
-    emitter.label("__rt_substr_replace");
+    emitter.label_global("__rt_substr_replace");
     emitter.instruction("sub sp, sp, #16");                                     // allocate stack frame
     emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // set frame pointer

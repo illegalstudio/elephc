@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_hash_iter(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_iter_next ---");
-    emitter.label("__rt_hash_iter_next");
+    emitter.label_global("__rt_hash_iter_next");
 
     // -- cursor protocol --
     // 0   = start from header.head

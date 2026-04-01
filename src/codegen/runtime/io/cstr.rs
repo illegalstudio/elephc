@@ -11,7 +11,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_cstr(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: cstr ---");
-    emitter.label("__rt_cstr");
+    emitter.label_global("__rt_cstr");
 
     // -- load destination buffer address --
     emitter.instruction("adrp x9, _cstr_buf@PAGE");                             // load page address of cstr scratch buffer
@@ -35,7 +35,7 @@ pub fn emit_cstr(emitter: &mut Emitter) {
 
     emitter.blank();
     emitter.comment("--- runtime: cstr2 ---");
-    emitter.label("__rt_cstr2");
+    emitter.label_global("__rt_cstr2");
 
     // -- load second buffer address --
     emitter.instruction("adrp x9, _cstr_buf2@PAGE");                            // load page address of second cstr buffer

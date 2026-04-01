@@ -4,7 +4,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_strcasecmp(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strcasecmp ---");
-    emitter.label("__rt_strcasecmp");
+    emitter.label_global("__rt_strcasecmp");
 
     // -- determine minimum length for comparison --
     emitter.instruction("cmp x2, x4");                                          // compare lengths of both strings

@@ -10,7 +10,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_mktime(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mktime ---");
-    emitter.label("__rt_mktime");
+    emitter.label_global("__rt_mktime");
 
     // -- set up stack frame --
     // Need 44 bytes for struct tm (rounded up to 48 for alignment) + 16 for frame

@@ -12,7 +12,7 @@ use crate::codegen::emit::Emitter;
 pub(crate) fn emit_date(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: date ---");
-    emitter.label("__rt_date");
+    emitter.label_global("__rt_date");
 
     // -- set up stack frame --
     // Stack layout:

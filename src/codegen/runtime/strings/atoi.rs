@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_atoi(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: atoi ---");
-    emitter.label("__rt_atoi");
+    emitter.label_global("__rt_atoi");
 
     // -- initialize result and sign flag --
     emitter.instruction("mov x0, #0");                                          // initialize result accumulator to zero

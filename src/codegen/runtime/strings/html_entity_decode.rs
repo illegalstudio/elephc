@@ -5,7 +5,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_html_entity_decode(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: html_entity_decode ---");
-    emitter.label("__rt_html_entity_decode");
+    emitter.label_global("__rt_html_entity_decode");
 
     // -- set up concat_buf destination --
     emitter.instruction("adrp x6, _concat_off@PAGE");                           // load concat offset page

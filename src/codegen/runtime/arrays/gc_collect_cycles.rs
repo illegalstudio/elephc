@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: gc_collect_cycles ---");
-    emitter.label("__rt_gc_collect_cycles");
+    emitter.label_global("__rt_gc_collect_cycles");
 
     // -- avoid recursive re-entry while the collector is already running --
     emitter.instruction("adrp x9, _gc_collecting@PAGE");                        // load page of the collector-active flag

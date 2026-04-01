@@ -7,7 +7,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_shift(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_shift ---");
-    emitter.label("__rt_array_shift");
+    emitter.label_global("__rt_array_shift");
 
     // -- check if array is empty --
     emitter.instruction("ldr x9, [x0]");                                        // x9 = current array length

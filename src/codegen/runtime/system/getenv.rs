@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_getenv(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: getenv ---");
-    emitter.label("__rt_getenv");
+    emitter.label_global("__rt_getenv");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #32");                                     // allocate 32 bytes on the stack

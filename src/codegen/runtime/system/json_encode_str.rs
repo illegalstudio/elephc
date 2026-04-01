@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub(crate) fn emit_json_encode_str(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_str ---");
-    emitter.label("__rt_json_encode_str");
+    emitter.label_global("__rt_json_encode_str");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack

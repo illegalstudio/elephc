@@ -12,7 +12,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: sprintf ---");
-    emitter.label("__rt_sprintf");
+    emitter.label_global("__rt_sprintf");
 
     // Frame layout (288 bytes):
     //   sp+0..7     = variadic arg slot for snprintf (must be at sp)

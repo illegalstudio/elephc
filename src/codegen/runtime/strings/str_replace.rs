@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_str_replace(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_replace ---");
-    emitter.label("__rt_str_replace");
+    emitter.label_global("__rt_str_replace");
 
     // -- set up stack frame (80 bytes) --
     emitter.instruction("sub sp, sp, #80");                                     // allocate 80 bytes on the stack

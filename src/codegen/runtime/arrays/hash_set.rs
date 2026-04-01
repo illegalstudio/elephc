@@ -8,7 +8,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_set ---");
-    emitter.label("__rt_hash_set");
+    emitter.label_global("__rt_hash_set");
 
     // -- set up stack frame, save all inputs --
     // Stack layout:

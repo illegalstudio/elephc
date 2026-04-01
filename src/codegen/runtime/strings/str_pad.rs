@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_str_pad(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_pad ---");
-    emitter.label("__rt_str_pad");
+    emitter.label_global("__rt_str_pad");
     emitter.instruction("sub sp, sp, #64");                                     // allocate stack frame
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #48");                                    // set frame pointer

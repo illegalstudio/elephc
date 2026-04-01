@@ -4,7 +4,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_strrpos(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strrpos ---");
-    emitter.label("__rt_strrpos");
+    emitter.label_global("__rt_strrpos");
 
     // -- edge cases --
     emitter.instruction("cbz x4, __rt_strrpos_empty");                          // empty needle returns last position

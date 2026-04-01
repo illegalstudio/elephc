@@ -26,7 +26,7 @@ use crate::codegen::emit::Emitter;
 pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: preg_replace ---");
-    emitter.label("__rt_preg_replace");
+    emitter.label_global("__rt_preg_replace");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #240");                                    // allocate 240 bytes

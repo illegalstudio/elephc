@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_implode(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: implode ---");
-    emitter.label("__rt_implode");
+    emitter.label_global("__rt_implode");
 
     // -- set up stack frame (64 bytes) --
     emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack

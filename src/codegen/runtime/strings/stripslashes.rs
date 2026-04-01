@@ -5,7 +5,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_stripslashes(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stripslashes ---");
-    emitter.label("__rt_stripslashes");
+    emitter.label_global("__rt_stripslashes");
 
     emitter.instruction("adrp x6, _concat_off@PAGE");                           // load concat offset page
     emitter.instruction("add x6, x6, _concat_off@PAGEOFF");                     // resolve address

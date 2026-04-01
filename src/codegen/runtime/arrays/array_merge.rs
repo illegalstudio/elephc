@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_merge(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_merge ---");
-    emitter.label("__rt_array_merge");
+    emitter.label_global("__rt_array_merge");
 
     // -- set up stack frame, save source arrays --
     emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack

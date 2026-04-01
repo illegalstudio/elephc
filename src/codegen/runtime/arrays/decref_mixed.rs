@@ -3,7 +3,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_decref_mixed(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: decref_mixed ---");
-    emitter.label("__rt_decref_mixed");
+    emitter.label_global("__rt_decref_mixed");
 
     emitter.instruction("cbz x0, __rt_decref_mixed_skip");                      // skip null mixed pointers immediately
     emitter.instruction("adrp x9, _heap_buf@PAGE");                             // load page of heap buffer

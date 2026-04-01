@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub(crate) fn emit_preg_strip(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: preg_strip_delimiters ---");
-    emitter.label("__rt_preg_strip");
+    emitter.label_global("__rt_preg_strip");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes

@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: gc_mark_reachable ---");
-    emitter.label("__rt_gc_mark_reachable");
+    emitter.label_global("__rt_gc_mark_reachable");
 
     // -- reject null, non-heap, freed, and non-refcounted values --
     emitter.instruction("cbz x0, __rt_gc_mark_reachable_done");                 // ignore null roots

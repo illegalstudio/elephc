@@ -7,7 +7,7 @@ pub(crate) fn emit_ptr_check_nonnull(emitter: &mut Emitter) {
     emitter.blank();
     emitter.raw("    .p2align 2");                                              // ensure 4-byte alignment for ARM64 instructions
     emitter.comment("--- runtime: ptr_check_nonnull ---");
-    emitter.label("__rt_ptr_check_nonnull");
+    emitter.label_global("__rt_ptr_check_nonnull");
 
     // -- fast path for valid pointers --
     emitter.instruction("cmp x0, #0");                                          // compare pointer value against null

@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_glob(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: glob ---");
-    emitter.label("__rt_glob");
+    emitter.label_global("__rt_glob");
 
     // -- set up stack frame (128 bytes for glob_t + locals + frame) --
     emitter.instruction("sub sp, sp, #176");                                    // allocate 176 bytes on the stack

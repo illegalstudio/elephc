@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_ltrim_mask(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ltrim_mask ---");
-    emitter.label("__rt_ltrim_mask");
+    emitter.label_global("__rt_ltrim_mask");
 
     // -- loop: check first character against mask --
     emitter.label("__rt_ltrim_mask_loop");

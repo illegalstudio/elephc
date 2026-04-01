@@ -8,7 +8,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_hash_grow(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_grow ---");
-    emitter.label("__rt_hash_grow");
+    emitter.label_global("__rt_hash_grow");
 
     // -- set up stack frame --
     // Stack layout:

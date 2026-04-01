@@ -9,7 +9,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_grow(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_grow ---");
-    emitter.label("__rt_array_grow");
+    emitter.label_global("__rt_array_grow");
 
     // -- set up stack frame --
     // Stack layout:

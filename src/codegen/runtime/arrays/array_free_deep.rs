@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_free_deep(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_free_deep ---");
-    emitter.label("__rt_array_free_deep");
+    emitter.label_global("__rt_array_free_deep");
 
     // -- null check --
     emitter.instruction("cbz x0, __rt_array_free_deep_done");                   // skip if null

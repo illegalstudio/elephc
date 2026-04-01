@@ -8,7 +8,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_clone_shallow(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_clone_shallow ---");
-    emitter.label("__rt_array_clone_shallow");
+    emitter.label_global("__rt_array_clone_shallow");
 
     // -- set up stack frame and preserve callee-saved registers --
     emitter.instruction("sub sp, sp, #96");                                     // allocate 96 bytes on the stack

@@ -21,7 +21,7 @@ use crate::codegen::emit::Emitter;
 pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: preg_match_all ---");
-    emitter.label("__rt_preg_match_all");
+    emitter.label_global("__rt_preg_match_all");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #176");                                    // allocate 176 bytes

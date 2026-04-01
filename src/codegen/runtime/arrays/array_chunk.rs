@@ -7,7 +7,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_chunk(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_chunk ---");
-    emitter.label("__rt_array_chunk");
+    emitter.label_global("__rt_array_chunk");
 
     // -- set up stack frame, save arguments --
     // Stack layout:

@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_base64_encode(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: base64_encode ---");
-    emitter.label("__rt_base64_encode");
+    emitter.label_global("__rt_base64_encode");
 
     // -- set up concat_buf destination --
     emitter.instruction("adrp x6, _concat_off@PAGE");                           // load concat offset page

@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_strtolower(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strtolower ---");
-    emitter.label("__rt_strtolower");
+    emitter.label_global("__rt_strtolower");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #16");                                     // allocate 16 bytes on the stack

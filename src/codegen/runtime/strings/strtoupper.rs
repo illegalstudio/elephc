@@ -4,7 +4,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_strtoupper(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strtoupper ---");
-    emitter.label("__rt_strtoupper");
+    emitter.label_global("__rt_strtoupper");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #16");                                     // allocate 16 bytes on the stack

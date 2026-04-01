@@ -5,7 +5,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_htmlspecialchars(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: htmlspecialchars ---");
-    emitter.label("__rt_htmlspecialchars");
+    emitter.label_global("__rt_htmlspecialchars");
 
     // -- set up concat_buf destination --
     emitter.instruction("adrp x6, _concat_off@PAGE");                           // load concat offset page

@@ -3,7 +3,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_match_unhandled(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: match_unhandled ---");
-    emitter.label("__rt_match_unhandled");
+    emitter.label_global("__rt_match_unhandled");
     emitter.instruction("adrp x1, _match_unhandled_msg@PAGE");                    // load the unhandled-match error message page
     emitter.instruction("add x1, x1, _match_unhandled_msg@PAGEOFF");              // resolve the unhandled-match error message address
     emitter.instruction("mov x2, #34");                                           // byte length of the unhandled-match error message

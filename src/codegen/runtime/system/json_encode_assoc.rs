@@ -9,7 +9,7 @@ use crate::codegen::emit::Emitter;
 pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_assoc ---");
-    emitter.label("__rt_json_encode_assoc");
+    emitter.label_global("__rt_json_encode_assoc");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #112");                                    // allocate 112 bytes

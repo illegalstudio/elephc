@@ -7,7 +7,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_slice(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_slice ---");
-    emitter.label("__rt_array_slice");
+    emitter.label_global("__rt_array_slice");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack

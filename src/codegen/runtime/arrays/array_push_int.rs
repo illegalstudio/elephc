@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_push_int(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_push_int ---");
-    emitter.label("__rt_array_push_int");
+    emitter.label_global("__rt_array_push_int");
 
     // -- split shared arrays before appending in place --
     emitter.instruction("sub sp, sp, #32");                                     // allocate 32 bytes on the stack

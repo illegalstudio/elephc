@@ -7,7 +7,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_str_persist(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_persist ---");
-    emitter.label("__rt_str_persist");
+    emitter.label_global("__rt_str_persist");
 
     // -- handle zero-length strings (no allocation needed) --
     emitter.instruction("cbz x2, __rt_str_persist_done");                       // empty string, return as-is

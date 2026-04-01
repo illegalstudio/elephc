@@ -5,7 +5,7 @@ use crate::codegen::emit::Emitter;
 pub(crate) fn emit_json_encode_null(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_null ---");
-    emitter.label("__rt_json_encode_null");
+    emitter.label_global("__rt_json_encode_null");
 
     emitter.instruction("adrp x1, _json_null@PAGE");                            // load page of "null" string
     emitter.instruction("add x1, x1, _json_null@PAGEOFF");                      // resolve "null" address

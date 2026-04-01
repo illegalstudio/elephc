@@ -6,7 +6,7 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
 
     emitter.blank();
     emitter.comment("--- runtime: heap_debug_validate_free_list ---");
-    emitter.label("__rt_heap_debug_validate_free_list");
+    emitter.label_global("__rt_heap_debug_validate_free_list");
 
     // -- load heap bounds and current free-list head --
     emitter.instruction("adrp x9, _heap_buf@PAGE");                             // load page of the heap buffer

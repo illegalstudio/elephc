@@ -3,7 +3,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_exception_matches(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: exception_matches ---");
-    emitter.label("__rt_exception_matches");
+    emitter.label_global("__rt_exception_matches");
 
     // -- null exceptions never match any catch type --
     emitter.instruction("cbz x0, __rt_exception_matches_no");                   // null means there is no active exception object to test

@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_str_repeat(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_repeat ---");
-    emitter.label("__rt_str_repeat");
+    emitter.label_global("__rt_str_repeat");
 
     // -- set up stack frame (48 bytes) --
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack

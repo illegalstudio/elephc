@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_concat(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: concat ---");
-    emitter.label("__rt_concat");
+    emitter.label_global("__rt_concat");
 
     // -- set up stack frame (64 bytes) --
     emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack

@@ -17,7 +17,7 @@ pub fn emit_number_format(emitter: &mut Emitter) {
     //   [sp+112]    saved x29, x30
     emitter.blank();
     emitter.comment("--- runtime: number_format ---");
-    emitter.label("__rt_number_format");
+    emitter.label_global("__rt_number_format");
 
     // -- set up stack frame (128 bytes) --
     emitter.instruction("sub sp, sp, #128");                                    // allocate 128 bytes on the stack

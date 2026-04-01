@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_heap_kind(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: heap_kind ---");
-    emitter.label("__rt_heap_kind");
+    emitter.label_global("__rt_heap_kind");
 
     // -- reject null pointers up front --
     emitter.instruction("cbz x0, __rt_heap_kind_zero");                         // null pointers have no heap kind

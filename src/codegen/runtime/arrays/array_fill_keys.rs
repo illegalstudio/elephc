@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_fill_keys(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_fill_keys ---");
-    emitter.label("__rt_array_fill_keys");
+    emitter.label_global("__rt_array_fill_keys");
 
     // -- set up stack frame, save arguments --
     // Stack layout:

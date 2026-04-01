@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_product(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_product ---");
-    emitter.label("__rt_array_product");
+    emitter.label_global("__rt_array_product");
 
     // -- set up loop variables --
     emitter.instruction("ldr x9, [x0]");                                        // x9 = array length from header

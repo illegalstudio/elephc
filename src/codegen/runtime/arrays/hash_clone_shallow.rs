@@ -8,7 +8,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_hash_clone_shallow(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_clone_shallow ---");
-    emitter.label("__rt_hash_clone_shallow");
+    emitter.label_global("__rt_hash_clone_shallow");
 
     // -- set up stack frame and preserve callee-saved registers --
     // Stack layout:

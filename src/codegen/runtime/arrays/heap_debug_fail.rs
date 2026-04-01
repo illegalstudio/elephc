@@ -5,7 +5,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_heap_debug_fail(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: heap_debug_fail ---");
-    emitter.label("__rt_heap_debug_fail");
+    emitter.label_global("__rt_heap_debug_fail");
     emitter.instruction("mov x0, #2");                                          // fd = stderr
     emitter.instruction("mov x16, #4");                                         // syscall 4 = sys_write
     emitter.instruction("svc #0x80");                                           // write the heap-debug error message

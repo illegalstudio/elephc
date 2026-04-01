@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_trim_mask(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: trim_mask ---");
-    emitter.label("__rt_trim_mask");
+    emitter.label_global("__rt_trim_mask");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #32");                                     // allocate 32 bytes on the stack

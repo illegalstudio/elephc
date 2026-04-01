@@ -4,7 +4,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_ltrim(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ltrim ---");
-    emitter.label("__rt_ltrim");
+    emitter.label_global("__rt_ltrim");
     emitter.label("__rt_ltrim_loop");
     emitter.instruction("cbz x2, __rt_ltrim_done");                             // if string is empty, nothing to trim
     emitter.instruction("ldrb w9, [x1]");                                       // peek at first byte without advancing

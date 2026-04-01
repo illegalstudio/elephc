@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_hash_fnv1a(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_fnv1a ---");
-    emitter.label("__rt_hash_fnv1a");
+    emitter.label_global("__rt_hash_fnv1a");
 
     // -- load FNV offset basis into x0 (0xcbf29ce484222325) --
     emitter.instruction("movz x0, #0x2325");                                    // hash[15:0] = 0x2325

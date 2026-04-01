@@ -3,7 +3,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_decref_hash(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: decref_hash ---");
-    emitter.label("__rt_decref_hash");
+    emitter.label_global("__rt_decref_hash");
 
     // -- null check --
     emitter.instruction("cbz x0, __rt_decref_hash_skip");                       // skip if null pointer

@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_hash_ensure_unique(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_ensure_unique ---");
-    emitter.label("__rt_hash_ensure_unique");
+    emitter.label_global("__rt_hash_ensure_unique");
 
     // -- null hashes are already trivially unique --
     emitter.instruction("cbz x0, __rt_hash_ensure_unique_done");                // null inputs do not need copy-on-write splitting

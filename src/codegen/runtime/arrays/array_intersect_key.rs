@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_intersect_key(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_intersect_key ---");
-    emitter.label("__rt_array_intersect_key");
+    emitter.label_global("__rt_array_intersect_key");
 
     // -- set up stack frame, save arguments --
     // Stack layout:

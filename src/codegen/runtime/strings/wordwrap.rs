@@ -5,7 +5,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_wordwrap(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: wordwrap ---");
-    emitter.label("__rt_wordwrap");
+    emitter.label_global("__rt_wordwrap");
     emitter.instruction("sub sp, sp, #48");                                     // allocate stack frame
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // set frame pointer

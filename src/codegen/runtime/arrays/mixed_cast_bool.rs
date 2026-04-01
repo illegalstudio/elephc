@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_mixed_cast_bool(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_cast_bool ---");
-    emitter.label("__rt_mixed_cast_bool");
+    emitter.label_global("__rt_mixed_cast_bool");
 
     emitter.instruction("sub sp, sp, #32");                                     // allocate a small stack frame for nested helper calls
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address

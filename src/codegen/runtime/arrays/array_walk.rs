@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_walk(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_walk ---");
-    emitter.label("__rt_array_walk");
+    emitter.label_global("__rt_array_walk");
 
     // -- set up stack frame, save callee-saved registers --
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack

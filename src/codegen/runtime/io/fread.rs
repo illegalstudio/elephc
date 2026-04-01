@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_fread(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fread ---");
-    emitter.label("__rt_fread");
+    emitter.label_global("__rt_fread");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack

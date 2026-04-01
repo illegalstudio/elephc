@@ -11,7 +11,7 @@ pub fn emit_stat(emitter: &mut Emitter) {
     // ================================================================
     emitter.blank();
     emitter.comment("--- runtime: file_exists ---");
-    emitter.label("__rt_file_exists");
+    emitter.label_global("__rt_file_exists");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #176");                                    // allocate 176 bytes (144 stat + frame)
@@ -40,7 +40,7 @@ pub fn emit_stat(emitter: &mut Emitter) {
     // ================================================================
     emitter.blank();
     emitter.comment("--- runtime: is_file ---");
-    emitter.label("__rt_is_file");
+    emitter.label_global("__rt_is_file");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #176");                                    // allocate 176 bytes (144 stat + frame)
@@ -80,7 +80,7 @@ pub fn emit_stat(emitter: &mut Emitter) {
     // ================================================================
     emitter.blank();
     emitter.comment("--- runtime: is_dir ---");
-    emitter.label("__rt_is_dir");
+    emitter.label_global("__rt_is_dir");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #176");                                    // allocate 176 bytes (144 stat + frame)
@@ -120,7 +120,7 @@ pub fn emit_stat(emitter: &mut Emitter) {
     // ================================================================
     emitter.blank();
     emitter.comment("--- runtime: is_readable ---");
-    emitter.label("__rt_is_readable");
+    emitter.label_global("__rt_is_readable");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #16");                                     // allocate 16 bytes on the stack
@@ -151,7 +151,7 @@ pub fn emit_stat(emitter: &mut Emitter) {
     // ================================================================
     emitter.blank();
     emitter.comment("--- runtime: is_writable ---");
-    emitter.label("__rt_is_writable");
+    emitter.label_global("__rt_is_writable");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #16");                                     // allocate 16 bytes on the stack
@@ -182,7 +182,7 @@ pub fn emit_stat(emitter: &mut Emitter) {
     // ================================================================
     emitter.blank();
     emitter.comment("--- runtime: filesize ---");
-    emitter.label("__rt_filesize");
+    emitter.label_global("__rt_filesize");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #176");                                    // allocate 176 bytes (144 stat + frame)
@@ -210,7 +210,7 @@ pub fn emit_stat(emitter: &mut Emitter) {
     // ================================================================
     emitter.blank();
     emitter.comment("--- runtime: filemtime ---");
-    emitter.label("__rt_filemtime");
+    emitter.label_global("__rt_filemtime");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #176");                                    // allocate 176 bytes (144 stat + frame)

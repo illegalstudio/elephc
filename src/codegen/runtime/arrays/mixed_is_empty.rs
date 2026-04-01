@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_mixed_is_empty(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_is_empty ---");
-    emitter.label("__rt_mixed_is_empty");
+    emitter.label_global("__rt_mixed_is_empty");
 
     // -- null boxed pointers behave like null --
     emitter.instruction("cbz x0, __rt_mixed_is_empty_yes");                     // missing mixed boxes are empty like null

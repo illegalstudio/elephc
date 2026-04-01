@@ -7,7 +7,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_new(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_new ---");
-    emitter.label("__rt_array_new");
+    emitter.label_global("__rt_array_new");
 
     // -- set up stack frame, save arguments for use after heap_alloc call --
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack

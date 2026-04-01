@@ -4,7 +4,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_strrev(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strrev ---");
-    emitter.label("__rt_strrev");
+    emitter.label_global("__rt_strrev");
 
     // -- get concat_buf write position --
     emitter.instruction("adrp x6, _concat_off@PAGE");                           // load page address of concat buffer offset
