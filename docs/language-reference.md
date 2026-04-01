@@ -14,6 +14,7 @@ This document describes the PHP subset supported by elephc. The language aims to
 | `array` | Yes | Indexed (`[1, 2, 3]`) and associative (`["key" => "value"]`). Arrays use copy-on-write semantics: assignments and by-value calls share storage until the first write. |
 | `mixed` | Internal | Static helper type used when an associative array stores heterogeneous values. Runtime values are boxed with a per-entry tag, but PHP source code does not spell this type explicitly. |
 | `object` | Yes | Class instances. Heap-allocated, fixed-layout. `new ClassName(...)` |
+| `enum` | Yes | Pure and backed enums. Cases are singletons. Backed enums support `->value`, `::from()`, `::tryFrom()`, `::cases()`. |
 | `pointer` | Yes | 64-bit memory address. `ptr($var)`, `ptr_null()`. Echo prints `0x...` hex. |
 | `buffer<T>` | Extension | Contiguous heap buffer for POD scalars, pointers, or packed classes. `buffer_new<T>(len)`, `buffer_len($buf)`, `buffer_free($buf)`. |
 | `packed class` | Extension | Nominal POD record type with fixed compile-time field offsets. Intended for hot-path storage and typed pointer access. |
@@ -1900,6 +1901,30 @@ $p->x = 10;           // assign property
 echo $p->magnitude(); // method call
 ```
 
+### Enums
+
+elephc supports PHP-style enums, including backed enums:
+
+```php
+<?php
+enum Color: int {
+    case Red = 1;
+    case Green = 2;
+}
+
+echo Color::Red->value;          // 1
+echo Color::from(2) === Color::Green; // 1
+echo count(Color::cases());      // 2
+```
+
+Current rules:
+- pure enums (`enum Suit { case Hearts; }`) support case identity and `::cases()`
+- backed enums support `->value`, `::from($value)`, `::tryFrom($value)`, and `::cases()`
+- enum cases are singletons, so strict equality compares by identity as in PHP
+- enums cannot be instantiated with `new`
+- only `int` and `string` backing types are supported
+- enum case backing values must currently be literal `int` or `string` expressions
+
 ### Limitations
 
 - No `final` classes or methods
@@ -1909,7 +1934,6 @@ echo $p->magnitude(); // method call
 
 ## What elephc cannot do (by design)
 
-- No enums
 - No `eval()`
 - No dynamic `include`/`require` (path must be a string literal)
 - No generators/yield

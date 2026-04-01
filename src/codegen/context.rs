@@ -3,8 +3,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::parser::ast::{ExprKind, Stmt};
 use crate::types::{
-    ClassInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo,
-    PhpType,
+    ClassInfo, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo,
+    PackedClassInfo, PhpType,
 };
 
 static GLOBAL_LABEL_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -93,6 +93,8 @@ pub struct Context {
     pub classes: HashMap<String, ClassInfo>,
     /// Interface definitions for OOP support.
     pub interfaces: HashMap<String, InterfaceInfo>,
+    /// Enum definitions.
+    pub enums: HashMap<String, EnumInfo>,
     /// Packed layout-only record definitions.
     pub packed_classes: HashMap<String, PackedClassInfo>,
     /// Name of the class currently being compiled (for $this resolution).
@@ -166,6 +168,7 @@ impl Context {
             closure_captures: HashMap::new(),
             classes: HashMap::new(),
             interfaces: HashMap::new(),
+            enums: HashMap::new(),
             packed_classes: HashMap::new(),
             current_class: None,
             extern_functions: HashMap::new(),

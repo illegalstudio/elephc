@@ -75,6 +75,10 @@ pub enum ExprKind {
         args: Vec<Expr>,
     },
     ConstRef(Name),
+    EnumCase {
+        enum_name: Name,
+        case_name: String,
+    },
     NewObject {
         class_name: Name,
         args: Vec<Expr>,
@@ -351,6 +355,11 @@ pub enum StmtKind {
         properties: Vec<ClassProperty>,
         methods: Vec<ClassMethod>,
     },
+    EnumDecl {
+        name: String,
+        backing_type: Option<TypeExpr>,
+        cases: Vec<EnumCaseDecl>,
+    },
     PackedClassDecl {
         name: String,
         fields: Vec<PackedField>,
@@ -426,6 +435,19 @@ pub enum TypeExpr {
     Named(Name),
     Nullable(Box<TypeExpr>),
     Union(Vec<TypeExpr>),
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumCaseDecl {
+    pub name: String,
+    pub value: Option<Expr>,
+    pub span: Span,
+}
+
+impl PartialEq for EnumCaseDecl {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.value == other.value
+    }
 }
 
 // --- FFI ---

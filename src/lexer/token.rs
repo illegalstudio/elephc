@@ -83,6 +83,7 @@ pub enum Token {
     PhpOs,
     DirectorySeparator,
     Class,          // class
+    Enum,           // enum
     New,            // new
     Public,         // public
     Protected,      // protected

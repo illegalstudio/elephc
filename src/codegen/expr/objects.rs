@@ -28,6 +28,20 @@ pub(super) fn emit_property_access(
     access::emit_property_access(object, property, emitter, ctx, data)
 }
 
+pub(super) fn emit_enum_case(
+    enum_name: &str,
+    case_name: &str,
+    emitter: &mut Emitter,
+    _ctx: &mut Context,
+) -> PhpType {
+    let label = crate::names::enum_case_symbol(enum_name, case_name);
+    emitter.comment(&format!("load enum case {}::{}", enum_name, case_name));
+    emitter.instruction(&format!("adrp x9, {}@PAGE", label));                   // load page of the enum singleton slot
+    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label));             // resolve the enum singleton slot address
+    emitter.instruction("ldr x0, [x9]");                                        // load the enum singleton pointer from its global slot
+    PhpType::Object(enum_name.to_string())
+}
+
 pub(super) fn push_magic_property_name_arg(
     property: &str,
     emitter: &mut Emitter,

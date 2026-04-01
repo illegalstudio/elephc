@@ -211,6 +211,24 @@ pub struct ClassInfo {
     pub constructor_param_to_prop: Vec<Option<String>>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum EnumCaseValue {
+    Int(i64),
+    Str(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumCaseInfo {
+    pub name: String,
+    pub value: Option<EnumCaseValue>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumInfo {
+    pub backing_type: Option<PhpType>,
+    pub cases: Vec<EnumCaseInfo>,
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // Fields read by codegen via pattern matching
 pub struct ExternFunctionSig {
@@ -283,6 +301,7 @@ pub struct CheckResult {
     pub functions: HashMap<String, FunctionSig>,
     pub interfaces: HashMap<String, InterfaceInfo>,
     pub classes: HashMap<String, ClassInfo>,
+    pub enums: HashMap<String, EnumInfo>,
     pub packed_classes: HashMap<String, PackedClassInfo>,
     pub extern_functions: HashMap<String, ExternFunctionSig>,
     pub extern_classes: HashMap<String, ExternClassInfo>,

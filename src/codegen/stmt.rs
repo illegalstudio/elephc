@@ -101,6 +101,7 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
         | StmtKind::UseDecl { .. } => {
             emitter.comment("WARNING: unresolved namespace/use reached codegen");
         }
+        StmtKind::EnumDecl { .. } => {}
         StmtKind::Echo(expr) => {
             io::emit_echo_stmt(expr, emitter, ctx, data);
         }

@@ -781,31 +781,42 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                     Ok(Expr::new(ExprKind::FunctionCall { name, args }, span))
                 }
             } else if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleColon {
-                // Static method call: ClassName::method(args)
+                // Static member access: ClassName::method(args) or EnumName::Case
                 *pos += 1; // consume ::
-                let method = match tokens.get(*pos).map(|(t, _)| t) {
-                    Some(Token::Identifier(m)) => { let m = m.clone(); *pos += 1; m }
-                    _ => return Err(CompileError::new(span, "Expected method name after '::'")),
+                let member = match tokens.get(*pos).map(|(t, _)| t) {
+                    Some(Token::Identifier(m)) => {
+                        let m = m.clone();
+                        *pos += 1;
+                        m
+                    }
+                    _ => return Err(CompileError::new(span, "Expected member name after '::'")),
                 };
-                if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
-                    return Err(CompileError::new(span, "Expected '(' after static method name"));
-                }
-                *pos += 1;
-                if parse_first_class_callable_parens(tokens, pos, span)? {
-                    Ok(Expr::new(
-                        ExprKind::FirstClassCallable(CallableTarget::StaticMethod {
-                            receiver: StaticReceiver::Named(name),
-                            method,
-                        }),
-                        span,
-                    ))
+                if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
+                    *pos += 1;
+                    if parse_first_class_callable_parens(tokens, pos, span)? {
+                        Ok(Expr::new(
+                            ExprKind::FirstClassCallable(CallableTarget::StaticMethod {
+                                receiver: StaticReceiver::Named(name),
+                                method: member,
+                            }),
+                            span,
+                        ))
+                    } else {
+                        let args = parse_args(tokens, pos, span)?;
+                        Ok(Expr::new(
+                            ExprKind::StaticMethodCall {
+                                receiver: StaticReceiver::Named(name),
+                                method: member,
+                                args,
+                            },
+                            span,
+                        ))
+                    }
                 } else {
-                    let args = parse_args(tokens, pos, span)?;
                     Ok(Expr::new(
-                        ExprKind::StaticMethodCall {
-                            receiver: StaticReceiver::Named(name),
-                            method,
-                            args,
+                        ExprKind::EnumCase {
+                            enum_name: name,
+                            case_name: member,
                         },
                         span,
                     ))

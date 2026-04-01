@@ -2,9 +2,9 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::functions;
-use crate::names::{method_symbol, static_method_symbol};
+use crate::names::{enum_case_symbol, method_symbol, static_method_symbol};
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Visibility};
-use crate::types::{FunctionSig, PhpType};
+use crate::types::{EnumCaseValue, FunctionSig, PhpType};
 
 use super::super::{
     emit_expr, restore_concat_offset_after_nested_call, retain_borrowed_heap_arg,
@@ -436,6 +436,9 @@ pub(super) fn emit_static_method_call(
             }
         }
     };
+    if ctx.enums.contains_key(&class_name) {
+        return emit_enum_static_method_call(&class_name, method, args, emitter, ctx, data);
+    }
     emitter.comment(&format!("{}::{}()", class_name, method));
 
     let class_info = match ctx.classes.get(&class_name).cloned() {
@@ -584,4 +587,211 @@ pub(super) fn emit_static_method_call(
     restore_concat_offset_after_nested_call(emitter, &ret_ty);
 
     ret_ty
+}
+
+fn emit_enum_static_method_call(
+    enum_name: &str,
+    method: &str,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    emitter.comment(&format!("{}::{}()", enum_name, method));
+    let Some(enum_info) = ctx.enums.get(enum_name).cloned() else {
+        emitter.comment(&format!("WARNING: undefined enum {}", enum_name));
+        return PhpType::Int;
+    };
+
+    match method {
+        "cases" => emit_enum_cases(enum_name, &enum_info, emitter, ctx),
+        "from" => emit_enum_from_like(enum_name, &enum_info, args, emitter, ctx, data, false),
+        "tryFrom" => emit_enum_from_like(enum_name, &enum_info, args, emitter, ctx, data, true),
+        _ => {
+            emitter.comment(&format!("WARNING: undefined enum method {}::{}", enum_name, method));
+            PhpType::Int
+        }
+    }
+}
+
+fn emit_enum_cases(
+    enum_name: &str,
+    enum_info: &crate::types::EnumInfo,
+    emitter: &mut Emitter,
+    _ctx: &mut Context,
+) -> PhpType {
+    let capacity = if enum_info.cases.is_empty() { 4 } else { enum_info.cases.len() };
+    emitter.instruction(&format!("mov x0, #{}", capacity));                    // capacity = exact enum case count (or a small empty-array default)
+    emitter.instruction("mov x1, #8");                                          // enum case arrays store one pointer per element
+    emitter.instruction("bl __rt_array_new");                                   // allocate the enum cases array
+    emitter.instruction("str x0, [sp, #-16]!");                                 // save the array pointer while filling elements
+
+    for (i, case) in enum_info.cases.iter().enumerate() {
+        let case_label = enum_case_symbol(enum_name, &case.name);
+        emitter.instruction(&format!("adrp x9, {}@PAGE", case_label));          // load page of the enum singleton slot
+        emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", case_label));    // resolve the enum singleton slot address
+        emitter.instruction("ldr x0, [x9]");                                    // load the enum singleton pointer from its slot
+        crate::codegen::abi::emit_incref_if_refcounted(emitter, &PhpType::Object(enum_name.to_string())); // array storage becomes a new owner of the singleton reference
+        emitter.instruction("ldr x9, [sp]");                                    // peek the enum cases array pointer from the stack
+        if i == 0 {
+            super::super::arrays::emit_array_value_type_stamp(
+                emitter,
+                "x9",
+                &PhpType::Object(enum_name.to_string()),
+            );
+        }
+        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8));         // store the enum singleton pointer in the array payload
+        emitter.instruction(&format!("mov x10, #{}", i + 1));                   // updated array length after appending this enum case
+        emitter.instruction("str x10, [x9]");                                   // persist the new enum cases array length
+    }
+
+    emitter.instruction("ldr x0, [sp], #16");                                   // pop the enum cases array pointer into x0
+    PhpType::Array(Box::new(PhpType::Object(enum_name.to_string())))
+}
+
+fn emit_enum_from_like(
+    enum_name: &str,
+    enum_info: &crate::types::EnumInfo,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+    is_try: bool,
+) -> PhpType {
+    let Some(backing_ty) = enum_info.backing_type.as_ref() else {
+        emitter.comment(&format!("WARNING: enum {} has no backing type", enum_name));
+        return PhpType::Int;
+    };
+    let Some(arg) = args.first() else {
+        emitter.comment(&format!("WARNING: missing enum backing argument for {}::{}", enum_name, if is_try { "tryFrom" } else { "from" }));
+        return PhpType::Int;
+    };
+
+    let input_ty = emit_expr(arg, emitter, ctx, data);
+    let success_label = ctx.next_label("enum_from_success");
+    let done_label = ctx.next_label("enum_from_done");
+    let string_cleanup_label = if matches!(backing_ty, PhpType::Str) {
+        Some(ctx.next_label("enum_from_cleanup_input"))
+    } else {
+        None
+    };
+
+    match backing_ty {
+        PhpType::Int => {
+            let _ = input_ty;
+            for case in &enum_info.cases {
+                let Some(EnumCaseValue::Int(value)) = case.value.as_ref() else {
+                    continue;
+                };
+                let next_label = ctx.next_label("enum_from_next");
+                load_immediate(emitter, "x10", *value);                         // materialize the current enum backing integer for comparison
+                emitter.instruction("cmp x0, x10");                              // compare the input integer with the current enum backing value
+                emitter.instruction(&format!("b.ne {}", next_label));           // continue scanning when the current enum backing value does not match
+                let case_label = enum_case_symbol(enum_name, &case.name);
+                emitter.instruction(&format!("adrp x9, {}@PAGE", case_label));  // load page of the matching enum singleton slot
+                emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", case_label)); // resolve the matching enum singleton slot address
+                emitter.instruction("ldr x0, [x9]");                            // load the matching enum singleton pointer
+                emitter.instruction(&format!("b {}", success_label));           // return the matching enum singleton immediately
+                emitter.label(&next_label);
+            }
+        }
+        PhpType::Str => {
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve the input string payload across candidate comparisons
+            for case in &enum_info.cases {
+                let Some(EnumCaseValue::Str(value)) = case.value.as_ref() else {
+                    continue;
+                };
+                let match_label = ctx.next_label("enum_from_case");
+                let next_label = ctx.next_label("enum_from_next");
+                let (label, len) = data.add_string(value.as_bytes());
+                emitter.instruction("ldp x1, x2, [sp]");                        // reload the input string pointer and length for this candidate
+                emitter.instruction(&format!("adrp x3, {}@PAGE", label));       // load page of the candidate enum backing string
+                emitter.instruction(&format!("add x3, x3, {}@PAGEOFF", label)); // resolve the candidate enum backing string address
+                emitter.instruction(&format!("mov x4, #{}", len));              // materialize the candidate enum backing string length
+                emitter.instruction("bl __rt_str_eq");                          // compare the input string against the candidate backing string
+                emitter.instruction(&format!("cbnz x0, {}", match_label));      // branch when the current enum backing string matches
+                emitter.instruction(&format!("b {}", next_label));              // continue scanning when the current enum backing string does not match
+                emitter.label(&match_label);
+                let case_label = enum_case_symbol(enum_name, &case.name);
+                emitter.instruction(&format!("adrp x9, {}@PAGE", case_label));  // load page of the matching enum singleton slot
+                emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", case_label)); // resolve the matching enum singleton slot address
+                emitter.instruction("ldr x0, [x9]");                            // load the matching enum singleton pointer
+                if let Some(cleanup_label) = &string_cleanup_label {
+                    emitter.instruction(&format!("b {}", cleanup_label));       // drop the preserved input string before returning the match
+                }
+                emitter.label(&next_label);
+            }
+            emitter.instruction("add sp, sp, #16");                             // drop the preserved input string payload after the scan
+        }
+        _ => {
+            emitter.comment("WARNING: unsupported enum backing type in codegen");
+            return PhpType::Int;
+        }
+    }
+
+    if let Some(cleanup_label) = &string_cleanup_label {
+        emitter.label(cleanup_label);
+        emitter.instruction("add sp, sp, #16");                                 // drop the preserved input string payload before returning the matching singleton
+        emitter.instruction(&format!("b {}", success_label));                   // continue through the shared success path with a clean stack
+    }
+
+    if is_try {
+        emit_null_into_x0(emitter);
+        crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Void);
+        emitter.instruction(&format!("b {}", done_label));                      // return boxed null when tryFrom() does not match any case
+    } else {
+        emitter.instruction("bl __rt_enum_from_fail");                          // abort when from() does not match any case
+    }
+
+    emitter.label(&success_label);
+    if is_try {
+        crate::codegen::emit_box_current_value_as_mixed(
+            emitter,
+            &PhpType::Object(enum_name.to_string()),
+        );
+    }
+    emitter.label(&done_label);
+    if is_try {
+        PhpType::Union(vec![PhpType::Object(enum_name.to_string()), PhpType::Void])
+    } else {
+        PhpType::Object(enum_name.to_string())
+    }
+}
+
+fn emit_null_into_x0(emitter: &mut Emitter) {
+    emitter.instruction("movz x0, #0xFFFE");                                    // load lowest 16 bits of the null sentinel
+    emitter.instruction("movk x0, #0xFFFF, lsl #16");                           // insert bits 16-31 of the null sentinel
+    emitter.instruction("movk x0, #0xFFFF, lsl #32");                           // insert bits 32-47 of the null sentinel
+    emitter.instruction("movk x0, #0x7FFF, lsl #48");                           // insert bits 48-63, completing the null sentinel
+}
+
+fn load_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
+    if (0..=65535).contains(&value) || (-65536..0).contains(&value) {
+        emitter.instruction(&format!("mov {}, #{}", reg, value));               // load a small signed immediate directly into the target register
+        return;
+    }
+
+    let uval = value as u64;
+    emitter.instruction(&format!("movz {}, #0x{:x}", reg, uval & 0xFFFF));     // seed the low 16 bits of the wider immediate value
+    if (uval >> 16) & 0xFFFF != 0 {
+        emitter.instruction(&format!(
+            "movk {}, #0x{:x}, lsl #16",
+            reg,
+            (uval >> 16) & 0xFFFF
+        ));                                                                     // patch bits 16-31 of the wider immediate value
+    }
+    if (uval >> 32) & 0xFFFF != 0 {
+        emitter.instruction(&format!(
+            "movk {}, #0x{:x}, lsl #32",
+            reg,
+            (uval >> 32) & 0xFFFF
+        ));                                                                     // patch bits 32-47 of the wider immediate value
+    }
+    if (uval >> 48) & 0xFFFF != 0 {
+        emitter.instruction(&format!(
+            "movk {}, #0x{:x}, lsl #48",
+            reg,
+            (uval >> 48) & 0xFFFF
+        ));                                                                     // patch bits 48-63 of the wider immediate value
+    }
 }
