@@ -1221,6 +1221,33 @@ impl Checker {
                 for arg in args { self.infer_type(arg, env)?; }
                 // Resolve callback function so codegen emits it
                 if let ExprKind::StringLiteral(cb_name) = &args[0].kind {
+                    if let Some(sig) = self.functions.get(cb_name.as_str()).cloned() {
+                        if sig.ref_params.iter().any(|is_ref| *is_ref) {
+                            return Err(CompileError::new(
+                                span,
+                                "call_user_func_array() does not support pass-by-reference callback parameters yet",
+                            ));
+                        }
+                        if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
+                            let ret_ty = self.check_known_callable_call(
+                                &sig,
+                                elems,
+                                span,
+                                env,
+                                "call_user_func_array() callback",
+                            )?;
+                            return Ok(Some(ret_ty));
+                        }
+                        return Ok(Some(sig.return_type.clone()));
+                    }
+                    if let Some(decl) = self.fn_decls.get(cb_name.as_str()).cloned() {
+                        if decl.ref_params.iter().any(|is_ref| *is_ref) {
+                            return Err(CompileError::new(
+                                span,
+                                "call_user_func_array() does not support pass-by-reference callback parameters yet",
+                            ));
+                        }
+                    }
                     // Extract actual args from the array literal to get correct types
                     if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
                         let ret_ty = self.check_function_call(cb_name, elems, span, env)?;
@@ -1235,6 +1262,25 @@ impl Checker {
                         return Ok(Some(ret_ty));
                     }
                 }
+                if let Some(sig) = self.resolve_expr_callable_sig(&args[0], env)? {
+                    if sig.ref_params.iter().any(|is_ref| *is_ref) {
+                        return Err(CompileError::new(
+                            span,
+                            "call_user_func_array() does not support pass-by-reference callback parameters yet",
+                        ));
+                    }
+                    if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
+                        let ret_ty = self.check_known_callable_call(
+                            &sig,
+                            elems,
+                            span,
+                            env,
+                            "call_user_func_array() callback",
+                        )?;
+                        return Ok(Some(ret_ty));
+                    }
+                    return Ok(Some(sig.return_type.clone()));
+                }
                 Ok(Some(PhpType::Int))
             }
             "call_user_func" => {
@@ -1244,8 +1290,28 @@ impl Checker {
                 for arg in args { self.infer_type(arg, env)?; }
                 // Resolve callback function so codegen emits it
                 if let ExprKind::StringLiteral(cb_name) = &args[0].kind {
+                    if let Some(sig) = self.functions.get(cb_name.as_str()).cloned() {
+                        let ret_ty = self.check_known_callable_call(
+                            &sig,
+                            &args[1..],
+                            span,
+                            env,
+                            "call_user_func() callback",
+                        )?;
+                        return Ok(Some(ret_ty));
+                    }
                     let cb_args = args[1..].to_vec();
                     let ret_ty = self.check_function_call(cb_name, &cb_args, span, env)?;
+                    return Ok(Some(ret_ty));
+                }
+                if let Some(sig) = self.resolve_expr_callable_sig(&args[0], env)? {
+                    let ret_ty = self.check_known_callable_call(
+                        &sig,
+                        &args[1..],
+                        span,
+                        env,
+                        "call_user_func() callback",
+                    )?;
                     return Ok(Some(ret_ty));
                 }
                 Ok(Some(PhpType::Int))

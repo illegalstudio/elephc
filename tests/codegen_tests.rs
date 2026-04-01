@@ -13077,6 +13077,39 @@ echo call_user_func(strlen(...), "hello");
 }
 
 #[test]
+fn test_call_user_func_first_class_callable_preserves_by_ref_params() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(&$n) {
+    $n = $n + 1;
+}
+
+$f = bump(...);
+$value = 5;
+call_user_func($f, $value);
+echo $value;
+"#,
+    );
+    assert_eq!(out, "6");
+}
+
+#[test]
+fn test_call_user_func_closure_alias_preserves_by_ref_params() {
+    let out = compile_and_run(
+        r#"<?php
+$f = function (&$x) {
+    $x = $x + 1;
+};
+$g = $f;
+$value = 5;
+call_user_func($g, $value);
+echo $value;
+"#,
+    );
+    assert_eq!(out, "6");
+}
+
+#[test]
 fn test_example_v017_trio_compiles_and_runs() {
     let out = compile_and_run(include_str!("../examples/v017-trio/main.php"));
     assert_eq!(out, "health:[ok]:missing");

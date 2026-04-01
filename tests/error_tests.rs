@@ -2550,3 +2550,35 @@ fn test_error_closure_ref_param_requires_variable() {
         "parameter $x must be passed a variable",
     );
 }
+
+#[test]
+fn test_error_call_user_func_ref_param_requires_variable() {
+    expect_error(
+        "<?php function bump(&$n) { $n = $n + 1; } $f = bump(...); call_user_func($f, 1);",
+        "parameter $n must be passed a variable",
+    );
+}
+
+#[test]
+fn test_error_call_user_func_string_literal_ref_param_requires_variable() {
+    expect_error(
+        "<?php function bump(&$n) { $n = $n + 1; } call_user_func(\"bump\", 1);",
+        "parameter $n must be passed a variable",
+    );
+}
+
+#[test]
+fn test_error_call_user_func_array_rejects_ref_callback_params() {
+    expect_error(
+        "<?php function bump(&$n) { $n = $n + 1; } $f = bump(...); $value = 1; call_user_func_array($f, [$value]);",
+        "does not support pass-by-reference callback parameters yet",
+    );
+}
+
+#[test]
+fn test_error_call_user_func_array_string_literal_rejects_ref_callback_params() {
+    expect_error(
+        "<?php function bump(&$n) { $n = $n + 1; } $value = 1; call_user_func_array(\"bump\", [$value]);",
+        "does not support pass-by-reference callback parameters yet",
+    );
+}

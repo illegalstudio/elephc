@@ -189,6 +189,15 @@ impl Checker {
         if let Some(sig) = self.functions.get(name).cloned() {
             // Count required params (those without defaults)
             let required = sig.defaults.iter().filter(|d| d.is_none()).count();
+            if sig.ref_params.iter().any(|is_ref| *is_ref) && has_spread {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "Function '{}' cannot be invoked with spread arguments when it has pass-by-reference parameters",
+                        name
+                    ),
+                ));
+            }
             if !has_spread {
                 if sig.variadic.is_some() {
                     // Variadic: need at least the required regular params
@@ -231,6 +240,22 @@ impl Checker {
                     continue;
                 }
                 if param_idx < regular_param_count {
+                    if sig.ref_params.get(param_idx).copied().unwrap_or(false)
+                        && !matches!(arg.kind, ExprKind::Variable(_))
+                    {
+                        let param_name = sig
+                            .params
+                            .get(param_idx)
+                            .map(|(name, _)| name.as_str())
+                            .unwrap_or("arg");
+                        return Err(CompileError::new(
+                            arg.span,
+                            &format!(
+                                "Function '{}' parameter ${} must be passed a variable",
+                                name, param_name
+                            ),
+                        ));
+                    }
                     if let Some((param_name, expected_ty)) = sig.params.get(param_idx) {
                         self.require_compatible_arg_type(
                             expected_ty,
@@ -262,6 +287,15 @@ impl Checker {
 
         // Count required params (those without defaults)
         let required = decl.defaults.iter().filter(|d| d.is_none()).count();
+        if decl.ref_params.iter().any(|is_ref| *is_ref) && has_spread {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Function '{}' cannot be invoked with spread arguments when it has pass-by-reference parameters",
+                    name
+                ),
+            ));
+        }
         if !has_spread {
             if decl.variadic.is_some() {
                 if effective_arg_count < required {
@@ -297,6 +331,18 @@ impl Checker {
                 }
                 arg_idx = decl.params.len();
             } else if arg_idx < decl.params.len() {
+                if decl.ref_params.get(arg_idx).copied().unwrap_or(false)
+                    && !matches!(arg.kind, ExprKind::Variable(_))
+                {
+                    let param_name = decl.params.get(arg_idx).map(String::as_str).unwrap_or("arg");
+                    return Err(CompileError::new(
+                        arg.span,
+                        &format!(
+                            "Function '{}' parameter ${} must be passed a variable",
+                            name, param_name
+                        ),
+                    ));
+                }
                 param_types.push((decl.params[arg_idx].clone(), ty));
                 arg_idx += 1;
             } else {

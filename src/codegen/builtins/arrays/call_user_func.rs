@@ -5,7 +5,7 @@ use crate::codegen::expr::emit_expr;
 use crate::codegen::abi;
 use crate::names::function_symbol;
 use crate::parser::ast::{Expr, ExprKind};
-use crate::types::PhpType;
+use crate::types::{FunctionSig, PhpType};
 
 pub fn emit(
     _name: &str,
@@ -21,19 +21,19 @@ pub fn emit(
         &args[0].kind,
         ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_)
     );
-    let mut ret_ty = PhpType::Int;
+    let mut sig: Option<FunctionSig> = None;
     if is_callable_expr {
         emit_expr(&args[0], emitter, ctx, data);
         emitter.instruction("mov x19, x0");                                         // move synthesized callback address to x19
         if let Some(deferred) = ctx.deferred_closures.last() {
-            ret_ty = deferred.sig.return_type.clone();
+            sig = Some(deferred.sig.clone());
         }
     } else if let ExprKind::Variable(var_name) = &args[0].kind {
         let var = ctx.variables.get(var_name).expect("undefined callback variable");
         let offset = var.stack_offset;
         abi::load_at_offset(emitter, "x19", offset);                                // load callback address from callable variable
-        if let Some(sig) = ctx.closure_sigs.get(var_name) {
-            ret_ty = sig.return_type.clone();
+        if let Some(closure_sig) = ctx.closure_sigs.get(var_name) {
+            sig = Some(closure_sig.clone());
         }
     } else {
         let func_name = match &args[0].kind {
@@ -41,24 +41,54 @@ pub fn emit(
             _ => panic!("call_user_func() callback must be a string literal, callable expression, or callable variable"),
         };
         let label = function_symbol(&func_name);
-        ret_ty = ctx.functions
-            .get(&func_name)
-            .map(|sig| sig.return_type.clone())
-            .unwrap_or(PhpType::Int);
+        sig = ctx.functions.get(&func_name).cloned();
         emitter.instruction(&format!("adrp x19, {}@PAGE", label));                  // load page address of callback function
         emitter.instruction(&format!("add x19, x19, {}@PAGEOFF", label));           // resolve full address of callback function
     }
+    let ret_ty = sig
+        .as_ref()
+        .map(|sig| sig.return_type.clone())
+        .unwrap_or(PhpType::Int);
 
     // -- evaluate remaining arguments and push onto stack --
     let mut arg_types = Vec::new();
-    for arg in &args[1..] {
+    for (i, arg) in args[1..].iter().enumerate() {
+        let is_ref = sig
+            .as_ref()
+            .and_then(|sig| sig.ref_params.get(i))
+            .copied()
+            .unwrap_or(false);
+        if is_ref {
+            if let ExprKind::Variable(var_name) = &arg.kind {
+                if ctx.global_vars.contains(var_name) {
+                    let label = format!("_gvar_{}", var_name);
+                    emitter.comment(&format!("call_user_func ref arg: address of global ${}", var_name));
+                    emitter.instruction(&format!("adrp x0, {}@PAGE", label));       // load page of global var
+                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); // resolve global var address
+                } else if ctx.ref_params.contains(var_name) {
+                    let var = ctx.variables.get(var_name).expect("undefined ref callback argument");
+                    emitter.comment(&format!("call_user_func ref arg: forward underlying reference for ${}", var_name));
+                    abi::load_at_offset(emitter, "x0", var.stack_offset);            // load existing reference pointer
+                } else {
+                    let var = ctx.variables.get(var_name).expect("undefined callback argument");
+                    emitter.comment(&format!("call_user_func ref arg: address of ${}", var_name));
+                    emitter.instruction(&format!("sub x0, x29, #{}", var.stack_offset)); // compute address of local variable
+                }
+            } else {
+                panic!("call_user_func() by-reference callback argument must be a variable");
+            }
+            emitter.instruction("str x0, [sp, #-16]!");                             // push argument address onto stack
+            arg_types.push(PhpType::Int);
+            continue;
+        }
+
         let ty = emit_expr(arg, emitter, ctx, data);
         match &ty {
             PhpType::Str => {
-                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push string ptr+len onto stack
+                emitter.instruction("stp x1, x2, [sp, #-16]!");                     // push string ptr+len onto stack
             }
             _ => {
-                emitter.instruction("str x0, [sp, #-16]!");                     // push int/bool/array arg onto stack
+                emitter.instruction("str x0, [sp, #-16]!");                         // push int/bool/array arg onto stack
             }
         }
         arg_types.push(ty);
