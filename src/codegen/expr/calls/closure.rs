@@ -1,6 +1,7 @@
 use crate::codegen::context::{Context, DeferredClosure};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
+use crate::codegen::functions;
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::types::{FunctionSig, PhpType};
 
@@ -94,6 +95,7 @@ fn infer_closure_return_type(body: &[Stmt], sig: &FunctionSig) -> PhpType {
 
 pub(super) fn emit_closure(
     params: &[(String, Option<Expr>, bool)],
+    variadic: &Option<String>,
     body: &[Stmt],
     captures: &[String],
     emitter: &mut Emitter,
@@ -114,22 +116,34 @@ pub(super) fn emit_closure(
 
     let mut param_types: Vec<(String, PhpType)> =
         params.iter().map(|(p, _, _)| (p.clone(), PhpType::Int)).collect();
+    if let Some(variadic_name) = variadic {
+        param_types.push((
+            variadic_name.clone(),
+            PhpType::Array(Box::new(PhpType::Int)),
+        ));
+    }
     for (cap_name, cap_ty) in &capture_types {
         param_types.push((cap_name.clone(), cap_ty.clone()));
     }
     let mut defaults: Vec<Option<Expr>> =
         params.iter().map(|(_, default, _)| default.clone()).collect();
+    if variadic.is_some() {
+        defaults.push(None);
+    }
     for _ in &capture_types {
         defaults.push(None);
     }
     let mut ref_params: Vec<bool> = params.iter().map(|(_, _, is_ref)| *is_ref).collect();
+    if variadic.is_some() {
+        ref_params.push(false);
+    }
     ref_params.extend(std::iter::repeat_n(false, capture_types.len()));
     let preliminary_sig = FunctionSig {
         params: param_types.clone(),
         defaults: defaults.clone(),
         return_type: PhpType::Int,
         ref_params: ref_params.clone(),
-        variadic: None,
+        variadic: variadic.clone(),
     };
     let return_type = infer_closure_return_type(body, &preliminary_sig);
     let sig = FunctionSig {
@@ -137,7 +151,7 @@ pub(super) fn emit_closure(
         defaults,
         return_type,
         ref_params,
-        variadic: None,
+        variadic: variadic.clone(),
     };
 
     let param_names: Vec<String> = params.iter().map(|(n, _, _)| n.clone()).collect();
@@ -170,18 +184,47 @@ pub(super) fn emit_closure_call(
         .as_ref()
         .map(|s| s.params.len() - captures.len())
         .unwrap_or(args_exprs.len());
-
-    let mut all_args: Vec<&Expr> = args_exprs.iter().collect();
-    let mut default_exprs: Vec<Expr> = Vec::new();
-    if let Some(ref s) = sig {
-        for i in all_args.len()..visible_param_count {
-            if let Some(Some(default)) = s.defaults.get(i) {
-                default_exprs.push(default.clone());
+    let regular_param_count = sig
+        .as_ref()
+        .map(|s| {
+            if s.variadic.is_some() {
+                visible_param_count.saturating_sub(1)
+            } else {
+                visible_param_count
             }
+        })
+        .unwrap_or(args_exprs.len());
+    let is_variadic = sig.as_ref().map(|s| s.variadic.is_some()).unwrap_or(false);
+
+    let mut regular_args: Vec<&Expr> = Vec::new();
+    let mut variadic_args: Vec<&Expr> = Vec::new();
+    let mut spread_arg: Option<&Expr> = None;
+    let mut spread_at_index: usize = 0;
+    for (i, arg) in args_exprs.iter().enumerate() {
+        if let ExprKind::Spread(inner) = &arg.kind {
+            spread_arg = Some(inner.as_ref());
+            spread_at_index = regular_args.len();
+        } else if is_variadic && i >= regular_param_count {
+            variadic_args.push(arg);
+        } else {
+            regular_args.push(arg);
         }
     }
-    let default_refs: Vec<&Expr> = default_exprs.iter().collect();
-    all_args.extend(default_refs);
+    let spread_into_named = spread_arg.is_some() && !is_variadic;
+
+    let mut all_args: Vec<&Expr> = regular_args;
+    let mut default_exprs: Vec<Expr> = Vec::new();
+    if !spread_into_named {
+        if let Some(ref s) = sig {
+            for i in all_args.len()..regular_param_count {
+                if let Some(Some(default)) = s.defaults.get(i) {
+                    default_exprs.push(default.clone());
+                }
+            }
+        }
+        let default_refs: Vec<&Expr> = default_exprs.iter().collect();
+        all_args.extend(default_refs);
+    }
 
     let ref_params = sig
         .as_ref()
@@ -229,6 +272,105 @@ pub(super) fn emit_closure_call(
             let ty = super::super::emit_expr(arg, emitter, ctx, data);
             args::push_arg_value(emitter, &ty);
             arg_types.push(ty);
+        }
+    }
+
+    if spread_into_named {
+        if let Some(spread_expr) = spread_arg {
+            let remaining = regular_param_count.saturating_sub(spread_at_index);
+            emitter.comment(&format!("unpack spread into {} closure params", remaining));
+            let _ty = super::super::emit_expr(spread_expr, emitter, ctx, data);
+            let elem_ty = if let Some(ref s) = sig {
+                if spread_at_index < s.params.len() {
+                    s.params[spread_at_index].1.clone()
+                } else {
+                    PhpType::Int
+                }
+            } else {
+                PhpType::Int
+            };
+            emitter.instruction("mov x9, x0");                                  // save array pointer in x9
+            emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header to reach data
+            for idx in 0..remaining {
+                match &elem_ty {
+                    PhpType::Int | PhpType::Bool => {
+                        emitter.instruction(&format!("ldr x0, [x9, #{}]", idx * 8)); // load int element from spread array
+                        emitter.instruction("str x0, [sp, #-16]!");             // push unpacked int arg onto stack
+                    }
+                    PhpType::Float => {
+                        emitter.instruction(&format!("ldr d0, [x9, #{}]", idx * 8)); // load float element from spread array
+                        emitter.instruction("str d0, [sp, #-16]!");             // push unpacked float arg onto stack
+                    }
+                    PhpType::Str => {
+                        emitter.instruction(&format!("ldr x1, [x9, #{}]", idx * 16)); // load spread string pointer
+                        emitter.instruction(&format!("ldr x2, [x9, #{}]", idx * 16 + 8)); // load spread string length
+                        emitter.instruction("stp x1, x2, [sp, #-16]!");         // push unpacked string arg onto stack
+                    }
+                    _ => {
+                        emitter.instruction(&format!("ldr x0, [x9, #{}]", idx * 8)); // load spread element from array
+                        emitter.instruction("str x0, [sp, #-16]!");             // push unpacked arg onto stack
+                    }
+                }
+                arg_types.push(elem_ty.clone());
+            }
+        }
+    }
+
+    if is_variadic {
+        if let Some(spread_expr) = spread_arg {
+            emitter.comment("spread array as variadic closure param");
+            let ty = super::super::emit_expr(spread_expr, emitter, ctx, data);
+            super::super::retain_borrowed_heap_arg(emitter, spread_expr, &ty);
+            emitter.instruction("str x0, [sp, #-16]!");                         // push variadic array pointer onto stack
+            arg_types.push(ty);
+        } else if variadic_args.is_empty() {
+            emitter.comment("empty variadic closure array");
+            emitter.instruction("mov x0, #4");                                  // initial capacity: 4 (grows dynamically)
+            emitter.instruction("mov x1, #8");                                  // element size: 8 bytes
+            emitter.instruction("bl __rt_array_new");                           // allocate empty array for variadic param
+            emitter.instruction("str x0, [sp, #-16]!");                         // push empty variadic array onto stack
+            arg_types.push(PhpType::Array(Box::new(PhpType::Int)));
+        } else {
+            let n = variadic_args.len();
+            emitter.comment(&format!("build variadic closure array ({} elements)", n));
+            let first_elem_ty = functions::infer_contextual_type(variadic_args[0], ctx);
+            let es: usize = match &first_elem_ty {
+                PhpType::Str => 16,
+                _ => 8,
+            };
+            emitter.instruction(&format!("mov x0, #{}", n));                    // capacity: exact element count
+            emitter.instruction(&format!("mov x1, #{}", es));                   // element size in bytes
+            emitter.instruction("bl __rt_array_new");                           // allocate array for variadic args
+            emitter.instruction("str x0, [sp, #-16]!");                         // save variadic array pointer on stack
+
+            for (i, varg) in variadic_args.iter().enumerate() {
+                let ty = super::super::emit_expr(varg, emitter, ctx, data);
+                super::super::retain_borrowed_heap_arg(emitter, varg, &ty);
+                emitter.instruction("ldr x9, [sp]");                            // peek variadic array pointer from stack
+                if i == 0 {
+                    super::super::arrays::emit_array_value_type_stamp(emitter, "x9", &ty);
+                }
+                match &ty {
+                    PhpType::Int | PhpType::Bool | PhpType::Callable => {
+                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); // store int-like element in variadic array
+                    }
+                    PhpType::Float => {
+                        emitter.instruction(&format!("str d0, [x9, #{}]", 24 + i * 8)); // store float element in variadic array
+                    }
+                    PhpType::Str => {
+                        emitter.instruction(&format!("str x1, [x9, #{}]", 24 + i * 16)); // store variadic string pointer
+                        emitter.instruction(&format!("str x2, [x9, #{}]", 24 + i * 16 + 8)); // store variadic string length
+                    }
+                    PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); // store refcounted variadic payload
+                    }
+                    _ => {}
+                }
+                emitter.instruction(&format!("mov x10, #{}", i + 1));           // new variadic array length after this element
+                emitter.instruction("str x10, [x9]");                           // persist updated variadic array length
+            }
+
+            arg_types.push(PhpType::Array(Box::new(first_elem_ty)));
         }
     }
 
@@ -291,7 +433,7 @@ pub(super) fn emit_closure_call(
         }
         arg_types.push(cap_ty.clone());
     }
-    let total_args = all_args.len() + captures.len();
+    let total_args = arg_types.len();
 
     let var_info = match ctx.variables.get(var) {
         Some(v) => v,

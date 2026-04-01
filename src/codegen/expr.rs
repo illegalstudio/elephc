@@ -438,9 +438,9 @@ pub fn emit_expr(
             params,
             body,
             is_arrow: _,
-            variadic: _,
+            variadic,
             captures,
-        } => emit_closure(params, body, captures, emitter, ctx, data),
+        } => emit_closure(params, variadic, body, captures, emitter, ctx, data),
         ExprKind::FirstClassCallable(target) => {
             emit_first_class_callable(target, emitter, ctx, data)
         }
@@ -689,13 +689,14 @@ pub(crate) fn coerce_result_to_type(
 
 fn emit_closure(
     params: &[(String, Option<Expr>, bool)],
+    variadic: &Option<String>,
     body: &[crate::parser::ast::Stmt],
     captures: &[String],
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> PhpType {
-    calls::emit_closure(params, body, captures, emitter, ctx, data)
+    calls::emit_closure(params, variadic, body, captures, emitter, ctx, data)
 }
 
 fn emit_closure_call(

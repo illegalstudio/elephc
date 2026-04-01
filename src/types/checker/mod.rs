@@ -1616,16 +1616,13 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 .iter()
                 .map(|p| (p.clone(), PhpType::Int))
                 .collect();
-            checker.functions.insert(
-                name.clone(),
-                FunctionSig {
-                    params,
-                    defaults: decl.defaults.clone(),
-                    return_type,
-                    ref_params: decl.ref_params.clone(),
-                    variadic: decl.variadic.clone(),
-                },
-            );
+            checker.functions.insert(name.clone(), Checker::callable_wrapper_sig(&FunctionSig {
+                params,
+                defaults: decl.defaults.clone(),
+                return_type,
+                ref_params: decl.ref_params.clone(),
+                variadic: decl.variadic.clone(),
+            }));
         }
     }
 
@@ -1752,6 +1749,28 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
 }
 
 impl Checker {
+    fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
+        let Some(variadic_name) = sig.variadic.as_ref() else {
+            return sig.clone();
+        };
+        if sig
+            .params
+            .last()
+            .is_some_and(|(name, ty)| name == variadic_name && matches!(ty, PhpType::Array(_)))
+        {
+            return sig.clone();
+        }
+
+        let mut wrapper_sig = sig.clone();
+        wrapper_sig.params.push((
+            variadic_name.clone(),
+            PhpType::Array(Box::new(PhpType::Mixed)),
+        ));
+        wrapper_sig.defaults.push(None);
+        wrapper_sig.ref_params.push(false);
+        wrapper_sig
+    }
+
     fn with_local_storage_context<T, F>(
         &mut self,
         ref_param_names: Vec<String>,
@@ -2357,13 +2376,13 @@ impl Checker {
                 .collect();
             self.functions.insert(
                 callback_name.to_string(),
-                FunctionSig {
+                Self::callable_wrapper_sig(&FunctionSig {
                     params,
                     defaults: decl.defaults.clone(),
                     return_type,
                     ref_params: decl.ref_params.clone(),
                     variadic: decl.variadic.clone(),
-                },
+                }),
             );
         }
 
@@ -2381,10 +2400,10 @@ impl Checker {
             CallableTarget::Function(name) => {
                 let function_name = name.as_str();
                 if let Some(sig) = self.functions.get(function_name) {
-                    return Ok(sig.clone());
+                    return Ok(Self::callable_wrapper_sig(sig));
                 }
                 if let Some(decl) = self.fn_decls.get(function_name) {
-                    return Ok(FunctionSig {
+                    return Ok(Self::callable_wrapper_sig(&FunctionSig {
                         params: decl
                             .params
                             .iter()
@@ -2395,7 +2414,7 @@ impl Checker {
                         return_type: infer_return_type_syntactic(&decl.body),
                         ref_params: decl.ref_params.clone(),
                         variadic: decl.variadic.clone(),
-                    });
+                    }));
                 }
                 if let Some(sig) = self.extern_functions.get(function_name) {
                     return Ok(FunctionSig {
@@ -2501,7 +2520,7 @@ impl Checker {
                         ));
                     }
                 }
-                Ok(sig.clone())
+                Ok(Self::callable_wrapper_sig(sig))
             }
             CallableTarget::Method { object, method } => {
                 let object_ty = self.infer_type(object, env)?;

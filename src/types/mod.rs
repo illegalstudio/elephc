@@ -102,7 +102,13 @@ pub(crate) fn first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig
             variadic: None,
         }),
         "count" => Some(FunctionSig {
-            params: vec![("arg0".to_string(), PhpType::Array(Box::new(PhpType::Int)))],
+            params: vec![(
+                "arg0".to_string(),
+                PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(PhpType::Mixed),
+                },
+            )],
             defaults: vec![None],
             return_type: PhpType::Int,
             ref_params: vec![false],

@@ -5,6 +5,28 @@ use crate::names::Name;
 use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
 use crate::types::{first_class_callable_builtin_sig, FunctionSig, PhpType};
 
+fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
+    let Some(variadic_name) = sig.variadic.as_ref() else {
+        return sig.clone();
+    };
+    if sig
+        .params
+        .last()
+        .is_some_and(|(name, ty)| name == variadic_name && matches!(ty, PhpType::Array(_)))
+    {
+        return sig.clone();
+    }
+
+    let mut wrapper_sig = sig.clone();
+    wrapper_sig.params.push((
+        variadic_name.clone(),
+        PhpType::Array(Box::new(PhpType::Mixed)),
+    ));
+    wrapper_sig.defaults.push(None);
+    wrapper_sig.ref_params.push(false);
+    wrapper_sig
+}
+
 fn resolved_static_callable_target(
     receiver: &StaticReceiver,
     ctx: &Context,
@@ -25,7 +47,7 @@ fn resolved_static_callable_target(
 }
 
 pub(super) fn first_class_callable_sig(target: &CallableTarget, ctx: &Context) -> Option<FunctionSig> {
-    match target {
+    let sig = match target {
         CallableTarget::Function(name) => ctx
             .functions
             .get(name.as_str())
@@ -41,14 +63,28 @@ pub(super) fn first_class_callable_sig(target: &CallableTarget, ctx: &Context) -
                 .cloned()
         }
         CallableTarget::Method { .. } => None,
-    }
+    }?;
+
+    Some(callable_wrapper_sig(&sig))
 }
 
 fn wrapper_body(target: &CallableTarget, sig: &FunctionSig) -> Vec<Stmt> {
+    let last_param_idx = sig.params.len().saturating_sub(1);
     let args: Vec<Expr> = sig
         .params
         .iter()
-        .map(|(name, _)| Expr::new(ExprKind::Variable(name.clone()), crate::span::Span::dummy()))
+        .enumerate()
+        .map(|(idx, (name, _))| {
+            let var_expr = Expr::new(ExprKind::Variable(name.clone()), crate::span::Span::dummy());
+            if sig.variadic.is_some() && idx == last_param_idx {
+                Expr::new(
+                    ExprKind::Spread(Box::new(var_expr)),
+                    crate::span::Span::dummy(),
+                )
+            } else {
+                var_expr
+            }
+        })
         .collect();
 
     let call_expr = match target {
