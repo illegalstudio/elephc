@@ -29,6 +29,9 @@ impl Checker {
 
         match (expected, actual) {
             (PhpType::Mixed, _) => true,
+            (PhpType::Union(members), _) => {
+                members.iter().any(|m| Self::types_compatible(m, actual))
+            }
             (
                 PhpType::AssocArray { key, value },
                 PhpType::Array(_) | PhpType::AssocArray { .. },
