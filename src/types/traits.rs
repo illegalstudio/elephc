@@ -65,7 +65,9 @@ pub fn flatten_classes(program: &Program) -> Result<Vec<FlattenedClass>, Compile
                     },
                 );
             }
-            StmtKind::ClassDecl { name, .. } | StmtKind::InterfaceDecl { name, .. } => {
+            StmtKind::ClassDecl { name, .. }
+            | StmtKind::EnumDecl { name, .. }
+            | StmtKind::InterfaceDecl { name, .. } => {
                 if trait_map.contains_key(name) || !class_names.insert(name.clone()) {
                     return Err(CompileError::new(
                         stmt.span,

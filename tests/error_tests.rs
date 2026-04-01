@@ -119,6 +119,46 @@ fn test_error_throw_requires_object() {
 }
 
 #[test]
+fn test_error_enum_cannot_be_instantiated() {
+    expect_error(
+        "<?php enum Color: int { case Red = 1; } $x = new Color();",
+        "Cannot instantiate enum: Color",
+    );
+}
+
+#[test]
+fn test_error_backed_enum_case_requires_value() {
+    expect_error(
+        "<?php enum Color: int { case Red; }",
+        "Backed enum cases must declare a value",
+    );
+}
+
+#[test]
+fn test_error_pure_enum_case_cannot_have_backing_value() {
+    expect_error(
+        "<?php enum Suit { case Hearts = 1; }",
+        "Pure enum cases cannot declare a backing value",
+    );
+}
+
+#[test]
+fn test_error_enum_duplicate_backing_value() {
+    expect_error(
+        "<?php enum Color: int { case Red = 1; case Crimson = 1; }",
+        "Duplicate enum backing value",
+    );
+}
+
+#[test]
+fn test_error_pure_enum_has_no_from_method() {
+    expect_error(
+        "<?php enum Suit { case Hearts; } Suit::from(1);",
+        "Undefined method: Suit::from",
+    );
+}
+
+#[test]
 fn test_error_throw_requires_throwable() {
     expect_error(
         "<?php class PlainObject {} throw new PlainObject();",

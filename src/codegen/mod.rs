@@ -11,11 +11,11 @@ mod stmt;
 
 use std::collections::{HashMap, HashSet};
 
-use crate::names::{method_symbol, static_method_symbol};
+use crate::names::{enum_case_symbol, method_symbol, static_method_symbol};
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
 use crate::types::{
-    ClassInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo,
-    PhpType, TypeEnv,
+    ClassInfo, EnumCaseValue, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig,
+    InterfaceInfo, PackedClassInfo, PhpType, TypeEnv,
 };
 use context::Context;
 use data_section::DataSection;
@@ -27,6 +27,7 @@ pub fn generate(
     functions: &HashMap<String, FunctionSig>,
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: &HashMap<String, ClassInfo>,
+    enums: &HashMap<String, EnumInfo>,
     packed_classes: &HashMap<String, PackedClassInfo>,
     extern_functions: &HashMap<String, ExternFunctionSig>,
     extern_classes: &HashMap<String, ExternClassInfo>,
@@ -160,6 +161,7 @@ pub fn generate(
     ctx.all_static_vars = all_static_vars.clone();
     ctx.classes = classes.clone();
     ctx.interfaces = interfaces.clone();
+    ctx.enums = enums.clone();
     ctx.packed_classes = packed_classes.clone();
     ctx.extern_functions = extern_functions.clone();
     ctx.extern_classes = extern_classes.clone();
@@ -240,6 +242,7 @@ pub fn generate(
         }
     }
     emit_main_activation_record_push(&mut emitter, &ctx, &main_cleanup_label);
+    emit_enum_singleton_initializers(&mut emitter, &mut data, &ctx);
 
     // -- emit user statements --
     for s in program {
@@ -327,6 +330,7 @@ pub fn generate(
         &all_static_vars,
         interfaces,
         classes,
+        enums,
     );
 
     let mut user_asm = emitter.output();
@@ -354,6 +358,63 @@ pub fn generate_runtime(heap_size: usize) -> String {
     output.push('\n');
     output.push_str(&runtime::emit_runtime_data_fixed(heap_size));
     output
+}
+
+fn emit_enum_singleton_initializers(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    ctx: &Context,
+) {
+    let mut sorted_enums: Vec<(&String, &EnumInfo)> = ctx.enums.iter().collect();
+    sorted_enums.sort_by_key(|(name, _)| name.as_str());
+    for (enum_name, enum_info) in sorted_enums {
+        let Some(class_info) = ctx.classes.get(enum_name) else {
+            continue;
+        };
+        for case in &enum_info.cases {
+            emitter.comment(&format!("initialize enum singleton {}::{}", enum_name, case.name));
+            let obj_size = 8 + class_info.properties.len() * 16;
+            emitter.instruction(&format!("mov x0, #{}", obj_size));             // enum singleton object size in bytes
+            emitter.instruction("bl __rt_heap_alloc");                          // allocate enum singleton object storage
+            emitter.instruction("mov x9, #4");                                  // heap kind 4 = object instance
+            emitter.instruction("str x9, [x0, #-8]");                           // store object kind in the uniform heap header
+            emitter.instruction(&format!("mov x10, #{}", class_info.class_id)); // load compile-time enum class id
+            emitter.instruction("str x10, [x0]");                               // store enum class id at object header
+            emitter.instruction("str x0, [sp, #-16]!");                         // save singleton object pointer while initializing properties
+
+            for i in 0..class_info.properties.len() {
+                let offset = 8 + i * 16;
+                emitter.instruction("ldr x9, [sp]");                            // peek enum singleton pointer from the stack
+                emitter.instruction(&format!("str xzr, [x9, #{}]", offset));    // zero-init property lo word
+                emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8)); // zero-init property hi word
+            }
+
+            if let Some(case_value) = &case.value {
+                emitter.instruction("ldr x9, [sp]");                            // reload enum singleton pointer for backing-value initialization
+                match case_value {
+                    EnumCaseValue::Int(value) => {
+                        load_immediate(emitter, "x10", *value);                 // materialize the enum int backing value
+                        emitter.instruction("str x10, [x9, #8]");               // store the int backing value in the first property slot
+                        emitter.instruction("str xzr, [x9, #16]");              // clear the metadata/high word for the int property
+                    }
+                    EnumCaseValue::Str(value) => {
+                        let (label, len) = data.add_string(value.as_bytes());
+                        emitter.instruction(&format!("adrp x10, {}@PAGE", label)); // load page of the enum string backing literal
+                        emitter.instruction(&format!("add x10, x10, {}@PAGEOFF", label)); // resolve the enum string backing literal address
+                        emitter.instruction("str x10, [x9, #8]");               // store the string backing pointer in the first property slot
+                        emitter.instruction(&format!("mov x10, #{}", len));     // materialize the enum string backing length
+                        emitter.instruction("str x10, [x9, #16]");              // store the string backing length in the second property word
+                    }
+                }
+            }
+
+            emitter.instruction("ldr x0, [sp], #16");                           // pop initialized enum singleton pointer into x0
+            let slot_label = enum_case_symbol(enum_name, &case.name);
+            emitter.instruction(&format!("adrp x9, {}@PAGE", slot_label));      // load page of the enum singleton slot
+            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", slot_label)); // resolve the enum singleton slot address
+            emitter.instruction("str x0, [x9]");                                // publish the enum singleton pointer in its global slot
+        }
+    }
 }
 
 fn emit_deferred_closures(
@@ -730,4 +791,35 @@ pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpTyp
 
 fn align16(n: usize) -> usize {
     (n + 15) & !15
+}
+
+fn load_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
+    if (0..=65535).contains(&value) || (-65536..0).contains(&value) {
+        emitter.instruction(&format!("mov {}, #{}", reg, value));               // load a small signed immediate directly into the target register
+        return;
+    }
+
+    let uval = value as u64;
+    emitter.instruction(&format!("movz {}, #0x{:x}", reg, uval & 0xFFFF));     // seed the low 16 bits of the wider immediate value
+    if (uval >> 16) & 0xFFFF != 0 {
+        emitter.instruction(&format!(
+            "movk {}, #0x{:x}, lsl #16",
+            reg,
+            (uval >> 16) & 0xFFFF
+        ));                                                                     // patch bits 16-31 of the wider immediate value
+    }
+    if (uval >> 32) & 0xFFFF != 0 {
+        emitter.instruction(&format!(
+            "movk {}, #0x{:x}, lsl #32",
+            reg,
+            (uval >> 32) & 0xFFFF
+        ));                                                                     // patch bits 32-47 of the wider immediate value
+    }
+    if (uval >> 48) & 0xFFFF != 0 {
+        emitter.instruction(&format!(
+            "movk {}, #0x{:x}, lsl #48",
+            reg,
+            (uval >> 48) & 0xFFFF
+        ));                                                                     // patch bits 48-63 of the wider immediate value
+    }
 }

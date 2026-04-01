@@ -210,6 +210,21 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
                 })
                 .collect(),
         },
+        StmtKind::EnumDecl {
+            name,
+            backing_type,
+            cases,
+        } => StmtKind::EnumDecl {
+            name,
+            backing_type,
+            cases: cases
+                .into_iter()
+                .map(|mut case| {
+                    case.value = case.value.map(|expr| rewrite_expr(expr, defines));
+                    case
+                })
+                .collect(),
+        },
         StmtKind::InterfaceDecl {
             name,
             extends,
@@ -382,6 +397,14 @@ fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
                 .into_iter()
                 .map(|arg| rewrite_expr(arg, defines))
                 .collect(),
+        },
+        ExprKind::ConstRef(name) => ExprKind::ConstRef(name),
+        ExprKind::EnumCase {
+            enum_name,
+            case_name,
+        } => ExprKind::EnumCase {
+            enum_name,
+            case_name,
         },
         ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
             class_name,

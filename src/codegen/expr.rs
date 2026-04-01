@@ -458,6 +458,9 @@ pub fn emit_expr(
             let synthetic_expr = Expr::new(value, expr.span);
             emit_expr(&synthetic_expr, emitter, ctx, data)
         }
+        ExprKind::EnumCase { enum_name, case_name } => {
+            objects::emit_enum_case(enum_name.as_str(), case_name, emitter, ctx)
+        }
         ExprKind::BinaryOp { left, op, right } => emit_binop(left, op, right, emitter, ctx, data),
         ExprKind::Spread(inner) => {
             // Spread is handled at call site / array literal level.

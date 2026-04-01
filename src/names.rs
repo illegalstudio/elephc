@@ -165,3 +165,11 @@ pub fn static_method_symbol(class_name: &str, method_name: &str) -> String {
         mangle_fqn(method_name)
     )
 }
+
+pub fn enum_case_symbol(enum_name: &str, case_name: &str) -> String {
+    format!(
+        "_enum_case_{}_{}",
+        mangle_fqn(enum_name),
+        mangle_fqn(case_name)
+    )
+}

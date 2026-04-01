@@ -354,6 +354,7 @@ pub fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
         "parent" => Ok(Token::Parent),
         "insteadof" => Ok(Token::InsteadOf),
         "class" => Ok(Token::Class),
+        "enum" => Ok(Token::Enum),
         "new" => Ok(Token::New),
         "public" => Ok(Token::Public),
         "protected" => Ok(Token::Protected),
@@ -578,4 +579,3 @@ fn interpolate_heredoc_content(
     result.push((Token::RParen, span));
     result
 }
-

@@ -10,9 +10,9 @@ use crate::parser::ast::{
 };
 use crate::types::{
     ctype_stack_size, ctype_to_php_type, first_class_callable_builtin_sig, packed_type_size,
-    traits::{flatten_classes, FlattenedClass}, CheckResult, ClassInfo, ExternClassInfo,
-    ExternFieldInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo,
-    PackedFieldInfo, PhpType, TypeEnv,
+    traits::{flatten_classes, FlattenedClass}, CheckResult, ClassInfo, EnumCaseInfo,
+    EnumCaseValue, EnumInfo, ExternClassInfo, ExternFieldInfo, ExternFunctionSig, FunctionSig,
+    InterfaceInfo, PackedClassInfo, PackedFieldInfo, PhpType, TypeEnv,
 };
 
 /// Infer a function's return type by scanning its body for Return statements.
@@ -215,6 +215,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             result_ty
         }
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.as_str().to_string()),
+        ExprKind::EnumCase { enum_name, .. } => PhpType::Object(enum_name.as_str().to_string()),
         ExprKind::This => PhpType::Object(String::new()),
         ExprKind::PtrCast { target_type, .. } => PhpType::Pointer(Some(target_type.clone())),
         ExprKind::BinaryOp { left, op, right } => match op {
@@ -257,6 +258,8 @@ pub(crate) struct Checker {
     pub interfaces: HashMap<String, InterfaceInfo>,
     /// Class definitions collected during first pass.
     pub classes: HashMap<String, ClassInfo>,
+    /// Enum definitions collected during first pass.
+    pub enums: HashMap<String, EnumInfo>,
     /// Name of the class currently being type-checked (for $this).
     pub current_class: Option<String>,
     /// Name of the current method, when type-checking a class method body.
@@ -1344,6 +1347,207 @@ fn propagate_abstract_return_types(checker: &mut Checker) {
     }
 }
 
+fn build_enum_info(
+    name: &str,
+    backing_type: Option<&crate::parser::ast::TypeExpr>,
+    cases: &[crate::parser::ast::EnumCaseDecl],
+    span: crate::span::Span,
+    checker: &mut Checker,
+    next_class_id: &mut u64,
+) -> Result<(), CompileError> {
+    if checker.classes.contains_key(name)
+        || checker.interfaces.contains_key(name)
+        || checker.enums.contains_key(name)
+    {
+        return Err(CompileError::new(
+            span,
+            &format!("Duplicate class or enum declaration: {}", name),
+        ));
+    }
+
+    let resolved_backing = match backing_type {
+        Some(backing_type) => {
+            let resolved = checker.resolve_type_expr(backing_type, span)?;
+            match resolved {
+                PhpType::Int | PhpType::Str => Some(resolved),
+                _ => {
+                    return Err(CompileError::new(
+                        span,
+                        "Enum backing type must be int or string",
+                    ))
+                }
+            }
+        }
+        None => None,
+    };
+
+    let mut seen_case_names = HashSet::new();
+    let mut seen_int_values = HashSet::new();
+    let mut seen_string_values = HashSet::new();
+    let mut enum_cases = Vec::new();
+    for case in cases {
+        if !seen_case_names.insert(case.name.clone()) {
+            return Err(CompileError::new(
+                case.span,
+                &format!("Duplicate enum case: {}::{}", name, case.name),
+            ));
+        }
+
+        let value = match (&resolved_backing, &case.value) {
+            (None, None) => None,
+            (None, Some(_)) => {
+                return Err(CompileError::new(
+                    case.span,
+                    "Pure enum cases cannot declare a backing value",
+                ))
+            }
+            (Some(_), None) => {
+                return Err(CompileError::new(
+                    case.span,
+                    "Backed enum cases must declare a value",
+                ))
+            }
+            (Some(PhpType::Int), Some(expr)) => match &expr.kind {
+                ExprKind::IntLiteral(value) => {
+                    if !seen_int_values.insert(*value) {
+                        return Err(CompileError::new(
+                            case.span,
+                            &format!("Duplicate enum backing value in {}: {}", name, value),
+                        ));
+                    }
+                    Some(EnumCaseValue::Int(*value))
+                }
+                _ => {
+                    return Err(CompileError::new(
+                        case.span,
+                        "Enum int backing values must be integer literals",
+                    ))
+                }
+            },
+            (Some(PhpType::Str), Some(expr)) => match &expr.kind {
+                ExprKind::StringLiteral(value) => {
+                    if !seen_string_values.insert(value.clone()) {
+                        return Err(CompileError::new(
+                            case.span,
+                            &format!("Duplicate enum backing value in {}: {:?}", name, value),
+                        ));
+                    }
+                    Some(EnumCaseValue::Str(value.clone()))
+                }
+                _ => {
+                    return Err(CompileError::new(
+                        case.span,
+                        "Enum string backing values must be string literals",
+                    ))
+                }
+            },
+            _ => unreachable!("enum backing type already validated"),
+        };
+
+        enum_cases.push(EnumCaseInfo {
+            name: case.name.clone(),
+            value,
+        });
+    }
+
+    let mut properties = Vec::new();
+    let mut property_offsets = HashMap::new();
+    let mut property_declaring_classes = HashMap::new();
+    let mut defaults = Vec::new();
+    let mut property_visibilities = HashMap::new();
+    let mut readonly_properties = HashSet::new();
+    if let Some(backing_ty) = &resolved_backing {
+        properties.push(("value".to_string(), backing_ty.clone()));
+        property_offsets.insert("value".to_string(), 8);
+        property_declaring_classes.insert("value".to_string(), name.to_string());
+        defaults.push(None);
+        property_visibilities.insert("value".to_string(), Visibility::Public);
+        readonly_properties.insert("value".to_string());
+    }
+
+    let mut static_methods = HashMap::new();
+    let mut static_method_visibilities = HashMap::new();
+    let mut static_method_declaring_classes = HashMap::new();
+    let mut static_method_impl_classes = HashMap::new();
+    static_methods.insert(
+        "cases".to_string(),
+        FunctionSig {
+            params: Vec::new(),
+            defaults: Vec::new(),
+            return_type: PhpType::Array(Box::new(PhpType::Object(name.to_string()))),
+            ref_params: Vec::new(),
+            variadic: None,
+        },
+    );
+    static_method_visibilities.insert("cases".to_string(), Visibility::Public);
+    static_method_declaring_classes.insert("cases".to_string(), name.to_string());
+    static_method_impl_classes.insert("cases".to_string(), name.to_string());
+    if let Some(backing_ty) = &resolved_backing {
+        for method_name in ["from", "tryFrom"] {
+            static_methods.insert(
+                method_name.to_string(),
+                FunctionSig {
+                    params: vec![("value".to_string(), backing_ty.clone())],
+                    defaults: vec![None],
+                    return_type: if method_name == "from" {
+                        PhpType::Object(name.to_string())
+                    } else {
+                        checker.normalize_union_type(vec![
+                            PhpType::Object(name.to_string()),
+                            PhpType::Void,
+                        ])
+                    },
+                    ref_params: vec![false],
+                    variadic: None,
+                },
+            );
+            static_method_visibilities.insert(method_name.to_string(), Visibility::Public);
+            static_method_declaring_classes.insert(method_name.to_string(), name.to_string());
+            static_method_impl_classes.insert(method_name.to_string(), name.to_string());
+        }
+    }
+
+    checker.classes.insert(
+        name.to_string(),
+        ClassInfo {
+            class_id: *next_class_id,
+            parent: None,
+            is_abstract: false,
+            is_readonly_class: true,
+            properties,
+            property_offsets,
+            property_declaring_classes,
+            defaults,
+            property_visibilities,
+            readonly_properties,
+            method_decls: Vec::new(),
+            methods: HashMap::new(),
+            static_methods,
+            method_visibilities: HashMap::new(),
+            method_declaring_classes: HashMap::new(),
+            method_impl_classes: HashMap::new(),
+            vtable_methods: Vec::new(),
+            vtable_slots: HashMap::new(),
+            static_method_visibilities,
+            static_method_declaring_classes,
+            static_method_impl_classes,
+            static_vtable_methods: Vec::new(),
+            static_vtable_slots: HashMap::new(),
+            interfaces: Vec::new(),
+            constructor_param_to_prop: Vec::new(),
+        },
+    );
+    checker.enums.insert(
+        name.to_string(),
+        EnumInfo {
+            backing_type: resolved_backing,
+            cases: enum_cases,
+        },
+    );
+    *next_class_id += 1;
+    Ok(())
+}
+
 pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
     let mut checker = Checker {
         fn_decls: HashMap::new(),
@@ -1353,6 +1557,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         callable_sigs: HashMap::new(),
         interfaces: HashMap::new(),
         classes: HashMap::new(),
+        enums: HashMap::new(),
         current_class: None,
         current_method: None,
         current_method_is_static: false,
@@ -1451,6 +1656,23 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
             &mut next_class_id,
             &mut building,
         )?;
+    }
+    for stmt in program {
+        if let StmtKind::EnumDecl {
+            name,
+            backing_type,
+            cases,
+        } = &stmt.kind
+        {
+            build_enum_info(
+                name,
+                backing_type.as_ref(),
+                cases,
+                stmt.span,
+                &mut checker,
+                &mut next_class_id,
+            )?;
+        }
     }
     patch_builtin_exception_signatures(&mut checker);
     patch_magic_method_signatures(&mut checker);
@@ -1757,6 +1979,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         functions: checker.functions,
         interfaces: checker.interfaces,
         classes: checker.classes,
+        enums: checker.enums,
         packed_classes: checker.packed_classes,
         extern_functions: checker.extern_functions,
         extern_classes: checker.extern_classes,
@@ -2005,6 +2228,75 @@ impl Checker {
 
     fn is_union_with_mixed_int_dispatch(&self, ty: &PhpType) -> bool {
         matches!(ty, PhpType::Union(_)) && self.type_supports_mixed_int_dispatch(ty)
+    }
+
+    fn check_enum_static_call(
+        &mut self,
+        enum_info: &EnumInfo,
+        class_name: &str,
+        method: &str,
+        args: &[Expr],
+        env: &TypeEnv,
+        span: crate::span::Span,
+    ) -> Result<PhpType, CompileError> {
+        match method {
+            "cases" => {
+                if !args.is_empty() {
+                    return Err(CompileError::new(
+                        span,
+                        &format!(
+                            "Static method '{}::cases' expects 0 arguments, got {}",
+                            class_name,
+                            args.len()
+                        ),
+                    ));
+                }
+                Ok(PhpType::Array(Box::new(PhpType::Object(
+                    class_name.to_string(),
+                ))))
+            }
+            "from" | "tryFrom" => {
+                let Some(backing_ty) = enum_info.backing_type.as_ref() else {
+                    return Err(CompileError::new(
+                        span,
+                        &format!("Undefined method: {}::{}", class_name, method),
+                    ));
+                };
+                if args.len() != 1 {
+                    return Err(CompileError::new(
+                        span,
+                        &format!(
+                            "Static method '{}::{}' expects 1 argument, got {}",
+                            class_name,
+                            method,
+                            args.len()
+                        ),
+                    ));
+                }
+                let arg_ty = self.infer_type(&args[0], env)?;
+                if !self.type_accepts(backing_ty, &arg_ty) {
+                    return Err(CompileError::new(
+                        span,
+                        &format!(
+                            "Type error: {}::{} expects {}, got {}",
+                            class_name, method, backing_ty, arg_ty
+                        ),
+                    ));
+                }
+                if method == "from" {
+                    Ok(PhpType::Object(class_name.to_string()))
+                } else {
+                    Ok(self.normalize_union_type(vec![
+                        PhpType::Object(class_name.to_string()),
+                        PhpType::Void,
+                    ]))
+                }
+            }
+            _ => Err(CompileError::new(
+                span,
+                &format!("Undefined method: {}::{}", class_name, method),
+            )),
+        }
     }
 
     fn merged_assignment_type(&self, existing: &PhpType, new_ty: &PhpType) -> Option<PhpType> {
@@ -3191,6 +3483,7 @@ impl Checker {
                 Ok(())
             }
             StmtKind::ClassDecl { .. }
+            | StmtKind::EnumDecl { .. }
             | StmtKind::InterfaceDecl { .. }
             | StmtKind::TraitDecl { .. } => {
                 // Method bodies are type-checked in a post-pass (after all new ClassName()
@@ -3822,6 +4115,12 @@ impl Checker {
             }
             ExprKind::NewObject { class_name, args } => {
                 let class_name = class_name.as_str().to_string();
+                if self.enums.contains_key(class_name.as_str()) {
+                    return Err(CompileError::new(
+                        expr.span,
+                        &format!("Cannot instantiate enum: {}", class_name),
+                    ));
+                }
                 if self.interfaces.contains_key(class_name.as_str()) {
                     return Err(CompileError::new(
                         expr.span,
@@ -3875,6 +4174,19 @@ impl Checker {
                     }
                 }
                 Ok(PhpType::Object(class_name))
+            }
+            ExprKind::EnumCase { enum_name, case_name } => {
+                let enum_name = enum_name.as_str().to_string();
+                let enum_info = self.enums.get(enum_name.as_str()).ok_or_else(|| {
+                    CompileError::new(expr.span, &format!("Undefined enum: {}", enum_name))
+                })?;
+                if !enum_info.cases.iter().any(|case| case.name == *case_name) {
+                    return Err(CompileError::new(
+                        expr.span,
+                        &format!("Undefined enum case: {}::{}", enum_name, case_name),
+                    ));
+                }
+                Ok(PhpType::Object(enum_name))
             }
             ExprKind::PropertyAccess { object, property } => {
                 let obj_ty = self.infer_type(object, env)?;
@@ -4072,6 +4384,9 @@ impl Checker {
                     }
                 };
                 let class_name = resolved_class_name.as_str();
+                if let Some(enum_info) = self.enums.get(class_name).cloned() {
+                    return self.check_enum_static_call(&enum_info, class_name, method, args, env, expr.span);
+                }
                 if let Some(class_info) = self.classes.get(class_name) {
                     if let Some(sig) = class_info.static_methods.get(method) {
                         if let Some(visibility) = class_info.static_method_visibilities.get(method)

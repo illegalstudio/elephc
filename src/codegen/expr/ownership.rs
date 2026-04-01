@@ -6,6 +6,7 @@ pub(super) fn expr_result_heap_ownership(expr: &Expr) -> HeapOwnership {
         ExprKind::Variable(_)
         | ExprKind::ArrayAccess { .. }
         | ExprKind::PropertyAccess { .. }
+        | ExprKind::EnumCase { .. }
         | ExprKind::This => HeapOwnership::Borrowed,
         ExprKind::Spread(inner)
         | ExprKind::PtrCast { expr: inner, .. }

@@ -2,8 +2,9 @@ use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::names::{Name, NameKind};
 use crate::parser::ast::{
-    CType, ClassMethod, ClassProperty, Expr, ExprKind, ExternField, ExternParam, PackedField,
-    Stmt, StmtKind, TraitAdaptation, TraitUse, TypeExpr, UseItem, UseKind, Visibility,
+    CType, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind, ExternField, ExternParam,
+    PackedField, Stmt, StmtKind, TraitAdaptation, TraitUse, TypeExpr, UseItem, UseKind,
+    Visibility,
 };
 use crate::parser::control;
 use crate::parser::expr::parse_expr;
@@ -18,6 +19,7 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
         Token::This => parse_this_stmt(tokens, pos, span),
         Token::PlusPlus | Token::MinusMinus => parse_incdec_stmt(tokens, pos, span),
         Token::Class => parse_class_decl(tokens, pos, span, false, false),
+        Token::Enum => parse_enum_decl(tokens, pos, span),
         Token::ReadOnly => parse_readonly_decl(tokens, pos, span),
         Token::Packed => parse_packed_decl(tokens, pos, span),
         Token::Interface => parse_interface_decl(tokens, pos, span),
@@ -826,6 +828,72 @@ fn parse_class_decl(
             trait_uses,
             properties,
             methods,
+        },
+        span,
+    ))
+}
+
+fn parse_enum_decl(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1; // consume 'enum'
+
+    let name = match tokens.get(*pos).map(|(t, _)| t) {
+        Some(Token::Identifier(n)) => {
+            let n = n.clone();
+            *pos += 1;
+            n
+        }
+        _ => return Err(CompileError::new(span, "Expected enum name after 'enum'")),
+    };
+
+    let backing_type = if *pos < tokens.len() && tokens[*pos].0 == Token::Colon {
+        *pos += 1;
+        Some(parse_type_expr(tokens, pos, span)?)
+    } else {
+        None
+    };
+
+    expect_token(tokens, pos, &Token::LBrace, "Expected '{' after enum name")?;
+    let mut cases = Vec::new();
+    while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
+        let case_span = tokens[*pos].1;
+        expect_token(tokens, pos, &Token::Case, "Expected 'case' in enum body")?;
+        let case_name = match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Identifier(name)) => {
+                let name = name.clone();
+                *pos += 1;
+                name
+            }
+            _ => {
+                return Err(CompileError::new(
+                    case_span,
+                    "Expected case name after 'case'",
+                ))
+            }
+        };
+        let value = if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
+            *pos += 1;
+            Some(parse_expr(tokens, pos)?)
+        } else {
+            None
+        };
+        expect_semicolon(tokens, pos)?;
+        cases.push(EnumCaseDecl {
+            name: case_name,
+            value,
+            span: case_span,
+        });
+    }
+
+    expect_token(tokens, pos, &Token::RBrace, "Expected '}' at end of enum")?;
+    Ok(Stmt::new(
+        StmtKind::EnumDecl {
+            name,
+            backing_type,
+            cases,
         },
         span,
     ))

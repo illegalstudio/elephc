@@ -190,6 +190,34 @@ fn test_packed_class_and_buffer_type_tokens() {
 }
 
 #[test]
+fn test_enum_tokens() {
+    let t = tokens("<?php enum Color: int { case Red = 1; case Green = 2; }");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Enum,
+            Token::Identifier("Color".into()),
+            Token::Colon,
+            Token::Identifier("int".into()),
+            Token::LBrace,
+            Token::Case,
+            Token::Identifier("Red".into()),
+            Token::Assign,
+            Token::IntLiteral(1),
+            Token::Semicolon,
+            Token::Case,
+            Token::Identifier("Green".into()),
+            Token::Assign,
+            Token::IntLiteral(2),
+            Token::Semicolon,
+            Token::RBrace,
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
 fn test_echo_string() {
     let t = tokens("<?php echo \"hello\";");
     assert_eq!(

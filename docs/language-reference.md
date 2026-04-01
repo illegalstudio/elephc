@@ -1900,6 +1900,30 @@ $p->x = 10;           // assign property
 echo $p->magnitude(); // method call
 ```
 
+### Enums
+
+elephc supports PHP-style enums, including backed enums:
+
+```php
+<?php
+enum Color: int {
+    case Red = 1;
+    case Green = 2;
+}
+
+echo Color::Red->value;          // 1
+echo Color::from(2) === Color::Green; // 1
+echo count(Color::cases());      // 2
+```
+
+Current rules:
+- pure enums (`enum Suit { case Hearts; }`) support case identity and `::cases()`
+- backed enums support `->value`, `::from($value)`, `::tryFrom($value)`, and `::cases()`
+- enum cases are singletons, so strict equality compares by identity as in PHP
+- enums cannot be instantiated with `new`
+- only `int` and `string` backing types are supported
+- enum case backing values must currently be literal `int` or `string` expressions
+
 ### Limitations
 
 - No `final` classes or methods
@@ -1909,7 +1933,6 @@ echo $p->magnitude(); // method call
 
 ## What elephc cannot do (by design)
 
-- No enums
 - No `eval()`
 - No dynamic `include`/`require` (path must be a string literal)
 - No generators/yield

@@ -62,6 +62,11 @@ fn collect_symbols(stmts: &[Stmt], current_namespace: Option<&str>, symbols: &mu
                     .classes
                     .insert(canonical_name_for_decl(namespace.as_deref(), name));
             }
+            StmtKind::EnumDecl { name, .. } => {
+                symbols
+                    .classes
+                    .insert(canonical_name_for_decl(namespace.as_deref(), name));
+            }
             StmtKind::InterfaceDecl { name, .. } => {
                 symbols
                     .interfaces
@@ -173,6 +178,31 @@ fn resolve_stmt_list(
                         trait_uses,
                         properties: properties.clone(),
                         methods: resolved_methods,
+                    },
+                    stmt.span,
+                ));
+            }
+            StmtKind::EnumDecl {
+                name,
+                backing_type,
+                cases,
+            } => {
+                let resolved_cases = cases
+                    .iter()
+                    .map(|case| crate::parser::ast::EnumCaseDecl {
+                        name: case.name.clone(),
+                        value: case
+                            .value
+                            .as_ref()
+                            .map(|expr| resolve_expr(expr, namespace.as_deref(), &imports, symbols)),
+                        span: case.span,
+                    })
+                    .collect();
+                resolved.push(Stmt::new(
+                    StmtKind::EnumDecl {
+                        name: canonical_name_for_decl(namespace.as_deref(), name),
+                        backing_type: backing_type.clone(),
+                        cases: resolved_cases,
                     },
                     stmt.span,
                 ));
@@ -688,6 +718,14 @@ fn resolve_expr(expr: &Expr, current_namespace: Option<&str>, imports: &Imports,
         ExprKind::ConstRef(name) => {
             ExprKind::ConstRef(resolved_name(resolve_constant_name(name, current_namespace, imports, symbols)))
         }
+        ExprKind::EnumCase { enum_name, case_name } => ExprKind::EnumCase {
+            enum_name: resolved_name(resolve_special_or_class_name(
+                enum_name,
+                current_namespace,
+                imports,
+            )),
+            case_name: case_name.clone(),
+        },
         ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
             class_name: resolved_name(resolve_special_or_class_name(
                 class_name,

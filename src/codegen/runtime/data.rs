@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::names::{mangle_fqn, method_symbol, static_method_symbol};
-use crate::types::{ClassInfo, InterfaceInfo, PhpType};
+use crate::names::{enum_case_symbol, mangle_fqn, method_symbol, static_method_symbol};
+use crate::types::{ClassInfo, EnumInfo, InterfaceInfo, PhpType};
 
 use super::system;
 
@@ -34,6 +34,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(".globl _buffer_bounds_msg\n_buffer_bounds_msg:\n    .ascii \"Fatal error: buffer index out of bounds\\n\"\n");
     out.push_str(".globl _buffer_uaf_msg\n_buffer_uaf_msg:\n    .ascii \"Fatal error: use of buffer after buffer_free()\\n\"\n");
     out.push_str(".globl _match_unhandled_msg\n_match_unhandled_msg:\n    .ascii \"Fatal error: unhandled match case\\n\"\n");
+    out.push_str(".globl _enum_from_msg\n_enum_from_msg:\n    .ascii \"Fatal error: enum case not found\\n\"\n");
     out.push_str(".globl _ptr_null_err_msg\n_ptr_null_err_msg:\n    .ascii \"Fatal error: null pointer dereference\\n\"\n");
     out.push_str(".globl _uncaught_exc_msg\n_uncaught_exc_msg:\n    .ascii \"Fatal error: uncaught exception\\n\"\n");
     out.push_str(".comm _gc_allocs, 8, 3\n");
@@ -92,6 +93,7 @@ pub(crate) fn emit_runtime_data_user(
     static_vars: &HashMap<(String, String), PhpType>,
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: &HashMap<String, ClassInfo>,
+    enums: &HashMap<String, EnumInfo>,
 ) -> String {
     let mut out = String::new();
 
@@ -114,6 +116,20 @@ pub(crate) fn emit_runtime_data_user(
             mangle_fqn(func_name),
             var_name
         ));
+    }
+
+    let mut sorted_enum_names: Vec<&String> = enums.keys().collect();
+    sorted_enum_names.sort();
+    for enum_name in sorted_enum_names {
+        let Some(enum_info) = enums.get(enum_name) else {
+            continue;
+        };
+        for case in &enum_info.cases {
+            out.push_str(&format!(
+                ".comm {}, 8, 3\n",
+                enum_case_symbol(enum_name, &case.name)
+            ));
+        }
     }
 
     let mut sorted_interfaces: Vec<(&String, &InterfaceInfo)> = interfaces.iter().collect();
