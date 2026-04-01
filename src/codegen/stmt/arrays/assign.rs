@@ -57,10 +57,16 @@ pub(super) fn emit_array_assign_stmt(
         }
         emitter.instruction("ldr x9, [sp, #16]");                                   // reload the target index without disturbing the saved value
         emitter.instruction("ldr x10, [sp, #32]");                                  // reload the buffer header pointer without disturbing the saved value
-        emitter.instruction("cbz x10, __rt_buffer_use_after_free");                 // abort if the buffer was freed (null pointer)
+        let uaf_ok = ctx.next_label("buf_st_uaf_ok");
+        emitter.instruction(&format!("cbnz x10, {}", uaf_ok));                     // skip fatal if buffer pointer is valid
+        emitter.instruction("b __rt_buffer_use_after_free");                        // abort — buffer was freed
+        emitter.label(&uaf_ok);
         let bounds_ok = ctx.next_label("buffer_store_ok");
+        let oob_ok = ctx.next_label("buf_st_oob_ok");
         emitter.instruction("cmp x9, #0");                                          // reject negative buffer indexes
-        emitter.instruction("b.lt __rt_buffer_bounds_fail");                        // abort on negative buffer index
+        emitter.instruction(&format!("b.ge {}", oob_ok));                           // skip fatal if index is non-negative
+        emitter.instruction("b __rt_buffer_bounds_fail");                           // abort — negative index
+        emitter.label(&oob_ok);
         emitter.instruction("ldr x11, [x10]");                                      // load the logical buffer length from the header
         emitter.instruction("cmp x9, x11");                                         // compare the target index against the logical length
         emitter.instruction(&format!("b.lo {}", bounds_ok));                        // continue once the write target is in bounds
