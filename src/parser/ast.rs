@@ -59,7 +59,7 @@ pub enum ExprKind {
         expr: Box<Expr>,
     },
     Closure {
-        params: Vec<(String, Option<Expr>, bool)>,
+        params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
         variadic: Option<String>,
         body: Vec<Stmt>,
         is_arrow: bool,
@@ -325,8 +325,9 @@ pub enum StmtKind {
     },
     FunctionDecl {
         name: String,
-        params: Vec<(String, Option<Expr>, bool)>,
+        params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
         variadic: Option<String>,
+        return_type: Option<TypeExpr>,
         body: Vec<Stmt>,
     },
     Return(Option<Expr>),
@@ -554,8 +555,10 @@ pub struct ClassMethod {
     pub is_static: bool,
     pub is_abstract: bool,
     pub has_body: bool,
-    pub params: Vec<(String, Option<Expr>, bool)>,
+    pub params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
     pub variadic: Option<String>,
+    #[allow(dead_code)] // Will be used for return type checking in future phases
+    pub return_type: Option<TypeExpr>,
     pub body: Vec<Stmt>,
     #[allow(dead_code)] // Used for error reporting in future phases
     pub span: Span,

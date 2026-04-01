@@ -543,6 +543,12 @@ fn parse_function_decl(
             }
             continue;
         }
+        // Try to parse optional type annotation before $variable
+        let type_ann = if looks_like_typed_param(tokens, *pos) {
+            Some(parse_type_expr(tokens, pos, span)?)
+        } else {
+            None
+        };
         match tokens.get(*pos).map(|(t, _)| t) {
             Some(Token::Variable(n)) => {
                 let n = n.clone();
@@ -554,16 +560,32 @@ fn parse_function_decl(
                 } else {
                     None
                 };
-                params.push((n, default, is_ref));
+                params.push((n, type_ann, default, is_ref));
             }
             _ => return Err(CompileError::new(span, "Expected parameter variable")),
         }
     }
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after parameters")?;
 
+    // Parse optional return type: `: TypeExpr`
+    let return_type = if *pos < tokens.len() && tokens[*pos].0 == Token::Colon {
+        *pos += 1;
+        Some(parse_type_expr(tokens, pos, span)?)
+    } else {
+        None
+    };
+
     let body = parse_block(tokens, pos)?;
 
-    Ok(Stmt::new(StmtKind::FunctionDecl { name, params, variadic, body }, span))
+    Ok(Stmt::new(StmtKind::FunctionDecl { name, params, variadic, return_type, body }, span))
+}
+
+fn looks_like_typed_param(tokens: &[(Token, Span)], pos: usize) -> bool {
+    let mut probe = pos;
+    match parse_type_expr(tokens, &mut probe, tokens[pos].1) {
+        Ok(_) => matches!(tokens.get(probe).map(|(t, _)| t), Some(Token::Variable(_))),
+        Err(_) => false,
+    }
 }
 
 fn looks_like_typed_assign(tokens: &[(Token, Span)], pos: usize) -> bool {
@@ -1241,6 +1263,13 @@ fn parse_class_like_method(
     expect_token(tokens, pos, &Token::LParen, "Expected '(' after method name")?;
     let (params, variadic) = parse_params(tokens, pos, span)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')'")?;
+    // Parse optional return type: `: TypeExpr`
+    let return_type = if *pos < tokens.len() && tokens[*pos].0 == Token::Colon {
+        *pos += 1;
+        Some(parse_type_expr(tokens, pos, span)?)
+    } else {
+        None
+    };
     let (has_body, body) = if *pos < tokens.len() && tokens[*pos].0 == Token::Semicolon {
         *pos += 1;
         (false, Vec::new())
@@ -1255,6 +1284,7 @@ fn parse_class_like_method(
         has_body,
         params,
         variadic,
+        return_type,
         body,
         span,
     })
@@ -1479,7 +1509,7 @@ fn parse_params(
     tokens: &[(Token, Span)],
     pos: &mut usize,
     span: Span,
-) -> Result<(Vec<(String, Option<Expr>, bool)>, Option<String>), CompileError> {
+) -> Result<(Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>, Option<String>), CompileError> {
     let mut params = Vec::new();
     let mut variadic = None;
     while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
@@ -1509,6 +1539,12 @@ fn parse_params(
             }
             continue;
         }
+        // Try to parse optional type annotation before $variable
+        let type_ann = if looks_like_typed_param(tokens, *pos) {
+            Some(parse_type_expr(tokens, pos, span)?)
+        } else {
+            None
+        };
         match tokens.get(*pos).map(|(t, _)| t) {
             Some(Token::Variable(n)) => {
                 let n = n.clone();
@@ -1519,7 +1555,7 @@ fn parse_params(
                 } else {
                     None
                 };
-                params.push((n, default, is_ref));
+                params.push((n, type_ann, default, is_ref));
             }
             _ => return Err(CompileError::new(span, "Expected parameter variable")),
         }

@@ -85,13 +85,13 @@ pub fn generate(
                     if let Some(sig) = class_static_sig {
                         params.extend(sig.params.clone());
                     } else {
-                        params.extend(method.params.iter().map(|(n, _, _)| (n.clone(), PhpType::Int)));
+                        params.extend(method.params.iter().map(|(n, _, _, _)| (n.clone(), PhpType::Int)));
                     }
                     let mut defaults: Vec<Option<crate::parser::ast::Expr>> = vec![None];
                     if let Some(sig) = class_static_sig {
                         defaults.extend(sig.defaults.clone());
                     } else {
-                        defaults.extend(method.params.iter().map(|(_, d, _)| d.clone()));
+                        defaults.extend(method.params.iter().map(|(_, _, d, _)| d.clone()));
                         if method.variadic.is_some() {
                             defaults.push(None);
                         }
@@ -100,7 +100,7 @@ pub fn generate(
                     if let Some(sig) = class_static_sig {
                         ref_params.extend(sig.ref_params.clone());
                     } else {
-                        ref_params.extend(method.params.iter().map(|(_, _, r)| *r));
+                        ref_params.extend(method.params.iter().map(|(_, _, _, r)| *r));
                         if method.variadic.is_some() {
                             ref_params.push(false);
                         }
@@ -118,13 +118,13 @@ pub fn generate(
                     if let Some(sig) = class_method_sig {
                         params.extend(sig.params.clone());
                     } else {
-                        params.extend(method.params.iter().map(|(n, _, _)| (n.clone(), PhpType::Int)));
+                        params.extend(method.params.iter().map(|(n, _, _, _)| (n.clone(), PhpType::Int)));
                     }
                     let mut defaults: Vec<Option<crate::parser::ast::Expr>> = vec![None]; // $this has no default
                     if let Some(sig) = class_method_sig {
                         defaults.extend(sig.defaults.clone());
                     } else {
-                        defaults.extend(method.params.iter().map(|(_, d, _)| d.clone()));
+                        defaults.extend(method.params.iter().map(|(_, _, d, _)| d.clone()));
                         if method.variadic.is_some() {
                             defaults.push(None);
                         }
@@ -133,7 +133,7 @@ pub fn generate(
                     if let Some(sig) = class_method_sig {
                         ref_params.extend(sig.ref_params.clone());
                     } else {
-                        ref_params.extend(method.params.iter().map(|(_, _, r)| *r));
+                        ref_params.extend(method.params.iter().map(|(_, _, _, r)| *r));
                         if method.variadic.is_some() {
                             ref_params.push(false);
                         }

@@ -366,6 +366,7 @@ fn builtin_exception_constructor_method() -> ClassMethod {
         has_body: true,
         params: vec![(
             "message".to_string(),
+            None,
             Some(Expr::new(
                 ExprKind::StringLiteral(String::new()),
                 crate::span::Span::dummy(),
@@ -373,6 +374,7 @@ fn builtin_exception_constructor_method() -> ClassMethod {
             false,
         )],
         variadic: None,
+        return_type: None,
         body: vec![Stmt::new(
             StmtKind::PropertyAssign {
                 object: Box::new(Expr::new(ExprKind::This, crate::span::Span::dummy())),
@@ -394,6 +396,7 @@ fn builtin_exception_get_message_method() -> ClassMethod {
         has_body: true,
         params: Vec::new(),
         variadic: None,
+        return_type: None,
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::PropertyAccess {
@@ -417,6 +420,7 @@ fn builtin_throwable_get_message_method() -> ClassMethod {
         has_body: false,
         params: Vec::new(),
         variadic: None,
+        return_type: None,
         body: Vec::new(),
         span: crate::span::Span::dummy(),
     }
@@ -545,10 +549,10 @@ fn build_method_sig(method: &crate::parser::ast::ClassMethod) -> FunctionSig {
     let params: Vec<(String, PhpType)> = method
         .params
         .iter()
-        .map(|(n, _, _)| (n.clone(), PhpType::Int))
+        .map(|(n, _, _, _)| (n.clone(), PhpType::Int))
         .collect();
-    let defaults: Vec<Option<Expr>> = method.params.iter().map(|(_, d, _)| d.clone()).collect();
-    let ref_params: Vec<bool> = method.params.iter().map(|(_, _, r)| *r).collect();
+    let defaults: Vec<Option<Expr>> = method.params.iter().map(|(_, _, d, _)| d.clone()).collect();
+    let ref_params: Vec<bool> = method.params.iter().map(|(_, _, _, r)| *r).collect();
     let return_type = infer_return_type_syntactic(&method.body);
     Checker::callable_wrapper_sig(&FunctionSig {
         params,
@@ -565,7 +569,7 @@ fn build_constructor_param_map(methods: &[crate::parser::ast::ClassMethod]) -> V
         param_to_prop = constructor
             .params
             .iter()
-            .map(|(pname, _, _)| {
+            .map(|(pname, _, _, _)| {
                 for stmt in &constructor.body {
                     if let StmtKind::PropertyAssign { property, value, .. } = &stmt.kind {
                         if let ExprKind::Variable(vn) = &value.kind {
@@ -1578,11 +1582,12 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
             params,
             variadic,
             body,
+            ..
         } = &stmt.kind
         {
-            let param_names: Vec<String> = params.iter().map(|(n, _, _)| n.clone()).collect();
-            let defaults: Vec<Option<Expr>> = params.iter().map(|(_, d, _)| d.clone()).collect();
-            let ref_flags: Vec<bool> = params.iter().map(|(_, _, r)| *r).collect();
+            let param_names: Vec<String> = params.iter().map(|(n, _, _, _)| n.clone()).collect();
+            let defaults: Vec<Option<Expr>> = params.iter().map(|(_, _, d, _)| d.clone()).collect();
+            let ref_flags: Vec<bool> = params.iter().map(|(_, _, _, r)| *r).collect();
             checker.fn_decls.insert(
                 name.clone(),
                 FnDecl {
@@ -1889,7 +1894,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                         .and_then(|c| c.methods.get(&method.name))
                         .map(|s| s.params.clone())
                 };
-                for (i, (pname, _, _)) in method.params.iter().enumerate() {
+                for (i, (pname, _, _, _)) in method.params.iter().enumerate() {
                     let ty = sig_params
                         .as_ref()
                         .and_then(|p| p.get(i))
@@ -1910,7 +1915,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 // (for correct register assignment in codegen prologue)
                 if method.name == "__construct" {
                     if let Some(ci) = checker.classes.get(&class.name).cloned() {
-                        for (i, (pname, _, _)) in method.params.iter().enumerate() {
+                        for (i, (pname, _, _, _)) in method.params.iter().enumerate() {
                             if let Some(Some(prop_name)) = ci.constructor_param_to_prop.get(i) {
                                 if let Some((_, ty)) =
                                     ci.properties.iter().find(|(n, _)| n == prop_name)
@@ -1936,8 +1941,8 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 let method_ref_params: Vec<String> = method
                     .params
                     .iter()
-                    .filter(|(_, _, is_ref)| *is_ref)
-                    .map(|(name, _, _)| name.clone())
+                    .filter(|(_, _, _, is_ref)| *is_ref)
+                    .map(|(name, _, _, _)| name.clone())
                     .collect();
                 checker.with_local_storage_context(method_ref_params, |checker| {
                     for s in &method.body {
@@ -2975,7 +2980,7 @@ impl Checker {
                 Ok(Some(FunctionSig {
                     params: params
                         .iter()
-                        .map(|(name, _, _)| (name.clone(), PhpType::Mixed))
+                        .map(|(name, _, _, _)| (name.clone(), PhpType::Mixed))
                         .chain(
                             variadic
                                 .iter()
@@ -2983,9 +2988,9 @@ impl Checker {
                                 .map(|name| (name, PhpType::Array(Box::new(PhpType::Mixed)))),
                         )
                         .collect(),
-                    defaults: params.iter().map(|(_, default, _)| default.clone()).collect(),
+                    defaults: params.iter().map(|(_, _, default, _)| default.clone()).collect(),
                     return_type,
-                    ref_params: params.iter().map(|(_, _, is_ref)| *is_ref).collect(),
+                    ref_params: params.iter().map(|(_, _, _, is_ref)| *is_ref).collect(),
                     variadic: variadic.clone(),
                 }))
             }
@@ -3879,7 +3884,7 @@ impl Checker {
                 // Type-check the closure body in its own environment
                 let mut closure_env: TypeEnv = env.clone();
                 // Add params as Int (simple default for now — they'll be refined at call site)
-                for (p, _default, _is_ref) in params {
+                for (p, _type_ann, _default, _is_ref) in params {
                     closure_env.insert(p.clone(), PhpType::Int);
                 }
                 if let Some(vp) = variadic {
@@ -3887,8 +3892,8 @@ impl Checker {
                 }
                 let closure_ref_params: Vec<String> = params
                     .iter()
-                    .filter(|(_, _, is_ref)| *is_ref)
-                    .map(|(name, _, _)| name.clone())
+                    .filter(|(_, _, _, is_ref)| *is_ref)
+                    .map(|(name, _, _, _)| name.clone())
                     .collect();
                 self.with_local_storage_context(closure_ref_params, |checker| {
                     for stmt in body {

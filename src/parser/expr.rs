@@ -600,7 +600,7 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                             } else {
                                 None
                             };
-                            params.push((n, default, is_ref));
+                            params.push((n, None, default, is_ref));
                         }
                         _ => return Err(CompileError::new(span, "Expected parameter variable")),
                     }
@@ -693,7 +693,7 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                         } else {
                             None
                         };
-                        params.push((n, default, is_ref));
+                        params.push((n, None, default, is_ref));
                     }
                     _ => return Err(CompileError::new(span, "Expected parameter variable")),
                 }

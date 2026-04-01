@@ -2,7 +2,7 @@ use crate::codegen::context::{Context, DeferredClosure};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::functions;
-use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind, TypeExpr};
 use crate::types::{FunctionSig, PhpType};
 
 use super::args;
@@ -94,7 +94,7 @@ fn infer_closure_return_type(body: &[Stmt], sig: &FunctionSig) -> PhpType {
 }
 
 pub(super) fn emit_closure(
-    params: &[(String, Option<Expr>, bool)],
+    params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
     variadic: &Option<String>,
     body: &[Stmt],
     captures: &[String],
@@ -115,7 +115,7 @@ pub(super) fn emit_closure(
     }
 
     let mut param_types: Vec<(String, PhpType)> =
-        params.iter().map(|(p, _, _)| (p.clone(), PhpType::Int)).collect();
+        params.iter().map(|(p, _, _, _)| (p.clone(), PhpType::Int)).collect();
     if let Some(variadic_name) = variadic {
         param_types.push((
             variadic_name.clone(),
@@ -126,14 +126,14 @@ pub(super) fn emit_closure(
         param_types.push((cap_name.clone(), cap_ty.clone()));
     }
     let mut defaults: Vec<Option<Expr>> =
-        params.iter().map(|(_, default, _)| default.clone()).collect();
+        params.iter().map(|(_, _, default, _)| default.clone()).collect();
     if variadic.is_some() {
         defaults.push(None);
     }
     for _ in &capture_types {
         defaults.push(None);
     }
-    let mut ref_params: Vec<bool> = params.iter().map(|(_, _, is_ref)| *is_ref).collect();
+    let mut ref_params: Vec<bool> = params.iter().map(|(_, _, _, is_ref)| *is_ref).collect();
     if variadic.is_some() {
         ref_params.push(false);
     }
@@ -154,7 +154,7 @@ pub(super) fn emit_closure(
         variadic: variadic.clone(),
     };
 
-    let param_names: Vec<String> = params.iter().map(|(n, _, _)| n.clone()).collect();
+    let param_names: Vec<String> = params.iter().map(|(n, _, _, _)| n.clone()).collect();
     ctx.deferred_closures.push(DeferredClosure {
         label: closure_label.clone(),
         params: param_names,

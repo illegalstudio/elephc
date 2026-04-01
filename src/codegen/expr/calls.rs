@@ -8,6 +8,7 @@ use super::super::context::Context;
 use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
 use super::Expr;
+use crate::parser::ast::TypeExpr;
 use crate::types::PhpType;
 
 pub(super) fn emit_function_call(
@@ -21,7 +22,7 @@ pub(super) fn emit_function_call(
 }
 
 pub(super) fn emit_closure(
-    params: &[(String, Option<Expr>, bool)],
+    params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
     variadic: &Option<String>,
     body: &[crate::parser::ast::Stmt],
     captures: &[String],

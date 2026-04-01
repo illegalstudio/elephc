@@ -506,7 +506,7 @@ fn test_function_declaration_parses() {
     } = &stmts[0].kind
     {
         assert_eq!(name, "foo");
-        let param_names: Vec<&str> = params.iter().map(|(n, _, _)| n.as_str()).collect();
+        let param_names: Vec<&str> = params.iter().map(|(n, _, _, _)| n.as_str()).collect();
         assert_eq!(param_names, &["a", "b"]);
         assert_eq!(body.len(), 1);
     } else {
@@ -811,7 +811,7 @@ fn test_parse_closure() {
             params, is_arrow, ..
         } = &value.kind
         {
-            let param_names: Vec<&str> = params.iter().map(|(n, _, _)| n.as_str()).collect();
+            let param_names: Vec<&str> = params.iter().map(|(n, _, _, _)| n.as_str()).collect();
             assert_eq!(param_names, &["x"]);
             assert!(!is_arrow);
         } else {
@@ -831,7 +831,7 @@ fn test_parse_arrow_function() {
             params, is_arrow, ..
         } = &value.kind
         {
-            let param_names: Vec<&str> = params.iter().map(|(n, _, _)| n.as_str()).collect();
+            let param_names: Vec<&str> = params.iter().map(|(n, _, _, _)| n.as_str()).collect();
             assert_eq!(param_names, &["x"]);
             assert!(is_arrow);
         } else {
@@ -866,9 +866,9 @@ fn test_parse_function_default_params() {
     if let StmtKind::FunctionDecl { params, .. } = &stmts[0].kind {
         assert_eq!(params.len(), 2);
         assert_eq!(params[0].0, "a");
-        assert!(params[0].1.is_none());
+        assert!(params[0].2.is_none());
         assert_eq!(params[1].0, "b");
-        assert!(params[1].1.is_some());
+        assert!(params[1].2.is_some());
     } else {
         panic!("expected FunctionDecl");
     }
@@ -1086,7 +1086,7 @@ fn test_parse_ref_param() {
             assert_eq!(name, "foo");
             assert_eq!(params.len(), 1);
             assert_eq!(params[0].0, "x");
-            assert!(params[0].2, "Expected param to be pass-by-reference");
+            assert!(params[0].3, "Expected param to be pass-by-reference");
         }
         _ => panic!("Expected FunctionDecl"),
     }
@@ -1099,9 +1099,9 @@ fn test_parse_mixed_ref_params() {
     match &stmts[0].kind {
         StmtKind::FunctionDecl { params, .. } => {
             assert_eq!(params.len(), 3);
-            assert!(params[0].2, "First param should be ref");
-            assert!(!params[1].2, "Second param should not be ref");
-            assert!(params[2].2, "Third param should be ref");
+            assert!(params[0].3, "First param should be ref");
+            assert!(!params[1].3, "Second param should not be ref");
+            assert!(params[2].3, "Third param should be ref");
         }
         _ => panic!("Expected FunctionDecl"),
     }
@@ -1112,7 +1112,7 @@ fn test_parse_non_ref_param() {
     let stmts = parse_source("<?php function foo($x) { }");
     match &stmts[0].kind {
         StmtKind::FunctionDecl { params, .. } => {
-            assert!(!params[0].2, "Normal param should not be ref");
+            assert!(!params[0].3, "Normal param should not be ref");
         }
         _ => panic!("Expected FunctionDecl"),
     }

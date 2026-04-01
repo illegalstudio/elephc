@@ -11,7 +11,7 @@ use super::abi;
 use super::context::{Context, HeapOwnership};
 use super::data_section::DataSection;
 use super::emit::Emitter;
-use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind};
+use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind, TypeExpr};
 use crate::types::FunctionSig;
 use crate::types::PhpType;
 
@@ -692,7 +692,7 @@ pub(crate) fn coerce_result_to_type(
 }
 
 fn emit_closure(
-    params: &[(String, Option<Expr>, bool)],
+    params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
     variadic: &Option<String>,
     body: &[crate::parser::ast::Stmt],
     captures: &[String],
