@@ -34,7 +34,7 @@ pub fn generate(
     heap_size: usize,
     gc_stats: bool,
     heap_debug: bool,
-) -> String {
+) -> (String, String) {
     let mut emitter = Emitter::new();
     let mut data = DataSection::new();
 
@@ -188,10 +188,9 @@ pub fn generate(
     let frame_size = align16(vars_size + 16);     // 16-byte aligned, +16 for saved x29/x30
 
     // -- prologue: set up stack frame --
-    emitter.raw(".global _main");
     emitter.raw(".align 2");
     emitter.blank();
-    emitter.label("_main");
+    emitter.label_global("_main");
     emitter.comment("prologue");
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // grow stack for locals + saved regs
     if frame_size - 16 <= 504 {
@@ -321,26 +320,39 @@ pub fn generate(
     emit_deferred_closures(&mut emitter, &mut data, &mut ctx);
     emit_main_cleanup_callback(&mut emitter, &main_cleanup_label, &ctx);
 
-    // -- emit runtime routines and data sections --
-    runtime::emit_runtime(&mut emitter);
-
+    // -- build user assembly (functions + main + closures + user data) --
     let data_output = data.emit();
-    let runtime_data = runtime::emit_runtime_data(
+    let user_data = runtime::emit_runtime_data_user(
         &all_global_var_names,
         &all_static_vars,
         interfaces,
         classes,
-        heap_size,
     );
 
-    let mut output = emitter.output();
+    let mut user_asm = emitter.output();
     if !data_output.is_empty() {
-        output.push('\n');
-        output.push_str(&data_output);
+        user_asm.push('\n');
+        user_asm.push_str(&data_output);
     }
-    output.push('\n');
-    output.push_str(&runtime_data);
+    user_asm.push('\n');
+    user_asm.push_str(&user_data);
 
+    // -- build runtime assembly (routines + fixed data) --
+    let runtime_asm = generate_runtime(heap_size);
+
+    (user_asm, runtime_asm)
+}
+
+/// Generate the runtime assembly string independently.
+/// This output is identical for all programs compiled with the same heap_size
+/// and can be pre-assembled and cached.
+pub fn generate_runtime(heap_size: usize) -> String {
+    let mut emitter = Emitter::new();
+    emitter.raw(".text");
+    runtime::emit_runtime(&mut emitter);
+    let mut output = emitter.output();
+    output.push('\n');
+    output.push_str(&runtime::emit_runtime_data_fixed(heap_size));
     output
 }
 

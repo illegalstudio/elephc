@@ -51,7 +51,7 @@ impl DataSection {
 
         let mut out = String::from(".data\n");
         for (label, bytes) in &self.entries {
-            out.push_str(&format!("{}:\n", label));
+            out.push_str(&format!(".globl {}\n{}:\n", label, label));
             out.push_str("    .ascii \"");
             for &b in bytes {
                 match b {
@@ -66,7 +66,7 @@ impl DataSection {
             out.push_str("\"\n");
         }
         for (label, bits) in &self.float_entries {
-            out.push_str(&format!(".align 3\n{}:\n    .quad 0x{:016x}\n", label, bits));
+            out.push_str(&format!(".align 3\n.globl {}\n{}:\n    .quad 0x{:016x}\n", label, label, bits));
         }
         out
     }
