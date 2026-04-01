@@ -169,6 +169,9 @@ if ($x === 3) {
 | `array` | `[1, 2, 3]`, `["key" => "value"]`, `[[1,2],[3,4]]` (indexed, associative, multi-dimensional, copy-on-write) |
 | `object` | `new Foo()`, `$user->name` |
 | `pointer` | `ptr($x)`, `ptr_null()`, `ptr_cast<int>($p)` |
+| `enum` | `enum Color: int { case Red = 1; }`, `Color::Red->value`, `Color::from(1)` |
+| `int\|string` | `int\|string $x = 42;` (union type — accepts any listed type) |
+| `?int` | `?int $x = null;` (nullable — sugar for `int\|null`) |
 | `buffer<T>` | `buffer<int> $xs = buffer_new<int>(256)` |
 | `packed class` | `packed class Vec2 { public float $x; public float $y; }` |
 
@@ -211,6 +214,8 @@ if ($x === 3) {
 | Traits | `trait Named { public function name() { return "x"; } }`, `use Named { Named::name as protected; }` |
 | New / Property / Method | `$f = new Foo(); $f->x = 1; $f->get();` |
 | Magic methods | `__toString()`, `__get($name)`, `__set($name, $value)` |
+| Enums | `enum Color: int { case Red = 1; }`, `Color::from(1)`, `Color::tryFrom(1)`, `Color::cases()` |
+| Union / Nullable types | `int\|string $x = 42;`, `?int $y = null;` |
 | Static methods | `Foo::create()` |
 | String interpolation | `"Hello $name"` |
 | Heredoc / Nowdoc | `<<<EOT ... EOT;`, `<<<'EOT' ... EOT;` |
