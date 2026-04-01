@@ -1930,7 +1930,90 @@ impl Checker {
         matches!((left, right), (PhpType::Pointer(_), PhpType::Pointer(_)))
     }
 
+    fn normalize_union_type(&self, members: Vec<PhpType>) -> PhpType {
+        let mut flat = Vec::new();
+        for member in members {
+            match member {
+                PhpType::Union(inner) => flat.extend(inner),
+                PhpType::Mixed => return PhpType::Mixed,
+                other => flat.push(other),
+            }
+        }
+
+        let mut deduped = Vec::new();
+        for member in flat {
+            if !deduped.iter().any(|existing| existing == &member) {
+                deduped.push(member);
+            }
+        }
+
+        if deduped.len() == 1 {
+            deduped.pop().expect("union member exists")
+        } else {
+            PhpType::Union(deduped)
+        }
+    }
+
+    fn type_accepts(&self, expected: &PhpType, actual: &PhpType) -> bool {
+        if expected == actual {
+            return true;
+        }
+
+        match expected {
+            PhpType::Mixed => true,
+            PhpType::Union(members) => members.iter().any(|member| self.type_accepts(member, actual)),
+            PhpType::Object(expected_name) => match actual {
+                PhpType::Object(actual_name) => {
+                    expected_name == actual_name
+                        || self.is_subclass_of(actual_name, expected_name)
+                        || self.class_implements_interface(actual_name, expected_name)
+                        || self.interface_extends_interface(actual_name, expected_name)
+                }
+                _ => false,
+            },
+            PhpType::Pointer(_) => Self::pointer_types_compatible(expected, actual),
+            _ => false,
+        }
+    }
+
+    fn union_contains_void(ty: &PhpType) -> bool {
+        matches!(ty, PhpType::Union(members) if members.iter().any(|member| *member == PhpType::Void))
+    }
+
+    fn strip_void_from_union(&self, ty: &PhpType) -> PhpType {
+        match ty {
+            PhpType::Union(members) => {
+                let filtered: Vec<PhpType> = members
+                    .iter()
+                    .filter(|member| **member != PhpType::Void)
+                    .cloned()
+                    .collect();
+                self.normalize_union_type(filtered)
+            }
+            other => other.clone(),
+        }
+    }
+
+    fn type_supports_mixed_int_dispatch(&self, ty: &PhpType) -> bool {
+        let _ = self;
+        match ty {
+            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Str => true,
+            PhpType::Union(members) => members.iter().all(|member| self.type_supports_mixed_int_dispatch(member)),
+            _ => false,
+        }
+    }
+
+    fn is_union_with_mixed_int_dispatch(&self, ty: &PhpType) -> bool {
+        matches!(ty, PhpType::Union(_)) && self.type_supports_mixed_int_dispatch(ty)
+    }
+
     fn merged_assignment_type(&self, existing: &PhpType, new_ty: &PhpType) -> Option<PhpType> {
+        if self.type_accepts(existing, new_ty) {
+            return Some(existing.clone());
+        }
+        if matches!(existing, PhpType::Union(_)) {
+            return None;
+        }
         if existing == new_ty {
             return Some(existing.clone());
         }
@@ -2098,6 +2181,17 @@ impl Checker {
             crate::parser::ast::TypeExpr::Int => Ok(PhpType::Int),
             crate::parser::ast::TypeExpr::Float => Ok(PhpType::Float),
             crate::parser::ast::TypeExpr::Bool => Ok(PhpType::Bool),
+            crate::parser::ast::TypeExpr::Nullable(inner) => {
+                let inner_ty = self.resolve_type_expr(inner, span)?;
+                Ok(self.normalize_union_type(vec![inner_ty, PhpType::Void]))
+            }
+            crate::parser::ast::TypeExpr::Union(members) => {
+                let resolved = members
+                    .iter()
+                    .map(|member| self.resolve_type_expr(member, span))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(self.normalize_union_type(resolved))
+            }
             crate::parser::ast::TypeExpr::Ptr(target) => {
                 let normalized = match target {
                     Some(name) => self.normalize_pointer_target_type(name.as_str()).ok_or_else(|| {
@@ -2231,6 +2325,7 @@ impl Checker {
                 }
                 PhpType::Void
                 | PhpType::Mixed
+                | PhpType::Union(_)
                 | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Object(_)
@@ -2745,7 +2840,7 @@ impl Checker {
                         return Err(CompileError::new(
                             stmt.span,
                             &format!(
-                                "Type error: cannot reassign ${} from {:?} to {:?}",
+                                "Type error: cannot reassign ${} from {} to {}",
                                 name, existing, ty
                             ),
                         ));
@@ -2853,18 +2948,12 @@ impl Checker {
                 value,
             } => {
                 let declared_ty = self.resolve_type_expr(type_expr, stmt.span)?;
-                if !matches!(declared_ty, PhpType::Buffer(_)) {
-                    return Err(CompileError::new(
-                        stmt.span,
-                        "Typed local declarations currently support only buffer<T>",
-                    ));
-                }
                 let value_ty = self.infer_type(value, env)?;
-                if value_ty != declared_ty {
+                if !self.type_accepts(&declared_ty, &value_ty) {
                     return Err(CompileError::new(
                         stmt.span,
                         &format!(
-                            "Type error: cannot initialize ${} as {:?} with {:?}",
+                            "Type error: cannot initialize ${} as {} with {}",
                             name, declared_ty, value_ty
                         ),
                     ));
@@ -3462,7 +3551,11 @@ impl Checker {
             ExprKind::NullCoalesce { value, default } => {
                 let vt = self.infer_type(value, env)?;
                 let dt = self.infer_type(default, env)?;
-                Ok(wider_type_syntactic(&vt, &dt))
+                if Self::union_contains_void(&vt) {
+                    Ok(wider_type_syntactic(&self.strip_void_from_union(&vt), &dt))
+                } else {
+                    Ok(wider_type_syntactic(&vt, &dt))
+                }
             }
             ExprKind::ConstRef(name) => self.constants.get(name.as_str()).cloned().ok_or_else(|| {
                 CompileError::new(expr.span, &format!("Undefined constant: {}", name))
@@ -3614,11 +3707,11 @@ impl Checker {
                         let lt_ok = matches!(
                             lt,
                             PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
-                        );
+                        ) || self.is_union_with_mixed_int_dispatch(&lt);
                         let rt_ok = matches!(
                             rt,
                             PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
-                        );
+                        ) || self.is_union_with_mixed_int_dispatch(&rt);
                         if !lt_ok || !rt_ok {
                             return Err(CompileError::new(
                                 expr.span,
@@ -3631,11 +3724,11 @@ impl Checker {
                         let lt_ok = matches!(
                             lt,
                             PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
-                        );
+                        ) || self.is_union_with_mixed_int_dispatch(&lt);
                         let rt_ok = matches!(
                             rt,
                             PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
-                        );
+                        ) || self.is_union_with_mixed_int_dispatch(&rt);
                         if !lt_ok || !rt_ok {
                             return Err(CompileError::new(
                                 expr.span,
@@ -3663,11 +3756,11 @@ impl Checker {
                         let lt_ok = matches!(
                             lt,
                             PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
-                        );
+                        ) || self.is_union_with_mixed_int_dispatch(&lt);
                         let rt_ok = matches!(
                             rt,
                             PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
-                        );
+                        ) || self.is_union_with_mixed_int_dispatch(&rt);
                         if !lt_ok || !rt_ok {
                             return Err(CompileError::new(
                                 expr.span,
@@ -3687,8 +3780,10 @@ impl Checker {
                     | BinOp::BitXor
                     | BinOp::ShiftLeft
                     | BinOp::ShiftRight => {
-                        let lt_ok = matches!(lt, PhpType::Int | PhpType::Bool | PhpType::Void);
-                        let rt_ok = matches!(rt, PhpType::Int | PhpType::Bool | PhpType::Void);
+                        let lt_ok = matches!(lt, PhpType::Int | PhpType::Bool | PhpType::Void)
+                            || self.is_union_with_mixed_int_dispatch(&lt);
+                        let rt_ok = matches!(rt, PhpType::Int | PhpType::Bool | PhpType::Void)
+                            || self.is_union_with_mixed_int_dispatch(&rt);
                         if !lt_ok || !rt_ok {
                             return Err(CompileError::new(
                                 expr.span,
@@ -3701,11 +3796,11 @@ impl Checker {
                         let lt_ok = matches!(
                             lt,
                             PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
-                        );
+                        ) || self.is_union_with_mixed_int_dispatch(&lt);
                         let rt_ok = matches!(
                             rt,
                             PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
-                        );
+                        ) || self.is_union_with_mixed_int_dispatch(&rt);
                         if !lt_ok || !rt_ok {
                             return Err(CompileError::new(
                                 expr.span,

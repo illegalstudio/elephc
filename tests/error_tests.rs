@@ -231,10 +231,10 @@ fn test_error_packed_class_rejects_non_pod_field() {
 }
 
 #[test]
-fn test_error_typed_local_decl_currently_requires_buffer() {
+fn test_error_union_typed_local_rejects_invalid_initializer() {
     expect_error(
-        "<?php int $value = 1;",
-        "Typed local declarations currently support only buffer<T>",
+        "<?php int|string $value = 1.5;",
+        "cannot initialize $value",
     );
 }
 
@@ -243,6 +243,22 @@ fn test_error_buffer_new_rejects_non_pod_element_type() {
     expect_error(
         "<?php buffer<string> $names = buffer_new<string>(2);",
         "buffer<T> requires a POD scalar, pointer, or packed class element type",
+    );
+}
+
+#[test]
+fn test_error_buffer_new_rejects_union_element_type() {
+    expect_error(
+        "<?php buffer<int|string> $values = buffer_new<int|string>(2);",
+        "buffer<T> requires a POD scalar, pointer, or packed class element type",
+    );
+}
+
+#[test]
+fn test_error_packed_class_rejects_nullable_field() {
+    expect_error(
+        "<?php packed class MaybePoint { public ?int $x; }",
+        "Packed class fields must use POD scalars, pointers, or packed classes",
     );
 }
 
@@ -2580,5 +2596,13 @@ fn test_error_call_user_func_array_string_literal_rejects_ref_callback_params() 
     expect_error(
         "<?php function bump(&$n) { $n = $n + 1; } $value = 1; call_user_func_array(\"bump\", [$value]);",
         "does not support pass-by-reference callback parameters yet",
+    );
+}
+
+#[test]
+fn test_error_nullable_typed_local_rejects_invalid_reassignment() {
+    expect_error(
+        "<?php ?int $value = null; $value = \"x\";",
+        "cannot reassign $value",
     );
 }

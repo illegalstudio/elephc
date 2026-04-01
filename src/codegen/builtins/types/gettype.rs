@@ -14,7 +14,7 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("gettype()");
     let ty = emit_expr(&args[0], emitter, ctx, data);
-    if matches!(ty, PhpType::Mixed) {
+    if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
         let (integer_label, integer_len) = data.add_string(b"integer");
         let (double_label, double_len) = data.add_string(b"double");
         let (string_label, string_len) = data.add_string(b"string");
@@ -105,7 +105,7 @@ pub fn emit(
         PhpType::Pointer(_) => "pointer",
         PhpType::Buffer(_) => "buffer",
         PhpType::Packed(_) => "packed",
-        PhpType::Mixed => unreachable!("mixed handled above"),
+        PhpType::Mixed | PhpType::Union(_) => unreachable!("mixed handled above"),
     };
     let (label, len) = data.add_string(type_str.as_bytes());
     emitter.instruction(&format!("adrp x1, {}@PAGE", label));                   // load page address of type name string

@@ -288,17 +288,14 @@ Proper type system for PHP compatibility.
 - [x] Full namespace support
 - [ ] Comprehensive error recovery (multiple errors per compilation)
 - [ ] Warning system (unused variables, unreachable code)
-- [ ] Generators / `yield` — compile-time state machine transformation (struct holds locals + state index, `next()` dispatches via switch)
-- [ ] `yield from` delegation — forward iteration to an inner generator
 - [ ] Enums (`enum Color { Red; Green; Blue; }`) — backed enums with `->value`, `::from()`, `::cases()`
 - [ ] Named arguments (`foo(name: "Alice", age: 30)`) — reorder args at compile time based on parameter names
 - [x] First-class callable syntax (`strlen(...)`) — create closures from function names without string indirection
-- [ ] Union types (`int|string`) — tagged union with runtime type dispatch
-- [ ] Nullable types (`?int`) — sugar for `int|null`
 - [x] `match` with no-match error — runtime fatal when no arm matches and no default
 - [x] Readonly classes (`readonly class Point {}`) — all properties implicitly readonly
 - [ ] Constructor promotion (`public function __construct(public int $x)`) — declare + assign properties in constructor signature
-- [ ] Fibers — cooperative multitasking via `Fiber::start()`, `Fiber::suspend()`, `Fiber::resume()` (heap-allocated stack frames)
+- [x] Union types (`int|string`) — tagged union with runtime type dispatch
+- [x] Nullable types (`?int`) — sugar for `int|null`
 
 ## v0.18.x — Multi-platform and optimizations
 
@@ -357,6 +354,18 @@ Proper type system for PHP compatibility.
 - [ ] Proof of concept with one extension (e.g., `mbstring` or `curl`)
 - [ ] `--ext` flag to specify extension libraries at compile time
 - [ ] Documentation: how to bridge a PHP extension
+
+---
+
+## Future ideas
+
+Features that are feasible but complex. Not currently planned for any specific version — they will be considered when a concrete use case justifies the implementation effort.
+
+| Feature | Complexity | Notes |
+|---|---|---|
+| Generators / `yield` | High | Requires compile-time state machine transformation: every yield point becomes a switch case, all locals promoted to heap-allocated generator object. Edge cases with yield inside try/catch/finally are significant. |
+| `yield from` delegation | High | Depends on generators. Forwards iteration to an inner generator, propagating values and return. |
+| Fibers | Very high | Cooperative multitasking needs per-fiber stack allocation (~1MB each), custom context switch in assembly (save/restore x19-x28, d8-d15, SP), guard pages, and GC awareness of multiple stack roots. Best suited for async I/O workloads, not the current game/systems target. |
 
 ---
 

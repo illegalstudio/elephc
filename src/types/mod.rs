@@ -2,6 +2,7 @@ pub mod checker;
 pub mod traits;
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 
 use crate::errors::CompileError;
 use crate::parser::ast::{CType, ClassMethod, Program, Visibility};
@@ -25,6 +26,7 @@ pub enum PhpType {
     Object(String),
     Packed(String),
     Pointer(Option<String>), // None = opaque ptr, Some("Class") = typed ptr<Class>
+    Union(Vec<PhpType>),
 }
 
 impl PhpType {
@@ -44,6 +46,7 @@ impl PhpType {
             PhpType::Object(_) => 8,         // pointer to heap
             PhpType::Packed(_) => 8,         // metadata-only nominal type, usually accessed by pointer
             PhpType::Pointer(_) => 8,        // 64-bit address
+            PhpType::Union(_) => 8,          // boxed runtime-tagged payload (same storage as Mixed)
         }
     }
 
@@ -63,6 +66,7 @@ impl PhpType {
             PhpType::Object(_) => 1,
             PhpType::Packed(_) => 1,
             PhpType::Pointer(_) => 1,
+            PhpType::Union(_) => 1,
         }
     }
 
@@ -75,8 +79,50 @@ impl PhpType {
     pub fn is_refcounted(&self) -> bool {
         matches!(
             self,
-            PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+            PhpType::Mixed
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Object(_)
+                | PhpType::Union(_)
         )
+    }
+
+    /// Lower high-level checker-only types to the runtime representation used by codegen.
+    pub fn codegen_repr(&self) -> PhpType {
+        match self {
+            PhpType::Union(_) => PhpType::Mixed,
+            _ => self.clone(),
+        }
+    }
+}
+
+impl fmt::Display for PhpType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PhpType::Int => write!(f, "int"),
+            PhpType::Float => write!(f, "float"),
+            PhpType::Str => write!(f, "string"),
+            PhpType::Bool => write!(f, "bool"),
+            PhpType::Void => write!(f, "null"),
+            PhpType::Mixed => write!(f, "mixed"),
+            PhpType::Array(inner) => write!(f, "array<{}>", inner),
+            PhpType::AssocArray { key, value } => write!(f, "array<{}, {}>", key, value),
+            PhpType::Buffer(inner) => write!(f, "buffer<{}>", inner),
+            PhpType::Callable => write!(f, "callable"),
+            PhpType::Object(name) => write!(f, "{}", name),
+            PhpType::Packed(name) => write!(f, "packed {}", name),
+            PhpType::Pointer(Some(name)) => write!(f, "ptr<{}>", name),
+            PhpType::Pointer(None) => write!(f, "ptr"),
+            PhpType::Union(members) => {
+                for (i, member) in members.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, "|")?;
+                    }
+                    write!(f, "{}", member)?;
+                }
+                Ok(())
+            }
+        }
     }
 }
 

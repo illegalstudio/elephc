@@ -17,7 +17,26 @@ This document describes the PHP subset supported by elephc. The language aims to
 | `pointer` | Yes | 64-bit memory address. `ptr($var)`, `ptr_null()`. Echo prints `0x...` hex. |
 | `buffer<T>` | Extension | Contiguous heap buffer for POD scalars, pointers, or packed classes. `buffer_new<T>(len)`, `buffer_len($buf)`, `buffer_free($buf)`. |
 | `packed class` | Extension | Nominal POD record type with fixed compile-time field offsets. Intended for hot-path storage and typed pointer access. |
+| `int\|string` | Yes | Union type — variable accepts any of the listed types. Lowered to Mixed at runtime. `int\|string $x = 42;` |
+| `?int` | Yes | Nullable shorthand — sugar for `int\|null`. `?int $x = null;` |
 | `resource` | No | File handles are currently modeled as integer file descriptors (`int`), not as a separate runtime resource type. |
+
+### Typed local declarations
+
+elephc supports explicit type annotations on local variables:
+
+```php
+<?php
+int|string $value = 1;
+?int $maybe = null;
+```
+
+Rules in the current implementation:
+- union types are supported in typed local declarations, for example `int|string`
+- nullable shorthand `?T` is supported as sugar for `T|null`
+- at runtime these values are lowered to the compiler's boxed tagged representation, so operations such as `gettype()`, `??`, string coercion, strict comparison, and truthiness dispatch behave dynamically
+- `?T|U` is not accepted; write `T|U|null` explicitly instead
+- `packed class` fields and `buffer<T>` element types remain restricted to POD layouts and therefore do not accept union or nullable type annotations
 
 ### Null behavior
 

@@ -33,8 +33,15 @@ pub fn emit_mixed_cast_bool(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_cast_bool_done");                         // return the integer truthiness result
 
     emitter.label("__rt_mixed_cast_bool_from_string");
-    emitter.instruction("cmp x2, #0");                                          // compare the string length against zero
-    emitter.instruction("cset x0, ne");                                         // strings are truthy when non-empty under current cast rules
+    emitter.instruction("cbz x2, __rt_mixed_cast_bool_done");                   // empty strings are falsy
+    emitter.instruction("cmp x2, #1");                                          // check whether the string length is exactly one byte
+    emitter.instruction("b.ne __rt_mixed_cast_bool_string_truthy");             // strings longer than one byte are truthy
+    emitter.instruction("ldrb w9, [x1]");                                       // load the first byte of the string payload
+    emitter.instruction("cmp w9, #48");                                         // compare against ASCII '0'
+    emitter.instruction("cset x0, ne");                                         // the one-byte string \"0\" is falsy, everything else is truthy
+    emitter.instruction("b __rt_mixed_cast_bool_done");                         // return the string truthiness result
+    emitter.label("__rt_mixed_cast_bool_string_truthy");
+    emitter.instruction("mov x0, #1");                                          // non-empty strings other than \"0\" are truthy
     emitter.instruction("b __rt_mixed_cast_bool_done");                         // return the string truthiness result
 
     emitter.label("__rt_mixed_cast_bool_from_float");

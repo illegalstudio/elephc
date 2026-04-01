@@ -44,7 +44,7 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
             }
         }
         Token::LBracket => parse_list_unpack(tokens, pos, span),
-        Token::Identifier(_) | Token::Self_ | Token::Parent | Token::Backslash => {
+        Token::Identifier(_) | Token::Self_ | Token::Parent | Token::Backslash | Token::Question => {
             if looks_like_typed_assign(tokens, *pos) {
                 return parse_typed_assign(tokens, pos, span);
             }
@@ -600,6 +600,41 @@ fn parse_typed_assign(
 }
 
 pub(crate) fn parse_type_expr(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<TypeExpr, CompileError> {
+    let mut ty = if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Question)) {
+        *pos += 1;
+        TypeExpr::Nullable(Box::new(parse_atomic_type_expr(tokens, pos, span)?))
+    } else {
+        parse_atomic_type_expr(tokens, pos, span)?
+    };
+
+    if matches!(ty, TypeExpr::Nullable(_))
+        && matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Pipe))
+    {
+        return Err(CompileError::new(
+            span,
+            "Nullable shorthand cannot be combined directly with union types; write T|null",
+        ));
+    }
+
+    let mut members = vec![ty];
+    while matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Pipe)) {
+        *pos += 1;
+        members.push(parse_atomic_type_expr(tokens, pos, span)?);
+    }
+
+    if members.len() == 1 {
+        ty = members.pop().expect("type member exists");
+        Ok(ty)
+    } else {
+        Ok(TypeExpr::Union(members))
+    }
+}
+
+fn parse_atomic_type_expr(
     tokens: &[(Token, Span)],
     pos: &mut usize,
     span: Span,

@@ -157,7 +157,7 @@ pub fn emit(
         PhpType::Str => emit_var_dump_string(emitter, data),
         PhpType::Bool => emit_var_dump_bool(emitter, ctx, data),
         PhpType::Void => emit_var_dump_null(emitter, data),
-        PhpType::Mixed => {
+        PhpType::Mixed | PhpType::Union(_) => {
             let int_case = ctx.next_label("vd_mixed_int");
             let string_case = ctx.next_label("vd_mixed_string");
             let float_case = ctx.next_label("vd_mixed_float");

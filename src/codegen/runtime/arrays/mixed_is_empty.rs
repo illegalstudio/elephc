@@ -46,8 +46,13 @@ pub fn emit_mixed_is_empty(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_is_empty_string");
     emitter.instruction("ldr x10, [x0, #16]");                                  // load the string length from value_hi
-    emitter.instruction("cmp x10, #0");                                         // compare the string length against zero
-    emitter.instruction("cset x0, eq");                                         // return 1 when the string length is zero
+    emitter.instruction("cbz x10, __rt_mixed_is_empty_yes");                    // empty strings are empty
+    emitter.instruction("cmp x10, #1");                                         // check whether the string length is exactly one byte
+    emitter.instruction("b.ne __rt_mixed_is_empty_no");                         // longer strings are not empty
+    emitter.instruction("ldr x11, [x0, #8]");                                   // load the string pointer from value_lo
+    emitter.instruction("ldrb w12, [x11]");                                     // load the first byte of the string payload
+    emitter.instruction("cmp w12, #48");                                        // compare against ASCII '0'
+    emitter.instruction("cset x0, eq");                                         // the one-byte string \"0\" is empty, anything else is not
     emitter.instruction("ret");                                                 // finish string empty() evaluation
 
     emitter.label("__rt_mixed_is_empty_float");

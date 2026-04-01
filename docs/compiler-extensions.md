@@ -273,6 +273,7 @@ packed class Enemy {
 
 Constraints:
 - Fields must be `int`, `float`, `bool`, `ptr`, or another `packed class`
+- Union and nullable annotations are not allowed in packed fields because they do not have a fixed POD layout
 - No strings, arrays, objects, or mixed values
 - No methods, constructors, inheritance, traits, or interfaces
 - Only `public` visibility is accepted (optional and redundant — all fields are public)
@@ -292,6 +293,8 @@ buffer<float> $speeds = buffer_new<float>(1000);
 // Packed class buffer (Array of Structs)
 buffer<Enemy> $enemies = buffer_new<Enemy>(256);
 ```
+
+`buffer<T>` only accepts POD scalar, pointer, or packed-record element types. Union types such as `buffer<int|string>` and nullable forms such as `buffer<?int>` are rejected because buffer elements must have a single fixed stride.
 
 ### Reading and writing
 

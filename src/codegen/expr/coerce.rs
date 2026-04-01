@@ -34,7 +34,7 @@ pub(super) fn coerce_to_string(
             // -- null coerces to empty string in PHP --
             emitter.instruction("mov x2, #0");                                  // null produces empty string (length = 0)
         }
-        PhpType::Mixed => {
+        PhpType::Mixed | PhpType::Union(_) => {
             // -- mixed strings dispatch on the boxed payload at runtime --
             emitter.instruction("bl __rt_mixed_cast_string");                   // cast the boxed mixed payload to string in x1/x2
         }
@@ -131,5 +131,8 @@ pub(super) fn coerce_to_truthiness(emitter: &mut Emitter, ctx: &mut Context, ty:
         // -- float truthiness: 0.0 is falsy --
         emitter.instruction("fcmp d0, #0.0");                                   // compare float against zero
         emitter.instruction("cset x0, ne");                                     // x0=1 if nonzero (truthy), 0 if zero
+    } else if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+        // -- mixed/union truthiness dispatches on the boxed payload at runtime --
+        emitter.instruction("bl __rt_mixed_cast_bool");                         // normalize the boxed mixed payload to PHP truthiness
     }
 }

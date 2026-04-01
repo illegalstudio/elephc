@@ -424,6 +424,8 @@ pub enum TypeExpr {
     Ptr(Option<Name>),
     Buffer(Box<TypeExpr>),
     Named(Name),
+    Nullable(Box<TypeExpr>),
+    Union(Vec<TypeExpr>),
 }
 
 // --- FFI ---

@@ -13,6 +13,11 @@ pub(super) fn widen_codegen_type(a: &PhpType, b: &PhpType) -> PhpType {
     if a == b {
         return a.clone();
     }
+    if matches!(a, PhpType::Mixed | PhpType::Union(_))
+        || matches!(b, PhpType::Mixed | PhpType::Union(_))
+    {
+        return PhpType::Mixed;
+    }
     if *a == PhpType::Str || *b == PhpType::Str {
         return PhpType::Str;
     }
@@ -38,7 +43,9 @@ pub(super) fn coerce_result_to_type(
     if source_ty == target_ty {
         return;
     }
-    if *target_ty == PhpType::Str {
+    if matches!(target_ty, PhpType::Mixed | PhpType::Union(_)) {
+        crate::codegen::emit_box_current_value_as_mixed(emitter, source_ty);
+    } else if *target_ty == PhpType::Str {
         super::coerce_to_string(emitter, ctx, data, source_ty);
     } else if *target_ty == PhpType::Float
         && matches!(source_ty, PhpType::Int | PhpType::Bool | PhpType::Void)

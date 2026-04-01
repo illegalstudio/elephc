@@ -410,6 +410,7 @@ pub(super) fn emit_closure_call(
             PhpType::Bool
             | PhpType::Int
             | PhpType::Mixed
+            | PhpType::Union(_)
             | PhpType::Array(_)
             | PhpType::AssocArray { .. }
             | PhpType::Buffer(_)

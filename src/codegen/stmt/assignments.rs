@@ -171,6 +171,7 @@ pub(super) fn emit_property_assign_stmt(
         PhpType::Bool
         | PhpType::Int
         | PhpType::Mixed
+        | PhpType::Union(_)
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
         | PhpType::Buffer(_)
@@ -300,7 +301,7 @@ pub(super) fn emit_property_assign_stmt(
             emitter.instruction(&format!("str x10, [x9, #{}]", offset));        // store value into property
             emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8));    // clear runtime property metadata slot
         }
-        PhpType::Mixed => {
+        PhpType::Mixed | PhpType::Union(_) => {
             emitter.instruction("ldr x10, [sp], #16");                          // pop saved boxed mixed value
             emitter.instruction(&format!("str x10, [x9, #{}]", offset));        // store boxed mixed pointer into property
             emitter.instruction("mov x10, #7");                                 // runtime property tag 7 = mixed
