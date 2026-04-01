@@ -547,13 +547,13 @@ fn build_method_sig(method: &crate::parser::ast::ClassMethod) -> FunctionSig {
     let defaults: Vec<Option<Expr>> = method.params.iter().map(|(_, d, _)| d.clone()).collect();
     let ref_params: Vec<bool> = method.params.iter().map(|(_, _, r)| *r).collect();
     let return_type = infer_return_type_syntactic(&method.body);
-    FunctionSig {
+    Checker::callable_wrapper_sig(&FunctionSig {
         params,
         defaults,
         return_type,
         ref_params,
         variadic: method.variadic.clone(),
-    }
+    })
 }
 
 fn build_constructor_param_map(methods: &[crate::parser::ast::ClassMethod]) -> Vec<Option<String>> {
@@ -588,7 +588,16 @@ fn visibility_rank(visibility: &Visibility) -> u8 {
 }
 
 fn required_param_count(sig: &FunctionSig) -> usize {
-    sig.defaults.iter().filter(|default| default.is_none()).count()
+    sig.defaults
+        .iter()
+        .enumerate()
+        .filter(|(idx, default)| {
+            if sig.variadic.is_some() && *idx + 1 == sig.defaults.len() {
+                return false;
+            }
+            default.is_none()
+        })
+        .count()
 }
 
 fn validate_signature_compatibility(
@@ -1665,6 +1674,14 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                         .map(|(_, t)| t.clone())
                         .unwrap_or(PhpType::Int);
                     method_env.insert(pname.clone(), ty);
+                }
+                if let Some(variadic_name) = &method.variadic {
+                    let ty = sig_params
+                        .as_ref()
+                        .and_then(|p| p.get(method.params.len()))
+                        .map(|(_, t)| t.clone())
+                        .unwrap_or(PhpType::Array(Box::new(PhpType::Int)));
+                    method_env.insert(variadic_name.clone(), ty);
                 }
                 // For __construct: infer param types from property types
                 // This updates both the env (for body type-checking) and the sig
@@ -3880,12 +3897,26 @@ impl Checker {
                         .unwrap_or_else(|| class_name.clone());
                     if let Some(class_info) = self.classes.get_mut(&impl_class_name) {
                         if let Some(sig) = class_info.methods.get_mut(method) {
+                            let regular_param_count = if sig.variadic.is_some() {
+                                sig.params.len().saturating_sub(1)
+                            } else {
+                                sig.params.len()
+                            };
                             for (i, arg_ty) in arg_types.iter().enumerate() {
-                                if i < sig.params.len()
+                                if i < regular_param_count
                                     && sig.params[i].1 == PhpType::Int
                                     && *arg_ty != PhpType::Int
                                 {
                                     sig.params[i].1 = arg_ty.clone();
+                                }
+                            }
+                            if sig.variadic.is_some() && arg_types.len() > regular_param_count {
+                                let mut elem_ty = arg_types[regular_param_count].clone();
+                                for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
+                                    elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
+                                }
+                                if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
+                                    **existing_elem_ty = wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
                                 }
                             }
                             return Ok(sig.return_type.clone());
@@ -4048,12 +4079,26 @@ impl Checker {
                 };
                 if let Some(class_info) = self.classes.get_mut(class_name) {
                     if let Some(sig) = class_info.static_methods.get_mut(method) {
+                        let regular_param_count = if sig.variadic.is_some() {
+                            sig.params.len().saturating_sub(1)
+                        } else {
+                            sig.params.len()
+                        };
                         for (i, arg_ty) in arg_types.iter().enumerate() {
-                            if i < sig.params.len()
+                            if i < regular_param_count
                                 && sig.params[i].1 == PhpType::Int
                                 && *arg_ty != PhpType::Int
                             {
                                 sig.params[i].1 = arg_ty.clone();
+                            }
+                        }
+                        if sig.variadic.is_some() && arg_types.len() > regular_param_count {
+                            let mut elem_ty = arg_types[regular_param_count].clone();
+                            for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
+                                elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
+                            }
+                            if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
+                                **existing_elem_ty = wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
                             }
                         }
                         return Ok(sig.return_type.clone());
@@ -4065,12 +4110,26 @@ impl Checker {
                         .get_mut(&direct_impl_class_name)
                         .and_then(|class_info| class_info.methods.get_mut(method))
                     {
+                        let regular_param_count = if sig.variadic.is_some() {
+                            sig.params.len().saturating_sub(1)
+                        } else {
+                            sig.params.len()
+                        };
                         for (i, arg_ty) in arg_types.iter().enumerate() {
-                            if i < sig.params.len()
+                            if i < regular_param_count
                                 && sig.params[i].1 == PhpType::Int
                                 && *arg_ty != PhpType::Int
                             {
                                 sig.params[i].1 = arg_ty.clone();
+                            }
+                        }
+                        if sig.variadic.is_some() && arg_types.len() > regular_param_count {
+                            let mut elem_ty = arg_types[regular_param_count].clone();
+                            for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
+                                elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
+                            }
+                            if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
+                                **existing_elem_ty = wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
                             }
                         }
                         return Ok(sig.return_type.clone());

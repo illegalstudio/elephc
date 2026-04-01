@@ -78,49 +78,66 @@ pub fn generate(
                 }
                 let (label, sig) = if method.is_static {
                     let label = static_method_symbol(class_name, &method.name);
-                    // Use param types from ClassInfo sig (set by type checker)
                     let class_static_sig = class_info.static_methods.get(&method.name);
                     let mut params: Vec<(String, PhpType)> =
                         vec![("__elephc_called_class_id".to_string(), PhpType::Int)];
-                    params.extend(method.params.iter().enumerate().map(|(i, (n, _, _))| {
-                        let ty = class_static_sig
-                            .and_then(|s| s.params.get(i))
-                            .map(|(_, t)| t.clone())
-                            .unwrap_or(PhpType::Int);
-                        (n.clone(), ty)
-                    }));
+                    if let Some(sig) = class_static_sig {
+                        params.extend(sig.params.clone());
+                    } else {
+                        params.extend(method.params.iter().map(|(n, _, _)| (n.clone(), PhpType::Int)));
+                    }
                     let mut defaults: Vec<Option<crate::parser::ast::Expr>> = vec![None];
-                    defaults.extend(method.params.iter().map(|(_, d, _)| d.clone()));
+                    if let Some(sig) = class_static_sig {
+                        defaults.extend(sig.defaults.clone());
+                    } else {
+                        defaults.extend(method.params.iter().map(|(_, d, _)| d.clone()));
+                        if method.variadic.is_some() {
+                            defaults.push(None);
+                        }
+                    }
                     let mut ref_params: Vec<bool> = vec![false];
-                    ref_params.extend(method.params.iter().map(|(_, _, r)| *r));
-                    let return_type = class_info
-                        .static_methods
-                        .get(&method.name)
+                    if let Some(sig) = class_static_sig {
+                        ref_params.extend(sig.ref_params.clone());
+                    } else {
+                        ref_params.extend(method.params.iter().map(|(_, _, r)| *r));
+                        if method.variadic.is_some() {
+                            ref_params.push(false);
+                        }
+                    }
+                    let return_type = class_static_sig
                         .map(|s| s.return_type.clone())
                         .unwrap_or(PhpType::Int);
                     (label, FunctionSig { params, defaults, return_type, ref_params, variadic: method.variadic.clone() })
                 } else {
                     let label = method_symbol(class_name, &method.name);
-                    // $this is the first parameter
+                    let class_method_sig = class_info.methods.get(&method.name);
                     let mut params: Vec<(String, PhpType)> = vec![
                         ("this".to_string(), PhpType::Object(class_name.clone())),
                     ];
-                    // Use param types from ClassInfo sig (set by type checker post-pass)
-                    let class_method_sig = class_info.methods.get(&method.name);
-                    params.extend(method.params.iter().enumerate().map(|(i, (n, _, _))| {
-                        let ty = class_method_sig
-                            .and_then(|s| s.params.get(i))
-                            .map(|(_, t)| t.clone())
-                            .unwrap_or(PhpType::Int);
-                        (n.clone(), ty)
-                    }));
+                    if let Some(sig) = class_method_sig {
+                        params.extend(sig.params.clone());
+                    } else {
+                        params.extend(method.params.iter().map(|(n, _, _)| (n.clone(), PhpType::Int)));
+                    }
                     let mut defaults: Vec<Option<crate::parser::ast::Expr>> = vec![None]; // $this has no default
-                    defaults.extend(method.params.iter().map(|(_, d, _)| d.clone()));
+                    if let Some(sig) = class_method_sig {
+                        defaults.extend(sig.defaults.clone());
+                    } else {
+                        defaults.extend(method.params.iter().map(|(_, d, _)| d.clone()));
+                        if method.variadic.is_some() {
+                            defaults.push(None);
+                        }
+                    }
                     let mut ref_params: Vec<bool> = vec![false]; // $this is not a ref
-                    ref_params.extend(method.params.iter().map(|(_, _, r)| *r));
-                    let return_type = class_info
-                        .methods
-                        .get(&method.name)
+                    if let Some(sig) = class_method_sig {
+                        ref_params.extend(sig.ref_params.clone());
+                    } else {
+                        ref_params.extend(method.params.iter().map(|(_, _, r)| *r));
+                        if method.variadic.is_some() {
+                            ref_params.push(false);
+                        }
+                    }
+                    let return_type = class_method_sig
                         .map(|s| s.return_type.clone())
                         .unwrap_or(PhpType::Int);
                     (label, FunctionSig { params, defaults, return_type, ref_params, variadic: method.variadic.clone() })

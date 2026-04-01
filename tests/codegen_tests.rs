@@ -12066,6 +12066,8 @@ echo strlen($home) > 0 ? "ok" : "empty";
 fn test_ffi_sdl_init_and_ticks() {
     let out = compile_and_run(
         r#"<?php
+putenv("SDL_VIDEODRIVER=dummy");
+
 extern "SDL2" {
     function SDL_Init(int $flags): int;
     function SDL_Quit(): void;
@@ -12083,6 +12085,43 @@ SDL_Quit();
 "#,
     );
     assert_eq!(out, "init|ticks");
+}
+
+#[test]
+fn test_variadic_instance_method() {
+    let out = compile_and_run(
+        r#"<?php
+class Counter {
+    public function headAndCount($a, ...$rest) {
+        echo $a;
+        echo ":";
+        echo count($rest);
+    }
+}
+
+$counter = new Counter();
+$counter->headAndCount(7, 8, 9);
+"#,
+    );
+    assert_eq!(out, "7:2");
+}
+
+#[test]
+fn test_variadic_static_method() {
+    let out = compile_and_run(
+        r#"<?php
+class Counter {
+    public static function headAndCount($a, ...$rest) {
+        echo $a;
+        echo ":";
+        echo count($rest);
+    }
+}
+
+Counter::headAndCount(7, 8, 9);
+"#,
+    );
+    assert_eq!(out, "7:2");
 }
 
 #[test]
