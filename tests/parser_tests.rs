@@ -1738,3 +1738,37 @@ fn test_parse_first_class_callable_static_method() {
         other => panic!("Expected expression statement, got {:?}", other),
     }
 }
+
+#[test]
+fn test_parse_nullable_typed_assign() {
+    let stmts = parse_source("<?php ?int $value = null;");
+    match &stmts[0].kind {
+        StmtKind::TypedAssign { type_expr, name, value } => {
+            assert_eq!(name, "value");
+            assert_eq!(type_expr, &TypeExpr::Nullable(Box::new(TypeExpr::Int)));
+            assert_eq!(value.kind, ExprKind::Null);
+        }
+        other => panic!("Expected typed assign, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_union_typed_assign() {
+    let stmts = parse_source("<?php int|string $value = 1;");
+    match &stmts[0].kind {
+        StmtKind::TypedAssign { type_expr, name, value } => {
+            assert_eq!(name, "value");
+            assert_eq!(
+                type_expr,
+                &TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::Named(Name::unqualified("string"))])
+            );
+            assert_eq!(value.kind, ExprKind::IntLiteral(1));
+        }
+        other => panic!("Expected typed assign, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_nullable_shorthand_cannot_be_combined_with_union() {
+    assert!(parse_fails("<?php ?int|string $value = null;"));
+}

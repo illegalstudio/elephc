@@ -19,6 +19,23 @@ This document describes the PHP subset supported by elephc. The language aims to
 | `packed class` | Extension | Nominal POD record type with fixed compile-time field offsets. Intended for hot-path storage and typed pointer access. |
 | `resource` | No | File handles are currently modeled as integer file descriptors (`int`), not as a separate runtime resource type. |
 
+### Typed local declarations
+
+elephc supports explicit type annotations on local variables:
+
+```php
+<?php
+int|string $value = 1;
+?int $maybe = null;
+```
+
+Rules in the current implementation:
+- union types are supported in typed local declarations, for example `int|string`
+- nullable shorthand `?T` is supported as sugar for `T|null`
+- at runtime these values are lowered to the compiler's boxed tagged representation, so operations such as `gettype()`, `??`, string coercion, strict comparison, and truthiness dispatch behave dynamically
+- `?T|U` is not accepted; write `T|U|null` explicitly instead
+- `packed class` fields and `buffer<T>` element types remain restricted to POD layouts and therefore do not accept union or nullable type annotations
+
 ### Null behavior
 
 ```php

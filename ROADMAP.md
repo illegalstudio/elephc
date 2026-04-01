@@ -294,8 +294,8 @@ Proper type system for PHP compatibility.
 - [x] `match` with no-match error — runtime fatal when no arm matches and no default
 - [x] Readonly classes (`readonly class Point {}`) — all properties implicitly readonly
 - [ ] Constructor promotion (`public function __construct(public int $x)`) — declare + assign properties in constructor signature
-- [ ] Union types (`int|string`) — tagged union with runtime type dispatch
-- [ ] Nullable types (`?int`) — sugar for `int|null`
+- [x] Union types (`int|string`) — tagged union with runtime type dispatch
+- [x] Nullable types (`?int`) — sugar for `int|null`
 
 ## v0.18.x — Multi-platform and optimizations
 

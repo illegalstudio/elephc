@@ -1058,3 +1058,23 @@ fn test_lex_extern_keyword() {
     assert!(t.contains(&Token::Extern));
     assert!(t.contains(&Token::Function));
 }
+
+#[test]
+fn test_nullable_and_union_type_tokens() {
+    let t = tokens("<?php ?int|string $value = null;");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Question,
+            Token::Identifier("int".into()),
+            Token::Pipe,
+            Token::Identifier("string".into()),
+            Token::Variable("value".into()),
+            Token::Assign,
+            Token::Null,
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
