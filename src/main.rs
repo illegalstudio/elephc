@@ -190,7 +190,7 @@ fn main() {
         }
     };
 
-    let asm = codegen::generate(
+    let (user_asm, runtime_asm) = codegen::generate(
         &ast,
         &check_result.global_env,
         &check_result.functions,
@@ -211,6 +211,11 @@ fn main() {
             extra_link_libs.push(lib.clone());
         }
     }
+
+    // Concatenate user + runtime into a single assembly file
+    let mut asm = user_asm;
+    asm.push('\n');
+    asm.push_str(&runtime_asm);
 
     if let Err(e) = fs::write(&asm_path, &asm) {
         eprintln!("Error writing '{}': {}", asm_path.display(), e);
