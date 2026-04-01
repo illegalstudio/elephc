@@ -580,7 +580,7 @@ fn parse_function_decl(
     Ok(Stmt::new(StmtKind::FunctionDecl { name, params, variadic, return_type, body }, span))
 }
 
-fn looks_like_typed_param(tokens: &[(Token, Span)], pos: usize) -> bool {
+pub(crate) fn looks_like_typed_param(tokens: &[(Token, Span)], pos: usize) -> bool {
     let mut probe = pos;
     match parse_type_expr(tokens, &mut probe, tokens[pos].1) {
         Ok(_) => matches!(tokens.get(probe).map(|(t, _)| t), Some(Token::Variable(_))),
@@ -675,6 +675,14 @@ fn parse_atomic_type_expr(
         Some(Token::Identifier(name)) if matches!(name.as_str(), "bool" | "boolean") => {
             *pos += 1;
             Ok(TypeExpr::Bool)
+        }
+        Some(Token::Identifier(name)) if name.as_str() == "string" => {
+            *pos += 1;
+            Ok(TypeExpr::Str)
+        }
+        Some(Token::Identifier(name)) if name.as_str() == "void" => {
+            *pos += 1;
+            Ok(TypeExpr::Void)
         }
         Some(Token::Identifier(name)) if matches!(name.as_str(), "ptr" | "pointer") => {
             *pos += 1;

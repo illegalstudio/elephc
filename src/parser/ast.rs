@@ -431,6 +431,8 @@ pub enum TypeExpr {
     Int,
     Float,
     Bool,
+    Str,
+    Void,
     Ptr(Option<Name>),
     Buffer(Box<TypeExpr>),
     Named(Name),

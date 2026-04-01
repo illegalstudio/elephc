@@ -589,6 +589,11 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                         }
                         continue;
                     }
+                    let type_ann = if crate::parser::stmt::looks_like_typed_param(tokens, *pos) {
+                        Some(crate::parser::stmt::parse_type_expr(tokens, pos, span)?)
+                    } else {
+                        None
+                    };
                     match tokens.get(*pos).map(|(t, _)| t) {
                         Some(Token::Variable(n)) => {
                             let n = n.clone();
@@ -600,7 +605,7 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                             } else {
                                 None
                             };
-                            params.push((n, None, default, is_ref));
+                            params.push((n, type_ann, default, is_ref));
                         }
                         _ => return Err(CompileError::new(span, "Expected parameter variable")),
                     }
@@ -682,6 +687,11 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                     }
                     continue;
                 }
+                let type_ann = if crate::parser::stmt::looks_like_typed_param(tokens, *pos) {
+                    Some(crate::parser::stmt::parse_type_expr(tokens, pos, span)?)
+                } else {
+                    None
+                };
                 match tokens.get(*pos).map(|(t, _)| t) {
                     Some(Token::Variable(n)) => {
                         let n = n.clone();
@@ -693,7 +703,7 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                         } else {
                             None
                         };
-                        params.push((n, None, default, is_ref));
+                        params.push((n, type_ann, default, is_ref));
                     }
                     _ => return Err(CompileError::new(span, "Expected parameter variable")),
                 }

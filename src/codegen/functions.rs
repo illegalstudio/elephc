@@ -964,6 +964,8 @@ fn resolve_buffer_element_type(type_expr: &TypeExpr, ctx: &Context) -> PhpType {
                 PhpType::Int
             }
         }
+        TypeExpr::Str => PhpType::Str,
+        TypeExpr::Void => PhpType::Void,
         TypeExpr::Buffer(inner) => PhpType::Buffer(Box::new(resolve_buffer_element_type(inner, ctx))),
         TypeExpr::Nullable(_) | TypeExpr::Union(_) => PhpType::Int,
     }
@@ -974,6 +976,8 @@ fn codegen_declared_type(type_expr: &TypeExpr, ctx: &Context) -> PhpType {
         TypeExpr::Int => PhpType::Int,
         TypeExpr::Float => PhpType::Float,
         TypeExpr::Bool => PhpType::Bool,
+        TypeExpr::Str => PhpType::Str,
+        TypeExpr::Void => PhpType::Void,
         TypeExpr::Ptr(target) => {
             PhpType::Pointer(target.as_ref().map(|name| name.as_str().to_string()))
         }

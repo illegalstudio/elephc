@@ -347,6 +347,25 @@ impl Checker {
                         ),
                     ));
                 }
+                // Validate against declared type if present
+                if let Some(Some(type_ann)) = decl.param_types.get(arg_idx) {
+                    if let Some(declared_ty) = super::resolve_type_expr_simple(type_ann) {
+                        if !self.type_accepts(&declared_ty, &ty) {
+                            let param_name = decl.params.get(arg_idx).map(String::as_str).unwrap_or("arg");
+                            return Err(CompileError::new(
+                                arg.span,
+                                &format!(
+                                    "Function '{}' parameter ${} expects {:?}, got {:?}",
+                                    name, param_name, declared_ty, ty
+                                ),
+                            ));
+                        }
+                        // Use declared type for the signature (not inferred from arg)
+                        param_types.push((decl.params[arg_idx].clone(), declared_ty));
+                        arg_idx += 1;
+                        continue;
+                    }
+                }
                 param_types.push((decl.params[arg_idx].clone(), ty));
                 arg_idx += 1;
             } else {
@@ -416,8 +435,22 @@ impl Checker {
             Ok(())
         })?;
 
-        // Pick the widest return type across all branches
-        if !all_return_types.is_empty() {
+        // Use declared return type if present, otherwise infer from body
+        if let Some(declared_ret) = decl.return_type.as_ref().and_then(super::resolve_type_expr_simple) {
+            // Validate that all return statements are compatible with the declared type
+            for rt in &all_return_types {
+                if !self.type_accepts(&declared_ret, rt) {
+                    return Err(CompileError::new(
+                        crate::span::Span::dummy(),
+                        &format!(
+                            "Function '{}' declared return type {:?} but returns {:?}",
+                            name, declared_ret, rt
+                        ),
+                    ));
+                }
+            }
+            return_type = declared_ret;
+        } else if !all_return_types.is_empty() {
             return_type = all_return_types[0].clone();
             for rt in &all_return_types[1..] {
                 return_type = Self::wider_type(&return_type, rt);

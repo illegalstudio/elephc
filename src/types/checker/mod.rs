@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use crate::errors::CompileError;
 use crate::parser::ast::{
     BinOp, CallableTarget, CType, CastType, ClassMethod, ClassProperty, Expr, ExprKind, Program,
-    StaticReceiver, Stmt, StmtKind, Visibility,
+    StaticReceiver, Stmt, StmtKind, TypeExpr, Visibility,
 };
 use crate::types::{
     ctype_stack_size, ctype_to_php_type, first_class_callable_builtin_sig, packed_type_size,
@@ -289,9 +289,11 @@ pub(crate) struct Checker {
 #[derive(Clone)]
 pub(crate) struct FnDecl {
     pub params: Vec<String>,
+    pub param_types: Vec<Option<TypeExpr>>,
     pub defaults: Vec<Option<Expr>>,
     pub ref_params: Vec<bool>,
     pub variadic: Option<String>,
+    pub return_type: Option<TypeExpr>,
     pub body: Vec<Stmt>,
 }
 
@@ -545,15 +547,49 @@ fn validate_magic_method_contracts(checker: &Checker) -> Result<(), CompileError
     Ok(())
 }
 
+pub(crate) fn resolve_type_expr_simple(type_expr: &TypeExpr) -> Option<PhpType> {
+    match type_expr {
+        TypeExpr::Int => Some(PhpType::Int),
+        TypeExpr::Float => Some(PhpType::Float),
+        TypeExpr::Bool => Some(PhpType::Bool),
+        TypeExpr::Str => Some(PhpType::Str),
+        TypeExpr::Void => Some(PhpType::Void),
+        TypeExpr::Nullable(inner) => {
+            resolve_type_expr_simple(inner).map(|t| PhpType::Union(vec![t, PhpType::Void]))
+        }
+        TypeExpr::Union(members) => {
+            let resolved: Option<Vec<PhpType>> = members.iter().map(resolve_type_expr_simple).collect();
+            resolved.map(PhpType::Union)
+        }
+        TypeExpr::Ptr(target) => Some(PhpType::Pointer(
+            target.as_ref().map(|n| n.as_str().to_string()),
+        )),
+        TypeExpr::Named(name) => Some(PhpType::Object(name.as_str().to_string())),
+        TypeExpr::Buffer(inner) => {
+            resolve_type_expr_simple(inner).map(|t| PhpType::Buffer(Box::new(t)))
+        }
+    }
+}
+
 fn build_method_sig(method: &crate::parser::ast::ClassMethod) -> FunctionSig {
     let params: Vec<(String, PhpType)> = method
         .params
         .iter()
-        .map(|(n, _, _, _)| (n.clone(), PhpType::Int))
+        .map(|(n, type_ann, _, _)| {
+            let ty = type_ann
+                .as_ref()
+                .and_then(resolve_type_expr_simple)
+                .unwrap_or(PhpType::Int);
+            (n.clone(), ty)
+        })
         .collect();
     let defaults: Vec<Option<Expr>> = method.params.iter().map(|(_, _, d, _)| d.clone()).collect();
     let ref_params: Vec<bool> = method.params.iter().map(|(_, _, _, r)| *r).collect();
-    let return_type = infer_return_type_syntactic(&method.body);
+    let return_type = method
+        .return_type
+        .as_ref()
+        .and_then(resolve_type_expr_simple)
+        .unwrap_or_else(|| infer_return_type_syntactic(&method.body));
     Checker::callable_wrapper_sig(&FunctionSig {
         params,
         defaults,
@@ -1581,20 +1617,24 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
             name,
             params,
             variadic,
+            return_type,
             body,
             ..
         } = &stmt.kind
         {
             let param_names: Vec<String> = params.iter().map(|(n, _, _, _)| n.clone()).collect();
+            let param_type_anns: Vec<Option<TypeExpr>> = params.iter().map(|(_, t, _, _)| t.clone()).collect();
             let defaults: Vec<Option<Expr>> = params.iter().map(|(_, _, d, _)| d.clone()).collect();
             let ref_flags: Vec<bool> = params.iter().map(|(_, _, _, r)| *r).collect();
             checker.fn_decls.insert(
                 name.clone(),
                 FnDecl {
                     params: param_names,
+                    param_types: param_type_anns,
                     defaults,
                     ref_params: ref_flags,
                     variadic: variadic.clone(),
+                    return_type: return_type.clone(),
                     body: body.clone(),
                 },
             );
@@ -2478,6 +2518,8 @@ impl Checker {
             crate::parser::ast::TypeExpr::Int => Ok(PhpType::Int),
             crate::parser::ast::TypeExpr::Float => Ok(PhpType::Float),
             crate::parser::ast::TypeExpr::Bool => Ok(PhpType::Bool),
+            crate::parser::ast::TypeExpr::Str => Ok(PhpType::Str),
+            crate::parser::ast::TypeExpr::Void => Ok(PhpType::Void),
             crate::parser::ast::TypeExpr::Nullable(inner) => {
                 let inner_ty = self.resolve_type_expr(inner, span)?;
                 Ok(self.normalize_union_type(vec![inner_ty, PhpType::Void]))
