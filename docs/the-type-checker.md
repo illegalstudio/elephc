@@ -127,7 +127,7 @@ The type checker computes the type of every expression:
 
 ### Function calls
 
-Built-in functions have hardcoded type signatures (see below). User-defined functions have their return type inferred from the `return` statements in their body.
+Built-in functions have hardcoded type signatures (see below). User-defined functions can now carry declared parameter and return type hints; when a declaration omits them, elephc still falls back to its existing inference rules.
 
 ## Built-in function signatures
 
@@ -168,9 +168,10 @@ When the type checker encounters a function declaration, it:
 
 1. **Collects all function declarations** in a first pass (so functions can be called before they're defined)
 2. **Creates a local type environment** for the function body (separate from global scope)
-3. **Infers parameter types** from how they're used in the body
-4. **Infers return type** from `return` expressions
-5. **Stores the `FunctionSig`** — parameter count, parameter types, return type, reference parameters, and variadic parameter
+3. **Resolves declared parameter types** when type hints are present, and otherwise falls back to the existing defaults / inference path
+4. **Resolves the declared return type** when present, and otherwise infers it from `return` expressions
+5. **Validates defaults, call sites, and return statements** against the declared types
+6. **Stores the `FunctionSig`** — parameter count, parameter types, return type, reference parameters, and variadic parameter
 
 The `FunctionSig` struct:
 

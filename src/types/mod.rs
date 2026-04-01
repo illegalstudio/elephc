@@ -135,6 +135,7 @@ pub struct FunctionSig {
     pub defaults: Vec<Option<crate::parser::ast::Expr>>,
     pub return_type: PhpType,
     pub ref_params: Vec<bool>,
+    pub declared_params: Vec<bool>,
     pub variadic: Option<String>,
 }
 
@@ -145,6 +146,7 @@ pub(crate) fn first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig
             defaults: vec![None],
             return_type: PhpType::Int,
             ref_params: vec![false],
+            declared_params: vec![true],
             variadic: None,
         }),
         "count" => Some(FunctionSig {
@@ -158,6 +160,7 @@ pub(crate) fn first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig
             defaults: vec![None],
             return_type: PhpType::Int,
             ref_params: vec![false],
+            declared_params: vec![true],
             variadic: None,
         }),
         "buffer_len" => Some(FunctionSig {
@@ -165,6 +168,7 @@ pub(crate) fn first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig
             defaults: vec![None],
             return_type: PhpType::Int,
             ref_params: vec![false],
+            declared_params: vec![true],
             variadic: None,
         }),
         _ => None,
