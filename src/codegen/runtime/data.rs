@@ -245,6 +245,7 @@ pub(crate) fn emit_runtime_data_user(
                     PhpType::AssocArray { .. } => 5,
                     PhpType::Object(_) => 6,
                     PhpType::Mixed => 7,
+                    PhpType::Union(_) => 7,
                     PhpType::Callable
                     | PhpType::Pointer(_)
                     | PhpType::Buffer(_)

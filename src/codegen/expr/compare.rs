@@ -31,7 +31,7 @@ pub(super) fn emit_cast(
                 PhpType::Array(_) | PhpType::AssocArray { .. } => {
                     emitter.instruction("ldr x0, [x0]");                        // load array length from header (first field)
                 }
-                PhpType::Mixed => {
+                PhpType::Mixed | PhpType::Union(_) => {
                     emitter.instruction("bl __rt_mixed_cast_int");              // cast the boxed mixed payload to int at runtime
                 }
                 PhpType::Callable
@@ -59,6 +59,7 @@ pub(super) fn emit_cast(
                 PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Mixed
+                | PhpType::Union(_)
                 | PhpType::Callable
                 | PhpType::Object(_)
                 | PhpType::Buffer(_)
@@ -95,7 +96,7 @@ pub(super) fn emit_cast(
                     emitter.instruction("cmp x0, #0");                          // check if array is empty
                     emitter.instruction("cset x0, ne");                         // x0=1 if non-empty, 0 if empty
                 }
-                PhpType::Mixed => {
+                PhpType::Mixed | PhpType::Union(_) => {
                     emitter.instruction("bl __rt_mixed_cast_bool");             // cast the boxed mixed payload to bool at runtime
                 }
                 PhpType::Callable
@@ -173,9 +174,11 @@ pub(super) fn emit_strict_compare(
 
         let rt = emit_expr(right, emitter, ctx, data);
 
-        if matches!(lt, PhpType::Mixed) || matches!(rt, PhpType::Mixed) {
-            let left_temp = !matches!(lt, PhpType::Mixed);
-            let right_temp = !matches!(rt, PhpType::Mixed);
+        if matches!(lt, PhpType::Mixed | PhpType::Union(_))
+            || matches!(rt, PhpType::Mixed | PhpType::Union(_))
+        {
+            let left_temp = !matches!(lt, PhpType::Mixed | PhpType::Union(_));
+            let right_temp = !matches!(rt, PhpType::Mixed | PhpType::Union(_));
 
             match &rt {
                 PhpType::Float => {
@@ -289,7 +292,7 @@ pub(super) fn emit_strict_compare(
                 let cond = if is_eq { "eq" } else { "ne" };
                 emitter.instruction(&format!("cset x0, {}", cond));             // set boolean result from pointer comparison
             }
-            PhpType::Mixed => {
+            PhpType::Mixed | PhpType::Union(_) => {
                 emitter.instruction("ldr x1, [sp], #16");                       // pop the saved left boxed mixed pointer into the second helper argument
                 emitter.instruction("mov x9, x0");                              // preserve the right boxed mixed pointer across the register shuffle
                 emitter.instruction("mov x0, x1");                              // move the left boxed mixed pointer into the first helper argument
@@ -339,21 +342,34 @@ pub(super) fn emit_null_coalesce(
 
     let use_value_label = ctx.next_label("nc_keep");
     let end_label = ctx.next_label("nc_end");
-    emitter.instruction("movz x9, #0xFFFE");                                    // load lowest 16 bits of null sentinel
-    emitter.instruction("movk x9, #0xFFFF, lsl #16");                           // insert bits 16-31 of null sentinel
-    emitter.instruction("movk x9, #0xFFFF, lsl #32");                           // insert bits 32-47 of null sentinel
-    emitter.instruction("movk x9, #0x7FFF, lsl #48");                           // insert bits 48-63 of null sentinel
-    if val_ty == PhpType::Float {
-        emitter.instruction("fmov x0, d0");                                     // copy float bits to x0 for null sentinel check
+    if matches!(val_ty, PhpType::Mixed | PhpType::Union(_)) {
+        emitter.instruction("str x0, [sp, #-16]!");                             // save the boxed mixed/union value across the null check and fallback evaluation
+        emitter.instruction("bl __rt_mixed_unbox");                             // inspect the boxed payload tag before deciding whether ?? should fall back
+        emitter.instruction("cmp x0, #8");                                      // runtime tag 8 = null
+        emitter.instruction(&format!("b.ne {}", use_value_label));              // non-null mixed payload keeps the original boxed value
+    } else {
+        emitter.instruction("movz x9, #0xFFFE");                                // load lowest 16 bits of null sentinel
+        emitter.instruction("movk x9, #0xFFFF, lsl #16");                       // insert bits 16-31 of null sentinel
+        emitter.instruction("movk x9, #0xFFFF, lsl #32");                       // insert bits 32-47 of null sentinel
+        emitter.instruction("movk x9, #0x7FFF, lsl #48");                       // insert bits 48-63 of null sentinel
+        if val_ty == PhpType::Float {
+            emitter.instruction("fmov x0, d0");                                 // copy float bits to x0 for null sentinel check
+        }
+        let cmp_reg = if val_ty == PhpType::Str { "x1" } else { "x0" };
+        emitter.instruction(&format!("cmp {}, x9", cmp_reg));                   // compare value against null sentinel
+        emitter.instruction(&format!("b.ne {}", use_value_label));              // if not null, skip default branch and keep value
     }
-    let cmp_reg = if val_ty == PhpType::Str { "x1" } else { "x0" };
-    emitter.instruction(&format!("cmp {}, x9", cmp_reg));                       // compare value against null sentinel
-    emitter.instruction(&format!("b.ne {}", use_value_label));                  // if not null, skip default branch and keep value
 
     let default_runtime_ty = emit_expr(default, emitter, ctx, data);
     coerce_result_to_type(emitter, ctx, data, &default_runtime_ty, &result_ty);
+    if matches!(val_ty, PhpType::Mixed | PhpType::Union(_)) {
+        emitter.instruction("add sp, sp, #16");                                 // discard the saved original boxed mixed/union value on the null fallback path
+    }
     emitter.instruction(&format!("b {}", end_label));                           // skip non-null branch after evaluating default
     emitter.label(&use_value_label);
+    if matches!(val_ty, PhpType::Mixed | PhpType::Union(_)) {
+        emitter.instruction("ldr x0, [sp], #16");                               // restore the original boxed mixed/union payload for the keep-left branch
+    }
     coerce_result_to_type(emitter, ctx, data, &val_ty, &result_ty);
     emitter.label(&end_label);
 

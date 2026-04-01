@@ -173,7 +173,7 @@ pub fn generate(
         ctx.alloc_var("argv", PhpType::Array(Box::new(PhpType::Str)));
     }
     for (name, ty) in global_env {
-        ctx.alloc_var(name, ty.clone());
+        ctx.alloc_var(name, ty.codegen_repr());
     }
     collect_main_try_slots(program, &mut ctx);
     let main_cleanup_label = ctx.next_label("main_cleanup_frame");
@@ -676,6 +676,7 @@ pub(crate) fn runtime_value_tag(ty: &PhpType) -> u8 {
         PhpType::AssocArray { .. } => 5,
         PhpType::Object(_) => 6,
         PhpType::Mixed => 7,
+        PhpType::Union(_) => 7,
         PhpType::Void => 8,
         PhpType::Callable | PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_) => 0,
     }
@@ -695,7 +696,7 @@ pub(crate) fn emit_box_runtime_payload_as_mixed(
 
 pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
-        PhpType::Mixed => {}
+        PhpType::Mixed | PhpType::Union(_) => {}
         PhpType::Int | PhpType::Bool | PhpType::Void => {
             emitter.instruction("mov x1, x0");                                  // move the current scalar payload into the mixed helper argument register
             emitter.instruction("mov x2, xzr");                                 // scalar mixed payloads do not use a second word

@@ -68,6 +68,11 @@ pub(super) fn emit_new_object(
                     emitter.instruction("mov x10, #7");                         // runtime property tag 7 = mixed
                     emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); //store runtime property metadata tag
                 }
+                PhpType::Union(_) => {
+                    emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store boxed union value using mixed runtime layout
+                    emitter.instruction("mov x10, #7");                         // runtime property tag 7 = mixed/union boxed payload
+                    emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); //store runtime property metadata tag
+                }
                 PhpType::Array(_) => {
                     emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
                     emitter.instruction("mov x10, #4");                         // runtime property tag 4 = indexed array
@@ -106,6 +111,7 @@ pub(super) fn emit_new_object(
                 PhpType::Bool
                 | PhpType::Int
                 | PhpType::Mixed
+                | PhpType::Union(_)
                 | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Buffer(_)
@@ -146,6 +152,7 @@ pub(super) fn emit_new_object(
                 PhpType::Bool
                 | PhpType::Int
                 | PhpType::Mixed
+                | PhpType::Union(_)
                 | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Buffer(_)

@@ -160,6 +160,7 @@ pub(super) fn emit_array_value_type_stamp(
         PhpType::AssocArray { .. } => 5,
         PhpType::Object(_) => 6,
         PhpType::Mixed => 7,
+        PhpType::Union(_) => 7,
         PhpType::Void => 8,
         _ => return,
     };
@@ -508,5 +509,6 @@ fn resolve_buffer_element_type(type_expr: &TypeExpr, ctx: &Context) -> PhpType {
             }
         }
         TypeExpr::Buffer(inner) => PhpType::Buffer(Box::new(resolve_buffer_element_type(inner, ctx))),
+        TypeExpr::Nullable(_) | TypeExpr::Union(_) => PhpType::Int,
     }
 }

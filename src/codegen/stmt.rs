@@ -33,6 +33,7 @@ fn stamp_indexed_array_value_type(emitter: &mut Emitter, array_reg: &str, elem_t
         PhpType::AssocArray { .. } => 5,
         PhpType::Object(_) => 6,
         PhpType::Mixed => 7,
+        PhpType::Union(_) => 7,
         _ => return,
     };
     emitter.instruction(&format!("ldr x12, [{}, #-8]", array_reg));             // load the packed array kind word from the heap header
@@ -359,4 +360,3 @@ pub fn emit_global_load(emitter: &mut Emitter, ctx: &mut Context, name: &str, ty
 fn emit_extern_global_store(emitter: &mut Emitter, name: &str, ty: &PhpType) {
     storage::emit_extern_global_store(emitter, name, ty);
 }
-

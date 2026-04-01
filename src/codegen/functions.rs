@@ -5,7 +5,7 @@ use super::data_section::DataSection;
 use super::emit::Emitter;
 use super::stmt;
 use crate::names::{function_epilogue_symbol, function_symbol};
-use crate::parser::ast::{ExprKind, StmtKind};
+use crate::parser::ast::{ExprKind, StmtKind, TypeExpr};
 use crate::types::{ClassInfo, FunctionSig, InterfaceInfo, PhpType};
 
 #[allow(clippy::too_many_arguments)]
@@ -143,15 +143,15 @@ fn emit_function_with_label_and_class(
             // dereferences correctly (e.g., string ref loads x1/x2, not x0)
             ctx.update_var_type_and_ownership(
                 pname,
-                _pty.clone(),
+                _pty.codegen_repr(),
                 HeapOwnership::borrowed_alias_for_type(_pty),
             );
         } else if pname == "this" {
-            ctx.alloc_var(pname, _pty.clone());
+            ctx.alloc_var(pname, _pty.codegen_repr());
             ctx.set_var_ownership(pname, HeapOwnership::borrowed_alias_for_type(_pty));
             ctx.disable_epilogue_cleanup(pname);
         } else {
-            ctx.alloc_var(pname, _pty.clone());
+            ctx.alloc_var(pname, _pty.codegen_repr());
             ctx.set_var_ownership(pname, HeapOwnership::local_owner_for_type(_pty));
         }
     }
@@ -220,6 +220,7 @@ fn emit_function_with_label_and_class(
                 }
                 PhpType::Void => {}
                 PhpType::Mixed
+                | PhpType::Union(_)
                 | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Buffer(_)
@@ -741,7 +742,13 @@ pub fn collect_local_vars(
         match &stmt.kind {
             StmtKind::Assign { name, value } => {
                 if !ctx.variables.contains_key(name) {
-                    let ty = infer_local_type(value, sig, Some(ctx));
+                    let ty = infer_local_type(value, sig, Some(ctx)).codegen_repr();
+                    ctx.alloc_var(name, ty);
+                }
+            }
+            StmtKind::TypedAssign { type_expr, name, .. } => {
+                if !ctx.variables.contains_key(name) {
+                    let ty = codegen_declared_type(type_expr, ctx).codegen_repr();
                     ctx.alloc_var(name, ty);
                 }
             }
@@ -756,7 +763,7 @@ pub fn collect_local_vars(
             StmtKind::StaticVar { name, init } => {
                 // Allocate local slot for the static var
                 if !ctx.variables.contains_key(name) {
-                    let ty = infer_local_type(init, sig, Some(ctx));
+                    let ty = infer_local_type(init, sig, Some(ctx)).codegen_repr();
                     ctx.alloc_var(name, ty);
                 }
             }
@@ -786,10 +793,7 @@ pub fn collect_local_vars(
                     );
                     if let Some(variable) = &catch_clause.variable {
                         if !ctx.variables.contains_key(variable) {
-                            ctx.alloc_var(
-                                variable,
-                                PhpType::Object(catch_type_name),
-                            );
+                            ctx.alloc_var(variable, PhpType::Object(catch_type_name));
                         }
                     }
                     collect_local_vars(&catch_clause.body, ctx, sig);
@@ -808,7 +812,7 @@ pub fn collect_local_vars(
                         } else {
                             PhpType::Int
                         };
-                        ctx.alloc_var(k, key_ty);
+                        ctx.alloc_var(k, key_ty.codegen_repr());
                     }
                 }
                 if !ctx.variables.contains_key(value_var) {
@@ -817,7 +821,7 @@ pub fn collect_local_vars(
                         PhpType::AssocArray { value, .. } => *value.clone(),
                         _ => PhpType::Int,
                     };
-                    ctx.alloc_var(value_var, elem_ty);
+                    ctx.alloc_var(value_var, elem_ty.codegen_repr());
                 }
                 collect_local_vars(body, ctx, sig);
             }
@@ -837,7 +841,7 @@ pub fn collect_local_vars(
                 };
                 for var in vars {
                     if !ctx.variables.contains_key(var) {
-                        ctx.alloc_var(var, elem_ty.clone());
+                        ctx.alloc_var(var, elem_ty.codegen_repr());
                     }
                 }
             }
@@ -925,6 +929,11 @@ fn wider_of(a: &PhpType, b: &PhpType) -> PhpType {
     if a == b {
         return a.clone();
     }
+    if matches!(a, PhpType::Mixed | PhpType::Union(_))
+        || matches!(b, PhpType::Mixed | PhpType::Union(_))
+    {
+        return PhpType::Mixed;
+    }
     if *a == PhpType::Str || *b == PhpType::Str {
         return PhpType::Str;
     }
@@ -938,6 +947,50 @@ fn wider_of(a: &PhpType, b: &PhpType) -> PhpType {
         return a.clone();
     }
     a.clone()
+}
+
+fn resolve_buffer_element_type(type_expr: &TypeExpr, ctx: &Context) -> PhpType {
+    match type_expr {
+        TypeExpr::Int => PhpType::Int,
+        TypeExpr::Float => PhpType::Float,
+        TypeExpr::Bool => PhpType::Bool,
+        TypeExpr::Ptr(target) => {
+            PhpType::Pointer(target.as_ref().map(|name| name.as_str().to_string()))
+        }
+        TypeExpr::Named(name) => {
+            if ctx.packed_classes.contains_key(name.as_str()) {
+                PhpType::Packed(name.as_str().to_string())
+            } else {
+                PhpType::Int
+            }
+        }
+        TypeExpr::Buffer(inner) => PhpType::Buffer(Box::new(resolve_buffer_element_type(inner, ctx))),
+        TypeExpr::Nullable(_) | TypeExpr::Union(_) => PhpType::Int,
+    }
+}
+
+fn codegen_declared_type(type_expr: &TypeExpr, ctx: &Context) -> PhpType {
+    match type_expr {
+        TypeExpr::Int => PhpType::Int,
+        TypeExpr::Float => PhpType::Float,
+        TypeExpr::Bool => PhpType::Bool,
+        TypeExpr::Ptr(target) => {
+            PhpType::Pointer(target.as_ref().map(|name| name.as_str().to_string()))
+        }
+        TypeExpr::Buffer(inner) => {
+            PhpType::Buffer(Box::new(resolve_buffer_element_type(inner, ctx)))
+        }
+        TypeExpr::Named(name) => {
+            if ctx.packed_classes.contains_key(name.as_str()) {
+                PhpType::Packed(name.as_str().to_string())
+            } else if ctx.classes.contains_key(name.as_str()) {
+                PhpType::Object(name.as_str().to_string())
+            } else {
+                PhpType::Int
+            }
+        }
+        TypeExpr::Nullable(_) | TypeExpr::Union(_) => PhpType::Mixed,
+    }
 }
 
 fn infer_local_type(
@@ -1178,36 +1231,7 @@ fn infer_local_type(
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.as_str().to_string()),
         ExprKind::BufferNew { element_type, .. } => {
             if let Some(c) = ctx {
-                let elem_ty = match element_type {
-                    crate::parser::ast::TypeExpr::Int => PhpType::Int,
-                    crate::parser::ast::TypeExpr::Float => PhpType::Float,
-                    crate::parser::ast::TypeExpr::Bool => PhpType::Bool,
-                    crate::parser::ast::TypeExpr::Ptr(target) => {
-                        PhpType::Pointer(target.as_ref().map(|name| name.as_str().to_string()))
-                    }
-                    crate::parser::ast::TypeExpr::Buffer(inner) => match inner.as_ref() {
-                        crate::parser::ast::TypeExpr::Int => {
-                            PhpType::Buffer(Box::new(PhpType::Int))
-                        }
-                        crate::parser::ast::TypeExpr::Float => {
-                            PhpType::Buffer(Box::new(PhpType::Float))
-                        }
-                        crate::parser::ast::TypeExpr::Bool => {
-                            PhpType::Buffer(Box::new(PhpType::Bool))
-                        }
-                        crate::parser::ast::TypeExpr::Named(name) => {
-                            PhpType::Buffer(Box::new(PhpType::Packed(name.as_str().to_string())))
-                        }
-                        _ => PhpType::Buffer(Box::new(PhpType::Int)),
-                    },
-                    crate::parser::ast::TypeExpr::Named(name) => {
-                        if c.packed_classes.contains_key(name.as_str()) {
-                            PhpType::Packed(name.as_str().to_string())
-                        } else {
-                            PhpType::Int
-                        }
-                    }
-                };
+                let elem_ty = resolve_buffer_element_type(element_type, c);
                 PhpType::Buffer(Box::new(elem_ty))
             } else {
                 PhpType::Buffer(Box::new(PhpType::Int))

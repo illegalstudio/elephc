@@ -132,6 +132,7 @@ pub(super) fn emit_property_access(
             emitter.instruction(&format!("ldr x0, [x0, #{}]", offset));         // load int/bool from property
         }
         PhpType::Mixed
+        | PhpType::Union(_)
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
         | PhpType::Buffer(_)

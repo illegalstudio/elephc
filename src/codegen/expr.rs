@@ -95,6 +95,7 @@ pub fn emit_expr(
                     }
                     PhpType::Void
                     | PhpType::Mixed
+                    | PhpType::Union(_)
                     | PhpType::Array(_)
                     | PhpType::AssocArray { .. }
                     | PhpType::Object(_) => {

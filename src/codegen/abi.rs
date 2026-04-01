@@ -72,6 +72,7 @@ pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
             store_at_offset(emitter, "x0", offset);                             // store null sentinel
         }
         PhpType::Mixed
+        | PhpType::Union(_)
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
         | PhpType::Buffer(_)
@@ -96,7 +97,7 @@ pub fn emit_incref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
 /// Release the current value in x0 if it is runtime-refcounted.
 pub fn emit_decref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
-        PhpType::Mixed => {
+        PhpType::Mixed | PhpType::Union(_) => {
             emitter.instruction("bl __rt_decref_mixed");                        // release mixed cell reference
         }
         PhpType::Array(_) => {
@@ -131,6 +132,7 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
             load_at_offset(emitter, "x0", offset);                              // load null sentinel
         }
         PhpType::Mixed
+        | PhpType::Union(_)
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
         | PhpType::Buffer(_)
@@ -179,7 +181,7 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
             emitter.instruction("mov x16, #4");                                 // syscall 4 = write
             emitter.instruction("svc #0x80");                                   // invoke kernel
         }
-        PhpType::Mixed => {
+        PhpType::Mixed | PhpType::Union(_) => {
             emitter.instruction("bl __rt_mixed_write_stdout");                  // inspect boxed mixed payload and print if scalar/string
         }
         PhpType::Void | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {} // null/array/callable/object: nothing to print
