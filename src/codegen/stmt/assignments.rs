@@ -109,16 +109,33 @@ pub(super) fn emit_assign_stmt(
         }
     }
 
-    if matches!(
-        &value.kind,
-        ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_)
-    ) {
-        if let Some(deferred) = ctx.deferred_closures.last() {
-            ctx.closure_sigs.insert(name.to_string(), deferred.sig.clone());
-            if !deferred.captures.is_empty() {
-                ctx.closure_captures
-                    .insert(name.to_string(), deferred.captures.clone());
+    match &value.kind {
+        ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => {
+            if let Some(deferred) = ctx.deferred_closures.last() {
+                ctx.closure_sigs.insert(name.to_string(), deferred.sig.clone());
+                if !deferred.captures.is_empty() {
+                    ctx.closure_captures
+                        .insert(name.to_string(), deferred.captures.clone());
+                } else {
+                    ctx.closure_captures.remove(name);
+                }
             }
+        }
+        ExprKind::Variable(src_name) if ty == PhpType::Callable => {
+            if let Some(sig) = ctx.closure_sigs.get(src_name).cloned() {
+                ctx.closure_sigs.insert(name.to_string(), sig);
+            } else {
+                ctx.closure_sigs.remove(name);
+            }
+            if let Some(captures) = ctx.closure_captures.get(src_name).cloned() {
+                ctx.closure_captures.insert(name.to_string(), captures);
+            } else {
+                ctx.closure_captures.remove(name);
+            }
+        }
+        _ => {
+            ctx.closure_sigs.remove(name);
+            ctx.closure_captures.remove(name);
         }
     }
 

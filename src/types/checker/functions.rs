@@ -28,6 +28,7 @@ impl Checker {
         }
 
         match (expected, actual) {
+            (PhpType::Mixed, _) => true,
             (PhpType::Float, PhpType::Int | PhpType::Bool | PhpType::Void) => true,
             (PhpType::Int, PhpType::Bool | PhpType::Void) => true,
             (PhpType::Bool, PhpType::Int | PhpType::Void) => true,

@@ -2542,3 +2542,11 @@ fn test_error_first_class_callable_ref_param_requires_variable() {
         "parameter $n must be passed a variable",
     );
 }
+
+#[test]
+fn test_error_closure_ref_param_requires_variable() {
+    expect_error(
+        "<?php $f = function (&$x) { $x = $x + 1; }; $f(1);",
+        "parameter $x must be passed a variable",
+    );
+}

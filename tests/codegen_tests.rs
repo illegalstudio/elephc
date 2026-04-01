@@ -13014,6 +13014,41 @@ echo $value;
 }
 
 #[test]
+fn test_first_class_callable_alias_preserves_by_ref_params() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(&$n) {
+    $n = $n + 1;
+}
+
+$f = bump(...);
+$g = $f;
+$value = 7;
+$g($value);
+echo $value;
+"#,
+    );
+    assert_eq!(out, "8");
+}
+
+#[test]
+fn test_closure_alias_preserves_by_ref_params() {
+    let out = compile_and_run(
+        r#"<?php
+$f = function (&$x) {
+    $x = $x + 1;
+};
+
+$g = $f;
+$value = 7;
+$g($value);
+echo $value;
+"#,
+    );
+    assert_eq!(out, "8");
+}
+
+#[test]
 fn test_first_class_callable_variable_used_in_array_map() {
     let out = compile_and_run(
         r#"<?php

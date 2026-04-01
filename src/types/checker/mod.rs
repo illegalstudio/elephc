@@ -2389,7 +2389,7 @@ impl Checker {
                             .params
                             .iter()
                             .cloned()
-                            .map(|name| (name, PhpType::Int))
+                            .map(|name| (name, PhpType::Mixed))
                             .collect(),
                         defaults: decl.defaults.clone(),
                         return_type: infer_return_type_syntactic(&decl.body),
@@ -2533,6 +2533,45 @@ impl Checker {
             .return_type)
     }
 
+    fn resolve_expr_callable_sig(
+        &mut self,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<Option<FunctionSig>, CompileError> {
+        match &expr.kind {
+            ExprKind::Closure {
+                params,
+                variadic,
+                body,
+                ..
+            } => {
+                let return_type = self.infer_closure_return_type(body, env);
+                Ok(Some(FunctionSig {
+                    params: params
+                        .iter()
+                        .map(|(name, _, _)| (name.clone(), PhpType::Mixed))
+                        .chain(
+                            variadic
+                                .iter()
+                                .cloned()
+                                .map(|name| (name, PhpType::Array(Box::new(PhpType::Mixed)))),
+                        )
+                        .collect(),
+                    defaults: params.iter().map(|(_, default, _)| default.clone()).collect(),
+                    return_type,
+                    ref_params: params.iter().map(|(_, _, is_ref)| *is_ref).collect(),
+                    variadic: variadic.clone(),
+                }))
+            }
+            ExprKind::FirstClassCallable(target) => {
+                self.resolve_first_class_callable_sig(target, expr.span, env)
+                    .map(Some)
+            }
+            ExprKind::Variable(var_name) => Ok(self.callable_sigs.get(var_name).cloned()),
+            _ => Ok(None),
+        }
+    }
+
     fn check_extern_function_call(
         &mut self,
         name: &str,
@@ -2651,15 +2690,18 @@ impl Checker {
             }
             StmtKind::Assign { name, value } => {
                 let ty = self.infer_type(value, env)?;
-                // Track closure return types for closure-returning-closure patterns
-                if let ExprKind::Closure { body, .. } = &value.kind {
-                    let ret_ty = self.infer_closure_return_type(body, env);
-                    self.closure_return_types.insert(name.clone(), ret_ty);
-                } else if let ExprKind::FirstClassCallable(target) = &value.kind {
-                    let sig = self.resolve_first_class_callable_sig(target, stmt.span, env)?;
-                    self.closure_return_types
-                        .insert(name.clone(), sig.return_type.clone());
-                    self.callable_sigs.insert(name.clone(), sig);
+                if ty == PhpType::Callable {
+                    if let Some(sig) = self.resolve_expr_callable_sig(value, env)? {
+                        self.closure_return_types
+                            .insert(name.clone(), sig.return_type.clone());
+                        self.callable_sigs.insert(name.clone(), sig);
+                    } else {
+                        self.closure_return_types.remove(name);
+                        self.callable_sigs.remove(name);
+                    }
+                } else {
+                    self.closure_return_types.remove(name);
+                    self.callable_sigs.remove(name);
                 }
                 if let Some(existing) = env.get(name) {
                     let merged_ty = self.merged_assignment_type(existing, &ty);
