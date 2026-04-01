@@ -275,7 +275,7 @@ Constraints:
 - Fields must be `int`, `float`, `bool`, `ptr`, or another `packed class`
 - No strings, arrays, objects, or mixed values
 - No methods, constructors, inheritance, traits, or interfaces
-- No visibility modifiers (all fields are public)
+- Only `public` visibility is accepted (optional and redundant — all fields are public)
 - No default values
 - Layout is sequential: field 0 at offset 0, field 1 at offset 8, etc.
 

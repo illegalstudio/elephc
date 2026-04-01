@@ -15,7 +15,7 @@ This document describes the PHP subset supported by elephc. The language aims to
 | `mixed` | Internal | Static helper type used when an associative array stores heterogeneous values. Runtime values are boxed with a per-entry tag, but PHP source code does not spell this type explicitly. |
 | `object` | Yes | Class instances. Heap-allocated, fixed-layout. `new ClassName(...)` |
 | `pointer` | Yes | 64-bit memory address. `ptr($var)`, `ptr_null()`. Echo prints `0x...` hex. |
-| `buffer<T>` | Extension | Contiguous heap buffer for POD scalars, pointers, or packed classes. Allocate with `buffer_new<T>(len)` and query with `buffer_len($buf)`. |
+| `buffer<T>` | Extension | Contiguous heap buffer for POD scalars, pointers, or packed classes. `buffer_new<T>(len)`, `buffer_len($buf)`, `buffer_free($buf)`. |
 | `packed class` | Extension | Nominal POD record type with fixed compile-time field offsets. Intended for hot-path storage and typed pointer access. |
 | `resource` | No | File handles are currently modeled as integer file descriptors (`int`), not as a separate runtime resource type. |
 
@@ -96,8 +96,9 @@ Rules in v1:
 - Allocate buffers explicitly with `buffer_new<T>(len)`.
 - Read scalar elements with `$buf[$i]`; access packed elements with `$buf[$i]->field`.
 - `buffer_len($buf)` returns the logical element count.
+- `buffer_free($buf)` releases the buffer memory and nullifies the variable. Use-after-free is detected at runtime.
 - Bounds checks are always enabled; out-of-range access aborts with a fatal error.
-- `packed class` is metadata-only in v1: no inheritance, traits, methods, constructors, magic methods, or non-`public` fields.
+- `packed class` fields accept an optional `public` modifier (redundant — all fields are public). No other visibility is allowed.
 - `buffer<T>` is fixed-size in v1: no push/pop, no implicit conversion to PHP arrays, and no copy-on-write behavior.
 - This syntax is an elephc extension and is not valid in standard PHP.
 

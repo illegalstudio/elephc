@@ -128,7 +128,7 @@ src/
 │   ├── builtins/              Built-in function codegen (one file per language function)
 │   │   ├── mod.rs             Dispatcher — chains to category modules
 │   │   ├── strings/           strlen, substr, strpos, explode, sprintf, md5, ... (57 files)
-│   │   ├── arrays/            count, array_push, buffer_len, sort, array_map, usort, ... (57 files)
+│   │   ├── arrays/            count, array_push, buffer_new/len/free, sort, array_map, usort, ... (58 files)
 │   │   ├── math/              abs, floor, pow, rand, fmod, fdiv, round, min, max, sin, cos, ... (32 files)
 │   │   ├── types/             is_*, gettype, empty, unset, settype, ... (16 files)
 │   │   ├── io/                fopen, fwrite, file_get_contents, scandir, ... (36 files)
