@@ -5,9 +5,11 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
+
 static TEST_ID: AtomicU64 = AtomicU64::new(0);
 static SDK_PATH: OnceLock<String> = OnceLock::new();
 static SDK_VERSION: OnceLock<String> = OnceLock::new();
+static RUNTIME_OBJ: OnceLock<std::path::PathBuf> = OnceLock::new();
 
 fn get_sdk_path() -> &'static str {
     SDK_PATH.get_or_init(|| {
@@ -38,7 +40,43 @@ fn get_sdk_version() -> &'static str {
     })
 }
 
-/// Compile ASM string to binary via as + ld, then run it and return stdout.
+/// Pre-assemble the runtime into a cached .o file. Built once per test
+/// session, reused by every test via two-object linking.
+fn get_runtime_obj() -> &'static Path {
+    RUNTIME_OBJ.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("elephc_test_runtime_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let runtime_asm = elephc::codegen::generate_runtime(8_388_608);
+        let asm_path = dir.join("runtime.s");
+        let obj_path = dir.join("runtime.o");
+        fs::write(&asm_path, &runtime_asm).unwrap();
+        let status = Command::new("as")
+            .args(["-arch", "arm64", "-o"])
+            .arg(&obj_path)
+            .arg(&asm_path)
+            .status()
+            .expect("failed to assemble runtime");
+        assert!(status.success(), "runtime assembler failed");
+        obj_path
+    })
+}
+
+/// Assemble a custom runtime for tests that need a non-default heap size.
+fn assemble_custom_runtime(heap_size: usize, dir: &Path) -> std::path::PathBuf {
+    let runtime_asm = elephc::codegen::generate_runtime(heap_size);
+    let asm_path = dir.join("runtime.s");
+    let obj_path = dir.join("runtime.o");
+    fs::write(&asm_path, &runtime_asm).unwrap();
+    let status = Command::new("as")
+        .args(["-arch", "arm64", "-o"])
+        .arg(&obj_path)
+        .arg(&asm_path)
+        .status()
+        .expect("failed to assemble custom runtime");
+    assert!(status.success(), "custom runtime assembler failed");
+    obj_path
+}
+
 fn default_link_paths() -> Vec<String> {
     let mut paths = Vec::new();
     for candidate in ["/opt/homebrew/lib", "/usr/local/lib"] {
@@ -51,6 +89,7 @@ fn default_link_paths() -> Vec<String> {
 
 fn link_binary(
     obj_path: &Path,
+    runtime_obj: &Path,
     bin_path: &Path,
     extra_link_libs: &[String],
     extra_link_paths: &[String],
@@ -60,6 +99,7 @@ fn link_binary(
     ld_cmd.args(["-arch", "arm64", "-e", "_main", "-o"]);
     ld_cmd.arg(bin_path);
     ld_cmd.arg(obj_path);
+    ld_cmd.arg(runtime_obj);
     ld_cmd.args(["-lSystem", "-syslibroot"]);
     ld_cmd.arg(get_sdk_path());
     ld_cmd.args([
@@ -85,7 +125,8 @@ fn link_binary(
 }
 
 fn assemble_and_run(
-    asm: &str,
+    user_asm: &str,
+    runtime_obj: &Path,
     dir: &Path,
     extra_link_libs: &[String],
     extra_link_paths: &[String],
@@ -95,7 +136,7 @@ fn assemble_and_run(
     let obj_path = dir.join("test.o");
     let bin_path = dir.join("test");
 
-    fs::write(&asm_path, asm).unwrap();
+    fs::write(&asm_path, user_asm).unwrap();
 
     let as_status = Command::new("as")
         .args(["-arch", "arm64", "-o"])
@@ -107,6 +148,7 @@ fn assemble_and_run(
 
     link_binary(
         &obj_path,
+        runtime_obj,
         &bin_path,
         extra_link_libs,
         extra_link_paths,
@@ -278,7 +320,8 @@ struct ProgramOutput {
 }
 
 fn assemble_and_run_capture(
-    asm: &str,
+    user_asm: &str,
+    runtime_obj: &Path,
     dir: &Path,
     extra_link_libs: &[String],
     extra_link_paths: &[String],
@@ -288,7 +331,7 @@ fn assemble_and_run_capture(
     let obj_path = dir.join("test.o");
     let bin_path = dir.join("test");
 
-    fs::write(&asm_path, asm).unwrap();
+    fs::write(&asm_path, user_asm).unwrap();
 
     let as_status = Command::new("as")
         .args(["-arch", "arm64", "-o"])
@@ -300,6 +343,7 @@ fn assemble_and_run_capture(
 
     link_binary(
         &obj_path,
+        runtime_obj,
         &bin_path,
         extra_link_libs,
         extra_link_paths,
@@ -319,7 +363,8 @@ fn assemble_and_run_capture(
 }
 
 fn assemble_and_run_expect_failure(
-    asm: &str,
+    user_asm: &str,
+    runtime_obj: &Path,
     dir: &Path,
     extra_link_libs: &[String],
     extra_link_paths: &[String],
@@ -329,7 +374,7 @@ fn assemble_and_run_expect_failure(
     let obj_path = dir.join("test.o");
     let bin_path = dir.join("test");
 
-    fs::write(&asm_path, asm).unwrap();
+    fs::write(&asm_path, user_asm).unwrap();
 
     let as_status = Command::new("as")
         .args(["-arch", "arm64", "-o"])
@@ -341,6 +386,7 @@ fn assemble_and_run_expect_failure(
 
     link_binary(
         &obj_path,
+        runtime_obj,
         &bin_path,
         extra_link_libs,
         extra_link_paths,
@@ -362,7 +408,7 @@ fn compile_source_to_asm_with_options(
     heap_size: usize,
     gc_stats: bool,
     heap_debug: bool,
-) -> (String, Vec<String>) {
+) -> (String, String, Vec<String>) {
     compile_source_to_asm_with_defines(source, dir, &HashSet::new(), heap_size, gc_stats, heap_debug)
 }
 
@@ -373,14 +419,14 @@ fn compile_source_to_asm_with_defines(
     heap_size: usize,
     gc_stats: bool,
     heap_debug: bool,
-) -> (String, Vec<String>) {
+) -> (String, String, Vec<String>) {
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
     let ast = elephc::conditional::apply(ast, defines);
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let check_result = elephc::types::check(&resolved).expect("type check failed");
-    let asm = elephc::codegen::generate(
+    let (user_asm, runtime_asm) = elephc::codegen::generate(
         &resolved,
         &check_result.global_env,
         &check_result.functions,
@@ -394,7 +440,7 @@ fn compile_source_to_asm_with_defines(
         gc_stats,
         heap_debug,
     );
-    (asm, check_result.required_libraries)
+    (user_asm, runtime_asm, check_result.required_libraries)
 }
 
 fn inject_main_exit_harness(asm: &str, harness: &str) -> String {
@@ -412,11 +458,13 @@ fn compile_harness_expect_failure(source: &str, heap_size: usize, harness: &str)
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let (asm, required_libraries) =
+    let (user_asm, _runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, heap_size, false, true);
-    let patched = inject_main_exit_harness(&asm, harness);
+    let runtime_obj = assemble_custom_runtime(heap_size, &dir);
+    let patched = inject_main_exit_harness(&user_asm, harness);
     let stderr = assemble_and_run_expect_failure(
         &patched,
+        &runtime_obj,
         &dir,
         &required_libraries,
         &default_link_paths(),
@@ -434,11 +482,13 @@ fn compile_harness_and_run(source: &str, heap_size: usize, harness: &str) -> Str
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let (asm, required_libraries) =
+    let (user_asm, _runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, heap_size, false, false);
-    let patched = inject_main_exit_harness(&asm, harness);
+    let runtime_obj = assemble_custom_runtime(heap_size, &dir);
+    let patched = inject_main_exit_harness(&user_asm, harness);
     let stdout = assemble_and_run(
         &patched,
+        &runtime_obj,
         &dir,
         &required_libraries,
         &default_link_paths(),
@@ -456,11 +506,13 @@ fn compile_harness_and_run_with_heap_debug(source: &str, heap_size: usize, harne
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let (asm, required_libraries) =
+    let (user_asm, _runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, heap_size, false, true);
-    let patched = inject_main_exit_harness(&asm, harness);
+    let runtime_obj = assemble_custom_runtime(heap_size, &dir);
+    let patched = inject_main_exit_harness(&user_asm, harness);
     let stdout = assemble_and_run(
         &patched,
+        &runtime_obj,
         &dir,
         &required_libraries,
         &default_link_paths(),
@@ -478,10 +530,11 @@ fn compile_and_run_with_gc_stats(source: &str) -> ProgramOutput {
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let (asm, required_libraries) =
+    let (user_asm, _runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, true, false);
     let output = assemble_and_run_capture(
-        &asm,
+        &user_asm,
+        get_runtime_obj(),
         &dir,
         &required_libraries,
         &default_link_paths(),
@@ -499,10 +552,11 @@ fn compile_and_run_with_heap_debug(source: &str) -> ProgramOutput {
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let (asm, required_libraries) =
+    let (user_asm, _runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, true);
     let output = assemble_and_run_capture(
-        &asm,
+        &user_asm,
+        get_runtime_obj(),
         &dir,
         &required_libraries,
         &default_link_paths(),
@@ -543,11 +597,20 @@ fn compile_and_run_with_heap_size(source: &str, heap_size: usize) -> String {
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let (asm, required_libraries) =
+    let (user_asm, _runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, heap_size, false, false);
 
+    let custom_rt;
+    let runtime_obj: &Path = if heap_size == 8_388_608 {
+        get_runtime_obj()
+    } else {
+        custom_rt = assemble_custom_runtime(heap_size, &dir);
+        &custom_rt
+    };
+
     let elephc_out = assemble_and_run(
-        &asm,
+        &user_asm,
+        runtime_obj,
         &dir,
         &required_libraries,
         &default_link_paths(),
@@ -708,10 +771,11 @@ fn compile_and_run_with_defines(source: &str, defines: &[&str]) -> String {
     fs::create_dir_all(&dir).unwrap();
 
     let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();
-    let (asm, required_libraries) =
+    let (user_asm, _runtime_asm, required_libraries) =
         compile_source_to_asm_with_defines(source, &dir, &define_set, 8_388_608, false, false);
     let elephc_out = assemble_and_run(
-        &asm,
+        &user_asm,
+        get_runtime_obj(),
         &dir,
         &required_libraries,
         &default_link_paths(),
@@ -765,10 +829,10 @@ fn compile_and_run_expect_failure(source: &str) -> String {
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let (asm, required_libraries) =
+    let (user_asm, _runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
     let output =
-        assemble_and_run_expect_failure(&asm, &dir, &required_libraries, &default_link_paths(), &[]);
+        assemble_and_run_expect_failure(&user_asm, get_runtime_obj(), &dir, &required_libraries, &default_link_paths(), &[]);
 
     let _ = fs::remove_dir_all(&dir);
     output
@@ -809,7 +873,7 @@ fn compile_and_run_files_with_defines(
     let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let check_result = elephc::types::check(&resolved).expect("type check failed");
-    let asm = elephc::codegen::generate(
+    let (user_asm, _runtime_asm) = elephc::codegen::generate(
         &resolved,
         &check_result.global_env,
         &check_result.functions,
@@ -825,7 +889,8 @@ fn compile_and_run_files_with_defines(
     );
 
     let elephc_out = assemble_and_run(
-        &asm,
+        &user_asm,
+        get_runtime_obj(),
         &dir,
         &check_result.required_libraries,
         &default_link_paths(),
@@ -1127,7 +1192,7 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
     let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let check_result = elephc::types::check(&resolved).expect("type check failed");
-    let asm = elephc::codegen::generate(
+    let (user_asm, _runtime_asm) = elephc::codegen::generate(
         &resolved,
         &check_result.global_env,
         &check_result.functions,
@@ -1146,7 +1211,7 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
     let obj_path = dir.join("test.o");
     let bin_path = dir.join("test");
 
-    fs::write(&asm_path, &asm).unwrap();
+    fs::write(&asm_path, &user_asm).unwrap();
 
     let as_status = Command::new("as")
         .args(["-arch", "arm64", "-o"])
@@ -1158,6 +1223,7 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
 
     link_binary(
         &obj_path,
+        get_runtime_obj(),
         &bin_path,
         &check_result.required_libraries,
         &default_link_paths(),
@@ -1197,7 +1263,7 @@ fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {
     let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let check_result = elephc::types::check(&resolved).expect("type check failed");
-    let asm = elephc::codegen::generate(
+    let (user_asm, _runtime_asm) = elephc::codegen::generate(
         &resolved,
         &check_result.global_env,
         &check_result.functions,
@@ -1213,7 +1279,8 @@ fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {
     );
 
     let elephc_out = assemble_and_run(
-        &asm,
+        &user_asm,
+        get_runtime_obj(),
         &dir,
         &check_result.required_libraries,
         &default_link_paths(),
@@ -11343,15 +11410,15 @@ fn test_new_object_codegen_sets_heap_kind() {
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let (asm, _) = compile_source_to_asm_with_options(
+    let (user_asm, _runtime_asm, _) = compile_source_to_asm_with_options(
         "<?php class Foo { public $x = 1; } $o = new Foo();",
         &dir,
         8_388_608,
         false,
         false,
     );
-    assert!(asm.contains("new Foo()"));
-    assert!(asm.contains("str x9, [x0, #-8]"), "{asm}");
+    assert!(user_asm.contains("new Foo()"));
+    assert!(user_asm.contains("str x9, [x0, #-8]"), "{user_asm}");
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -11364,7 +11431,7 @@ fn test_decref_hash_codegen_skips_gc_for_scalar_only_hashes() {
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let (asm, _) = compile_source_to_asm_with_options(
+    let (_user_asm, _runtime_asm, _) = compile_source_to_asm_with_options(
         r#"<?php
 $map = ["a" => 1, "b" => 2];
 unset($map);
@@ -11374,9 +11441,12 @@ unset($map);
         false,
         false,
     );
-    assert!(asm.contains("__rt_hash_may_have_cyclic_values"), "{asm}");
-    assert!(asm.contains("bl __rt_hash_may_have_cyclic_values"), "{asm}");
-    assert!(asm.contains("cbz x0, __rt_decref_hash_skip"), "{asm}");
+    // The scalar-only GC skip logic lives in the runtime, not user code.
+    // Verify it exists in the runtime assembly.
+    let runtime_asm = elephc::codegen::generate_runtime(8_388_608);
+    assert!(runtime_asm.contains("__rt_hash_may_have_cyclic_values"), "runtime missing cyclic-value check");
+    assert!(runtime_asm.contains("bl __rt_hash_may_have_cyclic_values"), "runtime missing cyclic-value call");
+    assert!(runtime_asm.contains("cbz x0, __rt_decref_hash_skip"), "runtime missing scalar-only skip branch");
 
     let _ = fs::remove_dir_all(&dir);
 }
