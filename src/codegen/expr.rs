@@ -11,7 +11,7 @@ use super::abi;
 use super::context::{Context, HeapOwnership};
 use super::data_section::DataSection;
 use super::emit::Emitter;
-use crate::parser::ast::{BinOp, Expr, ExprKind};
+use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind};
 use crate::types::FunctionSig;
 use crate::types::PhpType;
 
@@ -438,9 +438,12 @@ pub fn emit_expr(
             params,
             body,
             is_arrow: _,
-            variadic: _,
+            variadic,
             captures,
-        } => emit_closure(params, body, captures, emitter, ctx, data),
+        } => emit_closure(params, variadic, body, captures, emitter, ctx, data),
+        ExprKind::FirstClassCallable(target) => {
+            emit_first_class_callable(target, emitter, ctx, data)
+        }
         ExprKind::ClosureCall { var, args } => emit_closure_call(var, args, emitter, ctx, data),
         ExprKind::ExprCall { callee, args } => emit_expr_call(callee, args, emitter, ctx, data),
         ExprKind::ConstRef(name) => {
@@ -686,13 +689,14 @@ pub(crate) fn coerce_result_to_type(
 
 fn emit_closure(
     params: &[(String, Option<Expr>, bool)],
+    variadic: &Option<String>,
     body: &[crate::parser::ast::Stmt],
     captures: &[String],
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> PhpType {
-    calls::emit_closure(params, body, captures, emitter, ctx, data)
+    calls::emit_closure(params, variadic, body, captures, emitter, ctx, data)
 }
 
 fn emit_closure_call(
@@ -703,6 +707,15 @@ fn emit_closure_call(
     data: &mut DataSection,
 ) -> PhpType {
     calls::emit_closure_call(var, args, emitter, ctx, data)
+}
+
+fn emit_first_class_callable(
+    target: &CallableTarget,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    calls::emit_first_class_callable(target, emitter, ctx, data)
 }
 
 fn emit_expr_call(

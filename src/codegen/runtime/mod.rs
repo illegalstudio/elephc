@@ -89,6 +89,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     system::emit_preg_match_all(emitter);
     system::emit_preg_replace(emitter);
     system::emit_preg_split(emitter);
+    system::emit_match_unhandled(emitter);
 
     // Exception runtime functions
     exceptions::emit_exception_cleanup_frames(emitter);

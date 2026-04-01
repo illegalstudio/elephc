@@ -17,7 +17,8 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
         Token::Variable(_) => parse_variable_stmt(tokens, pos, span),
         Token::This => parse_this_stmt(tokens, pos, span),
         Token::PlusPlus | Token::MinusMinus => parse_incdec_stmt(tokens, pos, span),
-        Token::Class => parse_class_decl(tokens, pos, span, false),
+        Token::Class => parse_class_decl(tokens, pos, span, false, false),
+        Token::ReadOnly => parse_readonly_decl(tokens, pos, span),
         Token::Packed => parse_packed_decl(tokens, pos, span),
         Token::Interface => parse_interface_decl(tokens, pos, span),
         Token::Trait => parse_trait_decl(tokens, pos, span),
@@ -746,6 +747,7 @@ fn parse_class_decl(
     pos: &mut usize,
     span: Span,
     is_abstract: bool,
+    is_readonly_class: bool,
 ) -> Result<Stmt, CompileError> {
     *pos += 1; // consume 'class'
 
@@ -785,6 +787,7 @@ fn parse_class_decl(
             extends,
             implements,
             is_abstract,
+            is_readonly_class,
             trait_uses,
             properties,
             methods,
@@ -863,12 +866,47 @@ fn parse_abstract_decl(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     *pos += 1; // consume 'abstract'
+    if *pos < tokens.len() && tokens[*pos].0 == Token::ReadOnly {
+        *pos += 1; // consume 'readonly'
+        if *pos < tokens.len() && tokens[*pos].0 == Token::Class {
+            return parse_class_decl(tokens, pos, span, true, true);
+        }
+        return Err(CompileError::new(
+            span,
+            "Expected 'class' after 'abstract readonly' at statement position",
+        ));
+    }
     if *pos < tokens.len() && tokens[*pos].0 == Token::Class {
-        return parse_class_decl(tokens, pos, span, true);
+        return parse_class_decl(tokens, pos, span, true, false);
     }
     Err(CompileError::new(
         span,
         "Expected 'class' after 'abstract' at statement position",
+    ))
+}
+
+fn parse_readonly_decl(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1; // consume 'readonly'
+    if *pos < tokens.len() && tokens[*pos].0 == Token::Abstract {
+        *pos += 1; // consume 'abstract'
+        if *pos < tokens.len() && tokens[*pos].0 == Token::Class {
+            return parse_class_decl(tokens, pos, span, true, true);
+        }
+        return Err(CompileError::new(
+            span,
+            "Expected 'class' after 'readonly abstract' at statement position",
+        ));
+    }
+    if *pos < tokens.len() && tokens[*pos].0 == Token::Class {
+        return parse_class_decl(tokens, pos, span, false, true);
+    }
+    Err(CompileError::new(
+        span,
+        "Expected 'class' after 'readonly' at statement position",
     ))
 }
 

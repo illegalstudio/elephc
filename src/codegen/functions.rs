@@ -40,16 +40,17 @@ pub fn emit_closure(
     body: &[crate::parser::ast::Stmt],
     all_functions: &HashMap<String, FunctionSig>,
     constants: &HashMap<String, (ExprKind, PhpType)>,
+    interfaces: &HashMap<String, InterfaceInfo>,
+    classes: &HashMap<String, ClassInfo>,
 ) {
     let epilogue_label = format!("{}_epilogue", label);
     let empty_globals = HashSet::new();
     let empty_statics = HashMap::new();
-    let empty_interfaces = HashMap::new();
     emit_function_with_label(
         emitter, data, label, &epilogue_label, sig, body,
         all_functions, constants, &empty_globals, &empty_statics,
-        &empty_interfaces,
-        None,
+        interfaces,
+        Some(classes),
     );
 }
 
@@ -346,6 +347,8 @@ fn emit_function_with_label_and_class(
     emit_frame_cleanup_callback(emitter, &ctx, &cleanup_label);
 
     // -- emit any closures deferred during this function's body --
+    let empty_classes = HashMap::new();
+    let classes = class_context.map(|(classes, _)| classes).unwrap_or(&empty_classes);
     while !ctx.deferred_closures.is_empty() {
         let closures: Vec<_> = ctx.deferred_closures.drain(..).collect();
         for closure in closures {
@@ -357,6 +360,8 @@ fn emit_function_with_label_and_class(
                 &closure.body,
                 all_functions,
                 constants,
+                interfaces,
+                classes,
             );
         }
     }

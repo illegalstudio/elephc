@@ -1,6 +1,6 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
-use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, CallableTarget, CastType, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
 use crate::parser::stmt::{parse_name, parse_type_expr};
 use crate::span::Span;
 
@@ -76,11 +76,21 @@ fn parse_expr_bp(
         // Check if method call: ->method(args)
         if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
             *pos += 1;
-            let args = parse_args(tokens, pos, arrow_span)?;
-            lhs = Expr::new(
-                ExprKind::MethodCall { object: Box::new(lhs), method: member_name, args },
-                arrow_span,
-            );
+            if parse_first_class_callable_parens(tokens, pos, arrow_span)? {
+                lhs = Expr::new(
+                    ExprKind::FirstClassCallable(CallableTarget::Method {
+                        object: Box::new(lhs),
+                        method: member_name,
+                    }),
+                    arrow_span,
+                );
+            } else {
+                let args = parse_args(tokens, pos, arrow_span)?;
+                lhs = Expr::new(
+                    ExprKind::MethodCall { object: Box::new(lhs), method: member_name, args },
+                    arrow_span,
+                );
+            }
         } else {
             // Property access: ->prop
             lhs = Expr::new(
@@ -761,8 +771,15 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
             // Function call: name(...)
             if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
                 *pos += 1;
-                let args = parse_args(tokens, pos, span)?;
-                Ok(Expr::new(ExprKind::FunctionCall { name, args }, span))
+                if parse_first_class_callable_parens(tokens, pos, span)? {
+                    Ok(Expr::new(
+                        ExprKind::FirstClassCallable(CallableTarget::Function(name)),
+                        span,
+                    ))
+                } else {
+                    let args = parse_args(tokens, pos, span)?;
+                    Ok(Expr::new(ExprKind::FunctionCall { name, args }, span))
+                }
             } else if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleColon {
                 // Static method call: ClassName::method(args)
                 *pos += 1; // consume ::
@@ -774,15 +791,25 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                     return Err(CompileError::new(span, "Expected '(' after static method name"));
                 }
                 *pos += 1;
-                let args = parse_args(tokens, pos, span)?;
-                Ok(Expr::new(
-                    ExprKind::StaticMethodCall {
-                        receiver: StaticReceiver::Named(name),
-                        method,
-                        args,
-                    },
-                    span,
-                ))
+                if parse_first_class_callable_parens(tokens, pos, span)? {
+                    Ok(Expr::new(
+                        ExprKind::FirstClassCallable(CallableTarget::StaticMethod {
+                            receiver: StaticReceiver::Named(name),
+                            method,
+                        }),
+                        span,
+                    ))
+                } else {
+                    let args = parse_args(tokens, pos, span)?;
+                    Ok(Expr::new(
+                        ExprKind::StaticMethodCall {
+                            receiver: StaticReceiver::Named(name),
+                            method,
+                            args,
+                        },
+                        span,
+                    ))
+                }
             } else {
                 // Bare identifier — treat as constant reference (validated by type checker)
                 Ok(Expr::new(ExprKind::ConstRef(name), span))
@@ -856,15 +883,37 @@ fn parse_scoped_static_call(
         ));
     }
     *pos += 1;
-    let args = parse_args(tokens, pos, span)?;
-    Ok(Expr::new(
-        ExprKind::StaticMethodCall {
-            receiver,
-            method,
-            args,
-        },
-        span,
-    ))
+    if parse_first_class_callable_parens(tokens, pos, span)? {
+        Ok(Expr::new(
+            ExprKind::FirstClassCallable(CallableTarget::StaticMethod { receiver, method }),
+            span,
+        ))
+    } else {
+        let args = parse_args(tokens, pos, span)?;
+        Ok(Expr::new(
+            ExprKind::StaticMethodCall {
+                receiver,
+                method,
+                args,
+            },
+            span,
+        ))
+    }
+}
+
+fn parse_first_class_callable_parens(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    _span: Span,
+) -> Result<bool, CompileError> {
+    if *pos + 1 < tokens.len()
+        && tokens[*pos].0 == Token::Ellipsis
+        && tokens[*pos + 1].0 == Token::RParen
+    {
+        *pos += 2; // consume ... )
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 /// Check if tokens at `pos` form a type cast: (int), (float), (string), (bool), (array)

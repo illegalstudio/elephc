@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use crate::errors::CompileError;
 use crate::names::{canonical_name_for_decl, Name, NameKind};
 use crate::parser::ast::{
-    CatchClause, Expr, ExprKind, Program, StaticReceiver, Stmt, StmtKind, TraitAdaptation, TraitUse,
-    UseItem, UseKind,
+    CallableTarget, CatchClause, Expr, ExprKind, Program, StaticReceiver, Stmt, StmtKind,
+    TraitAdaptation, TraitUse, UseItem, UseKind,
 };
 
 #[derive(Default, Clone)]
@@ -138,6 +138,7 @@ fn resolve_stmt_list(
                 extends,
                 implements,
                 is_abstract,
+                is_readonly_class,
                 trait_uses,
                 properties,
                 methods,
@@ -168,6 +169,7 @@ fn resolve_stmt_list(
                             .map(|name| resolved_name(resolved_class_name(name, namespace.as_deref(), &imports)))
                             .collect(),
                         is_abstract: *is_abstract,
+                        is_readonly_class: *is_readonly_class,
                         trait_uses,
                         properties: properties.clone(),
                         methods: resolved_methods,
@@ -726,6 +728,24 @@ fn resolve_expr(expr: &Expr, current_namespace: Option<&str>, imports: &Imports,
                 .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
                 .collect(),
         },
+        ExprKind::FirstClassCallable(target) => ExprKind::FirstClassCallable(match target {
+            CallableTarget::Function(name) => CallableTarget::Function(resolved_name(
+                resolve_function_name(name, current_namespace, imports, symbols),
+            )),
+            CallableTarget::StaticMethod { receiver, method } => CallableTarget::StaticMethod {
+                receiver: match receiver {
+                    StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
+                        resolve_special_or_class_name(name, current_namespace, imports),
+                    )),
+                    _ => receiver.clone(),
+                },
+                method: method.clone(),
+            },
+            CallableTarget::Method { object, method } => CallableTarget::Method {
+                object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
+                method: method.clone(),
+            },
+        }),
         ExprKind::PtrCast { target_type, expr } => ExprKind::PtrCast {
             target_type: target_type.clone(),
             expr: Box::new(resolve_expr(expr, current_namespace, imports, symbols)),
@@ -936,7 +956,7 @@ fn namespace_name(name: &Option<Name>) -> String {
     name.as_ref().map(Name::as_canonical).unwrap_or_default()
 }
 
-fn is_builtin_function(name: &str) -> bool {
+pub(crate) fn is_builtin_function(name: &str) -> bool {
     matches!(
         name,
         "exit"

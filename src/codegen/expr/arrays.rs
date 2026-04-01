@@ -297,6 +297,8 @@ pub(super) fn emit_match_expr(
 
     if let Some(def) = default {
         result_ty = emit_expr(def, emitter, ctx, data);
+    } else {
+        emitter.instruction("bl __rt_match_unhandled");                           // fatal when no arm matched and the match has no default arm
     }
 
     emitter.label(&end_label);

@@ -27,7 +27,10 @@ pub fn emit(
     emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer onto stack
 
     // -- resolve callback function address --
-    let is_closure = matches!(&args[1].kind, ExprKind::Closure { .. });
+    let is_closure = matches!(
+        &args[1].kind,
+        ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_)
+    );
     if is_closure {
         emit_expr(&args[1], emitter, ctx, data);
         emitter.instruction("mov x19, x0");                                     // move closure address to x19
@@ -38,7 +41,7 @@ pub fn emit(
     } else {
         let func_name = match &args[1].kind {
             ExprKind::StringLiteral(name) => name.clone(),
-            _ => panic!("uksort() callback must be a string literal, closure, or callable variable"),
+            _ => panic!("uksort() callback must be a string literal, callable expression, or callable variable"),
         };
         let label = function_symbol(&func_name);
         emitter.instruction(&format!("adrp x19, {}@PAGE", label));              // load page address of comparator function

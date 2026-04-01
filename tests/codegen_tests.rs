@@ -12066,6 +12066,8 @@ echo strlen($home) > 0 ? "ok" : "empty";
 fn test_ffi_sdl_init_and_ticks() {
     let out = compile_and_run(
         r#"<?php
+putenv("SDL_VIDEODRIVER=dummy");
+
 extern "SDL2" {
     function SDL_Init(int $flags): int;
     function SDL_Quit(): void;
@@ -12083,6 +12085,43 @@ SDL_Quit();
 "#,
     );
     assert_eq!(out, "init|ticks");
+}
+
+#[test]
+fn test_variadic_instance_method() {
+    let out = compile_and_run(
+        r#"<?php
+class Counter {
+    public function headAndCount($a, ...$rest) {
+        echo $a;
+        echo ":";
+        echo count($rest);
+    }
+}
+
+$counter = new Counter();
+$counter->headAndCount(7, 8, 9);
+"#,
+    );
+    assert_eq!(out, "7:2");
+}
+
+#[test]
+fn test_variadic_static_method() {
+    let out = compile_and_run(
+        r#"<?php
+class Counter {
+    public static function headAndCount($a, ...$rest) {
+        echo $a;
+        echo ":";
+        echo count($rest);
+    }
+}
+
+Counter::headAndCount(7, 8, 9);
+"#,
+    );
+    assert_eq!(out, "7:2");
 }
 
 #[test]
@@ -12918,4 +12957,269 @@ echo $product->label();
 fn test_example_interfaces_compiles_and_runs() {
     let out = compile_and_run(include_str!("../examples/interfaces/main.php"));
     assert_eq!(out, "WIDGET\n");
+}
+
+#[test]
+fn test_match_without_default_is_fatal() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+$value = 3;
+echo match($value) {
+    1 => "one",
+    2 => "two",
+};
+"#,
+    );
+    assert!(err.contains("unhandled match case"), "{err}");
+}
+
+#[test]
+fn test_readonly_class_constructor_initialization() {
+    let out = compile_and_run(
+        r#"<?php
+readonly class User {
+    public $id;
+
+    public function __construct($id) {
+        $this->id = $id;
+    }
+}
+
+$user = new User(42);
+echo $user->id;
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_first_class_callable_named_function_indirect_call() {
+    let out = compile_and_run(
+        r#"<?php
+function triple($n) {
+    return $n * 3;
+}
+
+$fn = triple(...);
+echo $fn(7);
+"#,
+    );
+    assert_eq!(out, "21");
+}
+
+#[test]
+fn test_first_class_callable_static_method_indirect_call() {
+    let out = compile_and_run(
+        r#"<?php
+class MathBox {
+    public static function double($n) {
+        return $n * 2;
+    }
+}
+
+$fn = MathBox::double(...);
+echo $fn(9);
+"#,
+    );
+    assert_eq!(out, "18");
+}
+
+#[test]
+fn test_first_class_callable_builtin_used_in_array_map() {
+    let out = compile_and_run(
+        r#"<?php
+$len = strlen(...);
+echo $len("tool");
+"#,
+    );
+    assert_eq!(out, "4");
+}
+
+#[test]
+fn test_first_class_callable_preserves_by_ref_params() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(&$n) {
+    $n = $n + 1;
+}
+
+$fn = bump(...);
+$value = 7;
+$fn($value);
+echo $value;
+"#,
+    );
+    assert_eq!(out, "8");
+}
+
+#[test]
+fn test_first_class_callable_alias_preserves_by_ref_params() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(&$n) {
+    $n = $n + 1;
+}
+
+$f = bump(...);
+$g = $f;
+$value = 7;
+$g($value);
+echo $value;
+"#,
+    );
+    assert_eq!(out, "8");
+}
+
+#[test]
+fn test_closure_alias_preserves_by_ref_params() {
+    let out = compile_and_run(
+        r#"<?php
+$f = function (&$x) {
+    $x = $x + 1;
+};
+
+$g = $f;
+$value = 7;
+$g($value);
+echo $value;
+"#,
+    );
+    assert_eq!(out, "8");
+}
+
+#[test]
+fn test_first_class_callable_variable_used_in_array_map() {
+    let out = compile_and_run(
+        r#"<?php
+function double($n) {
+    return $n * 2;
+}
+
+$fn = double(...);
+$values = array_map($fn, [1, 2, 3]);
+echo $values[0];
+echo ":";
+echo $values[2];
+"#,
+    );
+    assert_eq!(out, "2:6");
+}
+
+#[test]
+fn test_first_class_callable_direct_call_user_func() {
+    let out = compile_and_run(
+        r#"<?php
+echo call_user_func(strlen(...), "hello");
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+#[test]
+fn test_call_user_func_first_class_callable_preserves_by_ref_params() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(&$n) {
+    $n = $n + 1;
+}
+
+$f = bump(...);
+$value = 5;
+call_user_func($f, $value);
+echo $value;
+"#,
+    );
+    assert_eq!(out, "6");
+}
+
+#[test]
+fn test_call_user_func_closure_alias_preserves_by_ref_params() {
+    let out = compile_and_run(
+        r#"<?php
+$f = function (&$x) {
+    $x = $x + 1;
+};
+$g = $f;
+$value = 5;
+call_user_func($g, $value);
+echo $value;
+"#,
+    );
+    assert_eq!(out, "6");
+}
+
+#[test]
+fn test_first_class_callable_variadic_function_call() {
+    let out = compile_and_run(
+        r#"<?php
+function count_args(...$xs) {
+    echo count($xs);
+}
+
+$f = count_args(...);
+$f(1, 2, 3);
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_closure_variadic_call() {
+    let out = compile_and_run(
+        r#"<?php
+$f = function (...$xs) {
+    echo count($xs);
+};
+
+$f(1, 2, 3);
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_first_class_callable_variadic_with_regular_param() {
+    let out = compile_and_run(
+        r#"<?php
+function head_and_count($a, ...$rest) {
+    echo $a;
+    echo ":";
+    echo count($rest);
+}
+
+$f = head_and_count(...);
+$f(7, 8, 9);
+"#,
+    );
+    assert_eq!(out, "7:2");
+}
+
+#[test]
+fn test_first_class_callable_builtin_count_accepts_string_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+$f = count(...);
+$xs = ["a", "b"];
+echo $f($xs);
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+#[test]
+fn test_first_class_callable_builtin_count_accepts_assoc_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+$f = count(...);
+$xs = ["a" => 1, "b" => 2];
+echo $f($xs);
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+#[test]
+fn test_example_v017_trio_compiles_and_runs() {
+    let out = compile_and_run(include_str!("../examples/v017-trio/main.php"));
+    assert_eq!(out, "health:[ok]:missing");
 }

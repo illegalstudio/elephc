@@ -2494,3 +2494,91 @@ fn test_error_extern_class_void_field() {
         "Extern class 'Bad' field $field uses an unsupported type",
     );
 }
+
+#[test]
+fn test_error_readonly_class_property_is_implicitly_readonly() {
+    expect_error(
+        "<?php readonly class User { public $id; public function __construct($id) { $this->id = $id; } } $u = new User(1); $u->id = 2;",
+        "Cannot assign to readonly property outside constructor: User::id",
+    );
+}
+
+#[test]
+fn test_error_readonly_class_cannot_extend_non_readonly_parent() {
+    expect_error(
+        "<?php class Base {} readonly class Child extends Base {}",
+        "readonly class cannot extend non-readonly parent",
+    );
+}
+
+#[test]
+fn test_error_first_class_callable_rejects_instance_methods() {
+    expect_error(
+        "<?php class User { public function greet() { return 1; } } $u = new User(); $f = $u->greet(...);",
+        "First-class instance method callables are not supported yet",
+    );
+}
+
+#[test]
+fn test_error_first_class_callable_rejects_static_receiver_static() {
+    expect_error(
+        "<?php class User { public static function make() { return 1; } public function run() { $f = static::make(...); } }",
+        "does not support static:: targets yet",
+    );
+}
+
+#[test]
+fn test_error_first_class_callable_rejects_unsupported_builtin() {
+    expect_error(
+        "<?php $f = trim(...);",
+        "does not support builtin 'trim' yet",
+    );
+}
+
+#[test]
+fn test_error_first_class_callable_ref_param_requires_variable() {
+    expect_error(
+        "<?php function bump(&$n) { $n = $n + 1; } $f = bump(...); $f(1);",
+        "parameter $n must be passed a variable",
+    );
+}
+
+#[test]
+fn test_error_closure_ref_param_requires_variable() {
+    expect_error(
+        "<?php $f = function (&$x) { $x = $x + 1; }; $f(1);",
+        "parameter $x must be passed a variable",
+    );
+}
+
+#[test]
+fn test_error_call_user_func_ref_param_requires_variable() {
+    expect_error(
+        "<?php function bump(&$n) { $n = $n + 1; } $f = bump(...); call_user_func($f, 1);",
+        "parameter $n must be passed a variable",
+    );
+}
+
+#[test]
+fn test_error_call_user_func_string_literal_ref_param_requires_variable() {
+    expect_error(
+        "<?php function bump(&$n) { $n = $n + 1; } call_user_func(\"bump\", 1);",
+        "parameter $n must be passed a variable",
+    );
+}
+
+#[test]
+fn test_error_call_user_func_array_rejects_ref_callback_params() {
+    expect_error(
+        "<?php function bump(&$n) { $n = $n + 1; } $f = bump(...); $value = 1; call_user_func_array($f, [$value]);",
+        "does not support pass-by-reference callback parameters yet",
+    );
+}
+
+#[test]
+fn test_error_call_user_func_array_string_literal_rejects_ref_callback_params() {
+    expect_error(
+        "<?php function bump(&$n) { $n = $n + 1; } $value = 1; call_user_func_array(\"bump\", [$value]);",
+        "does not support pass-by-reference callback parameters yet",
+    );
+}

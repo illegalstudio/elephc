@@ -5,11 +5,11 @@ use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
 use crate::parser::ast::{
-    BinOp, CType, CastType, ClassMethod, ClassProperty, Expr, ExprKind, Program, StaticReceiver,
-    Stmt, StmtKind, Visibility,
+    BinOp, CallableTarget, CType, CastType, ClassMethod, ClassProperty, Expr, ExprKind, Program,
+    StaticReceiver, Stmt, StmtKind, Visibility,
 };
 use crate::types::{
-    ctype_stack_size, ctype_to_php_type, packed_type_size,
+    ctype_stack_size, ctype_to_php_type, first_class_callable_builtin_sig, packed_type_size,
     traits::{flatten_classes, FlattenedClass}, CheckResult, ClassInfo, ExternClassInfo,
     ExternFieldInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo,
     PackedFieldInfo, PhpType, TypeEnv,
@@ -203,6 +203,17 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                 then_ty
             }
         }
+        ExprKind::Match { arms, default, .. } => {
+            let mut result_ty = default
+                .as_ref()
+                .map(|expr| infer_expr_type_syntactic(expr))
+                .unwrap_or(PhpType::Void);
+            for (_, arm_expr) in arms {
+                let arm_ty = infer_expr_type_syntactic(arm_expr);
+                result_ty = wider_type_syntactic(&result_ty, &arm_ty);
+            }
+            result_ty
+        }
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.as_str().to_string()),
         ExprKind::This => PhpType::Object(String::new()),
         ExprKind::PtrCast { target_type, .. } => PhpType::Pointer(Some(target_type.clone())),
@@ -240,6 +251,8 @@ pub(crate) struct Checker {
     pub constants: HashMap<String, PhpType>,
     /// Tracks the return type of closures assigned to variables.
     pub closure_return_types: HashMap<String, PhpType>,
+    /// Tracks known callable signatures assigned to variables.
+    pub callable_sigs: HashMap<String, FunctionSig>,
     /// Interface definitions collected during first pass.
     pub interfaces: HashMap<String, InterfaceInfo>,
     /// Class definitions collected during first pass.
@@ -316,6 +329,7 @@ fn inject_builtin_throwables(
             extends: None,
             implements: vec!["Throwable".to_string()],
             is_abstract: false,
+            is_readonly_class: false,
             properties: vec![builtin_exception_message_property()],
             methods: vec![
                 builtin_exception_constructor_method(),
@@ -533,13 +547,13 @@ fn build_method_sig(method: &crate::parser::ast::ClassMethod) -> FunctionSig {
     let defaults: Vec<Option<Expr>> = method.params.iter().map(|(_, d, _)| d.clone()).collect();
     let ref_params: Vec<bool> = method.params.iter().map(|(_, _, r)| *r).collect();
     let return_type = infer_return_type_syntactic(&method.body);
-    FunctionSig {
+    Checker::callable_wrapper_sig(&FunctionSig {
         params,
         defaults,
         return_type,
         ref_params,
         variadic: method.variadic.clone(),
-    }
+    })
 }
 
 fn build_constructor_param_map(methods: &[crate::parser::ast::ClassMethod]) -> Vec<Option<String>> {
@@ -574,7 +588,16 @@ fn visibility_rank(visibility: &Visibility) -> u8 {
 }
 
 fn required_param_count(sig: &FunctionSig) -> usize {
-    sig.defaults.iter().filter(|default| default.is_none()).count()
+    sig.defaults
+        .iter()
+        .enumerate()
+        .filter(|(idx, default)| {
+            if sig.variadic.is_some() && *idx + 1 == sig.defaults.len() {
+                return false;
+            }
+            default.is_none()
+        })
+        .count()
 }
 
 fn validate_signature_compatibility(
@@ -859,6 +882,20 @@ fn build_class_info_recursive(
         None
     };
 
+    if let (Some(parent), Some(parent_name)) = (&parent_info, class.extends.as_ref()) {
+        if class.is_readonly_class != parent.is_readonly_class {
+            let relation = if class.is_readonly_class {
+                "readonly class cannot extend non-readonly parent"
+            } else {
+                "non-readonly class cannot extend readonly parent"
+            };
+            return Err(CompileError::new(
+                crate::span::Span::dummy(),
+                &format!("{}: {} extends {}", relation, class.name, parent_name),
+            ));
+        }
+    }
+
     let mut prop_types = Vec::new();
     let mut property_offsets = HashMap::new();
     let mut property_declaring_classes = HashMap::new();
@@ -956,7 +993,7 @@ fn build_class_info_recursive(
         property_declaring_classes.insert(prop.name.clone(), class.name.clone());
         defaults.push(prop.default.clone());
         property_visibilities.insert(prop.name.clone(), prop.visibility.clone());
-        if prop.readonly {
+        if class.is_readonly_class || prop.readonly {
             readonly_properties.insert(prop.name.clone());
         }
     }
@@ -1221,6 +1258,7 @@ fn build_class_info_recursive(
             class_id: *next_class_id,
             parent: class.extends.clone(),
             is_abstract: class.is_abstract,
+            is_readonly_class: class.is_readonly_class,
             properties: prop_types,
             property_offsets,
             property_declaring_classes,
@@ -1312,6 +1350,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         functions: HashMap::new(),
         constants: HashMap::new(),
         closure_return_types: HashMap::new(),
+        callable_sigs: HashMap::new(),
         interfaces: HashMap::new(),
         classes: HashMap::new(),
         current_class: None,
@@ -1586,16 +1625,13 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 .iter()
                 .map(|p| (p.clone(), PhpType::Int))
                 .collect();
-            checker.functions.insert(
-                name.clone(),
-                FunctionSig {
-                    params,
-                    defaults: decl.defaults.clone(),
-                    return_type,
-                    ref_params: decl.ref_params.clone(),
-                    variadic: decl.variadic.clone(),
-                },
-            );
+            checker.functions.insert(name.clone(), Checker::callable_wrapper_sig(&FunctionSig {
+                params,
+                defaults: decl.defaults.clone(),
+                return_type,
+                ref_params: decl.ref_params.clone(),
+                variadic: decl.variadic.clone(),
+            }));
         }
     }
 
@@ -1638,6 +1674,14 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                         .map(|(_, t)| t.clone())
                         .unwrap_or(PhpType::Int);
                     method_env.insert(pname.clone(), ty);
+                }
+                if let Some(variadic_name) = &method.variadic {
+                    let ty = sig_params
+                        .as_ref()
+                        .and_then(|p| p.get(method.params.len()))
+                        .map(|(_, t)| t.clone())
+                        .unwrap_or(PhpType::Array(Box::new(PhpType::Int)));
+                    method_env.insert(variadic_name.clone(), ty);
                 }
                 // For __construct: infer param types from property types
                 // This updates both the env (for body type-checking) and the sig
@@ -1722,6 +1766,28 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
 }
 
 impl Checker {
+    fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
+        let Some(variadic_name) = sig.variadic.as_ref() else {
+            return sig.clone();
+        };
+        if sig
+            .params
+            .last()
+            .is_some_and(|(name, ty)| name == variadic_name && matches!(ty, PhpType::Array(_)))
+        {
+            return sig.clone();
+        }
+
+        let mut wrapper_sig = sig.clone();
+        wrapper_sig.params.push((
+            variadic_name.clone(),
+            PhpType::Array(Box::new(PhpType::Mixed)),
+        ));
+        wrapper_sig.defaults.push(None);
+        wrapper_sig.ref_params.push(false);
+        wrapper_sig
+    }
+
     fn with_local_storage_context<T, F>(
         &mut self,
         ref_param_names: Vec<String>,
@@ -2327,18 +2393,219 @@ impl Checker {
                 .collect();
             self.functions.insert(
                 callback_name.to_string(),
-                FunctionSig {
+                Self::callable_wrapper_sig(&FunctionSig {
                     params,
                     defaults: decl.defaults.clone(),
                     return_type,
                     ref_params: decl.ref_params.clone(),
                     variadic: decl.variadic.clone(),
-                },
+                }),
             );
         }
 
         let _ = decl;
         Ok(())
+    }
+
+    fn resolve_first_class_callable_sig(
+        &mut self,
+        target: &CallableTarget,
+        span: crate::span::Span,
+        env: &TypeEnv,
+    ) -> Result<FunctionSig, CompileError> {
+        match target {
+            CallableTarget::Function(name) => {
+                let function_name = name.as_str();
+                if let Some(sig) = self.functions.get(function_name) {
+                    return Ok(Self::callable_wrapper_sig(sig));
+                }
+                if let Some(decl) = self.fn_decls.get(function_name) {
+                    return Ok(Self::callable_wrapper_sig(&FunctionSig {
+                        params: decl
+                            .params
+                            .iter()
+                            .cloned()
+                            .map(|name| (name, PhpType::Mixed))
+                            .collect(),
+                        defaults: decl.defaults.clone(),
+                        return_type: infer_return_type_syntactic(&decl.body),
+                        ref_params: decl.ref_params.clone(),
+                        variadic: decl.variadic.clone(),
+                    }));
+                }
+                if let Some(sig) = self.extern_functions.get(function_name) {
+                    return Ok(FunctionSig {
+                        params: sig.params.clone(),
+                        defaults: vec![None; sig.params.len()],
+                        return_type: sig.return_type.clone(),
+                        ref_params: vec![false; sig.params.len()],
+                        variadic: None,
+                    });
+                }
+                if crate::name_resolver::is_builtin_function(function_name) {
+                    return first_class_callable_builtin_sig(function_name).ok_or_else(|| {
+                        CompileError::new(
+                            span,
+                            &format!(
+                                "First-class callable syntax does not support builtin '{}' yet",
+                                function_name
+                            ),
+                        )
+                    });
+                }
+                Err(CompileError::new(
+                    span,
+                    &format!("Undefined function for first-class callable: {}", function_name),
+                ))
+            }
+            CallableTarget::StaticMethod { receiver, method } => {
+                let resolved_class_name = match receiver {
+                    StaticReceiver::Named(class_name) => class_name.as_str().to_string(),
+                    StaticReceiver::Self_ => {
+                        self.current_class.as_ref().cloned().ok_or_else(|| {
+                            CompileError::new(
+                                span,
+                                "Cannot use self:: in first-class callable outside class method scope",
+                            )
+                        })?
+                    }
+                    StaticReceiver::Static => {
+                        return Err(CompileError::new(
+                            span,
+                            "First-class callable syntax does not support static:: targets yet",
+                        ));
+                    }
+                    StaticReceiver::Parent => {
+                        let current_class = self.current_class.as_ref().ok_or_else(|| {
+                            CompileError::new(
+                                span,
+                                "Cannot use parent:: in first-class callable outside class method scope",
+                            )
+                        })?;
+                        let current_info = self.classes.get(current_class).ok_or_else(|| {
+                            CompileError::new(
+                                span,
+                                &format!("Undefined class: {}", current_class),
+                            )
+                        })?;
+                        current_info.parent.as_ref().cloned().ok_or_else(|| {
+                            CompileError::new(
+                                span,
+                                &format!("Class {} has no parent class", current_class),
+                            )
+                        })?
+                    }
+                };
+
+                let class_info = self.classes.get(&resolved_class_name).ok_or_else(|| {
+                    CompileError::new(span, &format!("Undefined class: {}", resolved_class_name))
+                })?;
+                let sig = class_info.static_methods.get(method).ok_or_else(|| {
+                    if class_info.methods.contains_key(method) {
+                        CompileError::new(
+                            span,
+                            &format!(
+                                "First-class callable syntax only supports static methods here: {}::{}",
+                                resolved_class_name, method
+                            ),
+                        )
+                    } else {
+                        CompileError::new(
+                            span,
+                            &format!(
+                                "Undefined static method for first-class callable: {}::{}",
+                                resolved_class_name, method
+                            ),
+                        )
+                    }
+                })?;
+                if let Some(visibility) = class_info.static_method_visibilities.get(method) {
+                    let declaring_class = class_info
+                        .static_method_declaring_classes
+                        .get(method)
+                        .map(String::as_str)
+                        .unwrap_or(resolved_class_name.as_str());
+                    if !self.can_access_member(declaring_class, visibility) {
+                        return Err(CompileError::new(
+                            span,
+                            &format!(
+                                "Cannot access {} method: {}::{}",
+                                Self::visibility_label(visibility),
+                                resolved_class_name,
+                                method
+                            ),
+                        ));
+                    }
+                }
+                Ok(Self::callable_wrapper_sig(sig))
+            }
+            CallableTarget::Method { object, method } => {
+                let object_ty = self.infer_type(object, env)?;
+                match object_ty {
+                    PhpType::Object(class_name) => Err(CompileError::new(
+                        span,
+                        &format!(
+                            "First-class instance method callables are not supported yet: {}->{}(...)",
+                            class_name, method
+                        ),
+                    )),
+                    _ => Err(CompileError::new(
+                        span,
+                        "First-class method callable requires an object receiver",
+                    )),
+                }
+            }
+        }
+    }
+
+    fn infer_first_class_callable_target(
+        &mut self,
+        target: &CallableTarget,
+        span: crate::span::Span,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        Ok(self
+            .resolve_first_class_callable_sig(target, span, env)?
+            .return_type)
+    }
+
+    fn resolve_expr_callable_sig(
+        &mut self,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<Option<FunctionSig>, CompileError> {
+        match &expr.kind {
+            ExprKind::Closure {
+                params,
+                variadic,
+                body,
+                ..
+            } => {
+                let return_type = self.infer_closure_return_type(body, env);
+                Ok(Some(FunctionSig {
+                    params: params
+                        .iter()
+                        .map(|(name, _, _)| (name.clone(), PhpType::Mixed))
+                        .chain(
+                            variadic
+                                .iter()
+                                .cloned()
+                                .map(|name| (name, PhpType::Array(Box::new(PhpType::Mixed)))),
+                        )
+                        .collect(),
+                    defaults: params.iter().map(|(_, default, _)| default.clone()).collect(),
+                    return_type,
+                    ref_params: params.iter().map(|(_, _, is_ref)| *is_ref).collect(),
+                    variadic: variadic.clone(),
+                }))
+            }
+            ExprKind::FirstClassCallable(target) => {
+                self.resolve_first_class_callable_sig(target, expr.span, env)
+                    .map(Some)
+            }
+            ExprKind::Variable(var_name) => Ok(self.callable_sigs.get(var_name).cloned()),
+            _ => Ok(None),
+        }
     }
 
     fn check_extern_function_call(
@@ -2459,10 +2726,18 @@ impl Checker {
             }
             StmtKind::Assign { name, value } => {
                 let ty = self.infer_type(value, env)?;
-                // Track closure return types for closure-returning-closure patterns
-                if let ExprKind::Closure { body, .. } = &value.kind {
-                    let ret_ty = self.infer_closure_return_type(body, env);
-                    self.closure_return_types.insert(name.clone(), ret_ty);
+                if ty == PhpType::Callable {
+                    if let Some(sig) = self.resolve_expr_callable_sig(value, env)? {
+                        self.closure_return_types
+                            .insert(name.clone(), sig.return_type.clone());
+                        self.callable_sigs.insert(name.clone(), sig);
+                    } else {
+                        self.closure_return_types.remove(name);
+                        self.callable_sigs.remove(name);
+                    }
+                } else {
+                    self.closure_return_types.remove(name);
+                    self.callable_sigs.remove(name);
                 }
                 if let Some(existing) = env.get(name) {
                     let merged_ty = self.merged_assignment_type(existing, &ty);
@@ -3192,6 +3467,10 @@ impl Checker {
             ExprKind::ConstRef(name) => self.constants.get(name.as_str()).cloned().ok_or_else(|| {
                 CompileError::new(expr.span, &format!("Undefined constant: {}", name))
             }),
+            ExprKind::FirstClassCallable(target) => {
+                self.infer_first_class_callable_target(target, expr.span, env)?;
+                Ok(PhpType::Callable)
+            }
             ExprKind::Closure {
                 params,
                 variadic,
@@ -3250,16 +3529,23 @@ impl Checker {
                         &format!("Cannot call ${} — not a callable (got {:?})", var, var_ty),
                     ));
                 }
+                if let Some(sig) = self.callable_sigs.get(var).cloned() {
+                    return self.check_known_callable_call(
+                        &sig,
+                        args,
+                        expr.span,
+                        env,
+                        &format!("callable ${}", var),
+                    );
+                }
                 for arg in args {
                     self.infer_type(arg, env)?;
                 }
-                // Use tracked return type if available, otherwise default to Int.
-                let ret_ty = self
+                Ok(self
                     .closure_return_types
                     .get(var)
                     .cloned()
-                    .unwrap_or(PhpType::Int);
-                Ok(ret_ty)
+                    .unwrap_or(PhpType::Int))
             }
             ExprKind::ExprCall { callee, args } => {
                 let callee_ty = self.infer_type(callee, env)?;
@@ -3271,6 +3557,30 @@ impl Checker {
                             callee_ty
                         ),
                     ));
+                }
+                match &callee.kind {
+                    ExprKind::Variable(var_name) => {
+                        if let Some(sig) = self.callable_sigs.get(var_name).cloned() {
+                            return self.check_known_callable_call(
+                                &sig,
+                                args,
+                                expr.span,
+                                env,
+                                &format!("callable ${}", var_name),
+                            );
+                        }
+                    }
+                    ExprKind::FirstClassCallable(target) => {
+                        let sig = self.resolve_first_class_callable_sig(target, expr.span, env)?;
+                        return self.check_known_callable_call(
+                            &sig,
+                            args,
+                            expr.span,
+                            env,
+                            "first-class callable",
+                        );
+                    }
+                    _ => {}
                 }
                 for arg in args {
                     self.infer_type(arg, env)?;
@@ -3587,12 +3897,26 @@ impl Checker {
                         .unwrap_or_else(|| class_name.clone());
                     if let Some(class_info) = self.classes.get_mut(&impl_class_name) {
                         if let Some(sig) = class_info.methods.get_mut(method) {
+                            let regular_param_count = if sig.variadic.is_some() {
+                                sig.params.len().saturating_sub(1)
+                            } else {
+                                sig.params.len()
+                            };
                             for (i, arg_ty) in arg_types.iter().enumerate() {
-                                if i < sig.params.len()
+                                if i < regular_param_count
                                     && sig.params[i].1 == PhpType::Int
                                     && *arg_ty != PhpType::Int
                                 {
                                     sig.params[i].1 = arg_ty.clone();
+                                }
+                            }
+                            if sig.variadic.is_some() && arg_types.len() > regular_param_count {
+                                let mut elem_ty = arg_types[regular_param_count].clone();
+                                for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
+                                    elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
+                                }
+                                if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
+                                    **existing_elem_ty = wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
                                 }
                             }
                             return Ok(sig.return_type.clone());
@@ -3755,12 +4079,26 @@ impl Checker {
                 };
                 if let Some(class_info) = self.classes.get_mut(class_name) {
                     if let Some(sig) = class_info.static_methods.get_mut(method) {
+                        let regular_param_count = if sig.variadic.is_some() {
+                            sig.params.len().saturating_sub(1)
+                        } else {
+                            sig.params.len()
+                        };
                         for (i, arg_ty) in arg_types.iter().enumerate() {
-                            if i < sig.params.len()
+                            if i < regular_param_count
                                 && sig.params[i].1 == PhpType::Int
                                 && *arg_ty != PhpType::Int
                             {
                                 sig.params[i].1 = arg_ty.clone();
+                            }
+                        }
+                        if sig.variadic.is_some() && arg_types.len() > regular_param_count {
+                            let mut elem_ty = arg_types[regular_param_count].clone();
+                            for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
+                                elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
+                            }
+                            if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
+                                **existing_elem_ty = wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
                             }
                         }
                         return Ok(sig.return_type.clone());
@@ -3772,12 +4110,26 @@ impl Checker {
                         .get_mut(&direct_impl_class_name)
                         .and_then(|class_info| class_info.methods.get_mut(method))
                     {
+                        let regular_param_count = if sig.variadic.is_some() {
+                            sig.params.len().saturating_sub(1)
+                        } else {
+                            sig.params.len()
+                        };
                         for (i, arg_ty) in arg_types.iter().enumerate() {
-                            if i < sig.params.len()
+                            if i < regular_param_count
                                 && sig.params[i].1 == PhpType::Int
                                 && *arg_ty != PhpType::Int
                             {
                                 sig.params[i].1 = arg_ty.clone();
+                            }
+                        }
+                        if sig.variadic.is_some() && arg_types.len() > regular_param_count {
+                            let mut elem_ty = arg_types[regular_param_count].clone();
+                            for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
+                                elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
+                            }
+                            if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
+                                **existing_elem_ty = wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
                             }
                         }
                         return Ok(sig.return_type.clone());

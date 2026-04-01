@@ -1,8 +1,8 @@
 use elephc::lexer::tokenize;
 use elephc::names::Name;
 use elephc::parser::ast::{
-    BinOp, CatchClause, Expr, ExprKind, StaticReceiver, Stmt, StmtKind, TraitAdaptation, TypeExpr,
-    UseKind, Visibility,
+    BinOp, CallableTarget, CatchClause, Expr, ExprKind, StaticReceiver, Stmt, StmtKind,
+    TraitAdaptation, TypeExpr, UseKind, Visibility,
 };
 use elephc::parser::parse;
 
@@ -1168,6 +1168,7 @@ fn test_parse_class_decl() {
             trait_uses,
             properties,
             methods,
+            ..
         } => {
             assert_eq!(name, "Point");
             assert_eq!(extends, &None);
@@ -1219,6 +1220,7 @@ fn test_parse_trait_decl_and_use_adaptations() {
             trait_uses,
             properties,
             methods,
+            ..
         } => {
             assert_eq!(name, "Box");
             assert_eq!(extends, &None);
@@ -1665,5 +1667,74 @@ fn test_parse_extern_callable_param() {
             ));
         }
         _ => panic!("Expected ExternFunctionDecl"),
+    }
+}
+
+#[test]
+fn test_parse_readonly_class_flag() {
+    let stmts = parse_source("<?php readonly class User { public $id; }");
+    match &stmts[0].kind {
+        StmtKind::ClassDecl {
+            name,
+            is_readonly_class,
+            properties,
+            ..
+        } => {
+            assert_eq!(name, "User");
+            assert!(*is_readonly_class);
+            assert_eq!(properties.len(), 1);
+            assert_eq!(properties[0].name, "id");
+        }
+        other => panic!("Expected readonly ClassDecl, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_abstract_readonly_class_flags() {
+    let stmts = parse_source("<?php abstract readonly class User {}");
+    match &stmts[0].kind {
+        StmtKind::ClassDecl {
+            name,
+            is_abstract,
+            is_readonly_class,
+            ..
+        } => {
+            assert_eq!(name, "User");
+            assert!(*is_abstract);
+            assert!(*is_readonly_class);
+        }
+        other => panic!("Expected abstract readonly ClassDecl, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_first_class_callable_function() {
+    let stmts = parse_source("<?php $f = strlen(...);");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
+                assert_eq!(name.as_str(), "strlen");
+            }
+            other => panic!("Expected function first-class callable, got {:?}", other),
+        },
+        other => panic!("Expected assignment, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_first_class_callable_static_method() {
+    let stmts = parse_source("<?php Foo::build(...);");
+    match &stmts[0].kind {
+        StmtKind::ExprStmt(expr) => match &expr.kind {
+            ExprKind::FirstClassCallable(CallableTarget::StaticMethod { receiver, method }) => {
+                assert_eq!(method, "build");
+                match receiver {
+                    StaticReceiver::Named(name) => assert_eq!(name.as_str(), "Foo"),
+                    other => panic!("Expected named static receiver, got {:?}", other),
+                }
+            }
+            other => panic!("Expected static first-class callable, got {:?}", other),
+        },
+        other => panic!("Expected expression statement, got {:?}", other),
     }
 }

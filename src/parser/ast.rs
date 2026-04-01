@@ -93,6 +93,7 @@ pub enum ExprKind {
         method: String,
         args: Vec<Expr>,
     },
+    FirstClassCallable(CallableTarget),
     This,
     PtrCast {
         target_type: String,
@@ -119,6 +120,19 @@ pub enum StaticReceiver {
     Self_,
     Static,
     Parent,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CallableTarget {
+    Function(Name),
+    StaticMethod {
+        receiver: StaticReceiver,
+        method: String,
+    },
+    Method {
+        object: Box<Expr>,
+        method: String,
+    },
 }
 
 impl PartialEq for Expr {
@@ -332,6 +346,7 @@ pub enum StmtKind {
         extends: Option<Name>,
         implements: Vec<Name>,
         is_abstract: bool,
+        is_readonly_class: bool,
         trait_uses: Vec<TraitUse>,
         properties: Vec<ClassProperty>,
         methods: Vec<ClassMethod>,

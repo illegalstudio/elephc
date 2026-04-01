@@ -1,5 +1,6 @@
 mod args;
 mod closure;
+mod first_class;
 mod function;
 mod indirect;
 
@@ -21,13 +22,14 @@ pub(super) fn emit_function_call(
 
 pub(super) fn emit_closure(
     params: &[(String, Option<Expr>, bool)],
+    variadic: &Option<String>,
     body: &[crate::parser::ast::Stmt],
     captures: &[String],
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> PhpType {
-    closure::emit_closure(params, body, captures, emitter, ctx, data)
+    closure::emit_closure(params, variadic, body, captures, emitter, ctx, data)
 }
 
 pub(super) fn emit_closure_call(
@@ -48,4 +50,20 @@ pub(super) fn emit_expr_call(
     data: &mut DataSection,
 ) -> PhpType {
     indirect::emit_expr_call(callee, args, emitter, ctx, data)
+}
+
+pub(super) fn emit_first_class_callable(
+    target: &crate::parser::ast::CallableTarget,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    first_class::emit_first_class_callable(target, emitter, ctx, data)
+}
+
+pub(super) fn first_class_callable_sig(
+    target: &crate::parser::ast::CallableTarget,
+    ctx: &Context,
+) -> Option<crate::types::FunctionSig> {
+    first_class::first_class_callable_sig(target, ctx)
 }

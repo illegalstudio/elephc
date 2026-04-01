@@ -75,6 +75,17 @@ pub(super) fn emit_function_call(
                     emitter.comment(&format!("ref arg: address of global ${}", var_name));
                     emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page of global var
                     emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); //add page offset
+                } else if ctx.ref_params.contains(var_name) {
+                    let var = match ctx.variables.get(var_name) {
+                        Some(v) => v,
+                        None => {
+                            emitter.comment(&format!("WARNING: undefined ref variable ${}", var_name));
+                            continue;
+                        }
+                    };
+                    let offset = var.stack_offset;
+                    emitter.comment(&format!("ref arg: forward underlying reference for ${}", var_name));
+                    crate::codegen::abi::load_at_offset(emitter, "x0", offset); // load existing address stored by by-ref param
                 } else {
                     let var = match ctx.variables.get(var_name) {
                         Some(v) => v,

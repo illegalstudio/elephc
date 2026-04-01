@@ -92,6 +92,39 @@ pub struct FunctionSig {
     pub variadic: Option<String>,
 }
 
+pub(crate) fn first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
+    match name {
+        "strlen" => Some(FunctionSig {
+            params: vec![("arg0".to_string(), PhpType::Str)],
+            defaults: vec![None],
+            return_type: PhpType::Int,
+            ref_params: vec![false],
+            variadic: None,
+        }),
+        "count" => Some(FunctionSig {
+            params: vec![(
+                "arg0".to_string(),
+                PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(PhpType::Mixed),
+                },
+            )],
+            defaults: vec![None],
+            return_type: PhpType::Int,
+            ref_params: vec![false],
+            variadic: None,
+        }),
+        "buffer_len" => Some(FunctionSig {
+            params: vec![("arg0".to_string(), PhpType::Buffer(Box::new(PhpType::Int)))],
+            defaults: vec![None],
+            return_type: PhpType::Int,
+            ref_params: vec![false],
+            variadic: None,
+        }),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct InterfaceInfo {
     pub interface_id: u64,
@@ -107,6 +140,7 @@ pub struct ClassInfo {
     pub class_id: u64,
     pub parent: Option<String>,
     pub is_abstract: bool,
+    pub is_readonly_class: bool,
     pub properties: Vec<(String, PhpType)>,
     pub property_offsets: HashMap<String, usize>,
     pub property_declaring_classes: HashMap<String, String>,

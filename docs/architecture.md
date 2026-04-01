@@ -101,7 +101,7 @@ src/
 │   ├── expr/                  Expression submodules
 │   │   ├── arrays.rs          Indexed/assoc arrays, match, array access
 │   │   ├── binops.rs          Arithmetic, comparison, bitwise, null-coalesce helpers
-│   │   ├── calls.rs           Function / closure / indirect call dispatch
+│   │   ├── calls.rs           Function / closure / first-class callable / indirect call dispatch
 │   │   ├── calls/             Call-specific helpers
 │   │   ├── coerce.rs          Truthiness / string / null coercions
 │   │   ├── compare.rs         Comparison and widening helpers
@@ -141,10 +141,10 @@ src/
 │       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, str_persist, ... (53 files)
 │       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, sort, usort, refcount, gc/decref dispatch, ... (100 files)
 │       ├── io/                fopen, fgets, fread, stat, scandir, ... (17 files)
-│       ├── buffers/           buffer_new, buffer_len, bounds_fail
+│       ├── buffers/           buffer_new, buffer_len, bounds_fail, use_after_free
 │       ├── exceptions.rs      Exception runtime module root / re-exports
 │       ├── exceptions/        cleanup_frames, matches, throw_current, rethrow_current helpers
-│       ├── system/            build_argv, time, getenv, shell_exec, date, mktime, strtotime, json_encode_*, json_decode, preg_*, ... (26 files)
+│       ├── system/            build_argv, time, getenv, shell_exec, date, mktime, strtotime, match_unhandled, json_encode_*, json_decode, preg_*, ... (27 files)
 │       └── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ... (5 files)
 │
 │
@@ -212,6 +212,8 @@ Namespace syntax is preserved through parsing and include resolution, then norma
 
 Because codegen receives canonical names, namespaces do not require special cases in most later passes: mangled labels are derived centrally from the final fully-qualified name.
 
+First-class callable syntax rides on the same canonical naming pipeline. The parser emits a dedicated callable-target node, the checker validates the target statically, and codegen lowers it to a synthesized wrapper function so runtime callable values remain ordinary function pointers.
+
 ## Runtime memory layout
 
 ### Array header (heap-allocated)
@@ -235,6 +237,8 @@ Offset  Size  Field
 
 `buffer<T>` is deliberately separate from the PHP array/hash runtime path. Codegen uses the checked static element type plus the stored stride to emit direct address arithmetic and direct scalar loads/stores, or typed packed-field access for `buffer<PackedType>`.
 
+`match` expressions stay in the normal expression pipeline. When the source omits `default`, codegen now emits a branch to a dedicated runtime fatal helper (`__rt_match_unhandled`) instead of falling through to an undefined result.
+
 ### Runtime BSS and data symbols
 
 The runtime reserves a fixed set of global symbols in `src/codegen/runtime/data.rs` via `emit_runtime_data()`:
@@ -244,7 +248,7 @@ The runtime reserves a fixed set of global symbols in `src/codegen/runtime/data.
 | String scratch | `_concat_buf`, `_concat_off` | Temporary string results for expression evaluation |
 | CLI globals | `_global_argc`, `_global_argv` | Saved OS argument state used to build `$argv` |
 | Heap allocator | `_heap_buf`, `_heap_off`, `_heap_free_list`, `_heap_small_bins`, `_heap_debug_enabled`, `_heap_max` | Heap storage plus general/small-bin allocator metadata and heap-debug toggle |
-| Runtime diagnostics | `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg`, `_buffer_bounds_msg`, `_uncaught_exc_msg`, `_heap_dbg_*` | Fatal error messages plus heap-debug summary/failure strings |
+| Runtime diagnostics | `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg`, `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_match_unhandled_msg`, `_uncaught_exc_msg`, `_heap_dbg_*` | Fatal error messages plus heap-debug summary/failure strings |
 | GC statistics and cycle state | `_gc_allocs`, `_gc_frees`, `_gc_live`, `_gc_peak`, `_gc_collecting`, `_gc_release_suppressed` | Allocation/free/live-byte counters plus targeted-cycle-collector coordination flags |
 | Exception state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_class_parent_ids` | Active handler stack, activation cleanup stack, current exception object, and parent links used for catch matching |
 | I/O scratch | `_cstr_buf`, `_cstr_buf2`, `_eof_flags` | Syscall-oriented C-string scratch buffers and EOF bookkeeping |
