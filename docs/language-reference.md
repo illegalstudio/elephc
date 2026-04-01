@@ -446,6 +446,35 @@ function add($a, $b) {
 echo add(3, 4); // 7
 ```
 
+### Parameter and return type hints
+
+elephc now supports PHP-style parameter and return type hints on functions, methods, constructors, closures, and arrow functions:
+
+```php
+<?php
+function repeat(string $label, int $count): string {
+    return $label . $count;
+}
+
+class User {
+    public function __construct(int $id) {
+        echo $id;
+    }
+}
+
+$double = fn(int $x): int => $x * 2;
+echo repeat("item-", $double(2)); // item-4
+```
+
+Current rules:
+- supported parameter and return types match the compiler's existing nominal/scalar types such as `int`, `float`, `bool`, `string`, `array`, `callable`, `ptr`, and known class / interface / enum names
+- `mixed`, union, and nullable type hints are also supported, and are lowered to the compiler's boxed runtime representation
+- `void` is valid only as a return type, not as a parameter type
+- declared parameter types are enforced at call sites
+- declared return types are enforced even if the function is never called directly
+- typed variadic parameters such as `function foo(int ...$xs)` are not supported yet
+- pass-by-reference parameters declared as `mixed`, union, or nullable require an argument variable that already uses boxed mixed-compatible storage (for example another typed union/nullable local)
+
 ### Recursion
 
 ```php

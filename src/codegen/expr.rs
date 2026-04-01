@@ -1,6 +1,6 @@
 mod arrays;
 mod binops;
-mod calls;
+pub(crate) mod calls;
 mod coerce;
 mod compare;
 mod helpers;
@@ -387,6 +387,7 @@ pub fn emit_expr(
                 defaults: vec![],
                 return_type: PhpType::Int,
                 ref_params: vec![],
+                declared_params: vec![],
                 variadic: None,
             };
             let then_syn = super::functions::infer_local_type_with_ctx(then_expr, &dummy_sig, ctx);

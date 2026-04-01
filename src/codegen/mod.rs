@@ -105,10 +105,31 @@ pub fn generate(
                             ref_params.push(false);
                         }
                     }
+                    let mut declared_params: Vec<bool> = vec![false];
+                    if let Some(sig) = class_static_sig {
+                        declared_params.extend(sig.declared_params.clone());
+                    } else {
+                        declared_params.extend(
+                            method.params.iter().map(|(_, type_ann, _, _)| type_ann.is_some()),
+                        );
+                        if method.variadic.is_some() {
+                            declared_params.push(false);
+                        }
+                    }
                     let return_type = class_static_sig
                         .map(|s| s.return_type.clone())
                         .unwrap_or(PhpType::Int);
-                    (label, FunctionSig { params, defaults, return_type, ref_params, variadic: method.variadic.clone() })
+                    (
+                        label,
+                        FunctionSig {
+                            params,
+                            defaults,
+                            return_type,
+                            ref_params,
+                            declared_params,
+                            variadic: method.variadic.clone(),
+                        },
+                    )
                 } else {
                     let label = method_symbol(class_name, &method.name);
                     let class_method_sig = class_info.methods.get(&method.name);
@@ -138,10 +159,31 @@ pub fn generate(
                             ref_params.push(false);
                         }
                     }
+                    let mut declared_params: Vec<bool> = vec![false]; // $this is synthetic
+                    if let Some(sig) = class_method_sig {
+                        declared_params.extend(sig.declared_params.clone());
+                    } else {
+                        declared_params.extend(
+                            method.params.iter().map(|(_, type_ann, _, _)| type_ann.is_some()),
+                        );
+                        if method.variadic.is_some() {
+                            declared_params.push(false);
+                        }
+                    }
                     let return_type = class_method_sig
                         .map(|s| s.return_type.clone())
                         .unwrap_or(PhpType::Int);
-                    (label, FunctionSig { params, defaults, return_type, ref_params, variadic: method.variadic.clone() })
+                    (
+                        label,
+                        FunctionSig {
+                            params,
+                            defaults,
+                            return_type,
+                            ref_params,
+                            declared_params,
+                            variadic: method.variadic.clone(),
+                        },
+                    )
                 };
                 let epilogue_label = format!("{}_epilogue", label);
                 functions::emit_method(

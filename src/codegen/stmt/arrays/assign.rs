@@ -106,7 +106,9 @@ pub(super) fn emit_array_assign_stmt(
         emit_expr(index, emitter, ctx, data);
         emitter.instruction("stp x1, x2, [sp, #-16]!");                         // save key ptr/len
         let mut val_ty = emit_expr(value, emitter, ctx, data);
-        if matches!(elem_ty, PhpType::Mixed) && val_ty != PhpType::Mixed {
+        if matches!(elem_ty, PhpType::Mixed)
+            && !matches!(val_ty, PhpType::Mixed | PhpType::Union(_))
+        {
             super::super::super::emit_box_current_value_as_mixed(emitter, &val_ty);
             val_ty = PhpType::Mixed;
         } else {

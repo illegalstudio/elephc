@@ -24,6 +24,7 @@ fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
     ));
     wrapper_sig.defaults.push(None);
     wrapper_sig.ref_params.push(false);
+    wrapper_sig.declared_params.push(false);
     wrapper_sig
 }
 

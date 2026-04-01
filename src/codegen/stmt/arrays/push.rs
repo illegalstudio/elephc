@@ -39,7 +39,7 @@ pub(super) fn emit_array_push_stmt(
         None => PhpType::Int,
     };
     let mut val_ty = emit_expr(value, emitter, ctx, data);
-    if matches!(elem_ty, PhpType::Mixed) && val_ty != PhpType::Mixed {
+    if matches!(elem_ty, PhpType::Mixed) && !matches!(val_ty, PhpType::Mixed | PhpType::Union(_)) {
         crate::codegen::emit_box_current_value_as_mixed(emitter, &val_ty);
         val_ty = PhpType::Mixed;
     } else {

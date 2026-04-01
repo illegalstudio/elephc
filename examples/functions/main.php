@@ -1,32 +1,32 @@
 <?php
 // Functions: declaration, return, recursion, composition
 
-function my_abs($x) {
+function my_abs(int $x): int {
     if ($x < 0) {
         return -$x;
     }
     return $x;
 }
 
-function my_max($a, $b) {
+function my_max(int $a, int $b): int {
     if ($a > $b) {
         return $a;
     }
     return $b;
 }
 
-function my_min($a, $b) {
+function my_min(int $a, int $b): int {
     if ($a < $b) {
         return $a;
     }
     return $b;
 }
 
-function clamp($val, $lo, $hi) {
+function clamp(int $val, int $lo, int $hi): int {
     return my_max($lo, my_min($val, $hi));
 }
 
-function gcd($a, $b) {
+function gcd(int $a, int $b): int {
     $a = my_abs($a);
     $b = my_abs($b);
     while ($b != 0) {
@@ -37,7 +37,7 @@ function gcd($a, $b) {
     return $a;
 }
 
-function power($base, $exp) {
+function power(int $base, int $exp): int {
     $result = 1;
     for ($i = 0; $i < $exp; $i++) {
         $result *= $base;
@@ -45,8 +45,21 @@ function power($base, $exp) {
     return $result;
 }
 
+function describe(int|string $value): string {
+    return gettype($value) . ":" . $value;
+}
+
+function describe_maybe(?int $value): string {
+    if (is_null($value)) {
+        return "NULL:null";
+    }
+    return gettype($value) . ":" . $value;
+}
+
 echo "my_abs(-42) = " . my_abs(-42) . "\n";
 echo "my_max(3, 7) = " . my_max(3, 7) . "\n";
 echo "clamp(15, 0, 10) = " . clamp(15, 0, 10) . "\n";
 echo "gcd(48, 18) = " . gcd(48, 18) . "\n";
 echo "2^10 = " . power(2, 10) . "\n";
+echo "describe(42) = " . describe(42) . "\n";
+echo "describe(null) = " . describe_maybe(null) . "\n";

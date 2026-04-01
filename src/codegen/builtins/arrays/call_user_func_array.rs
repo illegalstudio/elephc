@@ -2,6 +2,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::expr::calls::args;
 use crate::codegen::abi;
 use crate::names::function_symbol;
 use crate::parser::ast::{Expr, ExprKind};
@@ -57,60 +58,25 @@ pub fn emit(
     // Determine element type and size from the array type
     let elem_ty = match &arr_ty {
         PhpType::Array(t) => *t.clone(),
+        PhpType::AssocArray { value, .. } => *value.clone(),
         _ => PhpType::Int,
     };
-    let elem_size = match &elem_ty {
-        PhpType::Str => 16,
-        _ => 8,
-    };
+    let elem_size = args::array_element_stride(&elem_ty);
 
-    // -- save array pointer --
-    emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer onto stack
+    emitter.instruction("mov x20, x0");                                         // preserve the callback-argument array pointer across element boxing
 
-    // -- extract elements from array into ABI registers --
-    let mut int_reg = 0usize;
-    let mut float_reg = 0usize;
-    for (i, (_pname, pty)) in sig.params.iter().enumerate() {
-        emitter.instruction("ldr x9, [sp]");                                    // peek array pointer from stack
-        match pty {
-            PhpType::Int | PhpType::Bool => {
-                emitter.instruction("add x9, x9, #24");                         // skip 24-byte array header
-                emitter.instruction(&format!(                                   // load int element at index
-                    "ldr x{}, [x9, #{}]", int_reg, i * elem_size
-                ));
-                int_reg += 1;
-            }
-            PhpType::Float => {
-                emitter.instruction("add x9, x9, #24");                         // skip 24-byte array header
-                emitter.instruction(&format!(                                   // load float element at index
-                    "ldr d{}, [x9, #{}]", float_reg, i * elem_size
-                ));
-                float_reg += 1;
-            }
-            PhpType::Str => {
-                emitter.instruction(&format!(                                   // offset to string slot
-                    "add x9, x9, #{}", 24 + i * elem_size
-                ));
-                emitter.instruction(&format!(                                   // load string pointer
-                    "ldr x{}, [x9]", int_reg
-                ));
-                emitter.instruction(&format!(                                   // load string length
-                    "ldr x{}, [x9, #8]", int_reg + 1
-                ));
-                int_reg += 2;
-            }
-            _ => {
-                emitter.instruction("add x9, x9, #24");                         // skip 24-byte array header
-                emitter.instruction(&format!(                                   // load element at index
-                    "ldr x{}, [x9, #{}]", int_reg, i * elem_size
-                ));
-                int_reg += 1;
-            }
-        }
+    // -- extract elements from array and push them as regular call arguments --
+    let mut arg_types = Vec::new();
+    for (i, (_pname, _pty)) in sig.params.iter().enumerate() {
+        emitter.instruction("add x9, x20, #24");                                // point x9 at the callback-argument array payload
+        args::load_array_element_to_result(emitter, &elem_ty, "x9", i * elem_size);
+        let target_ty = args::declared_target_ty(Some(&sig), i);
+        let pushed_ty = args::push_loaded_array_element_arg(&elem_ty, target_ty, emitter, ctx, data);
+        arg_types.push(pushed_ty);
     }
 
-    // -- pop saved array pointer --
-    emitter.instruction("add sp, sp, #16");                                     // clean up saved array pointer
+    let assignments = args::build_arg_assignments(&arg_types, 0);
+    args::load_arg_assignments(emitter, &assignments, arg_types.len());
 
     let ret_ty = sig.return_type.clone();
 

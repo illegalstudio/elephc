@@ -2,6 +2,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::expr::calls::args;
 use crate::codegen::abi;
 use crate::names::function_symbol;
 use crate::parser::ast::{Expr, ExprKind};
@@ -58,6 +59,7 @@ pub fn emit(
             .and_then(|sig| sig.ref_params.get(i))
             .copied()
             .unwrap_or(false);
+        let target_ty = args::declared_target_ty(sig.as_ref(), i);
         if is_ref {
             if let ExprKind::Variable(var_name) = &arg.kind {
                 if ctx.global_vars.contains(var_name) {
@@ -82,16 +84,8 @@ pub fn emit(
             continue;
         }
 
-        let ty = emit_expr(arg, emitter, ctx, data);
-        match &ty {
-            PhpType::Str => {
-                emitter.instruction("stp x1, x2, [sp, #-16]!");                     // push string ptr+len onto stack
-            }
-            _ => {
-                emitter.instruction("str x0, [sp, #-16]!");                         // push int/bool/array arg onto stack
-            }
-        }
-        arg_types.push(ty);
+        let pushed_ty = args::push_expr_arg(arg, target_ty, emitter, ctx, data);
+        arg_types.push(pushed_ty);
     }
 
     // -- pop arguments back into ABI registers in reverse --
