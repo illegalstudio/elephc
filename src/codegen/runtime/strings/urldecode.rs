@@ -5,7 +5,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_urldecode(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: urldecode ---");
-    emitter.label("__rt_urldecode");
+    emitter.label_global("__rt_urldecode");
 
     // -- set up concat_buf destination --
     emitter.instruction("adrp x6, _concat_off@PAGE");                           // load concat offset page

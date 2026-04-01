@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_file_put_contents(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: file_put_contents ---");
-    emitter.label("__rt_file_put_contents");
+    emitter.label_global("__rt_file_put_contents");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack

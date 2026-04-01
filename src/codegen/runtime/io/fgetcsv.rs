@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_fgetcsv(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fgetcsv ---");
-    emitter.label("__rt_fgetcsv");
+    emitter.label_global("__rt_fgetcsv");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #80");                                     // allocate 80 bytes on the stack

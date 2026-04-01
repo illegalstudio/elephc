@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_diff(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_diff ---");
-    emitter.label("__rt_array_diff");
+    emitter.label_global("__rt_array_diff");
 
     // -- set up stack frame, save arguments --
     // Stack layout:

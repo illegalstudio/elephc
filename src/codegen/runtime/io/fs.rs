@@ -10,7 +10,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
     // ================================================================
     emitter.blank();
     emitter.comment("--- runtime: unlink ---");
-    emitter.label("__rt_unlink");
+    emitter.label_global("__rt_unlink");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #16");                                     // allocate 16 bytes on the stack
@@ -38,7 +38,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
     // ================================================================
     emitter.blank();
     emitter.comment("--- runtime: mkdir ---");
-    emitter.label("__rt_mkdir");
+    emitter.label_global("__rt_mkdir");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #16");                                     // allocate 16 bytes on the stack
@@ -67,7 +67,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
     // ================================================================
     emitter.blank();
     emitter.comment("--- runtime: rmdir ---");
-    emitter.label("__rt_rmdir");
+    emitter.label_global("__rt_rmdir");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #16");                                     // allocate 16 bytes on the stack
@@ -95,7 +95,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
     // ================================================================
     emitter.blank();
     emitter.comment("--- runtime: chdir ---");
-    emitter.label("__rt_chdir");
+    emitter.label_global("__rt_chdir");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #16");                                     // allocate 16 bytes on the stack
@@ -123,7 +123,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
     // ================================================================
     emitter.blank();
     emitter.comment("--- runtime: rename ---");
-    emitter.label("__rt_rename");
+    emitter.label_global("__rt_rename");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack
@@ -164,7 +164,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
     // ================================================================
     emitter.blank();
     emitter.comment("--- runtime: copy ---");
-    emitter.label("__rt_copy");
+    emitter.label_global("__rt_copy");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack

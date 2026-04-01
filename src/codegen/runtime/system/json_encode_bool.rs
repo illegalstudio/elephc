@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub(crate) fn emit_json_encode_bool(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_bool ---");
-    emitter.label("__rt_json_encode_bool");
+    emitter.label_global("__rt_json_encode_bool");
 
     emitter.instruction("cbnz x0, __rt_json_encode_true");                      // if true, emit "true"
 

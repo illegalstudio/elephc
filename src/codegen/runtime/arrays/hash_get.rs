@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_hash_get(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_get ---");
-    emitter.label("__rt_hash_get");
+    emitter.label_global("__rt_hash_get");
 
     // -- set up stack frame, save inputs --
     // Stack layout:

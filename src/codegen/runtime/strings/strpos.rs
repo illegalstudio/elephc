@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_strpos(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strpos ---");
-    emitter.label("__rt_strpos");
+    emitter.label_global("__rt_strpos");
 
     // -- edge cases --
     emitter.instruction("cbz x4, __rt_strpos_empty");                           // empty needle always matches at position 0

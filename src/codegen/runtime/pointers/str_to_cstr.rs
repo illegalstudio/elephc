@@ -7,7 +7,7 @@ pub fn emit_str_to_cstr(emitter: &mut Emitter) {
     emitter.blank();
     emitter.raw("    .p2align 2"); // ensure 4-byte alignment for ARM64 instructions
     emitter.comment("--- runtime: str_to_cstr ---");
-    emitter.label("__rt_str_to_cstr");
+    emitter.label_global("__rt_str_to_cstr");
 
     // -- save return state before calling heap allocator --
     emitter.instruction("sub sp, sp, #32");                                     // allocate stack space for frame and saved arguments

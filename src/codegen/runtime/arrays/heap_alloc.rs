@@ -9,7 +9,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: heap_alloc (free-list + bump) ---");
-    emitter.label("__rt_heap_alloc");
+    emitter.label_global("__rt_heap_alloc");
 
     // -- enforce minimum allocation of 8 bytes (free payload needs space for next ptr) --
     emitter.instruction("cmp x0, #8");                                          // is requested size < 8?

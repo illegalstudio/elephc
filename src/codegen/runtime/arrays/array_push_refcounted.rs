@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_push_refcounted(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_push_refcounted ---");
-    emitter.label("__rt_array_push_refcounted");
+    emitter.label_global("__rt_array_push_refcounted");
 
     // -- preserve arguments across incref --
     emitter.instruction("sub sp, sp, #32");                                     // allocate stack frame

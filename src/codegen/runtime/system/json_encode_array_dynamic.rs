@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_array_dynamic ---");
-    emitter.label("__rt_json_encode_array_dynamic");
+    emitter.label_global("__rt_json_encode_array_dynamic");
 
     emitter.instruction("sub sp, sp, #112");                                    // allocate stack space for array metadata and element scratch values
     emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address

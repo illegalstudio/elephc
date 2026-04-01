@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_fill(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_fill ---");
-    emitter.label("__rt_array_fill");
+    emitter.label_global("__rt_array_fill");
 
     // -- set up stack frame, save arguments --
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack

@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_chr(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: chr ---");
-    emitter.label("__rt_chr");
+    emitter.label_global("__rt_chr");
 
     // -- get concat_buf write position --
     emitter.instruction("adrp x6, _concat_off@PAGE");                           // load page address of concat buffer offset

@@ -3,7 +3,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_decref_object(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: decref_object ---");
-    emitter.label("__rt_decref_object");
+    emitter.label_global("__rt_decref_object");
 
     // -- null check --
     emitter.instruction("cbz x0, __rt_decref_object_skip");                     // skip if null pointer

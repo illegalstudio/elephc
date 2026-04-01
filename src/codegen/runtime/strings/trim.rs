@@ -5,7 +5,7 @@ pub fn emit_trim(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: trim ---");
     // ltrim first, then rtrim
-    emitter.label("__rt_trim");
+    emitter.label_global("__rt_trim");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #16");                                     // allocate 16 bytes on the stack

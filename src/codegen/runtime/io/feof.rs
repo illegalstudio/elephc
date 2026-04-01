@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_feof(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: feof ---");
-    emitter.label("__rt_feof");
+    emitter.label_global("__rt_feof");
 
     // -- load eof flag for this fd from _eof_flags array --
     emitter.instruction("adrp x9, _eof_flags@PAGE");                            // load page address of eof flags array

@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_reverse(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_reverse ---");
-    emitter.label("__rt_array_reverse");
+    emitter.label_global("__rt_array_reverse");
 
     // -- set up stack frame, save source array info --
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack

@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fopen ---");
-    emitter.label("__rt_fopen");
+    emitter.label_global("__rt_fopen");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack

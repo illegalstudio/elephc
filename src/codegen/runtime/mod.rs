@@ -8,7 +8,8 @@ mod strings;
 mod system;
 
 use super::emit::Emitter;
-pub(crate) use data::emit_runtime_data;
+pub(crate) use data::emit_runtime_data_fixed;
+pub(crate) use data::emit_runtime_data_user;
 
 pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     // String runtime functions

@@ -22,7 +22,7 @@ use crate::codegen::emit::Emitter;
 pub(crate) fn emit_preg_split(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: preg_split ---");
-    emitter.label("__rt_preg_split");
+    emitter.label_global("__rt_preg_split");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #224");                                    // allocate 224 bytes

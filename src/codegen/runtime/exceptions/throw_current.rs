@@ -3,7 +3,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_throw_current(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: throw_current ---");
-    emitter.label("__rt_throw_current");
+    emitter.label_global("__rt_throw_current");
 
     // -- save callee-saved state while the throw helper inspects handler stacks --
     emitter.instruction("sub sp, sp, #48");                                     // reserve stack space for handler state and frame linkage

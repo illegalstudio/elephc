@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_filter(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_filter ---");
-    emitter.label("__rt_array_filter");
+    emitter.label_global("__rt_array_filter");
 
     // -- set up stack frame, save callee-saved registers --
     emitter.instruction("sub sp, sp, #80");                                     // allocate 80 bytes on the stack

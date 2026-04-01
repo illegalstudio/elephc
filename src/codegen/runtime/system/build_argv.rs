@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_build_argv(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: build_argv ---");
-    emitter.label("__rt_build_argv");
+    emitter.label_global("__rt_build_argv");
 
     // -- set up stack frame (48 bytes for locals + saved registers) --
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack

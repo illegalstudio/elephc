@@ -8,7 +8,7 @@ pub fn emit_sort_int(emitter: &mut Emitter, reverse: bool) {
 
     emitter.blank();
     emitter.comment(&format!("--- runtime: {} ---", label));
-    emitter.label(label);
+    emitter.label_global(label);
 
     // -- load array metadata and set up outer loop --
     emitter.instruction("ldr x1, [x0]");                                        // x1 = array length from header

@@ -12,7 +12,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_strtotime(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strtotime ---");
-    emitter.label("__rt_strtotime");
+    emitter.label_global("__rt_strtotime");
 
     // -- set up stack frame --
     // Stack: [sp+0..47] = struct tm, [sp+48..55] = string ptr, [sp+56..63] = string len

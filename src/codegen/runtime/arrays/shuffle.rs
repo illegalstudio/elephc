@@ -7,7 +7,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_shuffle(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: shuffle ---");
-    emitter.label("__rt_shuffle");
+    emitter.label_global("__rt_shuffle");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #32");                                     // allocate 32 bytes on the stack

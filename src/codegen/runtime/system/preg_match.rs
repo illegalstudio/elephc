@@ -20,7 +20,7 @@ use crate::codegen::emit::Emitter;
 pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: preg_match ---");
-    emitter.label("__rt_preg_match");
+    emitter.label_global("__rt_preg_match");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #160");                                    // allocate 160 bytes

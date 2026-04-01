@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_filter_refcounted(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_filter_refcounted ---");
-    emitter.label("__rt_array_filter_refcounted");
+    emitter.label_global("__rt_array_filter_refcounted");
 
     // -- set up stack frame, save callee-saved registers --
     emitter.instruction("sub sp, sp, #80");                                     // allocate stack frame

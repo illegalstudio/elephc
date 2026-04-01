@@ -320,11 +320,17 @@ pub(super) fn emit_array_access(
         emit_expr(index, emitter, ctx, data);
         emitter.instruction("ldr x9, [sp], #16");                                   // pop buffer pointer into scratch register x9
         emitter.comment("buffer access");
-        emitter.instruction("cbz x9, __rt_buffer_use_after_free");                  // abort if the buffer was freed (null pointer)
+        let uaf_ok = ctx.next_label("buf_uaf_ok");
+        emitter.instruction(&format!("cbnz x9, {}", uaf_ok));                      // skip fatal if buffer pointer is valid
+        emitter.instruction("b __rt_buffer_use_after_free");                        // abort — buffer was freed
+        emitter.label(&uaf_ok);
         let elem_ty = *elem_ty.clone();
         let bounds_ok = ctx.next_label("buffer_idx_ok");
+        let oob_ok = ctx.next_label("buf_oob_ok");
         emitter.instruction("cmp x0, #0");                                          // reject negative buffer indexes
-        emitter.instruction("b.lt __rt_buffer_bounds_fail");                        // abort on negative buffer index
+        emitter.instruction(&format!("b.ge {}", oob_ok));                           // skip fatal if index is non-negative
+        emitter.instruction("b __rt_buffer_bounds_fail");                           // abort — negative index
+        emitter.label(&oob_ok);
         emitter.instruction("ldr x10, [x9]");                                       // load buffer length from header
         emitter.instruction("cmp x0, x10");                                         // compare index against logical buffer length
         emitter.instruction(&format!("b.lo {}", bounds_ok));                        // continue once the index is in range

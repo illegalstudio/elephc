@@ -7,7 +7,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_reduce(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_reduce ---");
-    emitter.label("__rt_array_reduce");
+    emitter.label_global("__rt_array_reduce");
 
     // -- set up stack frame, save callee-saved registers --
     emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack

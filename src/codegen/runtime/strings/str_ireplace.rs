@@ -6,7 +6,7 @@ pub fn emit_str_ireplace(emitter: &mut Emitter) {
     // Same as str_replace but uses case-insensitive comparison.
     emitter.blank();
     emitter.comment("--- runtime: str_ireplace ---");
-    emitter.label("__rt_str_ireplace");
+    emitter.label_global("__rt_str_ireplace");
     emitter.instruction("sub sp, sp, #80");                                     // allocate stack frame
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #64");                                    // set frame pointer

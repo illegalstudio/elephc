@@ -5,7 +5,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_ucwords(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ucwords ---");
-    emitter.label("__rt_ucwords");
+    emitter.label_global("__rt_ucwords");
     emitter.instruction("sub sp, sp, #16");                                     // allocate stack frame
     emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // set frame pointer

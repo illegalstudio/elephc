@@ -4,7 +4,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_rtrim(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: rtrim ---");
-    emitter.label("__rt_rtrim");
+    emitter.label_global("__rt_rtrim");
     emitter.label("__rt_rtrim_loop");
     emitter.instruction("cbz x2, __rt_rtrim_done");                             // if string is empty, nothing to trim
     emitter.instruction("sub x9, x2, #1");                                      // compute index of last character

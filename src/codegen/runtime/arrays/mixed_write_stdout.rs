@@ -3,7 +3,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_mixed_write_stdout(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_write_stdout ---");
-    emitter.label("__rt_mixed_write_stdout");
+    emitter.label_global("__rt_mixed_write_stdout");
 
     emitter.instruction("sub sp, sp, #16");                                     // allocate a small frame so nested helper calls can preserve x30
     emitter.instruction("str x30, [sp]");                                       // save the caller return address before any nested bl instructions

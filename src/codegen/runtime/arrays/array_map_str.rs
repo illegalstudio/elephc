@@ -7,7 +7,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_map_str(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_map_str ---");
-    emitter.label("__rt_array_map_str");
+    emitter.label_global("__rt_array_map_str");
 
     // -- set up stack frame, save callee-saved registers --
     emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack

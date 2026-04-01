@@ -3,7 +3,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_buffer_new(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: buffer_new ---");
-    emitter.label("__rt_buffer_new");
+    emitter.label_global("__rt_buffer_new");
 
     // -- save len/stride across heap allocation --
     emitter.instruction("sub sp, sp, #32");                                     // allocate a small stack frame for saved arguments

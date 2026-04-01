@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_file_get_contents(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: file_get_contents ---");
-    emitter.label("__rt_file_get_contents");
+    emitter.label_global("__rt_file_get_contents");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #224");                                    // allocate 224 bytes (144 for stat + locals + frame)

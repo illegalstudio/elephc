@@ -7,7 +7,7 @@ pub fn emit_cstr_to_str(emitter: &mut Emitter) {
     emitter.blank();
     emitter.raw("    .p2align 2"); // ensure 4-byte alignment for ARM64 instructions
     emitter.comment("--- runtime: cstr_to_str ---");
-    emitter.label("__rt_cstr_to_str");
+    emitter.label_global("__rt_cstr_to_str");
 
     // -- handle null pointer --
     emitter.instruction("cbz x0, __rt_cstr_to_str_null");                       // null pointer → empty string

@@ -7,7 +7,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_unshift(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_unshift ---");
-    emitter.label("__rt_array_unshift");
+    emitter.label_global("__rt_array_unshift");
 
     // -- load array metadata --
     emitter.instruction("ldr x9, [x0]");                                        // x9 = current array length

@@ -7,7 +7,7 @@ use crate::codegen::emit::Emitter;
 pub(crate) fn emit_pcre_to_posix(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: pcre_to_posix ---");
-    emitter.label("__rt_pcre_to_posix");
+    emitter.label_global("__rt_pcre_to_posix");
 
     // -- load destination buffer address --
     emitter.instruction("adrp x9, _cstr_buf@PAGE");                             // load page address of cstr scratch buffer

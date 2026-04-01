@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_rtrim_mask(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: rtrim_mask ---");
-    emitter.label("__rt_rtrim_mask");
+    emitter.label_global("__rt_rtrim_mask");
 
     // -- loop: check last character against mask --
     emitter.label("__rt_rtrim_mask_loop");

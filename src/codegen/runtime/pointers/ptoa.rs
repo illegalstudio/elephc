@@ -7,7 +7,7 @@ pub(crate) fn emit_ptoa(emitter: &mut Emitter) {
     emitter.blank();
     emitter.raw("    .p2align 2");                                              // ensure 4-byte alignment for ARM64 instructions
     emitter.comment("--- runtime: ptoa (pointer to hex string) ---");
-    emitter.label("__rt_ptoa");
+    emitter.label_global("__rt_ptoa");
 
     // -- save return address --
     emitter.instruction("str x30, [sp, #-16]!");                                // save link register

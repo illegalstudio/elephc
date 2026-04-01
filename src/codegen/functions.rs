@@ -175,7 +175,7 @@ fn emit_function_with_label_and_class(
 
     // -- function prologue: set up stack frame --
     emitter.raw(".align 2");
-    emitter.label(label);
+    emitter.label_global(label);
     emitter.comment("prologue");
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for locals
     if frame_size - 16 <= 504 {

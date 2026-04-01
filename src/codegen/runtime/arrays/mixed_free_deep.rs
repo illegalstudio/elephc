@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_mixed_free_deep(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_free_deep ---");
-    emitter.label("__rt_mixed_free_deep");
+    emitter.label_global("__rt_mixed_free_deep");
 
     emitter.instruction("cbz x0, __rt_mixed_free_deep_done");                   // skip null mixed cells immediately
     emitter.instruction("sub sp, sp, #32");                                     // allocate a small frame to preserve the mixed pointer

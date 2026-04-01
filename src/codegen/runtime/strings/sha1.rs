@@ -7,7 +7,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_sha1(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: sha1 ---");
-    emitter.label("__rt_sha1");
+    emitter.label_global("__rt_sha1");
     emitter.instruction("sub sp, sp, #64");                                     // allocate stack frame (20 bytes for hash + padding)
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #48");                                    // set frame pointer

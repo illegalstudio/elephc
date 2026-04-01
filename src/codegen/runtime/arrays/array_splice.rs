@@ -7,7 +7,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_splice(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_splice ---");
-    emitter.label("__rt_array_splice");
+    emitter.label_global("__rt_array_splice");
 
     // -- set up stack frame, save arguments --
     // Stack layout:

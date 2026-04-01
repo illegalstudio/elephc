@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_explode(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: explode ---");
-    emitter.label("__rt_explode");
+    emitter.label_global("__rt_explode");
 
     // -- set up stack frame (80 bytes) --
     emitter.instruction("sub sp, sp, #80");                                     // allocate 80 bytes on the stack

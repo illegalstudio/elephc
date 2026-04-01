@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_shell_exec(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: shell_exec ---");
-    emitter.label("__rt_shell_exec");
+    emitter.label_global("__rt_shell_exec");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #80");                                     // allocate 80 bytes on the stack

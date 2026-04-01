@@ -7,7 +7,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_flip(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_flip ---");
-    emitter.label("__rt_array_flip");
+    emitter.label_global("__rt_array_flip");
 
     // -- set up stack frame, save arguments --
     // Stack layout:

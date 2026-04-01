@@ -3,7 +3,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_exception_cleanup_frames(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: exception_cleanup_frames ---");
-    emitter.label("__rt_exception_cleanup_frames");
+    emitter.label_global("__rt_exception_cleanup_frames");
 
     // -- save callee-saved state used by the cleanup walk --
     emitter.instruction("sub sp, sp, #48");                                     // reserve stack space for x19/x20 plus frame linkage

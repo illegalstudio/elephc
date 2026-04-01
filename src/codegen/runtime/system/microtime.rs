@@ -5,7 +5,7 @@ use crate::codegen::emit::Emitter;
 pub(crate) fn emit_microtime(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: microtime ---");
-    emitter.label("__rt_microtime");
+    emitter.label_global("__rt_microtime");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes (16 for timeval + 16 for frame + padding)

@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_getcwd(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: getcwd ---");
-    emitter.label("__rt_getcwd");
+    emitter.label_global("__rt_getcwd");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #32");                                     // allocate 32 bytes on the stack

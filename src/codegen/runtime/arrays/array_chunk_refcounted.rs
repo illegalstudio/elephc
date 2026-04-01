@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_chunk_refcounted(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_chunk_refcounted ---");
-    emitter.label("__rt_array_chunk_refcounted");
+    emitter.label_global("__rt_array_chunk_refcounted");
 
     // -- set up stack frame, save arguments --
     emitter.instruction("sub sp, sp, #80");                                     // allocate stack frame

@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_key_exists(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_key_exists ---");
-    emitter.label("__rt_array_key_exists");
+    emitter.label_global("__rt_array_key_exists");
 
     // -- check if key is in bounds [0, length) --
     emitter.instruction("ldr x9, [x0]");                                        // x9 = current array length from header

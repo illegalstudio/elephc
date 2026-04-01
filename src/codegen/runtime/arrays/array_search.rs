@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_search(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_search ---");
-    emitter.label("__rt_array_search");
+    emitter.label_global("__rt_array_search");
 
     // -- set up loop variables --
     emitter.instruction("ldr x9, [x0]");                                        // x9 = array length from header

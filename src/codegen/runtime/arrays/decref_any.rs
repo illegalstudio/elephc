@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_decref_any(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: decref_any ---");
-    emitter.label("__rt_decref_any");
+    emitter.label_global("__rt_decref_any");
 
     // -- null and heap-range checks --
     emitter.instruction("cbz x0, __rt_decref_any_done");                        // skip null values immediately

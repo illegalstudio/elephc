@@ -10,7 +10,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_hash_new(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_new ---");
-    emitter.label("__rt_hash_new");
+    emitter.label_global("__rt_hash_new");
 
     // -- set up stack frame, save arguments --
     emitter.instruction("sub sp, sp, #32");                                     // allocate 32 bytes on the stack

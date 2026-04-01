@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_mixed_strict_eq(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_strict_eq ---");
-    emitter.label("__rt_mixed_strict_eq");
+    emitter.label_global("__rt_mixed_strict_eq");
 
     // -- save both mixed operands across helper calls --
     emitter.instruction("sub sp, sp, #64");                                     // allocate stack space for both operands, payloads, and saved frame state

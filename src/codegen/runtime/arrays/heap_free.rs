@@ -17,7 +17,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
 
     emitter.blank();
     emitter.comment("--- runtime: heap_free ---");
-    emitter.label("__rt_heap_free");
+    emitter.label_global("__rt_heap_free");
 
     // -- validate pointer is not null --
     emitter.instruction("cbz x0, __rt_heap_free_done");                         // skip if null pointer
@@ -232,7 +232,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     // Safe to call with garbage/null/.data pointers — silently skips.
     emitter.blank();
     emitter.comment("--- runtime: heap_free_safe ---");
-    emitter.label("__rt_heap_free_safe");
+    emitter.label_global("__rt_heap_free_safe");
 
     // -- null check --
     emitter.instruction("cbz x0, __rt_heap_free_safe_skip");                    // skip if null pointer

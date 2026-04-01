@@ -5,14 +5,12 @@ use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 
 use super::system;
 
-pub(crate) fn emit_runtime_data(
-    global_var_names: &HashSet<String>,
-    static_vars: &HashMap<(String, String), PhpType>,
-    interfaces: &HashMap<String, InterfaceInfo>,
-    classes: &HashMap<String, ClassInfo>,
-    heap_size: usize,
-) -> String {
+/// Emit the fixed runtime data section — cacheable across compilations.
+/// Contains heap buffers, error messages, lookup tables, and other
+/// data that does not depend on the user's program.
+pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     let mut out = String::new();
+    out.push_str(".data\n");
     out.push_str(".comm _concat_buf, 65536, 3\n");
     out.push_str(".comm _concat_off, 8, 3\n");
     out.push_str(".comm _global_argc, 8, 3\n");
@@ -27,17 +25,17 @@ pub(crate) fn emit_runtime_data(
     out.push_str(".comm _heap_debug_enabled, 8, 3\n");
     out.push_str(".comm _gc_collecting, 8, 3\n");
     out.push_str(".comm _gc_release_suppressed, 8, 3\n");
-    out.push_str(&format!("_heap_max:\n    .quad {}\n", heap_size));
-    out.push_str("_heap_err_msg:\n    .ascii \"Fatal error: heap memory exhausted\\n\"\n");
-    out.push_str("_heap_dbg_bad_refcount_msg:\n    .ascii \"Fatal error: heap debug detected bad refcount\\n\"\n");
-    out.push_str("_heap_dbg_double_free_msg:\n    .ascii \"Fatal error: heap debug detected double free\\n\"\n");
-    out.push_str("_heap_dbg_free_list_msg:\n    .ascii \"Fatal error: heap debug detected free-list corruption\\n\"\n");
-    out.push_str("_arr_cap_err_msg:\n    .ascii \"Fatal error: array capacity exceeded\\n\"\n");
-    out.push_str("_buffer_bounds_msg:\n    .ascii \"Fatal error: buffer index out of bounds\\n\"\n");
-    out.push_str("_buffer_uaf_msg:\n    .ascii \"Fatal error: use of buffer after buffer_free()\\n\"\n");
-    out.push_str("_match_unhandled_msg:\n    .ascii \"Fatal error: unhandled match case\\n\"\n");
-    out.push_str("_ptr_null_err_msg:\n    .ascii \"Fatal error: null pointer dereference\\n\"\n");
-    out.push_str("_uncaught_exc_msg:\n    .ascii \"Fatal error: uncaught exception\\n\"\n");
+    out.push_str(&format!(".globl _heap_max\n_heap_max:\n    .quad {}\n", heap_size));
+    out.push_str(".globl _heap_err_msg\n_heap_err_msg:\n    .ascii \"Fatal error: heap memory exhausted\\n\"\n");
+    out.push_str(".globl _heap_dbg_bad_refcount_msg\n_heap_dbg_bad_refcount_msg:\n    .ascii \"Fatal error: heap debug detected bad refcount\\n\"\n");
+    out.push_str(".globl _heap_dbg_double_free_msg\n_heap_dbg_double_free_msg:\n    .ascii \"Fatal error: heap debug detected double free\\n\"\n");
+    out.push_str(".globl _heap_dbg_free_list_msg\n_heap_dbg_free_list_msg:\n    .ascii \"Fatal error: heap debug detected free-list corruption\\n\"\n");
+    out.push_str(".globl _arr_cap_err_msg\n_arr_cap_err_msg:\n    .ascii \"Fatal error: array capacity exceeded\\n\"\n");
+    out.push_str(".globl _buffer_bounds_msg\n_buffer_bounds_msg:\n    .ascii \"Fatal error: buffer index out of bounds\\n\"\n");
+    out.push_str(".globl _buffer_uaf_msg\n_buffer_uaf_msg:\n    .ascii \"Fatal error: use of buffer after buffer_free()\\n\"\n");
+    out.push_str(".globl _match_unhandled_msg\n_match_unhandled_msg:\n    .ascii \"Fatal error: unhandled match case\\n\"\n");
+    out.push_str(".globl _ptr_null_err_msg\n_ptr_null_err_msg:\n    .ascii \"Fatal error: null pointer dereference\\n\"\n");
+    out.push_str(".globl _uncaught_exc_msg\n_uncaught_exc_msg:\n    .ascii \"Fatal error: uncaught exception\\n\"\n");
     out.push_str(".comm _gc_allocs, 8, 3\n");
     out.push_str(".comm _gc_frees, 8, 3\n");
     out.push_str(".comm _gc_live, 8, 3\n");
@@ -45,18 +43,18 @@ pub(crate) fn emit_runtime_data(
     out.push_str(".comm _cstr_buf, 4096, 3\n");
     out.push_str(".comm _cstr_buf2, 4096, 3\n");
     out.push_str(".comm _eof_flags, 256, 3\n");
-    out.push_str("_heap_dbg_stats_prefix:\n    .ascii \"HEAP DEBUG: allocs=\"\n");
-    out.push_str("_heap_dbg_frees_label:\n    .ascii \" frees=\"\n");
-    out.push_str("_heap_dbg_live_blocks_label:\n    .ascii \" live_blocks=\"\n");
-    out.push_str("_heap_dbg_live_bytes_label:\n    .ascii \" live_bytes=\"\n");
-    out.push_str("_heap_dbg_peak_label:\n    .ascii \" peak_live_bytes=\"\n");
-    out.push_str("_heap_dbg_leak_prefix:\n    .ascii \"HEAP DEBUG: leak summary: \"\n");
-    out.push_str("_heap_dbg_live_blocks_short_label:\n    .ascii \"live_blocks=\"\n");
-    out.push_str("_heap_dbg_clean_label:\n    .ascii \"clean\\n\"\n");
-    out.push_str("_heap_dbg_newline:\n    .ascii \"\\n\"\n");
-    out.push_str("_fmt_g:\n    .asciz \"%.14G\"\n");
-    out.push_str("_b64_encode_tbl:\n    .ascii \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\"\n");
-    out.push_str("_b64_decode_tbl:\n");
+    out.push_str(".globl _heap_dbg_stats_prefix\n_heap_dbg_stats_prefix:\n    .ascii \"HEAP DEBUG: allocs=\"\n");
+    out.push_str(".globl _heap_dbg_frees_label\n_heap_dbg_frees_label:\n    .ascii \" frees=\"\n");
+    out.push_str(".globl _heap_dbg_live_blocks_label\n_heap_dbg_live_blocks_label:\n    .ascii \" live_blocks=\"\n");
+    out.push_str(".globl _heap_dbg_live_bytes_label\n_heap_dbg_live_bytes_label:\n    .ascii \" live_bytes=\"\n");
+    out.push_str(".globl _heap_dbg_peak_label\n_heap_dbg_peak_label:\n    .ascii \" peak_live_bytes=\"\n");
+    out.push_str(".globl _heap_dbg_leak_prefix\n_heap_dbg_leak_prefix:\n    .ascii \"HEAP DEBUG: leak summary: \"\n");
+    out.push_str(".globl _heap_dbg_live_blocks_short_label\n_heap_dbg_live_blocks_short_label:\n    .ascii \"live_blocks=\"\n");
+    out.push_str(".globl _heap_dbg_clean_label\n_heap_dbg_clean_label:\n    .ascii \"clean\\n\"\n");
+    out.push_str(".globl _heap_dbg_newline\n_heap_dbg_newline:\n    .ascii \"\\n\"\n");
+    out.push_str(".globl _fmt_g\n_fmt_g:\n    .asciz \"%.14G\"\n");
+    out.push_str(".globl _b64_encode_tbl\n_b64_encode_tbl:\n    .ascii \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\"\n");
+    out.push_str(".globl _b64_decode_tbl\n_b64_decode_tbl:\n");
 
     let mut decode_tbl = vec![0u8; 256];
     for (i, &c) in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -75,14 +73,27 @@ pub(crate) fn emit_runtime_data(
     }
     out.push('\n');
 
-    out.push_str("_pcre_space:\n    .ascii \"[[:space:]]\"\n");
-    out.push_str("_pcre_digit:\n    .ascii \"[[:digit:]]\"\n");
-    out.push_str("_pcre_word:\n    .ascii \"[[:alnum:]_]\"\n");
-    out.push_str("_pcre_nspace:\n    .ascii \"[^[:space:]]\"\n");
-    out.push_str("_pcre_ndigit:\n    .ascii \"[^[:digit:]]\"\n");
-    out.push_str("_pcre_nword:\n    .ascii \"[^[:alnum:]_]\"\n");
+    out.push_str(".globl _pcre_space\n_pcre_space:\n    .ascii \"[[:space:]]\"\n");
+    out.push_str(".globl _pcre_digit\n_pcre_digit:\n    .ascii \"[[:digit:]]\"\n");
+    out.push_str(".globl _pcre_word\n_pcre_word:\n    .ascii \"[[:alnum:]_]\"\n");
+    out.push_str(".globl _pcre_nspace\n_pcre_nspace:\n    .ascii \"[^[:space:]]\"\n");
+    out.push_str(".globl _pcre_ndigit\n_pcre_ndigit:\n    .ascii \"[^[:digit:]]\"\n");
+    out.push_str(".globl _pcre_nword\n_pcre_nword:\n    .ascii \"[^[:alnum:]_]\"\n");
     out.push_str(&system::emit_json_data());
     out.push_str(&system::emit_date_data());
+
+    out
+}
+
+/// Emit the user-dependent data section — globals, statics, class metadata.
+/// This changes per program and cannot be cached.
+pub(crate) fn emit_runtime_data_user(
+    global_var_names: &HashSet<String>,
+    static_vars: &HashMap<(String, String), PhpType>,
+    interfaces: &HashMap<String, InterfaceInfo>,
+    classes: &HashMap<String, ClassInfo>,
+) -> String {
+    let mut out = String::new();
 
     let mut sorted_globals: Vec<&String> = global_var_names.iter().collect();
     sorted_globals.sort();
@@ -116,9 +127,9 @@ pub(crate) fn emit_runtime_data(
 
     out.push_str(".data\n");
     out.push_str(".p2align 3\n");
-    out.push_str("_interface_count:\n");
+    out.push_str(".globl _interface_count\n_interface_count:\n");
     out.push_str(&format!("    .quad {}\n", sorted_interfaces.len()));
-    out.push_str("_interface_method_ptrs:\n");
+    out.push_str(".globl _interface_method_ptrs\n_interface_method_ptrs:\n");
     for (_, interface_info) in &sorted_interfaces {
         out.push_str(&format!(
             "    .quad _interface_methods_{}\n",
@@ -126,7 +137,7 @@ pub(crate) fn emit_runtime_data(
         ));
     }
 
-    out.push_str("_class_interface_ptrs:\n");
+    out.push_str(".globl _class_interface_ptrs\n_class_interface_ptrs:\n");
     for (_, class_info) in &sorted_classes {
         out.push_str(&format!(
             "    .quad _class_interfaces_{}\n",
@@ -134,7 +145,7 @@ pub(crate) fn emit_runtime_data(
         ));
     }
 
-    out.push_str("_class_parent_ids:\n");
+    out.push_str(".globl _class_parent_ids\n_class_parent_ids:\n");
     for (_, class_info) in &sorted_classes {
         let parent_id = class_info
             .parent
@@ -145,19 +156,19 @@ pub(crate) fn emit_runtime_data(
         out.push_str(&format!("    .quad {}\n", parent_id));
     }
 
-    out.push_str("_class_gc_desc_count:\n");
+    out.push_str(".globl _class_gc_desc_count\n_class_gc_desc_count:\n");
     out.push_str(&format!("    .quad {}\n", sorted_classes.len()));
-    out.push_str("_class_gc_desc_ptrs:\n");
+    out.push_str(".globl _class_gc_desc_ptrs\n_class_gc_desc_ptrs:\n");
     for (_, class_info) in &sorted_classes {
         out.push_str(&format!("    .quad _class_gc_desc_{}\n", class_info.class_id));
     }
 
-    out.push_str("_class_vtable_ptrs:\n");
+    out.push_str(".globl _class_vtable_ptrs\n_class_vtable_ptrs:\n");
     for (_, class_info) in &sorted_classes {
         out.push_str(&format!("    .quad _class_vtable_{}\n", class_info.class_id));
     }
 
-    out.push_str("_class_static_vtable_ptrs:\n");
+    out.push_str(".globl _class_static_vtable_ptrs\n_class_static_vtable_ptrs:\n");
     for (_, class_info) in &sorted_classes {
         out.push_str(&format!(
             "    .quad _class_static_vtable_{}\n",
@@ -167,8 +178,8 @@ pub(crate) fn emit_runtime_data(
 
     for (_, interface_info) in &sorted_interfaces {
         out.push_str(&format!(
-            "_interface_methods_{}:\n",
-            interface_info.interface_id
+            ".globl _interface_methods_{}\n_interface_methods_{}:\n",
+            interface_info.interface_id, interface_info.interface_id
         ));
         out.push_str(&format!("    .quad {}\n", interface_info.method_order.len()));
         for method_name in &interface_info.method_order {
@@ -181,7 +192,7 @@ pub(crate) fn emit_runtime_data(
     }
 
     for (_, class_info) in sorted_classes {
-        out.push_str(&format!("_class_interfaces_{}:\n", class_info.class_id));
+        out.push_str(&format!(".globl _class_interfaces_{}\n_class_interfaces_{}:\n", class_info.class_id, class_info.class_id));
         out.push_str(&format!("    .quad {}\n", class_info.interfaces.len()));
         for interface_name in &class_info.interfaces {
             let interface_info = interfaces
@@ -199,7 +210,8 @@ pub(crate) fn emit_runtime_data(
                 .get(interface_name)
                 .expect("codegen bug: missing interface metadata for class");
             out.push_str(&format!(
-                "_class_interface_impl_{}_{}:\n",
+                ".globl _class_interface_impl_{}_{}\n_class_interface_impl_{}_{}:\n",
+                class_info.class_id, interface_info.interface_id,
                 class_info.class_id, interface_info.interface_id
             ));
             if interface_info.method_order.is_empty() {
@@ -215,7 +227,7 @@ pub(crate) fn emit_runtime_data(
             }
         }
 
-        out.push_str(&format!("_class_gc_desc_{}:\n", class_info.class_id));
+        out.push_str(&format!(".globl _class_gc_desc_{}\n_class_gc_desc_{}:\n", class_info.class_id, class_info.class_id));
         if class_info.properties.is_empty() {
             out.push_str("    .byte 0\n");
         } else {
@@ -245,7 +257,7 @@ pub(crate) fn emit_runtime_data(
         }
 
         out.push_str("    .p2align 3\n");
-        out.push_str(&format!("_class_vtable_{}:\n", class_info.class_id));
+        out.push_str(&format!(".globl _class_vtable_{}\n_class_vtable_{}:\n", class_info.class_id, class_info.class_id));
         if class_info.vtable_methods.is_empty() {
             out.push_str("    .quad 0\n");
         } else {
@@ -259,7 +271,7 @@ pub(crate) fn emit_runtime_data(
         }
 
         out.push_str("    .p2align 3\n");
-        out.push_str(&format!("_class_static_vtable_{}:\n", class_info.class_id));
+        out.push_str(&format!(".globl _class_static_vtable_{}\n_class_static_vtable_{}:\n", class_info.class_id, class_info.class_id));
         if class_info.static_vtable_methods.is_empty() {
             out.push_str("    .quad 0\n");
             continue;

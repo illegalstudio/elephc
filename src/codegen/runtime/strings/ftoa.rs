@@ -8,7 +8,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_ftoa(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: ftoa ---");
-    emitter.label("__rt_ftoa");
+    emitter.label_global("__rt_ftoa");
 
     // -- set up stack frame (64 bytes) --
     emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack

@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_slice_refcounted(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_slice_refcounted ---");
-    emitter.label("__rt_array_slice_refcounted");
+    emitter.label_global("__rt_array_slice_refcounted");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #64");                                     // allocate stack frame

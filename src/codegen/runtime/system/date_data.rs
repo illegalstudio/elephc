@@ -3,7 +3,7 @@ pub(crate) fn emit_date_data() -> String {
     let mut out = String::new();
     // Day names: 7 entries, each 12 bytes (10 chars + 1 length + 1 padding)
     // Sunday=0, Monday=1, ..., Saturday=6
-    out.push_str("_day_names:\n");
+    out.push_str(".globl _day_names\n_day_names:\n");
     let days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
     for day in &days {
         let mut padded = day.to_string();
@@ -17,7 +17,7 @@ pub(crate) fn emit_date_data() -> String {
 
     // Month names: 12 entries, each 12 bytes (10 chars + 1 length + 1 padding)
     // January=0, ..., December=11
-    out.push_str("_month_names:\n");
+    out.push_str(".globl _month_names\n_month_names:\n");
     let months = ["January", "February", "March", "April", "May", "June",
                   "July", "August", "September", "October", "November", "December"];
     for month in &months {

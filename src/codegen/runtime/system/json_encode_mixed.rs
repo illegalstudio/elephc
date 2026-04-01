@@ -3,7 +3,7 @@ use crate::codegen::emit::Emitter;
 pub(crate) fn emit_json_encode_mixed(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_mixed ---");
-    emitter.label("__rt_json_encode_mixed");
+    emitter.label_global("__rt_json_encode_mixed");
 
     emitter.instruction("cbz x0, __rt_json_encode_mixed_null");                 // null mixed pointers encode as JSON null
     emitter.instruction("ldr x9, [x0]");                                        // load the boxed runtime value_tag

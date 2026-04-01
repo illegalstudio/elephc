@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_column_ref(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_column_ref ---");
-    emitter.label("__rt_array_column_ref");
+    emitter.label_global("__rt_array_column_ref");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #80");                                     // allocate stack frame

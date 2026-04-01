@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_gc_note_child_ref(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: gc_note_child_ref ---");
-    emitter.label("__rt_gc_note_child_ref");
+    emitter.label_global("__rt_gc_note_child_ref");
 
     // -- null and heap-range checks --
     emitter.instruction("cbz x0, __rt_gc_note_child_ref_done");                 // ignore null child pointers

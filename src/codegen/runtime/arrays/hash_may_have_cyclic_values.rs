@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_hash_may_have_cyclic_values(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_may_have_cyclic_values ---");
-    emitter.label("__rt_hash_may_have_cyclic_values");
+    emitter.label_global("__rt_hash_may_have_cyclic_values");
 
     // -- null hashes cannot contain cyclic children --
     emitter.instruction("cbz x0, __rt_hash_may_have_cyclic_values_no");         // null hashes are never cycle roots

@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_unique_refcounted(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_unique_refcounted ---");
-    emitter.label("__rt_array_unique_refcounted");
+    emitter.label_global("__rt_array_unique_refcounted");
 
     // -- set up stack frame, save source array --
     emitter.instruction("sub sp, sp, #48");                                     // allocate stack frame

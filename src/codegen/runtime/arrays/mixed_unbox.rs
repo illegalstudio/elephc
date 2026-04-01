@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_mixed_unbox(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_unbox ---");
-    emitter.label("__rt_mixed_unbox");
+    emitter.label_global("__rt_mixed_unbox");
 
     // -- null mixed pointers behave like null payloads --
     emitter.instruction("cbz x0, __rt_mixed_unbox_null");                       // null boxed values unwrap to the null runtime tag

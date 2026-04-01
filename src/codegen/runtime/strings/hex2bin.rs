@@ -5,7 +5,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_hex2bin(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hex2bin ---");
-    emitter.label("__rt_hex2bin");
+    emitter.label_global("__rt_hex2bin");
 
     emitter.instruction("adrp x6, _concat_off@PAGE");                           // load concat offset page
     emitter.instruction("add x6, x6, _concat_off@PAGEOFF");                     // resolve address

@@ -3,7 +3,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_incref(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: incref ---");
-    emitter.label("__rt_incref");
+    emitter.label_global("__rt_incref");
 
     // -- null check --
     emitter.instruction("cbz x0, __rt_incref_skip");                            // skip if null pointer

@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_strcopy(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strcopy ---");
-    emitter.label("__rt_strcopy");
+    emitter.label_global("__rt_strcopy");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #16");                                     // allocate 16 bytes on the stack

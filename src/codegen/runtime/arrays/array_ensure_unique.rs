@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_array_ensure_unique(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_ensure_unique ---");
-    emitter.label("__rt_array_ensure_unique");
+    emitter.label_global("__rt_array_ensure_unique");
 
     // -- null arrays are already trivially unique --
     emitter.instruction("cbz x0, __rt_array_ensure_unique_done");               // null inputs do not need copy-on-write splitting

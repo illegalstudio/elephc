@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_strcmp(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strcmp ---");
-    emitter.label("__rt_strcmp");
+    emitter.label_global("__rt_strcmp");
 
     // -- determine minimum length for comparison --
     emitter.instruction("cmp x2, x4");                                          // compare lengths of both strings

@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_str_starts_with(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_starts_with ---");
-    emitter.label("__rt_str_starts_with");
+    emitter.label_global("__rt_str_starts_with");
 
     // -- check if needle fits in haystack --
     emitter.instruction("cmp x4, x2");                                          // compare needle length with haystack length

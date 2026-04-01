@@ -7,7 +7,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fgets ---");
-    emitter.label("__rt_fgets");
+    emitter.label_global("__rt_fgets");
 
     // -- check for invalid fd (negative = fopen failed) --
     emitter.instruction("cmp x0, #0");                                          // check if fd is negative

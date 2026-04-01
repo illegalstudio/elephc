@@ -19,6 +19,12 @@ impl Emitter {
         let _ = writeln!(self.buf, "{}:", name);
     }
 
+    /// Emit a label that is visible across object files (for two-object linking).
+    pub fn label_global(&mut self, name: &str) {
+        let _ = writeln!(self.buf, ".globl {}", name);
+        let _ = writeln!(self.buf, "{}:", name);
+    }
+
     pub fn comment(&mut self, text: &str) {
         let _ = writeln!(self.buf, "    ; {}", text);
     }

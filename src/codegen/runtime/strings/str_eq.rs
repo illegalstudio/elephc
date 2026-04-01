@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_str_eq(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_eq ---");
-    emitter.label("__rt_str_eq");
+    emitter.label_global("__rt_str_eq");
 
     // -- quick length check: different lengths means not equal --
     emitter.instruction("cmp x2, x4");                                          // compare lengths of both strings

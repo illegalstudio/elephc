@@ -6,7 +6,7 @@ use crate::codegen::emit::Emitter;
 pub fn emit_mixed_from_value(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_from_value ---");
-    emitter.label("__rt_mixed_from_value");
+    emitter.label_global("__rt_mixed_from_value");
 
     emitter.instruction("sub sp, sp, #48");                                     // allocate stack frame for the incoming payload and boxed result
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
