@@ -2513,13 +2513,16 @@ impl Checker {
                     "callable" => Ok(PhpType::Callable),
                     "void" => Ok(PhpType::Void),
                     "array" => Ok(PhpType::Array(Box::new(PhpType::Int))),
+                    _ if self.classes.contains_key(name.as_str())
+                        || self.interfaces.contains_key(name.as_str())
+                        || self.extern_classes.contains_key(name.as_str()) =>
+                    {
+                        Ok(PhpType::Object(name.as_str().to_string()))
+                    }
                     _ if self.packed_classes.contains_key(name.as_str()) => {
                         Ok(PhpType::Packed(name.as_str().to_string()))
                     }
-                    _ => Err(CompileError::new(
-                        span,
-                        &format!("Unknown packed type: {}", name.as_str()),
-                    )),
+                    _ => Err(CompileError::new(span, &format!("Unknown type: {}", name.as_str()))),
                 }
             }
         }

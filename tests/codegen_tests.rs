@@ -13501,6 +13501,23 @@ fn test_enum_try_from_is_null_through_nullable_variable() {
 }
 
 #[test]
+fn test_nullable_enum_typed_local_accepts_try_from_result() {
+    let out = compile_and_run(
+        "<?php
+        enum Color: int {
+            case Red = 1;
+        }
+        ?Color $missing = Color::tryFrom(99);
+        ?Color $present = Color::tryFrom(1);
+        echo is_null($missing) ? \"null\" : \"found\";
+        echo \"|\";
+        echo $present === Color::Red ? \"red\" : \"other\";
+        ",
+    );
+    assert_eq!(out, "null|red");
+}
+
+#[test]
 fn test_example_union_types_compiles_and_runs() {
     let out = compile_and_run(include_str!("../examples/union-types/main.php"));
     assert_eq!(out, "41:string:ready");
