@@ -110,7 +110,10 @@ fn test_error_unexpected_token_in_stmt() {
 
 #[test]
 fn test_error_try_requires_catch_or_finally() {
-    expect_error("<?php try { echo 1; }", "Expected at least one catch or a finally block after try");
+    expect_error(
+        "<?php try { echo 1; }",
+        "Expected at least one catch or a finally block after try",
+    );
 }
 
 #[test]
@@ -272,10 +275,7 @@ fn test_error_packed_class_rejects_non_pod_field() {
 
 #[test]
 fn test_error_union_typed_local_rejects_invalid_initializer() {
-    expect_error(
-        "<?php int|string $value = 1.5;",
-        "cannot initialize $value",
-    );
+    expect_error("<?php int|string $value = 1.5;", "cannot initialize $value");
 }
 
 #[test]
@@ -407,7 +407,10 @@ fn test_error_missing_if_paren() {
 
 #[test]
 fn test_error_ifdef_requires_symbol_name() {
-    expect_error("<?php ifdef { echo 1; }", "Expected symbol name after 'ifdef'");
+    expect_error(
+        "<?php ifdef { echo 1; }",
+        "Expected symbol name after 'ifdef'",
+    );
 }
 
 #[test]
@@ -2644,5 +2647,69 @@ fn test_error_nullable_typed_local_rejects_invalid_reassignment() {
     expect_error(
         "<?php ?int $value = null; $value = \"x\";",
         "cannot reassign $value",
+    );
+}
+
+#[test]
+fn test_error_function_typed_param_rejects_wrong_argument() {
+    expect_error(
+        "<?php function foo(int $x) { echo $x; } foo(\"hello\");",
+        "Function 'foo' parameter $x expects Int, got Str",
+    );
+}
+
+#[test]
+fn test_error_function_declared_return_type_rejects_mismatch_without_call() {
+    expect_error(
+        "<?php function foo(): string { return 1; }",
+        "Function 'foo' return type expects Str, got Int",
+    );
+}
+
+#[test]
+fn test_error_function_declared_return_type_rejects_mismatch_via_first_class_callable() {
+    expect_error(
+        "<?php function foo(): string { return 1; } $f = foo(...);",
+        "Function 'foo' return type expects Str, got Int",
+    );
+}
+
+#[test]
+fn test_error_typed_closure_param_rejects_wrong_argument() {
+    expect_error(
+        "<?php $f = function (int $x) { echo $x; }; $f(\"hello\");",
+        "callable $f parameter $x expects Int, got Str",
+    );
+}
+
+#[test]
+fn test_error_typed_first_class_callable_rejects_wrong_argument() {
+    expect_error(
+        "<?php function foo(int $x) { echo $x; } $f = foo(...); $f(\"hello\");",
+        "callable $f parameter $x expects Int, got Str",
+    );
+}
+
+#[test]
+fn test_error_void_parameter_type_is_rejected() {
+    expect_error(
+        "<?php function foo(void $x) { }",
+        "Function 'foo' parameter $x cannot use type void",
+    );
+}
+
+#[test]
+fn test_error_typed_variadic_parameter_is_not_supported_yet() {
+    expect_error(
+        "<?php function foo(int ...$xs) { }",
+        "Typed variadic parameters are not supported yet",
+    );
+}
+
+#[test]
+fn test_error_nullable_by_ref_parameter_requires_boxed_storage() {
+    expect_error(
+        "<?php function bump(?int &$x) { $x = null; } $value = 1; bump($value);",
+        "requires a variable with mixed/union/nullable storage when passed by reference",
     );
 }

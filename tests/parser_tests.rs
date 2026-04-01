@@ -235,7 +235,9 @@ fn test_parse_namespace_block_with_qualified_names() {
                     assert_eq!(trait_uses[0].trait_names[0].as_str(), "Shared\\Loggable");
                     match &methods[0].body[0].kind {
                         StmtKind::Return(Some(expr)) => match &expr.kind {
-                            ExprKind::StaticMethodCall { receiver, method, .. } => {
+                            ExprKind::StaticMethodCall {
+                                receiver, method, ..
+                            } => {
                                 match receiver {
                                     StaticReceiver::Named(name) => {
                                         assert_eq!(name.as_str(), "Factory\\UserFactory");
@@ -823,6 +825,28 @@ fn test_parse_closure() {
 }
 
 #[test]
+fn test_parse_typed_closure_param() {
+    let stmts = parse_source("<?php $fn = function(int &$x) { return $x; };");
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Assign { value, .. } = &stmts[0].kind {
+        if let ExprKind::Closure {
+            params, is_arrow, ..
+        } = &value.kind
+        {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].0, "x");
+            assert_eq!(params[0].1, Some(TypeExpr::Int));
+            assert!(params[0].3);
+            assert!(!is_arrow);
+        } else {
+            panic!("expected Closure");
+        }
+    } else {
+        panic!("expected Assign");
+    }
+}
+
+#[test]
 fn test_parse_arrow_function() {
     let stmts = parse_source("<?php $fn = fn($x) => $x * 2;");
     assert_eq!(stmts.len(), 1);
@@ -833,6 +857,27 @@ fn test_parse_arrow_function() {
         {
             let param_names: Vec<&str> = params.iter().map(|(n, _, _, _)| n.as_str()).collect();
             assert_eq!(param_names, &["x"]);
+            assert!(is_arrow);
+        } else {
+            panic!("expected Closure (arrow)");
+        }
+    } else {
+        panic!("expected Assign");
+    }
+}
+
+#[test]
+fn test_parse_typed_arrow_function_param() {
+    let stmts = parse_source("<?php $fn = fn(string $label) => $label;");
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Assign { value, .. } = &stmts[0].kind {
+        if let ExprKind::Closure {
+            params, is_arrow, ..
+        } = &value.kind
+        {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].0, "label");
+            assert_eq!(params[0].1, Some(TypeExpr::Str));
             assert!(is_arrow);
         } else {
             panic!("expected Closure (arrow)");
@@ -984,9 +1029,15 @@ fn test_parse_backed_enum_decl() {
             assert_eq!(backing_type, &Some(TypeExpr::Int));
             assert_eq!(cases.len(), 2);
             assert_eq!(cases[0].name, "Red");
-            assert_eq!(cases[0].value.as_ref().map(|expr| &expr.kind), Some(&ExprKind::IntLiteral(1)));
+            assert_eq!(
+                cases[0].value.as_ref().map(|expr| &expr.kind),
+                Some(&ExprKind::IntLiteral(1))
+            );
             assert_eq!(cases[1].name, "Green");
-            assert_eq!(cases[1].value.as_ref().map(|expr| &expr.kind), Some(&ExprKind::IntLiteral(2)));
+            assert_eq!(
+                cases[1].value.as_ref().map(|expr| &expr.kind),
+                Some(&ExprKind::IntLiteral(2))
+            );
         }
         other => panic!("Expected EnumDecl, got {:?}", other),
     }
@@ -1118,6 +1169,62 @@ fn test_parse_non_ref_param() {
     }
 }
 
+#[test]
+fn test_parse_typed_function_param_and_return_type() {
+    let stmts = parse_source("<?php function foo(int $x): string { return \"ok\"; }");
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl {
+            name,
+            params,
+            return_type,
+            ..
+        } => {
+            assert_eq!(name, "foo");
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].0, "x");
+            assert_eq!(params[0].1, Some(TypeExpr::Int));
+            assert_eq!(return_type.as_ref(), Some(&TypeExpr::Str));
+        }
+        other => panic!("Expected FunctionDecl, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_union_and_nullable_function_types() {
+    let stmts = parse_source("<?php function describe(int|string $value): ?int { return null; }");
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl {
+            params,
+            return_type,
+            ..
+        } => {
+            assert_eq!(
+                params[0].1,
+                Some(TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::Str]))
+            );
+            assert_eq!(
+                return_type.as_ref(),
+                Some(&TypeExpr::Nullable(Box::new(TypeExpr::Int)))
+            );
+        }
+        other => panic!("Expected FunctionDecl, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_typed_ref_param() {
+    let stmts = parse_source("<?php function bump(int &$x) { }");
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl { params, .. } => {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0].0, "x");
+            assert_eq!(params[0].1, Some(TypeExpr::Int));
+            assert!(params[0].3);
+        }
+        other => panic!("Expected FunctionDecl, got {:?}", other),
+    }
+}
+
 // --- Variadic and Spread ---
 
 #[test]
@@ -1163,6 +1270,11 @@ fn test_parse_no_variadic() {
         }
         _ => panic!("Expected FunctionDecl"),
     }
+}
+
+#[test]
+fn test_parse_typed_variadic_param_fails() {
+    assert!(parse_fails("<?php function foo(int ...$xs) { }"));
 }
 
 #[test]
@@ -1416,7 +1528,8 @@ fn test_parse_static_method_call() {
 
 #[test]
 fn test_parse_class_decl_with_extends() {
-    let stmts = parse_source("<?php class Child extends Base { public function run() { return 1; } }");
+    let stmts =
+        parse_source("<?php class Child extends Base { public function run() { return 1; } }");
     match &stmts[0].kind {
         StmtKind::ClassDecl {
             name,
@@ -1445,7 +1558,10 @@ fn test_parse_interface_decl() {
             methods,
         } => {
             assert_eq!(name, "Named");
-            assert_eq!(extends, &vec!["Renderable".to_string(), "Jsonable".to_string()]);
+            assert_eq!(
+                extends,
+                &vec!["Renderable".to_string(), "Jsonable".to_string()]
+            );
             assert_eq!(methods.len(), 1);
             assert_eq!(methods[0].name, "name");
             assert!(methods[0].is_abstract);
@@ -1783,7 +1899,11 @@ fn test_parse_first_class_callable_static_method() {
 fn test_parse_nullable_typed_assign() {
     let stmts = parse_source("<?php ?int $value = null;");
     match &stmts[0].kind {
-        StmtKind::TypedAssign { type_expr, name, value } => {
+        StmtKind::TypedAssign {
+            type_expr,
+            name,
+            value,
+        } => {
             assert_eq!(name, "value");
             assert_eq!(type_expr, &TypeExpr::Nullable(Box::new(TypeExpr::Int)));
             assert_eq!(value.kind, ExprKind::Null);
@@ -1796,12 +1916,13 @@ fn test_parse_nullable_typed_assign() {
 fn test_parse_union_typed_assign() {
     let stmts = parse_source("<?php int|string $value = 1;");
     match &stmts[0].kind {
-        StmtKind::TypedAssign { type_expr, name, value } => {
+        StmtKind::TypedAssign {
+            type_expr,
+            name,
+            value,
+        } => {
             assert_eq!(name, "value");
-            assert_eq!(
-                type_expr,
-                &TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::Named(Name::unqualified("string"))])
-            );
+            assert_eq!(type_expr, &TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::Str]));
             assert_eq!(value.kind, ExprKind::IntLiteral(1));
         }
         other => panic!("Expected typed assign, got {:?}", other),

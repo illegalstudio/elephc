@@ -1,10 +1,9 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
-
 
 static TEST_ID: AtomicU64 = AtomicU64::new(0);
 static SDK_PATH: OnceLock<String> = OnceLock::new();
@@ -174,7 +173,8 @@ fn test_exception_try_catch_same_function() {
 
 #[test]
 fn test_builtin_exception_try_catch() {
-    let out = compile_and_run("<?php try { throw new Exception(); } catch (Exception $e) { echo 11; }");
+    let out =
+        compile_and_run("<?php try { throw new Exception(); } catch (Exception $e) { echo 11; }");
     assert_eq!(out, "11");
 }
 
@@ -188,7 +188,8 @@ fn test_builtin_exception_message_api() {
 
 #[test]
 fn test_builtin_throwable_catches_exception() {
-    let out = compile_and_run("<?php try { throw new Exception(); } catch (Throwable $e) { echo 12; }");
+    let out =
+        compile_and_run("<?php try { throw new Exception(); } catch (Throwable $e) { echo 12; }");
     assert_eq!(out, "12");
 }
 
@@ -210,9 +211,8 @@ fn test_exception_multi_catch_matches_each_type() {
 
 #[test]
 fn test_exception_catch_without_variable() {
-    let out = compile_and_run(
-        "<?php try { throw new Exception(); } catch (Exception) { echo 21; }",
-    );
+    let out =
+        compile_and_run("<?php try { throw new Exception(); } catch (Exception) { echo 21; }");
     assert_eq!(out, "21");
 }
 
@@ -298,11 +298,20 @@ fn test_exception_try_catch_inside_loop() {
 fn test_gc_main_scope_cleanup_releases_owned_locals_on_exit() {
     let baseline = compile_and_run_with_gc_stats("<?php");
     let out = compile_and_run_with_gc_stats("<?php $items = [1, 2, 3];");
-    assert!(baseline.success, "baseline program failed: {}", baseline.stderr);
+    assert!(
+        baseline.success,
+        "baseline program failed: {}",
+        baseline.stderr
+    );
     assert!(out.success, "program failed: {}", out.stderr);
     let (baseline_allocs, baseline_frees) = parse_gc_stats(&baseline.stderr);
     let (allocs, frees) = parse_gc_stats(&out.stderr);
-    assert_eq!(allocs - baseline_allocs, frees - baseline_frees, "{}", out.stderr);
+    assert_eq!(
+        allocs - baseline_allocs,
+        frees - baseline_frees,
+        "{}",
+        out.stderr
+    );
 }
 
 #[test]
@@ -409,7 +418,14 @@ fn compile_source_to_asm_with_options(
     gc_stats: bool,
     heap_debug: bool,
 ) -> (String, String, Vec<String>) {
-    compile_source_to_asm_with_defines(source, dir, &HashSet::new(), heap_size, gc_stats, heap_debug)
+    compile_source_to_asm_with_defines(
+        source,
+        dir,
+        &HashSet::new(),
+        heap_size,
+        gc_stats,
+        heap_debug,
+    )
 }
 
 fn compile_source_to_asm_with_defines(
@@ -500,7 +516,11 @@ fn compile_harness_and_run(source: &str, heap_size: usize, harness: &str) -> Str
     stdout
 }
 
-fn compile_harness_and_run_with_heap_debug(source: &str, heap_size: usize, harness: &str) -> String {
+fn compile_harness_and_run_with_heap_debug(
+    source: &str,
+    heap_size: usize,
+    harness: &str,
+) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -685,7 +705,9 @@ fn test_buffer_packed_field_access() {
 
 #[test]
 fn test_buffer_len_returns_declared_length() {
-    let out = compile_and_run("<?php buffer<int> $values = buffer_new<int>(7); echo buffer_len($values);");
+    let out = compile_and_run(
+        "<?php buffer<int> $values = buffer_new<int>(7); echo buffer_len($values);",
+    );
     assert_eq!(out, "7");
 }
 
@@ -705,62 +727,74 @@ fn test_buffer_packed_fields_are_zero_initialized() {
 
 #[test]
 fn test_buffer_bounds_check_traps() {
-    let err = compile_and_run_expect_failure("<?php buffer<int> $values = buffer_new<int>(1); echo $values[1];");
+    let err = compile_and_run_expect_failure(
+        "<?php buffer<int> $values = buffer_new<int>(1); echo $values[1];",
+    );
     assert!(err.contains("buffer index out of bounds"), "{}", err);
 }
 
 #[test]
 fn test_buffer_free_releases_memory() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 buffer<int> $buf = buffer_new<int>(10);
 $buf[0] = 42;
 echo $buf[0] . " ";
 buffer_free($buf);
 echo "ok";
-"#);
+"#,
+    );
     assert_eq!(out, "42 ok");
 }
 
 #[test]
 fn test_buffer_free_in_loop_does_not_exhaust_heap() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 for ($i = 0; $i < 100; $i++) {
     buffer<int> $tmp = buffer_new<int>(1000);
     $tmp[0] = $i;
     buffer_free($tmp);
 }
 echo "survived";
-"#);
+"#,
+    );
     assert_eq!(out, "survived");
 }
 
 #[test]
 fn test_buffer_use_after_free_read_is_fatal() {
-    let err = compile_and_run_expect_failure(r#"<?php
+    let err = compile_and_run_expect_failure(
+        r#"<?php
 buffer<int> $buf = buffer_new<int>(5);
 buffer_free($buf);
 echo $buf[0];
-"#);
+"#,
+    );
     assert!(err.contains("use of buffer after buffer_free()"), "{}", err);
 }
 
 #[test]
 fn test_buffer_use_after_free_write_is_fatal() {
-    let err = compile_and_run_expect_failure(r#"<?php
+    let err = compile_and_run_expect_failure(
+        r#"<?php
 buffer<int> $buf = buffer_new<int>(5);
 buffer_free($buf);
 $buf[0] = 1;
-"#);
+"#,
+    );
     assert!(err.contains("use of buffer after buffer_free()"), "{}", err);
 }
 
 #[test]
 fn test_buffer_len_after_free_is_fatal() {
-    let err = compile_and_run_expect_failure(r#"<?php
+    let err = compile_and_run_expect_failure(
+        r#"<?php
 buffer<int> $buf = buffer_new<int>(5);
 buffer_free($buf);
 echo buffer_len($buf);
-"#);
+"#,
+    );
     assert!(err.contains("use of buffer after buffer_free()"), "{}", err);
 }
 
@@ -816,7 +850,10 @@ fn compile_cli_file_and_run(source: &str, defines: &[&str]) -> String {
         .current_dir(&dir)
         .output()
         .expect("failed to run compiled CLI binary");
-    assert!(output.status.success(), "CLI-compiled binary exited with error");
+    assert!(
+        output.status.success(),
+        "CLI-compiled binary exited with error"
+    );
 
     let _ = fs::remove_dir_all(&dir);
     String::from_utf8(output.stdout).unwrap()
@@ -832,8 +869,14 @@ fn compile_and_run_expect_failure(source: &str) -> String {
 
     let (user_asm, _runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    let output =
-        assemble_and_run_expect_failure(&user_asm, get_runtime_obj(), &dir, &required_libraries, &default_link_paths(), &[]);
+    let output = assemble_and_run_expect_failure(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
 
     let _ = fs::remove_dir_all(&dir);
     output
@@ -933,7 +976,8 @@ fn compile_files_fails_with_defines(
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
         let tokens = elephc::lexer::tokenize(&source)?;
         let ast = elephc::parser::parse(&tokens)?;
-        let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();
+        let define_set: HashSet<String> =
+            defines.iter().map(|define| (*define).to_string()).collect();
         let ast = elephc::conditional::apply(ast, &define_set);
         let resolved = elephc::resolver::resolve(ast, base_dir)?;
         let resolved = elephc::name_resolver::resolve(resolved)?;
@@ -1049,17 +1093,15 @@ ifdef FEATURE {
 #[test]
 fn test_ifdef_inactive_branch_skips_missing_include_resolution() {
     let out = compile_and_run_files_with_defines(
-        &[
-            (
-                "main.php",
-                r#"<?php
+        &[(
+            "main.php",
+            r#"<?php
 ifdef FEATURE {
     require "missing.php";
 }
 echo "safe";
 "#,
-            ),
-        ],
+        )],
         "main.php",
         &[],
     );
@@ -7920,7 +7962,10 @@ echo json_encode([
 ]);
 "#,
     );
-    assert_eq!(out, r#"{"floats":[1.5,2.25],"bools":[true,false],"objects":[null]}"#);
+    assert_eq!(
+        out,
+        r#"{"floats":[1.5,2.25],"bools":[true,false],"objects":[null]}"#
+    );
 }
 
 #[test]
@@ -10886,7 +10931,11 @@ build_and_drop_direct();
 build_and_drop_direct();
 "#,
     );
-    assert!(baseline.success, "baseline program failed: {}", baseline.stderr);
+    assert!(
+        baseline.success,
+        "baseline program failed: {}",
+        baseline.stderr
+    );
     let exhaustive = compile_and_run_with_gc_stats(
         r#"<?php
 function build_and_drop($flag) {
@@ -10933,7 +10982,11 @@ $n = new Node();
 unset($n);
 "#,
     );
-    assert!(acyclic.success, "acyclic program failed: {}", acyclic.stderr);
+    assert!(
+        acyclic.success,
+        "acyclic program failed: {}",
+        acyclic.stderr
+    );
 
     let cyclic = compile_and_run_with_gc_stats(
         r#"<?php
@@ -10964,7 +11017,11 @@ unset($a);
 unset($n);
 "#,
     );
-    assert!(acyclic.success, "acyclic program failed: {}", acyclic.stderr);
+    assert!(
+        acyclic.success,
+        "acyclic program failed: {}",
+        acyclic.stderr
+    );
 
     let cyclic = compile_and_run_with_gc_stats(
         r#"<?php
@@ -10997,7 +11054,11 @@ unset($a);
 unset($b);
 "#,
     );
-    assert!(acyclic.success, "acyclic program failed: {}", acyclic.stderr);
+    assert!(
+        acyclic.success,
+        "acyclic program failed: {}",
+        acyclic.stderr
+    );
 
     let cyclic = compile_and_run_with_gc_stats(
         r#"<?php
@@ -11030,7 +11091,11 @@ unset($a);
 unset($b);
 "#,
     );
-    assert!(acyclic.success, "acyclic program failed: {}", acyclic.stderr);
+    assert!(
+        acyclic.success,
+        "acyclic program failed: {}",
+        acyclic.stderr
+    );
 
     let cyclic = compile_and_run_with_gc_stats(
         r#"<?php
@@ -11061,7 +11126,11 @@ unset($a);
 unset($b);
 "#,
     );
-    assert!(acyclic.success, "acyclic program failed: {}", acyclic.stderr);
+    assert!(
+        acyclic.success,
+        "acyclic program failed: {}",
+        acyclic.stderr
+    );
 
     let cyclic = compile_and_run_with_gc_stats(
         r#"<?php
@@ -11094,7 +11163,11 @@ unset($h);
 unset($n);
 "#,
     );
-    assert!(acyclic.success, "acyclic program failed: {}", acyclic.stderr);
+    assert!(
+        acyclic.success,
+        "acyclic program failed: {}",
+        acyclic.stderr
+    );
 
     let cyclic = compile_and_run_with_gc_stats(
         r#"<?php
@@ -11302,7 +11375,10 @@ fn test_heap_debug_free_list_corruption_reports_error() {
     mov x0, #8
     bl __rt_heap_alloc"#,
     );
-    assert!(err.contains("heap debug detected free-list corruption"), "{err}");
+    assert!(
+        err.contains("heap debug detected free-list corruption"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -11311,7 +11387,11 @@ fn test_heap_debug_reports_exit_summary() {
     assert!(out.success, "program failed: {}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: allocs="), "{}", out.stderr);
     assert!(out.stderr.contains("peak_live_bytes="), "{}", out.stderr);
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary:"), "{}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary:"),
+        "{}",
+        out.stderr
+    );
 }
 
 #[test]
@@ -11448,9 +11528,18 @@ unset($map);
     // The scalar-only GC skip logic lives in the runtime, not user code.
     // Verify it exists in the runtime assembly.
     let runtime_asm = elephc::codegen::generate_runtime(8_388_608);
-    assert!(runtime_asm.contains("__rt_hash_may_have_cyclic_values"), "runtime missing cyclic-value check");
-    assert!(runtime_asm.contains("bl __rt_hash_may_have_cyclic_values"), "runtime missing cyclic-value call");
-    assert!(runtime_asm.contains("cbz x0, __rt_decref_hash_skip"), "runtime missing scalar-only skip branch");
+    assert!(
+        runtime_asm.contains("__rt_hash_may_have_cyclic_values"),
+        "runtime missing cyclic-value check"
+    );
+    assert!(
+        runtime_asm.contains("bl __rt_hash_may_have_cyclic_values"),
+        "runtime missing cyclic-value call"
+    );
+    assert!(
+        runtime_asm.contains("cbz x0, __rt_decref_hash_skip"),
+        "runtime missing scalar-only skip branch"
+    );
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -12037,7 +12126,11 @@ fn test_ffi_extern_strlen_frees_borrowed_cstr_temp() {
 extern function strlen(string $s): int;
 "#,
     );
-    assert!(baseline.success, "baseline program failed: {}", baseline.stderr);
+    assert!(
+        baseline.success,
+        "baseline program failed: {}",
+        baseline.stderr
+    );
     let out = compile_and_run_with_gc_stats(
         r#"<?php
 extern function strlen(string $s): int;
@@ -12048,7 +12141,12 @@ strlen("world");
     assert!(out.success, "program failed: {}", out.stderr);
     let (baseline_allocs, baseline_frees) = parse_gc_stats(&baseline.stderr);
     let (allocs, frees) = parse_gc_stats(&out.stderr);
-    assert_eq!(allocs - baseline_allocs, frees - baseline_frees, "{}", out.stderr);
+    assert_eq!(
+        allocs - baseline_allocs,
+        frees - baseline_frees,
+        "{}",
+        out.stderr
+    );
 }
 
 #[test]
@@ -12335,7 +12433,11 @@ fn test_ffi_extern_multiple_string_args_free_all_borrowed_cstr_temps() {
 extern function strcmp(string $left, string $right): int;
 "#,
     );
-    assert!(baseline.success, "baseline program failed: {}", baseline.stderr);
+    assert!(
+        baseline.success,
+        "baseline program failed: {}",
+        baseline.stderr
+    );
     let out = compile_and_run_with_gc_stats(
         r#"<?php
 extern function strcmp(string $left, string $right): int;
@@ -12346,7 +12448,12 @@ strcmp("bb", "bb");
     assert!(out.success, "program failed: {}", out.stderr);
     let (baseline_allocs, baseline_frees) = parse_gc_stats(&baseline.stderr);
     let (allocs, frees) = parse_gc_stats(&out.stderr);
-    assert_eq!(allocs - baseline_allocs, frees - baseline_frees, "{}", out.stderr);
+    assert_eq!(
+        allocs - baseline_allocs,
+        frees - baseline_frees,
+        "{}",
+        out.stderr
+    );
 }
 
 #[test]
@@ -13180,6 +13287,21 @@ echo $values[2];
 }
 
 #[test]
+fn test_first_class_callable_untyped_function_accepts_string_args() {
+    let out = compile_and_run(
+        r#"<?php
+function greet($name) {
+    return "Hello " . $name;
+}
+
+$f = greet(...);
+echo $f("World");
+"#,
+    );
+    assert_eq!(out, "Hello World");
+}
+
+#[test]
 fn test_first_class_callable_direct_call_user_func() {
     let out = compile_and_run(
         r#"<?php
@@ -13187,6 +13309,23 @@ echo call_user_func(strlen(...), "hello");
 "#,
     );
     assert_eq!(out, "5");
+}
+
+#[test]
+fn test_first_class_callable_untyped_static_method_accepts_string_args() {
+    let out = compile_and_run(
+        r#"<?php
+class Greeter {
+    public static function greet($name) {
+        return "Hello " . $name;
+    }
+}
+
+$f = Greeter::greet(...);
+echo $f("World");
+"#,
+    );
+    assert_eq!(out, "Hello World");
 }
 
 #[test]
@@ -13521,4 +13660,227 @@ fn test_nullable_enum_typed_local_accepts_try_from_result() {
 fn test_example_union_types_compiles_and_runs() {
     let out = compile_and_run(include_str!("../examples/union-types/main.php"));
     assert_eq!(out, "41:string:ready");
+}
+
+#[test]
+fn test_typed_array_parameter() {
+    let out = compile_and_run(
+        "<?php
+        function total(array $values) {
+            echo count($values);
+        }
+        total([1, 2, 3]);
+        ",
+    );
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_typed_callable_parameter() {
+    let out = compile_and_run(
+        "<?php
+        function apply(callable $fn) {
+            echo $fn(1);
+        }
+        function plus_one($x) {
+            return $x + 1;
+        }
+        apply(plus_one(...));
+        ",
+    );
+    assert_eq!(out, "2");
+}
+
+#[test]
+fn test_typed_by_ref_parameter() {
+    let out = compile_and_run(
+        "<?php
+        function bump(int &$x) {
+            $x = $x + 1;
+        }
+        $value = 4;
+        bump($value);
+        echo $value;
+        ",
+    );
+    assert_eq!(out, "5");
+}
+
+#[test]
+fn test_typed_method_parameter() {
+    let out = compile_and_run(
+        "<?php
+        class Box {
+            public function size(array $items) {
+                echo count($items);
+            }
+        }
+        $box = new Box();
+        $box->size([1, 2]);
+        ",
+    );
+    assert_eq!(out, "2");
+}
+
+#[test]
+fn test_typed_constructor_parameter() {
+    let out = compile_and_run(
+        "<?php
+        class User {
+            public $id;
+            public function __construct(int $id) {
+                $this->id = $id;
+            }
+        }
+        $user = new User(42);
+        echo $user->id;
+        ",
+    );
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_typed_closure_parameter() {
+    let out = compile_and_run(
+        "<?php
+        $f = function (int $x) {
+            echo $x + 1;
+        };
+        $f(41);
+        ",
+    );
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_typed_function_return_value() {
+    let out = compile_and_run(
+        "<?php
+        function label(): string {
+            return \"ok\";
+        }
+        echo label();
+        ",
+    );
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_nullable_typed_parameter_accepts_null_and_int() {
+    let out = compile_and_run(
+        "<?php
+        function show(?int $value): string {
+            return is_null($value) ? \"null\" : (string) $value;
+        }
+        echo show(null);
+        echo \"|\";
+        echo show(7);
+        ",
+    );
+    assert_eq!(out, "null|7");
+}
+
+#[test]
+fn test_union_typed_parameter_accepts_multiple_types() {
+    let out = compile_and_run(
+        "<?php
+        function show(int|string $value): string {
+            return gettype($value) . \":\" . $value;
+        }
+        echo show(1);
+        echo \"|\";
+        echo show(\"ok\");
+        ",
+    );
+    assert_eq!(out, "integer:1|string:ok");
+}
+
+#[test]
+fn test_nullable_return_type_boxes_results() {
+    let out = compile_and_run(
+        "<?php
+        function maybe(bool $flag): ?int {
+            if ($flag) {
+                return 7;
+            }
+            return null;
+        }
+        echo is_null(maybe(false)) ? \"null\" : \"value\";
+        echo \"|\";
+        echo maybe(true);
+        ",
+    );
+    assert_eq!(out, "null|7");
+}
+
+#[test]
+fn test_union_return_type_boxes_results() {
+    let out = compile_and_run(
+        "<?php
+        function choose(bool $flag): int|string {
+            if ($flag) {
+                return 7;
+            }
+            return \"ok\";
+        }
+        echo gettype(choose(true));
+        echo \"|\";
+        echo choose(false);
+        ",
+    );
+    assert_eq!(out, "integer|ok");
+}
+
+#[test]
+fn test_mixed_parameter_and_return_type() {
+    let out = compile_and_run(
+        "<?php
+        function id(mixed $value): mixed {
+            return $value;
+        }
+        echo gettype(id(\"ok\"));
+        echo \"|\";
+        echo id(7);
+        ",
+    );
+    assert_eq!(out, "string|7");
+}
+
+#[test]
+fn test_call_user_func_array_with_nullable_callback_param() {
+    let out = compile_and_run(
+        "<?php
+        function show(?int $value): string {
+            return is_null($value) ? \"null\" : (string) $value;
+        }
+        echo call_user_func_array(show(...), [null]);
+        echo \"|\";
+        echo call_user_func_array(show(...), [7]);
+        ",
+    );
+    assert_eq!(out, "null|7");
+}
+
+#[test]
+fn test_nullable_by_ref_parameter_accepts_boxed_typed_local() {
+    let out = compile_and_run(
+        "<?php
+        function clear(?int &$value): void {
+            $value = null;
+        }
+        ?int $value = 7;
+        clear($value);
+        echo is_null($value) ? \"null\" : \"value\";
+        ",
+    );
+    assert_eq!(out, "null");
+}
+
+#[test]
+fn test_example_functions_compiles_and_runs() {
+    let out = compile_and_run(include_str!("../examples/functions/main.php"));
+    assert_eq!(
+        out,
+        "my_abs(-42) = 42\nmy_max(3, 7) = 7\nclamp(15, 0, 10) = 10\ngcd(48, 18) = 6\n2^10 = 1024\ndescribe(42) = integer:42\ndescribe(null) = NULL:null\n",
+    );
 }
