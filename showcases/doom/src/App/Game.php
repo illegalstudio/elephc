@@ -118,6 +118,7 @@ class Game {
         }
 
         $this->map = $this->mapLoader->load($this->wad, $this->config->startupMap);
+
         if ($this->map->isValid()) {
             if ($this->map->hasPlayerStart()) {
                 $this->camera->setSpawn(

@@ -14,7 +14,14 @@ class WallRenderer {
         $this->projection = new Projection();
     }
 
-    public function render(SDL $sdl, Config $config, MapData $map, Camera $camera, $subSectorOrder, int $cameraSubSector): void {
+    public function render(
+        SDL $sdl,
+        Config $config,
+        MapData $map,
+        Camera $camera,
+        $subSectorOrder,
+        int $cameraSubSector
+    ): void {
         if (!$map->isValid() || $map->segCount <= 0 || $map->sidedefCount <= 0 || $map->sectorCount <= 0) {
             return;
         }
@@ -205,34 +212,34 @@ class WallRenderer {
         int $segDx = $worldX2 - $worldX1;
         int $segDy = $worldY2 - $worldY1;
         bool $mostlyVertical = $this->absoluteValue($segDy) > $this->absoluteValue($segDx);
-        int $baseRed = 34 + intdiv($light * 96, 255);
-        int $baseGreen = 54 + intdiv($light * 126, 255);
-        int $baseBlue = 70 + intdiv($light * 92, 255);
+        int $baseRed = 52 + intdiv($light * 72, 255);
+        int $baseGreen = 58 + intdiv($light * 86, 255);
+        int $baseBlue = 64 + intdiv($light * 70, 255);
         if ($mostlyVertical) {
-            $baseGreen += 18;
-            $baseBlue += 10;
+            $baseGreen += 8;
+            $baseBlue += 12;
         } else {
-            $baseRed += 20;
-            $baseGreen += 10;
+            $baseRed += 12;
+            $baseGreen += 8;
         }
         if ($map->segs[$segIndex]->direction != 0) {
-            $baseRed += 10;
-            $baseBlue += 14;
+            $baseRed += 6;
+            $baseBlue += 10;
         }
         if (!$oneSided) {
-            $baseBlue += 18;
-            $baseGreen += 6;
+            $baseBlue += 8;
+            $baseGreen += 4;
         }
-        int $nearBoost = 28 - intdiv($distance, 48);
+        int $nearBoost = 22 - intdiv($distance, 56);
         if ($nearBoost < 0) {
             $nearBoost = 0;
         }
-        if ($nearBoost > 28) {
-            $nearBoost = 28;
+        if ($nearBoost > 22) {
+            $nearBoost = 22;
         }
         $baseRed += $nearBoost;
-        $baseGreen += intdiv($nearBoost * 3, 4);
-        $baseBlue += intdiv($nearBoost, 2);
+        $baseGreen += intdiv($nearBoost * 4, 5);
+        $baseBlue += intdiv($nearBoost * 3, 5);
         if ($baseRed > 255) {
             $baseRed = 255;
         }
@@ -242,17 +249,49 @@ class WallRenderer {
         if ($baseBlue > 255) {
             $baseBlue = 255;
         }
-        $baseRed = $baseRed - $distanceFade;
-        $baseGreen = $baseGreen - intdiv($distanceFade * 9, 10);
-        $baseBlue = $baseBlue - intdiv($distanceFade * 5, 4);
-        if ($baseRed < 18) {
-            $baseRed = 18;
+        $baseRed = $baseRed - intdiv($distanceFade * 6, 5);
+        $baseGreen = $baseGreen - $distanceFade;
+        $baseBlue = $baseBlue - intdiv($distanceFade * 9, 10);
+        if ($baseRed < 24) {
+            $baseRed = 24;
         }
-        if ($baseGreen < 24) {
-            $baseGreen = 24;
+        if ($baseGreen < 28) {
+            $baseGreen = 28;
         }
-        if ($baseBlue < 28) {
-            $baseBlue = 28;
+        if ($baseBlue < 34) {
+            $baseBlue = 34;
+        }
+        int $midRed = $baseRed;
+        int $midGreen = $baseGreen;
+        int $midBlue = $baseBlue;
+        int $upperRed = $baseRed + 4;
+        int $upperGreen = $baseGreen + 10;
+        int $upperBlue = $baseBlue + 16;
+        int $lowerRed = $baseRed + 16;
+        int $lowerGreen = $baseGreen + 8;
+        int $lowerBlue = $baseBlue;
+        if ($oneSided) {
+            $midRed += 8;
+            $midGreen += 6;
+            $midBlue += 2;
+        }
+        if ($upperRed > 255) {
+            $upperRed = 255;
+        }
+        if ($upperGreen > 255) {
+            $upperGreen = 255;
+        }
+        if ($upperBlue > 255) {
+            $upperBlue = 255;
+        }
+        if ($lowerRed > 255) {
+            $lowerRed = 255;
+        }
+        if ($lowerGreen > 255) {
+            $lowerGreen = 255;
+        }
+        if ($lowerBlue > 255) {
+            $lowerBlue = 255;
         }
 
         if ($leftX < $viewportX) {
@@ -312,9 +351,9 @@ class WallRenderer {
                     $bottom,
                     $viewportY,
                     $viewportHeight,
-                    $baseRed,
-                    $baseGreen,
-                    $baseBlue
+                    $midRed,
+                    $midGreen,
+                    $midBlue
                 );
                 $solidDepth[$clipColumn] = $depth;
             } else {
@@ -342,9 +381,9 @@ class WallRenderer {
                         $bottom,
                         $viewportY,
                         $viewportHeight,
-                        $baseRed,
-                        $baseGreen,
-                        $baseBlue
+                        $upperRed,
+                        $upperGreen,
+                        $upperBlue
                     );
                 }
                 if ($frontFloor !== $backFloor) {
@@ -371,9 +410,9 @@ class WallRenderer {
                         $bottom,
                         $viewportY,
                         $viewportHeight,
-                        $baseRed,
-                        $baseGreen,
-                        $baseBlue
+                        $lowerRed,
+                        $lowerGreen,
+                        $lowerBlue
                     );
                 }
             }
@@ -402,9 +441,13 @@ class WallRenderer {
             if ($skyHeight > 0) {
                 $skyProgress = intdiv(($y - $skyTop) * 255, $skyHeight);
             }
-            int $red = 28 + intdiv($skyProgress * 28, 255);
-            int $green = 40 + intdiv($skyProgress * 32, 255);
-            int $blue = 76 + intdiv($skyProgress * 34, 255);
+            int $red = 22 + intdiv($skyProgress * 30, 255);
+            int $green = 30 + intdiv($skyProgress * 34, 255);
+            int $blue = 74 + intdiv($skyProgress * 24, 255);
+            if ($skyProgress > 180) {
+                $red += intdiv($skyProgress - 180, 10);
+                $green += intdiv($skyProgress - 180, 12);
+            }
             if ($red > 255) {
                 $red = 255;
             }
@@ -426,37 +469,37 @@ class WallRenderer {
                 $floorProgress = intdiv(($y - $floorTop) * 255, $floorHeight);
             }
             int $distanceShade = 255 - $floorProgress;
-            int $red = 48 - intdiv($distanceShade * 16, 255);
-            int $green = 36 - intdiv($distanceShade * 12, 255);
-            int $blue = 24 - intdiv($distanceShade * 8, 255);
-            if ($floorProgress > 96) {
-                $red += intdiv($floorProgress - 96, 20);
-                $green += intdiv($floorProgress - 96, 28);
+            int $red = 54 - intdiv($distanceShade * 14, 255);
+            int $green = 42 - intdiv($distanceShade * 10, 255);
+            int $blue = 30 - intdiv($distanceShade * 8, 255);
+            if ($floorProgress > 112) {
+                $red += intdiv($floorProgress - 112, 18);
+                $green += intdiv($floorProgress - 112, 24);
             }
-            if ($red < 24) {
-                $red = 24;
+            if ($red < 28) {
+                $red = 28;
             }
-            if ($green < 18) {
-                $green = 18;
+            if ($green < 22) {
+                $green = 22;
             }
-            if ($blue < 14) {
-                $blue = 14;
+            if ($blue < 16) {
+                $blue = 16;
             }
-            if ($red > 92) {
-                $red = 92;
+            if ($red > 88) {
+                $red = 88;
             }
-            if ($green > 70) {
-                $green = 70;
+            if ($green > 68) {
+                $green = 68;
             }
-            if ($blue > 42) {
-                $blue = 42;
+            if ($blue > 48) {
+                $blue = 48;
             }
             $sdl->setDrawColor($red, $green, $blue);
             $sdl->drawLine($viewportX, $y, $viewportX + $viewportWidth - 1, $y);
             if ($floorHeight > 0) {
-                int $band = intdiv(($y - $floorTop) * 14, $floorHeight);
+                int $band = intdiv(($y - $floorTop) * 16, $floorHeight);
                 if ($band % 2 === 0) {
-                    $sdl->setDrawColor($red + 4, $green + 3, $blue + 2);
+                    $sdl->setDrawColor($red + 3, $green + 3, $blue + 2);
                     $sdl->drawLine($viewportX, $y, $viewportX + $viewportWidth - 1, $y);
                 }
             }
