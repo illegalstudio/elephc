@@ -30,6 +30,10 @@ fn eval_and_push_args(
             }
         })
         .unwrap_or(args.len());
+    let normalized_args = sig
+        .map(|sig| super::super::calls::args::normalize_named_call_args(sig, args, regular_param_count))
+        .unwrap_or_else(|| args.to_vec());
+    let args = normalized_args.as_slice();
     let mut regular_args: Vec<&Expr> = Vec::new();
     let mut variadic_args: Vec<&Expr> = Vec::new();
     let mut spread_arg: Option<&Expr> = None;

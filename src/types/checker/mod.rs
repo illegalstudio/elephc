@@ -3237,8 +3237,10 @@ impl Checker {
                 if crate::name_resolver::is_builtin_function(name.as_str()) {
                     return Ok(base_sig);
                 }
-                self.check_function_call(name.as_str(), args, span, env)?;
-                self.specialize_untyped_function_params(name.as_str(), args, env)?;
+                let normalized_args =
+                    self.normalize_named_call_args(&base_sig, args, span, "first-class callable")?;
+                self.check_function_call(name.as_str(), &normalized_args, span, env)?;
+                self.specialize_untyped_function_params(name.as_str(), &normalized_args, env)?;
             }
             CallableTarget::StaticMethod { receiver, method } => {
                 let call_expr = Expr::new(
@@ -4158,6 +4160,23 @@ impl Checker {
             ExprKind::FunctionCall { name, args } => {
                 let name = name.as_str().to_string();
                 let args = args.clone();
+                if Self::has_named_args(&args) {
+                    if self.extern_functions.contains_key(name.as_str()) {
+                        return Err(CompileError::new(
+                            expr.span,
+                            &format!(
+                                "Extern function '{}' does not support named arguments yet",
+                                name
+                            ),
+                        ));
+                    }
+                    if crate::name_resolver::is_builtin_function(name.as_str()) {
+                        return Err(CompileError::new(
+                            expr.span,
+                            &format!("Builtin '{}' does not support named arguments yet", name),
+                        ));
+                    }
+                }
                 if self.extern_functions.contains_key(name.as_str()) {
                     return self.check_extern_function_call(name.as_str(), &args, expr.span, env);
                 }
@@ -4275,6 +4294,7 @@ impl Checker {
                     )),
                 }
             }
+            ExprKind::NamedArg { value, .. } => self.infer_type(value, env),
             ExprKind::ClosureCall { var, args } => {
                 let var_ty = env.get(var).cloned().ok_or_else(|| {
                     CompileError::new(expr.span, &format!("Undefined variable: ${}", var))
@@ -4312,6 +4332,15 @@ impl Checker {
                         env,
                         &format!("callable ${}", var),
                     );
+                }
+                if Self::has_named_args(args) {
+                    return Err(CompileError::new(
+                        expr.span,
+                        &format!(
+                            "callable ${} does not support named arguments without a known signature",
+                            var
+                        ),
+                    ));
                 }
                 for arg in args {
                     self.infer_type(arg, env)?;
@@ -4384,6 +4413,12 @@ impl Checker {
                         );
                     }
                     _ => {}
+                }
+                if Self::has_named_args(args) {
+                    return Err(CompileError::new(
+                        expr.span,
+                        "Callable expression does not support named arguments without a known signature",
+                    ));
                 }
                 for arg in args {
                     self.infer_type(arg, env)?;
@@ -4562,13 +4597,27 @@ impl Checker {
                             Self::declared_method_param_flags(class_info, "__construct", false);
                         let effective_sig =
                             Self::callable_sig_for_declared_params(sig, &declared_flags);
-                        self.check_known_callable_call(
+                        let param_to_prop = class_info.constructor_param_to_prop.clone();
+                        let normalized_args = self.normalize_named_call_args(
                             &effective_sig,
                             args,
+                            expr.span,
+                            &format!("Constructor '{}::__construct'", class_name),
+                        )?;
+                        self.check_known_callable_call(
+                            &effective_sig,
+                            &normalized_args,
                             expr.span,
                             env,
                             &format!("Constructor '{}::__construct'", class_name),
                         )?;
+                        for (i, arg) in normalized_args.iter().enumerate() {
+                            let arg_ty = self.infer_type(arg, env)?;
+                            if param_to_prop.get(i).is_some_and(|mapped| mapped.is_some()) {
+                                self.propagate_constructor_arg_type(class_name.as_str(), i, &arg_ty);
+                            }
+                        }
+                        return Ok(PhpType::Object(class_name));
                     } else if !args.is_empty() {
                         return Err(CompileError::new(
                             expr.span,
@@ -4679,12 +4728,8 @@ impl Checker {
                 args,
             } => {
                 let obj_ty = self.infer_type(object, env)?;
-                // Infer arg types and propagate to method sig params
-                let mut arg_types = Vec::new();
-                for arg in args {
-                    arg_types.push(self.infer_type(arg, env)?);
-                }
                 if let PhpType::Object(class_name) = &obj_ty {
+                    let mut normalized_args = args.clone();
                     if let Some(class_info) = self.classes.get(class_name) {
                         if let Some(sig) = class_info.methods.get(method) {
                             if let Some(visibility) = class_info.method_visibilities.get(method) {
@@ -4709,9 +4754,15 @@ impl Checker {
                                 Self::declared_method_param_flags(class_info, method, false);
                             let effective_sig =
                                 Self::callable_sig_for_declared_params(sig, &declared_flags);
-                            self.check_known_callable_call(
+                            normalized_args = self.normalize_named_call_args(
                                 &effective_sig,
                                 args,
+                                expr.span,
+                                &format!("Method {}::{}", class_name, method),
+                            )?;
+                            self.check_known_callable_call(
+                                &effective_sig,
+                                &normalized_args,
                                 expr.span,
                                 env,
                                 &format!("Method {}::{}", class_name, method),
@@ -4722,6 +4773,10 @@ impl Checker {
                                 &format!("Undefined method: {}::{}", class_name, method),
                             ));
                         }
+                    }
+                    let mut arg_types = Vec::new();
+                    for arg in &normalized_args {
+                        arg_types.push(self.infer_type(arg, env)?);
                     }
 
                     let impl_class_name = self
@@ -4776,11 +4831,6 @@ impl Checker {
                 method,
                 args,
             } => {
-                // Infer arg types and propagate to static method sig params
-                let mut arg_types = Vec::new();
-                for arg in args {
-                    arg_types.push(self.infer_type(arg, env)?);
-                }
                 let parent_call = matches!(receiver, StaticReceiver::Parent);
                 let self_call = matches!(receiver, StaticReceiver::Self_);
                 let resolved_class_name = match receiver {
@@ -4828,6 +4878,7 @@ impl Checker {
                         &enum_info, class_name, method, args, env, expr.span,
                     );
                 }
+                let normalized_args: Vec<Expr>;
                 if let Some(class_info) = self.classes.get(class_name) {
                     if let Some(sig) = class_info.static_methods.get(method) {
                         if let Some(visibility) = class_info.static_method_visibilities.get(method)
@@ -4853,9 +4904,15 @@ impl Checker {
                             Self::declared_method_param_flags(class_info, method, true);
                         let effective_sig =
                             Self::callable_sig_for_declared_params(sig, &declared_flags);
-                        self.check_known_callable_call(
+                        normalized_args = self.normalize_named_call_args(
                             &effective_sig,
                             args,
+                            expr.span,
+                            &format!("Static method {}::{}", class_name, method),
+                        )?;
+                        self.check_known_callable_call(
+                            &effective_sig,
+                            &normalized_args,
                             expr.span,
                             env,
                             &format!("Static method {}::{}", class_name, method),
@@ -4899,9 +4956,20 @@ impl Checker {
                             Self::declared_method_param_flags(class_info, method, false);
                         let effective_sig =
                             Self::callable_sig_for_declared_params(sig, &declared_flags);
-                        self.check_known_callable_call(
+                        normalized_args = self.normalize_named_call_args(
                             &effective_sig,
                             args,
+                            expr.span,
+                            &format!(
+                                "{} method {}::{}",
+                                if parent_call { "Parent" } else { "Self" },
+                                class_name,
+                                method
+                            ),
+                        )?;
+                        self.check_known_callable_call(
+                            &effective_sig,
+                            &normalized_args,
                             expr.span,
                             env,
                             &format!(
@@ -4930,6 +4998,10 @@ impl Checker {
                         expr.span,
                         &format!("Undefined class: {}", class_name),
                     ));
+                }
+                let mut arg_types = Vec::new();
+                for arg in &normalized_args {
+                    arg_types.push(self.infer_type(arg, env)?);
                 }
 
                 let direct_impl_class_name = if parent_call || self_call {

@@ -7,6 +7,110 @@ use crate::types::{FunctionSig, PhpType, TypeEnv};
 use super::{Checker, FnDecl};
 
 impl Checker {
+    pub(crate) fn has_named_args(args: &[Expr]) -> bool {
+        args.iter()
+            .any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
+    }
+
+    pub(crate) fn normalize_named_call_args(
+        &self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        callee_desc: &str,
+    ) -> Result<Vec<Expr>, CompileError> {
+        if !Self::has_named_args(args) {
+            return Ok(args.to_vec());
+        }
+
+        if args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "{} does not support mixing named arguments with spread arguments yet",
+                    callee_desc
+                ),
+            ));
+        }
+
+        let regular_param_count = if sig.variadic.is_some() {
+            sig.params.len().saturating_sub(1)
+        } else {
+            sig.params.len()
+        };
+        let mut resolved: Vec<Option<Expr>> = vec![None; regular_param_count];
+        let mut variadic_args = Vec::new();
+        let mut positional_idx = 0usize;
+        let mut seen_named = false;
+
+        for arg in args {
+            match &arg.kind {
+                ExprKind::NamedArg { name, value } => {
+                    seen_named = true;
+                    let Some(param_idx) = sig
+                        .params
+                        .iter()
+                        .take(regular_param_count)
+                        .position(|(param_name, _)| param_name == name)
+                    else {
+                        return Err(CompileError::new(
+                            arg.span,
+                            &format!("{} has no parameter ${}", callee_desc, name),
+                        ));
+                    };
+                    if resolved[param_idx].is_some() {
+                        return Err(CompileError::new(
+                            arg.span,
+                            &format!(
+                                "{} parameter ${} is already assigned",
+                                callee_desc, name
+                            ),
+                        ));
+                    }
+                    resolved[param_idx] = Some((**value).clone());
+                }
+                _ => {
+                    if seen_named {
+                        return Err(CompileError::new(
+                            arg.span,
+                            &format!(
+                                "{} cannot use positional arguments after named arguments",
+                                callee_desc
+                            ),
+                        ));
+                    }
+                    if positional_idx < regular_param_count {
+                        resolved[positional_idx] = Some(arg.clone());
+                    } else {
+                        variadic_args.push(arg.clone());
+                    }
+                    positional_idx += 1;
+                }
+            }
+        }
+
+        let mut normalized = Vec::new();
+        for (idx, slot) in resolved.into_iter().enumerate() {
+            if let Some(arg) = slot {
+                normalized.push(arg);
+            } else if let Some(Some(default_expr)) = sig.defaults.get(idx) {
+                normalized.push(default_expr.clone());
+            } else {
+                let param_name = sig
+                    .params
+                    .get(idx)
+                    .map(|(name, _)| name.as_str())
+                    .unwrap_or("arg");
+                return Err(CompileError::new(
+                    span,
+                    &format!("{} missing required parameter ${}", callee_desc, param_name),
+                ));
+            }
+        }
+        normalized.extend(variadic_args);
+        Ok(normalized)
+    }
+
     pub fn find_return_type_in_body(&mut self, body: &[Stmt], env: &TypeEnv) -> Option<PhpType> {
         let mut types = Vec::new();
         for stmt in body {
@@ -78,6 +182,8 @@ impl Checker {
         caller_env: &TypeEnv,
         callee_desc: &str,
     ) -> Result<PhpType, CompileError> {
+        let normalized_args = self.normalize_named_call_args(sig, args, span, callee_desc)?;
+        let args = normalized_args.as_slice();
         let effective_arg_count = args
             .iter()
             .filter(|a| !matches!(a.kind, ExprKind::Spread(_)))
@@ -195,16 +301,21 @@ impl Checker {
         span: crate::span::Span,
         caller_env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
-        // Count non-spread arguments for arity checking
-        let effective_arg_count = args
-            .iter()
-            .filter(|a| !matches!(a.kind, ExprKind::Spread(_)))
-            .count();
-        let has_spread = args.iter().any(|a| matches!(a.kind, ExprKind::Spread(_)));
-
         // Already resolved or being resolved (recursive)?
         if let Some(sig) = self.functions.get(name).cloned() {
             let effective_sig = Self::callable_sig_for_declared_params(&sig, &sig.declared_params);
+            let normalized_args = self.normalize_named_call_args(
+                &effective_sig,
+                args,
+                span,
+                &format!("Function '{}'", name),
+            )?;
+            let args = normalized_args.as_slice();
+            let effective_arg_count = args
+                .iter()
+                .filter(|a| !matches!(a.kind, ExprKind::Spread(_)))
+                .count();
+            let has_spread = args.iter().any(|a| matches!(a.kind, ExprKind::Spread(_)));
             // Count required params (those without defaults)
             let required = effective_sig.defaults.iter().filter(|d| d.is_none()).count();
             if effective_sig.ref_params.iter().any(|is_ref| *is_ref) && has_spread {
@@ -326,6 +437,45 @@ impl Checker {
             .get(name)
             .cloned()
             .ok_or_else(|| CompileError::new(span, &format!("Undefined function: {}", name)))?;
+        let normalization_sig = FunctionSig {
+            params: decl
+                .params
+                .iter()
+                .enumerate()
+                .map(|(idx, param_name)| {
+                    let ty = decl
+                        .param_types
+                        .get(idx)
+                        .and_then(|type_ann| type_ann.as_ref())
+                        .and_then(|type_ann| self.resolve_type_expr(type_ann, decl.span).ok())
+                        .unwrap_or(PhpType::Int);
+                    (param_name.clone(), ty)
+                })
+                .chain(
+                    decl.variadic
+                        .iter()
+                        .cloned()
+                        .map(|name| (name, PhpType::Array(Box::new(PhpType::Int)))),
+                )
+                .collect(),
+            defaults: decl.defaults.clone(),
+            return_type: PhpType::Int,
+            ref_params: decl.ref_params.clone(),
+            declared_params: decl.param_types.iter().map(|type_ann| type_ann.is_some()).collect(),
+            variadic: decl.variadic.clone(),
+        };
+        let normalized_args = self.normalize_named_call_args(
+            &normalization_sig,
+            args,
+            span,
+            &format!("Function '{}'", name),
+        )?;
+        let args = normalized_args.as_slice();
+        let effective_arg_count = args
+            .iter()
+            .filter(|a| !matches!(a.kind, ExprKind::Spread(_)))
+            .count();
+        let has_spread = args.iter().any(|a| matches!(a.kind, ExprKind::Spread(_)));
 
         // Count required params (those without defaults)
         let required = decl.defaults.iter().filter(|d| d.is_none()).count();

@@ -1,6 +1,60 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::{abi, context::Context, data_section::DataSection};
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
+
+pub(crate) fn has_named_args(args: &[Expr]) -> bool {
+    args.iter()
+        .any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
+}
+
+pub(crate) fn normalize_named_call_args(
+    sig: &FunctionSig,
+    args: &[Expr],
+    regular_param_count: usize,
+) -> Vec<Expr> {
+    if !has_named_args(args) {
+        return args.to_vec();
+    }
+
+    let mut resolved: Vec<Option<Expr>> = vec![None; regular_param_count];
+    let mut variadic_args = Vec::new();
+    let mut positional_idx = 0usize;
+
+    for arg in args {
+        match &arg.kind {
+            ExprKind::NamedArg { name, value } => {
+                if let Some(param_idx) = sig
+                    .params
+                    .iter()
+                    .take(regular_param_count)
+                    .position(|(param_name, _)| param_name == name)
+                {
+                    resolved[param_idx] = Some((**value).clone());
+                }
+            }
+            _ => {
+                if positional_idx < regular_param_count {
+                    resolved[positional_idx] = Some(arg.clone());
+                } else {
+                    variadic_args.push(arg.clone());
+                }
+                positional_idx += 1;
+            }
+        }
+    }
+
+    let mut normalized = Vec::new();
+    for (idx, slot) in resolved.into_iter().enumerate() {
+        if let Some(arg) = slot {
+            normalized.push(arg);
+        } else if let Some(Some(default_expr)) = sig.defaults.get(idx) {
+            normalized.push(default_expr.clone());
+        }
+    }
+    normalized.extend(variadic_args);
+    normalized
+}
 
 pub(crate) fn declared_target_ty<'a>(
     sig: Option<&'a FunctionSig>,

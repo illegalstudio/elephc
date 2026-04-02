@@ -103,8 +103,20 @@ pub(super) fn emit_new_object(
 
     // -- call __construct if it exists --
     if class_info.methods.contains_key("__construct") {
+        let normalized_args = class_info
+            .methods
+            .get("__construct")
+            .map(|sig| {
+                let regular_param_count = if sig.variadic.is_some() {
+                    sig.params.len().saturating_sub(1)
+                } else {
+                    sig.params.len()
+                };
+                crate::codegen::expr::calls::args::normalize_named_call_args(sig, args, regular_param_count)
+            })
+            .unwrap_or_else(|| args.to_vec());
         let mut arg_types = Vec::new();
-        for arg in args {
+        for arg in &normalized_args {
             let ty = emit_expr(arg, emitter, ctx, data);
             retain_borrowed_heap_arg(emitter, arg, &ty);
             match &ty {
