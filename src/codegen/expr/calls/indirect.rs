@@ -89,7 +89,7 @@ pub(super) fn emit_expr_call(
                     let label = format!("_gvar_{}", var_name);
                     emitter.comment(&format!("indirect ref arg: address of global ${}", var_name));
                     emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page of global var
-                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); // resolve global var address
+                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); //resolve global var address
                 } else if ctx.ref_params.contains(var_name) {
                     let Some(var) = ctx.variables.get(var_name) else {
                         emitter.comment(&format!("WARNING: undefined ref variable ${}", var_name));
@@ -103,13 +103,13 @@ pub(super) fn emit_expr_call(
                         continue;
                     };
                     emitter.comment(&format!("indirect ref arg: address of ${}", var_name));
-                    emitter.instruction(&format!("sub x0, x29, #{}", var.stack_offset)); // compute address of local variable
+                    emitter.instruction(&format!("sub x0, x29, #{}", var.stack_offset)); //compute address of local variable
                 }
             } else {
                 let ty = super::super::emit_expr(arg, emitter, ctx, data);
                 super::super::retain_borrowed_heap_arg(emitter, arg, &ty);
             }
-            emitter.instruction("str x0, [sp, #-16]!");                             // push address for by-ref argument
+            emitter.instruction("str x0, [sp, #-16]!");                         // push address for by-ref argument
             arg_types.push(PhpType::Int);
         } else {
             let pushed_ty = args::push_expr_arg(arg, target_ty, emitter, ctx, data);
@@ -177,17 +177,17 @@ pub(super) fn emit_expr_call(
                 }
                 match &ty {
                     PhpType::Int | PhpType::Bool | PhpType::Callable => {
-                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); // store int-like variadic element
+                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); //store int-like variadic element
                     }
                     PhpType::Float => {
-                        emitter.instruction(&format!("str d0, [x9, #{}]", 24 + i * 8)); // store float variadic element
+                        emitter.instruction(&format!("str d0, [x9, #{}]", 24 + i * 8)); //store float variadic element
                     }
                     PhpType::Str => {
-                        emitter.instruction(&format!("str x1, [x9, #{}]", 24 + i * 16)); // store variadic string pointer
-                        emitter.instruction(&format!("str x2, [x9, #{}]", 24 + i * 16 + 8)); // store variadic string length
+                        emitter.instruction(&format!("str x1, [x9, #{}]", 24 + i * 16)); //store variadic string pointer
+                        emitter.instruction(&format!("str x2, [x9, #{}]", 24 + i * 16 + 8)); //store variadic string length
                     }
                     PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
-                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); // store refcounted variadic payload
+                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); //store refcounted variadic payload
                     }
                     _ => {}
                 }

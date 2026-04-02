@@ -208,15 +208,14 @@ fn emit_function_with_label_and_class(
     emitter.raw(".align 2");
     emitter.label_global(label);
     emitter.comment("prologue");
-    emitter.instruction(&format!("sub sp, sp, #{}", frame_size)); // allocate stack for locals
+    emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for locals
     if frame_size - 16 <= 504 {
-        emitter.instruction(&format!("stp x29, x30, [sp, #{}]", frame_size - 16));
-    // save caller's frame ptr & return addr
+        emitter.instruction(&format!("stp x29, x30, [sp, #{}]", frame_size - 16)); //save caller's frame ptr & return addr
     } else {
-        emitter.instruction(&format!("add x9, sp, #{}", frame_size - 16)); // compute address of the saved frame-link area for large frames
-        emitter.instruction("stp x29, x30, [x9]"); // save caller's frame ptr & return addr through the computed address
+        emitter.instruction(&format!("add x9, sp, #{}", frame_size - 16));      // compute address of the saved frame-link area for large frames
+        emitter.instruction("stp x29, x30, [x9]");                              // save caller's frame ptr & return addr through the computed address
     }
-    emitter.instruction(&format!("add x29, sp, #{}", frame_size - 16)); // set new frame pointer
+    emitter.instruction(&format!("add x29, sp, #{}", frame_size - 16));         // set new frame pointer
 
     // -- save parameters from registers to local stack slots --
     // ARM64 ABI: int/bool/array args in x0-x7, float args in d0-d7
@@ -325,58 +324,53 @@ fn emit_function_with_label_and_class(
             let offset = var.stack_offset;
             let ty = var.ty.clone();
             emitter.comment(&format!("save static ${} back", static_var));
-            emitter.instruction(&format!("adrp x9, {}@PAGE", data_label)); // load page of static var storage
+            emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));      // load page of static var storage
             emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); //add page offset
                                                                                  // Note: x9 holds the global storage address, so we use x8 as scratch for large offsets
             match &ty {
                 PhpType::Bool | PhpType::Int => {
                     if offset <= 255 {
-                        emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset));
-                    //load local value
+                        emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); //load local value
                     } else {
                         emitter.instruction(&format!("sub x8, x29, #{}", offset)); //compute stack address for large offset
-                        emitter.instruction("ldr x10, [x8]"); // load local value via computed address
+                        emitter.instruction("ldr x10, [x8]");                   // load local value via computed address
                     }
-                    emitter.instruction("str x10, [x9]"); // save to static storage
+                    emitter.instruction("str x10, [x9]");                       // save to static storage
                 }
                 PhpType::Float => {
                     if offset <= 255 {
-                        emitter.instruction(&format!("ldur d0, [x29, #-{}]", offset));
-                    //load local float
+                        emitter.instruction(&format!("ldur d0, [x29, #-{}]", offset)); //load local float
                     } else {
                         emitter.instruction(&format!("sub x8, x29, #{}", offset)); //compute stack address for large offset
-                        emitter.instruction("ldr d0, [x8]"); // load local float via computed address
+                        emitter.instruction("ldr d0, [x8]");                    // load local float via computed address
                     }
-                    emitter.instruction("str d0, [x9]"); // save to static storage
+                    emitter.instruction("str d0, [x9]");                        // save to static storage
                 }
                 PhpType::Str => {
                     if offset <= 255 {
-                        emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset));
-                    //load string ptr
+                        emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); //load string ptr
                     } else {
                         emitter.instruction(&format!("sub x8, x29, #{}", offset)); //compute stack address for large offset
-                        emitter.instruction("ldr x10, [x8]"); // load string ptr via computed address
+                        emitter.instruction("ldr x10, [x8]");                   // load string ptr via computed address
                     }
                     let len_offset = offset - 8;
                     if len_offset <= 255 {
-                        emitter.instruction(&format!("ldur x11, [x29, #-{}]", len_offset));
-                    //load string len
+                        emitter.instruction(&format!("ldur x11, [x29, #-{}]", len_offset)); //load string len
                     } else {
                         emitter.instruction(&format!("sub x8, x29, #{}", len_offset)); //compute stack address for large offset
-                        emitter.instruction("ldr x11, [x8]"); // load string len via computed address
+                        emitter.instruction("ldr x11, [x8]");                   // load string len via computed address
                     }
-                    emitter.instruction("str x10, [x9]"); // save ptr to static storage
-                    emitter.instruction("str x11, [x9, #8]"); // save len to static storage
+                    emitter.instruction("str x10, [x9]");                       // save ptr to static storage
+                    emitter.instruction("str x11, [x9, #8]");                   // save len to static storage
                 }
                 _ => {
                     if offset <= 255 {
-                        emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset));
-                    //load local value
+                        emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); //load local value
                     } else {
                         emitter.instruction(&format!("sub x8, x29, #{}", offset)); //compute stack address for large offset
-                        emitter.instruction("ldr x10, [x8]"); // load local value via computed address
+                        emitter.instruction("ldr x10, [x8]");                   // load local value via computed address
                     }
-                    emitter.instruction("str x10, [x9]"); // save to static storage
+                    emitter.instruction("str x10, [x9]");                       // save to static storage
                 }
             }
         }
@@ -389,14 +383,13 @@ fn emit_function_with_label_and_class(
         restore_return_registers(emitter, &sig.return_type);
     }
     if frame_size - 16 <= 504 {
-        emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16));
-    // restore frame ptr & return addr
+        emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16)); //restore frame ptr & return addr
     } else {
-        emitter.instruction(&format!("add x9, sp, #{}", frame_size - 16)); // compute address of the saved frame-link area for large frames
-        emitter.instruction("ldp x29, x30, [x9]"); // restore frame ptr & return addr through the computed address
+        emitter.instruction(&format!("add x9, sp, #{}", frame_size - 16));      // compute address of the saved frame-link area for large frames
+        emitter.instruction("ldp x29, x30, [x9]");                              // restore frame ptr & return addr through the computed address
     }
-    emitter.instruction(&format!("add sp, sp, #{}", frame_size)); // deallocate stack frame
-    emitter.instruction("ret"); // return to caller
+    emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
+    emitter.instruction("ret");                                                 // return to caller
     emitter.blank();
     emit_frame_cleanup_callback(emitter, &ctx, &cleanup_label);
 
@@ -426,13 +419,13 @@ fn emit_function_with_label_and_class(
 fn preserve_return_registers(emitter: &mut Emitter, return_ty: &PhpType) {
     match return_ty {
         PhpType::Float => {
-            emitter.instruction("str d0, [sp, #-16]!"); // preserve float return value across epilogue side effects
+            emitter.instruction("str d0, [sp, #-16]!");                         // preserve float return value across epilogue side effects
         }
         PhpType::Str => {
-            emitter.instruction("stp x1, x2, [sp, #-16]!"); // preserve string return registers across epilogue side effects
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve string return registers across epilogue side effects
         }
         _ => {
-            emitter.instruction("str x0, [sp, #-16]!"); // preserve scalar/heap return value across epilogue side effects
+            emitter.instruction("str x0, [sp, #-16]!");                         // preserve scalar/heap return value across epilogue side effects
         }
     }
 }
@@ -440,13 +433,13 @@ fn preserve_return_registers(emitter: &mut Emitter, return_ty: &PhpType) {
 fn restore_return_registers(emitter: &mut Emitter, return_ty: &PhpType) {
     match return_ty {
         PhpType::Float => {
-            emitter.instruction("ldr d0, [sp], #16"); // restore float return value after epilogue cleanup
+            emitter.instruction("ldr d0, [sp], #16");                           // restore float return value after epilogue cleanup
         }
         PhpType::Str => {
-            emitter.instruction("ldp x1, x2, [sp], #16"); // restore string return registers after epilogue cleanup
+            emitter.instruction("ldp x1, x2, [sp], #16");                       // restore string return registers after epilogue cleanup
         }
         _ => {
-            emitter.instruction("ldr x0, [sp], #16"); // restore scalar/heap return value after epilogue cleanup
+            emitter.instruction("ldr x0, [sp], #16");                           // restore scalar/heap return value after epilogue cleanup
         }
     }
 }
@@ -482,7 +475,7 @@ pub(crate) fn emit_owned_local_epilogue_cleanup(emitter: &mut Emitter, ctx: &Con
             PhpType::Str => {
                 emitter.comment(&format!("epilogue cleanup ${}", name));
                 super::abi::load_at_offset(emitter, "x0", var.stack_offset); // load owned string pointer from local slot
-                emitter.instruction("bl __rt_heap_free_safe"); // release owned string storage before returning
+                emitter.instruction("bl __rt_heap_free_safe");                  // release owned string storage before returning
             }
             ty if ty.is_refcounted() => {
                 emitter.comment(&format!("epilogue cleanup ${}", name));
@@ -506,14 +499,14 @@ fn emit_activation_record_push(emitter: &mut Emitter, ctx: &Context, cleanup_lab
         .expect("codegen bug: missing activation frame-base slot");
 
     emitter.comment("register exception cleanup frame");
-    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE"); // load page of the call-frame stack top
-    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF"); // resolve the call-frame stack top address
-    emitter.instruction("ldr x10, [x9]"); // load the previous call-frame pointer
+    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                   // load page of the call-frame stack top
+    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");             // resolve the call-frame stack top address
+    emitter.instruction("ldr x10, [x9]");                                       // load the previous call-frame pointer
     super::abi::store_at_offset(emitter, "x10", prev_offset); // save the previous call-frame pointer in this frame record
-    emitter.instruction(&format!("adrp x10, {}@PAGE", cleanup_label)); // load page of the cleanup callback label
-    emitter.instruction(&format!("add x10, x10, {}@PAGEOFF", cleanup_label)); // resolve the cleanup callback label address
+    emitter.instruction(&format!("adrp x10, {}@PAGE", cleanup_label));          // load page of the cleanup callback label
+    emitter.instruction(&format!("add x10, x10, {}@PAGEOFF", cleanup_label));   // resolve the cleanup callback label address
     super::abi::store_at_offset(emitter, "x10", cleanup_offset); // save the cleanup callback address in this frame record
-    emitter.instruction("mov x10, x29"); // x10 = current frame pointer for cleanup callbacks
+    emitter.instruction("mov x10, x29");                                        // x10 = current frame pointer for cleanup callbacks
     super::abi::store_at_offset(emitter, "x10", frame_base_offset); // save the current frame pointer in this frame record
     super::abi::store_at_offset(
         emitter,
@@ -521,10 +514,10 @@ fn emit_activation_record_push(emitter: &mut Emitter, ctx: &Context, cleanup_lab
         ctx.pending_action_offset
             .expect("codegen bug: missing pending-action slot"),
     ); // clear pending finally action for this activation
-    emitter.instruction(&format!("sub x10, x29, #{}", prev_offset)); // x10 = address of this activation record's first slot
-    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE"); // reload page of the call-frame stack top after stack-slot stores may clobber x9
-    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF"); // resolve the call-frame stack top address again
-    emitter.instruction("str x10, [x9]"); // publish this activation record as the new call-frame stack top
+    emitter.instruction(&format!("sub x10, x29, #{}", prev_offset));            // x10 = address of this activation record's first slot
+    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                   // reload page of the call-frame stack top after stack-slot stores may clobber x9
+    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");             // resolve the call-frame stack top address again
+    emitter.instruction("str x10, [x9]");                                       // publish this activation record as the new call-frame stack top
 }
 
 fn emit_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
@@ -533,23 +526,23 @@ fn emit_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
         .expect("codegen bug: missing activation prev slot");
 
     emitter.comment("unregister exception cleanup frame");
-    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE"); // load page of the call-frame stack top
-    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF"); // resolve the call-frame stack top address
+    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                   // load page of the call-frame stack top
+    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");             // resolve the call-frame stack top address
     super::abi::load_at_offset(emitter, "x10", prev_offset); // reload the previous call-frame pointer from this activation
-    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE"); // reload page of the call-frame stack top after the load helper may clobber x9
-    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF"); // resolve the call-frame stack top address again
-    emitter.instruction("str x10, [x9]"); // restore the previous call-frame stack top before returning
+    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                   // reload page of the call-frame stack top after the load helper may clobber x9
+    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");             // resolve the call-frame stack top address again
+    emitter.instruction("str x10, [x9]");                                       // restore the previous call-frame stack top before returning
 }
 
 fn emit_frame_cleanup_callback(emitter: &mut Emitter, ctx: &Context, cleanup_label: &str) {
     emitter.label(cleanup_label);
-    emitter.instruction("sub sp, sp, #16"); // reserve callback spill space for x29/x30
-    emitter.instruction("stp x29, x30, [sp, #0]"); // save the caller frame pointer and return address
-    emitter.instruction("mov x29, x0"); // treat the unwound activation's frame pointer as our temporary base
+    emitter.instruction("sub sp, sp, #16");                                     // reserve callback spill space for x29/x30
+    emitter.instruction("stp x29, x30, [sp, #0]");                              // save the caller frame pointer and return address
+    emitter.instruction("mov x29, x0");                                         // treat the unwound activation's frame pointer as our temporary base
     emit_owned_local_epilogue_cleanup(emitter, ctx);
-    emitter.instruction("ldp x29, x30, [sp, #0]"); // restore the callback frame pointer and return address
-    emitter.instruction("add sp, sp, #16"); // release the callback spill space
-    emitter.instruction("ret"); // finish unwound-frame cleanup callback
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore the callback frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the callback spill space
+    emitter.instruction("ret");                                                 // finish unwound-frame cleanup callback
     emitter.blank();
 }
 

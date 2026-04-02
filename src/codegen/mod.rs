@@ -238,7 +238,7 @@ pub fn generate(
     emitter.comment("prologue");
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // grow stack for locals + saved regs
     if frame_size - 16 <= 504 {
-        emitter.instruction(&format!("stp x29, x30, [sp, #{}]", frame_size - 16)); // save frame pointer & return address
+        emitter.instruction(&format!("stp x29, x30, [sp, #{}]", frame_size - 16)); //save frame pointer & return address
     } else {
         emitter.instruction(&format!("add x9, sp, #{}", frame_size - 16));      // compute address of the saved frame-link area for a large main frame
         emitter.instruction("stp x29, x30, [x9]");                              // save frame pointer & return address through the computed address
@@ -306,7 +306,7 @@ pub fn generate(
     functions::emit_owned_local_epilogue_cleanup(&mut emitter, &ctx);
     emit_main_activation_record_pop(&mut emitter, &ctx);
     if frame_size - 16 <= 504 {
-        emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16)); // restore frame pointer & return address
+        emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16)); //restore frame pointer & return address
     } else {
         emitter.instruction(&format!("add x9, sp, #{}", frame_size - 16));      // compute address of the saved frame-link area for a large main frame
         emitter.instruction("ldp x29, x30, [x9]");                              // restore frame pointer & return address through the computed address
@@ -428,7 +428,7 @@ fn emit_enum_singleton_initializers(
                 let offset = 8 + i * 16;
                 emitter.instruction("ldr x9, [sp]");                            // peek enum singleton pointer from the stack
                 emitter.instruction(&format!("str xzr, [x9, #{}]", offset));    // zero-init property lo word
-                emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8)); // zero-init property hi word
+                emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8)); //zero-init property hi word
             }
 
             if let Some(case_value) = &case.value {
@@ -441,8 +441,8 @@ fn emit_enum_singleton_initializers(
                     }
                     EnumCaseValue::Str(value) => {
                         let (label, len) = data.add_string(value.as_bytes());
-                        emitter.instruction(&format!("adrp x10, {}@PAGE", label)); // load page of the enum string backing literal
-                        emitter.instruction(&format!("add x10, x10, {}@PAGEOFF", label)); // resolve the enum string backing literal address
+                        emitter.instruction(&format!("adrp x10, {}@PAGE", label)); //load page of the enum string backing literal
+                        emitter.instruction(&format!("add x10, x10, {}@PAGEOFF", label)); //resolve the enum string backing literal address
                         emitter.instruction("str x10, [x9, #8]");               // store the string backing pointer in the first property slot
                         emitter.instruction(&format!("mov x10, #{}", len));     // materialize the enum string backing length
                         emitter.instruction("str x10, [x9, #16]");              // store the string backing length in the second property word
@@ -453,7 +453,7 @@ fn emit_enum_singleton_initializers(
             emitter.instruction("ldr x0, [sp], #16");                           // pop initialized enum singleton pointer into x0
             let slot_label = enum_case_symbol(enum_name, &case.name);
             emitter.instruction(&format!("adrp x9, {}@PAGE", slot_label));      // load page of the enum singleton slot
-            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", slot_label)); // resolve the enum singleton slot address
+            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", slot_label)); //resolve the enum singleton slot address
             emitter.instruction("str x0, [x9]");                                // publish the enum singleton pointer in its global slot
         }
     }
@@ -842,26 +842,14 @@ fn load_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
     }
 
     let uval = value as u64;
-    emitter.instruction(&format!("movz {}, #0x{:x}", reg, uval & 0xFFFF));     // seed the low 16 bits of the wider immediate value
+    emitter.instruction(&format!("movz {}, #0x{:x}", reg, uval & 0xFFFF));      // seed the low 16 bits of the wider immediate value
     if (uval >> 16) & 0xFFFF != 0 {
-        emitter.instruction(&format!(
-            "movk {}, #0x{:x}, lsl #16",
-            reg,
-            (uval >> 16) & 0xFFFF
-        ));                                                                     // patch bits 16-31 of the wider immediate value
+        emitter.instruction(&format!("movk {}, #0x{:x}, lsl #16", reg, (uval >> 16) & 0xFFFF)); //patch bits 16-31 of the wider immediate value
     }
     if (uval >> 32) & 0xFFFF != 0 {
-        emitter.instruction(&format!(
-            "movk {}, #0x{:x}, lsl #32",
-            reg,
-            (uval >> 32) & 0xFFFF
-        ));                                                                     // patch bits 32-47 of the wider immediate value
+        emitter.instruction(&format!("movk {}, #0x{:x}, lsl #32", reg, (uval >> 32) & 0xFFFF)); //patch bits 32-47 of the wider immediate value
     }
     if (uval >> 48) & 0xFFFF != 0 {
-        emitter.instruction(&format!(
-            "movk {}, #0x{:x}, lsl #48",
-            reg,
-            (uval >> 48) & 0xFFFF
-        ));                                                                     // patch bits 48-63 of the wider immediate value
+        emitter.instruction(&format!("movk {}, #0x{:x}, lsl #48", reg, (uval >> 48) & 0xFFFF)); //patch bits 48-63 of the wider immediate value
     }
 }

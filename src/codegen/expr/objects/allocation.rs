@@ -195,7 +195,7 @@ pub(super) fn emit_new_object(
             .get("__construct")
             .map(String::as_str)
             .unwrap_or(class_name);
-        emitter.instruction(&format!("bl {}", method_symbol(constructor_impl, "__construct"))); // call constructor
+        emitter.instruction(&format!("bl {}", method_symbol(constructor_impl, "__construct"))); //call constructor
         restore_concat_offset_after_nested_call(emitter, &PhpType::Void);
     }
 
