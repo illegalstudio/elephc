@@ -125,6 +125,7 @@ fn resolve_stmt_list(
                 name,
                 params,
                 variadic,
+                return_type,
                 body,
             } => {
                 let body = resolve_stmt_list(body, namespace.as_deref(), &imports, symbols)?;
@@ -133,6 +134,7 @@ fn resolve_stmt_list(
                         name: canonical_name_for_decl(namespace.as_deref(), name),
                         params: params.clone(),
                         variadic: variadic.clone(),
+                        return_type: return_type.clone(),
                         body,
                     },
                     stmt.span,

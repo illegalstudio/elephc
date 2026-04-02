@@ -1,6 +1,6 @@
 mod arrays;
 mod binops;
-mod calls;
+pub(crate) mod calls;
 mod coerce;
 mod compare;
 mod helpers;
@@ -11,7 +11,7 @@ use super::abi;
 use super::context::{Context, HeapOwnership};
 use super::data_section::DataSection;
 use super::emit::Emitter;
-use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind};
+use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind, TypeExpr};
 use crate::types::FunctionSig;
 use crate::types::PhpType;
 
@@ -387,6 +387,7 @@ pub fn emit_expr(
                 defaults: vec![],
                 return_type: PhpType::Int,
                 ref_params: vec![],
+                declared_params: vec![],
                 variadic: None,
             };
             let then_syn = super::functions::infer_local_type_with_ctx(then_expr, &dummy_sig, ctx);
@@ -692,7 +693,7 @@ pub(crate) fn coerce_result_to_type(
 }
 
 fn emit_closure(
-    params: &[(String, Option<Expr>, bool)],
+    params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
     variadic: &Option<String>,
     body: &[crate::parser::ast::Stmt],
     captures: &[String],

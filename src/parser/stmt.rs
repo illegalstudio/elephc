@@ -3,8 +3,7 @@ use crate::lexer::Token;
 use crate::names::{Name, NameKind};
 use crate::parser::ast::{
     CType, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind, ExternField, ExternParam,
-    PackedField, Stmt, StmtKind, TraitAdaptation, TraitUse, TypeExpr, UseItem, UseKind,
-    Visibility,
+    PackedField, Stmt, StmtKind, TraitAdaptation, TraitUse, TypeExpr, UseItem, UseKind, Visibility,
 };
 use crate::parser::control;
 use crate::parser::expr::parse_expr;
@@ -46,7 +45,11 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
             }
         }
         Token::LBracket => parse_list_unpack(tokens, pos, span),
-        Token::Identifier(_) | Token::Self_ | Token::Parent | Token::Backslash | Token::Question => {
+        Token::Identifier(_)
+        | Token::Self_
+        | Token::Parent
+        | Token::Backslash
+        | Token::Question => {
             if looks_like_typed_assign(tokens, *pos) {
                 return parse_typed_assign(tokens, pos, span);
             }
@@ -97,7 +100,12 @@ fn parse_include(
 
     let path = match tokens.get(*pos).map(|(t, _)| t) {
         Some(Token::StringLiteral(s)) => s.clone(),
-        _ => return Err(CompileError::new(span, "Expected string path after include/require")),
+        _ => {
+            return Err(CompileError::new(
+                span,
+                "Expected string path after include/require",
+            ))
+        }
     };
     *pos += 1;
 
@@ -109,14 +117,17 @@ fn parse_include(
     }
 
     expect_semicolon(tokens, pos)?;
-    Ok(Stmt::new(StmtKind::Include { path, once, required }, span))
+    Ok(Stmt::new(
+        StmtKind::Include {
+            path,
+            once,
+            required,
+        },
+        span,
+    ))
 }
 
-fn parse_echo(
-    tokens: &[(Token, Span)],
-    pos: &mut usize,
-    span: Span,
-) -> Result<Stmt, CompileError> {
+fn parse_echo(tokens: &[(Token, Span)], pos: &mut usize, span: Span) -> Result<Stmt, CompileError> {
     *pos += 1;
     let expr = parse_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
@@ -146,12 +157,22 @@ fn parse_namespace_stmt(
         return Ok(Stmt::new(StmtKind::NamespaceDecl { name }, span));
     }
 
-    expect_token(tokens, pos, &Token::LBrace, "Expected ';' or '{' after namespace name")?;
+    expect_token(
+        tokens,
+        pos,
+        &Token::LBrace,
+        "Expected ';' or '{' after namespace name",
+    )?;
     let mut body = Vec::new();
     while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
         body.push(parse_stmt(tokens, pos)?);
     }
-    expect_token(tokens, pos, &Token::RBrace, "Expected '}' after namespace block")?;
+    expect_token(
+        tokens,
+        pos,
+        &Token::RBrace,
+        "Expected '}' after namespace block",
+    )?;
     Ok(Stmt::new(StmtKind::NamespaceBlock { name, body }, span))
 }
 
@@ -204,11 +225,18 @@ fn parse_use_stmt(
             span,
             "Expected imported name after ',' in use declaration",
         )?;
-        all_imports.push(parse_single_use_item_after_name(tokens, pos, span, name, item_kind)?);
+        all_imports.push(parse_single_use_item_after_name(
+            tokens, pos, span, name, item_kind,
+        )?);
     }
 
     expect_semicolon(tokens, pos)?;
-    Ok(Stmt::new(StmtKind::UseDecl { imports: all_imports }, span))
+    Ok(Stmt::new(
+        StmtKind::UseDecl {
+            imports: all_imports,
+        },
+        span,
+    ))
 }
 
 /// Handle statements starting with $variable: assignment, array ops, or post-increment.
@@ -234,7 +262,14 @@ fn parse_variable_stmt(
             expect_semicolon(tokens, pos)?;
             // Extract property from the expression
             if let ExprKind::PropertyAccess { object, property } = expr.kind {
-                return Ok(Stmt::new(StmtKind::PropertyAssign { object, property, value }, span));
+                return Ok(Stmt::new(
+                    StmtKind::PropertyAssign {
+                        object,
+                        property,
+                        value,
+                    },
+                    span,
+                ));
             }
             return Err(CompileError::new(span, "Invalid assignment target"));
         }
@@ -271,7 +306,14 @@ fn parse_variable_stmt(
                 let value = parse_expr(tokens, pos)?;
                 expect_semicolon(tokens, pos)?;
                 if let ExprKind::PropertyAccess { object, property } = expr.kind {
-                    return Ok(Stmt::new(StmtKind::PropertyAssign { object, property, value }, span));
+                    return Ok(Stmt::new(
+                        StmtKind::PropertyAssign {
+                            object,
+                            property,
+                            value,
+                        },
+                        span,
+                    ));
                 }
                 return Err(CompileError::new(span, "Invalid assignment target"));
             }
@@ -283,7 +325,14 @@ fn parse_variable_stmt(
             *pos += 1;
             let value = parse_expr(tokens, pos)?;
             expect_semicolon(tokens, pos)?;
-            return Ok(Stmt::new(StmtKind::ArrayAssign { array: name, index, value }, span));
+            return Ok(Stmt::new(
+                StmtKind::ArrayAssign {
+                    array: name,
+                    index,
+                    value,
+                },
+                span,
+            ));
         }
 
         return Err(CompileError::new(span, "Expected '=' after array access"));
@@ -379,7 +428,10 @@ fn parse_incdec_stmt(
         Some(Token::Variable(n)) => n.clone(),
         _ => {
             let op = if is_increment { "++" } else { "--" };
-            return Err(CompileError::new(span, &format!("Expected variable after '{}'", op)));
+            return Err(CompileError::new(
+                span,
+                &format!("Expected variable after '{}'", op),
+            ));
         }
     };
     *pos += 1;
@@ -403,11 +455,21 @@ fn parse_const_decl(
 
     let name = match tokens.get(*pos).map(|(t, _)| t) {
         Some(Token::Identifier(n)) => n.clone(),
-        _ => return Err(CompileError::new(span, "Expected constant name after 'const'")),
+        _ => {
+            return Err(CompileError::new(
+                span,
+                "Expected constant name after 'const'",
+            ))
+        }
     };
     *pos += 1;
 
-    expect_token(tokens, pos, &Token::Assign, "Expected '=' after constant name")?;
+    expect_token(
+        tokens,
+        pos,
+        &Token::Assign,
+        "Expected '=' after constant name",
+    )?;
 
     let value = parse_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
@@ -426,7 +488,10 @@ fn parse_list_unpack(
     while *pos < tokens.len() && tokens[*pos].0 != Token::RBracket {
         if !vars.is_empty() {
             if tokens[*pos].0 != Token::Comma {
-                return Err(CompileError::new(tokens[*pos].1, "Expected ',' between list variables"));
+                return Err(CompileError::new(
+                    tokens[*pos].1,
+                    "Expected ',' between list variables",
+                ));
             }
             *pos += 1;
         }
@@ -435,7 +500,12 @@ fn parse_list_unpack(
                 vars.push(n.clone());
                 *pos += 1;
             }
-            _ => return Err(CompileError::new(span, "Expected variable in list unpacking")),
+            _ => {
+                return Err(CompileError::new(
+                    span,
+                    "Expected variable in list unpacking",
+                ))
+            }
         }
     }
 
@@ -444,7 +514,12 @@ fn parse_list_unpack(
     }
     *pos += 1;
 
-    expect_token(tokens, pos, &Token::Assign, "Expected '=' after list pattern")?;
+    expect_token(
+        tokens,
+        pos,
+        &Token::Assign,
+        "Expected '=' after list pattern",
+    )?;
 
     let value = parse_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
@@ -492,7 +567,12 @@ fn parse_static_var(
     };
     *pos += 1;
 
-    expect_token(tokens, pos, &Token::Assign, "Expected '=' after static variable")?;
+    expect_token(
+        tokens,
+        pos,
+        &Token::Assign,
+        "Expected '=' after static variable",
+    )?;
 
     let init = parse_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
@@ -513,18 +593,37 @@ fn parse_function_decl(
     };
     *pos += 1;
 
-    expect_token(tokens, pos, &Token::LParen, "Expected '(' after function name")?;
+    expect_token(
+        tokens,
+        pos,
+        &Token::LParen,
+        "Expected '(' after function name",
+    )?;
 
     let mut params = Vec::new();
     let mut variadic = None;
     while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
         if !params.is_empty() || variadic.is_some() {
-            expect_token(tokens, pos, &Token::Comma, "Expected ',' between parameters")?;
+            expect_token(
+                tokens,
+                pos,
+                &Token::Comma,
+                "Expected ',' between parameters",
+            )?;
         }
         if variadic.is_some() {
-            return Err(CompileError::new(span, "Variadic parameter must be the last parameter"));
+            return Err(CompileError::new(
+                span,
+                "Variadic parameter must be the last parameter",
+            ));
         }
         // Check for & (pass by reference)
+        // Try to parse optional type annotation before $variable
+        let type_ann = if looks_like_typed_param(tokens, *pos) {
+            Some(parse_type_expr(tokens, pos, span)?)
+        } else {
+            None
+        };
         let is_ref = if *pos < tokens.len() && tokens[*pos].0 == Token::Ampersand {
             *pos += 1;
             true
@@ -533,6 +632,12 @@ fn parse_function_decl(
         };
         // Check for ... (variadic)
         if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
+            if type_ann.is_some() {
+                return Err(CompileError::new(
+                    span,
+                    "Typed variadic parameters are not supported yet",
+                ));
+            }
             *pos += 1;
             match tokens.get(*pos).map(|(t, _)| t) {
                 Some(Token::Variable(n)) => {
@@ -554,16 +659,49 @@ fn parse_function_decl(
                 } else {
                     None
                 };
-                params.push((n, default, is_ref));
+                params.push((n, type_ann, default, is_ref));
             }
             _ => return Err(CompileError::new(span, "Expected parameter variable")),
         }
     }
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after parameters")?;
 
+    // Parse optional return type: `: TypeExpr`
+    let return_type = if *pos < tokens.len() && tokens[*pos].0 == Token::Colon {
+        *pos += 1;
+        Some(parse_type_expr(tokens, pos, span)?)
+    } else {
+        None
+    };
+
     let body = parse_block(tokens, pos)?;
 
-    Ok(Stmt::new(StmtKind::FunctionDecl { name, params, variadic, body }, span))
+    Ok(Stmt::new(
+        StmtKind::FunctionDecl {
+            name,
+            params,
+            variadic,
+            return_type,
+            body,
+        },
+        span,
+    ))
+}
+
+pub(crate) fn looks_like_typed_param(tokens: &[(Token, Span)], pos: usize) -> bool {
+    let mut probe = pos;
+    match parse_type_expr(tokens, &mut probe, tokens[pos].1) {
+        Ok(_) => {
+            if matches!(tokens.get(probe).map(|(t, _)| t), Some(Token::Ampersand)) {
+                probe += 1;
+            }
+            if matches!(tokens.get(probe).map(|(t, _)| t), Some(Token::Ellipsis)) {
+                probe += 1;
+            }
+            matches!(tokens.get(probe).map(|(t, _)| t), Some(Token::Variable(_)))
+        }
+        Err(_) => false,
+    }
 }
 
 fn looks_like_typed_assign(tokens: &[(Token, Span)], pos: usize) -> bool {
@@ -586,9 +724,19 @@ fn parse_typed_assign(
             *pos += 1;
             name
         }
-        _ => return Err(CompileError::new(span, "Expected variable after type annotation")),
+        _ => {
+            return Err(CompileError::new(
+                span,
+                "Expected variable after type annotation",
+            ))
+        }
     };
-    expect_token(tokens, pos, &Token::Assign, "Expected '=' after typed variable")?;
+    expect_token(
+        tokens,
+        pos,
+        &Token::Assign,
+        "Expected '=' after typed variable",
+    )?;
     let value = parse_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     Ok(Stmt::new(
@@ -654,6 +802,14 @@ fn parse_atomic_type_expr(
             *pos += 1;
             Ok(TypeExpr::Bool)
         }
+        Some(Token::Identifier(name)) if name.as_str() == "string" => {
+            *pos += 1;
+            Ok(TypeExpr::Str)
+        }
+        Some(Token::Identifier(name)) if name.as_str() == "void" => {
+            *pos += 1;
+            Ok(TypeExpr::Void)
+        }
         Some(Token::Identifier(name)) if matches!(name.as_str(), "ptr" | "pointer") => {
             *pos += 1;
             if *pos < tokens.len() && tokens[*pos].0 == Token::Less {
@@ -664,7 +820,12 @@ fn parse_atomic_type_expr(
                     span,
                     "Expected pointer target type inside ptr<...>",
                 )?;
-                expect_token(tokens, pos, &Token::Greater, "Expected '>' after ptr target type")?;
+                expect_token(
+                    tokens,
+                    pos,
+                    &Token::Greater,
+                    "Expected '>' after ptr target type",
+                )?;
                 Ok(TypeExpr::Ptr(Some(target)))
             } else {
                 Ok(TypeExpr::Ptr(None))
@@ -674,7 +835,12 @@ fn parse_atomic_type_expr(
             *pos += 1;
             expect_token(tokens, pos, &Token::Less, "Expected '<' after buffer")?;
             let inner = parse_type_expr(tokens, pos, span)?;
-            expect_token(tokens, pos, &Token::Greater, "Expected '>' after buffer element type")?;
+            expect_token(
+                tokens,
+                pos,
+                &Token::Greater,
+                "Expected '>' after buffer element type",
+            )?;
             Ok(TypeExpr::Buffer(Box::new(inner)))
         }
         Some(Token::Identifier(_)) | Some(Token::Backslash) => Ok(TypeExpr::Named(parse_name(
@@ -746,12 +912,19 @@ pub fn parse_body(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Vec<Stmt>
     }
 }
 
-pub(crate) fn expect_semicolon(tokens: &[(Token, Span)], pos: &mut usize) -> Result<(), CompileError> {
+pub(crate) fn expect_semicolon(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+) -> Result<(), CompileError> {
     if *pos < tokens.len() && tokens[*pos].0 == Token::Semicolon {
         *pos += 1;
         Ok(())
     } else {
-        let span = if *pos < tokens.len() { tokens[*pos].1 } else { Span::dummy() };
+        let span = if *pos < tokens.len() {
+            tokens[*pos].1
+        } else {
+            Span::dummy()
+        };
         Err(CompileError::new(span, "Expected ';'"))
     }
 }
@@ -770,9 +943,19 @@ fn parse_this_stmt(
         let value = parse_expr(tokens, pos)?;
         expect_semicolon(tokens, pos)?;
         if let ExprKind::PropertyAccess { object, property } = expr.kind {
-            return Ok(Stmt::new(StmtKind::PropertyAssign { object, property, value }, span));
+            return Ok(Stmt::new(
+                StmtKind::PropertyAssign {
+                    object,
+                    property,
+                    value,
+                },
+                span,
+            ));
         }
-        return Err(CompileError::new(span, "Invalid assignment target after $this"));
+        return Err(CompileError::new(
+            span,
+            "Invalid assignment target after $this",
+        ));
     }
     expect_semicolon(tokens, pos)?;
     Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
@@ -789,7 +972,11 @@ fn parse_class_decl(
     *pos += 1; // consume 'class'
 
     let name = match tokens.get(*pos).map(|(t, _)| t) {
-        Some(Token::Identifier(n)) => { let n = n.clone(); *pos += 1; n }
+        Some(Token::Identifier(n)) => {
+            let n = n.clone();
+            *pos += 1;
+            n
+        }
         _ => return Err(CompileError::new(span, "Expected class name after 'class'")),
     };
 
@@ -807,7 +994,12 @@ fn parse_class_decl(
 
     let implements = if *pos < tokens.len() && tokens[*pos].0 == Token::Implements {
         *pos += 1;
-        parse_name_list(tokens, pos, span, "Expected interface name after 'implements'")?
+        parse_name_list(
+            tokens,
+            pos,
+            span,
+            "Expected interface name after 'implements'",
+        )?
     } else {
         Vec::new()
     };
@@ -905,7 +1097,12 @@ fn parse_packed_decl(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     *pos += 1; // consume 'packed'
-    expect_token(tokens, pos, &Token::Class, "Expected 'class' after 'packed'")?;
+    expect_token(
+        tokens,
+        pos,
+        &Token::Class,
+        "Expected 'class' after 'packed'",
+    )?;
 
     let name = match tokens.get(*pos).map(|(t, _)| t) {
         Some(Token::Identifier(n)) => {
@@ -913,16 +1110,32 @@ fn parse_packed_decl(
             *pos += 1;
             n
         }
-        _ => return Err(CompileError::new(span, "Expected class name after 'packed class'")),
+        _ => {
+            return Err(CompileError::new(
+                span,
+                "Expected class name after 'packed class'",
+            ))
+        }
     };
 
-    expect_token(tokens, pos, &Token::LBrace, "Expected '{' after packed class name")?;
+    expect_token(
+        tokens,
+        pos,
+        &Token::LBrace,
+        "Expected '{' after packed class name",
+    )?;
     let mut fields = Vec::new();
     while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
         let field_span = tokens[*pos].1;
         match tokens.get(*pos).map(|(t, _)| t) {
             Some(Token::Public) => *pos += 1,
-            Some(Token::Protected | Token::Private | Token::Static | Token::ReadOnly | Token::Abstract) => {
+            Some(
+                Token::Protected
+                | Token::Private
+                | Token::Static
+                | Token::ReadOnly
+                | Token::Abstract,
+            ) => {
                 return Err(CompileError::new(
                     field_span,
                     "Packed class fields may only use public visibility",
@@ -959,7 +1172,12 @@ fn parse_packed_decl(
         });
     }
 
-    expect_token(tokens, pos, &Token::RBrace, "Expected '}' at end of packed class")?;
+    expect_token(
+        tokens,
+        pos,
+        &Token::RBrace,
+        "Expected '}' at end of packed class",
+    )?;
     Ok(Stmt::new(StmtKind::PackedClassDecl { name, fields }, span))
 }
 
@@ -1026,19 +1244,39 @@ fn parse_interface_decl(
             *pos += 1;
             n
         }
-        _ => return Err(CompileError::new(span, "Expected interface name after 'interface'")),
+        _ => {
+            return Err(CompileError::new(
+                span,
+                "Expected interface name after 'interface'",
+            ))
+        }
     };
 
     let extends = if *pos < tokens.len() && tokens[*pos].0 == Token::Extends {
         *pos += 1;
-        parse_name_list(tokens, pos, span, "Expected parent interface name after 'extends'")?
+        parse_name_list(
+            tokens,
+            pos,
+            span,
+            "Expected parent interface name after 'extends'",
+        )?
     } else {
         Vec::new()
     };
 
-    expect_token(tokens, pos, &Token::LBrace, "Expected '{' after interface name")?;
+    expect_token(
+        tokens,
+        pos,
+        &Token::LBrace,
+        "Expected '{' after interface name",
+    )?;
     let methods = parse_interface_body(tokens, pos)?;
-    expect_token(tokens, pos, &Token::RBrace, "Expected '}' at end of interface")?;
+    expect_token(
+        tokens,
+        pos,
+        &Token::RBrace,
+        "Expected '}' at end of interface",
+    )?;
 
     Ok(Stmt::new(
         StmtKind::InterfaceDecl {
@@ -1238,9 +1476,21 @@ fn parse_class_like_method(
         _ => return Err(CompileError::new(span, "Expected method name")),
     };
 
-    expect_token(tokens, pos, &Token::LParen, "Expected '(' after method name")?;
+    expect_token(
+        tokens,
+        pos,
+        &Token::LParen,
+        "Expected '(' after method name",
+    )?;
     let (params, variadic) = parse_params(tokens, pos, span)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')'")?;
+    // Parse optional return type: `: TypeExpr`
+    let return_type = if *pos < tokens.len() && tokens[*pos].0 == Token::Colon {
+        *pos += 1;
+        Some(parse_type_expr(tokens, pos, span)?)
+    } else {
+        None
+    };
     let (has_body, body) = if *pos < tokens.len() && tokens[*pos].0 == Token::Semicolon {
         *pos += 1;
         (false, Vec::new())
@@ -1255,6 +1505,7 @@ fn parse_class_like_method(
         has_body,
         params,
         variadic,
+        return_type,
         body,
         span,
     })
@@ -1368,11 +1619,21 @@ fn parse_group_use_items(
     prefix: Name,
     default_kind: UseKind,
 ) -> Result<Vec<UseItem>, CompileError> {
-    expect_token(tokens, pos, &Token::LBrace, "Expected '{' in group use declaration")?;
+    expect_token(
+        tokens,
+        pos,
+        &Token::LBrace,
+        "Expected '{' in group use declaration",
+    )?;
     let mut imports = Vec::new();
     while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
         if !imports.is_empty() {
-            expect_token(tokens, pos, &Token::Comma, "Expected ',' in group use declaration")?;
+            expect_token(
+                tokens,
+                pos,
+                &Token::Comma,
+                "Expected ',' in group use declaration",
+            )?;
         }
 
         let kind = if *pos < tokens.len() && tokens[*pos].0 == Token::Function {
@@ -1400,9 +1661,16 @@ fn parse_group_use_items(
         let mut parts = prefix.parts.clone();
         parts.extend(suffix.parts);
         let name = Name::qualified(parts);
-        imports.push(parse_single_use_item_after_name(tokens, pos, span, name, kind)?);
+        imports.push(parse_single_use_item_after_name(
+            tokens, pos, span, name, kind,
+        )?);
     }
-    expect_token(tokens, pos, &Token::RBrace, "Expected '}' after group use declaration")?;
+    expect_token(
+        tokens,
+        pos,
+        &Token::RBrace,
+        "Expected '}' after group use declaration",
+    )?;
     Ok(imports)
 }
 
@@ -1425,7 +1693,10 @@ fn parse_use_prefix(
                 *pos += 1;
             }
             _ if parts.is_empty() => {
-                return Err(CompileError::new(span, "Expected imported name after 'use'"))
+                return Err(CompileError::new(
+                    span,
+                    "Expected imported name after 'use'",
+                ))
             }
             _ => break,
         }
@@ -1479,12 +1750,23 @@ fn parse_params(
     tokens: &[(Token, Span)],
     pos: &mut usize,
     span: Span,
-) -> Result<(Vec<(String, Option<Expr>, bool)>, Option<String>), CompileError> {
+) -> Result<
+    (
+        Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
+        Option<String>,
+    ),
+    CompileError,
+> {
     let mut params = Vec::new();
     let mut variadic = None;
     while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
         if !params.is_empty() || variadic.is_some() {
-            expect_token(tokens, pos, &Token::Comma, "Expected ',' between parameters")?;
+            expect_token(
+                tokens,
+                pos,
+                &Token::Comma,
+                "Expected ',' between parameters",
+            )?;
         }
         if variadic.is_some() {
             return Err(CompileError::new(
@@ -1492,6 +1774,12 @@ fn parse_params(
                 "Variadic parameter must be the last parameter",
             ));
         }
+        // Try to parse optional type annotation before $variable
+        let type_ann = if looks_like_typed_param(tokens, *pos) {
+            Some(parse_type_expr(tokens, pos, span)?)
+        } else {
+            None
+        };
         let is_ref = if *pos < tokens.len() && tokens[*pos].0 == Token::Ampersand {
             *pos += 1;
             true
@@ -1499,6 +1787,12 @@ fn parse_params(
             false
         };
         if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
+            if type_ann.is_some() {
+                return Err(CompileError::new(
+                    span,
+                    "Typed variadic parameters are not supported yet",
+                ));
+            }
             *pos += 1;
             match tokens.get(*pos).map(|(t, _)| t) {
                 Some(Token::Variable(n)) => {
@@ -1519,7 +1813,7 @@ fn parse_params(
                 } else {
                     None
                 };
-                params.push((n, default, is_ref));
+                params.push((n, type_ann, default, is_ref));
             }
             _ => return Err(CompileError::new(span, "Expected parameter variable")),
         }
@@ -1535,7 +1829,12 @@ fn parse_trait_use(
     *pos += 1; // consume 'use'
     let mut trait_names = Vec::new();
     loop {
-        trait_names.push(parse_name(tokens, pos, span, "Expected trait name after 'use'")?);
+        trait_names.push(parse_name(
+            tokens,
+            pos,
+            span,
+            "Expected trait name after 'use'",
+        )?);
         if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
             *pos += 1;
             continue;
@@ -1549,7 +1848,10 @@ fn parse_trait_use(
         while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
             let (trait_name, method) = parse_trait_adaptation_target(tokens, pos, span)?;
             if *pos >= tokens.len() {
-                return Err(CompileError::new(span, "Unexpected end of trait adaptation block"));
+                return Err(CompileError::new(
+                    span,
+                    "Unexpected end of trait adaptation block",
+                ));
             }
             match &tokens[*pos].0 {
                 Token::As => {
@@ -1637,7 +1939,12 @@ fn parse_trait_use(
             }
             expect_semicolon(tokens, pos)?;
         }
-        expect_token(tokens, pos, &Token::RBrace, "Expected '}' after trait adaptations")?;
+        expect_token(
+            tokens,
+            pos,
+            &Token::RBrace,
+            "Expected '}' after trait adaptations",
+        )?;
         if *pos < tokens.len() && tokens[*pos].0 == Token::Semicolon {
             *pos += 1;
         }
@@ -1656,7 +1963,12 @@ fn parse_trait_adaptation_target(
     pos: &mut usize,
     span: Span,
 ) -> Result<(Option<Name>, String), CompileError> {
-    let first = parse_name(tokens, pos, span, "Expected method or trait name in adaptation")?;
+    let first = parse_name(
+        tokens,
+        pos,
+        span,
+        "Expected method or trait name in adaptation",
+    )?;
     if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleColon {
         *pos += 1;
         let method = match tokens.get(*pos).map(|(t, _)| t) {
@@ -1692,7 +2004,11 @@ pub(crate) fn expect_token(
         *pos += 1;
         Ok(())
     } else {
-        let span = if *pos < tokens.len() { tokens[*pos].1 } else { Span::dummy() };
+        let span = if *pos < tokens.len() {
+            tokens[*pos].1
+        } else {
+            Span::dummy()
+        };
         Err(CompileError::new(span, msg))
     }
 }
@@ -1700,7 +2016,11 @@ pub(crate) fn expect_token(
 // --- FFI parsing ---
 
 fn parse_c_type(tokens: &[(Token, Span)], pos: &mut usize) -> Result<CType, CompileError> {
-    let span = if *pos < tokens.len() { tokens[*pos].1 } else { Span::dummy() };
+    let span = if *pos < tokens.len() {
+        tokens[*pos].1
+    } else {
+        Span::dummy()
+    };
     match tokens.get(*pos).map(|(t, _)| t) {
         Some(Token::Identifier(name)) => {
             let name = name.clone();
@@ -1717,8 +2037,17 @@ fn parse_c_type(tokens: &[(Token, Span)], pos: &mut usize) -> Result<CType, Comp
                     if *pos < tokens.len() && tokens[*pos].0 == Token::Less {
                         *pos += 1; // consume <
                         let type_name = match tokens.get(*pos).map(|(t, _)| t) {
-                            Some(Token::Identifier(t)) => { let t = t.clone(); *pos += 1; t }
-                            _ => return Err(CompileError::new(span, "Expected type name after 'ptr<'")),
+                            Some(Token::Identifier(t)) => {
+                                let t = t.clone();
+                                *pos += 1;
+                                t
+                            }
+                            _ => {
+                                return Err(CompileError::new(
+                                    span,
+                                    "Expected type name after 'ptr<'",
+                                ))
+                            }
                         };
                         if *pos >= tokens.len() || tokens[*pos].0 != Token::Greater {
                             return Err(CompileError::new(span, "Expected '>' after ptr<T"));
@@ -1729,29 +2058,48 @@ fn parse_c_type(tokens: &[(Token, Span)], pos: &mut usize) -> Result<CType, Comp
                         Ok(CType::Ptr)
                     }
                 }
-                _ => Err(CompileError::new(span, &format!("Unknown C type: {}", name))),
+                _ => Err(CompileError::new(
+                    span,
+                    &format!("Unknown C type: {}", name),
+                )),
             }
         }
         _ => Err(CompileError::new(span, "Expected type name")),
     }
 }
 
-fn parse_extern_params(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Vec<ExternParam>, CompileError> {
+fn parse_extern_params(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+) -> Result<Vec<ExternParam>, CompileError> {
     let mut params = Vec::new();
     while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
         if !params.is_empty() {
             if tokens[*pos].0 != Token::Comma {
-                return Err(CompileError::new(tokens[*pos].1, "Expected ',' between extern parameters"));
+                return Err(CompileError::new(
+                    tokens[*pos].1,
+                    "Expected ',' between extern parameters",
+                ));
             }
             *pos += 1;
         }
         let c_type = parse_c_type(tokens, pos)?;
         let name = match tokens.get(*pos).map(|(t, _)| t) {
-            Some(Token::Variable(n)) => { let n = n.clone(); *pos += 1; n }
-            _ => return Err(CompileError::new(
-                if *pos < tokens.len() { tokens[*pos].1 } else { Span::dummy() },
-                "Expected $parameter_name after type",
-            )),
+            Some(Token::Variable(n)) => {
+                let n = n.clone();
+                *pos += 1;
+                n
+            }
+            _ => {
+                return Err(CompileError::new(
+                    if *pos < tokens.len() {
+                        tokens[*pos].1
+                    } else {
+                        Span::dummy()
+                    },
+                    "Expected $parameter_name after type",
+                ))
+            }
         };
         params.push(ExternParam { name, c_type });
     }
@@ -1766,12 +2114,31 @@ fn parse_extern_function(
 ) -> Result<Stmt, CompileError> {
     *pos += 1; // consume 'function'
     let name = match tokens.get(*pos).map(|(t, _)| t) {
-        Some(Token::Identifier(n)) => { let n = n.clone(); *pos += 1; n }
-        _ => return Err(CompileError::new(span, "Expected function name after 'extern function'")),
+        Some(Token::Identifier(n)) => {
+            let n = n.clone();
+            *pos += 1;
+            n
+        }
+        _ => {
+            return Err(CompileError::new(
+                span,
+                "Expected function name after 'extern function'",
+            ))
+        }
     };
-    expect_token(tokens, pos, &Token::LParen, "Expected '(' after extern function name")?;
+    expect_token(
+        tokens,
+        pos,
+        &Token::LParen,
+        "Expected '(' after extern function name",
+    )?;
     let params = parse_extern_params(tokens, pos)?;
-    expect_token(tokens, pos, &Token::RParen, "Expected ')' after extern parameters")?;
+    expect_token(
+        tokens,
+        pos,
+        &Token::RParen,
+        "Expected ')' after extern parameters",
+    )?;
 
     // Parse return type: ': type'
     let return_type = if *pos < tokens.len() && tokens[*pos].0 == Token::Colon {
@@ -1782,37 +2149,69 @@ fn parse_extern_function(
     };
 
     expect_semicolon(tokens, pos)?;
-    Ok(Stmt::new(StmtKind::ExternFunctionDecl { name, params, return_type, library }, span))
+    Ok(Stmt::new(
+        StmtKind::ExternFunctionDecl {
+            name,
+            params,
+            return_type,
+            library,
+        },
+        span,
+    ))
 }
 
 /// Parse extern declarations. Returns Vec<Stmt> because extern "lib" { } blocks produce multiple stmts.
 /// Called from parse() in mod.rs, not from parse_stmt.
-pub fn parse_extern_stmts(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Vec<Stmt>, CompileError> {
+pub fn parse_extern_stmts(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+) -> Result<Vec<Stmt>, CompileError> {
     let span = tokens[*pos].1;
     *pos += 1; // consume 'extern'
 
     match tokens.get(*pos).map(|(t, _)| t) {
-        Some(Token::Function) => {
-            Ok(vec![parse_extern_function(tokens, pos, span, None)?])
-        }
+        Some(Token::Function) => Ok(vec![parse_extern_function(tokens, pos, span, None)?]),
 
         Some(Token::StringLiteral(lib)) => {
             let library = lib.clone();
             *pos += 1;
             if *pos < tokens.len() && tokens[*pos].0 == Token::Function {
                 // extern "lib" function name(): type;
-                return Ok(vec![parse_extern_function(tokens, pos, span, Some(library))?]);
+                return Ok(vec![parse_extern_function(
+                    tokens,
+                    pos,
+                    span,
+                    Some(library),
+                )?]);
             }
             // extern "lib" { function ...; function ...; }
-            expect_token(tokens, pos, &Token::LBrace, "Expected '{' or 'function' after extern library name")?;
+            expect_token(
+                tokens,
+                pos,
+                &Token::LBrace,
+                "Expected '{' or 'function' after extern library name",
+            )?;
             let mut stmts = Vec::new();
             while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
                 if tokens[*pos].0 != Token::Function {
-                    return Err(CompileError::new(tokens[*pos].1, "Expected 'function' inside extern block"));
+                    return Err(CompileError::new(
+                        tokens[*pos].1,
+                        "Expected 'function' inside extern block",
+                    ));
                 }
-                stmts.push(parse_extern_function(tokens, pos, span, Some(library.clone()))?);
+                stmts.push(parse_extern_function(
+                    tokens,
+                    pos,
+                    span,
+                    Some(library.clone()),
+                )?);
             }
-            expect_token(tokens, pos, &Token::RBrace, "Expected '}' after extern block")?;
+            expect_token(
+                tokens,
+                pos,
+                &Token::RBrace,
+                "Expected '}' after extern block",
+            )?;
             if stmts.is_empty() {
                 return Err(CompileError::new(span, "Empty extern block"));
             }
@@ -1822,10 +2221,24 @@ pub fn parse_extern_stmts(tokens: &[(Token, Span)], pos: &mut usize) -> Result<V
         Some(Token::Class) => {
             *pos += 1; // consume 'class'
             let name = match tokens.get(*pos).map(|(t, _)| t) {
-                Some(Token::Identifier(n)) => { let n = n.clone(); *pos += 1; n }
-                _ => return Err(CompileError::new(span, "Expected class name after 'extern class'")),
+                Some(Token::Identifier(n)) => {
+                    let n = n.clone();
+                    *pos += 1;
+                    n
+                }
+                _ => {
+                    return Err(CompileError::new(
+                        span,
+                        "Expected class name after 'extern class'",
+                    ))
+                }
             };
-            expect_token(tokens, pos, &Token::LBrace, "Expected '{' after extern class name")?;
+            expect_token(
+                tokens,
+                pos,
+                &Token::LBrace,
+                "Expected '{' after extern class name",
+            )?;
             let mut fields = Vec::new();
             while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
                 if tokens[*pos].0 == Token::Public {
@@ -1833,30 +2246,66 @@ pub fn parse_extern_stmts(tokens: &[(Token, Span)], pos: &mut usize) -> Result<V
                 }
                 let c_type = parse_c_type(tokens, pos)?;
                 let field_name = match tokens.get(*pos).map(|(t, _)| t) {
-                    Some(Token::Variable(n)) => { let n = n.clone(); *pos += 1; n }
-                    _ => return Err(CompileError::new(
-                        if *pos < tokens.len() { tokens[*pos].1 } else { Span::dummy() },
-                        "Expected $field_name in extern class",
-                    )),
+                    Some(Token::Variable(n)) => {
+                        let n = n.clone();
+                        *pos += 1;
+                        n
+                    }
+                    _ => {
+                        return Err(CompileError::new(
+                            if *pos < tokens.len() {
+                                tokens[*pos].1
+                            } else {
+                                Span::dummy()
+                            },
+                            "Expected $field_name in extern class",
+                        ))
+                    }
                 };
                 expect_semicolon(tokens, pos)?;
-                fields.push(ExternField { name: field_name, c_type });
+                fields.push(ExternField {
+                    name: field_name,
+                    c_type,
+                });
             }
-            expect_token(tokens, pos, &Token::RBrace, "Expected '}' after extern class body")?;
-            Ok(vec![Stmt::new(StmtKind::ExternClassDecl { name, fields }, span)])
+            expect_token(
+                tokens,
+                pos,
+                &Token::RBrace,
+                "Expected '}' after extern class body",
+            )?;
+            Ok(vec![Stmt::new(
+                StmtKind::ExternClassDecl { name, fields },
+                span,
+            )])
         }
 
         Some(Token::Global) => {
             *pos += 1; // consume 'global'
             let c_type = parse_c_type(tokens, pos)?;
             let name = match tokens.get(*pos).map(|(t, _)| t) {
-                Some(Token::Variable(n)) => { let n = n.clone(); *pos += 1; n }
-                _ => return Err(CompileError::new(span, "Expected $variable_name after extern global type")),
+                Some(Token::Variable(n)) => {
+                    let n = n.clone();
+                    *pos += 1;
+                    n
+                }
+                _ => {
+                    return Err(CompileError::new(
+                        span,
+                        "Expected $variable_name after extern global type",
+                    ))
+                }
             };
             expect_semicolon(tokens, pos)?;
-            Ok(vec![Stmt::new(StmtKind::ExternGlobalDecl { name, c_type }, span)])
+            Ok(vec![Stmt::new(
+                StmtKind::ExternGlobalDecl { name, c_type },
+                span,
+            )])
         }
 
-        _ => Err(CompileError::new(span, "Expected 'function', string literal, 'class', or 'global' after 'extern'")),
+        _ => Err(CompileError::new(
+            span,
+            "Expected 'function', string literal, 'class', or 'global' after 'extern'",
+        )),
     }
 }

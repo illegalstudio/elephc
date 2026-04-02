@@ -77,6 +77,7 @@ pub(super) fn emit_expr_call(
             .and_then(|sig| sig.ref_params.get(i))
             .copied()
             .unwrap_or(false);
+        let target_ty = args::declared_target_ty(callee_sig.as_ref(), i);
         if is_ref {
             if let ExprKind::Variable(var_name) = &arg.kind {
                 if ctx.global_vars.contains(var_name) {
@@ -106,10 +107,8 @@ pub(super) fn emit_expr_call(
             emitter.instruction("str x0, [sp, #-16]!");                             // push address for by-ref argument
             arg_types.push(PhpType::Int);
         } else {
-            let ty = super::super::emit_expr(arg, emitter, ctx, data);
-            super::super::retain_borrowed_heap_arg(emitter, arg, &ty);
-            args::push_arg_value(emitter, &ty);
-            arg_types.push(ty);
+            let pushed_ty = args::push_expr_arg(arg, target_ty, emitter, ctx, data);
+            arg_types.push(pushed_ty);
         }
     }
 
@@ -117,39 +116,22 @@ pub(super) fn emit_expr_call(
         if let Some(spread_expr) = spread_arg {
             let remaining = regular_param_count.saturating_sub(spread_at_index);
             emitter.comment(&format!("unpack spread into {} indirect params", remaining));
-            let _ty = super::super::emit_expr(spread_expr, emitter, ctx, data);
-            let elem_ty = if let Some(ref sig) = callee_sig {
-                if spread_at_index < sig.params.len() {
-                    sig.params[spread_at_index].1.clone()
-                } else {
-                    PhpType::Int
-                }
-            } else {
-                PhpType::Int
+            let spread_ty = functions::infer_contextual_type(spread_expr, ctx);
+            let source_elem_ty = match &spread_ty {
+                PhpType::Array(elem) => (**elem).clone(),
+                PhpType::AssocArray { value, .. } => (**value).clone(),
+                _ => PhpType::Int,
             };
-            emitter.instruction("mov x9, x0");                                  // save array pointer in x9
-            emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header to reach data
+            let elem_stride = args::array_element_stride(&source_elem_ty);
+            let _ = super::super::emit_expr(spread_expr, emitter, ctx, data);
+            emitter.instruction("mov x20, x0");                                 // preserve the spread array pointer across boxing/incref helper calls
+            emitter.instruction("add x20, x20, #24");                           // skip 24-byte array header to reach data
             for idx in 0..remaining {
-                match &elem_ty {
-                    PhpType::Int | PhpType::Bool => {
-                        emitter.instruction(&format!("ldr x0, [x9, #{}]", idx * 8)); // load int element from spread array
-                        emitter.instruction("str x0, [sp, #-16]!");             // push unpacked int arg onto stack
-                    }
-                    PhpType::Float => {
-                        emitter.instruction(&format!("ldr d0, [x9, #{}]", idx * 8)); // load float element from spread array
-                        emitter.instruction("str d0, [sp, #-16]!");             // push unpacked float arg onto stack
-                    }
-                    PhpType::Str => {
-                        emitter.instruction(&format!("ldr x1, [x9, #{}]", idx * 16)); // load spread string pointer
-                        emitter.instruction(&format!("ldr x2, [x9, #{}]", idx * 16 + 8)); // load spread string length
-                        emitter.instruction("stp x1, x2, [sp, #-16]!");         // push unpacked string arg onto stack
-                    }
-                    _ => {
-                        emitter.instruction(&format!("ldr x0, [x9, #{}]", idx * 8)); // load spread element from array
-                        emitter.instruction("str x0, [sp, #-16]!");             // push unpacked arg onto stack
-                    }
-                }
-                arg_types.push(elem_ty.clone());
+                let target_ty = args::declared_target_ty(callee_sig.as_ref(), spread_at_index + idx);
+                args::load_array_element_to_result(emitter, &source_elem_ty, "x20", idx * elem_stride);
+                let pushed_ty =
+                    args::push_loaded_array_element_arg(&source_elem_ty, target_ty, emitter, ctx, data);
+                arg_types.push(pushed_ty);
             }
         }
     }

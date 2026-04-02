@@ -2,7 +2,7 @@ use crate::codegen::context::{Context, DeferredClosure};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::functions;
-use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind, TypeExpr};
 use crate::types::{FunctionSig, PhpType};
 
 use super::args;
@@ -94,7 +94,7 @@ fn infer_closure_return_type(body: &[Stmt], sig: &FunctionSig) -> PhpType {
 }
 
 pub(super) fn emit_closure(
-    params: &[(String, Option<Expr>, bool)],
+    params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
     variadic: &Option<String>,
     body: &[Stmt],
     captures: &[String],
@@ -114,8 +114,16 @@ pub(super) fn emit_closure(
         capture_types.push((cap_name.clone(), ty));
     }
 
-    let mut param_types: Vec<(String, PhpType)> =
-        params.iter().map(|(p, _, _)| (p.clone(), PhpType::Int)).collect();
+    let mut param_types: Vec<(String, PhpType)> = params
+        .iter()
+        .map(|(p, type_ann, _, _)| {
+            let ty = type_ann
+                .as_ref()
+                .map(|type_ann| functions::codegen_declared_type(type_ann, ctx))
+                .unwrap_or(PhpType::Int);
+            (p.clone(), ty)
+        })
+        .collect();
     if let Some(variadic_name) = variadic {
         param_types.push((
             variadic_name.clone(),
@@ -125,24 +133,31 @@ pub(super) fn emit_closure(
     for (cap_name, cap_ty) in &capture_types {
         param_types.push((cap_name.clone(), cap_ty.clone()));
     }
-    let mut defaults: Vec<Option<Expr>> =
-        params.iter().map(|(_, default, _)| default.clone()).collect();
+    let mut defaults: Vec<Option<Expr>> = params
+        .iter()
+        .map(|(_, _, default, _)| default.clone())
+        .collect();
     if variadic.is_some() {
         defaults.push(None);
     }
     for _ in &capture_types {
         defaults.push(None);
     }
-    let mut ref_params: Vec<bool> = params.iter().map(|(_, _, is_ref)| *is_ref).collect();
+    let mut ref_params: Vec<bool> = params.iter().map(|(_, _, _, is_ref)| *is_ref).collect();
+    let mut declared_params: Vec<bool> =
+        params.iter().map(|(_, type_ann, _, _)| type_ann.is_some()).collect();
     if variadic.is_some() {
         ref_params.push(false);
+        declared_params.push(false);
     }
     ref_params.extend(std::iter::repeat_n(false, capture_types.len()));
+    declared_params.extend(std::iter::repeat_n(false, capture_types.len()));
     let preliminary_sig = FunctionSig {
         params: param_types.clone(),
         defaults: defaults.clone(),
         return_type: PhpType::Int,
         ref_params: ref_params.clone(),
+        declared_params: declared_params.clone(),
         variadic: variadic.clone(),
     };
     let return_type = infer_closure_return_type(body, &preliminary_sig);
@@ -151,10 +166,11 @@ pub(super) fn emit_closure(
         defaults,
         return_type,
         ref_params,
+        declared_params,
         variadic: variadic.clone(),
     };
 
-    let param_names: Vec<String> = params.iter().map(|(n, _, _)| n.clone()).collect();
+    let param_names: Vec<String> = params.iter().map(|(n, _, _, _)| n.clone()).collect();
     ctx.deferred_closures.push(DeferredClosure {
         label: closure_label.clone(),
         params: param_names,
@@ -164,8 +180,8 @@ pub(super) fn emit_closure(
     });
 
     emitter.comment("closure: load function address");
-    emitter.instruction(&format!("adrp x0, {}@PAGE", closure_label));           // load page base of closure function
-    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", closure_label));     // add page offset to get exact closure address
+    emitter.instruction(&format!("adrp x0, {}@PAGE", closure_label)); // load page base of closure function
+    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", closure_label)); // add page offset to get exact closure address
     PhpType::Callable
 }
 
@@ -234,23 +250,30 @@ pub(super) fn emit_closure_call(
     let mut arg_types = Vec::new();
     for (i, arg) in all_args.iter().enumerate() {
         let is_ref = ref_params.get(i).copied().unwrap_or(false);
+        let target_ty = args::declared_target_ty(sig.as_ref(), i);
         if is_ref {
             if let ExprKind::Variable(var_name) = &arg.kind {
                 if ctx.global_vars.contains(var_name) {
                     let label = format!("_gvar_{}", var_name);
                     emitter.comment(&format!("closure ref arg: address of global ${}", var_name));
-                    emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page of global var
-                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); // resolve global var address
+                    emitter.instruction(&format!("adrp x0, {}@PAGE", label)); // load page of global var
+                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label));
+                // resolve global var address
                 } else if ctx.ref_params.contains(var_name) {
                     let cap_info = match ctx.variables.get(var_name) {
                         Some(v) => v,
                         None => {
-                            emitter.comment(&format!("WARNING: undefined ref variable ${}", var_name));
+                            emitter
+                                .comment(&format!("WARNING: undefined ref variable ${}", var_name));
                             continue;
                         }
                     };
-                    emitter.comment(&format!("closure ref arg: forward underlying reference for ${}", var_name));
-                    crate::codegen::abi::load_at_offset(emitter, "x0", cap_info.stack_offset); // load existing reference pointer
+                    emitter.comment(&format!(
+                        "closure ref arg: forward underlying reference for ${}",
+                        var_name
+                    ));
+                    crate::codegen::abi::load_at_offset(emitter, "x0", cap_info.stack_offset);
+                // load existing reference pointer
                 } else {
                     let cap_info = match ctx.variables.get(var_name) {
                         Some(v) => v,
@@ -260,18 +283,18 @@ pub(super) fn emit_closure_call(
                         }
                     };
                     emitter.comment(&format!("closure ref arg: address of ${}", var_name));
-                    emitter.instruction(&format!("sub x0, x29, #{}", cap_info.stack_offset)); // compute address of local variable
+                    emitter.instruction(&format!("sub x0, x29, #{}", cap_info.stack_offset));
+                    // compute address of local variable
                 }
             } else {
                 let ty = super::super::emit_expr(arg, emitter, ctx, data);
                 super::super::retain_borrowed_heap_arg(emitter, arg, &ty);
             }
-            emitter.instruction("str x0, [sp, #-16]!");                             // push address for by-ref argument
+            emitter.instruction("str x0, [sp, #-16]!"); // push address for by-ref argument
             arg_types.push(PhpType::Int);
         } else {
-            let ty = super::super::emit_expr(arg, emitter, ctx, data);
-            args::push_arg_value(emitter, &ty);
-            arg_types.push(ty);
+            let pushed_ty = args::push_expr_arg(arg, target_ty, emitter, ctx, data);
+            arg_types.push(pushed_ty);
         }
     }
 
@@ -279,39 +302,22 @@ pub(super) fn emit_closure_call(
         if let Some(spread_expr) = spread_arg {
             let remaining = regular_param_count.saturating_sub(spread_at_index);
             emitter.comment(&format!("unpack spread into {} closure params", remaining));
-            let _ty = super::super::emit_expr(spread_expr, emitter, ctx, data);
-            let elem_ty = if let Some(ref s) = sig {
-                if spread_at_index < s.params.len() {
-                    s.params[spread_at_index].1.clone()
-                } else {
-                    PhpType::Int
-                }
-            } else {
-                PhpType::Int
+            let spread_ty = functions::infer_contextual_type(spread_expr, ctx);
+            let source_elem_ty = match &spread_ty {
+                PhpType::Array(elem) => (**elem).clone(),
+                PhpType::AssocArray { value, .. } => (**value).clone(),
+                _ => PhpType::Int,
             };
-            emitter.instruction("mov x9, x0");                                  // save array pointer in x9
-            emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header to reach data
+            let elem_stride = args::array_element_stride(&source_elem_ty);
+            let _ = super::super::emit_expr(spread_expr, emitter, ctx, data);
+            emitter.instruction("mov x20, x0"); // preserve the spread array pointer across boxing/incref helper calls
+            emitter.instruction("add x20, x20, #24"); // skip 24-byte array header to reach data
             for idx in 0..remaining {
-                match &elem_ty {
-                    PhpType::Int | PhpType::Bool => {
-                        emitter.instruction(&format!("ldr x0, [x9, #{}]", idx * 8)); // load int element from spread array
-                        emitter.instruction("str x0, [sp, #-16]!");             // push unpacked int arg onto stack
-                    }
-                    PhpType::Float => {
-                        emitter.instruction(&format!("ldr d0, [x9, #{}]", idx * 8)); // load float element from spread array
-                        emitter.instruction("str d0, [sp, #-16]!");             // push unpacked float arg onto stack
-                    }
-                    PhpType::Str => {
-                        emitter.instruction(&format!("ldr x1, [x9, #{}]", idx * 16)); // load spread string pointer
-                        emitter.instruction(&format!("ldr x2, [x9, #{}]", idx * 16 + 8)); // load spread string length
-                        emitter.instruction("stp x1, x2, [sp, #-16]!");         // push unpacked string arg onto stack
-                    }
-                    _ => {
-                        emitter.instruction(&format!("ldr x0, [x9, #{}]", idx * 8)); // load spread element from array
-                        emitter.instruction("str x0, [sp, #-16]!");             // push unpacked arg onto stack
-                    }
-                }
-                arg_types.push(elem_ty.clone());
+                let target_ty = args::declared_target_ty(sig.as_ref(), spread_at_index + idx);
+                args::load_array_element_to_result(emitter, &source_elem_ty, "x20", idx * elem_stride);
+                let pushed_ty =
+                    args::push_loaded_array_element_arg(&source_elem_ty, target_ty, emitter, ctx, data);
+                arg_types.push(pushed_ty);
             }
         }
     }
@@ -321,14 +327,14 @@ pub(super) fn emit_closure_call(
             emitter.comment("spread array as variadic closure param");
             let ty = super::super::emit_expr(spread_expr, emitter, ctx, data);
             super::super::retain_borrowed_heap_arg(emitter, spread_expr, &ty);
-            emitter.instruction("str x0, [sp, #-16]!");                         // push variadic array pointer onto stack
+            emitter.instruction("str x0, [sp, #-16]!"); // push variadic array pointer onto stack
             arg_types.push(ty);
         } else if variadic_args.is_empty() {
             emitter.comment("empty variadic closure array");
-            emitter.instruction("mov x0, #4");                                  // initial capacity: 4 (grows dynamically)
-            emitter.instruction("mov x1, #8");                                  // element size: 8 bytes
-            emitter.instruction("bl __rt_array_new");                           // allocate empty array for variadic param
-            emitter.instruction("str x0, [sp, #-16]!");                         // push empty variadic array onto stack
+            emitter.instruction("mov x0, #4"); // initial capacity: 4 (grows dynamically)
+            emitter.instruction("mov x1, #8"); // element size: 8 bytes
+            emitter.instruction("bl __rt_array_new"); // allocate empty array for variadic param
+            emitter.instruction("str x0, [sp, #-16]!"); // push empty variadic array onto stack
             arg_types.push(PhpType::Array(Box::new(PhpType::Int)));
         } else {
             let n = variadic_args.len();
@@ -338,36 +344,40 @@ pub(super) fn emit_closure_call(
                 PhpType::Str => 16,
                 _ => 8,
             };
-            emitter.instruction(&format!("mov x0, #{}", n));                    // capacity: exact element count
-            emitter.instruction(&format!("mov x1, #{}", es));                   // element size in bytes
-            emitter.instruction("bl __rt_array_new");                           // allocate array for variadic args
-            emitter.instruction("str x0, [sp, #-16]!");                         // save variadic array pointer on stack
+            emitter.instruction(&format!("mov x0, #{}", n)); // capacity: exact element count
+            emitter.instruction(&format!("mov x1, #{}", es)); // element size in bytes
+            emitter.instruction("bl __rt_array_new"); // allocate array for variadic args
+            emitter.instruction("str x0, [sp, #-16]!"); // save variadic array pointer on stack
 
             for (i, varg) in variadic_args.iter().enumerate() {
                 let ty = super::super::emit_expr(varg, emitter, ctx, data);
                 super::super::retain_borrowed_heap_arg(emitter, varg, &ty);
-                emitter.instruction("ldr x9, [sp]");                            // peek variadic array pointer from stack
+                emitter.instruction("ldr x9, [sp]"); // peek variadic array pointer from stack
                 if i == 0 {
                     super::super::arrays::emit_array_value_type_stamp(emitter, "x9", &ty);
                 }
                 match &ty {
                     PhpType::Int | PhpType::Bool | PhpType::Callable => {
-                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); // store int-like element in variadic array
+                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8));
+                        // store int-like element in variadic array
                     }
                     PhpType::Float => {
-                        emitter.instruction(&format!("str d0, [x9, #{}]", 24 + i * 8)); // store float element in variadic array
+                        emitter.instruction(&format!("str d0, [x9, #{}]", 24 + i * 8));
+                        // store float element in variadic array
                     }
                     PhpType::Str => {
                         emitter.instruction(&format!("str x1, [x9, #{}]", 24 + i * 16)); // store variadic string pointer
-                        emitter.instruction(&format!("str x2, [x9, #{}]", 24 + i * 16 + 8)); // store variadic string length
+                        emitter.instruction(&format!("str x2, [x9, #{}]", 24 + i * 16 + 8));
+                        // store variadic string length
                     }
                     PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
-                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); // store refcounted variadic payload
+                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8));
+                        // store refcounted variadic payload
                     }
                     _ => {}
                 }
-                emitter.instruction(&format!("mov x10, #{}", i + 1));           // new variadic array length after this element
-                emitter.instruction("str x10, [x9]");                           // persist updated variadic array length
+                emitter.instruction(&format!("mov x10, #{}", i + 1)); // new variadic array length after this element
+                emitter.instruction("str x10, [x9]"); // persist updated variadic array length
             }
 
             arg_types.push(PhpType::Array(Box::new(first_elem_ty)));
@@ -379,6 +389,12 @@ pub(super) fn emit_closure_call(
             if deferred.sig.params == cached_sig.params {
                 for (i, ty) in arg_types.iter().enumerate() {
                     if i < deferred.sig.params.len()
+                        && !deferred
+                            .sig
+                            .declared_params
+                            .get(i)
+                            .copied()
+                            .unwrap_or(false)
                         && !deferred.sig.ref_params.get(i).copied().unwrap_or(false)
                     {
                         deferred.sig.params[i].1 = ty.clone();
@@ -389,7 +405,10 @@ pub(super) fn emit_closure_call(
         }
         if let Some(cached) = ctx.closure_sigs.get_mut(var) {
             for (i, ty) in arg_types.iter().enumerate() {
-                if i < cached.params.len() && !cached.ref_params.get(i).copied().unwrap_or(false) {
+                if i < cached.params.len()
+                    && !cached.declared_params.get(i).copied().unwrap_or(false)
+                    && !cached.ref_params.get(i).copied().unwrap_or(false)
+                {
                     cached.params[i].1 = ty.clone();
                 }
             }
@@ -401,7 +420,10 @@ pub(super) fn emit_closure_call(
         let cap_info = match ctx.variables.get(cap_name) {
             Some(v) => v,
             None => {
-                emitter.comment(&format!("WARNING: captured variable ${} not found", cap_name));
+                emitter.comment(&format!(
+                    "WARNING: captured variable ${} not found",
+                    cap_name
+                ));
                 continue;
             }
         };
@@ -418,17 +440,17 @@ pub(super) fn emit_closure_call(
             | PhpType::Object(_)
             | PhpType::Packed(_)
             | PhpType::Pointer(_) => {
-                crate::codegen::abi::load_at_offset(emitter, "x0", cap_offset);     // load captured int/bool/array value
-                emitter.instruction("str x0, [sp, #-16]!");                     // push captured value onto stack
+                crate::codegen::abi::load_at_offset(emitter, "x0", cap_offset); // load captured int/bool/array value
+                emitter.instruction("str x0, [sp, #-16]!"); // push captured value onto stack
             }
             PhpType::Float => {
-                crate::codegen::abi::load_at_offset(emitter, "d0", cap_offset);     // load captured float value
-                emitter.instruction("str d0, [sp, #-16]!");                     // push captured float onto stack
+                crate::codegen::abi::load_at_offset(emitter, "d0", cap_offset); // load captured float value
+                emitter.instruction("str d0, [sp, #-16]!"); // push captured float onto stack
             }
             PhpType::Str => {
-                crate::codegen::abi::load_at_offset(emitter, "x1", cap_offset);     // load captured string pointer
+                crate::codegen::abi::load_at_offset(emitter, "x1", cap_offset); // load captured string pointer
                 crate::codegen::abi::load_at_offset(emitter, "x2", cap_offset - 8); // load captured string length
-                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push captured string ptr+len onto stack
+                emitter.instruction("stp x1, x2, [sp, #-16]!"); // push captured string ptr+len onto stack
             }
             PhpType::Void => {}
         }
@@ -444,12 +466,12 @@ pub(super) fn emit_closure_call(
         }
     };
     let var_offset = var_info.stack_offset;
-    crate::codegen::abi::load_at_offset(emitter, "x9", var_offset);                // load closure function address from stack
-    emitter.instruction("str x9, [sp, #-16]!");                                 // push closure address temporarily
+    crate::codegen::abi::load_at_offset(emitter, "x9", var_offset); // load closure function address from stack
+    emitter.instruction("str x9, [sp, #-16]!"); // push closure address temporarily
 
     let assignments = args::build_arg_assignments(&arg_types, 0);
 
-    emitter.instruction("ldr x9, [sp], #16");                                   // pop closure function address into x9
+    emitter.instruction("ldr x9, [sp], #16"); // pop closure function address into x9
     args::load_arg_assignments(emitter, &assignments, total_args);
 
     let ret_ty = ctx
@@ -458,9 +480,9 @@ pub(super) fn emit_closure_call(
         .map(|s| s.return_type.clone())
         .unwrap_or(PhpType::Int);
 
-    emitter.instruction("mov x19, x9");                                         // preserve closure address across concat-offset save
+    emitter.instruction("mov x19, x9"); // preserve closure address across concat-offset save
     super::super::save_concat_offset_before_nested_call(emitter);
-    emitter.instruction("blr x19");                                             // branch to closure via function pointer in x19
+    emitter.instruction("blr x19"); // branch to closure via function pointer in x19
     super::super::restore_concat_offset_after_nested_call(emitter, &ret_ty);
 
     ret_ty

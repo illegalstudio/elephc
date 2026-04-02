@@ -1219,6 +1219,61 @@ impl Checker {
                     return Err(CompileError::new(span, "call_user_func_array() takes exactly 2 arguments"));
                 }
                 for arg in args { self.infer_type(arg, env)?; }
+                if let ExprKind::FirstClassCallable(target) = &args[0].kind {
+                    let elems = match &args[1].kind {
+                        ExprKind::ArrayLiteral(elems) => elems.as_slice(),
+                        _ => &[],
+                    };
+                    let sig =
+                        self.specialize_first_class_callable_target(target, elems, span, env)?;
+                    if sig.ref_params.iter().any(|is_ref| *is_ref) {
+                        return Err(CompileError::new(
+                            span,
+                            "call_user_func_array() does not support pass-by-reference callback parameters yet",
+                        ));
+                    }
+                    if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
+                        let ret_ty = self.check_known_callable_call(
+                            &sig,
+                            elems,
+                            span,
+                            env,
+                            "call_user_func_array() callback",
+                        )?;
+                        return Ok(Some(ret_ty));
+                    }
+                    return Ok(Some(sig.return_type));
+                }
+                if let ExprKind::Variable(var_name) = &args[0].kind {
+                    if let Some(target) = self.first_class_callable_targets.get(var_name).cloned() {
+                        let elems = match &args[1].kind {
+                            ExprKind::ArrayLiteral(elems) => elems.as_slice(),
+                            _ => &[],
+                        };
+                        let sig =
+                            self.specialize_first_class_callable_target(&target, elems, span, env)?;
+                        self.callable_sigs.insert(var_name.clone(), sig.clone());
+                        self.closure_return_types
+                            .insert(var_name.clone(), sig.return_type.clone());
+                        if sig.ref_params.iter().any(|is_ref| *is_ref) {
+                            return Err(CompileError::new(
+                                span,
+                                "call_user_func_array() does not support pass-by-reference callback parameters yet",
+                            ));
+                        }
+                        if let ExprKind::ArrayLiteral(elems) = &args[1].kind {
+                            let ret_ty = self.check_known_callable_call(
+                                &sig,
+                                elems,
+                                span,
+                                env,
+                                "call_user_func_array() callback",
+                            )?;
+                            return Ok(Some(ret_ty));
+                        }
+                        return Ok(Some(sig.return_type));
+                    }
+                }
                 // Resolve callback function so codegen emits it
                 if let ExprKind::StringLiteral(cb_name) = &args[0].kind {
                     if let Some(sig) = self.functions.get(cb_name.as_str()).cloned() {
@@ -1288,6 +1343,43 @@ impl Checker {
                     return Err(CompileError::new(span, "call_user_func() takes at least 1 argument"));
                 }
                 for arg in args { self.infer_type(arg, env)?; }
+                if let ExprKind::FirstClassCallable(target) = &args[0].kind {
+                    let sig = self.specialize_first_class_callable_target(
+                        target,
+                        &args[1..],
+                        span,
+                        env,
+                    )?;
+                    let ret_ty = self.check_known_callable_call(
+                        &sig,
+                        &args[1..],
+                        span,
+                        env,
+                        "call_user_func() callback",
+                    )?;
+                    return Ok(Some(ret_ty));
+                }
+                if let ExprKind::Variable(var_name) = &args[0].kind {
+                    if let Some(target) = self.first_class_callable_targets.get(var_name).cloned() {
+                        let sig = self.specialize_first_class_callable_target(
+                            &target,
+                            &args[1..],
+                            span,
+                            env,
+                        )?;
+                        self.callable_sigs.insert(var_name.clone(), sig.clone());
+                        self.closure_return_types
+                            .insert(var_name.clone(), sig.return_type.clone());
+                        let ret_ty = self.check_known_callable_call(
+                            &sig,
+                            &args[1..],
+                            span,
+                            env,
+                            "call_user_func() callback",
+                        )?;
+                        return Ok(Some(ret_ty));
+                    }
+                }
                 // Resolve callback function so codegen emits it
                 if let ExprKind::StringLiteral(cb_name) = &args[0].kind {
                     if let Some(sig) = self.functions.get(cb_name.as_str()).cloned() {

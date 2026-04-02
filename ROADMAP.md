@@ -293,9 +293,9 @@ Proper type system for PHP compatibility.
 - [x] First-class callable syntax (`strlen(...)`) — create closures from function names without string indirection
 - [x] `match` with no-match error — runtime fatal when no arm matches and no default
 - [x] Readonly classes (`readonly class Point {}`) — all properties implicitly readonly
-- [ ] Constructor promotion (`public function __construct(public int $x)`) — declare + assign properties in constructor signature
 - [x] Union types (`int|string`) — tagged union with runtime type dispatch
 - [x] Nullable types (`?int`) — sugar for `int|null`
+- [x] Function / method parameter and return type hints (`function foo(int $x): string`) — compile-time validation for functions, methods, constructors, closures, and arrow functions
 
 ## v0.18.x — Multi-platform and optimizations
 
@@ -363,6 +363,7 @@ Features that are feasible but complex. Not currently planned for any specific v
 
 | Feature | Complexity | Notes |
 |---|---|---|
+- Constructor promotion (`public function __construct(public int $x)`) — declare + assign properties in constructor signature
 | Generators / `yield` | High | Requires compile-time state machine transformation: every yield point becomes a switch case, all locals promoted to heap-allocated generator object. Edge cases with yield inside try/catch/finally are significant. |
 | `yield from` delegation | High | Depends on generators. Forwards iteration to an inner generator, propagating values and return. |
 | Fibers | Very high | Cooperative multitasking needs per-fiber stack allocation (~1MB each), custom context switch in assembly (save/restore x19-x28, d8-d15, SP), guard pages, and GC awareness of multiple stack roots. Best suited for async I/O workloads, not the current game/systems target. |

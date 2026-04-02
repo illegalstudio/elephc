@@ -152,16 +152,18 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             name,
             params,
             variadic,
+            return_type,
             body,
         } => StmtKind::FunctionDecl {
             name,
             params: params
                 .into_iter()
-                .map(|(name, default, is_ref)| {
-                    (name, default.map(|expr| rewrite_expr(expr, defines)), is_ref)
+                .map(|(name, type_ann, default, is_ref)| {
+                    (name, type_ann, default.map(|expr| rewrite_expr(expr, defines)), is_ref)
                 })
                 .collect(),
             variadic,
+            return_type,
             body: apply_stmts(body, defines),
         },
         StmtKind::Return(expr) => StmtKind::Return(expr.map(|expr| rewrite_expr(expr, defines))),
@@ -201,8 +203,8 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
                     method.params = method
                         .params
                         .into_iter()
-                        .map(|(name, default, is_ref)| {
-                            (name, default.map(|expr| rewrite_expr(expr, defines)), is_ref)
+                        .map(|(name, type_ann, default, is_ref)| {
+                            (name, type_ann, default.map(|expr| rewrite_expr(expr, defines)), is_ref)
                         })
                         .collect();
                     method.body = apply_stmts(method.body, defines);
@@ -249,8 +251,8 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
                     method.params = method
                         .params
                         .into_iter()
-                        .map(|(name, default, is_ref)| {
-                            (name, default.map(|expr| rewrite_expr(expr, defines)), is_ref)
+                        .map(|(name, type_ann, default, is_ref)| {
+                            (name, type_ann, default.map(|expr| rewrite_expr(expr, defines)), is_ref)
                         })
                         .collect();
                     method.body = apply_stmts(method.body, defines);
@@ -374,8 +376,8 @@ fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
         } => ExprKind::Closure {
             params: params
                 .into_iter()
-                .map(|(name, default, is_ref)| {
-                    (name, default.map(|expr| rewrite_expr(expr, defines)), is_ref)
+                .map(|(name, type_ann, default, is_ref)| {
+                    (name, type_ann, default.map(|expr| rewrite_expr(expr, defines)), is_ref)
                 })
                 .collect(),
             variadic,

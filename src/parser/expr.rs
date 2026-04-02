@@ -1,6 +1,8 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
-use crate::parser::ast::{BinOp, CallableTarget, CastType, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
+use crate::parser::ast::{
+    BinOp, CallableTarget, CastType, Expr, ExprKind, StaticReceiver, Stmt, StmtKind,
+};
 use crate::parser::stmt::{parse_name, parse_type_expr};
 use crate::span::Span;
 
@@ -19,7 +21,10 @@ pub(crate) fn parse_args(
     while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
         if !args.is_empty() {
             if tokens[*pos].0 != Token::Comma {
-                return Err(CompileError::new(tokens[*pos].1, "Expected ',' between arguments"));
+                return Err(CompileError::new(
+                    tokens[*pos].1,
+                    "Expected ',' between arguments",
+                ));
             }
             *pos += 1;
         }
@@ -70,8 +75,17 @@ fn parse_expr_bp(
         let arrow_span = tokens[*pos].1;
         *pos += 1; // consume ->
         let member_name = match tokens.get(*pos).map(|(t, _)| t) {
-            Some(Token::Identifier(n)) => { let n = n.clone(); *pos += 1; n }
-            _ => return Err(CompileError::new(arrow_span, "Expected property or method name after '->'")),
+            Some(Token::Identifier(n)) => {
+                let n = n.clone();
+                *pos += 1;
+                n
+            }
+            _ => {
+                return Err(CompileError::new(
+                    arrow_span,
+                    "Expected property or method name after '->'",
+                ))
+            }
         };
         // Check if method call: ->method(args)
         if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
@@ -87,14 +101,21 @@ fn parse_expr_bp(
             } else {
                 let args = parse_args(tokens, pos, arrow_span)?;
                 lhs = Expr::new(
-                    ExprKind::MethodCall { object: Box::new(lhs), method: member_name, args },
+                    ExprKind::MethodCall {
+                        object: Box::new(lhs),
+                        method: member_name,
+                        args,
+                    },
                     arrow_span,
                 );
             }
         } else {
             // Property access: ->prop
             lhs = Expr::new(
-                ExprKind::PropertyAccess { object: Box::new(lhs), property: member_name },
+                ExprKind::PropertyAccess {
+                    object: Box::new(lhs),
+                    property: member_name,
+                },
                 arrow_span,
             );
         }
@@ -102,12 +123,21 @@ fn parse_expr_bp(
 
     // Postfix call on expression result: $arr[0](args), $f()(), etc.
     while *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
-        if matches!(lhs.kind, ExprKind::ArrayAccess { .. } | ExprKind::ExprCall { .. } | ExprKind::ClosureCall { .. } | ExprKind::FunctionCall { .. }) {
+        if matches!(
+            lhs.kind,
+            ExprKind::ArrayAccess { .. }
+                | ExprKind::ExprCall { .. }
+                | ExprKind::ClosureCall { .. }
+                | ExprKind::FunctionCall { .. }
+        ) {
             let call_span = tokens[*pos].1;
             *pos += 1;
             let args = parse_args(tokens, pos, call_span)?;
             lhs = Expr::new(
-                ExprKind::ExprCall { callee: Box::new(lhs), args },
+                ExprKind::ExprCall {
+                    callee: Box::new(lhs),
+                    args,
+                },
                 call_span,
             );
         } else {
@@ -184,29 +214,29 @@ fn parse_expr_bp(
 fn infix_bp(token: &Token) -> Option<(BinOp, u8, u8)> {
     match token {
         Token::QuestionQuestion => Some((BinOp::NullCoalesce, 2, 1)), // right-associative, lowest binop
-        Token::OrOr            => Some((BinOp::Or,         3, 4)),
-        Token::AndAnd          => Some((BinOp::And,        5, 6)),
-        Token::Pipe            => Some((BinOp::BitOr,      7, 8)),
-        Token::Caret           => Some((BinOp::BitXor,     9, 10)),
-        Token::Ampersand       => Some((BinOp::BitAnd,    11, 12)),
-        Token::EqualEqual      => Some((BinOp::Eq,        13, 14)),
-        Token::NotEqual        => Some((BinOp::NotEq,     13, 14)),
-        Token::EqualEqualEqual => Some((BinOp::StrictEq,  13, 14)),
-        Token::NotEqualEqual   => Some((BinOp::StrictNotEq,13,14)),
-        Token::Less            => Some((BinOp::Lt,        15, 16)),
-        Token::Greater         => Some((BinOp::Gt,        15, 16)),
-        Token::LessEqual       => Some((BinOp::LtEq,     15, 16)),
-        Token::GreaterEqual    => Some((BinOp::GtEq,      15, 16)),
-        Token::Spaceship       => Some((BinOp::Spaceship, 15, 16)),
-        Token::LessLess        => Some((BinOp::ShiftLeft, 17, 18)),
-        Token::GreaterGreater  => Some((BinOp::ShiftRight,17, 18)),
-        Token::Dot             => Some((BinOp::Concat,    19, 20)),
-        Token::Plus            => Some((BinOp::Add,       21, 22)),
-        Token::Minus           => Some((BinOp::Sub,       21, 22)),
-        Token::Star            => Some((BinOp::Mul,       23, 24)),
-        Token::Slash           => Some((BinOp::Div,       23, 24)),
-        Token::Percent         => Some((BinOp::Mod,       23, 24)),
-        Token::StarStar        => Some((BinOp::Pow,       29, 28)), // right-associative, above unary
+        Token::OrOr => Some((BinOp::Or, 3, 4)),
+        Token::AndAnd => Some((BinOp::And, 5, 6)),
+        Token::Pipe => Some((BinOp::BitOr, 7, 8)),
+        Token::Caret => Some((BinOp::BitXor, 9, 10)),
+        Token::Ampersand => Some((BinOp::BitAnd, 11, 12)),
+        Token::EqualEqual => Some((BinOp::Eq, 13, 14)),
+        Token::NotEqual => Some((BinOp::NotEq, 13, 14)),
+        Token::EqualEqualEqual => Some((BinOp::StrictEq, 13, 14)),
+        Token::NotEqualEqual => Some((BinOp::StrictNotEq, 13, 14)),
+        Token::Less => Some((BinOp::Lt, 15, 16)),
+        Token::Greater => Some((BinOp::Gt, 15, 16)),
+        Token::LessEqual => Some((BinOp::LtEq, 15, 16)),
+        Token::GreaterEqual => Some((BinOp::GtEq, 15, 16)),
+        Token::Spaceship => Some((BinOp::Spaceship, 15, 16)),
+        Token::LessLess => Some((BinOp::ShiftLeft, 17, 18)),
+        Token::GreaterGreater => Some((BinOp::ShiftRight, 17, 18)),
+        Token::Dot => Some((BinOp::Concat, 19, 20)),
+        Token::Plus => Some((BinOp::Add, 21, 22)),
+        Token::Minus => Some((BinOp::Sub, 21, 22)),
+        Token::Star => Some((BinOp::Mul, 23, 24)),
+        Token::Slash => Some((BinOp::Div, 23, 24)),
+        Token::Percent => Some((BinOp::Mod, 23, 24)),
+        Token::StarStar => Some((BinOp::Pow, 29, 28)), // right-associative, above unary
         _ => None,
     }
 }
@@ -275,7 +305,10 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
         }
         Token::MPi => {
             *pos += 1;
-            Ok(Expr::new(ExprKind::FloatLiteral(std::f64::consts::PI), span))
+            Ok(Expr::new(
+                ExprKind::FloatLiteral(std::f64::consts::PI),
+                span,
+            ))
         }
         Token::ME => {
             *pos += 1;
@@ -283,23 +316,38 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
         }
         Token::MSqrt2 => {
             *pos += 1;
-            Ok(Expr::new(ExprKind::FloatLiteral(std::f64::consts::SQRT_2), span))
+            Ok(Expr::new(
+                ExprKind::FloatLiteral(std::f64::consts::SQRT_2),
+                span,
+            ))
         }
         Token::MPi2 => {
             *pos += 1;
-            Ok(Expr::new(ExprKind::FloatLiteral(std::f64::consts::FRAC_PI_2), span))
+            Ok(Expr::new(
+                ExprKind::FloatLiteral(std::f64::consts::FRAC_PI_2),
+                span,
+            ))
         }
         Token::MPi4 => {
             *pos += 1;
-            Ok(Expr::new(ExprKind::FloatLiteral(std::f64::consts::FRAC_PI_4), span))
+            Ok(Expr::new(
+                ExprKind::FloatLiteral(std::f64::consts::FRAC_PI_4),
+                span,
+            ))
         }
         Token::MLog2e => {
             *pos += 1;
-            Ok(Expr::new(ExprKind::FloatLiteral(std::f64::consts::LOG2_E), span))
+            Ok(Expr::new(
+                ExprKind::FloatLiteral(std::f64::consts::LOG2_E),
+                span,
+            ))
         }
         Token::MLog10e => {
             *pos += 1;
-            Ok(Expr::new(ExprKind::FloatLiteral(std::f64::consts::LOG10_E), span))
+            Ok(Expr::new(
+                ExprKind::FloatLiteral(std::f64::consts::LOG10_E),
+                span,
+            ))
         }
         Token::PhpFloatMin => {
             *pos += 1;
@@ -327,7 +375,10 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
         }
         Token::PhpOs => {
             *pos += 1;
-            Ok(Expr::new(ExprKind::StringLiteral("Darwin".to_string()), span))
+            Ok(Expr::new(
+                ExprKind::StringLiteral("Darwin".to_string()),
+                span,
+            ))
         }
         Token::DirectorySeparator => {
             *pos += 1;
@@ -401,7 +452,10 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                 *pos += 3; // skip (, type, )
                 let inner = parse_expr_bp(tokens, pos, 27)?;
                 return Ok(Expr::new(
-                    ExprKind::Cast { target: cast_ty, expr: Box::new(inner) },
+                    ExprKind::Cast {
+                        target: cast_ty,
+                        expr: Box::new(inner),
+                    },
                     span,
                 ));
             }
@@ -417,7 +471,10 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                 *pos += 1;
                 let args = parse_args(tokens, pos, call_span)?;
                 return Ok(Expr::new(
-                    ExprKind::ExprCall { callee: Box::new(inner), args },
+                    ExprKind::ExprCall {
+                        callee: Box::new(inner),
+                        args,
+                    },
                     call_span,
                 ));
             }
@@ -433,7 +490,10 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
             while *pos < tokens.len() && tokens[*pos].0 != Token::RBracket {
                 if !first {
                     if tokens[*pos].0 != Token::Comma {
-                        return Err(CompileError::new(tokens[*pos].1, "Expected ',' between array elements"));
+                        return Err(CompileError::new(
+                            tokens[*pos].1,
+                            "Expected ',' between array elements",
+                        ));
                     }
                     *pos += 1;
                     // Allow trailing comma
@@ -458,7 +518,10 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                     let value = parse_expr(tokens, pos)?;
                     assoc_elems.push((expr, value));
                 } else if is_assoc {
-                    return Err(CompileError::new(span, "Cannot mix associative and indexed array elements"));
+                    return Err(CompileError::new(
+                        span,
+                        "Cannot mix associative and indexed array elements",
+                    ));
                 } else {
                     elems.push(expr);
                 }
@@ -564,13 +627,24 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                 while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
                     if !params.is_empty() || variadic.is_some() {
                         if tokens[*pos].0 != Token::Comma {
-                            return Err(CompileError::new(tokens[*pos].1, "Expected ',' between parameters"));
+                            return Err(CompileError::new(
+                                tokens[*pos].1,
+                                "Expected ',' between parameters",
+                            ));
                         }
                         *pos += 1;
                     }
                     if variadic.is_some() {
-                        return Err(CompileError::new(span, "Variadic parameter must be the last parameter"));
+                        return Err(CompileError::new(
+                            span,
+                            "Variadic parameter must be the last parameter",
+                        ));
                     }
+                    let type_ann = if crate::parser::stmt::looks_like_typed_param(tokens, *pos) {
+                        Some(crate::parser::stmt::parse_type_expr(tokens, pos, span)?)
+                    } else {
+                        None
+                    };
                     let is_ref = if *pos < tokens.len() && tokens[*pos].0 == Token::Ampersand {
                         *pos += 1;
                         true
@@ -579,13 +653,24 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                     };
                     // Check for ... (variadic)
                     if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
+                        if type_ann.is_some() {
+                            return Err(CompileError::new(
+                                span,
+                                "Typed variadic parameters are not supported yet",
+                            ));
+                        }
                         *pos += 1;
                         match tokens.get(*pos).map(|(t, _)| t) {
                             Some(Token::Variable(n)) => {
                                 variadic = Some(n.clone());
                                 *pos += 1;
                             }
-                            _ => return Err(CompileError::new(span, "Expected variable after '...'")),
+                            _ => {
+                                return Err(CompileError::new(
+                                    span,
+                                    "Expected variable after '...'",
+                                ))
+                            }
                         }
                         continue;
                     }
@@ -594,13 +679,14 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                             let n = n.clone();
                             *pos += 1;
                             // Check for default value
-                            let default = if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
+                            let default = if *pos < tokens.len() && tokens[*pos].0 == Token::Assign
+                            {
                                 *pos += 1;
                                 Some(parse_expr(tokens, pos)?)
                             } else {
                                 None
                             };
-                            params.push((n, default, is_ref));
+                            params.push((n, type_ann, default, is_ref));
                         }
                         _ => return Err(CompileError::new(span, "Expected parameter variable")),
                     }
@@ -620,7 +706,10 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                     while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
                         if !captures.is_empty() {
                             if tokens[*pos].0 != Token::Comma {
-                                return Err(CompileError::new(tokens[*pos].1, "Expected ',' between captured variables"));
+                                return Err(CompileError::new(
+                                    tokens[*pos].1,
+                                    "Expected ',' between captured variables",
+                                ));
                             }
                             *pos += 1;
                         }
@@ -629,17 +718,31 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                                 captures.push(n.clone());
                                 *pos += 1;
                             }
-                            _ => return Err(CompileError::new(span, "Expected variable in use() capture list")),
+                            _ => {
+                                return Err(CompileError::new(
+                                    span,
+                                    "Expected variable in use() capture list",
+                                ))
+                            }
                         }
                     }
                     if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
-                        return Err(CompileError::new(span, "Expected ')' after use() capture list"));
+                        return Err(CompileError::new(
+                            span,
+                            "Expected ')' after use() capture list",
+                        ));
                     }
                     *pos += 1; // consume ')'
                 }
                 let body = crate::parser::stmt::parse_block(tokens, pos)?;
                 return Ok(Expr::new(
-                    ExprKind::Closure { params, variadic, body, is_arrow: false, captures },
+                    ExprKind::Closure {
+                        params,
+                        variadic,
+                        body,
+                        is_arrow: false,
+                        captures,
+                    },
                     span,
                 ));
             }
@@ -657,21 +760,37 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
             while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
                 if !params.is_empty() || variadic.is_some() {
                     if tokens[*pos].0 != Token::Comma {
-                        return Err(CompileError::new(tokens[*pos].1, "Expected ',' between parameters"));
+                        return Err(CompileError::new(
+                            tokens[*pos].1,
+                            "Expected ',' between parameters",
+                        ));
                     }
                     *pos += 1;
                 }
                 if variadic.is_some() {
-                    return Err(CompileError::new(span, "Variadic parameter must be the last parameter"));
+                    return Err(CompileError::new(
+                        span,
+                        "Variadic parameter must be the last parameter",
+                    ));
                 }
+                let type_ann = if crate::parser::stmt::looks_like_typed_param(tokens, *pos) {
+                    Some(crate::parser::stmt::parse_type_expr(tokens, pos, span)?)
+                } else {
+                    None
+                };
                 let is_ref = if *pos < tokens.len() && tokens[*pos].0 == Token::Ampersand {
                     *pos += 1;
                     true
                 } else {
                     false
                 };
-                // Check for ... (variadic)
                 if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
+                    if type_ann.is_some() {
+                        return Err(CompileError::new(
+                            span,
+                            "Typed variadic parameters are not supported yet",
+                        ));
+                    }
                     *pos += 1;
                     match tokens.get(*pos).map(|(t, _)| t) {
                         Some(Token::Variable(n)) => {
@@ -693,24 +812,36 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                         } else {
                             None
                         };
-                        params.push((n, default, is_ref));
+                        params.push((n, type_ann, default, is_ref));
                     }
                     _ => return Err(CompileError::new(span, "Expected parameter variable")),
                 }
             }
             if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
-                return Err(CompileError::new(span, "Expected ')' after arrow function parameters"));
+                return Err(CompileError::new(
+                    span,
+                    "Expected ')' after arrow function parameters",
+                ));
             }
             *pos += 1;
             // Expect =>
             if *pos >= tokens.len() || tokens[*pos].0 != Token::DoubleArrow {
-                return Err(CompileError::new(span, "Expected '=>' after arrow function parameters"));
+                return Err(CompileError::new(
+                    span,
+                    "Expected '=>' after arrow function parameters",
+                ));
             }
             *pos += 1;
             let body_expr = parse_expr(tokens, pos)?;
             let body = vec![Stmt::new(StmtKind::Return(Some(body_expr)), span)];
             Ok(Expr::new(
-                ExprKind::Closure { params, variadic, body, is_arrow: true, captures: vec![] },
+                ExprKind::Closure {
+                    params,
+                    variadic,
+                    body,
+                    is_arrow: true,
+                    captures: vec![],
+                },
                 span,
             ))
         }
@@ -733,7 +864,10 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                 *pos += 1; // consume (
                 let len = parse_expr(tokens, pos)?;
                 if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
-                    return Err(CompileError::new(span, "Expected ')' after buffer_new length"));
+                    return Err(CompileError::new(
+                        span,
+                        "Expected ')' after buffer_new length",
+                    ));
                 }
                 *pos += 1; // consume )
                 return Ok(Expr::new(
@@ -751,8 +885,9 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                 && tokens[*pos].0 == Token::Less
             {
                 *pos += 1; // consume <
-                let target_type = parse_name(tokens, pos, span, "Expected type name after 'ptr_cast<'")?
-                    .as_canonical();
+                let target_type =
+                    parse_name(tokens, pos, span, "Expected type name after 'ptr_cast<'")?
+                        .as_canonical();
                 if *pos >= tokens.len() || tokens[*pos].0 != Token::Greater {
                     return Err(CompileError::new(span, "Expected '>' after ptr_cast<T"));
                 }
@@ -763,10 +898,19 @@ fn parse_prefix(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Compi
                 *pos += 1; // consume (
                 let expr = parse_expr(tokens, pos)?;
                 if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
-                    return Err(CompileError::new(span, "Expected ')' after ptr_cast argument"));
+                    return Err(CompileError::new(
+                        span,
+                        "Expected ')' after ptr_cast argument",
+                    ));
                 }
                 *pos += 1; // consume )
-                return Ok(Expr::new(ExprKind::PtrCast { target_type, expr: Box::new(expr) }, span));
+                return Ok(Expr::new(
+                    ExprKind::PtrCast {
+                        target_type,
+                        expr: Box::new(expr),
+                    },
+                    span,
+                ));
             }
             // Function call: name(...)
             if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {

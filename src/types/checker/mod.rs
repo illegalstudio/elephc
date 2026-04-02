@@ -5,14 +5,15 @@ use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
 use crate::parser::ast::{
-    BinOp, CallableTarget, CType, CastType, ClassMethod, ClassProperty, Expr, ExprKind, Program,
-    StaticReceiver, Stmt, StmtKind, Visibility,
+    BinOp, CType, CallableTarget, CastType, ClassMethod, ClassProperty, Expr, ExprKind, Program,
+    StaticReceiver, Stmt, StmtKind, TypeExpr, Visibility,
 };
 use crate::types::{
     ctype_stack_size, ctype_to_php_type, first_class_callable_builtin_sig, packed_type_size,
-    traits::{flatten_classes, FlattenedClass}, CheckResult, ClassInfo, EnumCaseInfo,
-    EnumCaseValue, EnumInfo, ExternClassInfo, ExternFieldInfo, ExternFunctionSig, FunctionSig,
-    InterfaceInfo, PackedClassInfo, PackedFieldInfo, PhpType, TypeEnv,
+    traits::{flatten_classes, FlattenedClass},
+    CheckResult, ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo, ExternClassInfo,
+    ExternFieldInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo,
+    PackedFieldInfo, PhpType, TypeEnv,
 };
 
 /// Infer a function's return type by scanning its body for Return statements.
@@ -254,6 +255,8 @@ pub(crate) struct Checker {
     pub closure_return_types: HashMap<String, PhpType>,
     /// Tracks known callable signatures assigned to variables.
     pub callable_sigs: HashMap<String, FunctionSig>,
+    /// Tracks first-class callable targets assigned to variables.
+    pub first_class_callable_targets: HashMap<String, CallableTarget>,
     /// Interface definitions collected during first pass.
     pub interfaces: HashMap<String, InterfaceInfo>,
     /// Class definitions collected during first pass.
@@ -289,9 +292,12 @@ pub(crate) struct Checker {
 #[derive(Clone)]
 pub(crate) struct FnDecl {
     pub params: Vec<String>,
+    pub param_types: Vec<Option<TypeExpr>>,
     pub defaults: Vec<Option<Expr>>,
     pub ref_params: Vec<bool>,
     pub variadic: Option<String>,
+    pub return_type: Option<TypeExpr>,
+    pub span: crate::span::Span,
     pub body: Vec<Stmt>,
 }
 
@@ -366,6 +372,7 @@ fn builtin_exception_constructor_method() -> ClassMethod {
         has_body: true,
         params: vec![(
             "message".to_string(),
+            None,
             Some(Expr::new(
                 ExprKind::StringLiteral(String::new()),
                 crate::span::Span::dummy(),
@@ -373,11 +380,15 @@ fn builtin_exception_constructor_method() -> ClassMethod {
             false,
         )],
         variadic: None,
+        return_type: None,
         body: vec![Stmt::new(
             StmtKind::PropertyAssign {
                 object: Box::new(Expr::new(ExprKind::This, crate::span::Span::dummy())),
                 property: "message".to_string(),
-                value: Expr::new(ExprKind::Variable("message".to_string()), crate::span::Span::dummy()),
+                value: Expr::new(
+                    ExprKind::Variable("message".to_string()),
+                    crate::span::Span::dummy(),
+                ),
             },
             crate::span::Span::dummy(),
         )],
@@ -394,6 +405,7 @@ fn builtin_exception_get_message_method() -> ClassMethod {
         has_body: true,
         params: Vec::new(),
         variadic: None,
+        return_type: None,
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::PropertyAccess {
@@ -417,6 +429,7 @@ fn builtin_throwable_get_message_method() -> ClassMethod {
         has_body: false,
         params: Vec::new(),
         variadic: None,
+        return_type: None,
         body: Vec::new(),
         span: crate::span::Span::dummy(),
     }
@@ -467,7 +480,10 @@ fn validate_magic_method_contracts(checker: &Checker) -> Result<(), CompileError
                     if method.is_static {
                         return Err(CompileError::new(
                             method.span,
-                            &format!("Magic method must be non-static: {}::__toString", class_name),
+                            &format!(
+                                "Magic method must be non-static: {}::__toString",
+                                class_name
+                            ),
                         ));
                     }
                     if method.visibility != Visibility::Public {
@@ -479,7 +495,10 @@ fn validate_magic_method_contracts(checker: &Checker) -> Result<(), CompileError
                     if !method.params.is_empty() || method.variadic.is_some() {
                         return Err(CompileError::new(
                             method.span,
-                            &format!("Magic method must take 0 arguments: {}::__toString", class_name),
+                            &format!(
+                                "Magic method must take 0 arguments: {}::__toString",
+                                class_name
+                            ),
                         ));
                     }
                     if class_info
@@ -490,7 +509,10 @@ fn validate_magic_method_contracts(checker: &Checker) -> Result<(), CompileError
                     {
                         return Err(CompileError::new(
                             method.span,
-                            &format!("Magic method must return string: {}::__toString", class_name),
+                            &format!(
+                                "Magic method must return string: {}::__toString",
+                                class_name
+                            ),
                         ));
                     }
                 }
@@ -541,22 +563,60 @@ fn validate_magic_method_contracts(checker: &Checker) -> Result<(), CompileError
     Ok(())
 }
 
-fn build_method_sig(method: &crate::parser::ast::ClassMethod) -> FunctionSig {
+fn build_method_sig(
+    checker: &Checker,
+    method: &crate::parser::ast::ClassMethod,
+) -> Result<FunctionSig, CompileError> {
     let params: Vec<(String, PhpType)> = method
         .params
         .iter()
-        .map(|(n, _, _)| (n.clone(), PhpType::Int))
-        .collect();
-    let defaults: Vec<Option<Expr>> = method.params.iter().map(|(_, d, _)| d.clone()).collect();
-    let ref_params: Vec<bool> = method.params.iter().map(|(_, _, r)| *r).collect();
-    let return_type = infer_return_type_syntactic(&method.body);
-    Checker::callable_wrapper_sig(&FunctionSig {
+        .map(|(n, type_ann, _, _)| {
+            let ty = match type_ann {
+                Some(type_ann) => checker.resolve_declared_param_type_hint(
+                    type_ann,
+                    method.span,
+                    &format!("Method parameter ${}", n),
+                )?,
+                None => PhpType::Int,
+            };
+            Ok((n.clone(), ty))
+        })
+        .collect::<Result<Vec<_>, CompileError>>()?;
+    let defaults: Vec<Option<Expr>> = method.params.iter().map(|(_, _, d, _)| d.clone()).collect();
+    let ref_params: Vec<bool> = method.params.iter().map(|(_, _, _, r)| *r).collect();
+    for ((param_name, type_ann, default, _), (_, resolved_ty)) in
+        method.params.iter().zip(params.iter())
+    {
+        if type_ann.is_some() {
+            checker.validate_declared_default_type(
+                resolved_ty,
+                default.as_ref(),
+                method.span,
+                &format!("Method parameter ${}", param_name),
+            )?;
+        }
+    }
+    let return_type = match method.return_type.as_ref() {
+        Some(type_ann) => checker.resolve_declared_return_type_hint(
+            type_ann,
+            method.span,
+            &format!("Method '{}'", method.name),
+        )?,
+        None => infer_return_type_syntactic(&method.body),
+    };
+    Ok(Checker::callable_wrapper_sig(&FunctionSig {
         params,
         defaults,
         return_type,
         ref_params,
+        declared_params: method
+            .params
+            .iter()
+            .map(|(_, type_ann, _, _)| type_ann.is_some())
+            .chain(method.variadic.iter().map(|_| false))
+            .collect(),
         variadic: method.variadic.clone(),
-    })
+    }))
 }
 
 fn build_constructor_param_map(methods: &[crate::parser::ast::ClassMethod]) -> Vec<Option<String>> {
@@ -565,9 +625,12 @@ fn build_constructor_param_map(methods: &[crate::parser::ast::ClassMethod]) -> V
         param_to_prop = constructor
             .params
             .iter()
-            .map(|(pname, _, _)| {
+            .map(|(pname, _, _, _)| {
                 for stmt in &constructor.body {
-                    if let StmtKind::PropertyAssign { property, value, .. } = &stmt.kind {
+                    if let StmtKind::PropertyAssign {
+                        property, value, ..
+                    } = &stmt.kind
+                    {
                         if let ExprKind::Variable(vn) = &value.kind {
                             if vn == pname {
                                 return Some(property.clone());
@@ -632,10 +695,16 @@ fn validate_signature_compatibility(
         ));
     }
 
-    let child_defaults: Vec<bool> =
-        child_sig.defaults.iter().map(|default| default.is_some()).collect();
-    let parent_defaults: Vec<bool> =
-        parent_sig.defaults.iter().map(|default| default.is_some()).collect();
+    let child_defaults: Vec<bool> = child_sig
+        .defaults
+        .iter()
+        .map(|default| default.is_some())
+        .collect();
+    let parent_defaults: Vec<bool> = parent_sig
+        .defaults
+        .iter()
+        .map(|default| default.is_some())
+        .collect();
     if child_defaults != parent_defaults {
         return Err(CompileError::new(
             span,
@@ -670,13 +739,14 @@ fn validate_signature_compatibility(
 }
 
 fn validate_override_signature(
+    checker: &Checker,
     class_name: &str,
     method: &crate::parser::ast::ClassMethod,
     parent_sig: &FunctionSig,
     is_static: bool,
 ) -> Result<(), CompileError> {
     let kind = if is_static { "static method" } else { "method" };
-    let child_sig = build_method_sig(method);
+    let child_sig = build_method_sig(checker, method)?;
     if method.name == "__construct" {
         return Ok(());
     }
@@ -706,14 +776,20 @@ fn build_interface_info_recursive(
     if !building.insert(interface_name.to_string()) {
         return Err(CompileError::new(
             crate::span::Span::dummy(),
-            &format!("Circular interface inheritance detected involving {}", interface_name),
+            &format!(
+                "Circular interface inheritance detected involving {}",
+                interface_name
+            ),
         ));
     }
 
     let interface = interface_map.get(interface_name).cloned().ok_or_else(|| {
         CompileError::new(
             crate::span::Span::dummy(),
-            &format!("Unknown interface referenced during interface flattening: {}", interface_name),
+            &format!(
+                "Unknown interface referenced during interface flattening: {}",
+                interface_name
+            ),
         )
     })?;
 
@@ -740,12 +816,16 @@ fn build_interface_info_recursive(
             next_interface_id,
             building,
         )?;
-        let parent_info = checker.interfaces.get(parent_name).cloned().ok_or_else(|| {
-            CompileError::new(
-                interface.span,
-                &format!("Unknown parent interface: {}", parent_name),
-            )
-        })?;
+        let parent_info = checker
+            .interfaces
+            .get(parent_name)
+            .cloned()
+            .ok_or_else(|| {
+                CompileError::new(
+                    interface.span,
+                    &format!("Unknown parent interface: {}", parent_name),
+                )
+            })?;
         for method_name in &parent_info.method_order {
             let parent_sig = parent_info
                 .methods
@@ -780,7 +860,10 @@ fn build_interface_info_recursive(
         if method.visibility != Visibility::Public {
             return Err(CompileError::new(
                 method.span,
-                &format!("Interface methods must be public: {}::{}", interface.name, method.name),
+                &format!(
+                    "Interface methods must be public: {}::{}",
+                    interface.name, method.name
+                ),
             ));
         }
         if method.is_static {
@@ -802,7 +885,7 @@ fn build_interface_info_recursive(
             ));
         }
 
-        let sig = build_method_sig(method);
+        let sig = build_method_sig(checker, method)?;
         if let Some(parent_sig) = methods.get(&method.name) {
             validate_signature_compatibility(
                 method.span,
@@ -853,14 +936,20 @@ fn build_class_info_recursive(
     if !building.insert(class_name.to_string()) {
         return Err(CompileError::new(
             crate::span::Span::dummy(),
-            &format!("Circular inheritance detected involving class {}", class_name),
+            &format!(
+                "Circular inheritance detected involving class {}",
+                class_name
+            ),
         ));
     }
 
     let class = class_map.get(class_name).cloned().ok_or_else(|| {
         CompileError::new(
             crate::span::Span::dummy(),
-            &format!("Unknown class referenced during inheritance flattening: {}", class_name),
+            &format!(
+                "Unknown class referenced during inheritance flattening: {}",
+                class_name
+            ),
         )
     })?;
 
@@ -1002,23 +1091,32 @@ fn build_class_info_recursive(
     }
 
     for method in &class.methods {
-        let sig = build_method_sig(method);
+        let sig = build_method_sig(checker, method)?;
         if method.is_abstract && method.has_body {
             return Err(CompileError::new(
                 method.span,
-                &format!("Abstract method cannot have a body: {}::{}", class.name, method.name),
+                &format!(
+                    "Abstract method cannot have a body: {}::{}",
+                    class.name, method.name
+                ),
             ));
         }
         if !method.is_abstract && !method.has_body {
             return Err(CompileError::new(
                 method.span,
-                &format!("Non-abstract method must have a body: {}::{}", class.name, method.name),
+                &format!(
+                    "Non-abstract method must have a body: {}::{}",
+                    class.name, method.name
+                ),
             ));
         }
         if method.is_abstract && method.visibility == Visibility::Private {
             return Err(CompileError::new(
                 method.span,
-                &format!("Private abstract methods are not supported: {}::{}", class.name, method.name),
+                &format!(
+                    "Private abstract methods are not supported: {}::{}",
+                    class.name, method.name
+                ),
             ));
         }
         if method.is_static {
@@ -1043,7 +1141,7 @@ fn build_class_info_recursive(
                 }
             }
             if let Some(parent_sig) = static_sigs.get(&method.name) {
-                validate_override_signature(&class.name, method, parent_sig, true)?;
+                validate_override_signature(checker, &class.name, method, parent_sig, true)?;
             }
             if method.is_abstract && static_method_impl_classes.contains_key(&method.name) {
                 return Err(CompileError::new(
@@ -1091,7 +1189,7 @@ fn build_class_info_recursive(
                 }
             }
             if let Some(parent_sig) = method_sigs.get(&method.name) {
-                validate_override_signature(&class.name, method, parent_sig, false)?;
+                validate_override_signature(checker, &class.name, method, parent_sig, false)?;
             }
             if method.is_abstract && method_impl_classes.contains_key(&method.name) {
                 return Err(CompileError::new(
@@ -1110,7 +1208,8 @@ fn build_class_info_recursive(
             } else {
                 method_impl_classes.insert(method.name.clone(), class.name.clone());
             }
-            if method.visibility != Visibility::Private && !vtable_slots.contains_key(&method.name) {
+            if method.visibility != Visibility::Private && !vtable_slots.contains_key(&method.name)
+            {
                 let slot = vtable_methods.len();
                 vtable_slots.insert(method.name.clone(), slot);
                 vtable_methods.push(method.name.clone());
@@ -1333,7 +1432,10 @@ fn propagate_abstract_return_types(checker: &mut Checker) {
                 if !parent_info.static_methods.contains_key(method_name) {
                     break;
                 }
-                if parent_info.static_method_impl_classes.contains_key(method_name) {
+                if parent_info
+                    .static_method_impl_classes
+                    .contains_key(method_name)
+                {
                     break;
                 }
                 if let Some(parent_mut) = checker.classes.get_mut(&name) {
@@ -1476,6 +1578,7 @@ fn build_enum_info(
             defaults: Vec::new(),
             return_type: PhpType::Array(Box::new(PhpType::Object(name.to_string()))),
             ref_params: Vec::new(),
+            declared_params: Vec::new(),
             variadic: None,
         },
     );
@@ -1498,6 +1601,7 @@ fn build_enum_info(
                         ])
                     },
                     ref_params: vec![false],
+                    declared_params: vec![true],
                     variadic: None,
                 },
             );
@@ -1555,6 +1659,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         constants: HashMap::new(),
         closure_return_types: HashMap::new(),
         callable_sigs: HashMap::new(),
+        first_class_callable_targets: HashMap::new(),
         interfaces: HashMap::new(),
         classes: HashMap::new(),
         enums: HashMap::new(),
@@ -1577,19 +1682,26 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
             name,
             params,
             variadic,
+            return_type,
             body,
+            ..
         } = &stmt.kind
         {
-            let param_names: Vec<String> = params.iter().map(|(n, _, _)| n.clone()).collect();
-            let defaults: Vec<Option<Expr>> = params.iter().map(|(_, d, _)| d.clone()).collect();
-            let ref_flags: Vec<bool> = params.iter().map(|(_, _, r)| *r).collect();
+            let param_names: Vec<String> = params.iter().map(|(n, _, _, _)| n.clone()).collect();
+            let param_type_anns: Vec<Option<TypeExpr>> =
+                params.iter().map(|(_, t, _, _)| t.clone()).collect();
+            let defaults: Vec<Option<Expr>> = params.iter().map(|(_, _, d, _)| d.clone()).collect();
+            let ref_flags: Vec<bool> = params.iter().map(|(_, _, _, r)| *r).collect();
             checker.fn_decls.insert(
                 name.clone(),
                 FnDecl {
                     params: param_names,
+                    param_types: param_type_anns,
                     defaults,
                     ref_params: ref_flags,
                     variadic: variadic.clone(),
+                    return_type: return_type.clone(),
+                    span: stmt.span,
                     body: body.clone(),
                 },
             );
@@ -1621,7 +1733,10 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 name.clone(),
                 InterfaceDeclInfo {
                     name: name.clone(),
-                    extends: extends.iter().map(|name| name.as_str().to_string()).collect(),
+                    extends: extends
+                        .iter()
+                        .map(|name| name.as_str().to_string())
+                        .collect(),
                     methods: methods.clone(),
                     span: stmt.span,
                 },
@@ -1713,6 +1828,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                     defaults: params.iter().map(|_| None).collect(),
                     return_type: php_ret.clone(),
                     ref_params: params.iter().map(|_| false).collect(),
+                    declared_params: vec![true; php_params.len()],
                     variadic: None,
                 };
                 checker.functions.insert(name.clone(), sig);
@@ -1788,12 +1904,13 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                         ));
                     }
                     let php_type = checker.resolve_type_expr(&field.type_expr, field.span)?;
-                    let size = packed_type_size(&php_type, &checker.packed_classes).ok_or_else(|| {
-                        CompileError::new(
+                    let size =
+                        packed_type_size(&php_type, &checker.packed_classes).ok_or_else(|| {
+                            CompileError::new(
                             field.span,
                             "Packed class fields must use POD scalars, pointers, or packed classes",
                         )
-                    })?;
+                        })?;
                     packed_fields.push(PackedFieldInfo {
                         name: field.name.clone(),
                         php_type,
@@ -1830,9 +1947,8 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         checker.check_stmt(stmt, &mut global_env)?;
     }
 
-    // Register provisional signatures for functions that were declared but never
-    // called directly (e.g., used only as string callbacks in array_map).
-    // This ensures their return types are available for callback type inference.
+    // Resolve signatures for functions that were declared but never called
+    // directly so declared param/return types are still validated.
     let unchecked: Vec<String> = checker
         .fn_decls
         .keys()
@@ -1840,20 +1956,9 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         .cloned()
         .collect();
     for name in unchecked {
-        if let Some(decl) = checker.fn_decls.get(&name) {
-            let return_type = infer_return_type_syntactic(&decl.body);
-            let params = decl
-                .params
-                .iter()
-                .map(|p| (p.clone(), PhpType::Int))
-                .collect();
-            checker.functions.insert(name.clone(), Checker::callable_wrapper_sig(&FunctionSig {
-                params,
-                defaults: decl.defaults.clone(),
-                return_type,
-                ref_params: decl.ref_params.clone(),
-                variadic: decl.variadic.clone(),
-            }));
+        if let Some(decl) = checker.fn_decls.get(&name).cloned() {
+            let param_types = checker.initial_function_param_types(&name, &decl)?;
+            checker.resolve_function_signature(&name, &decl, param_types)?;
         }
     }
 
@@ -1862,67 +1967,66 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
     // This ensures methods see correct property types (e.g., Str not Int).
     for class in &flattened_classes {
         for method in &class.methods {
-                if method.is_abstract {
-                    continue;
-                }
-                let mut method_env: TypeEnv = global_env.clone();
-                if !method.is_static {
-                    method_env.insert("this".to_string(), PhpType::Object(class.name.clone()));
-                }
-                // Use param types from ClassInfo sig (updated by MethodCall inference)
-                let method_sig_key = if method.is_static {
-                    "static"
-                } else {
-                    "instance"
-                };
-                let _ = method_sig_key;
-                let sig_params = if method.is_static {
-                    checker
-                        .classes
-                        .get(&class.name)
-                        .and_then(|c| c.static_methods.get(&method.name))
-                        .map(|s| s.params.clone())
-                } else {
-                    checker
-                        .classes
-                        .get(&class.name)
-                        .and_then(|c| c.methods.get(&method.name))
-                        .map(|s| s.params.clone())
-                };
-                for (i, (pname, _, _)) in method.params.iter().enumerate() {
-                    let ty = sig_params
-                        .as_ref()
-                        .and_then(|p| p.get(i))
-                        .map(|(_, t)| t.clone())
-                        .unwrap_or(PhpType::Int);
-                    method_env.insert(pname.clone(), ty);
-                }
-                if let Some(variadic_name) = &method.variadic {
-                    let ty = sig_params
-                        .as_ref()
-                        .and_then(|p| p.get(method.params.len()))
-                        .map(|(_, t)| t.clone())
-                        .unwrap_or(PhpType::Array(Box::new(PhpType::Int)));
-                    method_env.insert(variadic_name.clone(), ty);
-                }
-                // For __construct: infer param types from property types
-                // This updates both the env (for body type-checking) and the sig
-                // (for correct register assignment in codegen prologue)
-                if method.name == "__construct" {
-                    if let Some(ci) = checker.classes.get(&class.name).cloned() {
-                        for (i, (pname, _, _)) in method.params.iter().enumerate() {
-                            if let Some(Some(prop_name)) = ci.constructor_param_to_prop.get(i) {
-                                if let Some((_, ty)) =
-                                    ci.properties.iter().find(|(n, _)| n == prop_name)
-                                {
-                                    method_env.insert(pname.clone(), ty.clone());
-                                    // Also update the sig in ClassInfo
-                                    // (sig.params has user params only, $this added by codegen)
-                                    if let Some(ci_mut) = checker.classes.get_mut(&class.name) {
-                                        if let Some(sig) = ci_mut.methods.get_mut("__construct") {
-                                            if i < sig.params.len() {
-                                                sig.params[i].1 = ty.clone();
-                                            }
+            if method.is_abstract {
+                continue;
+            }
+            let mut method_env: TypeEnv = global_env.clone();
+            if !method.is_static {
+                method_env.insert("this".to_string(), PhpType::Object(class.name.clone()));
+            }
+            // Use param types from ClassInfo sig (updated by MethodCall inference)
+            let method_sig_key = if method.is_static {
+                "static"
+            } else {
+                "instance"
+            };
+            let _ = method_sig_key;
+            let sig_params = if method.is_static {
+                checker
+                    .classes
+                    .get(&class.name)
+                    .and_then(|c| c.static_methods.get(&method.name))
+                    .map(|s| s.params.clone())
+            } else {
+                checker
+                    .classes
+                    .get(&class.name)
+                    .and_then(|c| c.methods.get(&method.name))
+                    .map(|s| s.params.clone())
+            };
+            for (i, (pname, _, _, _)) in method.params.iter().enumerate() {
+                let ty = sig_params
+                    .as_ref()
+                    .and_then(|p| p.get(i))
+                    .map(|(_, t)| t.clone())
+                    .unwrap_or(PhpType::Int);
+                method_env.insert(pname.clone(), ty);
+            }
+            if let Some(variadic_name) = &method.variadic {
+                let ty = sig_params
+                    .as_ref()
+                    .and_then(|p| p.get(method.params.len()))
+                    .map(|(_, t)| t.clone())
+                    .unwrap_or(PhpType::Array(Box::new(PhpType::Int)));
+                method_env.insert(variadic_name.clone(), ty);
+            }
+            // For __construct: infer param types from property types
+            // This updates both the env (for body type-checking) and the sig
+            // (for correct register assignment in codegen prologue)
+            if method.name == "__construct" {
+                if let Some(ci) = checker.classes.get(&class.name).cloned() {
+                    for (i, (pname, _, _, _)) in method.params.iter().enumerate() {
+                        if let Some(Some(prop_name)) = ci.constructor_param_to_prop.get(i) {
+                            if let Some((_, ty)) =
+                                ci.properties.iter().find(|(n, _)| n == prop_name)
+                            {
+                                method_env.insert(pname.clone(), ty.clone());
+                                // Also update the sig in ClassInfo
+                                // (sig.params has user params only, $this added by codegen)
+                                if let Some(ci_mut) = checker.classes.get_mut(&class.name) {
+                                    if let Some(sig) = ci_mut.methods.get_mut("__construct") {
+                                        if i < sig.params.len() {
+                                            sig.params[i].1 = ty.clone();
                                         }
                                     }
                                 }
@@ -1930,44 +2034,58 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                         }
                     }
                 }
-                checker.current_class = Some(class.name.clone());
-                checker.current_method = Some(method.name.clone());
-                checker.current_method_is_static = method.is_static;
-                let method_ref_params: Vec<String> = method
-                    .params
-                    .iter()
-                    .filter(|(_, _, is_ref)| *is_ref)
-                    .map(|(name, _, _)| name.clone())
-                    .collect();
-                checker.with_local_storage_context(method_ref_params, |checker| {
-                    for s in &method.body {
-                        checker.check_stmt(s, &mut method_env)?;
-                    }
-                    Ok(())
-                })?;
+            }
+            checker.current_class = Some(class.name.clone());
+            checker.current_method = Some(method.name.clone());
+            checker.current_method_is_static = method.is_static;
+            let method_ref_params: Vec<String> = method
+                .params
+                .iter()
+                .filter(|(_, _, _, is_ref)| *is_ref)
+                .map(|(name, _, _, _)| name.clone())
+                .collect();
+            checker.with_local_storage_context(method_ref_params, |checker| {
+                for s in &method.body {
+                    checker.check_stmt(s, &mut method_env)?;
+                }
+                Ok(())
+            })?;
 
-                // Update method return type from full type inference
-                // (must run while current_class is still set so $this resolves)
-                if !method.is_static {
-                    if let Some(ty) = checker.find_return_type_in_body(&method.body, &method_env) {
-                        if let Some(ci) = checker.classes.get_mut(&class.name) {
-                            if let Some(sig) = ci.methods.get_mut(&method.name) {
-                                sig.return_type = ty;
-                            }
-                        }
-                    }
-                } else {
-                    if let Some(ty) = checker.find_return_type_in_body(&method.body, &method_env) {
-                        if let Some(ci) = checker.classes.get_mut(&class.name) {
-                            if let Some(sig) = ci.static_methods.get_mut(&method.name) {
-                                sig.return_type = ty;
-                            }
-                        }
+            // Update method return type from full type inference
+            // (must run while current_class is still set so $this resolves)
+            let inferred_return = checker
+                .find_return_type_in_body(&method.body, &method_env)
+                .unwrap_or(PhpType::Void);
+            let effective_return = if let Some(type_ann) = method.return_type.as_ref() {
+                let declared = checker.resolve_declared_return_type_hint(
+                    type_ann,
+                    method.span,
+                    &format!("Method '{}::{}'", class.name, method.name),
+                )?;
+                checker.require_compatible_arg_type(
+                    &declared,
+                    &inferred_return,
+                    method.span,
+                    &format!("Method '{}::{}' return type", class.name, method.name),
+                )?;
+                declared
+            } else {
+                inferred_return
+            };
+            if !method.is_static {
+                if let Some(ci) = checker.classes.get_mut(&class.name) {
+                    if let Some(sig) = ci.methods.get_mut(&method.name) {
+                        sig.return_type = effective_return;
                     }
                 }
-                checker.current_class = None;
-                checker.current_method = None;
-                checker.current_method_is_static = false;
+            } else if let Some(ci) = checker.classes.get_mut(&class.name) {
+                if let Some(sig) = ci.static_methods.get_mut(&method.name) {
+                    sig.return_type = effective_return;
+                }
+            }
+            checker.current_class = None;
+            checker.current_method = None;
+            checker.current_method_is_static = false;
         }
     }
 
@@ -2008,7 +2126,134 @@ impl Checker {
         ));
         wrapper_sig.defaults.push(None);
         wrapper_sig.ref_params.push(false);
+        wrapper_sig.declared_params.push(false);
         wrapper_sig
+    }
+
+    pub(crate) fn resolve_declared_param_type_hint(
+        &self,
+        type_expr: &TypeExpr,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<PhpType, CompileError> {
+        let ty = self.resolve_type_expr(type_expr, span)?;
+        match ty {
+            PhpType::Void => Err(CompileError::new(
+                span,
+                &format!("{} cannot use type void", context),
+            )),
+            _ => Ok(ty),
+        }
+    }
+
+    pub(crate) fn resolve_declared_return_type_hint(
+        &self,
+        type_expr: &TypeExpr,
+        span: crate::span::Span,
+        _context: &str,
+    ) -> Result<PhpType, CompileError> {
+        let ty = self.resolve_type_expr(type_expr, span)?;
+        Ok(ty)
+    }
+
+    pub(crate) fn require_boxed_by_ref_storage(
+        &self,
+        expected_ty: &PhpType,
+        actual_ty: &PhpType,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        if matches!(expected_ty.codegen_repr(), PhpType::Mixed)
+            && !matches!(actual_ty.codegen_repr(), PhpType::Mixed)
+        {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "{} requires a variable with mixed/union/nullable storage when passed by reference",
+                    context
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_declared_default_type(
+        &self,
+        expected_ty: &PhpType,
+        default_expr: Option<&Expr>,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        if let Some(default_expr) = default_expr {
+            let default_ty = infer_expr_type_syntactic(default_expr);
+            self.require_compatible_arg_type(expected_ty, &default_ty, span, context)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn initial_function_param_types(
+        &self,
+        name: &str,
+        decl: &FnDecl,
+    ) -> Result<Vec<(String, PhpType)>, CompileError> {
+        let mut param_types = Vec::new();
+        for (idx, param_name) in decl.params.iter().enumerate() {
+            if let Some(type_ann) = decl.param_types.get(idx).and_then(|t| t.as_ref()) {
+                let declared_ty = self.resolve_declared_param_type_hint(
+                    type_ann,
+                    decl.span,
+                    &format!("Function '{}' parameter ${}", name, param_name),
+                )?;
+                self.validate_declared_default_type(
+                    &declared_ty,
+                    decl.defaults.get(idx).and_then(|d| d.as_ref()),
+                    decl.span,
+                    &format!("Function '{}' parameter ${}", name, param_name),
+                )?;
+                param_types.push((param_name.clone(), declared_ty));
+            } else if let Some(default_expr) = decl.defaults.get(idx).and_then(|d| d.as_ref()) {
+                param_types.push((param_name.clone(), infer_expr_type_syntactic(default_expr)));
+            } else {
+                param_types.push((param_name.clone(), PhpType::Int));
+            }
+        }
+        if let Some(variadic_name) = decl.variadic.as_ref() {
+            param_types.push((
+                variadic_name.clone(),
+                PhpType::Array(Box::new(PhpType::Int)),
+            ));
+        }
+        Ok(param_types)
+    }
+
+    fn declared_method_param_flags(
+        class_info: &ClassInfo,
+        method_name: &str,
+        is_static: bool,
+    ) -> Vec<bool> {
+        class_info
+            .method_decls
+            .iter()
+            .find(|method| method.name == method_name && method.is_static == is_static)
+            .map(|method| {
+                method
+                    .params
+                    .iter()
+                    .map(|(_, type_ann, _, _)| type_ann.is_some())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn callable_sig_for_declared_params(sig: &FunctionSig, declared_flags: &[bool]) -> FunctionSig {
+        let mut effective_sig = sig.clone();
+        for (idx, (_, ty)) in effective_sig.params.iter_mut().enumerate() {
+            if !declared_flags.get(idx).copied().unwrap_or(false) {
+                *ty = PhpType::Mixed;
+            }
+        }
+        effective_sig.declared_params = declared_flags.to_vec();
+        effective_sig
     }
 
     fn with_local_storage_context<T, F>(
@@ -2039,10 +2284,9 @@ impl Checker {
     fn can_access_member(&self, declaring_class: &str, visibility: &Visibility) -> bool {
         match visibility {
             Visibility::Public => true,
-            Visibility::Protected => self
-                .current_class
-                .as_deref()
-                .is_some_and(|current| current == declaring_class || self.is_subclass_of(current, declaring_class)),
+            Visibility::Protected => self.current_class.as_deref().is_some_and(|current| {
+                current == declaring_class || self.is_subclass_of(current, declaring_class)
+            }),
             Visibility::Private => self.current_class.as_deref() == Some(declaring_class),
         }
     }
@@ -2056,7 +2300,10 @@ impl Checker {
     }
 
     fn is_subclass_of(&self, class_name: &str, ancestor_name: &str) -> bool {
-        let mut current = self.classes.get(class_name).and_then(|class| class.parent.clone());
+        let mut current = self
+            .classes
+            .get(class_name)
+            .and_then(|class| class.parent.clone());
         while let Some(parent_name) = current {
             if parent_name == ancestor_name {
                 return true;
@@ -2070,9 +2317,12 @@ impl Checker {
     }
 
     fn class_implements_interface(&self, class_name: &str, interface_name: &str) -> bool {
-        self.classes
-            .get(class_name)
-            .is_some_and(|class_info| class_info.interfaces.iter().any(|name| name == interface_name))
+        self.classes.get(class_name).is_some_and(|class_info| {
+            class_info
+                .interfaces
+                .iter()
+                .any(|name| name == interface_name)
+        })
     }
 
     fn interface_extends_interface(&self, interface_name: &str, ancestor_name: &str) -> bool {
@@ -2134,7 +2384,10 @@ impl Checker {
             }),
             "parent" => {
                 let current_class = self.current_class.as_ref().ok_or_else(|| {
-                    CompileError::new(span, "Cannot use parent in catch outside of a class context")
+                    CompileError::new(
+                        span,
+                        "Cannot use parent in catch outside of a class context",
+                    )
                 })?;
                 self.classes
                     .get(current_class)
@@ -2184,7 +2437,9 @@ impl Checker {
 
         match expected {
             PhpType::Mixed => true,
-            PhpType::Union(members) => members.iter().any(|member| self.type_accepts(member, actual)),
+            PhpType::Union(members) => members
+                .iter()
+                .any(|member| self.type_accepts(member, actual)),
             PhpType::Object(expected_name) => match actual {
                 PhpType::Object(actual_name) => {
                     expected_name == actual_name
@@ -2221,7 +2476,9 @@ impl Checker {
         let _ = self;
         match ty {
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Str => true,
-            PhpType::Union(members) => members.iter().all(|member| self.type_supports_mixed_int_dispatch(member)),
+            PhpType::Union(members) => members
+                .iter()
+                .all(|member| self.type_supports_mixed_int_dispatch(member)),
             _ => false,
         }
     }
@@ -2405,20 +2662,22 @@ impl Checker {
         param_index: usize,
         arg_ty: &PhpType,
     ) {
-        let Some((prop_name, declaring_class)) = self.classes.get(instantiated_class).and_then(|class_info| {
-            class_info
-                .constructor_param_to_prop
-                .get(param_index)
-                .and_then(|mapped| mapped.as_ref())
-                .map(|prop_name| {
-                    let declaring_class = class_info
-                        .property_declaring_classes
-                        .get(prop_name)
-                        .cloned()
-                        .unwrap_or_else(|| instantiated_class.to_string());
-                    (prop_name.clone(), declaring_class)
-                })
-        }) else {
+        let Some((prop_name, declaring_class)) =
+            self.classes.get(instantiated_class).and_then(|class_info| {
+                class_info
+                    .constructor_param_to_prop
+                    .get(param_index)
+                    .and_then(|mapped| mapped.as_ref())
+                    .map(|prop_name| {
+                        let declaring_class = class_info
+                            .property_declaring_classes
+                            .get(prop_name)
+                            .cloned()
+                            .unwrap_or_else(|| instantiated_class.to_string());
+                        (prop_name.clone(), declaring_class)
+                    })
+            })
+        else {
             return;
         };
 
@@ -2456,7 +2715,9 @@ impl Checker {
             "string" => Some("string".to_string()),
             "ptr" | "pointer" => Some("ptr".to_string()),
             class_name if self.classes.contains_key(class_name) => Some(class_name.to_string()),
-            class_name if self.packed_classes.contains_key(class_name) => Some(class_name.to_string()),
+            class_name if self.packed_classes.contains_key(class_name) => {
+                Some(class_name.to_string())
+            }
             class_name if self.extern_classes.contains_key(class_name) => {
                 Some(class_name.to_string())
             }
@@ -2473,6 +2734,8 @@ impl Checker {
             crate::parser::ast::TypeExpr::Int => Ok(PhpType::Int),
             crate::parser::ast::TypeExpr::Float => Ok(PhpType::Float),
             crate::parser::ast::TypeExpr::Bool => Ok(PhpType::Bool),
+            crate::parser::ast::TypeExpr::Str => Ok(PhpType::Str),
+            crate::parser::ast::TypeExpr::Void => Ok(PhpType::Void),
             crate::parser::ast::TypeExpr::Nullable(inner) => {
                 let inner_ty = self.resolve_type_expr(inner, span)?;
                 Ok(self.normalize_union_type(vec![inner_ty, PhpType::Void]))
@@ -2486,12 +2749,14 @@ impl Checker {
             }
             crate::parser::ast::TypeExpr::Ptr(target) => {
                 let normalized = match target {
-                    Some(name) => self.normalize_pointer_target_type(name.as_str()).ok_or_else(|| {
-                        CompileError::new(
-                            span,
-                            &format!("Unknown pointer target type: {}", name.as_str()),
-                        )
-                    })?,
+                    Some(name) => self
+                        .normalize_pointer_target_type(name.as_str())
+                        .ok_or_else(|| {
+                            CompileError::new(
+                                span,
+                                &format!("Unknown pointer target type: {}", name.as_str()),
+                            )
+                        })?,
                     None => return Ok(PhpType::Pointer(None)),
                 };
                 Ok(PhpType::Pointer(Some(normalized)))
@@ -2506,25 +2771,26 @@ impl Checker {
                 }
                 Ok(PhpType::Buffer(Box::new(inner_ty)))
             }
-            crate::parser::ast::TypeExpr::Named(name) => {
-                match name.as_str() {
-                    "string" => Ok(PhpType::Str),
-                    "mixed" => Ok(PhpType::Mixed),
-                    "callable" => Ok(PhpType::Callable),
-                    "void" => Ok(PhpType::Void),
-                    "array" => Ok(PhpType::Array(Box::new(PhpType::Int))),
-                    _ if self.classes.contains_key(name.as_str())
-                        || self.interfaces.contains_key(name.as_str())
-                        || self.extern_classes.contains_key(name.as_str()) =>
-                    {
-                        Ok(PhpType::Object(name.as_str().to_string()))
-                    }
-                    _ if self.packed_classes.contains_key(name.as_str()) => {
-                        Ok(PhpType::Packed(name.as_str().to_string()))
-                    }
-                    _ => Err(CompileError::new(span, &format!("Unknown type: {}", name.as_str()))),
+            crate::parser::ast::TypeExpr::Named(name) => match name.as_str() {
+                "string" => Ok(PhpType::Str),
+                "mixed" => Ok(PhpType::Mixed),
+                "callable" => Ok(PhpType::Callable),
+                "void" => Ok(PhpType::Void),
+                "array" => Ok(PhpType::Array(Box::new(PhpType::Int))),
+                _ if self.classes.contains_key(name.as_str())
+                    || self.interfaces.contains_key(name.as_str())
+                    || self.extern_classes.contains_key(name.as_str()) =>
+                {
+                    Ok(PhpType::Object(name.as_str().to_string()))
                 }
-            }
+                _ if self.packed_classes.contains_key(name.as_str()) => {
+                    Ok(PhpType::Packed(name.as_str().to_string()))
+                }
+                _ => Err(CompileError::new(
+                    span,
+                    &format!("Unknown type: {}", name.as_str()),
+                )),
+            },
         }
     }
 
@@ -2765,8 +3031,15 @@ impl Checker {
                 ));
             }
         } else {
-            let return_type = infer_return_type_syntactic(&decl.body);
-            if !Self::callback_type_is_c_compatible(&return_type) {
+            let param_types = self.initial_function_param_types(callback_name, &decl)?;
+            self.resolve_function_signature(callback_name, &decl, param_types)?;
+            let sig = self.functions.get(callback_name).cloned().ok_or_else(|| {
+                CompileError::new(
+                    span,
+                    &format!("Undefined callback function: {}", callback_name),
+                )
+            })?;
+            if !Self::callback_type_is_c_compatible(&sig.return_type) {
                 return Err(CompileError::new(
                     span,
                     &format!(
@@ -2775,22 +3048,19 @@ impl Checker {
                     ),
                 ));
             }
-
-            let params: Vec<(String, PhpType)> = decl
+            if sig
                 .params
                 .iter()
-                .map(|name| (name.clone(), PhpType::Int))
-                .collect();
-            self.functions.insert(
-                callback_name.to_string(),
-                Self::callable_wrapper_sig(&FunctionSig {
-                    params,
-                    defaults: decl.defaults.clone(),
-                    return_type,
-                    ref_params: decl.ref_params.clone(),
-                    variadic: decl.variadic.clone(),
-                }),
-            );
+                .any(|(_, ty)| !Self::callback_type_is_c_compatible(ty))
+            {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "Callback function '{}' uses unsupported C callback types; only int, float, bool, ptr, and void are supported",
+                        callback_name
+                    ),
+                ));
+            }
         }
 
         let _ = decl;
@@ -2807,21 +3077,18 @@ impl Checker {
             CallableTarget::Function(name) => {
                 let function_name = name.as_str();
                 if let Some(sig) = self.functions.get(function_name) {
-                    return Ok(Self::callable_wrapper_sig(sig));
+                    let effective_sig =
+                        Self::callable_sig_for_declared_params(sig, &sig.declared_params);
+                    return Ok(Self::callable_wrapper_sig(&effective_sig));
                 }
-                if let Some(decl) = self.fn_decls.get(function_name) {
-                    return Ok(Self::callable_wrapper_sig(&FunctionSig {
-                        params: decl
-                            .params
-                            .iter()
-                            .cloned()
-                            .map(|name| (name, PhpType::Mixed))
-                            .collect(),
-                        defaults: decl.defaults.clone(),
-                        return_type: infer_return_type_syntactic(&decl.body),
-                        ref_params: decl.ref_params.clone(),
-                        variadic: decl.variadic.clone(),
-                    }));
+                if let Some(decl) = self.fn_decls.get(function_name).cloned() {
+                    let param_types = self.initial_function_param_types(function_name, &decl)?;
+                    self.resolve_function_signature(function_name, &decl, param_types)?;
+                    if let Some(sig) = self.functions.get(function_name) {
+                        let effective_sig =
+                            Self::callable_sig_for_declared_params(sig, &sig.declared_params);
+                        return Ok(Self::callable_wrapper_sig(&effective_sig));
+                    }
                 }
                 if let Some(sig) = self.extern_functions.get(function_name) {
                     return Ok(FunctionSig {
@@ -2829,6 +3096,7 @@ impl Checker {
                         defaults: vec![None; sig.params.len()],
                         return_type: sig.return_type.clone(),
                         ref_params: vec![false; sig.params.len()],
+                        declared_params: vec![true; sig.params.len()],
                         variadic: None,
                     });
                 }
@@ -2845,7 +3113,10 @@ impl Checker {
                 }
                 Err(CompileError::new(
                     span,
-                    &format!("Undefined function for first-class callable: {}", function_name),
+                    &format!(
+                        "Undefined function for first-class callable: {}",
+                        function_name
+                    ),
                 ))
             }
             CallableTarget::StaticMethod { receiver, method } => {
@@ -2927,7 +3198,9 @@ impl Checker {
                         ));
                     }
                 }
-                Ok(Self::callable_wrapper_sig(sig))
+                let declared_flags = Self::declared_method_param_flags(class_info, method, true);
+                let effective_sig = Self::callable_sig_for_declared_params(sig, &declared_flags);
+                Ok(Self::callable_wrapper_sig(&effective_sig))
             }
             CallableTarget::Method { object, method } => {
                 let object_ty = self.infer_type(object, env)?;
@@ -2946,6 +3219,41 @@ impl Checker {
                 }
             }
         }
+    }
+
+    fn specialize_first_class_callable_target(
+        &mut self,
+        target: &CallableTarget,
+        args: &[Expr],
+        span: crate::span::Span,
+        env: &TypeEnv,
+    ) -> Result<FunctionSig, CompileError> {
+        let base_sig = self.resolve_first_class_callable_sig(target, span, env)?;
+        if base_sig.declared_params.iter().all(|is_declared| *is_declared) {
+            return Ok(base_sig);
+        }
+        match target {
+            CallableTarget::Function(name) => {
+                if crate::name_resolver::is_builtin_function(name.as_str()) {
+                    return Ok(base_sig);
+                }
+                self.check_function_call(name.as_str(), args, span, env)?;
+                self.specialize_untyped_function_params(name.as_str(), args, env)?;
+            }
+            CallableTarget::StaticMethod { receiver, method } => {
+                let call_expr = Expr::new(
+                    ExprKind::StaticMethodCall {
+                        receiver: receiver.clone(),
+                        method: method.clone(),
+                        args: args.to_vec(),
+                    },
+                    span,
+                );
+                self.infer_type(&call_expr, env)?;
+            }
+            CallableTarget::Method { .. } => {}
+        }
+        self.resolve_first_class_callable_sig(target, span, env)
     }
 
     fn infer_first_class_callable_target(
@@ -2975,24 +3283,41 @@ impl Checker {
                 Ok(Some(FunctionSig {
                     params: params
                         .iter()
-                        .map(|(name, _, _)| (name.clone(), PhpType::Mixed))
+                        .map(|(name, type_ann, _, _)| {
+                            let ty = match type_ann {
+                                Some(type_ann) => self.resolve_declared_param_type_hint(
+                                    type_ann,
+                                    expr.span,
+                                    &format!("Closure parameter ${}", name),
+                                )?,
+                                None => PhpType::Mixed,
+                            };
+                            Ok((name.clone(), ty))
+                        })
                         .chain(
                             variadic
                                 .iter()
                                 .cloned()
-                                .map(|name| (name, PhpType::Array(Box::new(PhpType::Mixed)))),
+                                .map(|name| Ok((name, PhpType::Array(Box::new(PhpType::Mixed))))),
                         )
+                        .collect::<Result<Vec<_>, CompileError>>()?,
+                    defaults: params
+                        .iter()
+                        .map(|(_, _, default, _)| default.clone())
                         .collect(),
-                    defaults: params.iter().map(|(_, default, _)| default.clone()).collect(),
                     return_type,
-                    ref_params: params.iter().map(|(_, _, is_ref)| *is_ref).collect(),
+                    ref_params: params.iter().map(|(_, _, _, is_ref)| *is_ref).collect(),
+                    declared_params: params
+                        .iter()
+                        .map(|(_, type_ann, _, _)| type_ann.is_some())
+                        .chain(variadic.iter().map(|_| false))
+                        .collect(),
                     variadic: variadic.clone(),
                 }))
             }
-            ExprKind::FirstClassCallable(target) => {
-                self.resolve_first_class_callable_sig(target, expr.span, env)
-                    .map(Some)
-            }
+            ExprKind::FirstClassCallable(target) => self
+                .resolve_first_class_callable_sig(target, expr.span, env)
+                .map(Some),
             ExprKind::Variable(var_name) => Ok(self.callable_sigs.get(var_name).cloned()),
             _ => Ok(None),
         }
@@ -3100,10 +3425,9 @@ impl Checker {
 
     pub fn check_stmt(&mut self, stmt: &Stmt, env: &mut TypeEnv) -> Result<(), CompileError> {
         match &stmt.kind {
-            StmtKind::IfDef { .. } => Err(CompileError::new(
-                stmt.span,
-                "Unresolved ifdef statement",
-            )),
+            StmtKind::IfDef { .. } => {
+                Err(CompileError::new(stmt.span, "Unresolved ifdef statement"))
+            }
             StmtKind::NamespaceDecl { .. }
             | StmtKind::NamespaceBlock { .. }
             | StmtKind::UseDecl { .. } => Err(CompileError::new(
@@ -3121,13 +3445,30 @@ impl Checker {
                         self.closure_return_types
                             .insert(name.clone(), sig.return_type.clone());
                         self.callable_sigs.insert(name.clone(), sig);
+                        if let ExprKind::FirstClassCallable(target) = &value.kind {
+                            self.first_class_callable_targets
+                                .insert(name.clone(), target.clone());
+                        } else if let ExprKind::Variable(src_name) = &value.kind {
+                            if let Some(target) =
+                                self.first_class_callable_targets.get(src_name).cloned()
+                            {
+                                self.first_class_callable_targets
+                                    .insert(name.clone(), target);
+                            } else {
+                                self.first_class_callable_targets.remove(name);
+                            }
+                        } else {
+                            self.first_class_callable_targets.remove(name);
+                        }
                     } else {
                         self.closure_return_types.remove(name);
                         self.callable_sigs.remove(name);
+                        self.first_class_callable_targets.remove(name);
                     }
                 } else {
                     self.closure_return_types.remove(name);
                     self.callable_sigs.remove(name);
+                    self.first_class_callable_targets.remove(name);
                 }
                 if let Some(existing) = env.get(name) {
                     let merged_ty = self.merged_assignment_type(existing, &ty);
@@ -3176,7 +3517,11 @@ impl Checker {
                             .unwrap_or(val_ty);
                         env.insert(array.clone(), PhpType::Array(Box::new(merged_ty)));
                     }
-                } else if let PhpType::AssocArray { key, value: existing_value } = &arr_ty {
+                } else if let PhpType::AssocArray {
+                    key,
+                    value: existing_value,
+                } = &arr_ty
+                {
                     let merged_value = if **existing_value == val_ty {
                         *existing_value.clone()
                     } else {
@@ -3362,7 +3707,9 @@ impl Checker {
             StmtKind::Throw(expr) => {
                 let thrown_ty = self.infer_type(expr, env)?;
                 match thrown_ty {
-                    PhpType::Object(type_name) if self.object_type_implements_throwable(&type_name) => {
+                    PhpType::Object(type_name)
+                        if self.object_type_implements_throwable(&type_name) =>
+                    {
                         Ok(())
                     }
                     PhpType::Object(_) => Err(CompileError::new(
@@ -3782,7 +4129,9 @@ impl Checker {
             ExprKind::Throw(inner) => {
                 let thrown_ty = self.infer_type(inner, env)?;
                 match thrown_ty {
-                    PhpType::Object(type_name) if self.object_type_implements_throwable(&type_name) => {
+                    PhpType::Object(type_name)
+                        if self.object_type_implements_throwable(&type_name) =>
+                    {
                         Ok(PhpType::Void)
                     }
                     PhpType::Object(_) => Err(CompileError::new(
@@ -3853,9 +4202,11 @@ impl Checker {
                     Ok(wider_type_syntactic(&vt, &dt))
                 }
             }
-            ExprKind::ConstRef(name) => self.constants.get(name.as_str()).cloned().ok_or_else(|| {
-                CompileError::new(expr.span, &format!("Undefined constant: {}", name))
-            }),
+            ExprKind::ConstRef(name) => {
+                self.constants.get(name.as_str()).cloned().ok_or_else(|| {
+                    CompileError::new(expr.span, &format!("Undefined constant: {}", name))
+                })
+            }
             ExprKind::FirstClassCallable(target) => {
                 self.infer_first_class_callable_target(target, expr.span, env)?;
                 Ok(PhpType::Callable)
@@ -3878,17 +4229,33 @@ impl Checker {
                 }
                 // Type-check the closure body in its own environment
                 let mut closure_env: TypeEnv = env.clone();
-                // Add params as Int (simple default for now — they'll be refined at call site)
-                for (p, _default, _is_ref) in params {
-                    closure_env.insert(p.clone(), PhpType::Int);
+                for (p, type_ann, default, _is_ref) in params {
+                    let ty = match type_ann {
+                        Some(type_ann) => {
+                            let declared_ty = self.resolve_declared_param_type_hint(
+                                type_ann,
+                                expr.span,
+                                &format!("Closure parameter ${}", p),
+                            )?;
+                            self.validate_declared_default_type(
+                                &declared_ty,
+                                default.as_ref(),
+                                expr.span,
+                                &format!("Closure parameter ${}", p),
+                            )?;
+                            declared_ty
+                        }
+                        None => PhpType::Int,
+                    };
+                    closure_env.insert(p.clone(), ty);
                 }
                 if let Some(vp) = variadic {
                     closure_env.insert(vp.clone(), PhpType::Array(Box::new(PhpType::Int)));
                 }
                 let closure_ref_params: Vec<String> = params
                     .iter()
-                    .filter(|(_, _, is_ref)| *is_ref)
-                    .map(|(name, _, _)| name.clone())
+                    .filter(|(_, _, _, is_ref)| *is_ref)
+                    .map(|(name, _, _, _)| name.clone())
                     .collect();
                 self.with_local_storage_context(closure_ref_params, |checker| {
                     for stmt in body {
@@ -3919,6 +4286,25 @@ impl Checker {
                     ));
                 }
                 if let Some(sig) = self.callable_sigs.get(var).cloned() {
+                    if let Some(target) = self.first_class_callable_targets.get(var).cloned() {
+                        let specialized_sig = self.specialize_first_class_callable_target(
+                            &target,
+                            args,
+                            expr.span,
+                            env,
+                        )?;
+                        self.callable_sigs
+                            .insert(var.clone(), specialized_sig.clone());
+                        self.closure_return_types
+                            .insert(var.clone(), specialized_sig.return_type.clone());
+                        return self.check_known_callable_call(
+                            &specialized_sig,
+                            args,
+                            expr.span,
+                            env,
+                            &format!("callable ${}", var),
+                        );
+                    }
                     return self.check_known_callable_call(
                         &sig,
                         args,
@@ -3950,6 +4336,29 @@ impl Checker {
                 match &callee.kind {
                     ExprKind::Variable(var_name) => {
                         if let Some(sig) = self.callable_sigs.get(var_name).cloned() {
+                            if let Some(target) =
+                                self.first_class_callable_targets.get(var_name).cloned()
+                            {
+                                let specialized_sig = self.specialize_first_class_callable_target(
+                                    &target,
+                                    args,
+                                    expr.span,
+                                    env,
+                                )?;
+                                self.callable_sigs
+                                    .insert(var_name.clone(), specialized_sig.clone());
+                                self.closure_return_types.insert(
+                                    var_name.clone(),
+                                    specialized_sig.return_type.clone(),
+                                );
+                                return self.check_known_callable_call(
+                                    &specialized_sig,
+                                    args,
+                                    expr.span,
+                                    env,
+                                    &format!("callable ${}", var_name),
+                                );
+                            }
                             return self.check_known_callable_call(
                                 &sig,
                                 args,
@@ -3960,7 +4369,12 @@ impl Checker {
                         }
                     }
                     ExprKind::FirstClassCallable(target) => {
-                        let sig = self.resolve_first_class_callable_sig(target, expr.span, env)?;
+                        let sig = self.specialize_first_class_callable_target(
+                            target,
+                            args,
+                            expr.span,
+                            env,
+                        )?;
                         return self.check_known_callable_call(
                             &sig,
                             args,
@@ -4144,12 +4558,16 @@ impl Checker {
                         ));
                     }
                     if let Some(sig) = class_info.methods.get("__construct") {
-                        self.check_call_arity(
-                            "Constructor",
-                            &format!("{}::__construct", class_name),
-                            sig,
+                        let declared_flags =
+                            Self::declared_method_param_flags(class_info, "__construct", false);
+                        let effective_sig =
+                            Self::callable_sig_for_declared_params(sig, &declared_flags);
+                        self.check_known_callable_call(
+                            &effective_sig,
                             args,
                             expr.span,
+                            env,
+                            &format!("Constructor '{}::__construct'", class_name),
                         )?;
                     } else if !args.is_empty() {
                         return Err(CompileError::new(
@@ -4178,7 +4596,10 @@ impl Checker {
                 }
                 Ok(PhpType::Object(class_name))
             }
-            ExprKind::EnumCase { enum_name, case_name } => {
+            ExprKind::EnumCase {
+                enum_name,
+                case_name,
+            } => {
                 let enum_name = enum_name.as_str().to_string();
                 let enum_info = self.enums.get(enum_name.as_str()).ok_or_else(|| {
                     CompileError::new(expr.span, &format!("Undefined enum: {}", enum_name))
@@ -4284,12 +4705,16 @@ impl Checker {
                                     ));
                                 }
                             }
-                            self.check_call_arity(
-                                "Method",
-                                &format!("{}::{}", class_name, method),
-                                sig,
+                            let declared_flags =
+                                Self::declared_method_param_flags(class_info, method, false);
+                            let effective_sig =
+                                Self::callable_sig_for_declared_params(sig, &declared_flags);
+                            self.check_known_callable_call(
+                                &effective_sig,
                                 args,
                                 expr.span,
+                                env,
+                                &format!("Method {}::{}", class_name, method),
                             )?;
                         } else {
                             return Err(CompileError::new(
@@ -4305,6 +4730,13 @@ impl Checker {
                         .and_then(|class_info| class_info.method_impl_classes.get(method))
                         .cloned()
                         .unwrap_or_else(|| class_name.clone());
+                    let declared_flags = self
+                        .classes
+                        .get(&impl_class_name)
+                        .map(|class_info| {
+                            Self::declared_method_param_flags(class_info, method, false)
+                        })
+                        .unwrap_or_default();
                     if let Some(class_info) = self.classes.get_mut(&impl_class_name) {
                         if let Some(sig) = class_info.methods.get_mut(method) {
                             let regular_param_count = if sig.variadic.is_some() {
@@ -4314,6 +4746,7 @@ impl Checker {
                             };
                             for (i, arg_ty) in arg_types.iter().enumerate() {
                                 if i < regular_param_count
+                                    && !declared_flags.get(i).copied().unwrap_or(false)
                                     && sig.params[i].1 == PhpType::Int
                                     && *arg_ty != PhpType::Int
                                 {
@@ -4325,8 +4758,11 @@ impl Checker {
                                 for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
                                     elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
                                 }
-                                if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
-                                    **existing_elem_ty = wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
+                                if let Some((_, PhpType::Array(existing_elem_ty))) =
+                                    sig.params.last_mut()
+                                {
+                                    **existing_elem_ty =
+                                        wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
                                 }
                             }
                             return Ok(sig.return_type.clone());
@@ -4388,7 +4824,9 @@ impl Checker {
                 };
                 let class_name = resolved_class_name.as_str();
                 if let Some(enum_info) = self.enums.get(class_name).cloned() {
-                    return self.check_enum_static_call(&enum_info, class_name, method, args, env, expr.span);
+                    return self.check_enum_static_call(
+                        &enum_info, class_name, method, args, env, expr.span,
+                    );
                 }
                 if let Some(class_info) = self.classes.get(class_name) {
                     if let Some(sig) = class_info.static_methods.get(method) {
@@ -4411,12 +4849,16 @@ impl Checker {
                                 ));
                             }
                         }
-                        self.check_call_arity(
-                            "Static method",
-                            &format!("{}::{}", class_name, method),
-                            sig,
+                        let declared_flags =
+                            Self::declared_method_param_flags(class_info, method, true);
+                        let effective_sig =
+                            Self::callable_sig_for_declared_params(sig, &declared_flags);
+                        self.check_known_callable_call(
+                            &effective_sig,
                             args,
                             expr.span,
+                            env,
+                            &format!("Static method {}::{}", class_name, method),
                         )?;
                     } else if parent_call || self_call {
                         if self.current_method_is_static {
@@ -4453,12 +4895,21 @@ impl Checker {
                                 ));
                             }
                         }
-                        self.check_call_arity(
-                            if parent_call { "Parent method" } else { "Self method" },
-                            &format!("{}::{}", class_name, method),
-                            sig,
+                        let declared_flags =
+                            Self::declared_method_param_flags(class_info, method, false);
+                        let effective_sig =
+                            Self::callable_sig_for_declared_params(sig, &declared_flags);
+                        self.check_known_callable_call(
+                            &effective_sig,
                             args,
                             expr.span,
+                            env,
+                            &format!(
+                                "{} method {}::{}",
+                                if parent_call { "Parent" } else { "Self" },
+                                class_name,
+                                method
+                            ),
                         )?;
                     } else if class_info.methods.contains_key(method) {
                         return Err(CompileError::new(
@@ -4490,6 +4941,11 @@ impl Checker {
                 } else {
                     String::new()
                 };
+                let static_declared_flags = self
+                    .classes
+                    .get(class_name)
+                    .map(|class_info| Self::declared_method_param_flags(class_info, method, true))
+                    .unwrap_or_default();
                 if let Some(class_info) = self.classes.get_mut(class_name) {
                     if let Some(sig) = class_info.static_methods.get_mut(method) {
                         let regular_param_count = if sig.variadic.is_some() {
@@ -4499,6 +4955,7 @@ impl Checker {
                         };
                         for (i, arg_ty) in arg_types.iter().enumerate() {
                             if i < regular_param_count
+                                && !static_declared_flags.get(i).copied().unwrap_or(false)
                                 && sig.params[i].1 == PhpType::Int
                                 && *arg_ty != PhpType::Int
                             {
@@ -4510,14 +4967,24 @@ impl Checker {
                             for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
                                 elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
                             }
-                            if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
-                                **existing_elem_ty = wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
+                            if let Some((_, PhpType::Array(existing_elem_ty))) =
+                                sig.params.last_mut()
+                            {
+                                **existing_elem_ty =
+                                    wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
                             }
                         }
                         return Ok(sig.return_type.clone());
                     }
                 }
                 if parent_call || self_call {
+                    let instance_declared_flags = self
+                        .classes
+                        .get(&direct_impl_class_name)
+                        .map(|class_info| {
+                            Self::declared_method_param_flags(class_info, method, false)
+                        })
+                        .unwrap_or_default();
                     if let Some(sig) = self
                         .classes
                         .get_mut(&direct_impl_class_name)
@@ -4530,6 +4997,7 @@ impl Checker {
                         };
                         for (i, arg_ty) in arg_types.iter().enumerate() {
                             if i < regular_param_count
+                                && !instance_declared_flags.get(i).copied().unwrap_or(false)
                                 && sig.params[i].1 == PhpType::Int
                                 && *arg_ty != PhpType::Int
                             {
@@ -4541,8 +5009,11 @@ impl Checker {
                             for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
                                 elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
                             }
-                            if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
-                                **existing_elem_ty = wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
+                            if let Some((_, PhpType::Array(existing_elem_ty))) =
+                                sig.params.last_mut()
+                            {
+                                **existing_elem_ty =
+                                    wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
                             }
                         }
                         return Ok(sig.return_type.clone());

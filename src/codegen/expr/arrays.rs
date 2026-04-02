@@ -509,6 +509,8 @@ fn resolve_buffer_element_type(type_expr: &TypeExpr, ctx: &Context) -> PhpType {
             }
         }
         TypeExpr::Buffer(inner) => PhpType::Buffer(Box::new(resolve_buffer_element_type(inner, ctx))),
+        TypeExpr::Str => PhpType::Str,
+        TypeExpr::Void => PhpType::Void,
         TypeExpr::Nullable(_) | TypeExpr::Union(_) => PhpType::Int,
     }
 }
