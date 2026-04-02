@@ -1,4 +1,4 @@
-mod builtins;
+pub(crate) mod builtins;
 mod functions;
 
 use std::collections::{HashMap, HashSet};

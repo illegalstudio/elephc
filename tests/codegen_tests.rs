@@ -1126,6 +1126,66 @@ echo strlen("bc");
 }
 
 #[test]
+fn test_namespace_class_can_call_global_extern_function() {
+    let out = compile_and_run(
+        r#"<?php
+extern function getpid(): int;
+
+namespace Demo\App;
+
+class Probe {
+    public function ok(): int {
+        return getpid() > 0 ? 1 : 0;
+    }
+}
+
+$probe = new Probe();
+echo $probe->ok();
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_namespace_class_can_call_pointer_builtins_without_global_prefix() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo\App;
+
+class Probe {
+    public function ok(): int {
+        $p = ptr_null();
+        return ptr_is_null($p);
+    }
+}
+
+$probe = new Probe();
+echo $probe->ok();
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_namespace_class_can_call_string_builtin_without_global_prefix() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo\App;
+
+class Probe {
+    public function ok(): int {
+        return strlen("hello");
+    }
+}
+
+$probe = new Probe();
+echo $probe->ok();
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+#[test]
 fn test_namespace_include_preserves_class_namespace_context() {
     let out = compile_and_run_files(
         &[
