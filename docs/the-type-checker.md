@@ -170,7 +170,7 @@ When the type checker encounters a function declaration, it:
 2. **Creates a local type environment** for the function body (separate from global scope)
 3. **Resolves declared parameter types** when type hints are present, and otherwise falls back to the existing defaults / inference path
 4. **Resolves the declared return type** when present, and otherwise infers it from `return` expressions
-5. **Validates defaults, call sites, and return statements** against the declared types, including PHP-style default parameters such as `int $x = 10`
+5. **Validates defaults, call sites, and return statements** against the declared types, including PHP-style default parameters such as `int $x = 10` and named-argument reordering against the declared parameter names
 6. **Stores the `FunctionSig`** — parameter count, parameter types, return type, reference parameters, and variadic parameter
 
 The `FunctionSig` struct:
