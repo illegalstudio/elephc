@@ -216,74 +216,25 @@ class WallRenderer {
         }
 
         int $light = $this->wallLightForSeg($map, $segIndex);
-        int $distance = intdiv($leftDepth + $rightDepth, 2);
         int $segDx = $worldX2 - $worldX1;
         int $segDy = $worldY2 - $worldY1;
         bool $mostlyVertical = $this->absoluteValue($segDy) > $this->absoluteValue($segDx);
 
-        // exponential distance fog: fade = dist² / (dist² + k²), k=800
-        int $distSq = $distance * $distance;
-        int $fogDenom = $distSq + 640000;
-        int $fogFactor = 255;
-        if ($fogDenom > 0) {
-            $fogFactor = 255 - intdiv($distSq * 220, $fogDenom);
-        }
-        if ($fogFactor < 35) {
-            $fogFactor = 35;
-        }
-
-        // sector light drives the base brightness strongly
-        int $litR = 20 + intdiv($light * 140, 255);
-        int $litG = 22 + intdiv($light * 150, 255);
-        int $litB = 28 + intdiv($light * 130, 255);
-
-        // wall orientation tint
+        // base color from sector light + wall orientation (fog applied per-column)
+        int $baseR = 20 + intdiv($light * 140, 255);
+        int $baseG = 22 + intdiv($light * 150, 255);
+        int $baseB = 28 + intdiv($light * 130, 255);
         if ($mostlyVertical) {
-            $litG += 6;
-            $litB += 10;
+            $baseG += 6;
+            $baseB += 10;
         } else {
-            $litR += 10;
-            $litG += 4;
+            $baseR += 10;
+            $baseG += 4;
         }
         if ($map->segs[$segIndex]->direction != 0) {
-            $litR += 4;
-            $litB += 6;
+            $baseR += 4;
+            $baseB += 6;
         }
-
-        // apply fog
-        $litR = intdiv($litR * $fogFactor, 255);
-        $litG = intdiv($litG * $fogFactor, 255);
-        $litB = intdiv($litB * $fogFactor, 255);
-
-        // mid wall color (one-sided walls: main surface)
-        int $midRed = $litR;
-        int $midGreen = $litG;
-        int $midBlue = $litB;
-        if ($oneSided) {
-            $midRed += 6;
-            $midGreen += 4;
-        }
-
-        // upper step: cooler, bluish tint (exposed to sky)
-        int $upperRed = intdiv($litR * 3, 4);
-        int $upperGreen = intdiv($litG * 4, 5);
-        int $upperBlue = $litB + intdiv((255 - $litB), 4);
-
-        // lower step: warmer, brownish tint (near ground)
-        int $lowerRed = $litR + intdiv((255 - $litR), 5);
-        int $lowerGreen = intdiv($litG * 4, 5);
-        int $lowerBlue = intdiv($litB * 3, 5);
-
-        // clamp all colors
-        $midRed = $this->clampColor($midRed);
-        $midGreen = $this->clampColor($midGreen);
-        $midBlue = $this->clampColor($midBlue);
-        $upperRed = $this->clampColor($upperRed);
-        $upperGreen = $this->clampColor($upperGreen);
-        $upperBlue = $this->clampColor($upperBlue);
-        $lowerRed = $this->clampColor($lowerRed);
-        $lowerGreen = $this->clampColor($lowerGreen);
-        $lowerBlue = $this->clampColor($lowerBlue);
 
         if ($leftX < $viewportX) {
             $leftX = $viewportX;
@@ -328,7 +279,23 @@ class WallRenderer {
                 continue;
             }
 
+            // per-column exponential fog
+            int $dSq = $depth * $depth;
+            int $fogD = $dSq + 640000;
+            int $fog = 255 - intdiv($dSq * 220, $fogD);
+            if ($fog < 35) {
+                $fog = 35;
+            }
+
+            // apply fog to base color for this column
+            int $litR = intdiv($baseR * $fog, 255);
+            int $litG = intdiv($baseG * $fog, 255);
+            int $litB = intdiv($baseB * $fog, 255);
+
             if ($oneSided) {
+                int $midR = $this->clampColor($litR + 6);
+                int $midG = $this->clampColor($litG + 4);
+                int $midB = $this->clampColor($litB);
                 int $top = $this->projection->projectScreenY(
                     $frontCeiling,
                     $cameraEyeZ,
@@ -348,11 +315,15 @@ class WallRenderer {
                 $this->drawClippedSpan(
                     $sdl, $x, $top, $bottom,
                     $colCeil, $colFloor,
-                    $midRed, $midGreen, $midBlue
+                    $midR, $midG, $midB
                 );
                 $clipData[$base] = $depth;
             } else {
                 if ($frontCeiling !== $backCeiling) {
+                    // upper step: cooler bluish tint
+                    int $upR = $this->clampColor(intdiv($litR * 3, 4));
+                    int $upG = $this->clampColor(intdiv($litG * 4, 5));
+                    int $upB = $this->clampColor($litB + intdiv((255 - $litB), 4));
                     int $top = $this->projection->projectScreenY(
                         $this->higherOf($frontCeiling, $backCeiling),
                         $cameraEyeZ,
@@ -372,10 +343,14 @@ class WallRenderer {
                     $this->drawClippedSpan(
                         $sdl, $x, $top, $bottom,
                         $colCeil, $colFloor,
-                        $upperRed, $upperGreen, $upperBlue
+                        $upR, $upG, $upB
                     );
                 }
                 if ($frontFloor !== $backFloor) {
+                    // lower step: warmer brownish tint
+                    int $loR = $this->clampColor($litR + intdiv((255 - $litR), 5));
+                    int $loG = $this->clampColor(intdiv($litG * 4, 5));
+                    int $loB = $this->clampColor(intdiv($litB * 3, 5));
                     int $top = $this->projection->projectScreenY(
                         $this->higherOf($frontFloor, $backFloor),
                         $cameraEyeZ,
@@ -395,7 +370,7 @@ class WallRenderer {
                     $this->drawClippedSpan(
                         $sdl, $x, $top, $bottom,
                         $colCeil, $colFloor,
-                        $lowerRed, $lowerGreen, $lowerBlue
+                        $loR, $loG, $loB
                     );
                 }
                 if ($backFloor >= $backCeiling) {
