@@ -21,7 +21,8 @@ class Renderer {
 
     public function render(SDL $sdl, Config $config, MapData $map, Camera $camera): void {
         $order = $this->bspWalker->walk($map, $camera);
-        $this->walls->render($sdl, $config, $map, $camera, $order);
+        int $cameraSubSector = $this->bspWalker->findSubSectorIndex($map, $camera);
+        $this->walls->render($sdl, $config, $map, $camera, $order, $cameraSubSector);
         $this->minimap->renderInset($sdl, $config, $map, $camera, $order);
     }
 }

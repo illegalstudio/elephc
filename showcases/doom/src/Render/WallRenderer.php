@@ -8,7 +8,13 @@ use Showcases\Doom\Player\Camera;
 use Showcases\Doom\SDL\SDL;
 
 class WallRenderer {
-    public function render(SDL $sdl, Config $config, MapData $map, Camera $camera, $subSectorOrder): void {
+    public $projection;
+
+    public function __construct() {
+        $this->projection = new Projection();
+    }
+
+    public function render(SDL $sdl, Config $config, MapData $map, Camera $camera, $subSectorOrder, int $cameraSubSector): void {
         if (!$map->isValid() || $map->segCount <= 0 || $map->sidedefCount <= 0 || $map->sectorCount <= 0) {
             return;
         }
@@ -21,6 +27,7 @@ class WallRenderer {
         int $horizonY = intdiv($viewportHeight, 2);
         int $focal = intdiv($viewportWidth * 3, 4);
         int $nearPlane = 12;
+        int $cameraEyeZ = $this->projection->cameraEyeZ($map, $cameraSubSector);
 
         $this->renderFlatBackground(
             $sdl,
@@ -52,7 +59,9 @@ class WallRenderer {
                             $centerX,
                             $horizonY,
                             $focal,
-                            $nearPlane
+                            $nearPlane,
+                            $cameraEyeZ,
+                            $viewportHeight
                         );
                     }
                     $segOffset += 1;
@@ -73,7 +82,9 @@ class WallRenderer {
         int $centerX,
         int $horizonY,
         int $focal,
-        int $nearPlane
+        int $nearPlane,
+        int $cameraEyeZ,
+        int $viewportHeight
     ): void {
         int $startIndex = $map->segs[$segIndex]->start_vertex;
         int $endIndex = $map->segs[$segIndex]->end_vertex;
@@ -155,9 +166,20 @@ class WallRenderer {
             return;
         }
 
-        int $height = $this->wallHeightForSeg($map, $segIndex);
-        if ($height <= 0) {
-            $height = 96;
+        int $frontSectorIndex = $this->frontSectorIndexForSeg($map, $segIndex);
+        if ($frontSectorIndex < 0 || $frontSectorIndex >= $map->sectorCount) {
+            return;
+        }
+
+        int $frontFloor = $map->sectors[$frontSectorIndex]->floor_height;
+        int $frontCeiling = $map->sectors[$frontSectorIndex]->ceiling_height;
+        int $backSectorIndex = $this->backSectorIndexForSeg($map, $segIndex);
+        bool $oneSided = $backSectorIndex < 0 || $backSectorIndex >= $map->sectorCount;
+        int $backFloor = $frontFloor;
+        int $backCeiling = $frontCeiling;
+        if (!$oneSided) {
+            $backFloor = $map->sectors[$backSectorIndex]->floor_height;
+            $backCeiling = $map->sectors[$backSectorIndex]->ceiling_height;
         }
 
         int $light = $this->wallLightForSeg($map, $segIndex);
@@ -173,7 +195,7 @@ class WallRenderer {
             $baseRed += 18;
             $baseGreen += 12;
         }
-        if ($this->isTwoSidedSeg($map, $segIndex)) {
+        if (!$oneSided) {
             $baseBlue += 16;
             $baseGreen += 8;
         }
@@ -217,19 +239,94 @@ class WallRenderer {
                 $depth = $nearPlane;
             }
 
-            int $projectedHeight = intdiv($height * $focal, $depth);
-            int $top = $viewportY + $horizonY - intdiv($projectedHeight, 2);
-            int $bottom = $viewportY + $horizonY + intdiv($projectedHeight, 2);
-
-            if ($top < $viewportY) {
-                $top = $viewportY;
+            if ($oneSided) {
+                int $top = $this->projection->projectScreenY(
+                    $frontCeiling,
+                    $cameraEyeZ,
+                    $depth,
+                    $viewportY,
+                    $horizonY,
+                    $focal
+                );
+                int $bottom = $this->projection->projectScreenY(
+                    $frontFloor,
+                    $cameraEyeZ,
+                    $depth,
+                    $viewportY,
+                    $horizonY,
+                    $focal
+                );
+                $this->drawVerticalSpan(
+                    $sdl,
+                    $x,
+                    $top,
+                    $bottom,
+                    $viewportY,
+                    $viewportHeight,
+                    $baseRed,
+                    $baseGreen,
+                    $baseBlue
+                );
+            } else {
+                if ($frontCeiling !== $backCeiling) {
+                    int $top = $this->projection->projectScreenY(
+                        $this->higherOf($frontCeiling, $backCeiling),
+                        $cameraEyeZ,
+                        $depth,
+                        $viewportY,
+                        $horizonY,
+                        $focal
+                    );
+                    int $bottom = $this->projection->projectScreenY(
+                        $this->lowerOf($frontCeiling, $backCeiling),
+                        $cameraEyeZ,
+                        $depth,
+                        $viewportY,
+                        $horizonY,
+                        $focal
+                    );
+                    $this->drawVerticalSpan(
+                        $sdl,
+                        $x,
+                        $top,
+                        $bottom,
+                        $viewportY,
+                        $viewportHeight,
+                        $baseRed,
+                        $baseGreen,
+                        $baseBlue
+                    );
+                }
+                if ($frontFloor !== $backFloor) {
+                    int $top = $this->projection->projectScreenY(
+                        $this->higherOf($frontFloor, $backFloor),
+                        $cameraEyeZ,
+                        $depth,
+                        $viewportY,
+                        $horizonY,
+                        $focal
+                    );
+                    int $bottom = $this->projection->projectScreenY(
+                        $this->lowerOf($frontFloor, $backFloor),
+                        $cameraEyeZ,
+                        $depth,
+                        $viewportY,
+                        $horizonY,
+                        $focal
+                    );
+                    $this->drawVerticalSpan(
+                        $sdl,
+                        $x,
+                        $top,
+                        $bottom,
+                        $viewportY,
+                        $viewportHeight,
+                        $baseRed,
+                        $baseGreen,
+                        $baseBlue
+                    );
+                }
             }
-            if ($bottom >= $viewportY + ($horizonY * 2)) {
-                $bottom = $viewportY + ($horizonY * 2) - 1;
-            }
-
-            $sdl->setDrawColor($baseRed, $baseGreen, $baseBlue);
-            $sdl->drawLine($x, $top, $x, $bottom);
             $x += 1;
         }
     }
@@ -253,34 +350,6 @@ class WallRenderer {
 
             $x += 1;
         }
-    }
-
-    public function wallHeightForSeg(MapData $map, int $segIndex): int {
-        int $frontSectorIndex = $this->frontSectorIndexForSeg($map, $segIndex);
-        if ($frontSectorIndex < 0 || $frontSectorIndex >= $map->sectorCount) {
-            return 96;
-        }
-
-        int $backSectorIndex = $this->backSectorIndexForSeg($map, $segIndex);
-        if ($backSectorIndex < 0 || $backSectorIndex >= $map->sectorCount) {
-            return $map->sectors[$frontSectorIndex]->ceiling_height - $map->sectors[$frontSectorIndex]->floor_height;
-        }
-
-        int $ceilingDelta = $this->absoluteValue(
-            $map->sectors[$frontSectorIndex]->ceiling_height - $map->sectors[$backSectorIndex]->ceiling_height
-        );
-        int $floorDelta = $this->absoluteValue(
-            $map->sectors[$frontSectorIndex]->floor_height - $map->sectors[$backSectorIndex]->floor_height
-        );
-        int $portalHeight = $ceilingDelta;
-        if ($floorDelta > $portalHeight) {
-            $portalHeight = $floorDelta;
-        }
-        if ($portalHeight > 0) {
-            return $portalHeight;
-        }
-
-        return 0;
     }
 
     public function wallLightForSeg(MapData $map, int $segIndex): int {
@@ -349,13 +418,7 @@ class WallRenderer {
     }
 
     public function isOneSidedSeg(MapData $map, int $segIndex): bool {
-        int $linedefIndex = $map->segs[$segIndex]->linedef_index;
-        if ($linedefIndex < 0 || $linedefIndex >= $map->linedefCount) {
-            return false;
-        }
-
-        return $map->linedefs[$linedefIndex]->left_sidedef < 0
-            || $map->linedefs[$linedefIndex]->right_sidedef < 0;
+        return $this->backSectorIndexForSeg($map, $segIndex) < 0;
     }
 
     public function isTwoSidedSeg(MapData $map, int $segIndex): bool {
@@ -363,47 +426,11 @@ class WallRenderer {
     }
 
     public function frontSectorIndexForSeg(MapData $map, int $segIndex): int {
-        int $sidedefIndex = $this->frontSidedefIndexForSeg($map, $segIndex);
-        if ($sidedefIndex < 0 || $sidedefIndex >= $map->sidedefCount) {
-            return -1;
-        }
-
-        return $map->sidedefs[$sidedefIndex]->sector_index;
+        return $this->projection->frontSectorIndexForSeg($map, $segIndex);
     }
 
     public function backSectorIndexForSeg(MapData $map, int $segIndex): int {
-        int $sidedefIndex = $this->backSidedefIndexForSeg($map, $segIndex);
-        if ($sidedefIndex < 0 || $sidedefIndex >= $map->sidedefCount) {
-            return -1;
-        }
-
-        return $map->sidedefs[$sidedefIndex]->sector_index;
-    }
-
-    public function frontSidedefIndexForSeg(MapData $map, int $segIndex): int {
-        int $linedefIndex = $map->segs[$segIndex]->linedef_index;
-        if ($linedefIndex < 0 || $linedefIndex >= $map->linedefCount) {
-            return -1;
-        }
-
-        if ($map->segs[$segIndex]->direction != 0) {
-            return $map->linedefs[$linedefIndex]->left_sidedef;
-        }
-
-        return $map->linedefs[$linedefIndex]->right_sidedef;
-    }
-
-    public function backSidedefIndexForSeg(MapData $map, int $segIndex): int {
-        int $linedefIndex = $map->segs[$segIndex]->linedef_index;
-        if ($linedefIndex < 0 || $linedefIndex >= $map->linedefCount) {
-            return -1;
-        }
-
-        if ($map->segs[$segIndex]->direction != 0) {
-            return $map->linedefs[$linedefIndex]->right_sidedef;
-        }
-
-        return $map->linedefs[$linedefIndex]->left_sidedef;
+        return $this->projection->backSectorIndexForSeg($map, $segIndex);
     }
 
     public function absoluteValue(int $value): int {
@@ -412,6 +439,43 @@ class WallRenderer {
         }
 
         return $value;
+    }
+
+    public function higherOf(int $left, int $right): int {
+        if ($left > $right) {
+            return $left;
+        }
+
+        return $right;
+    }
+
+    public function lowerOf(int $left, int $right): int {
+        if ($left < $right) {
+            return $left;
+        }
+
+        return $right;
+    }
+
+    public function drawVerticalSpan(
+        SDL $sdl,
+        int $x,
+        int $top,
+        int $bottom,
+        int $viewportY,
+        int $viewportHeight,
+        int $red,
+        int $green,
+        int $blue
+    ): void {
+        int $clampedTop = $this->projection->clampScreenY($top, $viewportY, $viewportHeight);
+        int $clampedBottom = $this->projection->clampScreenY($bottom, $viewportY, $viewportHeight);
+        if ($clampedBottom < $clampedTop) {
+            return;
+        }
+
+        $sdl->setDrawColor($red, $green, $blue);
+        $sdl->drawLine($x, $clampedTop, $x, $clampedBottom);
     }
 
     public function directionBucket16(int $angle): int {

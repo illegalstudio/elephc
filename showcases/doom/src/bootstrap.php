@@ -23,6 +23,7 @@ require_once 'Map/MapLoader.php';
 require_once 'Bsp/BspWalker.php';
 
 require_once 'Render/Renderer.php';
+require_once 'Render/Projection.php';
 require_once 'Render/WallRenderer.php';
 require_once 'Render/MinimapRenderer.php';
 
