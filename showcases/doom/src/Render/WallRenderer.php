@@ -162,11 +162,15 @@ class WallRenderer {
 
         int $leftX = $screenX1;
         int $rightScreenX = $screenX2;
+        int $leftSide = $side1;
+        int $rightSide = $side2;
         int $leftDepth = $depth1;
         int $rightDepth = $depth2;
         if ($leftX > $rightScreenX) {
             $leftX = $screenX2;
             $rightScreenX = $screenX1;
+            $leftSide = $side2;
+            $rightSide = $side1;
             $leftDepth = $depth2;
             $rightDepth = $depth1;
         }
@@ -238,12 +242,17 @@ class WallRenderer {
         }
 
         int $x = $leftX;
+        int $screenCenter = $viewportX + $centerX;
         while ($x <= $rightScreenX) {
-            int $span = $rightScreenX - $leftX;
-            int $depth = $leftDepth;
-            if ($span > 0) {
-                $depth = $leftDepth + intdiv(($rightDepth - $leftDepth) * ($x - $leftX), $span);
-            }
+            int $depth = $this->depthForColumn(
+                $leftSide,
+                $leftDepth,
+                $rightSide,
+                $rightDepth,
+                $x,
+                $screenCenter,
+                $focal
+            );
             if ($depth < $nearPlane) {
                 $depth = $nearPlane;
             }
@@ -496,6 +505,36 @@ class WallRenderer {
 
         $sdl->setDrawColor($red, $green, $blue);
         $sdl->drawLine($x, $clampedTop, $x, $clampedBottom);
+    }
+
+    public function depthForColumn(
+        int $sideA,
+        int $depthA,
+        int $sideB,
+        int $depthB,
+        int $screenX,
+        int $screenCenter,
+        int $focal
+    ): int {
+        if ($focal <= 0) {
+            return $depthA;
+        }
+
+        int $ray = intdiv(($screenX - $screenCenter) * 1024, $focal);
+        int $deltaSide = $sideB - $sideA;
+        int $deltaDepth = $depthB - $depthA;
+        int $denominator = (1024 * $deltaSide) - ($ray * $deltaDepth);
+        if ($denominator === 0) {
+            return $depthA;
+        }
+
+        int $numerator = ($ray * $depthA) - (1024 * $sideA);
+        int $depth = $depthA + intdiv($deltaDepth * $numerator, $denominator);
+        if ($depth <= 0) {
+            return $depthA;
+        }
+
+        return $depth;
     }
 
     public function directionBucket16(int $angle): int {
