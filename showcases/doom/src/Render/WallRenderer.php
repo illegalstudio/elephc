@@ -217,94 +217,73 @@ class WallRenderer {
 
         int $light = $this->wallLightForSeg($map, $segIndex);
         int $distance = intdiv($leftDepth + $rightDepth, 2);
-        int $distanceFade = intdiv($distance, 10);
-        if ($distanceFade > 168) {
-            $distanceFade = 168;
-        }
         int $segDx = $worldX2 - $worldX1;
         int $segDy = $worldY2 - $worldY1;
         bool $mostlyVertical = $this->absoluteValue($segDy) > $this->absoluteValue($segDx);
-        int $baseRed = 52 + intdiv($light * 72, 255);
-        int $baseGreen = 58 + intdiv($light * 86, 255);
-        int $baseBlue = 64 + intdiv($light * 70, 255);
+
+        // exponential distance fog: fade = dist² / (dist² + k²), k=800
+        int $distSq = $distance * $distance;
+        int $fogDenom = $distSq + 640000;
+        int $fogFactor = 255;
+        if ($fogDenom > 0) {
+            $fogFactor = 255 - intdiv($distSq * 220, $fogDenom);
+        }
+        if ($fogFactor < 35) {
+            $fogFactor = 35;
+        }
+
+        // sector light drives the base brightness strongly
+        int $litR = 20 + intdiv($light * 140, 255);
+        int $litG = 22 + intdiv($light * 150, 255);
+        int $litB = 28 + intdiv($light * 130, 255);
+
+        // wall orientation tint
         if ($mostlyVertical) {
-            $baseGreen += 8;
-            $baseBlue += 12;
+            $litG += 6;
+            $litB += 10;
         } else {
-            $baseRed += 12;
-            $baseGreen += 8;
+            $litR += 10;
+            $litG += 4;
         }
         if ($map->segs[$segIndex]->direction != 0) {
-            $baseRed += 6;
-            $baseBlue += 10;
+            $litR += 4;
+            $litB += 6;
         }
-        if (!$oneSided) {
-            $baseBlue += 8;
-            $baseGreen += 4;
-        }
-        int $nearBoost = 22 - intdiv($distance, 56);
-        if ($nearBoost < 0) {
-            $nearBoost = 0;
-        }
-        if ($nearBoost > 22) {
-            $nearBoost = 22;
-        }
-        $baseRed += $nearBoost;
-        $baseGreen += intdiv($nearBoost * 4, 5);
-        $baseBlue += intdiv($nearBoost * 3, 5);
-        if ($baseRed > 255) {
-            $baseRed = 255;
-        }
-        if ($baseGreen > 255) {
-            $baseGreen = 255;
-        }
-        if ($baseBlue > 255) {
-            $baseBlue = 255;
-        }
-        $baseRed = $baseRed - intdiv($distanceFade * 6, 5);
-        $baseGreen = $baseGreen - $distanceFade;
-        $baseBlue = $baseBlue - intdiv($distanceFade * 9, 10);
-        if ($baseRed < 24) {
-            $baseRed = 24;
-        }
-        if ($baseGreen < 28) {
-            $baseGreen = 28;
-        }
-        if ($baseBlue < 34) {
-            $baseBlue = 34;
-        }
-        int $midRed = $baseRed;
-        int $midGreen = $baseGreen;
-        int $midBlue = $baseBlue;
-        int $upperRed = $baseRed + 4;
-        int $upperGreen = $baseGreen + 10;
-        int $upperBlue = $baseBlue + 16;
-        int $lowerRed = $baseRed + 16;
-        int $lowerGreen = $baseGreen + 8;
-        int $lowerBlue = $baseBlue;
+
+        // apply fog
+        $litR = intdiv($litR * $fogFactor, 255);
+        $litG = intdiv($litG * $fogFactor, 255);
+        $litB = intdiv($litB * $fogFactor, 255);
+
+        // mid wall color (one-sided walls: main surface)
+        int $midRed = $litR;
+        int $midGreen = $litG;
+        int $midBlue = $litB;
         if ($oneSided) {
-            $midRed += 8;
-            $midGreen += 6;
-            $midBlue += 2;
+            $midRed += 6;
+            $midGreen += 4;
         }
-        if ($upperRed > 255) {
-            $upperRed = 255;
-        }
-        if ($upperGreen > 255) {
-            $upperGreen = 255;
-        }
-        if ($upperBlue > 255) {
-            $upperBlue = 255;
-        }
-        if ($lowerRed > 255) {
-            $lowerRed = 255;
-        }
-        if ($lowerGreen > 255) {
-            $lowerGreen = 255;
-        }
-        if ($lowerBlue > 255) {
-            $lowerBlue = 255;
-        }
+
+        // upper step: cooler, bluish tint (exposed to sky)
+        int $upperRed = intdiv($litR * 3, 4);
+        int $upperGreen = intdiv($litG * 4, 5);
+        int $upperBlue = $litB + intdiv((255 - $litB), 4);
+
+        // lower step: warmer, brownish tint (near ground)
+        int $lowerRed = $litR + intdiv((255 - $litR), 5);
+        int $lowerGreen = intdiv($litG * 4, 5);
+        int $lowerBlue = intdiv($litB * 3, 5);
+
+        // clamp all colors
+        $midRed = $this->clampColor($midRed);
+        $midGreen = $this->clampColor($midGreen);
+        $midBlue = $this->clampColor($midBlue);
+        $upperRed = $this->clampColor($upperRed);
+        $upperGreen = $this->clampColor($upperGreen);
+        $upperBlue = $this->clampColor($upperBlue);
+        $lowerRed = $this->clampColor($lowerRed);
+        $lowerGreen = $this->clampColor($lowerGreen);
+        $lowerBlue = $this->clampColor($lowerBlue);
 
         if ($leftX < $viewportX) {
             $leftX = $viewportX;
@@ -593,6 +572,16 @@ class WallRenderer {
 
     public function backSectorIndexForSeg(MapData $map, int $segIndex): int {
         return $this->projection->backSectorIndexForSeg($map, $segIndex);
+    }
+
+    public function clampColor(int $value): int {
+        if ($value < 0) {
+            return 0;
+        }
+        if ($value > 255) {
+            return 255;
+        }
+        return $value;
     }
 
     public function absoluteValue(int $value): int {
