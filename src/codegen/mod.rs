@@ -66,6 +66,9 @@ pub fn generate(
             &global_constants, &all_global_var_names, &all_static_vars,
             interfaces,
             Some(classes),
+            extern_functions,
+            extern_classes,
+            extern_globals,
         );
     }
 
@@ -189,6 +192,7 @@ pub fn generate(
                 functions::emit_method(
                     &mut emitter, &mut data, &label, &epilogue_label, &sig, &method.body,
                     functions, &global_constants, interfaces, classes, class_name,
+                    extern_functions, extern_classes, extern_globals,
                 );
             }
     }
@@ -478,6 +482,9 @@ fn emit_deferred_closures(
                 &ctx.constants,
                 &ctx.interfaces,
                 &ctx.classes,
+                &ctx.extern_functions,
+                &ctx.extern_classes,
+                &ctx.extern_globals,
             );
         }
     }

@@ -6,7 +6,9 @@ use super::emit::Emitter;
 use super::stmt;
 use crate::names::{function_epilogue_symbol, function_symbol};
 use crate::parser::ast::{ExprKind, StmtKind, TypeExpr};
-use crate::types::{ClassInfo, FunctionSig, InterfaceInfo, PhpType};
+use crate::types::{
+    ClassInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PhpType,
+};
 
 #[allow(clippy::too_many_arguments)]
 pub fn emit_function(
@@ -21,6 +23,9 @@ pub fn emit_function(
     all_static_vars: &HashMap<(String, String), PhpType>,
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: Option<&HashMap<String, ClassInfo>>,
+    extern_functions: &HashMap<String, ExternFunctionSig>,
+    extern_classes: &HashMap<String, ExternClassInfo>,
+    extern_globals: &HashMap<String, PhpType>,
 ) {
     let label = function_symbol(name);
     let epilogue_label = function_epilogue_symbol(name);
@@ -37,6 +42,9 @@ pub fn emit_function(
         all_static_vars,
         interfaces,
         classes,
+        extern_functions,
+        extern_classes,
+        extern_globals,
     );
 }
 
@@ -50,6 +58,9 @@ pub fn emit_closure(
     constants: &HashMap<String, (ExprKind, PhpType)>,
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: &HashMap<String, ClassInfo>,
+    extern_functions: &HashMap<String, ExternFunctionSig>,
+    extern_classes: &HashMap<String, ExternClassInfo>,
+    extern_globals: &HashMap<String, PhpType>,
 ) {
     let epilogue_label = format!("{}_epilogue", label);
     let empty_globals = HashSet::new();
@@ -67,6 +78,9 @@ pub fn emit_closure(
         &empty_statics,
         interfaces,
         Some(classes),
+        extern_functions,
+        extern_classes,
+        extern_globals,
     );
 }
 
@@ -83,6 +97,9 @@ pub fn emit_method(
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: &HashMap<String, ClassInfo>,
     class_name: &str,
+    extern_functions: &HashMap<String, ExternFunctionSig>,
+    extern_classes: &HashMap<String, ExternClassInfo>,
+    extern_globals: &HashMap<String, PhpType>,
 ) {
     let empty_globals = HashSet::new();
     let empty_statics = HashMap::new();
@@ -99,6 +116,9 @@ pub fn emit_method(
         &empty_statics,
         interfaces,
         Some((classes, class_name)),
+        extern_functions,
+        extern_classes,
+        extern_globals,
     );
 }
 
@@ -116,6 +136,9 @@ fn emit_function_with_label(
     all_static_vars: &HashMap<(String, String), PhpType>,
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: Option<&HashMap<String, ClassInfo>>,
+    extern_functions: &HashMap<String, ExternFunctionSig>,
+    extern_classes: &HashMap<String, ExternClassInfo>,
+    extern_globals: &HashMap<String, PhpType>,
 ) {
     // Pass classes to regular functions so they can resolve Object types
     let class_ctx = classes.map(|c| (c, "" as &str));
@@ -132,6 +155,9 @@ fn emit_function_with_label(
         all_static_vars,
         interfaces,
         class_ctx,
+        extern_functions,
+        extern_classes,
+        extern_globals,
     );
 }
 
@@ -149,6 +175,9 @@ fn emit_function_with_label_and_class(
     all_static_vars: &HashMap<(String, String), PhpType>,
     interfaces: &HashMap<String, InterfaceInfo>,
     class_context: Option<(&HashMap<String, ClassInfo>, &str)>,
+    extern_functions: &HashMap<String, ExternFunctionSig>,
+    extern_classes: &HashMap<String, ExternClassInfo>,
+    extern_globals: &HashMap<String, PhpType>,
 ) {
     let mut ctx = Context::new();
     ctx.return_label = Some(epilogue_label.to_string());
@@ -158,6 +187,9 @@ fn emit_function_with_label_and_class(
     ctx.all_global_var_names = all_global_var_names.clone();
     ctx.all_static_vars = all_static_vars.clone();
     ctx.interfaces = interfaces.clone();
+    ctx.extern_functions = extern_functions.clone();
+    ctx.extern_classes = extern_classes.clone();
+    ctx.extern_globals = extern_globals.clone();
     if let Some((classes, class_name)) = class_context {
         ctx.classes = classes.clone();
         ctx.current_class = Some(class_name.to_string());
@@ -411,6 +443,9 @@ fn emit_function_with_label_and_class(
                 constants,
                 interfaces,
                 classes,
+                extern_functions,
+                extern_classes,
+                extern_globals,
             );
         }
     }
