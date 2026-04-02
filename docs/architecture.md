@@ -44,7 +44,7 @@ PHP source (.php)
 ┌─────────┐
 │  Type    │  src/types/
 │  Checker │  traits.rs, checker/mod.rs, checker/builtins.rs, checker/functions.rs
-│          │  Validates types, computes packed layouts, returns CheckResult
+│          │  Validates types, computes packed layouts, collects warnings, returns CheckResult
 └────┬─────┘
      │
      ▼
@@ -90,6 +90,7 @@ src/
 ├── types/
 │   ├── mod.rs                 PhpType enum, TypeEnv, packed layout metadata, CheckResult
 │   ├── traits.rs              Trait flattening and conflict-resolution helpers
+│   ├── warnings.rs            Non-fatal diagnostics (unused vars, unreachable code)
 │   └── checker/
 │       ├── mod.rs             check_stmt(), infer_type()
 │       ├── builtins.rs        Built-in function type signatures

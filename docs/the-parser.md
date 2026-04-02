@@ -64,7 +64,8 @@ Things that have a value:
 | `ArrayAccess { array, index }` | `$arr[0]`, `$str[-1]` | Same AST node is used for indexed arrays, associative-array lookups, and string indexing |
 | `Ternary { condition, then_expr, else_expr }` | `$a ? $b : $c` | |
 | `Cast { target, expr }` | `(int)$x` | |
-| `Closure { params, variadic, body, is_arrow, captures }` | `function($x) use ($y) { ... }` or `fn($x) => ...` | Anonymous function / arrow function. Params is `Vec<(String, Option<Expr>, bool)>` — name, default, is_ref. `variadic` is an optional parameter name. `captures` is `Vec<String>` — variables captured via an explicit `use (...)` clause. Arrow functions are still represented as `Closure`, but parse with `is_arrow = true` and `captures = []`. |
+| `Closure { params, variadic, body, is_arrow, captures }` | `function(int $x = 1) use ($y) { ... }` or `fn(int $x): int => $x * 2` | Anonymous function / arrow function. Params is `Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>` — name, declared type, default, is_ref. `variadic` is an optional parameter name. `captures` is `Vec<String>` — variables captured via an explicit `use (...)` clause. Arrow functions are still represented as `Closure`, parse with `is_arrow = true`, and do not carry explicit `use (...)` captures in the AST. |
+| `NamedArg { name, value }` | `foo(name: "Alice")` | Named call argument. Later phases reorder these against the declared parameter list. |
 | `ClosureCall { var, args }` | `$fn(1, 2)` | Calling a closure stored in a variable |
 | `ExprCall { callee, args }` | `$arr[0](1, 2)` | Calling the result of an expression (e.g., array access returning a callable) |
 | `Spread(Expr)` | `...$arr` | Spread/unpack operator — expands an array into individual arguments or elements |
@@ -92,7 +93,7 @@ Things that do something:
 | `Switch { subject, cases, default }` | `switch ($x) { case 1: ...; default: ... }` |
 | `ArrayAssign { array, index, value }` | `$arr[0] = 5;` |
 | `ArrayPush { array, value }` | `$arr[] = 5;` |
-| `FunctionDecl { name, params, variadic, body }` | `function foo($a, &$b, $c = 10) { }` — params is `Vec<(String, Option<Expr>, bool)>` where the `Option` is the default value and `bool` is `is_ref` (pass by reference). `variadic` is `Option<String>` for variadic parameters (`...$args`) |
+| `FunctionDecl { name, params, variadic, return_type, body }` | `function foo(int $a, &$b, string $c = "x"): string { }` — params is `Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>` where the tuple stores name, declared type, default value, and `is_ref` (pass by reference). `variadic` is `Option<String>` for variadic parameters (`...$args`) and `return_type` is an optional declared `TypeExpr` |
 | `Return(Option<Expr>)` | `return $x;` or `return;` |
 | `Break` | `break;` |
 | `Continue` | `continue;` |
@@ -140,6 +141,15 @@ At statement level, parsing is split between `parser/mod.rs` and `stmt.rs`:
 
 This is intentionally narrower than full PHP statement syntax. In the current subset, expression statements only enter through the token arms handled by `stmt::parse_stmt()` above; starting a statement with tokens such as `match`, `new`, `fn`, a literal, `(`, or a unary operator still produces an "unexpected token at statement position" parser error unless that construct appears inside another statement form.
 
+## Error recovery
+
+The parser does not stop at the first syntax error anymore. It now performs conservative synchronization at statement boundaries and block boundaries so one malformed statement does not necessarily prevent later statements from being parsed and reported.
+
+Current recovery behavior is intentionally simple:
+- top-level parsing can skip forward to the next plausible statement boundary after a syntax error
+- block parsing (`{ ... }`) can resynchronize on `;`, `}`, and `EOF`
+- the parser still prefers correctness over aggressive recovery, so heavily malformed input may still collapse into fewer diagnostics than an IDE-style parser would produce
+
 ### Binary operators (`BinOp`)
 
 ```
@@ -158,7 +168,7 @@ NullCoalesce
 |---|---|---|
 | `Visibility` | `Public`, `Protected`, `Private` | Enum for property/method visibility |
 | `ClassProperty` | `name`, `visibility`, `readonly`, `default`, `span` | A property declaration inside a class |
-| `ClassMethod` | `name`, `visibility`, `is_static`, `is_abstract`, `has_body`, `params`, `variadic`, `body`, `span` | A method declaration inside a class, trait, or interface |
+| `ClassMethod` | `name`, `visibility`, `is_static`, `is_abstract`, `has_body`, `params`, `variadic`, `return_type`, `body`, `span` | A method declaration inside a class, trait, or interface |
 | `CatchClause` | `exception_types`, `variable`, `body` | A catch arm. `exception_types` supports both single-type and PHP-style multi-catch (`TypeA | TypeB`), and `variable` is optional for PHP 8-style `catch (Exception)` |
 | `StaticReceiver` | `Named(Name)`, `Self_`, `Static`, `Parent` | Left-hand side of `ClassName::method()`, `self::method()`, `static::method()`, and `parent::method()` |
 | `TraitUse` | `trait_names`, `adaptations`, `span` | A `use TraitA, TraitB { ... }` clause inside a class or trait body |

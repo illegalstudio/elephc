@@ -21,7 +21,7 @@ I made the project as modular as possible. Every function has its own codegen fi
 
 ### What you should not expect
 
-Don't expect to take any existing PHP project and magically compile it. There's no Composer yet, but we do support PHP classes with single inheritance, interfaces, abstract classes, traits, constructors, instance/static methods, `self::method()`, `parent::method()`, `static::method()` with late static binding, `readonly` properties, `try` / `catch` / `finally` / `throw`, and `public` / `protected` / `private` visibility — roughly at the level of that famous *PHP 4* book where my journey began, plus some PHP 8 features.
+Don't expect to take any existing PHP project and magically compile it. There's no Composer yet, but we do support PHP classes with single inheritance, interfaces, abstract classes, traits, constructors, instance/static methods, `self::method()`, `parent::method()`, `static::method()` with late static binding, `readonly` properties and `readonly class`, enums, named arguments, first-class callables, typed parameters / returns, `try` / `catch` / `finally` / `throw`, and `public` / `protected` / `private` visibility — roughly at the level of that famous *PHP 4* book where my journey began, plus a growing set of PHP 8 features.
 
 ### What you can expect
 
@@ -170,8 +170,8 @@ if ($x === 3) {
 | `object` | `new Foo()`, `$user->name` |
 | `pointer` | `ptr($x)`, `ptr_null()`, `ptr_cast<int>($p)` |
 | `enum` | `enum Color: int { case Red = 1; }`, `Color::Red->value`, `Color::from(1)` |
-| `int\|string` | `int\|string $x = 42;` (union type — accepts any listed type) |
-| `?int` | `?int $x = null;` (nullable — sugar for `int\|null`) |
+| `int\|string` | `int\|string $x = 42;`, `function show(int\|string $x): string { ... }` |
+| `?int` | `?int $x = null;`, `function find(): ?int { ... }` |
 | `buffer<T>` | `buffer<int> $xs = buffer_new<int>(256)` |
 | `packed class` | `packed class Vec2 { public float $x; public float $y; }` |
 
@@ -200,9 +200,11 @@ if ($x === 3) {
 | Match | `$r = match($x) { 1 => "one", default => "other" };` |
 | Break / Continue | `break;`, `continue;` |
 | Try / Catch / Finally / Throw | `try { ... } catch (Exception $e) { ... } finally { ... }`, `throw new Exception("boom");` |
-| Functions | `function foo($x, $y = 10) { return $x + $y; }` |
+| Functions | `function foo(int $x, int $y = 10): int { return $x + $y; }` |
 | Variadic / Spread | `function sum(...$args) { }`, `func(...$arr)`, `[...$a, ...$b]` |
 | Pass by reference | `function inc(&$x) { $x++; }` |
+| Named arguments | `user(name: "Alice", age: 30)` |
+| First-class callables | `strlen(...)`, `Tools\\fmt(...)` |
 | Global / Static | `global $var;`, `static $counter = 0;` |
 | Closures / Arrow | `$fn = function($x) use ($y) { return $x * $y; };`, `fn($x) => $x * 2` |
 | FFI declarations | `extern function atoi(string $s): int;`, `extern "System" { function malloc(int $n): ptr; }`, `extern global ptr $environ;`, `extern class Point { public int $x; }` |
@@ -272,12 +274,14 @@ A variable's type is set at first assignment. Compatible types (int/float/bool/n
 
 ## Error messages
 
-Errors include line and column numbers:
+Errors include line and column numbers, and the compiler now tries to recover far enough to report multiple independent syntax / semantic errors in one pass. Successful compilations may also emit non-fatal warnings such as unused variables / parameters or unreachable code:
 
 ```
 error[3:1]: Undefined variable: $x
 error[5:7]: Type error: cannot reassign $x from Int to Str
 error[2:1]: Required file not found: 'missing.php'
+warning[9:5]: Unused variable: $tmp
+warning[14:9]: Unreachable code
 ```
 
 ## Project structure
@@ -307,6 +311,7 @@ src/
 ├── types/               # Static type checking
 │   ├── mod.rs           # PhpType, TypeEnv, check(), CheckResult
 │   ├── traits.rs        # Trait flattening and conflict resolution
+│   ├── warnings.rs      # Non-fatal diagnostics (unused vars, unreachable code)
 │   └── checker/
 │       ├── mod.rs       # check_stmt(), infer_type()
 │       ├── builtins.rs  # Built-in function type signatures
@@ -350,6 +355,7 @@ src/
 
 ```bash
 cargo test                      # all tests
+cargo test -- --include-ignored # all tests, including ignored integration tests
 cargo test test_my_feature      # run specific tests
 ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 ```
@@ -358,7 +364,7 @@ ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 
 The `docs/` directory is a **complete wiki** covering every aspect of the compiler — from what a compiler is, to how each phase works, to the ARM64 instruction set. If you're new to compilers or assembly, **start from the top and work your way down**.
 
-For runnable language samples, start with `examples/classes`, `examples/inheritance`, `examples/interfaces`, `examples/traits`, `examples/exceptions`, `examples/magic-methods`, `examples/namespaces`, `examples/ifdef`, `examples/arrays`, `examples/assoc-arrays`, `examples/cow`, `examples/closures`, `examples/hot-path`, and `examples/ffi-memory`. For a focused perf-oriented comparison, see `benchmarks/hot-path-buffer-vs-arrays`.
+For runnable language samples, start with `examples/functions`, `examples/default-params`, `examples/advanced-functions`, `examples/classes`, `examples/inheritance`, `examples/interfaces`, `examples/traits`, `examples/enums`, `examples/union-types`, `examples/exceptions`, `examples/magic-methods`, `examples/namespaces`, `examples/ifdef`, `examples/arrays`, `examples/assoc-arrays`, `examples/closures`, `examples/hot-path`, and `examples/ffi-memory`. For a focused perf-oriented comparison, see `benchmarks/hot-path-buffer-vs-arrays`.
 
 | Guide | What you'll learn |
 |---|---|

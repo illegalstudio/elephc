@@ -117,6 +117,8 @@ It builds a **type environment** — a map from variable names to their types:
 
 If you tried `$x = "hello"` after `$x = 10`, the type checker would reject it — elephc doesn't allow variables to change type (except from `null`). The checker also resolves class/interface metadata for exception handling, so `throw` only accepts objects implementing `Throwable` and each `catch` target can be matched correctly later in codegen.
 
+On successful type checking, elephc also runs a warning pass that reports issues such as unused variables and unreachable code. On failing compilations, the parser and checker both try to recover conservatively so they can often report more than one independent error in a single run.
+
 ## Phase 7: Code generation
 
 **File:** `src/codegen/` — See [The Code Generator](the-codegen.md) for details.
