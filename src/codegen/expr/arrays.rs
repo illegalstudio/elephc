@@ -299,7 +299,7 @@ pub(super) fn emit_match_expr(
     if let Some(def) = default {
         result_ty = emit_expr(def, emitter, ctx, data);
     } else {
-        emitter.instruction("bl __rt_match_unhandled");                           // fatal when no arm matched and the match has no default arm
+        emitter.instruction("bl __rt_match_unhandled");                         // fatal when no arm matched and the match has no default arm
     }
 
     emitter.label(&end_label);
@@ -317,41 +317,41 @@ pub(super) fn emit_array_access(
     let arr_ty = emit_expr(array, emitter, ctx, data);
 
     if let PhpType::Buffer(elem_ty) = &arr_ty {
-        emitter.instruction("str x0, [sp, #-16]!");                                 // push buffer pointer while evaluating the index expression
+        emitter.instruction("str x0, [sp, #-16]!");                             // push buffer pointer while evaluating the index expression
         emit_expr(index, emitter, ctx, data);
-        emitter.instruction("ldr x9, [sp], #16");                                   // pop buffer pointer into scratch register x9
+        emitter.instruction("ldr x9, [sp], #16");                               // pop buffer pointer into scratch register x9
         emitter.comment("buffer access");
         let uaf_ok = ctx.next_label("buf_uaf_ok");
-        emitter.instruction(&format!("cbnz x9, {}", uaf_ok));                      // skip fatal if buffer pointer is valid
-        emitter.instruction("b __rt_buffer_use_after_free");                        // abort — buffer was freed
+        emitter.instruction(&format!("cbnz x9, {}", uaf_ok));                   // skip fatal if buffer pointer is valid
+        emitter.instruction("b __rt_buffer_use_after_free");                    // abort — buffer was freed
         emitter.label(&uaf_ok);
         let elem_ty = *elem_ty.clone();
         let bounds_ok = ctx.next_label("buffer_idx_ok");
         let oob_ok = ctx.next_label("buf_oob_ok");
-        emitter.instruction("cmp x0, #0");                                          // reject negative buffer indexes
-        emitter.instruction(&format!("b.ge {}", oob_ok));                           // skip fatal if index is non-negative
-        emitter.instruction("b __rt_buffer_bounds_fail");                           // abort — negative index
+        emitter.instruction("cmp x0, #0");                                      // reject negative buffer indexes
+        emitter.instruction(&format!("b.ge {}", oob_ok));                       // skip fatal if index is non-negative
+        emitter.instruction("b __rt_buffer_bounds_fail");                       // abort — negative index
         emitter.label(&oob_ok);
-        emitter.instruction("ldr x10, [x9]");                                       // load buffer length from header
-        emitter.instruction("cmp x0, x10");                                         // compare index against logical buffer length
-        emitter.instruction(&format!("b.lo {}", bounds_ok));                        // continue once the index is in range
-        emitter.instruction("mov x1, x10");                                         // pass buffer length to the bounds-failure helper
-        emitter.instruction("bl __rt_buffer_bounds_fail");                          // abort with a dedicated buffer bounds message
+        emitter.instruction("ldr x10, [x9]");                                   // load buffer length from header
+        emitter.instruction("cmp x0, x10");                                     // compare index against logical buffer length
+        emitter.instruction(&format!("b.lo {}", bounds_ok));                    // continue once the index is in range
+        emitter.instruction("mov x1, x10");                                     // pass buffer length to the bounds-failure helper
+        emitter.instruction("bl __rt_buffer_bounds_fail");                      // abort with a dedicated buffer bounds message
         emitter.label(&bounds_ok);
-        emitter.instruction("ldr x12, [x9, #8]");                                   // load element stride from the buffer header
-        emitter.instruction("add x9, x9, #16");                                     // skip the buffer header to reach the payload base
-        emitter.instruction("madd x9, x0, x12, x9");                                // compute payload base + index*stride
+        emitter.instruction("ldr x12, [x9, #8]");                               // load element stride from the buffer header
+        emitter.instruction("add x9, x9, #16");                                 // skip the buffer header to reach the payload base
+        emitter.instruction("madd x9, x0, x12, x9");                            // compute payload base + index*stride
         match &elem_ty {
             PhpType::Float => {
-                emitter.instruction("ldr d0, [x9]");                                // load scalar float element from the contiguous payload
+                emitter.instruction("ldr d0, [x9]");                            // load scalar float element from the contiguous payload
                 return PhpType::Float;
             }
             PhpType::Packed(name) => {
-                emitter.instruction("mov x0, x9");                                  // expose the packed element address as a typed pointer
+                emitter.instruction("mov x0, x9");                              // expose the packed element address as a typed pointer
                 return PhpType::Pointer(Some(name.clone()));
             }
             _ => {
-                emitter.instruction("ldr x0, [x9]");                                // load scalar/pointer element from the contiguous payload
+                emitter.instruction("ldr x0, [x9]");                            // load scalar/pointer element from the contiguous payload
                 return elem_ty;
             }
         }
@@ -488,8 +488,8 @@ pub(super) fn emit_buffer_new(
     if len_ty != PhpType::Int {
         emitter.comment("WARNING: buffer_new length was not statically typed as int");
     }
-    emitter.instruction(&format!("mov x1, #{}", stride));                           // pass element stride to the buffer allocation helper
-    emitter.instruction("bl __rt_buffer_new");                                      // allocate the buffer header + contiguous payload
+    emitter.instruction(&format!("mov x1, #{}", stride));                       // pass element stride to the buffer allocation helper
+    emitter.instruction("bl __rt_buffer_new");                                  // allocate the buffer header + contiguous payload
     PhpType::Buffer(Box::new(elem_ty))
 }
 

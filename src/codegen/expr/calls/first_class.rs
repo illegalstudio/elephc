@@ -128,7 +128,7 @@ pub(super) fn emit_first_class_callable(
 ) -> PhpType {
     let Some(sig) = first_class_callable_sig(target, ctx) else {
         emitter.comment("WARNING: unsupported first-class callable target");
-        emitter.instruction("mov x0, #0");                                          // unsupported callable lowers to null pointer sentinel
+        emitter.instruction("mov x0, #0");                                      // unsupported callable lowers to null pointer sentinel
         return PhpType::Callable;
     };
 
@@ -136,7 +136,7 @@ pub(super) fn emit_first_class_callable(
         CallableTarget::StaticMethod { receiver, method } => {
             let Some(receiver) = resolved_static_callable_target(receiver, ctx) else {
                 emitter.comment("WARNING: unsupported first-class static:: callable target");
-                emitter.instruction("mov x0, #0");                                  // unsupported callable lowers to null pointer sentinel
+                emitter.instruction("mov x0, #0");                              // unsupported callable lowers to null pointer sentinel
                 return PhpType::Callable;
             };
             CallableTarget::StaticMethod {
@@ -160,7 +160,7 @@ pub(super) fn emit_first_class_callable(
     });
 
     emitter.comment("first-class callable: load wrapper address");
-    emitter.instruction(&format!("adrp x0, {}@PAGE", wrapper_label));               // load page base of synthesized callable wrapper
-    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", wrapper_label));         // resolve callable wrapper address
+    emitter.instruction(&format!("adrp x0, {}@PAGE", wrapper_label));           // load page base of synthesized callable wrapper
+    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", wrapper_label));     // resolve callable wrapper address
     PhpType::Callable
 }

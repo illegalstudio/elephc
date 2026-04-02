@@ -316,7 +316,7 @@ fn emit_try_handler_pop(emitter: &mut Emitter, handler_offset: usize) {
 }
 
 fn emit_handler_jmpbuf_address(emitter: &mut Emitter, handler_offset: usize, dest_reg: &str) {
-    emitter.instruction(&format!("sub {}, x29, #{}", dest_reg, handler_offset - 16)); // compute the jmp_buf base address inside this try slot
+    emitter.instruction(&format!("sub {}, x29, #{}", dest_reg, handler_offset - 16)); //compute the jmp_buf base address inside this try slot
 }
 
 fn bind_catch_variable(catch_clause: &CatchClause, emitter: &mut Emitter, ctx: &Context) {
@@ -345,7 +345,7 @@ fn bind_catch_variable(catch_clause: &CatchClause, emitter: &mut Emitter, ctx: &
 
 fn emit_label_address(emitter: &mut Emitter, label: &str, dest_reg: &str) {
     emitter.instruction(&format!("adrp {}, {}@PAGE", dest_reg, label));         // load page of the local control-flow target label
-    emitter.instruction(&format!("add {}, {}, {}@PAGEOFF", dest_reg, dest_reg, label)); // resolve the local control-flow target address
+    emitter.instruction(&format!("add {}, {}, {}@PAGEOFF", dest_reg, dest_reg, label)); //resolve the local control-flow target address
 }
 
 fn resolve_catch_match_target(ctx: &Context, raw_name: &str) -> (u64, u64) {

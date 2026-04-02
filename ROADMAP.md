@@ -286,8 +286,8 @@ Proper type system for PHP compatibility.
 
 - [x] Hot-path data type
 - [x] Full namespace support
-- [ ] Comprehensive error recovery (multiple errors per compilation)
-- [ ] Warning system (unused variables, unreachable code)
+- [x] Comprehensive error recovery (multiple errors per compilation)
+- [x] Warning system (unused variables, unreachable code)
 - [x] Enums (`enum Color { Red; Green; Blue; }`) — backed enums with `->value`, `::from()`, `::cases()`
 - [x] Named arguments (`foo(name: "Alice", age: 30)`) — reorder args at compile time based on parameter names
 - [x] First-class callable syntax (`strlen(...)`) — create closures from function names without string indirection

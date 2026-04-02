@@ -46,7 +46,7 @@ pub fn emit(
     );
     let sig = if is_callable_expr {
         emit_expr(&args[0], emitter, ctx, data);
-        emitter.instruction("mov x19, x0");                                         // move synthesized callback address to x19
+        emitter.instruction("mov x19, x0");                                     // move synthesized callback address to x19
         ctx.deferred_closures
             .last()
             .expect("call_user_func_array: missing synthesized callable signature")
@@ -66,8 +66,8 @@ pub fn emit(
             _ => panic!("call_user_func_array() callback must be a string literal, callable expression, or callable variable"),
         };
         let label = function_symbol(&func_name);
-        emitter.instruction(&format!("adrp x19, {}@PAGE", label));                  // load page address of callback function
-        emitter.instruction(&format!("add x19, x19, {}@PAGEOFF", label));           // resolve full address of callback
+        emitter.instruction(&format!("adrp x19, {}@PAGE", label));              // load page address of callback function
+        emitter.instruction(&format!("add x19, x19, {}@PAGEOFF", label));       // resolve full address of callback
         ctx.functions
             .get(&func_name)
             .expect("call_user_func_array: function not found")
@@ -109,10 +109,10 @@ pub fn emit(
         if let Some(default_expr) = sig.defaults.get(i).and_then(|d| d.as_ref()) {
             let load_label = ctx.next_label("cufa_load_arg");
             let done_label = ctx.next_label("cufa_arg_done");
-            emitter.instruction(&format!("cmp x21, #{}", i + 1));                // compare provided array length against required positional index
-            emitter.instruction(&format!("b.ge {}", load_label));                // load an explicit array element when present
+            emitter.instruction(&format!("cmp x21, #{}", i + 1));               // compare provided array length against required positional index
+            emitter.instruction(&format!("b.ge {}", load_label));               // load an explicit array element when present
             let _ = args::push_expr_arg(default_expr, target_ty, emitter, ctx, data);
-            emitter.instruction(&format!("b {}", done_label));                   // skip the explicit-element path after pushing the default
+            emitter.instruction(&format!("b {}", done_label));                  // skip the explicit-element path after pushing the default
             emitter.label(&load_label);
             emitter.instruction("add x9, x20, #24");                            // point x9 at the callback-argument array payload
             args::load_array_element_to_result(emitter, &elem_ty, "x9", i * elem_size);
@@ -139,32 +139,32 @@ pub fn emit(
             .unwrap_or_else(|| elem_ty.clone());
         let build_label = ctx.next_label("cufa_build_variadic");
         let done_label = ctx.next_label("cufa_variadic_done");
-        emitter.instruction(&format!("cmp x21, #{}", regular_param_count));      // compare provided array length against the fixed arity prefix
-        emitter.instruction(&format!("b.gt {}", build_label));                   // build a tail array only when extra positional elements exist
+        emitter.instruction(&format!("cmp x21, #{}", regular_param_count));     // compare provided array length against the fixed arity prefix
+        emitter.instruction(&format!("b.gt {}", build_label));                  // build a tail array only when extra positional elements exist
         emitter.comment("empty variadic array for call_user_func_array()");
-        emitter.instruction("mov x0, #4");                                       // initial capacity: 4 (grows dynamically)
-        emitter.instruction(&format!("mov x1, #{}", variadic_elem_ty.stack_size())); // element size in bytes for the variadic array
-        emitter.instruction("bl __rt_array_new");                                // allocate an empty variadic array
-        emitter.instruction("str x0, [sp, #-16]!");                              // push the empty variadic array onto the stack
-        emitter.instruction(&format!("b {}", done_label));                       // skip the non-empty variadic array builder
+        emitter.instruction("mov x0, #4");                                      // initial capacity: 4 (grows dynamically)
+        emitter.instruction(&format!("mov x1, #{}", variadic_elem_ty.stack_size())); //element size in bytes for the variadic array
+        emitter.instruction("bl __rt_array_new");                               // allocate an empty variadic array
+        emitter.instruction("str x0, [sp, #-16]!");                             // push the empty variadic array onto the stack
+        emitter.instruction(&format!("b {}", done_label));                      // skip the non-empty variadic array builder
 
         emitter.label(&build_label);
-        emitter.instruction(&format!("sub x22, x21, #{}", regular_param_count)); // compute the count of variadic tail arguments
-        emitter.instruction("mov x0, x22");                                      // pass the exact tail argument count as the initial capacity
-        emitter.instruction(&format!("mov x1, #{}", variadic_elem_ty.stack_size())); // pass the variadic element size in bytes
-        emitter.instruction("bl __rt_array_new");                                // allocate the variadic array storage
-        emitter.instruction("str x0, [sp, #-16]!");                              // keep the variadic array pointer on the stack while filling it
-        emitter.instruction("mov x9, x0");                                       // copy the variadic array pointer into a scratch register for metadata stamping
+        emitter.instruction(&format!("sub x22, x21, #{}", regular_param_count)); //compute the count of variadic tail arguments
+        emitter.instruction("mov x0, x22");                                     // pass the exact tail argument count as the initial capacity
+        emitter.instruction(&format!("mov x1, #{}", variadic_elem_ty.stack_size())); //pass the variadic element size in bytes
+        emitter.instruction("bl __rt_array_new");                               // allocate the variadic array storage
+        emitter.instruction("str x0, [sp, #-16]!");                             // keep the variadic array pointer on the stack while filling it
+        emitter.instruction("mov x9, x0");                                      // copy the variadic array pointer into a scratch register for metadata stamping
         emit_array_value_type_stamp(emitter, "x9", &variadic_elem_ty);           // stamp the array header with the variadic element runtime tag
-        emitter.instruction("mov x23, #0");                                      // start the variadic tail index at zero
+        emitter.instruction("mov x23, #0");                                     // start the variadic tail index at zero
         let loop_label = ctx.next_label("cufa_variadic_loop");
         let loop_done_label = ctx.next_label("cufa_variadic_loop_done");
         emitter.label(&loop_label);
-        emitter.instruction("cmp x23, x22");                                     // stop once every tail element has been copied
-        emitter.instruction(&format!("b.ge {}", loop_done_label));               // exit the fill loop when the tail array is complete
-        emitter.instruction("add x24, x23, #0");                                 // copy the tail index into a scratch register
+        emitter.instruction("cmp x23, x22");                                    // stop once every tail element has been copied
+        emitter.instruction(&format!("b.ge {}", loop_done_label));              // exit the fill loop when the tail array is complete
+        emitter.instruction("add x24, x23, #0");                                // copy the tail index into a scratch register
         if regular_param_count > 0 {
-            emitter.instruction(&format!("add x24, x24, #{}", regular_param_count)); // offset the tail index by the fixed-arity prefix length
+            emitter.instruction(&format!("add x24, x24, #{}", regular_param_count)); //offset the tail index by the fixed-arity prefix length
         }
         emitter.instruction("add x26, x20, #24");                               // point x26 at the callback-argument array payload
         match elem_ty.codegen_repr() {
@@ -195,7 +195,7 @@ pub fn emit(
         if !boxed_to_mixed {
             abi::emit_incref_if_refcounted(emitter, &elem_ty.codegen_repr());   // retain refcounted tail elements copied into the new variadic array
         }
-        emitter.instruction("ldr x9, [sp]");                                     // reload the variadic array pointer from the stack
+        emitter.instruction("ldr x9, [sp]");                                    // reload the variadic array pointer from the stack
         match stored_ty {
             PhpType::Int
             | PhpType::Bool
@@ -208,28 +208,28 @@ pub fn emit(
             | PhpType::Packed(_)
             | PhpType::Pointer(_)
             | PhpType::Union(_) => {
-                emitter.instruction("add x10, x9, #24");                         // point x10 at the variadic array payload
-                emitter.instruction("lsl x11, x23, #3");                         // compute the 8-byte destination slot offset
-                emitter.instruction("add x10, x10, x11");                        // advance to the selected variadic destination slot
-                emitter.instruction("str x0, [x10]");                            // store the scalar or boxed tail element
+                emitter.instruction("add x10, x9, #24");                        // point x10 at the variadic array payload
+                emitter.instruction("lsl x11, x23, #3");                        // compute the 8-byte destination slot offset
+                emitter.instruction("add x10, x10, x11");                       // advance to the selected variadic destination slot
+                emitter.instruction("str x0, [x10]");                           // store the scalar or boxed tail element
             }
             PhpType::Float => {
-                emitter.instruction("add x10, x9, #24");                         // point x10 at the variadic array payload
-                emitter.instruction("lsl x11, x23, #3");                         // compute the 8-byte destination slot offset
-                emitter.instruction("add x10, x10, x11");                        // advance to the selected variadic destination slot
-                emitter.instruction("str d0, [x10]");                            // store the float tail element
+                emitter.instruction("add x10, x9, #24");                        // point x10 at the variadic array payload
+                emitter.instruction("lsl x11, x23, #3");                        // compute the 8-byte destination slot offset
+                emitter.instruction("add x10, x10, x11");                       // advance to the selected variadic destination slot
+                emitter.instruction("str d0, [x10]");                           // store the float tail element
             }
             PhpType::Str => {
-                emitter.instruction("add x10, x9, #24");                         // point x10 at the variadic array payload
-                emitter.instruction("lsl x11, x23, #4");                         // compute the 16-byte destination slot offset
-                emitter.instruction("add x10, x10, x11");                        // advance to the selected variadic destination slot
-                emitter.instruction("stp x1, x2, [x10]");                        // store the string pointer and length pair
+                emitter.instruction("add x10, x9, #24");                        // point x10 at the variadic array payload
+                emitter.instruction("lsl x11, x23, #4");                        // compute the 16-byte destination slot offset
+                emitter.instruction("add x10, x10, x11");                       // advance to the selected variadic destination slot
+                emitter.instruction("stp x1, x2, [x10]");                       // store the string pointer and length pair
             }
             PhpType::Void => {}
         }
         emitter.instruction("add x23, x23, #1");                                // advance to the next tail element
-        emitter.instruction("str x23, [x9]");                                    // persist the updated variadic array length
-        emitter.instruction(&format!("b {}", loop_label));                       // continue filling the variadic array
+        emitter.instruction("str x23, [x9]");                                   // persist the updated variadic array length
+        emitter.instruction(&format!("b {}", loop_label));                      // continue filling the variadic array
         emitter.label(&loop_done_label);
         emitter.label(&done_label);
         arg_types.push(PhpType::Array(Box::new(variadic_elem_ty)));

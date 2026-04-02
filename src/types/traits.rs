@@ -37,9 +37,10 @@ struct ImportedMethod {
     decl: ClassMethod,
 }
 
-pub fn flatten_classes(program: &Program) -> Result<Vec<FlattenedClass>, CompileError> {
+pub fn flatten_classes(program: &Program) -> (Vec<FlattenedClass>, Vec<CompileError>) {
     let mut trait_map = HashMap::new();
     let mut class_names = HashSet::new();
+    let mut errors = Vec::new();
 
     for stmt in program {
         match &stmt.kind {
@@ -50,10 +51,11 @@ pub fn flatten_classes(program: &Program) -> Result<Vec<FlattenedClass>, Compile
                 methods,
             } => {
                 if class_names.contains(name) || trait_map.contains_key(name) {
-                    return Err(CompileError::new(
+                    errors.push(CompileError::new(
                         stmt.span,
                         &format!("Duplicate trait declaration: {}", name),
                     ));
+                    continue;
                 }
                 trait_map.insert(
                     name.clone(),
@@ -69,10 +71,11 @@ pub fn flatten_classes(program: &Program) -> Result<Vec<FlattenedClass>, Compile
             | StmtKind::EnumDecl { name, .. }
             | StmtKind::InterfaceDecl { name, .. } => {
                 if trait_map.contains_key(name) || !class_names.insert(name.clone()) {
-                    return Err(CompileError::new(
+                    errors.push(CompileError::new(
                         stmt.span,
                         &format!("Duplicate class or interface declaration: {}", name),
                     ));
+                    continue;
                 }
             }
             _ => {}
@@ -94,19 +97,48 @@ pub fn flatten_classes(program: &Program) -> Result<Vec<FlattenedClass>, Compile
             methods,
         } = &stmt.kind
         {
-            validate_direct_members(properties, methods, stmt.span, name)?;
-            let (imported_props, imported_methods) = resolve_trait_uses(
+            if let Err(error) = validate_direct_members(properties, methods, stmt.span, name) {
+                errors.extend(error.flatten());
+                continue;
+            }
+            let (imported_props, imported_methods) = match resolve_trait_uses(
                 trait_uses,
                 &trait_map,
                 &mut cache,
                 &mut stack,
                 &format!("class {}", name),
                 stmt.span,
-            )?;
-            let merged_props =
-                merge_properties(&imported_props, properties, stmt.span, &format!("class {}", name))?;
-            let merged_methods =
-                merge_methods(imported_methods, methods, stmt.span, &format!("class {}", name))?;
+            ) {
+                Ok(result) => result,
+                Err(error) => {
+                    errors.extend(error.flatten());
+                    continue;
+                }
+            };
+            let merged_props = match merge_properties(
+                &imported_props,
+                properties,
+                stmt.span,
+                &format!("class {}", name),
+            ) {
+                Ok(props) => props,
+                Err(error) => {
+                    errors.extend(error.flatten());
+                    continue;
+                }
+            };
+            let merged_methods = match merge_methods(
+                imported_methods,
+                methods,
+                stmt.span,
+                &format!("class {}", name),
+            ) {
+                Ok(methods) => methods,
+                Err(error) => {
+                    errors.extend(error.flatten());
+                    continue;
+                }
+            };
             flattened.push(FlattenedClass {
                 name: name.clone(),
                 extends: extends.as_ref().map(|name| name.as_str().to_string()),
@@ -119,7 +151,7 @@ pub fn flatten_classes(program: &Program) -> Result<Vec<FlattenedClass>, Compile
         }
     }
 
-    Ok(flattened)
+    (flattened, errors)
 }
 
 fn expand_trait(

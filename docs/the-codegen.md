@@ -99,6 +99,8 @@ pub struct Context {
     pub closure_captures: HashMap<String, Vec<(String, PhpType)>>,
     pub classes: HashMap<String, ClassInfo>,
     pub interfaces: HashMap<String, InterfaceInfo>,
+    pub enums: HashMap<String, EnumInfo>,
+    pub packed_classes: HashMap<String, PackedClassInfo>,
     pub current_class: Option<String>,
     pub extern_functions: HashMap<String, ExternFunctionSig>,
     pub extern_classes: HashMap<String, ExternClassInfo>,
@@ -358,6 +360,8 @@ echo MAX;
 
 Constants declared with `const` or `define()` are resolved at compile time. When the codegen encounters a `ConstRef`, it looks up the constant's value and emits it as a literal — `mov x0, #100` for an integer, or loads a string label from the data section. No runtime lookup is needed.
 
+Enum cases reuse the same idea, but through enum metadata instead of scalar constants: `ExprKind::EnumCase` resolves to a canonical enum-case symbol emitted in runtime data, and helper builtins such as `Enum::from()` / `Enum::tryFrom()` lower through the checker/codegen enum tables carried in `Context`.
+
 ### Pointer values and casts
 
 Pointer expressions are carried in `x0` as plain 64-bit addresses:
@@ -366,6 +370,12 @@ Pointer expressions are carried in `x0` as plain 64-bit addresses:
 - `ptr_null()` loads the zero address
 - `ptr_cast<T>($p)` only changes the static type tag seen by the checker, so codegen emits the inner expression and leaves the address unchanged
 - Pointer printing routes through `__rt_ptoa`, which formats the address as a `0x...` string before writing
+
+### Buffer allocation and packed hot-path access
+
+`buffer_new<T>(len)` lowers directly from `ExprKind::BufferNew`: codegen evaluates the element count, loads the checked element stride from the type metadata, and calls `__rt_buffer_new`. The resulting pointer in `x0` references a contiguous `[length][stride][payload...]` block rather than a PHP array/hash structure.
+
+When `T` is a scalar POD type, reads and writes use direct address arithmetic from the buffer base plus `index * stride`. When `T` is a `packed class`, codegen combines the buffer element stride with the field offset from `packed_classes` metadata and emits direct typed loads/stores into the packed payload.
 
 ### Function calls
 
@@ -511,6 +521,8 @@ $x = expr;
 2. If the result is a borrowed heap value, retain it before the local slot becomes a new owner
 3. Release the previous owned heap value from `$x` when overwriting a heap-backed slot
 4. `emit_store()` — write result to `$x`'s stack slot and classify the local slot as `Owned` for heap-backed types
+
+Typed local declarations such as `int $x = 42;` or `buffer<int> $xs = buffer_new<int>(8);` share the same storage path after the checker has resolved `StmtKind::TypedAssign` into a concrete `PhpType`.
 
 ### Constant declaration
 

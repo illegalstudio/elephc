@@ -37,15 +37,18 @@ pub enum PhpType {
         key: Box<PhpType>,
         value: Box<PhpType>,
     },
+    Buffer(Box<PhpType>),
     Callable,                      // closures and function references
     Object(String),                // class instance, e.g., Object("Point") or Object("App\\Point")
+    Packed(String),
     Pointer(Option<String>),       // opaque ptr or typed ptr<Class>
+    Union(Vec<PhpType>),
 }
 ```
 
-This is simpler than PHP's surface syntax — there are still no user-written union types or nullable annotations. Each variable gets exactly one static type for its lifetime, but associative-array values can widen to the internal `Mixed` type when later entries do not match the first value type. The distinction between `Array` (indexed) and `AssocArray` (key-value) is determined at compile time from the literal syntax (`[1, 2]` vs `["a" => 1]`).
+This is still much smaller than full PHP's runtime type system, but it now includes user-written union and nullable annotations where the language subset supports them. `Union(...)` values are lowered to the same boxed runtime representation used by `Mixed`. The distinction between `Array` (indexed) and `AssocArray` (key-value) is determined at compile time from the literal syntax (`[1, 2]` vs `["a" => 1]`).
 
-`Callable` is used for anonymous functions (closures) and arrow functions. A callable value is stored as a function pointer (8 bytes) on the stack, and is invoked via an indirect branch (`blr`).
+`Callable` is used for anonymous functions (closures), arrow functions, and first-class callables. A callable value is stored as a function pointer (8 bytes) on the stack, and is invoked via an indirect branch (`blr`).
 
 `Object(String)` represents a class instance. The string carries the canonical class name after name resolution (for example `"Point"` or `"App\\Point"`). Objects are heap-allocated pointers (8 bytes on the stack).
 
@@ -127,7 +130,7 @@ The type checker computes the type of every expression:
 
 ### Function calls
 
-Built-in functions have hardcoded type signatures (see below). User-defined functions can now carry declared parameter and return type hints; when a declaration omits them, elephc still falls back to its existing inference rules.
+Built-in functions have hardcoded type signatures (see below). User-defined functions, methods, constructors, closures, and arrow functions can also carry declared parameter and return type hints. Named arguments are normalized against the declared parameter list before the usual argument-count and type checks run.
 
 ## Built-in function signatures
 
@@ -181,14 +184,26 @@ pub struct FunctionSig {
     pub defaults: Vec<Option<Expr>>,
     pub return_type: PhpType,
     pub ref_params: Vec<bool>,         // which parameters are pass-by-reference (&$param)
+    pub declared_params: Vec<bool>,    // whether each parameter came from an explicit type hint
     pub variadic: Option<String>,      // variadic parameter name (...$args), if any
 }
 ```
 
 - `ref_params` tracks which parameters use `&` (pass by reference). The codegen passes the stack address of the argument instead of its value.
+- `declared_params` lets later phases distinguish explicit PHP type hints from inferred/defaulted parameter types.
 - `variadic` holds the name of the variadic parameter (e.g., `$args` in `function foo(...$args)`). Extra arguments beyond the regular parameters are collected into an array.
 
 This information is then used when checking calls to that function.
+
+## Diagnostics and warnings
+
+The checker is no longer strictly first-error-only. Many passes now accumulate independent semantic errors and return them as a grouped diagnostic instead of aborting immediately on the first failure.
+
+After successful checking, elephc also runs a warning pass over the AST. Current warnings include:
+- unused local variables and parameters
+- unreachable code
+
+Warnings are returned through `CheckResult` and printed by the CLI without failing the compilation.
 
 ## The global environment
 
@@ -237,6 +252,7 @@ pub struct ClassInfo {
     pub class_id: u64,
     pub parent: Option<String>,
     pub is_abstract: bool,
+    pub is_readonly_class: bool,
     pub properties: Vec<(String, PhpType)>,
     pub property_offsets: HashMap<String, usize>,
     pub property_declaring_classes: HashMap<String, String>,
@@ -284,10 +300,13 @@ pub struct CheckResult {
     pub functions: HashMap<String, FunctionSig>, // function name → signature
     pub interfaces: HashMap<String, InterfaceInfo>, // interface name → interface info
     pub classes: HashMap<String, ClassInfo>,     // class name → class info
+    pub enums: HashMap<String, EnumInfo>,
+    pub packed_classes: HashMap<String, PackedClassInfo>,
     pub extern_functions: HashMap<String, ExternFunctionSig>,
     pub extern_classes: HashMap<String, ExternClassInfo>,
     pub extern_globals: HashMap<String, PhpType>,
     pub required_libraries: Vec<String>,
+    pub warnings: Vec<CompileWarning>,
 }
 ```
 

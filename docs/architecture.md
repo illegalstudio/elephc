@@ -44,7 +44,7 @@ PHP source (.php)
 ┌─────────┐
 │  Type    │  src/types/
 │  Checker │  traits.rs, checker/mod.rs, checker/builtins.rs, checker/functions.rs
-│          │  Validates types, computes packed layouts, returns CheckResult
+│          │  Validates types, computes packed layouts, collects warnings, returns CheckResult
 └────┬─────┘
      │
      ▼
@@ -90,6 +90,7 @@ src/
 ├── types/
 │   ├── mod.rs                 PhpType enum, TypeEnv, packed layout metadata, CheckResult
 │   ├── traits.rs              Trait flattening and conflict-resolution helpers
+│   ├── warnings.rs            Non-fatal diagnostics (unused vars, unreachable code)
 │   └── checker/
 │       ├── mod.rs             check_stmt(), infer_type()
 │       ├── builtins.rs        Built-in function type signatures
@@ -107,7 +108,7 @@ src/
 │   │   ├── compare.rs         Comparison and widening helpers
 │   │   ├── helpers.rs         Shared expression-codegen utilities
 │   │   ├── objects.rs         Object-expression dispatch
-│   │   ├── objects/           Allocation / property / method dispatch helpers
+│   │   ├── objects/           `allocation.rs`, `access.rs`, `dispatch.rs`
 │   │   └── ownership.rs       Result ownership classification
 │   ├── stmt.rs                Statement codegen
 │   ├── stmt/                  Statement submodules
@@ -141,7 +142,7 @@ src/
 │       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, str_persist, ... (53 files)
 │       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, sort, usort, refcount, gc/decref dispatch, ... (100 files)
 │       ├── io/                fopen, fgets, fread, stat, scandir, ... (17 files)
-│       ├── buffers/           buffer_new, buffer_len, bounds_fail, use_after_free
+│       ├── buffers/           buffer_new, buffer_len, bounds_fail, use_after_free helpers (5 files incl. mod.rs)
 │       ├── exceptions.rs      Exception runtime module root / re-exports
 │       ├── exceptions/        cleanup_frames, matches, throw_current, rethrow_current helpers
 │       ├── system/            build_argv, time, getenv, shell_exec, date, mktime, strtotime, match_unhandled, enum_from_fail, json_encode_*, json_decode, preg_*, ... (28 files)
@@ -241,19 +242,20 @@ Offset  Size  Field
 
 ### Runtime BSS and data symbols
 
-The runtime reserves a fixed set of global symbols in `src/codegen/runtime/data.rs` via `emit_runtime_data()`:
+The runtime data emission in `src/codegen/runtime/data.rs` is split into `emit_runtime_data_fixed()` (shared heap buffers, diagnostics, lookup tables) and `emit_runtime_data_user()` (globals, statics, enum-case storage, and metadata derived from the user's program):
 
 | Symbol group | Symbols | Purpose |
 |---|---|---|
 | String scratch | `_concat_buf`, `_concat_off` | Temporary string results for expression evaluation |
 | CLI globals | `_global_argc`, `_global_argv` | Saved OS argument state used to build `$argv` |
 | Heap allocator | `_heap_buf`, `_heap_off`, `_heap_free_list`, `_heap_small_bins`, `_heap_debug_enabled`, `_heap_max` | Heap storage plus general/small-bin allocator metadata and heap-debug toggle |
-| Runtime diagnostics | `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg`, `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_match_unhandled_msg`, `_uncaught_exc_msg`, `_heap_dbg_*` | Fatal error messages plus heap-debug summary/failure strings |
+| Runtime diagnostics | `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg`, `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_match_unhandled_msg`, `_enum_from_msg`, `_uncaught_exc_msg`, `_heap_dbg_*` | Fatal error messages plus heap-debug summary/failure strings |
 | GC statistics and cycle state | `_gc_allocs`, `_gc_frees`, `_gc_live`, `_gc_peak`, `_gc_collecting`, `_gc_release_suppressed` | Allocation/free/live-byte counters plus targeted-cycle-collector coordination flags |
 | Exception state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_class_parent_ids` | Active handler stack, activation cleanup stack, current exception object, and parent links used for catch matching |
 | I/O scratch | `_cstr_buf`, `_cstr_buf2`, `_eof_flags` | Syscall-oriented C-string scratch buffers and EOF bookkeeping |
 | String/regex tables | `_fmt_g`, `_b64_encode_tbl`, `_b64_decode_tbl`, `_pcre_*` | Formatting and lookup tables for runtime helpers |
 | JSON/date tables | `_json_true`, `_json_false`, `_json_null`, `_day_names`, `_month_names` | Static data used by JSON and date routines |
+| User-dependent storage | `_gvar_<name>`, `_static_<func>_<name>`, `_static_<func>_<name>_init`, enum-case `.comm` symbols via `enum_case_symbol(...)` | Global/static storage plus singleton backing slots for enum cases |
 | Class/interface metadata tables | `_interface_count`, `_interface_method_ptrs`, `_interface_methods_<id>`, `_class_interface_ptrs`, `_class_interfaces_<id>`, `_class_interface_impl_<class>_<iface>`, `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>`, `_class_vtable_ptrs`, `_class_vtable_<id>`, `_class_static_vtable_ptrs`, `_class_static_vtable_<id>` | Per-interface method-order metadata plus per-class property traversal metadata and instance/static dispatch tables |
 
 ### Heap allocator

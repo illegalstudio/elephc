@@ -14,7 +14,7 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("buffer_free()");
     emit_expr(&args[0], emitter, ctx, data);
-    emitter.instruction("bl __rt_heap_free");                                    // release the buffer header and contiguous payload
+    emitter.instruction("bl __rt_heap_free");                                   // release the buffer header and contiguous payload
 
     // -- nullify the local stack slot so use-after-free hits a null check --
     // The type checker restricts buffer_free() to plain local variables only

@@ -1,10 +1,11 @@
 pub mod checker;
 pub mod traits;
+mod warnings;
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-use crate::errors::CompileError;
+use crate::errors::{CompileError, CompileWarning};
 use crate::parser::ast::{CType, ClassMethod, Program, Visibility};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -311,6 +312,7 @@ pub struct CheckResult {
     pub extern_classes: HashMap<String, ExternClassInfo>,
     pub extern_globals: HashMap<String, PhpType>,
     pub required_libraries: Vec<String>,
+    pub warnings: Vec<CompileWarning>,
 }
 
 pub fn packed_type_size(

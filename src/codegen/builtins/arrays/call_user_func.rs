@@ -25,7 +25,7 @@ pub fn emit(
     let mut sig: Option<FunctionSig> = None;
     if is_callable_expr {
         emit_expr(&args[0], emitter, ctx, data);
-        emitter.instruction("mov x19, x0");                                         // move synthesized callback address to x19
+        emitter.instruction("mov x19, x0");                                     // move synthesized callback address to x19
         if let Some(deferred) = ctx.deferred_closures.last() {
             sig = Some(deferred.sig.clone());
         }
@@ -43,8 +43,8 @@ pub fn emit(
         };
         let label = function_symbol(&func_name);
         sig = ctx.functions.get(&func_name).cloned();
-        emitter.instruction(&format!("adrp x19, {}@PAGE", label));                  // load page address of callback function
-        emitter.instruction(&format!("add x19, x19, {}@PAGEOFF", label));           // resolve full address of callback function
+        emitter.instruction(&format!("adrp x19, {}@PAGE", label));              // load page address of callback function
+        emitter.instruction(&format!("add x19, x19, {}@PAGEOFF", label));       // resolve full address of callback function
     }
     let ret_ty = sig
         .as_ref()
@@ -65,8 +65,8 @@ pub fn emit(
                 if ctx.global_vars.contains(var_name) {
                     let label = format!("_gvar_{}", var_name);
                     emitter.comment(&format!("call_user_func ref arg: address of global ${}", var_name));
-                    emitter.instruction(&format!("adrp x0, {}@PAGE", label));       // load page of global var
-                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); // resolve global var address
+                    emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page of global var
+                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); //resolve global var address
                 } else if ctx.ref_params.contains(var_name) {
                     let var = ctx.variables.get(var_name).expect("undefined ref callback argument");
                     emitter.comment(&format!("call_user_func ref arg: forward underlying reference for ${}", var_name));
@@ -74,12 +74,12 @@ pub fn emit(
                 } else {
                     let var = ctx.variables.get(var_name).expect("undefined callback argument");
                     emitter.comment(&format!("call_user_func ref arg: address of ${}", var_name));
-                    emitter.instruction(&format!("sub x0, x29, #{}", var.stack_offset)); // compute address of local variable
+                    emitter.instruction(&format!("sub x0, x29, #{}", var.stack_offset)); //compute address of local variable
                 }
             } else {
                 panic!("call_user_func() by-reference callback argument must be a variable");
             }
-            emitter.instruction("str x0, [sp, #-16]!");                             // push argument address onto stack
+            emitter.instruction("str x0, [sp, #-16]!");                         // push argument address onto stack
             arg_types.push(PhpType::Int);
             continue;
         }

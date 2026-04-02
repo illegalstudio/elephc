@@ -12,7 +12,7 @@ This document describes the PHP subset supported by elephc. The language aims to
 | `bool` | Yes | `true`/`false` as distinct type. `echo false` prints nothing, `echo true` prints `1`. Coerces to 0/1 in arithmetic. |
 | `float` | Yes | 64-bit double-precision. Literals: `3.14`, `.5`, `1.5e3`, `1.0e-5`. Constants: `INF`, `NAN`. |
 | `array` | Yes | Indexed (`[1, 2, 3]`) and associative (`["key" => "value"]`). Arrays use copy-on-write semantics: assignments and by-value calls share storage until the first write. |
-| `mixed` | Internal | Static helper type used when an associative array stores heterogeneous values. Runtime values are boxed with a per-entry tag, but PHP source code does not spell this type explicitly. |
+| `mixed` | Yes | Supported in type hints and typed locals. Runtime values are boxed with a per-value tag and are also used internally when associative arrays store heterogeneous values. |
 | `object` | Yes | Class instances. Heap-allocated, fixed-layout. `new ClassName(...)` |
 | `enum` | Yes | Pure and backed enums. Cases are singletons. Backed enums support `->value`, `::from()`, `::tryFrom()`, `::cases()`. |
 | `pointer` | Yes | 64-bit memory address. `ptr($var)`, `ptr_null()`. Echo prints `0x...` hex. |
@@ -58,6 +58,23 @@ $x = 42;              // reassignment from null works
 - `array_search()` returns `-1` when the value is not found, not `false`. Use `array_search($v, $arr) !== -1` or `array_search($v, $arr) >= 0` instead of `array_search($v, $arr) !== false`.
 - Integer overflow wraps instead of promoting to float. In PHP, `PHP_INT_MAX + 1` returns a float (`9.2233720368548E+18`); in elephc it wraps to `-9223372036854775808` (native 64-bit signed integer behavior). This is by design — runtime overflow detection would require checking the CPU overflow flag after every arithmetic operation, which is incompatible with the ahead-of-time compilation model.
 - Loose comparison (`==`) between different types coerces both sides to integer. PHP has more nuanced type juggling rules (e.g., numeric strings compared as numbers). elephc simplifies this: strings are parsed as integers (empty string and non-numeric strings become `0`).
+
+## Compiler diagnostics
+
+elephc reports errors with source spans and tries to recover far enough to surface multiple independent problems in a single compilation where possible.
+
+Example:
+
+```text
+error[3:5]: Undefined variable: $name
+error[8:1]: Function 'foo' declared return type string but returns int
+```
+
+The compiler also emits non-fatal warnings after successful type checking. Current warnings include:
+- unused local variables and parameters
+- unreachable code
+
+Warnings are informational and do not stop code generation.
 
 ## Compiler-specific extensions
 

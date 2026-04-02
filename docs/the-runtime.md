@@ -4,7 +4,7 @@
 
 ---
 
-**Source:** `src/codegen/runtime/` — `mod.rs`, `data.rs`, `strings/`, `arrays/`, `exceptions.rs`, `exceptions/`, `io/`, `system/`, `pointers/`
+**Source:** `src/codegen/runtime/` — `mod.rs`, `data.rs`, `strings/`, `arrays/`, `buffers/`, `exceptions.rs`, `exceptions/`, `io/`, `system/`, `pointers/`
 
 The runtime is a collection of **hand-written assembly routines** that handle operations too complex for inline code generation. When the [code generator](the-codegen.md) needs to convert an integer to a string or concatenate two strings, it emits a `bl __rt_itoa` or `bl __rt_concat` — a call to a runtime routine.
 
@@ -390,7 +390,7 @@ These helpers support the compiler-specific pointer builtins.
 
 ## Buffer routines
 
-**Source:** `src/codegen/runtime/buffers/` (4 files)
+**Source:** `src/codegen/runtime/buffers/` (5 files including `mod.rs`)
 
 These helpers support the compiler-specific `buffer<T>` hot-path data type.
 
@@ -428,6 +428,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     // system: argv, time, getenv, shell, date/mktime/strtotime, JSON, regex
     // exceptions: cleanup walk, catch matching, throw/rethrow helpers
     // arrays: heap alloc/free, array/hash helpers, sort, callbacks, refcount
+    // buffers: contiguous buffer allocation, bounds checking, UAF traps
     // io: c-string buffers, file I/O, stat/fs helpers, scandir/glob/tempnam, CSV
     // pointers: ptoa, null check, str_to_cstr, cstr_to_str
 }
@@ -439,7 +440,7 @@ All routines are included in every binary, even if unused. This is simpler than 
 
 ## Runtime data
 
-The runtime also declares global buffers using `.comm` and static data tables:
+The runtime data layer is split between `emit_runtime_data_fixed()` (shared buffers, error strings, lookup tables) and `emit_runtime_data_user()` (per-program globals, statics, enum-case slots, and metadata tables). Together they declare global buffers using `.comm` and static data tables:
 
 ```asm
 .comm _concat_buf, 65536     ; 64KB string buffer
@@ -477,6 +478,7 @@ Additionally, the runtime emits static data tables:
 - `_b64_encode_tbl` — 64-byte Base64 encoding lookup table
 - `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
 - `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` — fatal runtime error strings
+- `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_match_unhandled_msg`, `_enum_from_msg` — fatal runtime error strings for buffers, `match`, and enums
 - `_heap_dbg_bad_refcount_msg`, `_heap_dbg_double_free_msg`, `_heap_dbg_free_list_msg` — fatal heap-debug error strings enabled by `--heap-debug`
 - `_heap_dbg_*` summary labels — fixed strings used by `__rt_heap_debug_report` for alloc/free/live/leak output
 - `_uncaught_exc_msg` — fatal exception string written by `__rt_throw_current` when no handler exists
@@ -487,6 +489,7 @@ Additionally, the runtime emits static data tables:
 - `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>` — per-class property traversal metadata used by object deep-free and cycle collection
 - `_class_vtable_ptrs`, `_class_vtable_<id>` — per-class virtual-method tables used by inheritance dispatch through `class_id`
 - `_class_static_vtable_ptrs`, `_class_static_vtable_<id>` — per-class static-method tables used by late static binding
+- `enum_case_symbol(...)`-derived `.comm` slots — singleton backing storage for enum cases emitted from user program metadata
 
 When `--heap-debug` is enabled, the runtime also activates `__rt_heap_debug_check_live`, `__rt_heap_debug_validate_free_list`, and `__rt_heap_debug_report`. These helpers turn allocator corruption into immediate fatal errors for duplicate frees, zero-refcount `incref`/`decref` paths, and malformed free-list or small-bin state, poison freed payload bytes with `0xA5`, and print an end-of-process summary with alloc/free counts, live block count, live bytes, leak summary, and the peak live-byte watermark.
 

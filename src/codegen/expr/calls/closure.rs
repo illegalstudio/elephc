@@ -180,8 +180,8 @@ pub(super) fn emit_closure(
     });
 
     emitter.comment("closure: load function address");
-    emitter.instruction(&format!("adrp x0, {}@PAGE", closure_label)); // load page base of closure function
-    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", closure_label)); // add page offset to get exact closure address
+    emitter.instruction(&format!("adrp x0, {}@PAGE", closure_label));           // load page base of closure function
+    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", closure_label));     // add page offset to get exact closure address
     PhpType::Callable
 }
 
@@ -261,9 +261,8 @@ pub(super) fn emit_closure_call(
                 if ctx.global_vars.contains(var_name) {
                     let label = format!("_gvar_{}", var_name);
                     emitter.comment(&format!("closure ref arg: address of global ${}", var_name));
-                    emitter.instruction(&format!("adrp x0, {}@PAGE", label)); // load page of global var
-                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label));
-                // resolve global var address
+                    emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page of global var
+                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); //resolve global var address
                 } else if ctx.ref_params.contains(var_name) {
                     let cap_info = match ctx.variables.get(var_name) {
                         Some(v) => v,
@@ -277,8 +276,7 @@ pub(super) fn emit_closure_call(
                         "closure ref arg: forward underlying reference for ${}",
                         var_name
                     ));
-                    crate::codegen::abi::load_at_offset(emitter, "x0", cap_info.stack_offset);
-                // load existing reference pointer
+                    crate::codegen::abi::load_at_offset(emitter, "x0", cap_info.stack_offset); // load existing reference pointer
                 } else {
                     let cap_info = match ctx.variables.get(var_name) {
                         Some(v) => v,
@@ -288,14 +286,13 @@ pub(super) fn emit_closure_call(
                         }
                     };
                     emitter.comment(&format!("closure ref arg: address of ${}", var_name));
-                    emitter.instruction(&format!("sub x0, x29, #{}", cap_info.stack_offset));
-                    // compute address of local variable
+                    emitter.instruction(&format!("sub x0, x29, #{}", cap_info.stack_offset)); //compute address of local variable
                 }
             } else {
                 let ty = super::super::emit_expr(arg, emitter, ctx, data);
                 super::super::retain_borrowed_heap_arg(emitter, arg, &ty);
             }
-            emitter.instruction("str x0, [sp, #-16]!"); // push address for by-ref argument
+            emitter.instruction("str x0, [sp, #-16]!");                         // push address for by-ref argument
             arg_types.push(PhpType::Int);
         } else {
             let pushed_ty = args::push_expr_arg(arg, target_ty, emitter, ctx, data);
@@ -315,8 +312,8 @@ pub(super) fn emit_closure_call(
             };
             let elem_stride = args::array_element_stride(&source_elem_ty);
             let _ = super::super::emit_expr(spread_expr, emitter, ctx, data);
-            emitter.instruction("mov x20, x0"); // preserve the spread array pointer across boxing/incref helper calls
-            emitter.instruction("add x20, x20, #24"); // skip 24-byte array header to reach data
+            emitter.instruction("mov x20, x0");                                 // preserve the spread array pointer across boxing/incref helper calls
+            emitter.instruction("add x20, x20, #24");                           // skip 24-byte array header to reach data
             for idx in 0..remaining {
                 let target_ty = args::declared_target_ty(sig.as_ref(), spread_at_index + idx);
                 args::load_array_element_to_result(emitter, &source_elem_ty, "x20", idx * elem_stride);
@@ -332,14 +329,14 @@ pub(super) fn emit_closure_call(
             emitter.comment("spread array as variadic closure param");
             let ty = super::super::emit_expr(spread_expr, emitter, ctx, data);
             super::super::retain_borrowed_heap_arg(emitter, spread_expr, &ty);
-            emitter.instruction("str x0, [sp, #-16]!"); // push variadic array pointer onto stack
+            emitter.instruction("str x0, [sp, #-16]!");                         // push variadic array pointer onto stack
             arg_types.push(ty);
         } else if variadic_args.is_empty() {
             emitter.comment("empty variadic closure array");
-            emitter.instruction("mov x0, #4"); // initial capacity: 4 (grows dynamically)
-            emitter.instruction("mov x1, #8"); // element size: 8 bytes
-            emitter.instruction("bl __rt_array_new"); // allocate empty array for variadic param
-            emitter.instruction("str x0, [sp, #-16]!"); // push empty variadic array onto stack
+            emitter.instruction("mov x0, #4");                                  // initial capacity: 4 (grows dynamically)
+            emitter.instruction("mov x1, #8");                                  // element size: 8 bytes
+            emitter.instruction("bl __rt_array_new");                           // allocate empty array for variadic param
+            emitter.instruction("str x0, [sp, #-16]!");                         // push empty variadic array onto stack
             arg_types.push(PhpType::Array(Box::new(PhpType::Int)));
         } else {
             let n = variadic_args.len();
@@ -349,40 +346,36 @@ pub(super) fn emit_closure_call(
                 PhpType::Str => 16,
                 _ => 8,
             };
-            emitter.instruction(&format!("mov x0, #{}", n)); // capacity: exact element count
-            emitter.instruction(&format!("mov x1, #{}", es)); // element size in bytes
-            emitter.instruction("bl __rt_array_new"); // allocate array for variadic args
-            emitter.instruction("str x0, [sp, #-16]!"); // save variadic array pointer on stack
+            emitter.instruction(&format!("mov x0, #{}", n));                    // capacity: exact element count
+            emitter.instruction(&format!("mov x1, #{}", es));                   // element size in bytes
+            emitter.instruction("bl __rt_array_new");                           // allocate array for variadic args
+            emitter.instruction("str x0, [sp, #-16]!");                         // save variadic array pointer on stack
 
             for (i, varg) in variadic_args.iter().enumerate() {
                 let ty = super::super::emit_expr(varg, emitter, ctx, data);
                 super::super::retain_borrowed_heap_arg(emitter, varg, &ty);
-                emitter.instruction("ldr x9, [sp]"); // peek variadic array pointer from stack
+                emitter.instruction("ldr x9, [sp]");                            // peek variadic array pointer from stack
                 if i == 0 {
                     super::super::arrays::emit_array_value_type_stamp(emitter, "x9", &ty);
                 }
                 match &ty {
                     PhpType::Int | PhpType::Bool | PhpType::Callable => {
-                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8));
-                        // store int-like element in variadic array
+                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); //store int-like element in variadic array
                     }
                     PhpType::Float => {
-                        emitter.instruction(&format!("str d0, [x9, #{}]", 24 + i * 8));
-                        // store float element in variadic array
+                        emitter.instruction(&format!("str d0, [x9, #{}]", 24 + i * 8)); //store float element in variadic array
                     }
                     PhpType::Str => {
-                        emitter.instruction(&format!("str x1, [x9, #{}]", 24 + i * 16)); // store variadic string pointer
-                        emitter.instruction(&format!("str x2, [x9, #{}]", 24 + i * 16 + 8));
-                        // store variadic string length
+                        emitter.instruction(&format!("str x1, [x9, #{}]", 24 + i * 16)); //store variadic string pointer
+                        emitter.instruction(&format!("str x2, [x9, #{}]", 24 + i * 16 + 8)); //store variadic string length
                     }
                     PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
-                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8));
-                        // store refcounted variadic payload
+                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); //store refcounted variadic payload
                     }
                     _ => {}
                 }
-                emitter.instruction(&format!("mov x10, #{}", i + 1)); // new variadic array length after this element
-                emitter.instruction("str x10, [x9]"); // persist updated variadic array length
+                emitter.instruction(&format!("mov x10, #{}", i + 1));           // new variadic array length after this element
+                emitter.instruction("str x10, [x9]");                           // persist updated variadic array length
             }
 
             arg_types.push(PhpType::Array(Box::new(first_elem_ty)));
@@ -446,16 +439,16 @@ pub(super) fn emit_closure_call(
             | PhpType::Packed(_)
             | PhpType::Pointer(_) => {
                 crate::codegen::abi::load_at_offset(emitter, "x0", cap_offset); // load captured int/bool/array value
-                emitter.instruction("str x0, [sp, #-16]!"); // push captured value onto stack
+                emitter.instruction("str x0, [sp, #-16]!");                     // push captured value onto stack
             }
             PhpType::Float => {
                 crate::codegen::abi::load_at_offset(emitter, "d0", cap_offset); // load captured float value
-                emitter.instruction("str d0, [sp, #-16]!"); // push captured float onto stack
+                emitter.instruction("str d0, [sp, #-16]!");                     // push captured float onto stack
             }
             PhpType::Str => {
                 crate::codegen::abi::load_at_offset(emitter, "x1", cap_offset); // load captured string pointer
                 crate::codegen::abi::load_at_offset(emitter, "x2", cap_offset - 8); // load captured string length
-                emitter.instruction("stp x1, x2, [sp, #-16]!"); // push captured string ptr+len onto stack
+                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push captured string ptr+len onto stack
             }
             PhpType::Void => {}
         }
@@ -472,11 +465,11 @@ pub(super) fn emit_closure_call(
     };
     let var_offset = var_info.stack_offset;
     crate::codegen::abi::load_at_offset(emitter, "x9", var_offset); // load closure function address from stack
-    emitter.instruction("str x9, [sp, #-16]!"); // push closure address temporarily
+    emitter.instruction("str x9, [sp, #-16]!");                                 // push closure address temporarily
 
     let assignments = args::build_arg_assignments(&arg_types, 0);
 
-    emitter.instruction("ldr x9, [sp], #16"); // pop closure function address into x9
+    emitter.instruction("ldr x9, [sp], #16");                                   // pop closure function address into x9
     args::load_arg_assignments(emitter, &assignments, total_args);
 
     let ret_ty = ctx
@@ -485,9 +478,9 @@ pub(super) fn emit_closure_call(
         .map(|s| s.return_type.clone())
         .unwrap_or(PhpType::Int);
 
-    emitter.instruction("mov x19, x9"); // preserve closure address across concat-offset save
+    emitter.instruction("mov x19, x9");                                         // preserve closure address across concat-offset save
     super::super::save_concat_offset_before_nested_call(emitter);
-    emitter.instruction("blr x19"); // branch to closure via function pointer in x19
+    emitter.instruction("blr x19");                                             // branch to closure via function pointer in x19
     super::super::restore_concat_offset_after_nested_call(emitter, &ret_ty);
 
     ret_ty

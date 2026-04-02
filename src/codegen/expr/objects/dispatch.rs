@@ -77,7 +77,7 @@ fn eval_and_push_args(
                     let label = format!("_gvar_{}", var_name);
                     emitter.comment(&format!("method ref arg: address of global ${}", var_name));
                     emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page of global var
-                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); // resolve global var address
+                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); //resolve global var address
                 } else if ctx.ref_params.contains(var_name) {
                     let Some(var) = ctx.variables.get(var_name) else {
                         emitter.comment(&format!("WARNING: undefined ref variable ${}", var_name));
@@ -91,7 +91,7 @@ fn eval_and_push_args(
                         continue;
                     };
                     emitter.comment(&format!("method ref arg: address of ${}", var_name));
-                    emitter.instruction(&format!("sub x0, x29, #{}", var.stack_offset)); // compute address of local variable
+                    emitter.instruction(&format!("sub x0, x29, #{}", var.stack_offset)); //compute address of local variable
                 }
             } else {
                 let ty = emit_expr(arg, emitter, ctx, data);
@@ -176,17 +176,17 @@ fn eval_and_push_args(
                 }
                 match &ty {
                     PhpType::Int | PhpType::Bool | PhpType::Callable => {
-                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); // store int-like variadic element
+                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); //store int-like variadic element
                     }
                     PhpType::Float => {
-                        emitter.instruction(&format!("str d0, [x9, #{}]", 24 + i * 8)); // store float variadic element
+                        emitter.instruction(&format!("str d0, [x9, #{}]", 24 + i * 8)); //store float variadic element
                     }
                     PhpType::Str => {
-                        emitter.instruction(&format!("str x1, [x9, #{}]", 24 + i * 16)); // store variadic string pointer
-                        emitter.instruction(&format!("str x2, [x9, #{}]", 24 + i * 16 + 8)); // store variadic string length
+                        emitter.instruction(&format!("str x1, [x9, #{}]", 24 + i * 16)); //store variadic string pointer
+                        emitter.instruction(&format!("str x2, [x9, #{}]", 24 + i * 16 + 8)); //store variadic string length
                     }
                     PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
-                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); // store refcounted variadic payload
+                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); //store refcounted variadic payload
                     }
                     _ => {}
                 }
@@ -607,7 +607,7 @@ fn emit_enum_cases(
     _ctx: &mut Context,
 ) -> PhpType {
     let capacity = if enum_info.cases.is_empty() { 4 } else { enum_info.cases.len() };
-    emitter.instruction(&format!("mov x0, #{}", capacity));                    // capacity = exact enum case count (or a small empty-array default)
+    emitter.instruction(&format!("mov x0, #{}", capacity));                     // capacity = exact enum case count (or a small empty-array default)
     emitter.instruction("mov x1, #8");                                          // enum case arrays store one pointer per element
     emitter.instruction("bl __rt_array_new");                                   // allocate the enum cases array
     emitter.instruction("str x0, [sp, #-16]!");                                 // save the array pointer while filling elements
@@ -671,11 +671,11 @@ fn emit_enum_from_like(
                 };
                 let next_label = ctx.next_label("enum_from_next");
                 load_immediate(emitter, "x10", *value);                         // materialize the current enum backing integer for comparison
-                emitter.instruction("cmp x0, x10");                              // compare the input integer with the current enum backing value
+                emitter.instruction("cmp x0, x10");                             // compare the input integer with the current enum backing value
                 emitter.instruction(&format!("b.ne {}", next_label));           // continue scanning when the current enum backing value does not match
                 let case_label = enum_case_symbol(enum_name, &case.name);
                 emitter.instruction(&format!("adrp x9, {}@PAGE", case_label));  // load page of the matching enum singleton slot
-                emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", case_label)); // resolve the matching enum singleton slot address
+                emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", case_label)); //resolve the matching enum singleton slot address
                 emitter.instruction("ldr x0, [x9]");                            // load the matching enum singleton pointer
                 emitter.instruction(&format!("b {}", success_label));           // return the matching enum singleton immediately
                 emitter.label(&next_label);
@@ -700,7 +700,7 @@ fn emit_enum_from_like(
                 emitter.label(&match_label);
                 let case_label = enum_case_symbol(enum_name, &case.name);
                 emitter.instruction(&format!("adrp x9, {}@PAGE", case_label));  // load page of the matching enum singleton slot
-                emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", case_label)); // resolve the matching enum singleton slot address
+                emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", case_label)); //resolve the matching enum singleton slot address
                 emitter.instruction("ldr x0, [x9]");                            // load the matching enum singleton pointer
                 if let Some(cleanup_label) = &string_cleanup_label {
                     emitter.instruction(&format!("b {}", cleanup_label));       // drop the preserved input string before returning the match
@@ -758,26 +758,14 @@ fn load_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
     }
 
     let uval = value as u64;
-    emitter.instruction(&format!("movz {}, #0x{:x}", reg, uval & 0xFFFF));     // seed the low 16 bits of the wider immediate value
+    emitter.instruction(&format!("movz {}, #0x{:x}", reg, uval & 0xFFFF));      // seed the low 16 bits of the wider immediate value
     if (uval >> 16) & 0xFFFF != 0 {
-        emitter.instruction(&format!(
-            "movk {}, #0x{:x}, lsl #16",
-            reg,
-            (uval >> 16) & 0xFFFF
-        ));                                                                     // patch bits 16-31 of the wider immediate value
+        emitter.instruction(&format!("movk {}, #0x{:x}, lsl #16", reg, (uval >> 16) & 0xFFFF)); //patch bits 16-31 of the wider immediate value
     }
     if (uval >> 32) & 0xFFFF != 0 {
-        emitter.instruction(&format!(
-            "movk {}, #0x{:x}, lsl #32",
-            reg,
-            (uval >> 32) & 0xFFFF
-        ));                                                                     // patch bits 32-47 of the wider immediate value
+        emitter.instruction(&format!("movk {}, #0x{:x}, lsl #32", reg, (uval >> 32) & 0xFFFF)); //patch bits 32-47 of the wider immediate value
     }
     if (uval >> 48) & 0xFFFF != 0 {
-        emitter.instruction(&format!(
-            "movk {}, #0x{:x}, lsl #48",
-            reg,
-            (uval >> 48) & 0xFFFF
-        ));                                                                     // patch bits 48-63 of the wider immediate value
+        emitter.instruction(&format!("movk {}, #0x{:x}, lsl #48", reg, (uval >> 48) & 0xFFFF)); //patch bits 48-63 of the wider immediate value
     }
 }

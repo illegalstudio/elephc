@@ -16,6 +16,6 @@ pub fn emit(
     if !matches!(buf_ty, PhpType::Buffer(_)) {
         emitter.comment("WARNING: buffer_len() received a non-buffer argument");
     }
-    emitter.instruction("bl __rt_buffer_len");                                     // load the logical element count from the buffer header
+    emitter.instruction("bl __rt_buffer_len");                                  // load the logical element count from the buffer header
     Some(PhpType::Int)
 }
