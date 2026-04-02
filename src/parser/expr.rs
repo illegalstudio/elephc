@@ -69,96 +69,99 @@ fn parse_expr_bp(
 ) -> Result<Expr, CompileError> {
     let mut lhs = parse_prefix(tokens, pos)?;
 
-    // Postfix array access: $expr[index]
-    while *pos < tokens.len() && tokens[*pos].0 == Token::LBracket {
-        let span = tokens[*pos].1;
-        *pos += 1;
-        let index = parse_expr(tokens, pos)?;
-        if *pos >= tokens.len() || tokens[*pos].0 != Token::RBracket {
-            return Err(CompileError::new(span, "Expected ']'"));
-        }
-        *pos += 1;
-        lhs = Expr::new(
-            ExprKind::ArrayAccess {
-                array: Box::new(lhs),
-                index: Box::new(index),
-            },
-            span,
-        );
-    }
-
-    // Postfix property/method access: $obj->prop or $obj->method(args)
-    while *pos < tokens.len() && tokens[*pos].0 == Token::Arrow {
-        let arrow_span = tokens[*pos].1;
-        *pos += 1; // consume ->
-        let member_name = match tokens.get(*pos).map(|(t, _)| t) {
-            Some(Token::Identifier(n)) => {
-                let n = n.clone();
-                *pos += 1;
-                n
-            }
-            _ => {
-                return Err(CompileError::new(
-                    arrow_span,
-                    "Expected property or method name after '->'",
-                ))
-            }
-        };
-        // Check if method call: ->method(args)
-        if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
-            *pos += 1;
-            if parse_first_class_callable_parens(tokens, pos, arrow_span)? {
-                lhs = Expr::new(
-                    ExprKind::FirstClassCallable(CallableTarget::Method {
-                        object: Box::new(lhs),
-                        method: member_name,
-                    }),
-                    arrow_span,
-                );
-            } else {
-                let args = parse_args(tokens, pos, arrow_span)?;
-                lhs = Expr::new(
-                    ExprKind::MethodCall {
-                        object: Box::new(lhs),
-                        method: member_name,
-                        args,
-                    },
-                    arrow_span,
-                );
-            }
-        } else {
-            // Property access: ->prop
-            lhs = Expr::new(
-                ExprKind::PropertyAccess {
-                    object: Box::new(lhs),
-                    property: member_name,
-                },
-                arrow_span,
-            );
-        }
-    }
-
-    // Postfix call on expression result: $arr[0](args), $f()(), etc.
-    while *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
-        if matches!(
-            lhs.kind,
-            ExprKind::ArrayAccess { .. }
-                | ExprKind::ExprCall { .. }
-                | ExprKind::ClosureCall { .. }
-                | ExprKind::FunctionCall { .. }
-        ) {
-            let call_span = tokens[*pos].1;
-            *pos += 1;
-            let args = parse_args(tokens, pos, call_span)?;
-            lhs = Expr::new(
-                ExprKind::ExprCall {
-                    callee: Box::new(lhs),
-                    args,
-                },
-                call_span,
-            );
-        } else {
+    // Postfix chains: $obj->prop[$i](), $obj->method()->items[0], ...
+    loop {
+        if *pos >= tokens.len() {
             break;
+        }
+
+        match &tokens[*pos].0 {
+            Token::LBracket => {
+                let span = tokens[*pos].1;
+                *pos += 1;
+                let index = parse_expr(tokens, pos)?;
+                if *pos >= tokens.len() || tokens[*pos].0 != Token::RBracket {
+                    return Err(CompileError::new(span, "Expected ']'"));
+                }
+                *pos += 1;
+                lhs = Expr::new(
+                    ExprKind::ArrayAccess {
+                        array: Box::new(lhs),
+                        index: Box::new(index),
+                    },
+                    span,
+                );
+            }
+            Token::Arrow => {
+                let arrow_span = tokens[*pos].1;
+                *pos += 1; // consume ->
+                let member_name = match tokens.get(*pos).map(|(t, _)| t) {
+                    Some(Token::Identifier(n)) => {
+                        let n = n.clone();
+                        *pos += 1;
+                        n
+                    }
+                    _ => {
+                        return Err(CompileError::new(
+                            arrow_span,
+                            "Expected property or method name after '->'",
+                        ))
+                    }
+                };
+                if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
+                    *pos += 1;
+                    if parse_first_class_callable_parens(tokens, pos, arrow_span)? {
+                        lhs = Expr::new(
+                            ExprKind::FirstClassCallable(CallableTarget::Method {
+                                object: Box::new(lhs),
+                                method: member_name,
+                            }),
+                            arrow_span,
+                        );
+                    } else {
+                        let args = parse_args(tokens, pos, arrow_span)?;
+                        lhs = Expr::new(
+                            ExprKind::MethodCall {
+                                object: Box::new(lhs),
+                                method: member_name,
+                                args,
+                            },
+                            arrow_span,
+                        );
+                    }
+                } else {
+                    lhs = Expr::new(
+                        ExprKind::PropertyAccess {
+                            object: Box::new(lhs),
+                            property: member_name,
+                        },
+                        arrow_span,
+                    );
+                }
+            }
+            Token::LParen => {
+                if matches!(
+                    lhs.kind,
+                    ExprKind::ArrayAccess { .. }
+                        | ExprKind::ExprCall { .. }
+                        | ExprKind::ClosureCall { .. }
+                        | ExprKind::FunctionCall { .. }
+                ) {
+                    let call_span = tokens[*pos].1;
+                    *pos += 1;
+                    let args = parse_args(tokens, pos, call_span)?;
+                    lhs = Expr::new(
+                        ExprKind::ExprCall {
+                            callee: Box::new(lhs),
+                            args,
+                        },
+                        call_span,
+                    );
+                } else {
+                    break;
+                }
+            }
+            _ => break,
         }
     }
 

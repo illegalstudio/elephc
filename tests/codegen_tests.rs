@@ -1186,6 +1186,94 @@ echo $probe->ok();
 }
 
 #[test]
+fn test_namespace_resolves_class_type_hints_in_functions_and_typed_locals() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo\App;
+
+class Box {
+    public $value;
+
+    public function __construct() {
+        $this->value = 7;
+    }
+}
+
+function make_box(): Box {
+    return new Box();
+}
+
+Box $box = make_box();
+echo $box->value;
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_property_array_access_after_property_lookup() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag {
+    public $items;
+
+    public function __construct() {
+        $this->items = [10, 20, 30];
+    }
+
+    public function first(): int {
+        return $this->items[0];
+    }
+}
+
+$bag = new Bag();
+echo $bag->first();
+"#,
+    );
+    assert_eq!(out, "10");
+}
+
+#[test]
+fn test_typed_method_param_is_available_with_declared_type_in_body() {
+    let out = compile_and_run(
+        r#"<?php
+class Reader {
+    public function len(string $text): int {
+        return strlen($text);
+    }
+}
+
+$reader = new Reader();
+echo $reader->len("doom");
+"#,
+    );
+    assert_eq!(out, "4");
+}
+
+#[test]
+fn test_typed_constructor_param_is_not_overwritten_by_untyped_property_inference() {
+    let out = compile_and_run(
+        r#"<?php
+class Blob {
+    public $bytes;
+
+    public function __construct(string $bytes) {
+        $this->bytes = $bytes;
+    }
+
+    public function len(): int {
+        return strlen($this->bytes);
+    }
+}
+
+$blob = new Blob("doom");
+echo $blob->len();
+"#,
+    );
+    assert_eq!(out, "4");
+}
+
+#[test]
 fn test_namespace_include_preserves_class_namespace_context() {
     let out = compile_and_run_files(
         &[
