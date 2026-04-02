@@ -39,3 +39,4 @@ require_once 'Data/Node.php';
 require_once 'Data/Thing.php';
 
 require_once 'Support/Debug.php';
+require_once 'Support/Direction.php';

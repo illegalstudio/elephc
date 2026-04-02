@@ -8,6 +8,7 @@ use Showcases\Doom\SDL\Input;
 use Showcases\Doom\SDL\SDL;
 use Showcases\Doom\Map\MapData;
 use Showcases\Doom\Map\MapLoader;
+use Showcases\Doom\Support\Direction;
 use Showcases\Doom\Wad\WadFile;
 use Showcases\Doom\Wad\WadLoader;
 
@@ -23,6 +24,7 @@ class Game {
     public $wad;
     public $map;
     public $mapToggleHeld;
+    public $direction;
 
     public function __construct(Config $config) {
         $this->config = $config;
@@ -36,6 +38,7 @@ class Game {
         $this->wad = new WadFile("", "", 0, 0);
         $this->map = new MapData("", -1);
         $this->mapToggleHeld = 0;
+        $this->direction = new Direction();
     }
 
     public function run() {
@@ -165,7 +168,7 @@ class Game {
 
     public function updateCamera(ptr $keys): void {
         $moveStep = 24;
-        $turnStep = 4;
+        $turnStep = 5;
         $moveDx = 0;
         $moveDy = 0;
 
@@ -318,125 +321,18 @@ class Game {
     }
 
     public function forwardStepX(int $step): int {
-        return intdiv($this->directionUnitX() * $step, 1024);
+        return intdiv($this->direction->unitX($this->camera->angle) * $step, 1024);
     }
 
     public function forwardStepY(int $step): int {
-        return intdiv($this->directionUnitY() * $step, 1024);
+        return intdiv($this->direction->unitY($this->camera->angle) * $step, 1024);
     }
 
     public function strafeLeftStepX(int $step): int {
-        return intdiv($this->directionUnitY() * $step, 1024);
+        return intdiv($this->direction->unitY($this->camera->angle) * $step, 1024);
     }
 
     public function strafeLeftStepY(int $step): int {
-        return intdiv((-1 * $this->directionUnitX()) * $step, 1024);
-    }
-
-    public function directionBucket16(): int {
-        int $angle = $this->camera->angle + 11;
-        if ($angle >= 360) {
-            $angle = $angle - 360;
-        }
-
-        return intdiv($angle * 16, 360);
-    }
-
-    public function directionUnitX(): int {
-        int $bucket = $this->directionBucket16();
-
-        if ($bucket === 1) {
-            return 392;
-        }
-        if ($bucket === 2) {
-            return 724;
-        }
-        if ($bucket === 3) {
-            return 946;
-        }
-        if ($bucket === 4) {
-            return 1024;
-        }
-        if ($bucket === 5) {
-            return 946;
-        }
-        if ($bucket === 6) {
-            return 724;
-        }
-        if ($bucket === 7) {
-            return 392;
-        }
-        if ($bucket === 9) {
-            return -392;
-        }
-        if ($bucket === 10) {
-            return -724;
-        }
-        if ($bucket === 11) {
-            return -946;
-        }
-        if ($bucket === 12) {
-            return -1024;
-        }
-        if ($bucket === 13) {
-            return -946;
-        }
-        if ($bucket === 14) {
-            return -724;
-        }
-        if ($bucket === 15) {
-            return -392;
-        }
-
-        return 0;
-    }
-
-    public function directionUnitY(): int {
-        int $bucket = $this->directionBucket16();
-
-        if ($bucket === 0) {
-            return -1024;
-        }
-        if ($bucket === 1) {
-            return -946;
-        }
-        if ($bucket === 2) {
-            return -724;
-        }
-        if ($bucket === 3) {
-            return -392;
-        }
-        if ($bucket === 5) {
-            return 392;
-        }
-        if ($bucket === 6) {
-            return 724;
-        }
-        if ($bucket === 7) {
-            return 946;
-        }
-        if ($bucket === 8) {
-            return 1024;
-        }
-        if ($bucket === 9) {
-            return 946;
-        }
-        if ($bucket === 10) {
-            return 724;
-        }
-        if ($bucket === 11) {
-            return 392;
-        }
-        if ($bucket === 13) {
-            return -392;
-        }
-        if ($bucket === 14) {
-            return -724;
-        }
-        if ($bucket === 15) {
-            return -946;
-        }
-
-        return 0;
+        return intdiv((-1 * $this->direction->unitX($this->camera->angle)) * $step, 1024);
     }
 }

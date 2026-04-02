@@ -6,12 +6,15 @@ use Showcases\Doom\App\Config;
 use Showcases\Doom\Map\MapData;
 use Showcases\Doom\Player\Camera;
 use Showcases\Doom\SDL\SDL;
+use Showcases\Doom\Support\Direction;
 
 class WallRenderer {
     public $projection;
+    public $direction;
 
     public function __construct() {
         $this->projection = new Projection();
+        $this->direction = new Direction();
     }
 
     public function render(
@@ -128,8 +131,8 @@ class WallRenderer {
         int $relX2 = $worldX2 - $camera->x;
         int $relY2 = $worldY2 - $camera->y;
 
-        int $forwardX = $this->directionUnitX($camera->angle);
-        int $forwardY = $this->directionUnitY($camera->angle);
+        int $forwardX = $this->direction->unitX($camera->angle);
+        int $forwardY = $this->direction->unitY($camera->angle);
         int $rightX = -$forwardY;
         int $rightY = $forwardX;
 
@@ -663,110 +666,4 @@ class WallRenderer {
         return $depth;
     }
 
-    public function directionBucket16(int $angle): int {
-        int $adjusted = $angle + 11;
-        if ($adjusted >= 360) {
-            $adjusted = $adjusted - 360;
-        }
-
-        return intdiv($adjusted * 16, 360);
-    }
-
-    public function directionUnitX(int $angle): int {
-        int $bucket = $this->directionBucket16($angle);
-
-        if ($bucket === 1) {
-            return 392;
-        }
-        if ($bucket === 2) {
-            return 724;
-        }
-        if ($bucket === 3) {
-            return 946;
-        }
-        if ($bucket === 4) {
-            return 1024;
-        }
-        if ($bucket === 5) {
-            return 946;
-        }
-        if ($bucket === 6) {
-            return 724;
-        }
-        if ($bucket === 7) {
-            return 392;
-        }
-        if ($bucket === 9) {
-            return -392;
-        }
-        if ($bucket === 10) {
-            return -724;
-        }
-        if ($bucket === 11) {
-            return -946;
-        }
-        if ($bucket === 12) {
-            return -1024;
-        }
-        if ($bucket === 13) {
-            return -946;
-        }
-        if ($bucket === 14) {
-            return -724;
-        }
-        if ($bucket === 15) {
-            return -392;
-        }
-
-        return 0;
-    }
-
-    public function directionUnitY(int $angle): int {
-        int $bucket = $this->directionBucket16($angle);
-
-        if ($bucket === 0) {
-            return -1024;
-        }
-        if ($bucket === 1) {
-            return -946;
-        }
-        if ($bucket === 2) {
-            return -724;
-        }
-        if ($bucket === 3) {
-            return -392;
-        }
-        if ($bucket === 5) {
-            return 392;
-        }
-        if ($bucket === 6) {
-            return 724;
-        }
-        if ($bucket === 7) {
-            return 946;
-        }
-        if ($bucket === 8) {
-            return 1024;
-        }
-        if ($bucket === 9) {
-            return 946;
-        }
-        if ($bucket === 10) {
-            return 724;
-        }
-        if ($bucket === 11) {
-            return 392;
-        }
-        if ($bucket === 13) {
-            return -392;
-        }
-        if ($bucket === 14) {
-            return -724;
-        }
-        if ($bucket === 15) {
-            return -946;
-        }
-
-        return 0;
-    }
 }
