@@ -414,81 +414,48 @@ class WallRenderer {
         int $viewportHeight,
         int $horizonY
     ): void {
-        int $skyTop = $viewportY;
-        int $skyBottom = $viewportY + $horizonY;
-        int $floorTop = $skyBottom + 1;
-        int $floorBottom = $viewportY + $viewportHeight - 1;
-        int $skyHeight = $skyBottom - $skyTop;
-        int $floorHeight = $floorBottom - $floorTop;
+        int $screenHorizon = $viewportY + $horizonY;
+        int $screenBottom = $viewportY + $viewportHeight - 1;
+        int $rightEdge = $viewportX + $viewportWidth - 1;
 
-        int $y = $skyTop;
-        while ($y <= $skyBottom) {
-            int $skyProgress = 0;
-            if ($skyHeight > 0) {
-                $skyProgress = intdiv(($y - $skyTop) * 255, $skyHeight);
+        // ceiling: dark blue gradient, brighter near horizon
+        int $y = $viewportY;
+        while ($y < $screenHorizon) {
+            int $dy = $screenHorizon - $y;
+            // distance from horizon: larger dy = farther ceiling = darker
+            int $ceilDist = $dy * 4;
+            int $ceilDistSq = $ceilDist * $ceilDist;
+            int $ceilFog = 255 - intdiv($ceilDistSq * 200, $ceilDistSq + 360000);
+            if ($ceilFog < 20) {
+                $ceilFog = 20;
             }
-            int $red = 22 + intdiv($skyProgress * 30, 255);
-            int $green = 30 + intdiv($skyProgress * 34, 255);
-            int $blue = 74 + intdiv($skyProgress * 24, 255);
-            if ($skyProgress > 180) {
-                $red += intdiv($skyProgress - 180, 10);
-                $green += intdiv($skyProgress - 180, 12);
-            }
-            if ($red > 255) {
-                $red = 255;
-            }
-            if ($green > 255) {
-                $green = 255;
-            }
-            if ($blue > 255) {
-                $blue = 255;
-            }
+            int $red = intdiv(18 * $ceilFog, 255);
+            int $green = intdiv(22 * $ceilFog, 255);
+            int $blue = intdiv(68 * $ceilFog, 255);
             $sdl->setDrawColor($red, $green, $blue);
-            $sdl->drawLine($viewportX, $y, $viewportX + $viewportWidth - 1, $y);
+            $sdl->drawLine($viewportX, $y, $rightEdge, $y);
             $y += 1;
         }
 
-        $y = $floorTop;
-        while ($y <= $floorBottom) {
-            int $floorProgress = 0;
-            if ($floorHeight > 0) {
-                $floorProgress = intdiv(($y - $floorTop) * 255, $floorHeight);
+        // floor: brown/gray with perspective distance fog per scanline
+        $y = $screenHorizon;
+        while ($y <= $screenBottom) {
+            int $dy = $y - $screenHorizon;
+            if ($dy < 1) {
+                $dy = 1;
             }
-            int $distanceShade = 255 - $floorProgress;
-            int $red = 54 - intdiv($distanceShade * 14, 255);
-            int $green = 42 - intdiv($distanceShade * 10, 255);
-            int $blue = 30 - intdiv($distanceShade * 8, 255);
-            if ($floorProgress > 112) {
-                $red += intdiv($floorProgress - 112, 18);
-                $green += intdiv($floorProgress - 112, 24);
+            // perspective floor distance: closer to horizon = farther away
+            int $floorDist = intdiv(600 * 8, $dy);
+            int $floorDistSq = $floorDist * $floorDist;
+            int $floorFog = 255 - intdiv($floorDistSq * 220, $floorDistSq + 640000);
+            if ($floorFog < 25) {
+                $floorFog = 25;
             }
-            if ($red < 28) {
-                $red = 28;
-            }
-            if ($green < 22) {
-                $green = 22;
-            }
-            if ($blue < 16) {
-                $blue = 16;
-            }
-            if ($red > 88) {
-                $red = 88;
-            }
-            if ($green > 68) {
-                $green = 68;
-            }
-            if ($blue > 48) {
-                $blue = 48;
-            }
+            int $red = intdiv(72 * $floorFog, 255);
+            int $green = intdiv(56 * $floorFog, 255);
+            int $blue = intdiv(38 * $floorFog, 255);
             $sdl->setDrawColor($red, $green, $blue);
-            $sdl->drawLine($viewportX, $y, $viewportX + $viewportWidth - 1, $y);
-            if ($floorHeight > 0) {
-                int $band = intdiv(($y - $floorTop) * 16, $floorHeight);
-                if ($band % 2 === 0) {
-                    $sdl->setDrawColor($red + 3, $green + 3, $blue + 2);
-                    $sdl->drawLine($viewportX, $y, $viewportX + $viewportWidth - 1, $y);
-                }
-            }
+            $sdl->drawLine($viewportX, $y, $rightEdge, $y);
             $y += 1;
         }
     }
