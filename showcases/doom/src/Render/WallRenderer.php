@@ -22,6 +22,14 @@ class WallRenderer {
         int $focal = intdiv($viewportWidth * 3, 4);
         int $nearPlane = 12;
 
+        $this->renderFlatBackground(
+            $sdl,
+            $viewportX,
+            $viewportY,
+            $viewportWidth,
+            $viewportHeight
+        );
+
         int $subSectorCount = count($subSectorOrder);
         int $orderIndex = $subSectorCount - 1;
         while ($orderIndex >= 0) {
@@ -197,6 +205,27 @@ class WallRenderer {
 
             $sdl->setDrawColor($baseRed, $baseGreen, $baseBlue);
             $sdl->drawLine($x, $top, $x, $bottom);
+            $x += 1;
+        }
+    }
+
+    public function renderFlatBackground(
+        SDL $sdl,
+        int $viewportX,
+        int $viewportY,
+        int $viewportWidth,
+        int $viewportHeight
+    ): void {
+        int $ceilingBottom = $viewportY + intdiv($viewportHeight, 2);
+        int $x = 0;
+
+        while ($x < $viewportWidth) {
+            int $screenX = $viewportX + $x;
+            $sdl->setDrawColor(54, 66, 94);
+            $sdl->drawLine($screenX, $viewportY, $screenX, $ceilingBottom);
+            $sdl->setDrawColor(36, 28, 18);
+            $sdl->drawLine($screenX, $ceilingBottom + 1, $screenX, $viewportY + $viewportHeight - 1);
+
             $x += 1;
         }
     }
