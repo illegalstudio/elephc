@@ -220,32 +220,116 @@ class MinimapRenderer {
     }
 
     public function drawHeading(SDL $sdl, int $x, int $y, int $angle): void {
-        int $dx = 0;
-        int $dy = -8;
-
-        if ($angle >= 23 && $angle < 68) {
-            $dx = 6;
-            $dy = -6;
-        } else if ($angle >= 68 && $angle < 113) {
-            $dx = 8;
-            $dy = 0;
-        } else if ($angle >= 113 && $angle < 158) {
-            $dx = 6;
-            $dy = 6;
-        } else if ($angle >= 158 && $angle < 203) {
-            $dx = 0;
-            $dy = 8;
-        } else if ($angle >= 203 && $angle < 248) {
-            $dx = -6;
-            $dy = 6;
-        } else if ($angle >= 248 && $angle < 293) {
-            $dx = -8;
-            $dy = 0;
-        } else if ($angle >= 293 && $angle < 338) {
-            $dx = -6;
-            $dy = -6;
-        }
+        int $dx = intdiv($this->directionUnitX($angle) * 8, 1024);
+        int $dy = intdiv((-1 * $this->directionUnitY($angle)) * 8, 1024);
 
         $sdl->drawLine($x, $y, $x + $dx, $y + $dy);
+    }
+
+    public function directionBucket16(int $angle): int {
+        int $adjusted = $angle + 11;
+        if ($adjusted >= 360) {
+            $adjusted = $adjusted - 360;
+        }
+
+        return intdiv($adjusted * 16, 360);
+    }
+
+    public function directionUnitX(int $angle): int {
+        int $bucket = $this->directionBucket16($angle);
+
+        if ($bucket === 1) {
+            return 392;
+        }
+        if ($bucket === 2) {
+            return 724;
+        }
+        if ($bucket === 3) {
+            return 946;
+        }
+        if ($bucket === 4) {
+            return 1024;
+        }
+        if ($bucket === 5) {
+            return 946;
+        }
+        if ($bucket === 6) {
+            return 724;
+        }
+        if ($bucket === 7) {
+            return 392;
+        }
+        if ($bucket === 9) {
+            return -392;
+        }
+        if ($bucket === 10) {
+            return -724;
+        }
+        if ($bucket === 11) {
+            return -946;
+        }
+        if ($bucket === 12) {
+            return -1024;
+        }
+        if ($bucket === 13) {
+            return -946;
+        }
+        if ($bucket === 14) {
+            return -724;
+        }
+        if ($bucket === 15) {
+            return -392;
+        }
+
+        return 0;
+    }
+
+    public function directionUnitY(int $angle): int {
+        int $bucket = $this->directionBucket16($angle);
+
+        if ($bucket === 0) {
+            return -1024;
+        }
+        if ($bucket === 1) {
+            return -946;
+        }
+        if ($bucket === 2) {
+            return -724;
+        }
+        if ($bucket === 3) {
+            return -392;
+        }
+        if ($bucket === 5) {
+            return 392;
+        }
+        if ($bucket === 6) {
+            return 724;
+        }
+        if ($bucket === 7) {
+            return 946;
+        }
+        if ($bucket === 8) {
+            return 1024;
+        }
+        if ($bucket === 9) {
+            return 946;
+        }
+        if ($bucket === 10) {
+            return 724;
+        }
+        if ($bucket === 11) {
+            return 392;
+        }
+        if ($bucket === 13) {
+            return -392;
+        }
+        if ($bucket === 14) {
+            return -724;
+        }
+        if ($bucket === 15) {
+            return -946;
+        }
+
+        return 0;
     }
 }
