@@ -38,11 +38,14 @@ class WallRenderer {
         int $focal = intdiv($viewportWidth * 3, 4);
         int $nearPlane = 12;
         int $cameraEyeZ = $this->projection->cameraEyeZ($map, $cameraSubSector);
-        $solidDepth = [];
+        int $maxY = $viewportY + $viewportHeight - 1;
+        $clipData = [];
 
         int $clipIndex = 0;
         while ($clipIndex < $viewportWidth) {
-            $solidDepth[] = 2147483647;
+            $clipData[] = 2147483647;
+            $clipData[] = $viewportY;
+            $clipData[] = $maxY;
             $clipIndex += 1;
         }
 
@@ -80,7 +83,7 @@ class WallRenderer {
                             $nearPlane,
                             $cameraEyeZ,
                             $viewportHeight,
-                            $solidDepth
+                            $clipData
                         );
                     }
                     $segOffset += 1;
@@ -104,7 +107,7 @@ class WallRenderer {
         int $nearPlane,
         int $cameraEyeZ,
         int $viewportHeight,
-        &$solidDepth
+        &$clipData
     ): void {
         int $startIndex = $map->segs[$segIndex]->start_vertex;
         int $endIndex = $map->segs[$segIndex]->end_vertex;
@@ -151,6 +154,9 @@ class WallRenderer {
                 return;
             }
             int $num = $nearPlane - $depth1;
+            if ($num > $den) {
+                $num = $den;
+            }
             $side1 = $side1 + intdiv(($side2 - $side1) * $num, $den);
             $depth1 = $nearPlane;
         }
@@ -160,6 +166,9 @@ class WallRenderer {
                 return;
             }
             int $num = $nearPlane - $depth2;
+            if ($num > $den) {
+                $num = $den;
+            }
             $side2 = $side2 + intdiv(($side1 - $side2) * $num, $den);
             $depth2 = $nearPlane;
         }
@@ -325,7 +334,17 @@ class WallRenderer {
                 $x += 1;
                 continue;
             }
-            if ($depth >= $solidDepth[$clipColumn]) {
+            int $base = $clipColumn * 3;
+            if ($depth >= $clipData[$base]) {
+                $x += 1;
+                continue;
+            }
+
+            int $idxCeil = $base + 1;
+            int $idxFloor = $base + 2;
+            int $colCeil = $clipData[$idxCeil];
+            int $colFloor = $clipData[$idxFloor];
+            if ($colCeil >= $colFloor) {
                 $x += 1;
                 continue;
             }
@@ -347,18 +366,12 @@ class WallRenderer {
                     $horizonY,
                     $focal
                 );
-                $this->drawVerticalSpan(
-                    $sdl,
-                    $x,
-                    $top,
-                    $bottom,
-                    $viewportY,
-                    $viewportHeight,
-                    $midRed,
-                    $midGreen,
-                    $midBlue
+                $this->drawClippedSpan(
+                    $sdl, $x, $top, $bottom,
+                    $colCeil, $colFloor,
+                    $midRed, $midGreen, $midBlue
                 );
-                $solidDepth[$clipColumn] = $depth;
+                $clipData[$base] = $depth;
             } else {
                 if ($frontCeiling !== $backCeiling) {
                     int $top = $this->projection->projectScreenY(
@@ -377,16 +390,10 @@ class WallRenderer {
                         $horizonY,
                         $focal
                     );
-                    $this->drawVerticalSpan(
-                        $sdl,
-                        $x,
-                        $top,
-                        $bottom,
-                        $viewportY,
-                        $viewportHeight,
-                        $upperRed,
-                        $upperGreen,
-                        $upperBlue
+                    $this->drawClippedSpan(
+                        $sdl, $x, $top, $bottom,
+                        $colCeil, $colFloor,
+                        $upperRed, $upperGreen, $upperBlue
                     );
                 }
                 if ($frontFloor !== $backFloor) {
@@ -406,17 +413,14 @@ class WallRenderer {
                         $horizonY,
                         $focal
                     );
-                    $this->drawVerticalSpan(
-                        $sdl,
-                        $x,
-                        $top,
-                        $bottom,
-                        $viewportY,
-                        $viewportHeight,
-                        $lowerRed,
-                        $lowerGreen,
-                        $lowerBlue
+                    $this->drawClippedSpan(
+                        $sdl, $x, $top, $bottom,
+                        $colCeil, $colFloor,
+                        $lowerRed, $lowerGreen, $lowerBlue
                     );
+                }
+                if ($backFloor >= $backCeiling) {
+                    $clipData[$base] = $depth;
                 }
             }
             $x += 1;
@@ -613,6 +617,31 @@ class WallRenderer {
         }
 
         return $right;
+    }
+
+    public function drawClippedSpan(
+        SDL $sdl,
+        int $x,
+        int $top,
+        int $bottom,
+        int $clipTop,
+        int $clipBottom,
+        int $red,
+        int $green,
+        int $blue
+    ): void {
+        if ($top < $clipTop) {
+            $top = $clipTop;
+        }
+        if ($bottom > $clipBottom) {
+            $bottom = $clipBottom;
+        }
+        if ($bottom < $top) {
+            return;
+        }
+
+        $sdl->setDrawColor($red, $green, $blue);
+        $sdl->drawLine($x, $top, $x, $bottom);
     }
 
     public function drawVerticalSpan(
