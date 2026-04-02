@@ -10622,6 +10622,23 @@ echo $g->greet("World");
     assert_eq!(out, "Hello World!");
 }
 
+#[test]
+fn test_regression_string_property_survives_constructor_param_cleanup() {
+    let out = compile_and_run(
+        r#"<?php
+class Reader {
+    public $bytes;
+    public function __construct(string $bytes) { $this->bytes = $bytes; }
+    public function head(): string { return substr($this->bytes, 0, 4); }
+}
+$bytes = "AB" . "CD";
+$reader = new Reader($bytes);
+echo $reader->head();
+"#,
+    );
+    assert_eq!(out, "ABCD");
+}
+
 // Pattern: static method with string params
 #[test]
 fn test_regression_static_method_string() {
