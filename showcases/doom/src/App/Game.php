@@ -144,18 +144,24 @@ class Game {
     public function updateCamera(ptr $keys): void {
         int $moveStep = 24;
         int $turnStep = 4;
+        int $moveDx = 0;
+        int $moveDy = 0;
 
         if ($this->input->moveForward($keys)) {
-            $this->camera->moveBy(0, -$moveStep);
+            $moveDx = $moveDx + $this->forwardDx($moveStep);
+            $moveDy = $moveDy + $this->forwardDy($moveStep);
         }
         if ($this->input->moveBackward($keys)) {
-            $this->camera->moveBy(0, $moveStep);
+            $moveDx = $moveDx - $this->forwardDx($moveStep);
+            $moveDy = $moveDy - $this->forwardDy($moveStep);
         }
         if ($this->input->moveLeft($keys)) {
-            $this->camera->moveBy(-$moveStep, 0);
+            $moveDx = $moveDx + $this->strafeLeftDx($moveStep);
+            $moveDy = $moveDy + $this->strafeLeftDy($moveStep);
         }
         if ($this->input->moveRight($keys)) {
-            $this->camera->moveBy($moveStep, 0);
+            $moveDx = $moveDx - $this->strafeLeftDx($moveStep);
+            $moveDy = $moveDy - $this->strafeLeftDy($moveStep);
         }
         if ($this->input->turnLeft($keys)) {
             $this->camera->rotateBy(-$turnStep);
@@ -163,5 +169,167 @@ class Game {
         if ($this->input->turnRight($keys)) {
             $this->camera->rotateBy($turnStep);
         }
+
+        if ($moveDx !== 0 || $moveDy !== 0) {
+            $this->tryMoveCamera($moveDx, $moveDy);
+        }
+    }
+
+    public function tryMoveCamera(int $dx, int $dy): void {
+        int $targetX = $this->camera->x + $dx;
+        int $targetY = $this->camera->y + $dy;
+
+        if ($this->isWalkablePosition($targetX, $targetY)) {
+            $this->camera->setSpawn($targetX, $targetY, $this->camera->angle);
+            return;
+        }
+
+        if ($dx !== 0 && $this->isWalkablePosition($this->camera->x + $dx, $this->camera->y)) {
+            $this->camera->moveBy($dx, 0);
+        }
+        if ($dy !== 0 && $this->isWalkablePosition($this->camera->x, $this->camera->y + $dy)) {
+            $this->camera->moveBy(0, $dy);
+        }
+    }
+
+    public function isWalkablePosition(int $x, int $y): bool {
+        int $margin = 24;
+        if ($x < $this->map->minX - $margin || $x > $this->map->maxX + $margin) {
+            return false;
+        }
+        if ($y < $this->map->minY - $margin || $y > $this->map->maxY + $margin) {
+            return false;
+        }
+
+        int $i = 0;
+        int $radiusSquared = 28 * 28;
+        while ($i < $this->map->linedefCount) {
+            if ($this->isSolidLinedef($i)) {
+                int $startIndex = $this->map->linedefs[$i]->start_vertex;
+                int $endIndex = $this->map->linedefs[$i]->end_vertex;
+                if (
+                    $startIndex >= 0
+                    && $endIndex >= 0
+                    && $startIndex < $this->map->vertexCount
+                    && $endIndex < $this->map->vertexCount
+                ) {
+                    int $distanceSquared = $this->distanceToSegmentSquared(
+                        $x,
+                        $y,
+                        $this->map->vertexes[$startIndex]->x,
+                        $this->map->vertexes[$startIndex]->y,
+                        $this->map->vertexes[$endIndex]->x,
+                        $this->map->vertexes[$endIndex]->y
+                    );
+                    if ($distanceSquared < $radiusSquared) {
+                        return false;
+                    }
+                }
+            }
+            $i += 1;
+        }
+
+        return true;
+    }
+
+    public function isSolidLinedef(int $index): bool {
+        return $this->map->linedefs[$index]->left_sidedef < 0
+            || $this->map->linedefs[$index]->right_sidedef < 0;
+    }
+
+    public function distanceToSegmentSquared(
+        int $px,
+        int $py,
+        int $ax,
+        int $ay,
+        int $bx,
+        int $by
+    ): int {
+        int $dx = $bx - $ax;
+        int $dy = $by - $ay;
+        int $lengthSquared = ($dx * $dx) + ($dy * $dy);
+
+        if ($lengthSquared <= 0) {
+            return (($px - $ax) * ($px - $ax)) + (($py - $ay) * ($py - $ay));
+        }
+
+        int $numerator = (($px - $ax) * $dx) + (($py - $ay) * $dy);
+        int $closestX = $ax;
+        int $closestY = $ay;
+
+        if ($numerator >= $lengthSquared) {
+            $closestX = $bx;
+            $closestY = $by;
+        } else if ($numerator > 0) {
+            $closestX = $ax + intdiv($dx * $numerator, $lengthSquared);
+            $closestY = $ay + intdiv($dy * $numerator, $lengthSquared);
+        }
+
+        return (($px - $closestX) * ($px - $closestX))
+            + (($py - $closestY) * ($py - $closestY));
+    }
+
+    public function forwardDx(int $step): int {
+        int $bucket = $this->directionBucket();
+
+        if ($bucket === 1 || $bucket === 2 || $bucket === 3) {
+            return $step;
+        }
+        if ($bucket === 5 || $bucket === 6 || $bucket === 7) {
+            return -$step;
+        }
+        if ($bucket === 0 || $bucket === 4) {
+            return 0;
+        }
+
+        return 0;
+    }
+
+    public function forwardDy(int $step): int {
+        int $bucket = $this->directionBucket();
+
+        if ($bucket === 7 || $bucket === 0 || $bucket === 1) {
+            return -$step;
+        }
+        if ($bucket === 3 || $bucket === 4 || $bucket === 5) {
+            return $step;
+        }
+
+        return 0;
+    }
+
+    public function strafeLeftDx(int $step): int {
+        int $bucket = $this->directionBucket();
+
+        if ($bucket === 0 || $bucket === 1 || $bucket === 7) {
+            return -$step;
+        }
+        if ($bucket === 3 || $bucket === 4 || $bucket === 5) {
+            return $step;
+        }
+
+        return 0;
+    }
+
+    public function strafeLeftDy(int $step): int {
+        int $bucket = $this->directionBucket();
+
+        if ($bucket === 1 || $bucket === 2 || $bucket === 3) {
+            return -$step;
+        }
+        if ($bucket === 5 || $bucket === 6 || $bucket === 7) {
+            return $step;
+        }
+
+        return 0;
+    }
+
+    public function directionBucket(): int {
+        int $angle = $this->camera->angle + 22;
+        if ($angle >= 360) {
+            $angle = $angle - 360;
+        }
+
+        return intdiv($angle, 45);
     }
 }

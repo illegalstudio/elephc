@@ -8,7 +8,7 @@ use Showcases\Doom\Player\Camera;
 use Showcases\Doom\SDL\SDL;
 
 class MinimapRenderer {
-    public function render(SDL $sdl, Config $config, MapData $map, Camera $camera): void {
+    public function render(SDL $sdl, Config $config, MapData $map, Camera $camera, $subSectorOrder): void {
         if (!$map->isValid() || !$map->hasBounds() || $map->vertexCount <= 0 || $map->linedefCount <= 0) {
             return;
         }
@@ -62,6 +62,18 @@ class MinimapRenderer {
             $i += 1;
         }
 
+        $this->renderSubSectorOverlay(
+            $sdl,
+            $map,
+            $subSectorOrder,
+            $originX,
+            $originY,
+            $padX,
+            $padY,
+            $drawHeight,
+            $scale
+        );
+
         int $playerX = $this->projectX($camera->x, $map, $originX, $padX, $scale);
         int $playerY = $this->projectY($camera->y, $map, $originY, $padY, $drawHeight, $scale);
         $sdl->setDrawColor(255, 214, 102);
@@ -97,6 +109,84 @@ class MinimapRenderer {
         $sdl->drawPoint($x + 1, $y);
         $sdl->drawPoint($x, $y - 1);
         $sdl->drawPoint($x, $y + 1);
+    }
+
+    public function renderSubSectorOverlay(
+        SDL $sdl,
+        MapData $map,
+        $subSectorOrder,
+        int $originX,
+        int $originY,
+        int $padX,
+        int $padY,
+        int $drawHeight,
+        int $scale
+    ): void {
+        int $count = count($subSectorOrder);
+        if ($count <= 0) {
+            return;
+        }
+
+        int $i = 0;
+        while ($i < $count) {
+            int $subSectorIndex = $subSectorOrder[$i];
+            if ($subSectorIndex >= 0 && $subSectorIndex < $map->subSectorCount) {
+                int $intensity = 220 - intdiv($i * 140, $count);
+                if ($intensity < 80) {
+                    $intensity = 80;
+                }
+                $sdl->setDrawColor(80, $intensity, 220);
+                $this->renderSubSector(
+                    $sdl,
+                    $map,
+                    $subSectorIndex,
+                    $originX,
+                    $originY,
+                    $padX,
+                    $padY,
+                    $drawHeight,
+                    $scale
+                );
+            }
+            $i += 1;
+        }
+    }
+
+    public function renderSubSector(
+        SDL $sdl,
+        MapData $map,
+        int $subSectorIndex,
+        int $originX,
+        int $originY,
+        int $padX,
+        int $padY,
+        int $drawHeight,
+        int $scale
+    ): void {
+        int $firstSeg = $map->subSectors[$subSectorIndex]->first_seg_index;
+        int $segCount = $map->subSectors[$subSectorIndex]->seg_count;
+        int $i = 0;
+
+        while ($i < $segCount) {
+            int $segIndex = $firstSeg + $i;
+            if ($segIndex >= 0 && $segIndex < $map->segCount) {
+                int $startIndex = $map->segs[$segIndex]->start_vertex;
+                int $endIndex = $map->segs[$segIndex]->end_vertex;
+                if (
+                    $startIndex >= 0
+                    && $endIndex >= 0
+                    && $startIndex < $map->vertexCount
+                    && $endIndex < $map->vertexCount
+                ) {
+                    int $x1 = $this->projectX($map->vertexes[$startIndex]->x, $map, $originX, $padX, $scale);
+                    int $y1 = $this->projectY($map->vertexes[$startIndex]->y, $map, $originY, $padY, $drawHeight, $scale);
+                    int $x2 = $this->projectX($map->vertexes[$endIndex]->x, $map, $originX, $padX, $scale);
+                    int $y2 = $this->projectY($map->vertexes[$endIndex]->y, $map, $originY, $padY, $drawHeight, $scale);
+                    $sdl->drawLine($x1, $y1, $x2, $y2);
+                }
+            }
+            $i += 1;
+        }
     }
 
     public function drawHeading(SDL $sdl, int $x, int $y, int $angle): void {
