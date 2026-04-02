@@ -250,6 +250,13 @@ class WallRenderer {
             $rightScreenX = ($viewportX + $viewportWidth) - 1;
         }
 
+        // pre-compute height factors: projectScreenY = horizonBase - heightFactor / depth
+        int $horizonBase = $viewportY + $horizonY;
+        int $hFrontCeil = ($frontCeiling - $cameraEyeZ) * $focal;
+        int $hFrontFloor = ($frontFloor - $cameraEyeZ) * $focal;
+        int $hBackCeil = ($backCeiling - $cameraEyeZ) * $focal;
+        int $hBackFloor = ($backFloor - $cameraEyeZ) * $focal;
+
         int $x = $leftX;
         int $screenCenter = $viewportX + $centerX;
         while ($x <= $rightScreenX) {
@@ -288,13 +295,11 @@ class WallRenderer {
 
             // per-column exponential fog
             int $dSq = $depth * $depth;
-            int $fogD = $dSq + 640000;
-            int $fog = 255 - intdiv($dSq * 220, $fogD);
+            int $fog = 255 - intdiv($dSq * 220, $dSq + 640000);
             if ($fog < 35) {
                 $fog = 35;
             }
 
-            // apply fog to base color for this column
             int $litR = intdiv($baseR * $fog, 255);
             int $litG = intdiv($baseG * $fog, 255);
             int $litB = intdiv($baseB * $fog, 255);
@@ -303,22 +308,8 @@ class WallRenderer {
                 int $midR = $this->clampColor($litR + 6);
                 int $midG = $this->clampColor($litG + 4);
                 int $midB = $this->clampColor($litB);
-                int $top = $this->projection->projectScreenY(
-                    $frontCeiling,
-                    $cameraEyeZ,
-                    $depth,
-                    $viewportY,
-                    $horizonY,
-                    $focal
-                );
-                int $bottom = $this->projection->projectScreenY(
-                    $frontFloor,
-                    $cameraEyeZ,
-                    $depth,
-                    $viewportY,
-                    $horizonY,
-                    $focal
-                );
+                int $top = $horizonBase - intdiv($hFrontCeil, $depth);
+                int $bottom = $horizonBase - intdiv($hFrontFloor, $depth);
                 $this->drawClippedSpan(
                     $sdl, $x, $top, $bottom,
                     $colCeil, $colFloor,
@@ -327,26 +318,17 @@ class WallRenderer {
                 $clipData[$base] = $depth;
             } else {
                 if ($frontCeiling !== $backCeiling) {
-                    // upper step: cooler bluish tint
                     int $upR = $this->clampColor(intdiv($litR * 3, 4));
                     int $upG = $this->clampColor(intdiv($litG * 4, 5));
                     int $upB = $this->clampColor($litB + intdiv((255 - $litB), 4));
-                    int $top = $this->projection->projectScreenY(
-                        $this->higherOf($frontCeiling, $backCeiling),
-                        $cameraEyeZ,
-                        $depth,
-                        $viewportY,
-                        $horizonY,
-                        $focal
-                    );
-                    int $bottom = $this->projection->projectScreenY(
-                        $this->lowerOf($frontCeiling, $backCeiling),
-                        $cameraEyeZ,
-                        $depth,
-                        $viewportY,
-                        $horizonY,
-                        $focal
-                    );
+                    int $hHigh = $hFrontCeil;
+                    int $hLow = $hBackCeil;
+                    if ($backCeiling > $frontCeiling) {
+                        $hHigh = $hBackCeil;
+                        $hLow = $hFrontCeil;
+                    }
+                    int $top = $horizonBase - intdiv($hHigh, $depth);
+                    int $bottom = $horizonBase - intdiv($hLow, $depth);
                     $this->drawClippedSpan(
                         $sdl, $x, $top, $bottom,
                         $colCeil, $colFloor,
@@ -354,26 +336,17 @@ class WallRenderer {
                     );
                 }
                 if ($frontFloor !== $backFloor) {
-                    // lower step: warmer brownish tint
                     int $loR = $this->clampColor($litR + intdiv((255 - $litR), 5));
                     int $loG = $this->clampColor(intdiv($litG * 4, 5));
                     int $loB = $this->clampColor(intdiv($litB * 3, 5));
-                    int $top = $this->projection->projectScreenY(
-                        $this->higherOf($frontFloor, $backFloor),
-                        $cameraEyeZ,
-                        $depth,
-                        $viewportY,
-                        $horizonY,
-                        $focal
-                    );
-                    int $bottom = $this->projection->projectScreenY(
-                        $this->lowerOf($frontFloor, $backFloor),
-                        $cameraEyeZ,
-                        $depth,
-                        $viewportY,
-                        $horizonY,
-                        $focal
-                    );
+                    int $hHigh2 = $hFrontFloor;
+                    int $hLow2 = $hBackFloor;
+                    if ($backFloor > $frontFloor) {
+                        $hHigh2 = $hBackFloor;
+                        $hLow2 = $hFrontFloor;
+                    }
+                    int $top = $horizonBase - intdiv($hHigh2, $depth);
+                    int $bottom = $horizonBase - intdiv($hLow2, $depth);
                     $this->drawClippedSpan(
                         $sdl, $x, $top, $bottom,
                         $colCeil, $colFloor,
