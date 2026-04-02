@@ -13842,6 +13842,105 @@ fn test_typed_call_user_func_array_default_parameter() {
 }
 
 #[test]
+fn test_named_arguments_reorder_function_call() {
+    let out = compile_and_run(
+        "<?php
+        function describe($name, $age) {
+            echo $name;
+            echo \":\";
+            echo $age;
+        }
+        describe(age: 30, name: \"Alice\");
+        ",
+    );
+    assert_eq!(out, "Alice:30");
+}
+
+#[test]
+fn test_named_arguments_use_defaults_for_missing_params() {
+    let out = compile_and_run(
+        "<?php
+        function greet($name = \"world\", $suffix = \"!\") {
+            echo $name . $suffix;
+        }
+        greet(suffix: \"?\");
+        ",
+    );
+    assert_eq!(out, "world?");
+}
+
+#[test]
+fn test_named_arguments_closure_call() {
+    let out = compile_and_run(
+        "<?php
+        $f = function ($name, $age) {
+            echo $name;
+            echo \":\";
+            echo $age;
+        };
+        $f(age: 30, name: \"Alice\");
+        ",
+    );
+    assert_eq!(out, "Alice:30");
+}
+
+#[test]
+fn test_named_arguments_first_class_callable_call() {
+    let out = compile_and_run(
+        "<?php
+        function describe($name, $age) {
+            echo $name;
+            echo \":\";
+            echo $age;
+        }
+        $f = describe(...);
+        $f(age: 30, name: \"Alice\");
+        ",
+    );
+    assert_eq!(out, "Alice:30");
+}
+
+#[test]
+fn test_named_arguments_method_and_constructor_calls() {
+    let out = compile_and_run(
+        "<?php
+        class User {
+            public $name;
+            public $age;
+
+            public function __construct($name, $age = 18) {
+                $this->name = $name;
+                $this->age = $age;
+            }
+
+            public function describe($prefix, $suffix = \"!\") {
+                echo $prefix . $this->name . \":\" . $this->age . $suffix;
+            }
+        }
+
+        $user = new User(age: 30, name: \"Alice\");
+        $user->describe(suffix: \"?\", prefix: \"user=\");
+        ",
+    );
+    assert_eq!(out, "user=Alice:30?");
+}
+
+#[test]
+fn test_named_arguments_static_method_call() {
+    let out = compile_and_run(
+        "<?php
+        class Greeter {
+            public static function hi($name, $punct = \"!\") {
+                echo \"Hi \" . $name . $punct;
+            }
+        }
+        Greeter::hi(punct: \"?\", name: \"Alice\");
+        ",
+    );
+    assert_eq!(out, "Hi Alice?");
+}
+
+#[test]
 fn test_typed_closure_parameter() {
     let out = compile_and_run(
         "<?php
@@ -13983,6 +14082,6 @@ fn test_example_functions_compiles_and_runs() {
     let out = compile_and_run(include_str!("../examples/functions/main.php"));
     assert_eq!(
         out,
-        "my_abs(-42) = 42\nmy_max(3, 7) = 7\nclamp(15, 0, 10) = 10\ngcd(48, 18) = 6\n2^10 = 1024\ndescribe(42) = integer:42\ndescribe(null) = NULL:null\nadd_ten() = 20\n",
+        "my_abs(-42) = 42\nmy_max(3, 7) = 7\nclamp(15, 0, 10) = 10\ngcd(48, 18) = 6\n2^10 = 1024\ndescribe(42) = integer:42\ndescribe(null) = NULL:null\nadd_ten() = 20\nprofile(age: 30, name: \"Ada\") = Ada:30\n",
     );
 }

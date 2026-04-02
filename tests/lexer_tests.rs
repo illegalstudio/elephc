@@ -56,6 +56,29 @@ fn test_ellipsis_in_function_call() {
 }
 
 #[test]
+fn test_named_arguments_tokens() {
+    let t = tokens("<?php foo(name: \"Alice\", age: 30);");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Identifier("foo".into()),
+            Token::LParen,
+            Token::Identifier("name".into()),
+            Token::Colon,
+            Token::StringLiteral("Alice".into()),
+            Token::Comma,
+            Token::Identifier("age".into()),
+            Token::Colon,
+            Token::IntLiteral(30),
+            Token::RParen,
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
 fn test_dot_vs_ellipsis() {
     // Single dot is concat, three dots is ellipsis
     let t = tokens("<?php $a . $b ... $c");

@@ -2667,6 +2667,46 @@ fn test_error_typed_default_parameter_rejects_mismatched_default() {
 }
 
 #[test]
+fn test_error_named_arguments_reject_unknown_parameter() {
+    expect_error(
+        "<?php function greet($name) { echo $name; } greet(age: 30);",
+        "Function 'greet' has no parameter $age",
+    );
+}
+
+#[test]
+fn test_error_named_arguments_reject_positional_after_named() {
+    expect_error(
+        "<?php function greet($name, $age) { echo $name; } greet(name: \"Alice\", 30);",
+        "Function 'greet' cannot use positional arguments after named arguments",
+    );
+}
+
+#[test]
+fn test_error_named_arguments_reject_duplicate_assignment() {
+    expect_error(
+        "<?php function greet($name) { echo $name; } greet(\"Alice\", name: \"Bob\");",
+        "Function 'greet' parameter $name is already assigned",
+    );
+}
+
+#[test]
+fn test_error_named_arguments_reject_builtin_calls() {
+    expect_error(
+        "<?php strlen(string: \"hello\");",
+        "Builtin 'strlen' does not support named arguments yet",
+    );
+}
+
+#[test]
+fn test_error_named_arguments_reject_spread_mix() {
+    expect_error(
+        "<?php function greet($name, $age) { echo $name; } $args = [\"Alice\"]; greet(...$args, age: 30);",
+        "Function 'greet' does not support mixing named arguments with spread arguments yet",
+    );
+}
+
+#[test]
 fn test_error_function_declared_return_type_rejects_mismatch_without_call() {
     expect_error(
         "<?php function foo(): string { return 1; }",
