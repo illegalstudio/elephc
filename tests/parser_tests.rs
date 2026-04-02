@@ -903,6 +903,48 @@ fn test_parse_closure_call() {
     }
 }
 
+#[test]
+fn test_parse_named_function_call() {
+    let stmts = parse_source("<?php greet(name: \"Alice\", age: 30);");
+    if let StmtKind::ExprStmt(expr) = &stmts[0].kind {
+        if let ExprKind::FunctionCall { name, args } = &expr.kind {
+            assert_eq!(name.as_str(), "greet");
+            assert_eq!(args.len(), 2);
+            assert!(matches!(
+                args[0].kind,
+                ExprKind::NamedArg { ref name, .. } if name == "name"
+            ));
+            assert!(matches!(
+                args[1].kind,
+                ExprKind::NamedArg { ref name, .. } if name == "age"
+            ));
+        } else {
+            panic!("expected FunctionCall");
+        }
+    } else {
+        panic!("expected ExprStmt");
+    }
+}
+
+#[test]
+fn test_parse_named_constructor_call() {
+    let stmts = parse_source("<?php $user = new User(id: 42);");
+    if let StmtKind::Assign { value: expr, .. } = &stmts[0].kind {
+        if let ExprKind::NewObject { class_name, args } = &expr.kind {
+            assert_eq!(class_name.as_str(), "User");
+            assert_eq!(args.len(), 1);
+            assert!(matches!(
+                args[0].kind,
+                ExprKind::NamedArg { ref name, .. } if name == "id"
+            ));
+        } else {
+            panic!("expected NewObject");
+        }
+    } else {
+        panic!("expected Assign");
+    }
+}
+
 // --- Default parameter values ---
 
 #[test]

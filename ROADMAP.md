@@ -289,7 +289,7 @@ Proper type system for PHP compatibility.
 - [ ] Comprehensive error recovery (multiple errors per compilation)
 - [ ] Warning system (unused variables, unreachable code)
 - [x] Enums (`enum Color { Red; Green; Blue; }`) — backed enums with `->value`, `::from()`, `::cases()`
-- [ ] Named arguments (`foo(name: "Alice", age: 30)`) — reorder args at compile time based on parameter names
+- [x] Named arguments (`foo(name: "Alice", age: 30)`) — reorder args at compile time based on parameter names
 - [x] First-class callable syntax (`strlen(...)`) — create closures from function names without string indirection
 - [x] `match` with no-match error — runtime fatal when no arm matches and no default
 - [x] Readonly classes (`readonly class Point {}`) — all properties implicitly readonly

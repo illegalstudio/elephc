@@ -1374,6 +1374,7 @@ fn infer_local_type(
         ExprKind::ConstRef(_) => PhpType::Int, // constants resolved at emit time
         ExprKind::EnumCase { enum_name, .. } => PhpType::Object(enum_name.as_str().to_string()),
         ExprKind::Spread(inner) => infer_local_type(inner, sig, ctx),
+        ExprKind::NamedArg { value, .. } => infer_local_type(value, sig, ctx),
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.as_str().to_string()),
         ExprKind::BufferNew { element_type, .. } => {
             if let Some(c) = ctx {

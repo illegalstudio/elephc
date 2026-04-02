@@ -65,6 +65,10 @@ pub enum ExprKind {
         is_arrow: bool,
         captures: Vec<String>,
     },
+    NamedArg {
+        name: String,
+        value: Box<Expr>,
+    },
     Spread(Box<Expr>),
     ClosureCall {
         var: String,

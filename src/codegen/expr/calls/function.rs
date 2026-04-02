@@ -27,6 +27,11 @@ pub(super) fn emit_function_call(
     } else {
         sig.as_ref().map(|s| s.params.len()).unwrap_or(args_exprs.len())
     };
+    let normalized_args = sig
+        .as_ref()
+        .map(|sig| args::normalize_named_call_args(sig, args_exprs, regular_param_count))
+        .unwrap_or_else(|| args_exprs.to_vec());
+    let args_exprs = normalized_args.as_slice();
 
     let mut regular_args: Vec<&Expr> = Vec::new();
     let mut variadic_args: Vec<&Expr> = Vec::new();

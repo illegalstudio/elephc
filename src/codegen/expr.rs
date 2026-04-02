@@ -468,6 +468,7 @@ pub fn emit_expr(
             // If we reach here, just evaluate the inner expression.
             emit_expr(inner, emitter, ctx, data)
         }
+        ExprKind::NamedArg { value, .. } => emit_expr(value, emitter, ctx, data),
         ExprKind::NewObject { class_name, args } => {
             emit_new_object(class_name.as_str(), args, emitter, ctx, data)
         }

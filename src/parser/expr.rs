@@ -33,6 +33,23 @@ pub(crate) fn parse_args(
             *pos += 1;
             let inner = parse_expr(tokens, pos)?;
             args.push(Expr::new(ExprKind::Spread(Box::new(inner)), spread_span));
+        } else if matches!(tokens.get(*pos), Some((Token::Identifier(_), _)))
+            && matches!(tokens.get(*pos + 1), Some((Token::Colon, _)))
+        {
+            let arg_span = tokens[*pos].1;
+            let name = match &tokens[*pos].0 {
+                Token::Identifier(name) => name.clone(),
+                _ => unreachable!(),
+            };
+            *pos += 2;
+            let value = parse_expr(tokens, pos)?;
+            args.push(Expr::new(
+                ExprKind::NamedArg {
+                    name,
+                    value: Box::new(value),
+                },
+                arg_span,
+            ));
         } else {
             args.push(parse_expr(tokens, pos)?);
         }
