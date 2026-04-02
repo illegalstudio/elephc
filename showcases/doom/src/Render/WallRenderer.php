@@ -55,7 +55,8 @@ class WallRenderer {
             $viewportY,
             $viewportWidth,
             $viewportHeight,
-            $horizonY
+            $horizonY,
+            $camera->angle
         );
 
         int $subSectorCount = count($subSectorOrder);
@@ -393,28 +394,53 @@ class WallRenderer {
         int $viewportY,
         int $viewportWidth,
         int $viewportHeight,
-        int $horizonY
+        int $horizonY,
+        int $cameraAngle
     ): void {
         int $screenHorizon = $viewportY + $horizonY;
         int $screenBottom = $viewportY + $viewportHeight - 1;
         int $rightEdge = $viewportX + $viewportWidth - 1;
 
-        // ceiling: dark blue gradient, brighter near horizon
+        // sky: scrolling panorama based on camera angle
+        // angle 0..359 maps across a virtual 1440-pixel-wide sky strip
+        int $skyOffset = $cameraAngle * 4;
         int $y = $viewportY;
         while ($y < $screenHorizon) {
             int $dy = $screenHorizon - $y;
-            // distance from horizon: larger dy = farther ceiling = darker
-            int $ceilDist = $dy * 4;
-            int $ceilDistSq = $ceilDist * $ceilDist;
-            int $ceilFog = 255 - intdiv($ceilDistSq * 200, $ceilDistSq + 360000);
-            if ($ceilFog < 20) {
-                $ceilFog = 20;
+            // vertical position: 0 at horizon, grows toward top
+            int $vertProgress = 0;
+            if ($horizonY > 0) {
+                $vertProgress = intdiv($dy * 255, $horizonY);
             }
-            int $red = intdiv(18 * $ceilFog, 255);
-            int $green = intdiv(22 * $ceilFog, 255);
-            int $blue = intdiv(68 * $ceilFog, 255);
-            $sdl->setDrawColor($red, $green, $blue);
-            $sdl->drawLine($viewportX, $y, $rightEdge, $y);
+
+            // sky base: dark blue at top, lighter near horizon
+            int $skyR = 8 + intdiv((255 - $vertProgress) * 28, 255);
+            int $skyG = 10 + intdiv((255 - $vertProgress) * 32, 255);
+            int $skyB = 30 + intdiv((255 - $vertProgress) * 58, 255);
+
+            // horizontal variation: subtle color banding that scrolls with camera
+            int $x = $viewportX;
+            while ($x <= $rightEdge) {
+                int $skyX = ($x + $skyOffset) % 360;
+                // sinusoidal-ish variation using triangle wave
+                int $wave = $skyX;
+                if ($wave > 180) {
+                    $wave = 360 - $wave;
+                }
+                // wave is 0..180, normalize to -20..+20 brightness variation
+                int $variation = intdiv($wave, 9) - 10;
+                int $pr = $this->clampColor($skyR + $variation);
+                int $pg = $this->clampColor($skyG + $variation);
+                int $pb = $this->clampColor($skyB + intdiv($variation, 2));
+                $sdl->setDrawColor($pr, $pg, $pb);
+                // draw 4-pixel wide strips for performance
+                int $stripEnd = $x + 3;
+                if ($stripEnd > $rightEdge) {
+                    $stripEnd = $rightEdge;
+                }
+                $sdl->drawLine($x, $y, $stripEnd, $y);
+                $x += 4;
+            }
             $y += 1;
         }
 
@@ -425,7 +451,6 @@ class WallRenderer {
             if ($dy < 1) {
                 $dy = 1;
             }
-            // perspective floor distance: closer to horizon = farther away
             int $floorDist = intdiv(600 * 8, $dy);
             int $floorDistSq = $floorDist * $floorDist;
             int $floorFog = 255 - intdiv($floorDistSq * 220, $floorDistSq + 640000);
