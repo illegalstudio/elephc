@@ -11,14 +11,29 @@ The goal is not to structure it like a C demo with a few giant procedural files.
 
 ## Current status
 
-This directory currently contains only the architectural scaffold:
+This directory currently contains:
 
 - folder structure
 - bootstrap file with explicit `require_once`
-- empty or near-empty PHP classes / enums / packed data records
-- a tiny `main.php` entry point
+- the first application shell built around `Application`, `Game`, `Config`, `SDL`, and `Input`
+- empty or near-empty domain classes for WAD / map / BSP / rendering
+- initial `packed class` records for core map data
 
-No WAD parsing, SDL setup, BSP traversal, or rendering logic has been implemented yet.
+What works today:
+
+- `main.php` boots a real `Application`
+- SDL initializes, creates a window and renderer, clears the screen, presents frames, and shuts down cleanly
+- the app exits early on `ESC`
+- the loop also auto-exits after a short boot/demo interval so the shell can be run safely during development
+- namespaced classes now call `SDL_*` externs and compiler builtin functions directly, without a global helper layer
+
+What does not exist yet:
+
+- WAD parsing
+- level loading
+- BSP traversal
+- minimap rendering
+- 3D wall / floor / ceiling rendering
 
 ## Why this structure
 
@@ -53,6 +68,7 @@ showcases/doom/
       GameState.php
       RenderMode.php
     SDL/
+      extern.php
       SDL.php
       Input.php
     IO/
@@ -107,17 +123,18 @@ That keeps the low-level details isolated instead of leaking through the whole a
 
 ## Build
 
-Right now the scaffold can be compiled like any other showcase:
+The current shell requires SDL2, like the other SDL examples in the repo:
 
 ```bash
-cargo run -- showcases/doom/main.php
+cargo run -- -l SDL2 -L /opt/homebrew/lib showcases/doom/main.php
 ./showcases/doom/main
 ```
 
 Expected output:
 
 ```text
-DOOM showcase scaffold
+DOOM showcase SDL shell running
+ESC quits early
 ```
 
 ## Future implementation notes
