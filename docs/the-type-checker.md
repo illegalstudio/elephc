@@ -252,6 +252,7 @@ pub struct ClassInfo {
     pub class_id: u64,
     pub parent: Option<String>,
     pub is_abstract: bool,
+    pub is_readonly_class: bool,
     pub properties: Vec<(String, PhpType)>,
     pub property_offsets: HashMap<String, usize>,
     pub property_declaring_classes: HashMap<String, String>,
@@ -299,10 +300,13 @@ pub struct CheckResult {
     pub functions: HashMap<String, FunctionSig>, // function name → signature
     pub interfaces: HashMap<String, InterfaceInfo>, // interface name → interface info
     pub classes: HashMap<String, ClassInfo>,     // class name → class info
+    pub enums: HashMap<String, EnumInfo>,
+    pub packed_classes: HashMap<String, PackedClassInfo>,
     pub extern_functions: HashMap<String, ExternFunctionSig>,
     pub extern_classes: HashMap<String, ExternClassInfo>,
     pub extern_globals: HashMap<String, PhpType>,
     pub required_libraries: Vec<String>,
+    pub warnings: Vec<CompileWarning>,
 }
 ```
 

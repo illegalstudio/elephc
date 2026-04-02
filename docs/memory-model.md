@@ -402,11 +402,12 @@ _float_1: .quad 0x4000000000000000    ; 2.0
 
 These are **read-only** — the program never modifies them. When a string operation needs to work with a literal, it reads from the data section and writes the result to the [string buffer](#the-string-buffer).
 
-The runtime also emits static data tables:
+The runtime data layer is split into `emit_runtime_data_fixed()` (shared buffers, diagnostics, lookup tables) and `emit_runtime_data_user()` (per-program globals, statics, enum-case slots, and metadata). Together they emit these static data tables:
 - `_fmt_g` — printf format string for float-to-string conversion (`%.14G`)
 - `_b64_encode_tbl` — 64-byte Base64 encoding lookup table
 - `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
 - `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` — fatal runtime error strings
+- `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_match_unhandled_msg`, `_enum_from_msg` — fatal runtime error strings for buffers, `match`, and enums
 - `_pcre_space`, `_pcre_digit`, `_pcre_word`, `_pcre_nspace`, `_pcre_ndigit`, `_pcre_nword` — regex shorthand replacement strings used by the POSIX regex bridge
 - `_json_true`, `_json_false`, `_json_null` — JSON keyword strings (4, 5, and 4 bytes) used by `json_encode` for boolean and null values
 - `_day_names` — 84-byte table (7 entries x 12 bytes each) with day names, lengths, and padding. Used by `date()` for day-of-week formatting
@@ -414,6 +415,7 @@ The runtime also emits static data tables:
 - `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>` — per-class property traversal descriptors used by object deep-free and cycle collection
 - `_class_vtable_ptrs`, `_class_vtable_<id>` — per-class virtual tables used for inherited instance-method dispatch
 - `_class_static_vtable_ptrs`, `_class_static_vtable_<id>` — per-class static-method tables used for late static binding
+- enum-case `.comm` symbols produced via `enum_case_symbol(...)` — one 8-byte singleton storage slot per declared enum case
 
 ### Global variables
 
@@ -436,6 +438,12 @@ When a function uses `global $var`, the compiler allocates BSS storage for that 
 ```
 
 Each global variable gets 16 bytes of BSS storage (enough to hold any PHP value). The `_main` scope writes to these slots when assigning to variables that any function declares as `global`, and functions read/write through these slots instead of using local stack slots.
+
+### Enum case singleton storage
+
+User-defined enums also contribute BSS storage. During `emit_runtime_data_user()`, the compiler emits one 8-byte `.comm` symbol per declared case, using the mangled name from `enum_case_symbol(...)`.
+
+These slots let enum cases behave like stable singleton values at runtime: codegen can load the canonical case address directly, and helper paths such as `Enum::from()` can compare or return those canonical case objects without constructing ad-hoc heap values.
 
 ### Static variables (`static $var`)
 

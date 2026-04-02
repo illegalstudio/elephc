@@ -70,12 +70,15 @@ Things that have a value:
 | `ExprCall { callee, args }` | `$arr[0](1, 2)` | Calling the result of an expression (e.g., array access returning a callable) |
 | `Spread(Expr)` | `...$arr` | Spread/unpack operator — expands an array into individual arguments or elements |
 | `ConstRef(Name)` | `MAX_RETRIES`, `Config\PORT`, `\App\Config\PORT` | Reference to a user-defined constant |
+| `EnumCase { enum_name, case_name }` | `Color::Red`, `App\Status::Ok` | Reference to a declared enum case before later phases lower it to enum metadata |
 | `NewObject { class_name, args }` | `new Point(1, 2)`, `new App\Model\User()` | Object instantiation |
 | `PropertyAccess { object, property }` | `$p->x` | Property access via `->` |
 | `MethodCall { object, method, args }` | `$p->move(1, 2)` | Instance method call |
 | `StaticMethodCall { receiver, method, args }` | `Point::origin()`, `self::boot()`, `parent::boot()`, `static::boot()` | Static-style call via `::`, where `receiver` is a named class, `Self_`, `Static`, or `Parent` |
+| `FirstClassCallable(CallableTarget)` | `strlen(...)`, `Tools\fmt(...)`, `Math::twice(...)` | PHP-style first-class callable syntax; the target is preserved structurally instead of being parsed as a call |
 | `This` | `$this` | Reference to the current object inside a method |
 | `PtrCast { target_type, expr }` | `ptr_cast<Point>($p)` | Pointer-tag cast parsed specially after `ptr_cast<T>` |
+| `BufferNew { element_type, len }` | `buffer_new<int>(256)` | Compiler extension for contiguous hot-path buffers |
 
 ### Statements (`Stmt`)
 
@@ -93,6 +96,7 @@ Things that do something:
 | `Switch { subject, cases, default }` | `switch ($x) { case 1: ...; default: ... }` |
 | `ArrayAssign { array, index, value }` | `$arr[0] = 5;` |
 | `ArrayPush { array, value }` | `$arr[] = 5;` |
+| `TypedAssign { type_expr, name, value }` | `int $x = 42;`, `buffer<int> $xs = buffer_new<int>(8);` |
 | `FunctionDecl { name, params, variadic, return_type, body }` | `function foo(int $a, &$b, string $c = "x"): string { }` — params is `Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>` where the tuple stores name, declared type, default value, and `is_ref` (pass by reference). `variadic` is `Option<String>` for variadic parameters (`...$args`) and `return_type` is an optional declared `TypeExpr` |
 | `Return(Option<Expr>)` | `return $x;` or `return;` |
 | `Break` | `break;` |
@@ -108,7 +112,9 @@ Things that do something:
 | `ListUnpack { vars, value }` | `[$a, $b] = [1, 2];` |
 | `Global { vars }` | `global $x, $y;` — declares variables as referencing global storage |
 | `StaticVar { name, init }` | `static $count = 0;` — declares a variable that persists across function calls |
-| `ClassDecl { name, extends, implements, is_abstract, trait_uses, properties, methods }` | `abstract class Point extends Shape implements Named { use NamedTrait; ... }` |
+| `ClassDecl { name, extends, implements, is_abstract, is_readonly_class, trait_uses, properties, methods }` | `abstract readonly class Point extends Shape implements Named { use NamedTrait; ... }` |
+| `EnumDecl { name, backing_type, cases }` | `enum Status: int { case Ok = 1; case Err = 2; }` |
+| `PackedClassDecl { name, fields }` | `packed class Vec2 { public float $x; public float $y; }` |
 | `InterfaceDecl { name, extends, methods }` | `interface Named extends Jsonable { public function name(); }` |
 | `TraitDecl { name, trait_uses, properties, methods }` | `trait Named { ... }` |
 | `PropertyAssign { object, property, value }` | `$p->x = 10;` |
@@ -126,7 +132,9 @@ At statement level, parsing is split between `parser/mod.rs` and `stmt.rs`:
 
 | Current token | Parse as |
 |---|---|
-| `Class` / `Abstract Class` | Class declaration |
+| `Class` / `Abstract Class` / `Readonly Class` / `Abstract Readonly Class` | Class declaration |
+| `Enum` | Enum declaration |
+| `Packed` | Packed-class declaration |
 | `Interface` | Interface declaration |
 | `Trait` | Trait declaration |
 | `Function` | Function declaration |
@@ -174,6 +182,7 @@ NullCoalesce
 | `TraitUse` | `trait_names`, `adaptations`, `span` | A `use TraitA, TraitB { ... }` clause inside a class or trait body |
 | `TraitAdaptation` | `Alias { trait_name: Option<Name>, method, alias: Option<String>, visibility: Option<Visibility> }`, `InsteadOf { trait_name: Option<Name>, method, instead_of: Vec<Name> }` | PHP-style trait conflict resolution and aliasing |
 | `UseItem` / `UseKind` | `kind`, `name`, `alias` | Namespace import entries for `use`, `use function`, `use const`, and group-use declarations |
+| `CallableTarget` | `Function(Name)`, `StaticMethod { receiver, method }`, `Method { object, method }` | Structured target of first-class callable syntax such as `foo(...)` or `Cls::bar(...)` |
 
 Every AST node carries a `Span` (line + column) from the source, so error messages in later phases can point to the right location.
 
@@ -290,7 +299,9 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `(int)` / `(float)` / ... | Parse inner expr, return `Cast` |
 | `(` | Parse inner expr, expect `)`, return inner expr (and allow a later postfix call like `(expr)(args)`) |
 | `[` | Parse comma-separated exprs, expect `]`, return `ArrayLiteral` |
+| `match` + `(` | Parse `match (...) { ... }` → `Match` |
 | `Identifier` / `\Identifier` / qualified name + `(` | Parse as function call with arguments |
+| `Identifier` / `\Identifier` / qualified name + `(...)` | Parse as first-class callable → `FirstClassCallable(CallableTarget::Function)` |
 | `Identifier` / `\Identifier` / qualified name (no `(`) | Parse as constant reference → `ConstRef` |
 | `function` + `(` | Parse anonymous function (closure) → `Closure` |
 | `fn` + `(` | Parse arrow function → `Closure` (with `is_arrow = true`) |
@@ -298,6 +309,7 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `$this` | Return `This` node |
 | `...` + expr | Parse spread/unpack → `Spread` |
 | `ptr_cast` + `<Type>` + `(` | Parse pointer cast syntax → `PtrCast` |
+| `buffer_new` + `<Type>` + `(` | Parse contiguous-buffer allocation → `BufferNew` |
 
 ### Postfix: calls, array access, and member access
 
@@ -306,7 +318,7 @@ After parsing a prefix, the parser checks for postfix operators:
 - `(` for calling the result of an expression (`ExprCall`)
 - `[` for array access
 - `->` for property access or method call
-- `::` for static method call (when the prefix is a parsed name)
+- `::` for enum-case lookup, static method call, or static-method first-class callable (when the prefix is a parsed name)
 
 At statement level, `stmt.rs` also parses `trait` declarations and class/trait-body `use` clauses. That `use` handling is intentionally context-sensitive so it does not interfere with closure capture lists like `function () use ($x) { ... }`.
 
@@ -340,7 +352,9 @@ Statement parsing is simpler — after `parse()` has peeled off top-level `exter
 | `Foreach` | `Foreach` loop |
 | `Switch` | `Switch` statement with cases and optional default |
 | `Function` | Function declaration with parameters and body |
-| `Class` / `Abstract Class` | Class declaration with properties and methods |
+| `Class` / `Abstract Class` / `Readonly Class` / `Abstract Readonly Class` | Class declaration with properties and methods |
+| `Enum` | Enum declaration |
+| `Packed` | Packed class declaration |
 | `Interface` | Interface declaration |
 | `Trait` | Trait declaration with trait uses, properties, and methods |
 | `Extern` | Handled one level up in `parser/mod.rs` via `parse_extern_stmts()` |

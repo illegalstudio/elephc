@@ -166,6 +166,7 @@ if ($x === 3) {
 | `string` | `"hello\n"`, `'raw'` |
 | `bool` | `true`, `false` |
 | `null` | `null` |
+| `mixed` | `mixed $x = 42;`, `function show(mixed $x): string { ... }` |
 | `array` | `[1, 2, 3]`, `["key" => "value"]`, `[[1,2],[3,4]]` (indexed, associative, multi-dimensional, copy-on-write) |
 | `object` | `new Foo()`, `$user->name` |
 | `pointer` | `ptr($x)`, `ptr_null()`, `ptr_cast<int>($p)` |
@@ -265,7 +266,7 @@ The static type system tracks these runtime shapes at compile time:
 - **Void / null** — null sentinel value, coerces to 0/""
 - **Array** — indexed arrays with inferred element type
 - **AssocArray** — associative arrays with key/value types
-- **Mixed** — internal boxed runtime shape used when associative-array entries have heterogeneous value types
+- **Mixed** — boxed runtime-tagged payload used for heterogeneous assoc-array values and user-facing `mixed` hints
 - **Callable** — closures and callable function references
 - **Object** — heap-allocated class instances
 - **Pointer** — raw 64-bit addresses, optionally tagged via `ptr_cast<T>()`
@@ -285,6 +286,8 @@ warning[14:9]: Unreachable code
 ```
 
 ## Project structure
+
+High-level map of the source tree. The codebase contains more focused helper submodules than shown here; treat this as an orientation guide rather than a byte-for-byte file listing.
 
 ```
 src/
