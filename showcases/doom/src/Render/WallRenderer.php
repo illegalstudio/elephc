@@ -214,6 +214,7 @@ class WallRenderer {
             $backFloor = $map->sectors[$backSectorIndex]->floor_height;
             $backCeiling = $map->sectors[$backSectorIndex]->ceiling_height;
         }
+        bool $isDoor = !$oneSided && $backCeiling <= $backFloor;
 
         int $light = $this->wallLightForSeg($map, $segIndex);
         int $segDx = $worldX2 - $worldX1;
@@ -224,7 +225,12 @@ class WallRenderer {
         int $baseR = 20 + intdiv($light * 140, 255);
         int $baseG = 22 + intdiv($light * 150, 255);
         int $baseB = 28 + intdiv($light * 130, 255);
-        if ($mostlyVertical) {
+        if ($isDoor) {
+            // closed door: metallic blue-gray tint
+            $baseR = 30 + intdiv($light * 80, 255);
+            $baseG = 34 + intdiv($light * 90, 255);
+            $baseB = 50 + intdiv($light * 120, 255);
+        } else if ($mostlyVertical) {
             $baseG += 6;
             $baseB += 10;
         } else {
@@ -292,7 +298,7 @@ class WallRenderer {
             int $litG = intdiv($baseG * $fog, 255);
             int $litB = intdiv($baseB * $fog, 255);
 
-            if ($oneSided) {
+            if ($oneSided || $isDoor) {
                 int $midR = $this->clampColor($litR + 6);
                 int $midG = $this->clampColor($litG + 4);
                 int $midB = $this->clampColor($litB);
