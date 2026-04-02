@@ -9,14 +9,44 @@ use Showcases\Doom\SDL\SDL;
 
 class MinimapRenderer {
     public function render(SDL $sdl, Config $config, MapData $map, Camera $camera, $subSectorOrder): void {
+        $this->renderViewport(
+            $sdl,
+            $map,
+            $camera,
+            $subSectorOrder,
+            60,
+            60,
+            $config->windowWidth - 120,
+            $config->windowHeight - 120
+        );
+    }
+
+    public function renderInset(SDL $sdl, Config $config, MapData $map, Camera $camera, $subSectorOrder): void {
+        $this->renderViewport(
+            $sdl,
+            $map,
+            $camera,
+            $subSectorOrder,
+            $config->windowWidth - 300,
+            20,
+            260,
+            200
+        );
+    }
+
+    public function renderViewport(
+        SDL $sdl,
+        MapData $map,
+        Camera $camera,
+        $subSectorOrder,
+        int $originX,
+        int $originY,
+        int $drawWidth,
+        int $drawHeight
+    ): void {
         if (!$map->isValid() || !$map->hasBounds() || $map->vertexCount <= 0 || $map->linedefCount <= 0) {
             return;
         }
-
-        int $drawWidth = $config->windowWidth - 120;
-        int $drawHeight = $config->windowHeight - 120;
-        int $originX = 60;
-        int $originY = 60;
 
         int $worldWidth = $map->maxX - $map->minX;
         int $worldHeight = $map->maxY - $map->minY;

@@ -148,20 +148,20 @@ class Game {
         int $moveDy = 0;
 
         if ($this->input->moveForward($keys)) {
-            $moveDx = $moveDx + $this->forwardDx($moveStep);
-            $moveDy = $moveDy + $this->forwardDy($moveStep);
+            $moveDx = $moveDx + $this->forwardStepX($moveStep);
+            $moveDy = $moveDy + $this->forwardStepY($moveStep);
         }
         if ($this->input->moveBackward($keys)) {
-            $moveDx = $moveDx - $this->forwardDx($moveStep);
-            $moveDy = $moveDy - $this->forwardDy($moveStep);
+            $moveDx = $moveDx - $this->forwardStepX($moveStep);
+            $moveDy = $moveDy - $this->forwardStepY($moveStep);
         }
         if ($this->input->moveLeft($keys)) {
-            $moveDx = $moveDx + $this->strafeLeftDx($moveStep);
-            $moveDy = $moveDy + $this->strafeLeftDy($moveStep);
+            $moveDx = $moveDx + $this->strafeLeftStepX($moveStep);
+            $moveDy = $moveDy + $this->strafeLeftStepY($moveStep);
         }
         if ($this->input->moveRight($keys)) {
-            $moveDx = $moveDx - $this->strafeLeftDx($moveStep);
-            $moveDy = $moveDy - $this->strafeLeftDy($moveStep);
+            $moveDx = $moveDx - $this->strafeLeftStepX($moveStep);
+            $moveDy = $moveDy - $this->strafeLeftStepY($moveStep);
         }
         if ($this->input->turnLeft($keys)) {
             $this->camera->rotateBy(-$turnStep);
@@ -269,67 +269,126 @@ class Game {
             + (($py - $closestY) * ($py - $closestY));
     }
 
-    public function forwardDx(int $step): int {
-        int $bucket = $this->directionBucket();
-
-        if ($bucket === 1 || $bucket === 2 || $bucket === 3) {
-            return $step;
-        }
-        if ($bucket === 5 || $bucket === 6 || $bucket === 7) {
-            return -$step;
-        }
-        if ($bucket === 0 || $bucket === 4) {
-            return 0;
-        }
-
-        return 0;
+    public function forwardStepX(int $step): int {
+        return intdiv($this->directionUnitX() * $step, 1024);
     }
 
-    public function forwardDy(int $step): int {
-        int $bucket = $this->directionBucket();
-
-        if ($bucket === 7 || $bucket === 0 || $bucket === 1) {
-            return -$step;
-        }
-        if ($bucket === 3 || $bucket === 4 || $bucket === 5) {
-            return $step;
-        }
-
-        return 0;
+    public function forwardStepY(int $step): int {
+        return intdiv($this->directionUnitY() * $step, 1024);
     }
 
-    public function strafeLeftDx(int $step): int {
-        int $bucket = $this->directionBucket();
-
-        if ($bucket === 0 || $bucket === 1 || $bucket === 7) {
-            return -$step;
-        }
-        if ($bucket === 3 || $bucket === 4 || $bucket === 5) {
-            return $step;
-        }
-
-        return 0;
+    public function strafeLeftStepX(int $step): int {
+        return intdiv($this->directionUnitY() * $step, 1024);
     }
 
-    public function strafeLeftDy(int $step): int {
-        int $bucket = $this->directionBucket();
-
-        if ($bucket === 1 || $bucket === 2 || $bucket === 3) {
-            return -$step;
-        }
-        if ($bucket === 5 || $bucket === 6 || $bucket === 7) {
-            return $step;
-        }
-
-        return 0;
+    public function strafeLeftStepY(int $step): int {
+        return intdiv((-1 * $this->directionUnitX()) * $step, 1024);
     }
 
-    public function directionBucket(): int {
-        int $angle = $this->camera->angle + 22;
+    public function directionBucket16(): int {
+        int $angle = $this->camera->angle + 11;
         if ($angle >= 360) {
             $angle = $angle - 360;
         }
 
-        return intdiv($angle, 45);
+        return intdiv($angle * 16, 360);
+    }
+
+    public function directionUnitX(): int {
+        int $bucket = $this->directionBucket16();
+
+        if ($bucket === 1) {
+            return 392;
+        }
+        if ($bucket === 2) {
+            return 724;
+        }
+        if ($bucket === 3) {
+            return 946;
+        }
+        if ($bucket === 4) {
+            return 1024;
+        }
+        if ($bucket === 5) {
+            return 946;
+        }
+        if ($bucket === 6) {
+            return 724;
+        }
+        if ($bucket === 7) {
+            return 392;
+        }
+        if ($bucket === 9) {
+            return -392;
+        }
+        if ($bucket === 10) {
+            return -724;
+        }
+        if ($bucket === 11) {
+            return -946;
+        }
+        if ($bucket === 12) {
+            return -1024;
+        }
+        if ($bucket === 13) {
+            return -946;
+        }
+        if ($bucket === 14) {
+            return -724;
+        }
+        if ($bucket === 15) {
+            return -392;
+        }
+
+        return 0;
+    }
+
+    public function directionUnitY(): int {
+        int $bucket = $this->directionBucket16();
+
+        if ($bucket === 0) {
+            return -1024;
+        }
+        if ($bucket === 1) {
+            return -946;
+        }
+        if ($bucket === 2) {
+            return -724;
+        }
+        if ($bucket === 3) {
+            return -392;
+        }
+        if ($bucket === 5) {
+            return 392;
+        }
+        if ($bucket === 6) {
+            return 724;
+        }
+        if ($bucket === 7) {
+            return 946;
+        }
+        if ($bucket === 8) {
+            return 1024;
+        }
+        if ($bucket === 9) {
+            return 946;
+        }
+        if ($bucket === 10) {
+            return 724;
+        }
+        if ($bucket === 11) {
+            return 392;
+        }
+        if ($bucket === 13) {
+            return -392;
+        }
+        if ($bucket === 14) {
+            return -724;
+        }
+        if ($bucket === 15) {
+            return -946;
+        }
+
+        return 0;
     }
 }
