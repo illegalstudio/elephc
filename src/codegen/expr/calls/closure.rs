@@ -470,7 +470,7 @@ pub(super) fn emit_closure_call(
     let assignments = args::build_arg_assignments(&arg_types, 0);
 
     emitter.instruction("ldr x9, [sp], #16");                                   // pop closure function address into x9
-    args::load_arg_assignments(emitter, &assignments, total_args);
+    let overflow_bytes = args::materialize_call_args(emitter, &assignments, total_args);
 
     let ret_ty = ctx
         .closure_sigs
@@ -482,6 +482,9 @@ pub(super) fn emit_closure_call(
     super::super::save_concat_offset_before_nested_call(emitter);
     emitter.instruction("blr x19");                                             // branch to closure via function pointer in x19
     super::super::restore_concat_offset_after_nested_call(emitter, &ret_ty);
+    if overflow_bytes > 0 {
+        emitter.instruction(&format!("add sp, sp, #{}", overflow_bytes));       // drop spilled stack arguments after the closure call returns
+    }
 
     ret_ty
 }

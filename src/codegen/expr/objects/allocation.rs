@@ -144,51 +144,15 @@ pub(super) fn emit_new_object(
             arg_types.push(ty);
         }
 
-        let total_args = arg_types.len();
-        let mut int_reg_idx = 1usize;
-        let mut float_reg_idx = 0usize;
-        let mut assignments: Vec<(PhpType, usize, bool)> = Vec::new();
-        for ty in &arg_types {
-            if ty.is_float_reg() {
-                assignments.push((ty.clone(), float_reg_idx, true));
-                float_reg_idx += 1;
-            } else {
-                assignments.push((ty.clone(), int_reg_idx, false));
-                int_reg_idx += ty.register_count();
-            }
-        }
+        let assignments = crate::codegen::expr::calls::args::build_arg_assignments(&arg_types, 1);
+        let overflow_bytes =
+            crate::codegen::expr::calls::args::materialize_call_args(emitter, &assignments, arg_types.len());
 
-        for i in (0..total_args).rev() {
-            let (ty, start_reg, _is_float) = &assignments[i];
-            match ty {
-                PhpType::Bool
-                | PhpType::Int
-                | PhpType::Mixed
-                | PhpType::Union(_)
-                | PhpType::Array(_)
-                | PhpType::AssocArray { .. }
-                | PhpType::Buffer(_)
-                | PhpType::Callable
-                | PhpType::Object(_)
-                | PhpType::Packed(_)
-                | PhpType::Pointer(_) => {
-                    emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); //pop arg into register
-                }
-                PhpType::Float => {
-                    emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); //pop float arg
-                }
-                PhpType::Str => {
-                    emitter.instruction(&format!(                               // pop string constructor arg into consecutive registers
-                        "ldp x{}, x{}, [sp], #16",
-                        start_reg,
-                        start_reg + 1
-                    ));
-                }
-                PhpType::Void => {}
-            }
+        if overflow_bytes == 0 {
+            emitter.instruction("ldr x0, [sp]");                                // load $this directly from the top of the stack when all args stayed in registers
+        } else {
+            emitter.instruction(&format!("ldr x0, [sp, #{}]", overflow_bytes)); // skip spilled stack arguments to reload the saved object pointer as $this
         }
-
-        emitter.instruction("ldr x0, [sp]");                                    // load $this pointer for constructor
         save_concat_offset_before_nested_call(emitter);
         let constructor_impl = class_info
             .method_impl_classes
@@ -197,6 +161,9 @@ pub(super) fn emit_new_object(
             .unwrap_or(class_name);
         emitter.instruction(&format!("bl {}", method_symbol(constructor_impl, "__construct"))); //call constructor
         restore_concat_offset_after_nested_call(emitter, &PhpType::Void);
+        if overflow_bytes > 0 {
+            emitter.instruction(&format!("add sp, sp, #{}", overflow_bytes));   // drop spilled constructor arguments after the nested call returns
+        }
     }
 
     emitter.instruction("ldr x0, [sp], #16");                                   // pop object pointer into x0

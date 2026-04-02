@@ -10,6 +10,21 @@ use crate::types::{
     ClassInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PhpType,
 };
 
+fn emit_load_from_caller_stack(emitter: &mut Emitter, reg: &str, offset: usize) {
+    if offset <= 4095 {
+        emitter.instruction(&format!("ldr {}, [x29, #{}]", reg, offset));      // load spilled incoming argument from the caller stack
+    } else {
+        emitter.instruction("mov x9, x29");                                     // seed a scratch pointer from the caller frame base
+        let mut remaining = offset;
+        while remaining > 0 {
+            let chunk = remaining.min(4080);
+            emitter.instruction(&format!("add x9, x9, #{}", chunk));           // advance the scratch pointer toward the spilled argument slot
+            remaining -= chunk;
+        }
+        emitter.instruction(&format!("ldr {}, [x9]", reg));                    // load spilled incoming argument through the computed address
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn emit_function(
     emitter: &mut Emitter,
@@ -254,6 +269,9 @@ fn emit_function_with_label_and_class(
     // Strings use two consecutive int registers (ptr + len)
     let mut int_reg_idx = 0usize;
     let mut float_reg_idx = 0usize;
+    let mut caller_stack_offset = 32usize;
+    let mut int_stack_only = false;
+    let mut float_stack_only = false;
     for (i, (pname, pty)) in sig.params.iter().enumerate() {
         let is_ref = sig.ref_params.get(i).copied().unwrap_or(false);
         let var = ctx
@@ -262,36 +280,69 @@ fn emit_function_with_label_and_class(
             .expect("codegen bug: param was just allocated but not found in variables map");
         let offset = var.stack_offset;
         if is_ref {
-            // Ref param: store the address (always comes in an integer register)
-            emitter.comment(&format!("param &${} from x{} (ref)", pname, int_reg_idx));
-            super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save address of referenced variable
-            int_reg_idx += 1;
+            if !int_stack_only && int_reg_idx < 8 {
+                emitter.comment(&format!("param &${} from x{} (ref)", pname, int_reg_idx));
+                super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save address of referenced variable from an integer register
+                int_reg_idx += 1;
+            } else {
+                emitter.comment(&format!("param &${} from caller stack +{}", pname, caller_stack_offset));
+                emit_load_from_caller_stack(emitter, "x10", caller_stack_offset);
+                super::abi::store_at_offset(emitter, "x10", offset);            // save the spilled reference argument into the local slot
+                caller_stack_offset += 16;
+                int_stack_only = true;
+            }
         } else {
             match pty {
                 PhpType::Bool | PhpType::Int => {
-                    emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
-                    super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save int/bool param
-                    int_reg_idx += 1;
+                    if !int_stack_only && int_reg_idx < 8 {
+                        emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
+                        super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save int/bool param from an integer register
+                        int_reg_idx += 1;
+                    } else {
+                        emitter.comment(&format!("param ${} from caller stack +{}", pname, caller_stack_offset));
+                        emit_load_from_caller_stack(emitter, "x10", caller_stack_offset);
+                        super::abi::store_at_offset(emitter, "x10", offset);    // save the spilled int/bool parameter into the local slot
+                        caller_stack_offset += 16;
+                        int_stack_only = true;
+                    }
                 }
                 PhpType::Float => {
-                    emitter.comment(&format!("param ${} from d{}", pname, float_reg_idx));
-                    super::abi::store_at_offset(emitter, &format!("d{}", float_reg_idx), offset); // save float param
-                    float_reg_idx += 1;
+                    if !float_stack_only && float_reg_idx < 8 {
+                        emitter.comment(&format!("param ${} from d{}", pname, float_reg_idx));
+                        super::abi::store_at_offset(emitter, &format!("d{}", float_reg_idx), offset); // save float param from a floating-point register
+                        float_reg_idx += 1;
+                    } else {
+                        emitter.comment(&format!("param ${} from caller stack +{}", pname, caller_stack_offset));
+                        emit_load_from_caller_stack(emitter, "d15", caller_stack_offset);
+                        super::abi::store_at_offset(emitter, "d15", offset);    // save the spilled float parameter into the local slot
+                        caller_stack_offset += 16;
+                        float_stack_only = true;
+                    }
                 }
                 PhpType::Str => {
-                    emitter.comment(&format!(
-                        "param ${} from x{},x{}",
-                        pname,
-                        int_reg_idx,
-                        int_reg_idx + 1
-                    ));
-                    super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save string pointer
-                    super::abi::store_at_offset(
-                        emitter,
-                        &format!("x{}", int_reg_idx + 1),
-                        offset - 8,
-                    ); // save string length
-                    int_reg_idx += 2;
+                    if !int_stack_only && int_reg_idx + 1 < 8 {
+                        emitter.comment(&format!(
+                            "param ${} from x{},x{}",
+                            pname,
+                            int_reg_idx,
+                            int_reg_idx + 1
+                        ));
+                        super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save string pointer from the integer-register pair
+                        super::abi::store_at_offset(
+                            emitter,
+                            &format!("x{}", int_reg_idx + 1),
+                            offset - 8,
+                        ); // save string length from the integer-register pair
+                        int_reg_idx += 2;
+                    } else {
+                        emitter.comment(&format!("param ${} from caller stack +{}", pname, caller_stack_offset));
+                        emit_load_from_caller_stack(emitter, "x10", caller_stack_offset);
+                        emit_load_from_caller_stack(emitter, "x11", caller_stack_offset + 8);
+                        super::abi::store_at_offset(emitter, "x10", offset);    // save the spilled string pointer into the local slot
+                        super::abi::store_at_offset(emitter, "x11", offset - 8); // save the spilled string length into the local slot
+                        caller_stack_offset += 16;
+                        int_stack_only = true;
+                    }
                 }
                 PhpType::Void => {}
                 PhpType::Mixed
@@ -303,9 +354,17 @@ fn emit_function_with_label_and_class(
                 | PhpType::Object(_)
                 | PhpType::Packed(_)
                 | PhpType::Pointer(_) => {
-                    emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
-                    super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save array/callable/object/pointer param
-                    int_reg_idx += 1;
+                    if !int_stack_only && int_reg_idx < 8 {
+                        emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
+                        super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save heap/object/callable parameter from an integer register
+                        int_reg_idx += 1;
+                    } else {
+                        emitter.comment(&format!("param ${} from caller stack +{}", pname, caller_stack_offset));
+                        emit_load_from_caller_stack(emitter, "x10", caller_stack_offset);
+                        super::abi::store_at_offset(emitter, "x10", offset);    // save the spilled heap/object/callable parameter into the local slot
+                        caller_stack_offset += 16;
+                        int_stack_only = true;
+                    }
                 }
             }
         }
