@@ -5,6 +5,9 @@ namespace Showcases\Doom\App;
 use Showcases\Doom\Player\Camera;
 use Showcases\Doom\SDL\Input;
 use Showcases\Doom\SDL\SDL;
+use Showcases\Doom\Map\MapData;
+use Showcases\Doom\Map\MapLoader;
+use Showcases\Doom\Wad\WadFile;
 use Showcases\Doom\Wad\WadLoader;
 
 class Game {
@@ -14,6 +17,9 @@ class Game {
     public $camera;
     public $state;
     public $wadLoader;
+    public $mapLoader;
+    public $wad;
+    public $map;
 
     public function __construct(Config $config) {
         $this->config = $config;
@@ -22,6 +28,9 @@ class Game {
         $this->camera = new Camera();
         $this->state = GameState::Booting;
         $this->wadLoader = new WadLoader();
+        $this->mapLoader = new MapLoader();
+        $this->wad = new WadFile("", "", 0, 0);
+        $this->map = new MapData("", -1, 0, 0, 0, 0, 0, 0, 0, 0);
     }
 
     public function run() {
@@ -67,13 +76,36 @@ class Game {
             return;
         }
 
-        string $report = $this->wadLoader->report($wadPath);
-        if ($report === "") {
+        $this->wad = $this->wadLoader->load($wadPath);
+        if (!$this->wad->isValid()) {
             echo "Failed to load WAD: " . $wadPath . "\n";
             return;
         }
 
-        echo $report;
+        echo "Loaded WAD: ";
+        echo $this->wad->kind;
+        echo " | lumps: ";
+        echo $this->wad->entryCount;
+        echo " | directory: ";
+        echo $this->wad->directoryOffset;
+        echo "\n";
+
+        if ($this->wad->firstEntryName !== "") {
+            echo "First lump: ";
+            echo $this->wad->firstEntryName;
+            echo " @ ";
+            echo $this->wad->firstEntryOffset;
+            echo " (";
+            echo $this->wad->firstEntrySize;
+            echo " bytes)\n";
+        }
+
+        $this->map = $this->mapLoader->load($this->wad, $this->config->startupMap);
+        if ($this->map->isValid()) {
+            echo $this->map->summary() . "\n";
+        } else {
+            echo "Map " . $this->config->startupMap . " not found or incomplete\n";
+        }
     }
 
     public function resolveWadPath(): string {

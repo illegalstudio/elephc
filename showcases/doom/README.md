@@ -27,11 +27,13 @@ What works today:
 - the loop also auto-exits after a short boot/demo interval so the shell can be run safely during development
 - namespaced classes now call `SDL_*` externs and compiler builtin functions directly, without a global helper layer
 - the WAD layer is no longer just scaffold: `BinaryReader`, `WadEntry`, `WadFile`, and `WadLoader` can parse the WAD header and directory
-- if `DOOM1.WAD` exists in the showcase directory, or `showcases/doom/DOOM1.WAD` exists from the repo root, the shell prints a short load summary before opening SDL
+- `MapLoader` now resolves a startup map marker and prints structural counts for the main geometry lumps before opening SDL
+- if `DOOM1.WAD` exists in the showcase directory, or `showcases/doom/DOOM1.WAD` exists from the repo root, the shell prints a WAD summary plus the startup map stats before opening SDL
 
 What does not exist yet:
 
 - level loading
+- map geometry parsing into `packed class` / `buffer<T>` storage
 - BSP traversal
 - minimap rendering
 - 3D wall / floor / ceiling rendering
@@ -92,6 +94,9 @@ showcases/doom/
     Data/
       Vertex.php
       Linedef.php
+      Sidedef.php
+      Seg.php
+      SubSector.php
       Sector.php
       Node.php
       Thing.php
@@ -144,6 +149,7 @@ Expected output with a valid WAD file present starts with a summary like:
 ```text
 Loaded WAD: IWAD | lumps: 1264 | directory: 744152
 First lump: E1M1 @ 12 (0 bytes)
+E1M1: 470 vertices, 486 linedefs, 700 sidedefs, 148 sectors, 140 things, 747 segs, 239 subsectors, 238 nodes
 ```
 
 ## Future implementation notes

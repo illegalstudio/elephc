@@ -12,4 +12,12 @@ class WadEntry {
         $this->offset = $offset;
         $this->size = $size;
     }
+
+    public function isNamed(string $name): bool {
+        return $this->name === $name;
+    }
+
+    public function summary(): string {
+        return $this->name . " @ " . $this->offset . " (" . $this->size . " bytes)";
+    }
 }

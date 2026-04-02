@@ -7,6 +7,7 @@ class Config {
     public $windowHeight;
     public $windowTitle;
     public $wadPath;
+    public $startupMap;
     public $backgroundR;
     public $backgroundG;
     public $backgroundB;
@@ -18,6 +19,7 @@ class Config {
         $this->windowHeight = 600;
         $this->windowTitle = "elephc DOOM showcase";
         $this->wadPath = "DOOM1.WAD";
+        $this->startupMap = "E1M1";
         $this->backgroundR = 18;
         $this->backgroundG = 22;
         $this->backgroundB = 30;

@@ -30,6 +30,9 @@ require_once 'Player/Camera.php';
 
 require_once 'Data/Vertex.php';
 require_once 'Data/Linedef.php';
+require_once 'Data/Sidedef.php';
+require_once 'Data/Seg.php';
+require_once 'Data/SubSector.php';
 require_once 'Data/Sector.php';
 require_once 'Data/Node.php';
 require_once 'Data/Thing.php';
