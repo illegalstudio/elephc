@@ -86,6 +86,10 @@ class WallRenderer {
             return;
         }
 
+        if (!$this->shouldRenderSeg($map, $camera, $segIndex, $startIndex, $endIndex)) {
+            return;
+        }
+
         int $worldX1 = $map->vertexes[$startIndex]->x;
         int $worldY1 = $map->vertexes[$startIndex]->y;
         int $worldX2 = $map->vertexes[$endIndex]->x;
@@ -157,12 +161,21 @@ class WallRenderer {
         }
 
         int $light = $this->wallLightForSeg($map, $segIndex);
+        int $distance = intdiv($leftDepth + $rightDepth, 2);
+        int $distanceFade = intdiv($distance, 12);
+        if ($distanceFade > 140) {
+            $distanceFade = 140;
+        }
         int $baseRed = 40 + intdiv($light * 120, 255);
         int $baseGreen = 60 + intdiv($light * 140, 255);
         int $baseBlue = 80 + intdiv($light * 110, 255);
         if ($map->segs[$segIndex]->direction != 0) {
             $baseRed += 18;
             $baseGreen += 12;
+        }
+        if ($this->isTwoSidedSeg($map, $segIndex)) {
+            $baseBlue += 16;
+            $baseGreen += 8;
         }
         if ($baseRed > 255) {
             $baseRed = 255;
@@ -172,6 +185,18 @@ class WallRenderer {
         }
         if ($baseBlue > 255) {
             $baseBlue = 255;
+        }
+        $baseRed = $baseRed - $distanceFade;
+        $baseGreen = $baseGreen - $distanceFade;
+        $baseBlue = $baseBlue - intdiv($distanceFade * 5, 4);
+        if ($baseRed < 22) {
+            $baseRed = 22;
+        }
+        if ($baseGreen < 26) {
+            $baseGreen = 26;
+        }
+        if ($baseBlue < 32) {
+            $baseBlue = 32;
         }
 
         if ($leftX < $viewportX) {
@@ -231,16 +256,35 @@ class WallRenderer {
     }
 
     public function wallHeightForSeg(MapData $map, int $segIndex): int {
-        int $sectorIndex = $this->sectorIndexForSeg($map, $segIndex);
-        if ($sectorIndex < 0 || $sectorIndex >= $map->sectorCount) {
+        int $frontSectorIndex = $this->frontSectorIndexForSeg($map, $segIndex);
+        if ($frontSectorIndex < 0 || $frontSectorIndex >= $map->sectorCount) {
             return 96;
         }
 
-        return $map->sectors[$sectorIndex]->ceiling_height - $map->sectors[$sectorIndex]->floor_height;
+        int $backSectorIndex = $this->backSectorIndexForSeg($map, $segIndex);
+        if ($backSectorIndex < 0 || $backSectorIndex >= $map->sectorCount) {
+            return $map->sectors[$frontSectorIndex]->ceiling_height - $map->sectors[$frontSectorIndex]->floor_height;
+        }
+
+        int $ceilingDelta = $this->absoluteValue(
+            $map->sectors[$frontSectorIndex]->ceiling_height - $map->sectors[$backSectorIndex]->ceiling_height
+        );
+        int $floorDelta = $this->absoluteValue(
+            $map->sectors[$frontSectorIndex]->floor_height - $map->sectors[$backSectorIndex]->floor_height
+        );
+        int $portalHeight = $ceilingDelta;
+        if ($floorDelta > $portalHeight) {
+            $portalHeight = $floorDelta;
+        }
+        if ($portalHeight > 0) {
+            return $portalHeight;
+        }
+
+        return 0;
     }
 
     public function wallLightForSeg(MapData $map, int $segIndex): int {
-        int $sectorIndex = $this->sectorIndexForSeg($map, $segIndex);
+        int $sectorIndex = $this->frontSectorIndexForSeg($map, $segIndex);
         if ($sectorIndex < 0 || $sectorIndex >= $map->sectorCount) {
             return 160;
         }
@@ -255,21 +299,119 @@ class WallRenderer {
         return $light;
     }
 
-    public function sectorIndexForSeg(MapData $map, int $segIndex): int {
-        int $linedefIndex = $map->segs[$segIndex]->linedef_index;
-        if ($linedefIndex < 0 || $linedefIndex >= $map->linedefCount) {
-            return -1;
+    public function shouldRenderSeg(
+        MapData $map,
+        Camera $camera,
+        int $segIndex,
+        int $startIndex,
+        int $endIndex
+    ): bool {
+        if (!$this->isVisibleSideFacingCamera($map, $camera, $startIndex, $endIndex)) {
+            return false;
         }
 
-        int $sidedefIndex = $map->linedefs[$linedefIndex]->right_sidedef;
-        if ($map->segs[$segIndex]->direction != 0) {
-            $sidedefIndex = $map->linedefs[$linedefIndex]->left_sidedef;
+        if ($this->isOneSidedSeg($map, $segIndex)) {
+            return true;
         }
+
+        int $frontSectorIndex = $this->frontSectorIndexForSeg($map, $segIndex);
+        int $backSectorIndex = $this->backSectorIndexForSeg($map, $segIndex);
+        if (
+            $frontSectorIndex < 0
+            || $backSectorIndex < 0
+            || $frontSectorIndex >= $map->sectorCount
+            || $backSectorIndex >= $map->sectorCount
+        ) {
+            return false;
+        }
+
+        return $map->sectors[$frontSectorIndex]->floor_height !== $map->sectors[$backSectorIndex]->floor_height
+            || $map->sectors[$frontSectorIndex]->ceiling_height !== $map->sectors[$backSectorIndex]->ceiling_height;
+    }
+
+    public function isVisibleSideFacingCamera(
+        MapData $map,
+        Camera $camera,
+        int $startIndex,
+        int $endIndex
+    ): bool {
+        int $startX = $map->vertexes[$startIndex]->x;
+        int $startY = $map->vertexes[$startIndex]->y;
+        int $endX = $map->vertexes[$endIndex]->x;
+        int $endY = $map->vertexes[$endIndex]->y;
+        int $edgeX = $endX - $startX;
+        int $edgeY = $endY - $startY;
+        int $toCameraX = $camera->x - $startX;
+        int $toCameraY = $camera->y - $startY;
+        int $cross = ($edgeX * $toCameraY) - ($edgeY * $toCameraX);
+
+        return $cross < 0;
+    }
+
+    public function isOneSidedSeg(MapData $map, int $segIndex): bool {
+        int $linedefIndex = $map->segs[$segIndex]->linedef_index;
+        if ($linedefIndex < 0 || $linedefIndex >= $map->linedefCount) {
+            return false;
+        }
+
+        return $map->linedefs[$linedefIndex]->left_sidedef < 0
+            || $map->linedefs[$linedefIndex]->right_sidedef < 0;
+    }
+
+    public function isTwoSidedSeg(MapData $map, int $segIndex): bool {
+        return !$this->isOneSidedSeg($map, $segIndex);
+    }
+
+    public function frontSectorIndexForSeg(MapData $map, int $segIndex): int {
+        int $sidedefIndex = $this->frontSidedefIndexForSeg($map, $segIndex);
         if ($sidedefIndex < 0 || $sidedefIndex >= $map->sidedefCount) {
             return -1;
         }
 
         return $map->sidedefs[$sidedefIndex]->sector_index;
+    }
+
+    public function backSectorIndexForSeg(MapData $map, int $segIndex): int {
+        int $sidedefIndex = $this->backSidedefIndexForSeg($map, $segIndex);
+        if ($sidedefIndex < 0 || $sidedefIndex >= $map->sidedefCount) {
+            return -1;
+        }
+
+        return $map->sidedefs[$sidedefIndex]->sector_index;
+    }
+
+    public function frontSidedefIndexForSeg(MapData $map, int $segIndex): int {
+        int $linedefIndex = $map->segs[$segIndex]->linedef_index;
+        if ($linedefIndex < 0 || $linedefIndex >= $map->linedefCount) {
+            return -1;
+        }
+
+        if ($map->segs[$segIndex]->direction != 0) {
+            return $map->linedefs[$linedefIndex]->left_sidedef;
+        }
+
+        return $map->linedefs[$linedefIndex]->right_sidedef;
+    }
+
+    public function backSidedefIndexForSeg(MapData $map, int $segIndex): int {
+        int $linedefIndex = $map->segs[$segIndex]->linedef_index;
+        if ($linedefIndex < 0 || $linedefIndex >= $map->linedefCount) {
+            return -1;
+        }
+
+        if ($map->segs[$segIndex]->direction != 0) {
+            return $map->linedefs[$linedefIndex]->right_sidedef;
+        }
+
+        return $map->linedefs[$linedefIndex]->left_sidedef;
+    }
+
+    public function absoluteValue(int $value): int {
+        if ($value < 0) {
+            return -$value;
+        }
+
+        return $value;
     }
 
     public function directionBucket16(int $angle): int {
