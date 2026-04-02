@@ -13,6 +13,7 @@ class Config {
     public $backgroundB;
     public $targetFrameMs;
     public $bootDurationMs;
+    public $renderMode;
 
     public function __construct() {
         $this->windowWidth = 960;
@@ -25,5 +26,6 @@ class Config {
         $this->backgroundB = 30;
         $this->targetFrameMs = 16;
         $this->bootDurationMs = 0;
+        $this->renderMode = RenderMode::Split;
     }
 }

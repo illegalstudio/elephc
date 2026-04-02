@@ -11,6 +11,10 @@ class Input {
         return $this->keyPressed($keys, 41);
     }
 
+    public function toggleMap(ptr $keys): int {
+        return $this->keyPressed($keys, 43);
+    }
+
     public function moveForward(ptr $keys): int {
         return $this->keyPressed($keys, 26);
     }

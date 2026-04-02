@@ -22,6 +22,7 @@ class Game {
     public $mapLoader;
     public $wad;
     public $map;
+    public $mapToggleHeld;
 
     public function __construct(Config $config) {
         $this->config = $config;
@@ -34,6 +35,7 @@ class Game {
         $this->mapLoader = new MapLoader();
         $this->wad = new WadFile("", "", 0, 0);
         $this->map = new MapData("", -1);
+        $this->mapToggleHeld = 0;
     }
 
     public function run() {
@@ -55,6 +57,8 @@ class Game {
             if ($this->input->shouldQuit($keys)) {
                 $this->state = GameState::Stopped;
             }
+
+            $this->handleMapToggle($keys);
 
             if ($this->map->isValid()) {
                 $this->updateCamera($keys);
@@ -83,7 +87,7 @@ class Game {
     }
 
     public function bootWad(): void {
-        string $wadPath = $this->resolveWadPath();
+        $wadPath = $this->resolveWadPath();
         if ($wadPath === "") {
             echo "No WAD file at " . $this->config->wadPath . "\n";
             return;
@@ -141,11 +145,28 @@ class Game {
         return "";
     }
 
+    public function handleMapToggle(ptr $keys): void {
+        $pressed = $this->input->toggleMap($keys);
+        if ($pressed !== 0) {
+            if ($this->mapToggleHeld === 0) {
+                if ($this->config->renderMode === RenderMode::Split) {
+                    $this->config->renderMode = RenderMode::World3D;
+                } else {
+                    $this->config->renderMode = RenderMode::Split;
+                }
+            }
+            $this->mapToggleHeld = 1;
+            return;
+        }
+
+        $this->mapToggleHeld = 0;
+    }
+
     public function updateCamera(ptr $keys): void {
-        int $moveStep = 24;
-        int $turnStep = 4;
-        int $moveDx = 0;
-        int $moveDy = 0;
+        $moveStep = 24;
+        $turnStep = 4;
+        $moveDx = 0;
+        $moveDy = 0;
 
         if ($this->input->moveForward($keys)) {
             $moveDx = $moveDx + $this->forwardStepX($moveStep);
@@ -176,8 +197,8 @@ class Game {
     }
 
     public function tryMoveCamera(int $dx, int $dy): void {
-        int $targetX = $this->camera->x + $dx;
-        int $targetY = $this->camera->y + $dy;
+        $targetX = $this->camera->x + $dx;
+        $targetY = $this->camera->y + $dy;
 
         if ($this->isWalkablePosition($targetX, $targetY)) {
             $this->camera->setSpawn($targetX, $targetY, $this->camera->angle);
