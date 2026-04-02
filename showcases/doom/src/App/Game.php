@@ -3,6 +3,7 @@
 namespace Showcases\Doom\App;
 
 use Showcases\Doom\Player\Camera;
+use Showcases\Doom\Render\Renderer;
 use Showcases\Doom\SDL\Input;
 use Showcases\Doom\SDL\SDL;
 use Showcases\Doom\Map\MapData;
@@ -15,6 +16,7 @@ class Game {
     public $sdl;
     public $input;
     public $camera;
+    public $renderer;
     public $state;
     public $wadLoader;
     public $mapLoader;
@@ -26,6 +28,7 @@ class Game {
         $this->sdl = new SDL();
         $this->input = new Input();
         $this->camera = new Camera();
+        $this->renderer = new Renderer();
         $this->state = GameState::Booting;
         $this->wadLoader = new WadLoader();
         $this->mapLoader = new MapLoader();
@@ -53,7 +56,14 @@ class Game {
                 $this->state = GameState::Stopped;
             }
 
-            if ($this->sdl->ticks() - $start >= $this->config->bootDurationMs) {
+            if ($this->map->isValid()) {
+                $this->updateCamera($keys);
+            }
+
+            if (
+                $this->config->bootDurationMs > 0
+                && $this->sdl->ticks() - $start >= $this->config->bootDurationMs
+            ) {
                 $this->state = GameState::Stopped;
             }
 
@@ -62,6 +72,9 @@ class Game {
                 $this->config->backgroundG,
                 $this->config->backgroundB
             );
+            if ($this->map->isValid()) {
+                $this->renderer->render($this->sdl, $this->config, $this->map, $this->camera);
+            }
             $this->sdl->present();
             $this->sdl->delay($this->config->targetFrameMs);
         }
@@ -102,6 +115,13 @@ class Game {
 
         $this->map = $this->mapLoader->load($this->wad, $this->config->startupMap);
         if ($this->map->isValid()) {
+            if ($this->map->hasPlayerStart()) {
+                $this->camera->setSpawn(
+                    $this->map->playerStartX,
+                    $this->map->playerStartY,
+                    $this->map->playerStartAngle
+                );
+            }
             echo $this->map->summary() . "\n";
         } else {
             echo "Map " . $this->config->startupMap . " not found or incomplete\n";
@@ -119,5 +139,29 @@ class Game {
         }
 
         return "";
+    }
+
+    public function updateCamera(ptr $keys): void {
+        int $moveStep = 24;
+        int $turnStep = 4;
+
+        if ($this->input->moveForward($keys)) {
+            $this->camera->moveBy(0, -$moveStep);
+        }
+        if ($this->input->moveBackward($keys)) {
+            $this->camera->moveBy(0, $moveStep);
+        }
+        if ($this->input->moveLeft($keys)) {
+            $this->camera->moveBy(-$moveStep, 0);
+        }
+        if ($this->input->moveRight($keys)) {
+            $this->camera->moveBy($moveStep, 0);
+        }
+        if ($this->input->turnLeft($keys)) {
+            $this->camera->rotateBy(-$turnStep);
+        }
+        if ($this->input->turnRight($keys)) {
+            $this->camera->rotateBy($turnStep);
+        }
     }
 }

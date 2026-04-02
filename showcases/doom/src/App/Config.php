@@ -24,6 +24,6 @@ class Config {
         $this->backgroundG = 22;
         $this->backgroundB = 30;
         $this->targetFrameMs = 16;
-        $this->bootDurationMs = 3000;
+        $this->bootDurationMs = 0;
     }
 }

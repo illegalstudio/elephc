@@ -9,6 +9,8 @@ extern "SDL2" {
     function SDL_DestroyRenderer(ptr $renderer): void;
     function SDL_SetRenderDrawColor(ptr $renderer, int $r, int $g, int $b, int $a): int;
     function SDL_RenderClear(ptr $renderer): int;
+    function SDL_RenderDrawLine(ptr $renderer, int $x1, int $y1, int $x2, int $y2): int;
+    function SDL_RenderDrawPoint(ptr $renderer, int $x, int $y): int;
     function SDL_RenderPresent(ptr $renderer): void;
     function SDL_PumpEvents(): void;
     function SDL_GetKeyboardState(ptr $numkeys): ptr;

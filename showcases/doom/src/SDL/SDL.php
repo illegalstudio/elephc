@@ -47,6 +47,18 @@ class SDL {
         SDL_RenderClear($this->renderer);
     }
 
+    public function setDrawColor(int $r, int $g, int $b): void {
+        SDL_SetRenderDrawColor($this->renderer, $r, $g, $b, 255);
+    }
+
+    public function drawLine(int $x1, int $y1, int $x2, int $y2): void {
+        SDL_RenderDrawLine($this->renderer, $x1, $y1, $x2, $y2);
+    }
+
+    public function drawPoint(int $x, int $y): void {
+        SDL_RenderDrawPoint($this->renderer, $x, $y);
+    }
+
     public function present(): void {
         SDL_RenderPresent($this->renderer);
     }
