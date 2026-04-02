@@ -1,5 +1,6 @@
 use elephc::lexer::tokenize;
 use elephc::parser::parse;
+use elephc::parser::parse_with_recovery;
 use elephc::types;
 use elephc::types::PhpType;
 use std::collections::HashSet;
@@ -18,6 +19,13 @@ fn check_source_with_defines(src: &str, defines: &[&str]) -> Result<(), String> 
     Ok(())
 }
 
+fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::errors::CompileError> {
+    let tokens = tokenize(src).map_err(|e| elephc::errors::CompileError::new(e.span, &e.message))?;
+    let ast = parse(&tokens)?;
+    let ast = elephc::name_resolver::resolve(ast)?;
+    types::check(&ast)
+}
+
 fn expect_error(src: &str, expected_substr: &str) {
     match check_source(src) {
         Ok(_) => panic!(
@@ -33,6 +41,40 @@ fn expect_error(src: &str, expected_substr: &str) {
             );
         }
     }
+}
+
+fn expect_warning(src: &str, expected_substr: &str) {
+    let result = check_source_full(src).expect("expected source to type-check");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains(expected_substr)),
+        "Warnings {:?} do not contain '{}'",
+        result
+            .warnings
+            .iter()
+            .map(|warning| warning.message.clone())
+            .collect::<Vec<_>>(),
+        expected_substr,
+    );
+}
+
+fn expect_no_warning(src: &str, unexpected_substr: &str) {
+    let result = check_source_full(src).expect("expected source to type-check");
+    assert!(
+        !result
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains(unexpected_substr)),
+        "Warnings {:?} unexpectedly contain '{}'",
+        result
+            .warnings
+            .iter()
+            .map(|warning| warning.message.clone())
+            .collect::<Vec<_>>(),
+        unexpected_substr,
+    );
 }
 
 macro_rules! expect_builtin_arity_error {
@@ -89,6 +131,24 @@ fn test_error_missing_semicolon() {
 }
 
 #[test]
+fn test_parser_recovery_collects_multiple_errors() {
+    let tokens = tokenize("<?php echo ; echo ;").unwrap();
+    let errors = parse_with_recovery(&tokens).unwrap_err();
+    assert!(errors.len() >= 2, "expected multiple parse errors, got {:?}", errors);
+}
+
+#[test]
+fn test_parser_block_recovery_collects_multiple_errors() {
+    let tokens = tokenize("<?php function foo() { echo ; echo ; }").unwrap();
+    let error = parse(&tokens).unwrap_err();
+    assert!(
+        error.flatten().len() >= 2,
+        "expected multiple parse errors in block, got {:?}",
+        error.flatten(),
+    );
+}
+
+#[test]
 fn test_error_missing_equals() {
     expect_error("<?php $x \"hi\";", "Expected '='");
 }
@@ -106,6 +166,105 @@ fn test_error_unexpected_token_in_expr() {
 #[test]
 fn test_error_unexpected_token_in_stmt() {
     expect_error("<?php 42;", "Unexpected token");
+}
+
+#[test]
+fn test_type_checker_recovery_collects_multiple_errors() {
+    let error = check_source_full("<?php echo $missing; echo $also_missing;").unwrap_err();
+    let all = error.flatten();
+    assert!(
+        all.len() >= 2,
+        "expected multiple checker errors, got {:?}",
+        all.iter().map(|error| error.message.clone()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_type_checker_recovery_collects_multiple_early_errors() {
+    let error = check_source_full(
+        "<?php interface A {} interface A {} extern function foo(): int; extern function foo(): int;",
+    )
+    .unwrap_err();
+    let all = error.flatten();
+    assert!(
+        all.len() >= 2,
+        "expected multiple early checker errors, got {:?}",
+        all.iter().map(|error| error.message.clone()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_type_checker_recovery_collects_multiple_method_return_errors() {
+    let error = check_source_full(
+        "<?php class Demo { public function one(): string { return 1; } public function two(): string { return 2; } }",
+    )
+    .unwrap_err();
+    let all = error.flatten();
+    assert!(
+        all.len() >= 2,
+        "expected multiple method return errors, got {:?}",
+        all.iter().map(|error| error.message.clone()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_warning_unused_variable() {
+    expect_warning("<?php function foo($x) { $y = 1; return 2; }", "Unused variable: $x");
+    expect_warning("<?php function foo($x) { $y = 1; return 2; }", "Unused variable: $y");
+}
+
+#[test]
+fn test_warning_unreachable_code() {
+    expect_warning("<?php function foo() { return 1; echo 2; }", "Unreachable code");
+}
+
+#[test]
+fn test_warning_closure_call_marks_callable_variable_as_used() {
+    expect_no_warning(
+        "<?php function foo() { $f = function() { return 1; }; $f(); }",
+        "Unused variable: $f",
+    );
+}
+
+#[test]
+fn test_warning_nested_function_is_analyzed() {
+    expect_warning(
+        "<?php function outer() { function inner($x) { return 1; } }",
+        "Unused variable: $x",
+    );
+}
+
+#[test]
+fn test_warning_arrow_function_marks_outer_variable_as_used() {
+    expect_no_warning(
+        "<?php function outer() { $x = 1; $f = fn() => $x; }",
+        "Unused variable: $x",
+    );
+}
+
+#[test]
+fn test_warning_unused_param_has_real_span() {
+    let result = check_source_full("<?php function foo($x) { return 1; }").unwrap();
+    let warning = result
+        .warnings
+        .iter()
+        .find(|warning| warning.message.contains("Unused variable: $x"))
+        .expect("expected unused param warning");
+    assert!(warning.span.line > 0, "expected non-dummy span, got {:?}", warning.span);
+}
+
+#[test]
+fn test_error_magic_method_contracts_collect_multiple_errors() {
+    let error = check_source_full(
+        "<?php class A { private function __toString() { return \"x\"; } } class B { public static function __toString() { return \"y\"; } }",
+    )
+    .unwrap_err();
+    let all = error.flatten();
+    assert!(
+        all.len() >= 2,
+        "expected multiple magic method contract errors, got {:?}",
+        all.iter().map(|error| error.message.clone()).collect::<Vec<_>>(),
+    );
 }
 
 #[test]
