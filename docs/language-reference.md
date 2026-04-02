@@ -470,6 +470,7 @@ Current rules:
 - supported parameter and return types match the compiler's existing nominal/scalar types such as `int`, `float`, `bool`, `string`, `array`, `callable`, `ptr`, and known class / interface / enum names
 - `mixed`, union, and nullable type hints are also supported, and are lowered to the compiler's boxed runtime representation
 - `void` is valid only as a return type, not as a parameter type
+- typed parameters can also use PHP-style default values such as `function foo(int $x = 10) {}`
 - declared parameter types are enforced at call sites
 - declared return types are enforced even if the function is never called directly
 - typed variadic parameters such as `function foo(int ...$xs)` are not supported yet

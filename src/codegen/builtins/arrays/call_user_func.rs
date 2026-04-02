@@ -88,6 +88,21 @@ pub fn emit(
         arg_types.push(pushed_ty);
     }
 
+    if let Some(sig) = &sig {
+        let regular_param_count = if sig.variadic.is_some() {
+            sig.params.len().saturating_sub(1)
+        } else {
+            sig.params.len()
+        };
+        for i in arg_types.len()..regular_param_count {
+            if let Some(Some(default_expr)) = sig.defaults.get(i) {
+                let target_ty = sig.params.get(i).map(|(_, ty)| ty);
+                let pushed_ty = args::push_expr_arg(default_expr, target_ty, emitter, ctx, data);
+                arg_types.push(pushed_ty);
+            }
+        }
+    }
+
     // -- pop arguments back into ABI registers in reverse --
     let mut int_reg = 0usize;
     let mut reg_assignments: Vec<(PhpType, usize)> = Vec::new();

@@ -7168,6 +7168,21 @@ fn test_call_user_func_array_string_return() {
     assert_eq!(out, "Hello World");
 }
 
+#[test]
+fn test_call_user_func_array_variadic_callback() {
+    let out = compile_and_run(
+        "<?php
+        function summarize($head = 1, ...$rest) {
+            echo $head;
+            echo \":\";
+            echo count($rest);
+        }
+        call_user_func_array(summarize(...), [7, 8, 9]);
+        ",
+    );
+    assert_eq!(out, "7:2");
+}
+
 // -- v0.8 constants --
 
 #[test]
@@ -13740,6 +13755,93 @@ fn test_typed_constructor_parameter() {
 }
 
 #[test]
+fn test_typed_default_parameter_uses_default() {
+    let out = compile_and_run(
+        "<?php
+        function add_ten(int $value = 10): int {
+            return $value + 10;
+        }
+        echo add_ten();
+        ",
+    );
+    assert_eq!(out, "20");
+}
+
+#[test]
+fn test_typed_default_parameter_override() {
+    let out = compile_and_run(
+        "<?php
+        function add_ten(int $value = 10): int {
+            return $value + 10;
+        }
+        echo add_ten(5);
+        ",
+    );
+    assert_eq!(out, "15");
+}
+
+#[test]
+fn test_typed_closure_default_parameter() {
+    let out = compile_and_run(
+        "<?php
+        $f = function (int $value = 10) {
+            return $value + 1;
+        };
+        echo $f();
+        echo \"|\";
+        echo $f(4);
+        ",
+    );
+    assert_eq!(out, "11|5");
+}
+
+#[test]
+fn test_typed_first_class_callable_default_parameter() {
+    let out = compile_and_run(
+        "<?php
+        function add_ten(int $value = 10): int {
+            return $value + 10;
+        }
+        $f = add_ten(...);
+        echo $f();
+        echo \"|\";
+        echo $f(7);
+        ",
+    );
+    assert_eq!(out, "20|17");
+}
+
+#[test]
+fn test_typed_call_user_func_default_parameter() {
+    let out = compile_and_run(
+        "<?php
+        function add_ten(int $value = 10): int {
+            return $value + 10;
+        }
+        echo call_user_func(add_ten(...));
+        echo \"|\";
+        echo call_user_func(\"add_ten\", 5);
+        ",
+    );
+    assert_eq!(out, "20|15");
+}
+
+#[test]
+fn test_typed_call_user_func_array_default_parameter() {
+    let out = compile_and_run(
+        "<?php
+        function add_ten(int $value = 10): int {
+            return $value + 10;
+        }
+        echo call_user_func_array(add_ten(...), []);
+        echo \"|\";
+        echo call_user_func_array(\"add_ten\", [5]);
+        ",
+    );
+    assert_eq!(out, "20|15");
+}
+
+#[test]
 fn test_typed_closure_parameter() {
     let out = compile_and_run(
         "<?php
@@ -13881,6 +13983,6 @@ fn test_example_functions_compiles_and_runs() {
     let out = compile_and_run(include_str!("../examples/functions/main.php"));
     assert_eq!(
         out,
-        "my_abs(-42) = 42\nmy_max(3, 7) = 7\nclamp(15, 0, 10) = 10\ngcd(48, 18) = 6\n2^10 = 1024\ndescribe(42) = integer:42\ndescribe(null) = NULL:null\n",
+        "my_abs(-42) = 42\nmy_max(3, 7) = 7\nclamp(15, 0, 10) = 10\ngcd(48, 18) = 6\n2^10 = 1024\ndescribe(42) = integer:42\ndescribe(null) = NULL:null\nadd_ten() = 20\n",
     );
 }

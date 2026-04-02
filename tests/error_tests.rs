@@ -2659,6 +2659,14 @@ fn test_error_function_typed_param_rejects_wrong_argument() {
 }
 
 #[test]
+fn test_error_typed_default_parameter_rejects_mismatched_default() {
+    expect_error(
+        "<?php function foo(int $x = \"hello\") { echo $x; }",
+        "Function 'foo' parameter $x expects Int, got Str",
+    );
+}
+
+#[test]
 fn test_error_function_declared_return_type_rejects_mismatch_without_call() {
     expect_error(
         "<?php function foo(): string { return 1; }",
