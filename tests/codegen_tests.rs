@@ -8932,6 +8932,101 @@ echo $x[2];
 }
 
 #[test]
+fn test_ref_array_multi_index_write() {
+    // Writing to two different computed indices of a by-ref array must not corrupt values
+    let out = compile_and_run(
+        r#"<?php
+function write_two(&$arr, int $base, int $val1, int $val2): void {
+    $arr[$base] = $val1;
+    int $idx = $base + 1;
+    $arr[$idx] = $val2;
+}
+
+$data = [0, 0, 0, 0, 0, 0];
+write_two($data, 0, 42, 99);
+echo $data[0] . "\n";
+echo $data[1] . "\n";
+write_two($data, 3, 77, 88);
+echo $data[3] . "\n";
+echo $data[4] . "\n";
+"#,
+    );
+    assert_eq!(out, "42\n99\n77\n88\n");
+}
+
+#[test]
+fn test_ref_array_stride_loop_multi_write() {
+    // Reproduces DOOM showcase bug: loop over stride-3 packed array with read+write
+    let out = compile_and_run(
+        r#"<?php
+function process(&$data, int $width): void {
+    int $col = 0;
+    while ($col < $width) {
+        int $base = $col * 3;
+        int $depthVal = $data[$base];
+        if ($depthVal > 100) {
+            $data[$base] = 50;
+            int $idx1 = $base + 1;
+            $data[$idx1] = 999;
+        }
+        $col += 1;
+    }
+}
+
+$data = [];
+int $i = 0;
+while ($i < 4) {
+    $data[] = 2147483647;
+    $data[] = 0;
+    $data[] = 599;
+    $i += 1;
+}
+process($data, 4);
+echo $data[0] . "\n";
+echo $data[1] . "\n";
+echo $data[2] . "\n";
+echo $data[3] . "\n";
+echo $data[4] . "\n";
+echo $data[5] . "\n";
+"#,
+    );
+    assert_eq!(out, "50\n999\n599\n50\n999\n599\n");
+}
+
+#[test]
+fn test_ref_array_large_offset_multi_write() {
+    // Regression: load_at_offset used x9 as scratch at grow_ready, clobbering the
+    // array index register when the by-ref param lived at stack offset > 255.
+    let out = compile_and_run(
+        r#"<?php
+function big(
+    int $p1, int $p2, int $p3, int $p4, int $p5,
+    int $p6, int $p7, int $p8, int $p9, int $p10,
+    int $p11, int $p12, int $p13, int $p14, int $p15,
+    int $p16, int $p17, int $p18, int $p19, int $p20,
+    int $p21, int $p22, int $p23, int $p24, int $p25,
+    int $p26, int $p27, int $p28, int $p29, int $p30,
+    int $p31, int $p32,
+    &$arr
+): void {
+    int $base = $p1 * 3;
+    $arr[$base] = 50;
+    int $idx = $base + 1;
+    $arr[$idx] = 999;
+    echo $p2 + $p3 + $p4 + $p5 + $p6 + $p7 + $p8 + $p9 + $p10;
+    echo $p11 + $p12 + $p13 + $p14 + $p15 + $p16 + $p17 + $p18 + $p19 + $p20;
+    echo $p21 + $p22 + $p23 + $p24 + $p25 + $p26 + $p27 + $p28 + $p29 + $p30;
+    echo $p31 + $p32;
+}
+$data = [0, 0, 0, 0, 0, 0];
+big(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,$data);
+echo "\n" . $data[0] . "\n" . $data[1] . "\n";
+"#,
+    );
+    assert_eq!(out, "0000\n50\n999\n");
+}
+
+#[test]
 fn test_array_column_string_implode() {
     // Issue #33: array_column on arrays of assoc arrays with string values + implode
     let out = compile_and_run(
