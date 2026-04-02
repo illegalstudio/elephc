@@ -5,6 +5,7 @@ use crate::names::{canonical_name_for_decl, Name, NameKind};
 use crate::parser::ast::{
     CallableTarget, CatchClause, Expr, ExprKind, Program, StaticReceiver, Stmt, StmtKind,
     TraitAdaptation, TraitUse, UseItem, UseKind,
+    TypeExpr,
 };
 
 #[derive(Default, Clone)]
@@ -132,9 +133,16 @@ fn resolve_stmt_list(
                 resolved.push(Stmt::new(
                     StmtKind::FunctionDecl {
                         name: canonical_name_for_decl(namespace.as_deref(), name),
-                        params: params.clone(),
+                        params: resolve_params(
+                            params,
+                            namespace.as_deref(),
+                            &imports,
+                            symbols,
+                        ),
                         variadic: variadic.clone(),
-                        return_type: return_type.clone(),
+                        return_type: return_type
+                            .as_ref()
+                            .map(|ty| resolve_type_expr(ty, namespace.as_deref(), &imports)),
                         body,
                     },
                     stmt.span,
@@ -156,6 +164,16 @@ fn resolve_stmt_list(
                         let body =
                             resolve_stmt_list(&method.body, namespace.as_deref(), &imports, symbols)?;
                         Ok(crate::parser::ast::ClassMethod {
+                            params: resolve_params(
+                                &method.params,
+                                namespace.as_deref(),
+                                &imports,
+                                symbols,
+                            ),
+                            return_type: method
+                                .return_type
+                                .as_ref()
+                                .map(|ty| resolve_type_expr(ty, namespace.as_deref(), &imports)),
                             body,
                             ..method.clone()
                         })
@@ -216,6 +234,16 @@ fn resolve_stmt_list(
                         let body =
                             resolve_stmt_list(&method.body, namespace.as_deref(), &imports, symbols)?;
                         Ok(crate::parser::ast::ClassMethod {
+                            params: resolve_params(
+                                &method.params,
+                                namespace.as_deref(),
+                                &imports,
+                                symbols,
+                            ),
+                            return_type: method
+                                .return_type
+                                .as_ref()
+                                .map(|ty| resolve_type_expr(ty, namespace.as_deref(), &imports)),
                             body,
                             ..method.clone()
                         })
@@ -245,6 +273,16 @@ fn resolve_stmt_list(
                         let body =
                             resolve_stmt_list(&method.body, namespace.as_deref(), &imports, symbols)?;
                         Ok(crate::parser::ast::ClassMethod {
+                            params: resolve_params(
+                                &method.params,
+                                namespace.as_deref(),
+                                &imports,
+                                symbols,
+                            ),
+                            return_type: method
+                                .return_type
+                                .as_ref()
+                                .map(|ty| resolve_type_expr(ty, namespace.as_deref(), &imports)),
                             body,
                             ..method.clone()
                         })
@@ -446,6 +484,20 @@ fn resolve_stmt_list(
             StmtKind::Assign { name, value } => {
                 resolved.push(Stmt::new(
                     StmtKind::Assign {
+                        name: name.clone(),
+                        value: resolve_expr(value, namespace.as_deref(), &imports, symbols),
+                    },
+                    stmt.span,
+                ));
+            }
+            StmtKind::TypedAssign {
+                type_expr,
+                name,
+                value,
+            } => {
+                resolved.push(Stmt::new(
+                    StmtKind::TypedAssign {
+                        type_expr: resolve_type_expr(type_expr, namespace.as_deref(), &imports),
                         name: name.clone(),
                         value: resolve_expr(value, namespace.as_deref(), &imports, symbols),
                     },
@@ -693,7 +745,7 @@ fn resolve_expr(expr: &Expr, current_namespace: Option<&str>, imports: &Imports,
             is_arrow,
             captures,
         } => ExprKind::Closure {
-            params: params.clone(),
+            params: resolve_params(params, current_namespace, imports, symbols),
             variadic: variadic.clone(),
             body: resolve_stmt_list(body, current_namespace, imports, symbols)
                 .expect("name resolver bug: closure body resolution failed"),
@@ -790,9 +842,87 @@ fn resolve_expr(expr: &Expr, current_namespace: Option<&str>, imports: &Imports,
             target_type: target_type.clone(),
             expr: Box::new(resolve_expr(expr, current_namespace, imports, symbols)),
         },
+        ExprKind::BufferNew { element_type, len } => ExprKind::BufferNew {
+            element_type: resolve_type_expr(element_type, current_namespace, imports),
+            len: Box::new(resolve_expr(len, current_namespace, imports, symbols)),
+        },
         _ => expr.kind.clone(),
     };
     Expr::new(kind, expr.span)
+}
+
+fn resolve_params(
+    params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+    current_namespace: Option<&str>,
+    imports: &Imports,
+    symbols: &Symbols,
+) -> Vec<(String, Option<TypeExpr>, Option<Expr>, bool)> {
+    params
+        .iter()
+        .map(|(name, type_ann, default, is_ref)| {
+            (
+                name.clone(),
+                type_ann
+                    .as_ref()
+                    .map(|ty| resolve_type_expr(ty, current_namespace, imports)),
+                default
+                    .as_ref()
+                    .map(|expr| resolve_expr(expr, current_namespace, imports, symbols)),
+                *is_ref,
+            )
+        })
+        .collect()
+}
+
+fn resolve_type_expr(
+    type_expr: &TypeExpr,
+    current_namespace: Option<&str>,
+    imports: &Imports,
+) -> TypeExpr {
+    match type_expr {
+        TypeExpr::Int => TypeExpr::Int,
+        TypeExpr::Float => TypeExpr::Float,
+        TypeExpr::Bool => TypeExpr::Bool,
+        TypeExpr::Str => TypeExpr::Str,
+        TypeExpr::Void => TypeExpr::Void,
+        TypeExpr::Buffer(inner) => {
+            TypeExpr::Buffer(Box::new(resolve_type_expr(inner, current_namespace, imports)))
+        }
+        TypeExpr::Nullable(inner) => {
+            TypeExpr::Nullable(Box::new(resolve_type_expr(inner, current_namespace, imports)))
+        }
+        TypeExpr::Union(members) => TypeExpr::Union(
+            members
+                .iter()
+                .map(|member| resolve_type_expr(member, current_namespace, imports))
+                .collect(),
+        ),
+        TypeExpr::Ptr(None) => TypeExpr::Ptr(None),
+        TypeExpr::Ptr(Some(name)) => {
+            let raw = name.as_str();
+            if matches!(raw, "int" | "float" | "bool" | "string") {
+                TypeExpr::Ptr(Some(name.clone()))
+            } else {
+                TypeExpr::Ptr(Some(resolved_name(resolve_special_or_class_name(
+                    name,
+                    current_namespace,
+                    imports,
+                ))))
+            }
+        }
+        TypeExpr::Named(name) => {
+            let raw = name.as_str();
+            if matches!(raw, "array" | "mixed" | "callable" | "void") {
+                TypeExpr::Named(name.clone())
+            } else {
+                TypeExpr::Named(resolved_name(resolve_special_or_class_name(
+                    name,
+                    current_namespace,
+                    imports,
+                )))
+            }
+        }
+    }
 }
 
 fn register_imports(imports: &mut Imports, use_items: &[UseItem], span: crate::span::Span) -> Result<(), CompileError> {

@@ -2060,12 +2060,20 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                     .and_then(|c| c.methods.get(&method.name))
                     .map(|s| s.params.clone())
             };
-            for (i, (pname, _, _, _)) in method.params.iter().enumerate() {
-                let ty = sig_params
-                    .as_ref()
-                    .and_then(|p| p.get(i))
-                    .map(|(_, t)| t.clone())
-                    .unwrap_or(PhpType::Int);
+            for (i, (pname, type_ann, _, _)) in method.params.iter().enumerate() {
+                let ty = if let Some(type_ann) = type_ann {
+                    checker.resolve_declared_param_type_hint(
+                        type_ann,
+                        method.span,
+                        &format!("Method parameter ${}", pname),
+                    )?
+                } else {
+                    sig_params
+                        .as_ref()
+                        .and_then(|p| p.get(i))
+                        .map(|(_, t)| t.clone())
+                        .unwrap_or(PhpType::Int)
+                };
                 method_env.insert(pname.clone(), ty);
             }
             if let Some(variadic_name) = &method.variadic {
@@ -2081,7 +2089,10 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
             // (for correct register assignment in codegen prologue)
             if method.name == "__construct" {
                 if let Some(ci) = checker.classes.get(&class.name).cloned() {
-                    for (i, (pname, _, _, _)) in method.params.iter().enumerate() {
+                    for (i, (pname, type_ann, _, _)) in method.params.iter().enumerate() {
+                        if type_ann.is_some() {
+                            continue;
+                        }
                         if let Some(Some(prop_name)) = ci.constructor_param_to_prop.get(i) {
                             if let Some((_, ty)) =
                                 ci.properties.iter().find(|(n, _)| n == prop_name)
