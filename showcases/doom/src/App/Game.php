@@ -30,7 +30,7 @@ class Game {
         $this->wadLoader = new WadLoader();
         $this->mapLoader = new MapLoader();
         $this->wad = new WadFile("", "", 0, 0);
-        $this->map = new MapData("", -1, 0, 0, 0, 0, 0, 0, 0, 0);
+        $this->map = new MapData("", -1);
     }
 
     public function run() {

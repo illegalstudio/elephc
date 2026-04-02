@@ -24,20 +24,21 @@ class WadLoader {
 
         $entryCount = $reader->readU32LE(4);
         $directoryOffset = $reader->readU32LE(8);
-        $firstEntryName = "";
-        $firstEntryOffset = 0;
-        $firstEntrySize = 0;
-
-        if ($entryCount > 0) {
-            $firstEntryOffset = $reader->readU32LE($directoryOffset);
-            $firstEntrySize = $reader->readU32LE($directoryOffset + 4);
-            $firstEntryName = $reader->readFixedString($directoryOffset + 8, 8);
+        if ($directoryOffset <= 0 || $directoryOffset + ($entryCount * 16) > $reader->length()) {
+            return $this->invalid($path);
         }
 
         $wad = new WadFile($path, $kind, $entryCount, $directoryOffset);
-        $wad->firstEntryName = $firstEntryName;
-        $wad->firstEntryOffset = $firstEntryOffset;
-        $wad->firstEntrySize = $firstEntrySize;
+        int $i = 0;
+
+        while ($i < $entryCount && $i < 1) {
+            int $entryOffset = $directoryOffset + ($i * 16);
+            $wad->firstEntryName = $reader->readFixedString($entryOffset + 8, 8);
+            $wad->firstEntryOffset = $reader->readU32LE($entryOffset);
+            $wad->firstEntrySize = $reader->readU32LE($entryOffset + 4);
+            $i += 1;
+        }
+
         return $wad;
     }
 
