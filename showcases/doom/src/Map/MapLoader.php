@@ -207,6 +207,29 @@ class MapLoader {
         $map->nodes = $nodes;
         $map->sectors = $sectors;
 
+        // load PLAYPAL palette (256 RGB triplets = 768 bytes)
+        int $palIdx = $this->findEntryIndex($reader, $wad, "PLAYPAL");
+        if ($palIdx >= 0) {
+            $palEntry = $this->readDirectoryEntry($reader, $wad, $palIdx);
+            if ($palEntry->size >= 768) {
+                $palR = [];
+                $palG = [];
+                $palB = [];
+                int $pi = 0;
+                while ($pi < 256) {
+                    int $po = $palEntry->offset + ($pi * 3);
+                    $palR[] = $reader->readU8($po);
+                    $palG[] = $reader->readU8($po + 1);
+                    $palB[] = $reader->readU8($po + 2);
+                    $pi += 1;
+                }
+                $map->paletteReds = $palR;
+                $map->paletteGreens = $palG;
+                $map->paletteBlues = $palB;
+                $map->paletteCount = 256;
+            }
+        }
+
         return $map;
     }
 

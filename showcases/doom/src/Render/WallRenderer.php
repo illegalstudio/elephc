@@ -222,12 +222,25 @@ class WallRenderer {
         int $segDy = $worldY2 - $worldY1;
         bool $mostlyVertical = $this->absoluteValue($segDy) > $this->absoluteValue($segDx);
 
-        // base color from sector light + wall orientation (fog applied per-column)
+        // per-sector color from WAD palette (or fallback)
         int $baseR = 20 + intdiv($light * 140, 255);
         int $baseG = 22 + intdiv($light * 150, 255);
         int $baseB = 28 + intdiv($light * 130, 255);
+        if ($map->paletteCount > 0) {
+            // pick from brown/tan (16-47) and gray (80-103) palette regions
+            int $sectorSlot = ($frontSectorIndex * 5) % 56;
+            int $palIdx = 16 + $sectorSlot;
+            if ($sectorSlot >= 32) {
+                $palIdx = 80 + ($sectorSlot - 32);
+            }
+            int $palR = $map->paletteReds[$palIdx];
+            int $palG = $map->paletteGreens[$palIdx];
+            int $palB = $map->paletteBlues[$palIdx];
+            $baseR = 12 + intdiv($palR * $light, 320);
+            $baseG = 12 + intdiv($palG * $light, 320);
+            $baseB = 12 + intdiv($palB * $light, 320);
+        }
         if ($isDoor) {
-            // closed door: metallic blue-gray tint
             $baseR = 30 + intdiv($light * 80, 255);
             $baseG = 34 + intdiv($light * 90, 255);
             $baseB = 50 + intdiv($light * 120, 255);
@@ -318,9 +331,9 @@ class WallRenderer {
                 $clipData[$base] = $depth;
             } else {
                 if ($frontCeiling !== $backCeiling) {
-                    int $upR = $this->clampColor(intdiv($litR * 3, 4));
+                    int $upR = $this->clampColor(intdiv($litR * 4, 5));
                     int $upG = $this->clampColor(intdiv($litG * 4, 5));
-                    int $upB = $this->clampColor($litB + intdiv((255 - $litB), 4));
+                    int $upB = $this->clampColor(intdiv($litB * 4, 5) + 8);
                     int $hHigh = $hFrontCeil;
                     int $hLow = $hBackCeil;
                     if ($backCeiling > $frontCeiling) {
@@ -336,9 +349,9 @@ class WallRenderer {
                     );
                 }
                 if ($frontFloor !== $backFloor) {
-                    int $loR = $this->clampColor($litR + intdiv((255 - $litR), 5));
+                    int $loR = $this->clampColor(intdiv($litR * 4, 5) + 6);
                     int $loG = $this->clampColor(intdiv($litG * 4, 5));
-                    int $loB = $this->clampColor(intdiv($litB * 3, 5));
+                    int $loB = $this->clampColor(intdiv($litB * 4, 5));
                     int $hHigh2 = $hFrontFloor;
                     int $hLow2 = $hBackFloor;
                     if ($backFloor > $frontFloor) {

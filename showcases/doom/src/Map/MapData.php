@@ -28,6 +28,10 @@ class MapData {
     public $subSectors;
     public $nodes;
     public $sectors;
+    public $paletteReds;
+    public $paletteGreens;
+    public $paletteBlues;
+    public $paletteCount;
 
     public function __construct(string $mapName, int $markerIndex) {
         $this->mapName = $mapName;
@@ -55,6 +59,10 @@ class MapData {
         $this->subSectors = 0;
         $this->nodes = 0;
         $this->sectors = 0;
+        $this->paletteReds = [];
+        $this->paletteGreens = [];
+        $this->paletteBlues = [];
+        $this->paletteCount = 0;
     }
 
     public function isValid(): bool {
