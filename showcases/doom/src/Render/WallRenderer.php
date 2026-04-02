@@ -41,7 +41,8 @@ class WallRenderer {
             $viewportX,
             $viewportY,
             $viewportWidth,
-            $viewportHeight
+            $viewportHeight,
+            $horizonY
         );
 
         int $subSectorCount = count($subSectorOrder);
@@ -197,21 +198,41 @@ class WallRenderer {
 
         int $light = $this->wallLightForSeg($map, $segIndex);
         int $distance = intdiv($leftDepth + $rightDepth, 2);
-        int $distanceFade = intdiv($distance, 12);
-        if ($distanceFade > 140) {
-            $distanceFade = 140;
+        int $distanceFade = intdiv($distance, 10);
+        if ($distanceFade > 168) {
+            $distanceFade = 168;
         }
-        int $baseRed = 40 + intdiv($light * 120, 255);
-        int $baseGreen = 60 + intdiv($light * 140, 255);
-        int $baseBlue = 80 + intdiv($light * 110, 255);
+        int $segDx = $worldX2 - $worldX1;
+        int $segDy = $worldY2 - $worldY1;
+        bool $mostlyVertical = $this->absoluteValue($segDy) > $this->absoluteValue($segDx);
+        int $baseRed = 34 + intdiv($light * 96, 255);
+        int $baseGreen = 54 + intdiv($light * 126, 255);
+        int $baseBlue = 70 + intdiv($light * 92, 255);
+        if ($mostlyVertical) {
+            $baseGreen += 18;
+            $baseBlue += 10;
+        } else {
+            $baseRed += 20;
+            $baseGreen += 10;
+        }
         if ($map->segs[$segIndex]->direction != 0) {
-            $baseRed += 18;
-            $baseGreen += 12;
+            $baseRed += 10;
+            $baseBlue += 14;
         }
         if (!$oneSided) {
-            $baseBlue += 16;
-            $baseGreen += 8;
+            $baseBlue += 18;
+            $baseGreen += 6;
         }
+        int $nearBoost = 28 - intdiv($distance, 48);
+        if ($nearBoost < 0) {
+            $nearBoost = 0;
+        }
+        if ($nearBoost > 28) {
+            $nearBoost = 28;
+        }
+        $baseRed += $nearBoost;
+        $baseGreen += intdiv($nearBoost * 3, 4);
+        $baseBlue += intdiv($nearBoost, 2);
         if ($baseRed > 255) {
             $baseRed = 255;
         }
@@ -222,16 +243,16 @@ class WallRenderer {
             $baseBlue = 255;
         }
         $baseRed = $baseRed - $distanceFade;
-        $baseGreen = $baseGreen - $distanceFade;
+        $baseGreen = $baseGreen - intdiv($distanceFade * 9, 10);
         $baseBlue = $baseBlue - intdiv($distanceFade * 5, 4);
-        if ($baseRed < 22) {
-            $baseRed = 22;
+        if ($baseRed < 18) {
+            $baseRed = 18;
         }
-        if ($baseGreen < 26) {
-            $baseGreen = 26;
+        if ($baseGreen < 24) {
+            $baseGreen = 24;
         }
-        if ($baseBlue < 32) {
-            $baseBlue = 32;
+        if ($baseBlue < 28) {
+            $baseBlue = 28;
         }
 
         if ($leftX < $viewportX) {
@@ -365,19 +386,81 @@ class WallRenderer {
         int $viewportX,
         int $viewportY,
         int $viewportWidth,
-        int $viewportHeight
+        int $viewportHeight,
+        int $horizonY
     ): void {
-        int $ceilingBottom = $viewportY + intdiv($viewportHeight, 2);
-        int $x = 0;
+        int $skyTop = $viewportY;
+        int $skyBottom = $viewportY + $horizonY;
+        int $floorTop = $skyBottom + 1;
+        int $floorBottom = $viewportY + $viewportHeight - 1;
+        int $skyHeight = $skyBottom - $skyTop;
+        int $floorHeight = $floorBottom - $floorTop;
 
-        while ($x < $viewportWidth) {
-            int $screenX = $viewportX + $x;
-            $sdl->setDrawColor(54, 66, 94);
-            $sdl->drawLine($screenX, $viewportY, $screenX, $ceilingBottom);
-            $sdl->setDrawColor(36, 28, 18);
-            $sdl->drawLine($screenX, $ceilingBottom + 1, $screenX, $viewportY + $viewportHeight - 1);
+        int $y = $skyTop;
+        while ($y <= $skyBottom) {
+            int $skyProgress = 0;
+            if ($skyHeight > 0) {
+                $skyProgress = intdiv(($y - $skyTop) * 255, $skyHeight);
+            }
+            int $red = 28 + intdiv($skyProgress * 28, 255);
+            int $green = 40 + intdiv($skyProgress * 32, 255);
+            int $blue = 76 + intdiv($skyProgress * 34, 255);
+            if ($red > 255) {
+                $red = 255;
+            }
+            if ($green > 255) {
+                $green = 255;
+            }
+            if ($blue > 255) {
+                $blue = 255;
+            }
+            $sdl->setDrawColor($red, $green, $blue);
+            $sdl->drawLine($viewportX, $y, $viewportX + $viewportWidth - 1, $y);
+            $y += 1;
+        }
 
-            $x += 1;
+        $y = $floorTop;
+        while ($y <= $floorBottom) {
+            int $floorProgress = 0;
+            if ($floorHeight > 0) {
+                $floorProgress = intdiv(($y - $floorTop) * 255, $floorHeight);
+            }
+            int $distanceShade = 255 - $floorProgress;
+            int $red = 48 - intdiv($distanceShade * 16, 255);
+            int $green = 36 - intdiv($distanceShade * 12, 255);
+            int $blue = 24 - intdiv($distanceShade * 8, 255);
+            if ($floorProgress > 96) {
+                $red += intdiv($floorProgress - 96, 20);
+                $green += intdiv($floorProgress - 96, 28);
+            }
+            if ($red < 24) {
+                $red = 24;
+            }
+            if ($green < 18) {
+                $green = 18;
+            }
+            if ($blue < 14) {
+                $blue = 14;
+            }
+            if ($red > 92) {
+                $red = 92;
+            }
+            if ($green > 70) {
+                $green = 70;
+            }
+            if ($blue > 42) {
+                $blue = 42;
+            }
+            $sdl->setDrawColor($red, $green, $blue);
+            $sdl->drawLine($viewportX, $y, $viewportX + $viewportWidth - 1, $y);
+            if ($floorHeight > 0) {
+                int $band = intdiv(($y - $floorTop) * 14, $floorHeight);
+                if ($band % 2 === 0) {
+                    $sdl->setDrawColor($red + 4, $green + 3, $blue + 2);
+                    $sdl->drawLine($viewportX, $y, $viewportX + $viewportWidth - 1, $y);
+                }
+            }
+            $y += 1;
         }
     }
 
