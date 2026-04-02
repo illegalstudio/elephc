@@ -1211,6 +1211,32 @@ echo $box->value;
 }
 
 #[test]
+fn test_forward_class_reference_in_method_return_type() {
+    let out = compile_and_run(
+        r#"<?php
+class Loader {
+    public function load(): Item {
+        return new Item();
+    }
+}
+
+class Item {
+    public $value;
+
+    public function __construct() {
+        $this->value = 9;
+    }
+}
+
+$loader = new Loader();
+$item = $loader->load();
+echo $item->value;
+"#,
+    );
+    assert_eq!(out, "9");
+}
+
+#[test]
 fn test_property_array_access_after_property_lookup() {
     let out = compile_and_run(
         r#"<?php

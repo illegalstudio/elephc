@@ -261,8 +261,12 @@ pub(crate) struct Checker {
     pub interfaces: HashMap<String, InterfaceInfo>,
     /// Class definitions collected during first pass.
     pub classes: HashMap<String, ClassInfo>,
+    /// Canonical class names declared in the program, available for forward references.
+    pub declared_classes: HashSet<String>,
     /// Enum definitions collected during first pass.
     pub enums: HashMap<String, EnumInfo>,
+    /// Canonical interface names declared in the program, available for forward references.
+    pub declared_interfaces: HashSet<String>,
     /// Name of the class currently being type-checked (for $this).
     pub current_class: Option<String>,
     /// Name of the current method, when type-checking a class method body.
@@ -1674,7 +1678,9 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         first_class_callable_targets: HashMap::new(),
         interfaces: HashMap::new(),
         classes: HashMap::new(),
+        declared_classes: HashSet::new(),
         enums: HashMap::new(),
+        declared_interfaces: HashSet::new(),
         current_class: None,
         current_method: None,
         current_method_is_static: false,
@@ -1730,6 +1736,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         .collect();
     let mut class_map = class_map;
     let mut interface_map = HashMap::new();
+    checker.declared_classes = class_map.keys().cloned().collect();
     for stmt in program {
         if let StmtKind::InterfaceDecl {
             name,
@@ -1758,6 +1765,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
             );
         }
     }
+    checker.declared_interfaces = interface_map.keys().cloned().collect();
     if let Err(error) = inject_builtin_throwables(&mut interface_map, &mut class_map) {
         errors.extend(error.flatten());
     }
@@ -2883,7 +2891,9 @@ impl Checker {
                 "void" => Ok(PhpType::Void),
                 "array" => Ok(PhpType::Array(Box::new(PhpType::Int))),
                 _ if self.classes.contains_key(name.as_str())
+                    || self.declared_classes.contains(name.as_str())
                     || self.interfaces.contains_key(name.as_str())
+                    || self.declared_interfaces.contains(name.as_str())
                     || self.extern_classes.contains_key(name.as_str()) =>
                 {
                     Ok(PhpType::Object(name.as_str().to_string()))
