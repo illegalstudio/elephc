@@ -83,6 +83,94 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
     }
 }
 
+pub(crate) fn recover_to_statement_boundary(tokens: &[(Token, Span)], pos: &mut usize) {
+    let start = *pos;
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+
+    while *pos < tokens.len() {
+        match tokens[*pos].0 {
+            Token::LParen => {
+                paren_depth += 1;
+                *pos += 1;
+            }
+            Token::RParen => {
+                paren_depth = paren_depth.saturating_sub(1);
+                *pos += 1;
+            }
+            Token::LBracket => {
+                bracket_depth += 1;
+                *pos += 1;
+            }
+            Token::RBracket => {
+                bracket_depth = bracket_depth.saturating_sub(1);
+                *pos += 1;
+            }
+            Token::Semicolon if paren_depth == 0 && bracket_depth == 0 => {
+                *pos += 1;
+                break;
+            }
+            Token::RBrace if paren_depth == 0 && bracket_depth == 0 => {
+                break;
+            }
+            Token::Eof if paren_depth == 0 && bracket_depth == 0 => {
+                break;
+            }
+            Token::Echo
+            | Token::Print
+            | Token::Variable(_)
+            | Token::This
+            | Token::PlusPlus
+            | Token::MinusMinus
+            | Token::Class
+            | Token::Enum
+            | Token::ReadOnly
+            | Token::Packed
+            | Token::Interface
+            | Token::Trait
+            | Token::Abstract
+            | Token::Function
+            | Token::Namespace
+            | Token::Use
+            | Token::Return
+            | Token::Throw
+            | Token::Include
+            | Token::IncludeOnce
+            | Token::Require
+            | Token::RequireOnce
+            | Token::Const
+            | Token::Global
+            | Token::Static
+            | Token::Identifier(_)
+            | Token::Self_
+            | Token::Parent
+            | Token::Backslash
+            | Token::Question
+            | Token::Switch
+            | Token::If
+            | Token::IfDef
+            | Token::Try
+            | Token::While
+            | Token::Do
+            | Token::For
+            | Token::Foreach
+            | Token::Break
+            | Token::Continue
+                if *pos > start && paren_depth == 0 && bracket_depth == 0 =>
+            {
+                break;
+            }
+            _ => {
+                *pos += 1;
+            }
+        }
+    }
+
+    if *pos == start && *pos < tokens.len() && !matches!(tokens[*pos].0, Token::Eof) {
+        *pos += 1;
+    }
+}
+
 fn parse_include(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -164,8 +252,15 @@ fn parse_namespace_stmt(
         "Expected ';' or '{' after namespace name",
     )?;
     let mut body = Vec::new();
-    while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
-        body.push(parse_stmt(tokens, pos)?);
+    let mut errors = Vec::new();
+    while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
+        match parse_stmt(tokens, pos) {
+            Ok(stmt) => body.push(stmt),
+            Err(error) => {
+                errors.extend(error.flatten());
+                recover_to_statement_boundary(tokens, pos);
+            }
+        }
     }
     expect_token(
         tokens,
@@ -173,6 +268,9 @@ fn parse_namespace_stmt(
         &Token::RBrace,
         "Expected '}' after namespace block",
     )?;
+    if !errors.is_empty() {
+        return Err(CompileError::from_many(errors));
+    }
     Ok(Stmt::new(StmtKind::NamespaceBlock { name, body }, span))
 }
 
@@ -890,16 +988,28 @@ pub fn parse_block(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Vec<Stmt
     expect_token(tokens, pos, &Token::LBrace, "Expected '{'")?;
 
     let mut stmts = Vec::new();
-    while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
-        stmts.push(parse_stmt(tokens, pos)?);
+    let mut errors = Vec::new();
+    while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
+        match parse_stmt(tokens, pos) {
+            Ok(stmt) => stmts.push(stmt),
+            Err(error) => {
+                errors.extend(error.flatten());
+                recover_to_statement_boundary(tokens, pos);
+            }
+        }
     }
 
     if *pos >= tokens.len() || tokens[*pos].0 != Token::RBrace {
-        return Err(CompileError::new(span, "Expected '}'"));
+        errors.push(CompileError::new(span, "Expected '}'"));
+        return Err(CompileError::from_many(errors));
     }
     *pos += 1;
 
-    Ok(stmts)
+    if errors.is_empty() {
+        Ok(stmts)
+    } else {
+        Err(CompileError::from_many(errors))
+    }
 }
 
 /// Parse either a braced block `{ ... }` or a single statement (for braceless if/while/for/foreach).
@@ -1050,7 +1160,7 @@ fn parse_enum_decl(
 
     expect_token(tokens, pos, &Token::LBrace, "Expected '{' after enum name")?;
     let mut cases = Vec::new();
-    while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
+    while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
         let case_span = tokens[*pos].1;
         expect_token(tokens, pos, &Token::Case, "Expected 'case' in enum body")?;
         let case_name = match tokens.get(*pos).map(|(t, _)| t) {
@@ -1125,7 +1235,7 @@ fn parse_packed_decl(
         "Expected '{' after packed class name",
     )?;
     let mut fields = Vec::new();
-    while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
+    while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
         let field_span = tokens[*pos].1;
         match tokens.get(*pos).map(|(t, _)| t) {
             Some(Token::Public) => *pos += 1,
@@ -1329,7 +1439,7 @@ fn parse_class_like_body(
     let mut properties = Vec::new();
     let mut methods = Vec::new();
 
-    while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
+    while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
         let member_span = tokens[*pos].1;
         if tokens[*pos].0 == Token::Use {
             trait_uses.push(parse_trait_use(tokens, pos, member_span)?);
@@ -1517,7 +1627,7 @@ fn parse_interface_body(
 ) -> Result<Vec<ClassMethod>, CompileError> {
     let mut methods = Vec::new();
 
-    while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
+    while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
         let member_span = tokens[*pos].1;
         let modifiers = parse_member_modifiers(tokens, pos);
         if *pos >= tokens.len() || tokens[*pos].0 != Token::Function {
@@ -1626,7 +1736,7 @@ fn parse_group_use_items(
         "Expected '{' in group use declaration",
     )?;
     let mut imports = Vec::new();
-    while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
+    while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
         if !imports.is_empty() {
             expect_token(
                 tokens,
@@ -1845,7 +1955,7 @@ fn parse_trait_use(
     let mut adaptations = Vec::new();
     if *pos < tokens.len() && tokens[*pos].0 == Token::LBrace {
         *pos += 1;
-        while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
+        while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
             let (trait_name, method) = parse_trait_adaptation_target(tokens, pos, span)?;
             if *pos >= tokens.len() {
                 return Err(CompileError::new(
@@ -2192,19 +2302,28 @@ pub fn parse_extern_stmts(
                 "Expected '{' or 'function' after extern library name",
             )?;
             let mut stmts = Vec::new();
-            while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
+            let mut errors = Vec::new();
+            while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
                 if tokens[*pos].0 != Token::Function {
-                    return Err(CompileError::new(
+                    errors.push(CompileError::new(
                         tokens[*pos].1,
                         "Expected 'function' inside extern block",
                     ));
+                    recover_to_statement_boundary(tokens, pos);
+                    continue;
                 }
-                stmts.push(parse_extern_function(
+                match parse_extern_function(
                     tokens,
                     pos,
                     span,
                     Some(library.clone()),
-                )?);
+                ) {
+                    Ok(stmt) => stmts.push(stmt),
+                    Err(error) => {
+                        errors.extend(error.flatten());
+                        recover_to_statement_boundary(tokens, pos);
+                    }
+                }
             }
             expect_token(
                 tokens,
@@ -2213,9 +2332,13 @@ pub fn parse_extern_stmts(
                 "Expected '}' after extern block",
             )?;
             if stmts.is_empty() {
-                return Err(CompileError::new(span, "Empty extern block"));
+                errors.push(CompileError::new(span, "Empty extern block"));
             }
-            Ok(stmts)
+            if errors.is_empty() {
+                Ok(stmts)
+            } else {
+                Err(CompileError::from_many(errors))
+            }
         }
 
         Some(Token::Class) => {
@@ -2240,7 +2363,7 @@ pub fn parse_extern_stmts(
                 "Expected '{' after extern class name",
             )?;
             let mut fields = Vec::new();
-            while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
+            while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
                 if tokens[*pos].0 == Token::Public {
                     *pos += 1;
                 }

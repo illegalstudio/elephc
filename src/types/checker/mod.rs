@@ -473,33 +473,37 @@ fn patch_magic_method_signatures(checker: &mut Checker) {
 }
 
 fn validate_magic_method_contracts(checker: &Checker) -> Result<(), CompileError> {
+    let mut errors = Vec::new();
     for (class_name, class_info) in &checker.classes {
         for method in &class_info.method_decls {
             match method.name.as_str() {
                 "__toString" => {
                     if method.is_static {
-                        return Err(CompileError::new(
+                        errors.push(CompileError::new(
                             method.span,
                             &format!(
                                 "Magic method must be non-static: {}::__toString",
                                 class_name
                             ),
                         ));
+                        continue;
                     }
                     if method.visibility != Visibility::Public {
-                        return Err(CompileError::new(
+                        errors.push(CompileError::new(
                             method.span,
                             &format!("Magic method must be public: {}::__toString", class_name),
                         ));
+                        continue;
                     }
                     if !method.params.is_empty() || method.variadic.is_some() {
-                        return Err(CompileError::new(
+                        errors.push(CompileError::new(
                             method.span,
                             &format!(
                                 "Magic method must take 0 arguments: {}::__toString",
                                 class_name
                             ),
                         ));
+                        continue;
                     }
                     if class_info
                         .methods
@@ -507,7 +511,7 @@ fn validate_magic_method_contracts(checker: &Checker) -> Result<(), CompileError
                         .map(|sig| sig.return_type.clone())
                         != Some(PhpType::Str)
                     {
-                        return Err(CompileError::new(
+                        errors.push(CompileError::new(
                             method.span,
                             &format!(
                                 "Magic method must return string: {}::__toString",
@@ -518,19 +522,21 @@ fn validate_magic_method_contracts(checker: &Checker) -> Result<(), CompileError
                 }
                 "__get" => {
                     if method.is_static {
-                        return Err(CompileError::new(
+                        errors.push(CompileError::new(
                             method.span,
                             &format!("Magic method must be non-static: {}::__get", class_name),
                         ));
+                        continue;
                     }
                     if method.visibility != Visibility::Public {
-                        return Err(CompileError::new(
+                        errors.push(CompileError::new(
                             method.span,
                             &format!("Magic method must be public: {}::__get", class_name),
                         ));
+                        continue;
                     }
                     if method.params.len() != 1 || method.variadic.is_some() {
-                        return Err(CompileError::new(
+                        errors.push(CompileError::new(
                             method.span,
                             &format!("Magic method must take 1 argument: {}::__get", class_name),
                         ));
@@ -538,19 +544,21 @@ fn validate_magic_method_contracts(checker: &Checker) -> Result<(), CompileError
                 }
                 "__set" => {
                     if method.is_static {
-                        return Err(CompileError::new(
+                        errors.push(CompileError::new(
                             method.span,
                             &format!("Magic method must be non-static: {}::__set", class_name),
                         ));
+                        continue;
                     }
                     if method.visibility != Visibility::Public {
-                        return Err(CompileError::new(
+                        errors.push(CompileError::new(
                             method.span,
                             &format!("Magic method must be public: {}::__set", class_name),
                         ));
+                        continue;
                     }
                     if method.params.len() != 2 || method.variadic.is_some() {
-                        return Err(CompileError::new(
+                        errors.push(CompileError::new(
                             method.span,
                             &format!("Magic method must take 2 arguments: {}::__set", class_name),
                         ));
@@ -560,7 +568,11 @@ fn validate_magic_method_contracts(checker: &Checker) -> Result<(), CompileError
             }
         }
     }
-    Ok(())
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(CompileError::from_many(errors))
+    }
 }
 
 fn build_method_sig(
@@ -1676,6 +1688,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         active_globals: HashSet::new(),
         active_statics: HashSet::new(),
     };
+    let mut errors = Vec::new();
 
     for stmt in program {
         if let StmtKind::FunctionDecl {
@@ -1708,7 +1721,8 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         }
     }
 
-    let flattened_classes = flatten_classes(program)?;
+    let (flattened_classes, flatten_errors) = flatten_classes(program);
+    errors.extend(flatten_errors);
     let class_map: HashMap<String, FlattenedClass> = flattened_classes
         .iter()
         .cloned()
@@ -1724,10 +1738,11 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         } = &stmt.kind
         {
             if interface_map.contains_key(name) {
-                return Err(CompileError::new(
+                errors.push(CompileError::new(
                     stmt.span,
                     &format!("Duplicate interface declaration: {}", name),
                 ));
+                continue;
             }
             interface_map.insert(
                 name.clone(),
@@ -1743,20 +1758,24 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
             );
         }
     }
-    inject_builtin_throwables(&mut interface_map, &mut class_map)?;
+    if let Err(error) = inject_builtin_throwables(&mut interface_map, &mut class_map) {
+        errors.extend(error.flatten());
+    }
 
     let mut next_interface_id = 0u64;
     let mut building_interfaces = HashSet::new();
     let interface_names: Vec<String> = interface_map.keys().cloned().collect();
     for interface_name in interface_names {
-        build_interface_info_recursive(
+        if let Err(error) = build_interface_info_recursive(
             &interface_name,
             &interface_map,
             &class_map,
             &mut checker,
             &mut next_interface_id,
             &mut building_interfaces,
-        )?;
+        ) {
+            errors.extend(error.flatten());
+        }
     }
 
     // First pass: collect flattened class declarations and build ClassInfo
@@ -1764,13 +1783,15 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
     let mut building = HashSet::new();
     let class_names: Vec<String> = class_map.keys().cloned().collect();
     for class_name in class_names {
-        build_class_info_recursive(
+        if let Err(error) = build_class_info_recursive(
             &class_name,
             &class_map,
             &mut checker,
             &mut next_class_id,
             &mut building,
-        )?;
+        ) {
+            errors.extend(error.flatten());
+        }
     }
     for stmt in program {
         if let StmtKind::EnumDecl {
@@ -1779,14 +1800,16 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
             cases,
         } = &stmt.kind
         {
-            build_enum_info(
+            if let Err(error) = build_enum_info(
                 name,
                 backing_type.as_ref(),
                 cases,
                 stmt.span,
                 &mut checker,
                 &mut next_class_id,
-            )?;
+            ) {
+                errors.extend(error.flatten());
+            }
         }
     }
     patch_builtin_exception_signatures(&mut checker);
@@ -1804,24 +1827,28 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 if checker.extern_functions.contains_key(name)
                     || checker.fn_decls.contains_key(name)
                 {
-                    return Err(CompileError::new(
+                    errors.push(CompileError::new(
                         stmt.span,
                         &format!("Duplicate function declaration: {}", name),
                     ));
+                    continue;
                 }
                 let php_params: Vec<(String, PhpType)> = params
                     .iter()
                     .map(|p| (p.name.clone(), ctype_to_php_type(&p.c_type)))
                     .collect();
                 let php_ret = ctype_to_php_type(return_type);
-                checker.validate_extern_function_decl(
+                if let Err(error) = checker.validate_extern_function_decl(
                     name,
                     params,
                     return_type,
                     &php_params,
                     &php_ret,
                     stmt.span,
-                )?;
+                ) {
+                    errors.extend(error.flatten());
+                    continue;
+                }
                 // Register as a regular function sig so call-site type checking works
                 let sig = FunctionSig {
                     params: php_params.clone(),
@@ -1849,21 +1876,29 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
             }
             StmtKind::ExternClassDecl { name, fields } => {
                 if checker.extern_classes.contains_key(name) || checker.classes.contains_key(name) {
-                    return Err(CompileError::new(
+                    errors.push(CompileError::new(
                         stmt.span,
                         &format!("Duplicate class declaration: {}", name),
                     ));
+                    continue;
                 }
                 let mut extern_fields = Vec::new();
                 let mut offset = 0usize;
                 let mut seen_fields = std::collections::HashSet::new();
+                let mut class_has_errors = false;
                 for f in fields {
-                    checker.validate_extern_field_decl(name, f, stmt.span)?;
+                    if let Err(error) = checker.validate_extern_field_decl(name, f, stmt.span) {
+                        errors.extend(error.flatten());
+                        class_has_errors = true;
+                        continue;
+                    }
                     if !seen_fields.insert(f.name.clone()) {
-                        return Err(CompileError::new(
+                        errors.push(CompileError::new(
                             stmt.span,
                             &format!("Duplicate extern field: {}::{}", name, f.name),
                         ));
+                        class_has_errors = true;
+                        continue;
                     }
                     let php_type = ctype_to_php_type(&f.c_type);
                     let size = ctype_stack_size(&f.c_type);
@@ -1873,6 +1908,9 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                         offset,
                     });
                     offset += size;
+                }
+                if class_has_errors {
+                    continue;
                 }
                 checker.extern_classes.insert(
                     name.clone(),
@@ -1888,35 +1926,50 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                     || checker.classes.contains_key(name)
                     || checker.extern_classes.contains_key(name)
                 {
-                    return Err(CompileError::new(
+                    errors.push(CompileError::new(
                         stmt.span,
                         &format!("Duplicate packed class declaration: {}", name),
                     ));
+                    continue;
                 }
                 let mut packed_fields = Vec::new();
                 let mut offset = 0usize;
                 let mut seen_fields = std::collections::HashSet::new();
+                let mut class_has_errors = false;
                 for field in fields {
                     if !seen_fields.insert(field.name.clone()) {
-                        return Err(CompileError::new(
+                        errors.push(CompileError::new(
                             field.span,
                             &format!("Duplicate packed field: {}::{}", name, field.name),
                         ));
+                        class_has_errors = true;
+                        continue;
                     }
-                    let php_type = checker.resolve_type_expr(&field.type_expr, field.span)?;
-                    let size =
-                        packed_type_size(&php_type, &checker.packed_classes).ok_or_else(|| {
-                            CompileError::new(
+                    let php_type = match checker.resolve_type_expr(&field.type_expr, field.span) {
+                        Ok(php_type) => php_type,
+                        Err(error) => {
+                            errors.extend(error.flatten());
+                            class_has_errors = true;
+                            continue;
+                        }
+                    };
+                    let Some(size) = packed_type_size(&php_type, &checker.packed_classes) else {
+                        errors.push(CompileError::new(
                             field.span,
                             "Packed class fields must use POD scalars, pointers, or packed classes",
-                        )
-                        })?;
+                        ));
+                        class_has_errors = true;
+                        continue;
+                    };
                     packed_fields.push(PackedFieldInfo {
                         name: field.name.clone(),
                         php_type,
                         offset,
                     });
                     offset += size;
+                }
+                if class_has_errors {
+                    continue;
                 }
                 checker.packed_classes.insert(
                     name.clone(),
@@ -1927,7 +1980,10 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 );
             }
             StmtKind::ExternGlobalDecl { name, c_type } => {
-                checker.validate_extern_global_decl(name, c_type, stmt.span)?;
+                if let Err(error) = checker.validate_extern_global_decl(name, c_type, stmt.span) {
+                    errors.extend(error.flatten());
+                    continue;
+                }
                 let php_type = ctype_to_php_type(c_type);
                 checker.extern_globals.insert(name.clone(), php_type);
             }
@@ -1944,7 +2000,9 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
     }
     for stmt in program {
         checker.top_level_env = global_env.clone();
-        checker.check_stmt(stmt, &mut global_env)?;
+        if let Err(error) = checker.check_stmt(stmt, &mut global_env) {
+            errors.extend(error.flatten());
+        }
     }
 
     // Resolve signatures for functions that were declared but never called
@@ -1957,8 +2015,16 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         .collect();
     for name in unchecked {
         if let Some(decl) = checker.fn_decls.get(&name).cloned() {
-            let param_types = checker.initial_function_param_types(&name, &decl)?;
-            checker.resolve_function_signature(&name, &decl, param_types)?;
+            match checker.initial_function_param_types(&name, &decl) {
+                Ok(param_types) => {
+                    if let Err(error) =
+                        checker.resolve_function_signature(&name, &decl, param_types)
+                    {
+                        errors.extend(error.flatten());
+                    }
+                }
+                Err(error) => errors.extend(error.flatten()),
+            }
         }
     }
 
@@ -2044,49 +2110,76 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                 .filter(|(_, _, _, is_ref)| *is_ref)
                 .map(|(name, _, _, _)| name.clone())
                 .collect();
+            let mut method_errors = Vec::new();
             checker.with_local_storage_context(method_ref_params, |checker| {
                 for s in &method.body {
-                    checker.check_stmt(s, &mut method_env)?;
+                    if let Err(error) = checker.check_stmt(s, &mut method_env) {
+                        method_errors.extend(error.flatten());
+                    }
                 }
                 Ok(())
             })?;
+            let method_has_errors = !method_errors.is_empty();
+            errors.extend(method_errors);
 
             // Update method return type from full type inference
             // (must run while current_class is still set so $this resolves)
-            let inferred_return = checker
-                .find_return_type_in_body(&method.body, &method_env)
-                .unwrap_or(PhpType::Void);
-            let effective_return = if let Some(type_ann) = method.return_type.as_ref() {
-                let declared = checker.resolve_declared_return_type_hint(
-                    type_ann,
-                    method.span,
-                    &format!("Method '{}::{}'", class.name, method.name),
-                )?;
-                checker.require_compatible_arg_type(
-                    &declared,
-                    &inferred_return,
-                    method.span,
-                    &format!("Method '{}::{}' return type", class.name, method.name),
-                )?;
-                declared
-            } else {
-                inferred_return
-            };
-            if !method.is_static {
-                if let Some(ci) = checker.classes.get_mut(&class.name) {
-                    if let Some(sig) = ci.methods.get_mut(&method.name) {
+            if !method_has_errors {
+                let inferred_return = checker
+                    .find_return_type_in_body(&method.body, &method_env)
+                    .unwrap_or(PhpType::Void);
+                let effective_return = if let Some(type_ann) = method.return_type.as_ref() {
+                    match checker.resolve_declared_return_type_hint(
+                        type_ann,
+                        method.span,
+                        &format!("Method '{}::{}'", class.name, method.name),
+                    ) {
+                        Ok(declared) => {
+                            if let Err(error) = checker.require_compatible_arg_type(
+                                &declared,
+                                &inferred_return,
+                                method.span,
+                                &format!("Method '{}::{}' return type", class.name, method.name),
+                            ) {
+                                errors.extend(error.flatten());
+                                checker.current_class = None;
+                                checker.current_method = None;
+                                checker.current_method_is_static = false;
+                                continue;
+                            }
+                            declared
+                        }
+                        Err(error) => {
+                            errors.extend(error.flatten());
+                            checker.current_class = None;
+                            checker.current_method = None;
+                            checker.current_method_is_static = false;
+                            continue;
+                        }
+                    }
+                } else {
+                    inferred_return
+                };
+                if !method.is_static {
+                    if let Some(ci) = checker.classes.get_mut(&class.name) {
+                        if let Some(sig) = ci.methods.get_mut(&method.name) {
+                            sig.return_type = effective_return;
+                        }
+                    }
+                } else if let Some(ci) = checker.classes.get_mut(&class.name) {
+                    if let Some(sig) = ci.static_methods.get_mut(&method.name) {
                         sig.return_type = effective_return;
                     }
-                }
-            } else if let Some(ci) = checker.classes.get_mut(&class.name) {
-                if let Some(sig) = ci.static_methods.get_mut(&method.name) {
-                    sig.return_type = effective_return;
                 }
             }
             checker.current_class = None;
             checker.current_method = None;
             checker.current_method_is_static = false;
         }
+    }
+
+    if !errors.is_empty() {
+        return Err(CompileError::from_many(errors));
     }
 
     propagate_abstract_return_types(&mut checker);
@@ -2103,6 +2196,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         extern_classes: checker.extern_classes,
         extern_globals: checker.extern_globals,
         required_libraries: checker.required_libraries,
+        warnings: crate::types::warnings::collect_warnings(program),
     })
 }
 
@@ -3623,10 +3717,17 @@ impl Checker {
                 } else {
                     return Err(CompileError::new(stmt.span, "foreach requires an array"));
                 }
+                let mut errors = Vec::new();
                 for s in body {
-                    self.check_stmt(s, env)?;
+                    if let Err(error) = self.check_stmt(s, env) {
+                        errors.extend(error.flatten());
+                    }
                 }
-                Ok(())
+                if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(CompileError::from_many(errors))
+                }
             }
             StmtKind::Switch {
                 subject,
@@ -3634,20 +3735,29 @@ impl Checker {
                 default,
             } => {
                 self.infer_type(subject, env)?;
+                let mut errors = Vec::new();
                 for (values, body) in cases {
                     for v in values {
                         self.infer_type(v, env)?;
                     }
                     for s in body {
-                        self.check_stmt(s, env)?;
+                        if let Err(error) = self.check_stmt(s, env) {
+                            errors.extend(error.flatten());
+                        }
                     }
                 }
                 if let Some(body) = default {
                     for s in body {
-                        self.check_stmt(s, env)?;
+                        if let Err(error) = self.check_stmt(s, env) {
+                            errors.extend(error.flatten());
+                        }
                     }
                 }
-                Ok(())
+                if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(CompileError::from_many(errors))
+                }
             }
             StmtKind::If {
                 condition,
@@ -3656,35 +3766,60 @@ impl Checker {
                 else_body,
             } => {
                 self.infer_type(condition, env)?;
+                let mut errors = Vec::new();
                 for s in then_body {
-                    self.check_stmt(s, env)?;
+                    if let Err(error) = self.check_stmt(s, env) {
+                        errors.extend(error.flatten());
+                    }
                 }
                 for (cond, body) in elseif_clauses {
                     self.infer_type(cond, env)?;
                     for s in body {
-                        self.check_stmt(s, env)?;
+                        if let Err(error) = self.check_stmt(s, env) {
+                            errors.extend(error.flatten());
+                        }
                     }
                 }
                 if let Some(body) = else_body {
                     for s in body {
-                        self.check_stmt(s, env)?;
+                        if let Err(error) = self.check_stmt(s, env) {
+                            errors.extend(error.flatten());
+                        }
                     }
                 }
-                Ok(())
+                if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(CompileError::from_many(errors))
+                }
             }
             StmtKind::DoWhile { body, condition } => {
+                let mut errors = Vec::new();
                 for s in body {
-                    self.check_stmt(s, env)?;
+                    if let Err(error) = self.check_stmt(s, env) {
+                        errors.extend(error.flatten());
+                    }
                 }
                 self.infer_type(condition, env)?;
-                Ok(())
+                if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(CompileError::from_many(errors))
+                }
             }
             StmtKind::While { condition, body } => {
                 self.infer_type(condition, env)?;
+                let mut errors = Vec::new();
                 for s in body {
-                    self.check_stmt(s, env)?;
+                    if let Err(error) = self.check_stmt(s, env) {
+                        errors.extend(error.flatten());
+                    }
                 }
-                Ok(())
+                if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(CompileError::from_many(errors))
+                }
             }
             StmtKind::For {
                 init,
@@ -3701,10 +3836,17 @@ impl Checker {
                 if let Some(s) = update {
                     self.check_stmt(s, env)?;
                 }
+                let mut errors = Vec::new();
                 for s in body {
-                    self.check_stmt(s, env)?;
+                    if let Err(error) = self.check_stmt(s, env) {
+                        errors.extend(error.flatten());
+                    }
                 }
-                Ok(())
+                if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(CompileError::from_many(errors))
+                }
             }
             StmtKind::Throw(expr) => {
                 let thrown_ty = self.infer_type(expr, env)?;
@@ -3729,8 +3871,11 @@ impl Checker {
                 catches,
                 finally_body,
             } => {
+                let mut errors = Vec::new();
                 for s in try_body {
-                    self.check_stmt(s, env)?;
+                    if let Err(error) = self.check_stmt(s, env) {
+                        errors.extend(error.flatten());
+                    }
                 }
                 for catch_clause in catches {
                     let mut resolved_types = Vec::new();
@@ -3763,15 +3908,23 @@ impl Checker {
                         );
                     }
                     for s in &catch_clause.body {
-                        self.check_stmt(s, env)?;
+                        if let Err(error) = self.check_stmt(s, env) {
+                            errors.extend(error.flatten());
+                        }
                     }
                 }
                 if let Some(body) = finally_body {
                     for s in body {
-                        self.check_stmt(s, env)?;
+                        if let Err(error) = self.check_stmt(s, env) {
+                            errors.extend(error.flatten());
+                        }
                     }
                 }
-                Ok(())
+                if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(CompileError::from_many(errors))
+                }
             }
             StmtKind::Include { .. } => {
                 // Should have been resolved before type checking

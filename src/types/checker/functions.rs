@@ -704,6 +704,7 @@ impl Checker {
 
         let mut return_type = PhpType::Void;
         let mut all_return_types: Vec<PhpType> = Vec::new();
+        let mut errors = Vec::new();
         let ref_param_names: Vec<String> = decl
             .params
             .iter()
@@ -713,13 +714,18 @@ impl Checker {
             .collect();
         self.with_local_storage_context(ref_param_names, |checker| {
             for stmt in &decl.body {
-                checker.check_stmt(stmt, &mut local_env)?;
+                if let Err(error) = checker.check_stmt(stmt, &mut local_env) {
+                    errors.extend(error.flatten());
+                }
                 if let Some(rt) = checker.find_return_type(stmt, &local_env) {
                     all_return_types.push(rt);
                 }
             }
             Ok(())
         })?;
+        if !errors.is_empty() {
+            return Err(CompileError::from_many(errors));
+        }
 
         // Use declared return type if present, otherwise infer from body
         if let Some(type_ann) = decl.return_type.as_ref() {

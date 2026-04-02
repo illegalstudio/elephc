@@ -189,6 +189,9 @@ fn main() {
             process::exit(1);
         }
     };
+    for warning in &check_result.warnings {
+        errors::report_warning(warning);
+    }
 
     let (user_asm, runtime_asm) = codegen::generate(
         &ast,
