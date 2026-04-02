@@ -1238,6 +1238,53 @@ echo $probe->run();
 }
 
 #[test]
+fn test_method_post_pass_converges_property_types_across_classes() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Point {
+    public int $x;
+}
+
+class Box {
+    public $items;
+
+    public function __construct() {
+        $this->items = 0;
+    }
+}
+
+class Loader {
+    public function load(): Box {
+        $box = new Box();
+        buffer<Point> $items = buffer_new<Point>(1);
+        $items[0]->x = 7;
+        $box->items = $items;
+        return $box;
+    }
+}
+
+class Game {
+    public $box;
+
+    public function __construct() {
+        $this->box = 0;
+    }
+
+    public function run(): int {
+        $loader = new Loader();
+        $this->box = $loader->load();
+        return $this->box->items[0]->x;
+    }
+}
+
+$game = new Game();
+echo $game->run();
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+#[test]
 fn test_forward_class_reference_in_method_return_type() {
     let out = compile_and_run(
         r#"<?php
