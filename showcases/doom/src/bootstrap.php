@@ -1,5 +1,7 @@
 <?php
 
+require_once 'SDL/extern.php';
+
 require_once 'App/Application.php';
 require_once 'App/Config.php';
 require_once 'App/Game.php';

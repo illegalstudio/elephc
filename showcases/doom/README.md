@@ -26,10 +26,11 @@ What works today:
 - the app exits early on `ESC`
 - the loop also auto-exits after a short boot/demo interval so the shell can be run safely during development
 - namespaced classes now call `SDL_*` externs and compiler builtin functions directly, without a global helper layer
+- the WAD layer is no longer just scaffold: `BinaryReader`, `WadEntry`, `WadFile`, and `WadLoader` can parse the WAD header and directory
+- if `DOOM1.WAD` exists in the showcase directory, or `showcases/doom/DOOM1.WAD` exists from the repo root, the shell prints a short load summary before opening SDL
 
 What does not exist yet:
 
-- WAD parsing
 - level loading
 - BSP traversal
 - minimap rendering
@@ -130,11 +131,19 @@ cargo run -- -l SDL2 -L /opt/homebrew/lib showcases/doom/main.php
 ./showcases/doom/main
 ```
 
-Expected output:
+Expected output without a local WAD:
 
 ```text
+No WAD file at DOOM1.WAD
 DOOM showcase SDL shell running
 ESC quits early
+```
+
+Expected output with a valid WAD file present starts with a summary like:
+
+```text
+Loaded WAD: IWAD | lumps: 1264 | directory: 744152
+First lump: E1M1 @ 12 (0 bytes)
 ```
 
 ## Future implementation notes

@@ -2,6 +2,8 @@
 
 namespace Showcases\Doom\SDL;
 
+use Showcases\Doom\App\Config;
+
 class SDL {
     public $window;
     public $renderer;
@@ -11,7 +13,7 @@ class SDL {
         $this->renderer = ptr_null();
     }
 
-    public function boot($config): bool {
+    public function boot(Config $config): bool {
         if (SDL_Init(32) != 0) {
             return false;
         }

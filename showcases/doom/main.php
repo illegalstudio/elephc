@@ -2,4 +2,8 @@
 
 require_once 'src/bootstrap.php';
 
-echo "DOOM showcase scaffold\n";
+use Showcases\Doom\App\Application;
+use Showcases\Doom\App\Config;
+
+$app = new Application(new Config());
+$app->run();
