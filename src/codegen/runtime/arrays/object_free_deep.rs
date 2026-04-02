@@ -69,19 +69,19 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
     emitter.instruction("mov x10, #16");                                        // each property slot occupies 16 bytes
     emitter.instruction("mul x10, x12, x10");                                   // compute the property slot byte offset
     emitter.instruction("add x10, x10, #8");                                    // skip the leading class_id field
-    emitter.instruction("ldr x14, [x9, x10]");                                  // load the low 8-byte payload for this property
-    emitter.instruction("add x11, x10, #8");                                    // compute the offset of the metadata / length word
-    emitter.instruction("ldr x15, [x9, x11]");                                  // load the runtime metadata / length word for this property
-    emitter.instruction("cmp x15, #4");                                         // was this property last written with an indexed array?
-    emitter.instruction("b.eq __rt_object_free_deep_release_runtime");          // runtime metadata takes priority for refcounted payloads
-    emitter.instruction("cmp x15, #5");                                         // was this property last written with an associative array?
-    emitter.instruction("b.eq __rt_object_free_deep_release_runtime");          // runtime metadata takes priority for refcounted payloads
-    emitter.instruction("cmp x15, #6");                                         // was this property last written with an object?
-    emitter.instruction("b.eq __rt_object_free_deep_release_runtime");          // runtime metadata takes priority for refcounted payloads
-    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the descriptor pointer
-    emitter.instruction("ldrb w15, [x11, x12]");                                // load the compile-time fallback tag for this property slot
+    emitter.instruction("ldr x14, [x9, x10]");                                  // load the property payload pointer / low word
+    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the descriptor pointer for this property slot
+    emitter.instruction("ldrb w15, [x11, x12]");                                // load the compile-time property tag
     emitter.instruction("cmp x15, #1");                                         // is this a compile-time string property?
-    emitter.instruction("b.eq __rt_object_free_deep_release_runtime");          // strings release through the uniform dispatch helper
+    emitter.instruction("b.eq __rt_object_free_deep_release_runtime");          // strings always release through the uniform helper
+    emitter.instruction("cmp x15, #4");                                         // is this a compile-time indexed-array property?
+    emitter.instruction("b.eq __rt_object_free_deep_release_runtime");          // arrays always release through the uniform helper
+    emitter.instruction("cmp x15, #5");                                         // is this a compile-time associative-array property?
+    emitter.instruction("b.eq __rt_object_free_deep_release_runtime");          // hashes always release through the uniform helper
+    emitter.instruction("cmp x15, #6");                                         // is this a compile-time object property?
+    emitter.instruction("b.eq __rt_object_free_deep_release_runtime");          // objects always release through the uniform helper
+    emitter.instruction("cmp x15, #7");                                         // is this a compile-time mixed property?
+    emitter.instruction("b.eq __rt_object_free_deep_release_runtime");          // mixed payloads may or may not be heap-backed, but decref_any handles both safely
     emitter.instruction("b __rt_object_free_deep_next");                        // scalars and nulls need no cleanup
 
     emitter.label("__rt_object_free_deep_release_runtime");

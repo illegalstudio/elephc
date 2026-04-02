@@ -230,7 +230,11 @@ fn emit_function_with_label_and_class(
             ctx.disable_epilogue_cleanup(pname);
         } else {
             ctx.alloc_var(pname, _pty.codegen_repr());
-            ctx.set_var_ownership(pname, HeapOwnership::local_owner_for_type(_pty));
+            if matches!(_pty.codegen_repr(), PhpType::Str) {
+                ctx.set_var_ownership(pname, HeapOwnership::borrowed_alias_for_type(_pty));
+            } else {
+                ctx.set_var_ownership(pname, HeapOwnership::local_owner_for_type(_pty));
+            }
         }
     }
 
@@ -401,7 +405,7 @@ fn emit_function_with_label_and_class(
     emitter.label(epilogue_label);
     let needs_return_preserve = epilogue_has_side_effects(&ctx);
     if needs_return_preserve {
-        preserve_return_registers(emitter, &sig.return_type);
+        preserve_return_registers(emitter, &ctx, &sig.return_type);
     }
 
     // Save static vars back to global storage before returning
@@ -471,7 +475,7 @@ fn emit_function_with_label_and_class(
     emit_owned_local_epilogue_cleanup(emitter, &ctx);
 
     if needs_return_preserve {
-        restore_return_registers(emitter, &sig.return_type);
+        restore_return_registers(emitter, &ctx, &sig.return_type);
     }
     if frame_size - 16 <= 504 {
         emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16)); //restore frame ptr & return addr
@@ -510,30 +514,38 @@ fn emit_function_with_label_and_class(
     }
 }
 
-fn preserve_return_registers(emitter: &mut Emitter, return_ty: &PhpType) {
+fn preserve_return_registers(emitter: &mut Emitter, ctx: &Context, return_ty: &PhpType) {
+    let return_offset = ctx
+        .pending_return_value_offset
+        .expect("codegen bug: missing pending return spill slot");
     match return_ty {
         PhpType::Float => {
-            emitter.instruction("str d0, [sp, #-16]!");                         // preserve float return value across epilogue side effects
+            super::abi::store_at_offset(emitter, "d0", return_offset);          // preserve the float return value in the hidden frame slot across epilogue side effects
         }
         PhpType::Str => {
-            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve string return registers across epilogue side effects
+            super::abi::store_at_offset(emitter, "x1", return_offset);          // preserve the string return pointer in the hidden frame slot across epilogue side effects
+            super::abi::store_at_offset(emitter, "x2", return_offset - 8);      // preserve the string return length in the hidden frame slot across epilogue side effects
         }
         _ => {
-            emitter.instruction("str x0, [sp, #-16]!");                         // preserve scalar/heap return value across epilogue side effects
+            super::abi::store_at_offset(emitter, "x0", return_offset);          // preserve the scalar/object return value in the hidden frame slot across epilogue side effects
         }
     }
 }
 
-fn restore_return_registers(emitter: &mut Emitter, return_ty: &PhpType) {
+fn restore_return_registers(emitter: &mut Emitter, ctx: &Context, return_ty: &PhpType) {
+    let return_offset = ctx
+        .pending_return_value_offset
+        .expect("codegen bug: missing pending return spill slot");
     match return_ty {
         PhpType::Float => {
-            emitter.instruction("ldr d0, [sp], #16");                           // restore float return value after epilogue cleanup
+            super::abi::load_at_offset(emitter, "d0", return_offset);           // restore the float return value from the hidden frame slot after epilogue cleanup
         }
         PhpType::Str => {
-            emitter.instruction("ldp x1, x2, [sp], #16");                       // restore string return registers after epilogue cleanup
+            super::abi::load_at_offset(emitter, "x1", return_offset);           // restore the string return pointer from the hidden frame slot after epilogue cleanup
+            super::abi::load_at_offset(emitter, "x2", return_offset - 8);       // restore the string return length from the hidden frame slot after epilogue cleanup
         }
         _ => {
-            emitter.instruction("ldr x0, [sp], #16");                           // restore scalar/heap return value after epilogue cleanup
+            super::abi::load_at_offset(emitter, "x0", return_offset);           // restore the scalar/object return value from the hidden frame slot after epilogue cleanup
         }
     }
 }

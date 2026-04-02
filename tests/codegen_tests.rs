@@ -10640,6 +10640,109 @@ echo $reader->head();
 }
 
 #[test]
+fn test_regression_callee_does_not_free_caller_string_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class Greeter {
+    public $prefix;
+    public function __construct($prefix) {
+        $this->prefix = $prefix;
+    }
+}
+$prefix = "IWAD";
+$greeter = new Greeter($prefix);
+echo $prefix;
+echo "|";
+echo $greeter->prefix;
+"#,
+    );
+    assert_eq!(out, "IWAD|IWAD");
+}
+
+#[test]
+fn test_regression_string_property_persists_heap_slice_across_object_return() {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let path = std::env::temp_dir().join(format!("elephc_str_persist_{}.bin", id));
+    let mut bytes = vec![b'X'; 1024 * 1024];
+    bytes[..8].copy_from_slice(b"PLAYPAL\0");
+    fs::write(&path, &bytes).unwrap();
+
+    let source = format!(
+        r#"<?php
+class WadLike {{
+    public $name;
+    public function __construct() {{
+        $this->name = "";
+    }}
+}}
+
+class Maker {{
+    public function make(): WadLike {{
+        $bytes = file_get_contents("{path}");
+        $name = substr($bytes, 0, 7);
+        $wad = new WadLike();
+        $wad->name = $name;
+        return $wad;
+    }}
+}}
+
+$maker = new Maker();
+$wad = $maker->make();
+echo $wad->name;
+"#,
+        path = path.display()
+    );
+
+    let out = compile_and_run_with_heap_size(&source, 67_108_864);
+    let _ = fs::remove_file(&path);
+    assert_eq!(out, "PLAYPAL");
+}
+
+#[test]
+fn test_regression_returned_object_preserves_loop_built_string_property() {
+    let out = compile_and_run(
+        r#"<?php
+class WadLike {
+    public $kind;
+    public $firstEntryName;
+    public function __construct($kind) {
+        $this->kind = $kind;
+        $this->firstEntryName = "";
+    }
+}
+
+class Maker {
+    public function make(): WadLike {
+        $bytes = "IWADxxxxPLAYPAL\0tail";
+        $kind = substr($bytes, 0, 4);
+        $raw = substr($bytes, 8, 8);
+        $name = "";
+        $i = 0;
+        while ($i < strlen($raw)) {
+            $ch = substr($raw, $i, 1);
+            if (ord($ch) == 0) {
+                break;
+            }
+            $name .= $ch;
+            $i += 1;
+        }
+        $wad = new WadLike($kind);
+        $wad->firstEntryName = $name;
+        return $wad;
+    }
+}
+
+$maker = new Maker();
+$wad = $maker->make();
+echo $wad->kind;
+echo "|";
+echo $wad->firstEntryName;
+"#,
+    );
+    assert_eq!(out, "IWAD|PLAYPAL");
+}
+
+#[test]
 fn test_function_call_supports_stack_passed_overflow_args() {
     let out = compile_and_run(
         r#"<?php
