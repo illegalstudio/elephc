@@ -68,6 +68,11 @@ fn collect_symbols(stmts: &[Stmt], current_namespace: Option<&str>, symbols: &mu
                     .classes
                     .insert(canonical_name_for_decl(namespace.as_deref(), name));
             }
+            StmtKind::PackedClassDecl { name, .. } => {
+                symbols
+                    .classes
+                    .insert(canonical_name_for_decl(namespace.as_deref(), name));
+            }
             StmtKind::InterfaceDecl { name, .. } => {
                 symbols
                     .interfaces
@@ -223,6 +228,27 @@ fn resolve_stmt_list(
                         name: canonical_name_for_decl(namespace.as_deref(), name),
                         backing_type: backing_type.clone(),
                         cases: resolved_cases,
+                    },
+                    stmt.span,
+                ));
+            }
+            StmtKind::PackedClassDecl { name, fields } => {
+                let resolved_fields = fields
+                    .iter()
+                    .map(|field| crate::parser::ast::PackedField {
+                        name: field.name.clone(),
+                        type_expr: resolve_type_expr(
+                            &field.type_expr,
+                            namespace.as_deref(),
+                            &imports,
+                        ),
+                        span: field.span,
+                    })
+                    .collect();
+                resolved.push(Stmt::new(
+                    StmtKind::PackedClassDecl {
+                        name: canonical_name_for_decl(namespace.as_deref(), name),
+                        fields: resolved_fields,
                     },
                     stmt.span,
                 ));

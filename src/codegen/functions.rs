@@ -7,7 +7,8 @@ use super::stmt;
 use crate::names::{function_epilogue_symbol, function_symbol};
 use crate::parser::ast::{ExprKind, StmtKind, TypeExpr};
 use crate::types::{
-    ClassInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PhpType,
+    ClassInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo,
+    PhpType,
 };
 
 fn emit_load_from_caller_stack(emitter: &mut Emitter, reg: &str, offset: usize) {
@@ -38,6 +39,7 @@ pub fn emit_function(
     all_static_vars: &HashMap<(String, String), PhpType>,
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: Option<&HashMap<String, ClassInfo>>,
+    packed_classes: &HashMap<String, PackedClassInfo>,
     extern_functions: &HashMap<String, ExternFunctionSig>,
     extern_classes: &HashMap<String, ExternClassInfo>,
     extern_globals: &HashMap<String, PhpType>,
@@ -57,6 +59,7 @@ pub fn emit_function(
         all_static_vars,
         interfaces,
         classes,
+        packed_classes,
         extern_functions,
         extern_classes,
         extern_globals,
@@ -73,6 +76,7 @@ pub fn emit_closure(
     constants: &HashMap<String, (ExprKind, PhpType)>,
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: &HashMap<String, ClassInfo>,
+    packed_classes: &HashMap<String, PackedClassInfo>,
     extern_functions: &HashMap<String, ExternFunctionSig>,
     extern_classes: &HashMap<String, ExternClassInfo>,
     extern_globals: &HashMap<String, PhpType>,
@@ -93,6 +97,7 @@ pub fn emit_closure(
         &empty_statics,
         interfaces,
         Some(classes),
+        packed_classes,
         extern_functions,
         extern_classes,
         extern_globals,
@@ -111,6 +116,7 @@ pub fn emit_method(
     constants: &HashMap<String, (ExprKind, PhpType)>,
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: &HashMap<String, ClassInfo>,
+    packed_classes: &HashMap<String, PackedClassInfo>,
     class_name: &str,
     extern_functions: &HashMap<String, ExternFunctionSig>,
     extern_classes: &HashMap<String, ExternClassInfo>,
@@ -131,6 +137,7 @@ pub fn emit_method(
         &empty_statics,
         interfaces,
         Some((classes, class_name)),
+        packed_classes,
         extern_functions,
         extern_classes,
         extern_globals,
@@ -151,6 +158,7 @@ fn emit_function_with_label(
     all_static_vars: &HashMap<(String, String), PhpType>,
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: Option<&HashMap<String, ClassInfo>>,
+    packed_classes: &HashMap<String, PackedClassInfo>,
     extern_functions: &HashMap<String, ExternFunctionSig>,
     extern_classes: &HashMap<String, ExternClassInfo>,
     extern_globals: &HashMap<String, PhpType>,
@@ -170,6 +178,7 @@ fn emit_function_with_label(
         all_static_vars,
         interfaces,
         class_ctx,
+        packed_classes,
         extern_functions,
         extern_classes,
         extern_globals,
@@ -190,6 +199,7 @@ fn emit_function_with_label_and_class(
     all_static_vars: &HashMap<(String, String), PhpType>,
     interfaces: &HashMap<String, InterfaceInfo>,
     class_context: Option<(&HashMap<String, ClassInfo>, &str)>,
+    packed_classes: &HashMap<String, PackedClassInfo>,
     extern_functions: &HashMap<String, ExternFunctionSig>,
     extern_classes: &HashMap<String, ExternClassInfo>,
     extern_globals: &HashMap<String, PhpType>,
@@ -202,6 +212,7 @@ fn emit_function_with_label_and_class(
     ctx.all_global_var_names = all_global_var_names.clone();
     ctx.all_static_vars = all_static_vars.clone();
     ctx.interfaces = interfaces.clone();
+    ctx.packed_classes = packed_classes.clone();
     ctx.extern_functions = extern_functions.clone();
     ctx.extern_classes = extern_classes.clone();
     ctx.extern_globals = extern_globals.clone();
@@ -506,6 +517,7 @@ fn emit_function_with_label_and_class(
                 constants,
                 interfaces,
                 classes,
+                packed_classes,
                 extern_functions,
                 extern_classes,
                 extern_globals,

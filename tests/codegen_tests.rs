@@ -1211,6 +1211,33 @@ echo $box->value;
 }
 
 #[test]
+fn test_namespace_resolves_packed_class_types_inside_buffers() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo\App;
+
+packed class Vertex {
+    public int $x;
+    public int $y;
+}
+
+class Probe {
+    public function run(): int {
+        buffer<Vertex> $points = buffer_new<Vertex>(1);
+        $points[0]->x = 3;
+        $points[0]->y = 4;
+        return $points[0]->x + $points[0]->y;
+    }
+}
+
+$probe = new Probe();
+echo $probe->run();
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+#[test]
 fn test_forward_class_reference_in_method_return_type() {
     let out = compile_and_run(
         r#"<?php
