@@ -28,6 +28,13 @@ class WallRenderer {
         int $focal = intdiv($viewportWidth * 3, 4);
         int $nearPlane = 12;
         int $cameraEyeZ = $this->projection->cameraEyeZ($map, $cameraSubSector);
+        $solidDepth = [];
+
+        int $clipIndex = 0;
+        while ($clipIndex < $viewportWidth) {
+            $solidDepth[] = 2147483647;
+            $clipIndex += 1;
+        }
 
         $this->renderFlatBackground(
             $sdl,
@@ -38,8 +45,8 @@ class WallRenderer {
         );
 
         int $subSectorCount = count($subSectorOrder);
-        int $orderIndex = $subSectorCount - 1;
-        while ($orderIndex >= 0) {
+        int $orderIndex = 0;
+        while ($orderIndex < $subSectorCount) {
             int $subSectorIndex = $subSectorOrder[$orderIndex];
             if ($subSectorIndex >= 0 && $subSectorIndex < $map->subSectorCount) {
                 int $firstSeg = $map->subSectors[$subSectorIndex]->first_seg_index;
@@ -61,13 +68,14 @@ class WallRenderer {
                             $focal,
                             $nearPlane,
                             $cameraEyeZ,
-                            $viewportHeight
+                            $viewportHeight,
+                            $solidDepth
                         );
                     }
                     $segOffset += 1;
                 }
             }
-            $orderIndex -= 1;
+            $orderIndex += 1;
         }
     }
 
@@ -84,7 +92,8 @@ class WallRenderer {
         int $focal,
         int $nearPlane,
         int $cameraEyeZ,
-        int $viewportHeight
+        int $viewportHeight,
+        &$solidDepth
     ): void {
         int $startIndex = $map->segs[$segIndex]->start_vertex;
         int $endIndex = $map->segs[$segIndex]->end_vertex;
@@ -239,6 +248,16 @@ class WallRenderer {
                 $depth = $nearPlane;
             }
 
+            int $clipColumn = $x - $viewportX;
+            if ($clipColumn < 0 || $clipColumn >= $viewportWidth) {
+                $x += 1;
+                continue;
+            }
+            if ($depth >= $solidDepth[$clipColumn]) {
+                $x += 1;
+                continue;
+            }
+
             if ($oneSided) {
                 int $top = $this->projection->projectScreenY(
                     $frontCeiling,
@@ -267,6 +286,7 @@ class WallRenderer {
                     $baseGreen,
                     $baseBlue
                 );
+                $solidDepth[$clipColumn] = $depth;
             } else {
                 if ($frontCeiling !== $backCeiling) {
                     int $top = $this->projection->projectScreenY(
@@ -375,12 +395,12 @@ class WallRenderer {
         int $startIndex,
         int $endIndex
     ): bool {
-        if (!$this->isVisibleSideFacingCamera($map, $camera, $startIndex, $endIndex)) {
-            return false;
-        }
-
         if ($this->isOneSidedSeg($map, $segIndex)) {
             return true;
+        }
+
+        if (!$this->isVisibleSideFacingCamera($map, $camera, $startIndex, $endIndex)) {
+            return false;
         }
 
         int $frontSectorIndex = $this->frontSectorIndexForSeg($map, $segIndex);

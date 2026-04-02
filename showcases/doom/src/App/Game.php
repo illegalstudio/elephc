@@ -212,6 +212,7 @@ class Game {
                     && $endIndex >= 0
                     && $startIndex < $this->map->vertexCount
                     && $endIndex < $this->map->vertexCount
+                    && $this->isBlockingSideOfSolidLinedef($i, $x, $y)
                 ) {
                     int $distanceSquared = $this->distanceToSegmentSquared(
                         $x,
@@ -235,6 +236,31 @@ class Game {
     public function isSolidLinedef(int $index): bool {
         return $this->map->linedefs[$index]->left_sidedef < 0
             || $this->map->linedefs[$index]->right_sidedef < 0;
+    }
+
+    public function isBlockingSideOfSolidLinedef(int $index, int $x, int $y): bool {
+        int $startIndex = $this->map->linedefs[$index]->start_vertex;
+        int $endIndex = $this->map->linedefs[$index]->end_vertex;
+        if (
+            $startIndex < 0
+            || $endIndex < 0
+            || $startIndex >= $this->map->vertexCount
+            || $endIndex >= $this->map->vertexCount
+        ) {
+            return false;
+        }
+
+        int $ax = $this->map->vertexes[$startIndex]->x;
+        int $ay = $this->map->vertexes[$startIndex]->y;
+        int $bx = $this->map->vertexes[$endIndex]->x;
+        int $by = $this->map->vertexes[$endIndex]->y;
+        int $edgeX = $bx - $ax;
+        int $edgeY = $by - $ay;
+        int $toPointX = $x - $ax;
+        int $toPointY = $y - $ay;
+        int $cross = ($edgeX * $toPointY) - ($edgeY * $toPointX);
+
+        return $cross < 0;
     }
 
     public function distanceToSegmentSquared(
