@@ -9,31 +9,44 @@ A PHP-to-native compiler. Takes a subset of PHP and compiles it directly to **AR
 
 > **If you like the idea or find it useful, please star the repo** — it helps others discover it and keeps the project going.
 
+> **Want to support the project?** elephc is built and maintained independently. If you'd like to help it grow, consider [sponsoring on GitHub](https://github.com/sponsors/nahime0). Every contribution — big or small — makes a real difference.
+
+## DOOM rendered in PHP
+
+The flagship showcase: a real-time 3D renderer that loads original DOOM WAD files and renders E1M1 — BSP traversal, perspective projection, per-column fog, sector lighting, collision detection, step climbing — entirely in PHP compiled to a native ARM64 binary.
+
+https://media.nahi.me/illegalstudio/elephc/elephc-doom-3d-movement-4.mp4
+
+See [showcases/doom/](showcases/doom/) for full source and build instructions.
+
 ## Why
 
 My first "serious programming" book was *PHP 4 and MySQL*. After years of experimenting with code, that book turned my passion into a profession. I've worked with many languages over the past 20 years, but PHP is the one that has most consistently put food on the table.
 
-One thing I always missed about PHP was the ability to produce optimized, fast native binaries. With the advent of AI, we can build ambitious things quickly. While everyone else is busy building the next Facebook, chasing ephemeral wealth that will never come, I thought I could try to fill that gap and write a compiler for PHP.
+PHP has a simple, approachable, and elegant syntax. Millions of developers worldwide already know it well. That makes it an ideal bridge to bring web developers closer to lower-level programming — systems work, native binaries, understanding what happens under the hood — without forcing them to learn an entirely new language first.
 
-It's not perfect — it's 99% written by Claude — but **it works**. It's a solid starting point, and more importantly, it's a great way to understand **how a compiler works** and how assembly language operates under the hood.
+One thing I always missed about PHP was the ability to produce optimized, fast native binaries. While everyone else is busy building the next Facebook, I thought I could try to fill that gap and write a compiler for PHP.
+
+Of course, PHP has its limits when it comes to performance-critical or systems-level work. That's why elephc introduces compiler extensions like `packed class` for flat POD records, `buffer<T>` for contiguous typed arrays, `ptr` for raw memory access, and `extern` for FFI — constructs that give PHP developers the tools they need without abandoning the language they already know.
+
+It's not perfect, but **it works**. It's a solid starting point, and more importantly, it's a great way to understand **how a compiler works** and how assembly language operates under the hood.
 
 I made the project as modular as possible. Every function has its own codegen file, and each one is **commented line by line**, so you can see exactly how a high-level construct gets translated into its low-level equivalent.
 
-### What you should not expect
+## What you can expect
 
-Don't expect to take any existing PHP project and magically compile it. There's no Composer yet, but we do support PHP classes with single inheritance, interfaces, abstract classes, traits, constructors, instance/static methods, `self::method()`, `parent::method()`, `static::method()` with late static binding, `readonly` properties and `readonly class`, enums, named arguments, first-class callables, typed parameters / returns, `try` / `catch` / `finally` / `throw`, and `public` / `protected` / `private` visibility — roughly at the level of that famous *PHP 4* book where my journey began, plus a growing set of PHP 8 features.
+You can write PHP using the constructs documented in the [language reference](docs/language-reference.md). Classes with single inheritance, interfaces, abstract classes, traits, constructors, instance/static methods, `self::` / `parent::` / `static::` with late static binding, `readonly` properties and classes, enums, named arguments, first-class callables, typed parameters and returns, `try` / `catch` / `finally` / `throw`, visibility modifiers, union and nullable types, copy-on-write arrays, associative arrays with PHP insertion order, closures, namespaces, and includes.
 
-### What you can expect
+For performance-oriented code, elephc also exposes [compiler extensions](docs/compiler-extensions.md) beyond standard PHP — see the Why section above.
 
-You can write a PHP file using only the constructs documented in this project's [language reference](docs/language-reference.md). You can include other files with `include`, `require`, `include_once`, and `require_once`, organize code with PHP-style `namespace` / `use` imports, compose classes with traits, extend concrete classes with `extends`, implement interfaces, throw and catch built-in or custom exceptions, and rely on PHP-style copy-on-write arrays so by-value array assignments stay shared until the first write. Associative arrays also preserve PHP insertion order for `foreach`, `array_keys()`, `array_values()`, `array_search()`, and `json_encode()`. For performance-oriented code, elephc also exposes hot-path extensions such as `packed class` and `buffer<T>` for contiguous POD-style data.
-
-Then watch your code run at the speed of light after running:
+Then compile and run:
 
 ```bash
 elephc myfile.php
+./myfile
 ```
 
-But you should also expect the binary to segfault, the compiler to blow up, or worse. So experiment, have fun, but don't expect to use elephc for anything serious — at least not yet. I'd love for that to be possible someday. We'll see how it evolves.
+The compiler is experimental and evolving. Not everything PHP supports is implemented, and you will find bugs. But as the DOOM showcase demonstrates, you can build real, non-trivial programs with it today.
 
 If you want to contribute, you're welcome. Mi casa es tu casa.
 
@@ -103,6 +116,16 @@ cargo run -- hello.php
 ./hello
 ```
 
+## Showcases
+
+| Showcase | Description |
+|---|---|
+| [DOOM E1M1](showcases/doom/) | Real-time 3D WAD renderer with BSP traversal, SDL2 FFI, `packed class` geometry, `buffer<T>` storage, collision detection, HUD |
+| [SDL framebuffer](examples/sdl_framebuffer/) | Pixel-level rendering with SDL2 via FFI |
+| [SDL audio](examples/sdl_audio/) | Audio playback with SDL2 via FFI |
+| [Hot-path buffers](examples/hot-path/) | `packed class` + `buffer<T>` for performance-critical data |
+| [FFI memory](examples/ffi-memory/) | Raw C memory patterns with `malloc`, `free`, `memcpy` via FFI |
+
 ## FFI
 
 elephc can call native C functions directly through `extern` declarations.
@@ -133,16 +156,13 @@ Notes:
 - Callback functions must stay C-compatible: use `int`, `float`, `bool`, `ptr`, or `void`-shaped values. String callbacks are not supported yet.
 - Raw C memory patterns are supported through ordinary extern declarations such as `malloc`, `free`, `memcpy`, and `memset`.
 - Pointer helpers include byte/word buffer access (`ptr_read8`, `ptr_read32`, `ptr_write8`, `ptr_write32`) in addition to `ptr_get` / `ptr_set`.
-- See `examples/ffi-memory`, `examples/sdl_window`, `examples/sdl_input`, `examples/sdl_framebuffer`, and `examples/sdl_audio` for end-to-end native interop examples.
 
 ## What it compiles
 
-elephc supports a growing subset of PHP and aims to match PHP behavior for the language features it implements. Most supported programs are ordinary PHP, but elephc also includes compiler-specific extensions such as build-time `ifdef` branches, pointer builtins like `ptr()` / `ptr_cast<T>()`, and hot-path data primitives like `packed class`, `buffer<T>`, `buffer_new<T>()`, and `buffer_len()` that intentionally extend PHP syntax.
+elephc supports a growing subset of PHP and aims to match PHP behavior for the language features it implements.
 
 ```php
 <?php
-require_once 'math.php';
-
 $pi = M_PI;
 echo "Pi is approximately " . number_format($pi, 5) . "\n";
 echo "2 ** 10 = " . (2 ** 10) . "\n";
@@ -178,63 +198,31 @@ if ($x === 3) {
 
 ### Supported constructs
 
-| Construct | Example |
-|---|---|
-| Echo / Print | `echo $x;`, `print $x;` |
-| Variables | `$name = "hello";` |
-| Arithmetic | `+`, `-`, `*`, `/`, `%`, `**` |
-| Comparison | `==`, `!=`, `<`, `>`, `<=`, `>=`, `===`, `!==`, `<=>` |
-| Logical | `&&`, `\|\|`, `!` |
-| Bitwise | `&`, `\|`, `^`, `~`, `<<`, `>>` |
-| Null coalescing | `$x ?? $default` |
-| Concatenation | `"a" . "b"`, `"val=" . 42` |
-| Assignment | `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `.=` |
-| Increment/Decrement | `$i++`, `++$i`, `$i--`, `--$i` |
-| Type casting | `(int)`, `(float)`, `(string)`, `(bool)`, `(array)` |
-| Ternary | `$x > 0 ? "yes" : "no"` |
-| Array / String access | `$arr[0]`, `$map["name"]`, `$str[-1]` |
-| If / elseif / else | `if (...) { } elseif (...) { } else { }` |
-| Ifdef (elephc extension) | `ifdef DEBUG { ... } else { ... }` |
-| While / Do-while | `while (...) { }`, `do { } while (...);` |
-| For / Foreach | `for (;;) { }`, `foreach ($arr as $v) { }`, `foreach ($arr as $k => $v) { }` |
-| Switch | `switch ($x) { case 1: ...; break; default: ...; }` |
-| Match | `$r = match($x) { 1 => "one", default => "other" };` |
-| Break / Continue | `break;`, `continue;` |
-| Try / Catch / Finally / Throw | `try { ... } catch (Exception $e) { ... } finally { ... }`, `throw new Exception("boom");` |
-| Functions | `function foo(int $x, int $y = 10): int { return $x + $y; }` |
-| Variadic / Spread | `function sum(...$args) { }`, `func(...$arr)`, `[...$a, ...$b]` |
-| Pass by reference | `function inc(&$x) { $x++; }` |
-| Named arguments | `user(name: "Alice", age: 30)` |
-| First-class callables | `strlen(...)`, `Tools\\fmt(...)` |
-| Global / Static | `global $var;`, `static $counter = 0;` |
-| Closures / Arrow | `$fn = function($x) use ($y) { return $x * $y; };`, `fn($x) => $x * 2` |
-| FFI declarations | `extern function atoi(string $s): int;`, `extern "System" { function malloc(int $n): ptr; }`, `extern global ptr $environ;`, `extern class Point { public int $x; }` |
-| Constants | `const MAX = 100;`, `define("PI", 3.14)` |
-| Namespaces / Imports | `namespace App\Core;`, `use App\Lib\Tool;`, `use function App\fmt as paint;` |
-| List unpacking | `[$a, $b] = [1, 2];` |
-| Include/Require | `include 'file.php';`, `require_once 'lib.php';` |
-| Classes | `abstract class Foo extends Base implements Named { public readonly $id; protected $x; private $y; abstract public function name(); }` |
-| Traits | `trait Named { public function name() { return "x"; } }`, `use Named { Named::name as protected; }` |
-| New / Property / Method | `$f = new Foo(); $f->x = 1; $f->get();` |
-| Magic methods | `__toString()`, `__get($name)`, `__set($name, $value)` |
-| Enums | `enum Color: int { case Red = 1; }`, `Color::from(1)`, `Color::tryFrom(1)`, `Color::cases()` |
-| Union / Nullable types | `int\|string $x = 42;`, `?int $y = null;` |
-| Static methods | `Foo::create()` |
-| String interpolation | `"Hello $name"` |
-| Heredoc / Nowdoc | `<<<EOT ... EOT;`, `<<<'EOT' ... EOT;` |
-| Comments | `// ...`, `/* ... */` |
+The full list of supported constructs, operators, and control structures is in the [language reference](docs/language-reference.md). Highlights:
 
-### Built-in functions
+- **OOP**: classes, abstract classes, interfaces, traits, enums, `readonly`, static/instance methods, `self::`/`parent::`/`static::`, magic methods (`__toString`, `__get`, `__set`)
+- **Functions**: default parameters, variadic/spread, pass by reference, named arguments, first-class callables, closures, arrow functions
+- **Control flow**: if/elseif/else, while, do-while, for, foreach, switch, match, break, continue, try/catch/finally/throw
+- **Types**: union types (`int|string`), nullable (`?int`), type casting, typed parameters and returns
+- **Modules**: namespaces, use imports, include/require/require_once
+- **FFI**: extern functions, extern blocks, extern globals, extern classes, pointer builtins
+- **Extensions**: `ifdef`, `packed class`, `buffer<T>`, `buffer_new<T>()`, `buffer_len()`, `buffer_free()`
 
-**Strings:** `strlen`, `intval`, `number_format`, `substr`, `strpos`, `strrpos`, `strstr`, `str_replace`, `str_ireplace`, `substr_replace`, `strtolower`, `strtoupper`, `ucfirst`, `lcfirst`, `ucwords`, `trim`, `ltrim`, `rtrim`, `str_repeat`, `str_pad`, `strrev`, `str_split`, `strcmp`, `strcasecmp`, `str_contains`, `str_starts_with`, `str_ends_with`, `ord`, `chr`, `explode`, `implode`, `addslashes`, `stripslashes`, `nl2br`, `wordwrap`, `bin2hex`, `hex2bin`, `sprintf`, `printf`, `sscanf`, `md5`, `sha1`, `hash`, `htmlspecialchars`, `htmlentities`, `html_entity_decode`, `urlencode`, `urldecode`, `rawurlencode`, `rawurldecode`, `base64_encode`, `base64_decode`, `ctype_alpha`, `ctype_digit`, `ctype_alnum`, `ctype_space`
+### Built-in functions (200+)
+
+**Strings:** `strlen`, `substr`, `strpos`, `strrpos`, `strstr`, `str_replace`, `str_ireplace`, `substr_replace`, `strtolower`, `strtoupper`, `ucfirst`, `lcfirst`, `ucwords`, `trim`, `ltrim`, `rtrim`, `str_repeat`, `str_pad`, `strrev`, `str_split`, `strcmp`, `strcasecmp`, `str_contains`, `str_starts_with`, `str_ends_with`, `ord`, `chr`, `explode`, `implode`, `sprintf`, `printf`, `sscanf`, `md5`, `sha1`, `hash`, `number_format`, `intval`, `addslashes`, `stripslashes`, `nl2br`, `wordwrap`, `bin2hex`, `hex2bin`, `htmlspecialchars`, `htmlentities`, `html_entity_decode`, `urlencode`, `urldecode`, `rawurlencode`, `rawurldecode`, `base64_encode`, `base64_decode`, `ctype_alpha`, `ctype_digit`, `ctype_alnum`, `ctype_space`
+
 **Arrays:** `count`, `array_push`, `array_pop`, `in_array`, `array_keys`, `array_values`, `sort`, `rsort`, `isset`, `array_key_exists`, `array_search`, `array_merge`, `array_slice`, `array_splice`, `array_combine`, `array_flip`, `array_reverse`, `array_unique`, `array_sum`, `array_product`, `array_chunk`, `array_pad`, `array_fill`, `array_fill_keys`, `array_diff`, `array_intersect`, `array_diff_key`, `array_intersect_key`, `array_unshift`, `array_shift`, `asort`, `arsort`, `ksort`, `krsort`, `natsort`, `natcasesort`, `shuffle`, `array_rand`, `array_column`, `range`, `array_map`, `array_filter`, `array_reduce`, `array_walk`, `usort`, `uksort`, `uasort`, `call_user_func`, `call_user_func_array`, `function_exists`
+
 **Math:** `abs`, `floor`, `ceil`, `round`, `sqrt`, `pow`, `min`, `max`, `intdiv`, `fmod`, `fdiv`, `rand`, `mt_rand`, `random_int`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `log`, `log2`, `log10`, `exp`, `hypot`, `deg2rad`, `rad2deg`, `pi`
+
 **Types:** `gettype`, `settype`, `empty`, `unset`, `is_int`, `is_float`, `is_string`, `is_bool`, `is_null`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`, `boolval`, `floatval`
+
 **I/O:** `fopen`, `fclose`, `fread`, `fwrite`, `fgets`, `feof`, `readline`, `fseek`, `ftell`, `rewind`, `file_get_contents`, `file_put_contents`, `file`, `fgetcsv`, `fputcsv`, `file_exists`, `is_file`, `is_dir`, `is_readable`, `is_writable`, `filesize`, `filemtime`, `copy`, `rename`, `unlink`, `mkdir`, `rmdir`, `scandir`, `glob`, `getcwd`, `chdir`, `tempnam`, `sys_get_temp_dir`
-**Pointers:** `ptr`, `ptr_null`, `ptr_is_null`, `ptr_get`, `ptr_set`, `ptr_read8`, `ptr_read32`, `ptr_write8`, `ptr_write32`, `ptr_offset`, `ptr_cast<T>`, `ptr_sizeof`
-**Buffers:** `buffer_new<T>`, `buffer_len`, `buffer_free`
-**Debugging:** `var_dump`, `print_r`
-**System:** `exit`, `die`, `define`, `time`, `microtime`, `date`, `mktime`, `strtotime`, `sleep`, `usleep`, `getenv`, `putenv`, `php_uname`, `phpversion`, `exec`, `shell_exec`, `system`, `passthru`, `json_encode`, `json_decode`, `json_last_error`, `preg_match`, `preg_match_all`, `preg_replace`, `preg_split`
+
+**System:** `exit`, `die`, `time`, `microtime`, `date`, `mktime`, `strtotime`, `sleep`, `usleep`, `getenv`, `putenv`, `php_uname`, `phpversion`, `exec`, `shell_exec`, `system`, `passthru`, `json_encode`, `json_decode`, `json_last_error`, `preg_match`, `preg_match_all`, `preg_replace`, `preg_split`, `define`, `var_dump`, `print_r`
+
+**Pointers/Buffers:** `ptr`, `ptr_null`, `ptr_is_null`, `ptr_get`, `ptr_set`, `ptr_read8`, `ptr_read32`, `ptr_write8`, `ptr_write32`, `ptr_offset`, `ptr_cast<T>`, `ptr_sizeof`, `buffer_new<T>`, `buffer_len`, `buffer_free`
 
 ### Constants
 
@@ -275,7 +263,7 @@ A variable's type is set at first assignment. Compatible types (int/float/bool/n
 
 ## Error messages
 
-Errors include line and column numbers, and the compiler now tries to recover far enough to report multiple independent syntax / semantic errors in one pass. Successful compilations may also emit non-fatal warnings such as unused variables / parameters or unreachable code:
+Errors include line and column numbers, and the compiler tries to recover far enough to report multiple independent syntax / semantic errors in one pass. Successful compilations may also emit non-fatal warnings such as unused variables / parameters or unreachable code:
 
 ```
 error[3:1]: Undefined variable: $x
@@ -356,6 +344,8 @@ src/
 
 ## Tests
 
+1220+ tests across lexer, parser, codegen, and error reporting. Each codegen test compiles inline PHP source to a native binary, runs it, and asserts stdout.
+
 ```bash
 cargo test                      # all tests
 cargo test -- --include-ignored # all tests, including ignored integration tests
@@ -367,7 +357,7 @@ ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 
 The `docs/` directory is a **complete wiki** covering every aspect of the compiler — from what a compiler is, to how each phase works, to the ARM64 instruction set. If you're new to compilers or assembly, **start from the top and work your way down**.
 
-For runnable language samples, start with `examples/functions`, `examples/default-params`, `examples/advanced-functions`, `examples/classes`, `examples/inheritance`, `examples/interfaces`, `examples/traits`, `examples/enums`, `examples/union-types`, `examples/exceptions`, `examples/magic-methods`, `examples/namespaces`, `examples/ifdef`, `examples/arrays`, `examples/assoc-arrays`, `examples/closures`, `examples/hot-path`, and `examples/ffi-memory`. For a focused perf-oriented comparison, see `benchmarks/hot-path-buffer-vs-arrays`.
+For runnable language samples, see `examples/`. For a focused perf comparison, see `benchmarks/hot-path-buffer-vs-arrays`.
 
 | Guide | What you'll learn |
 |---|---|
@@ -382,6 +372,7 @@ For runnable language samples, start with `examples/functions`, `examples/defaul
 | [ARM64 Assembly](docs/arm64-assembly.md) | ARM64 primer for people who've never seen assembly |
 | [ARM64 Instructions](docs/arm64-instructions.md) | Quick reference for every instruction elephc uses |
 | [Language Reference](docs/language-reference.md) | Complete spec: types, operators, built-ins, limits |
+| [Compiler Extensions](docs/compiler-extensions.md) | FFI, pointers, `buffer<T>`, `packed class`, `ifdef` |
 | [Architecture](docs/architecture.md) | Module map, file counts, conventions |
 
 ## License
