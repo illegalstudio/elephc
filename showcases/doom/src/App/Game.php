@@ -206,15 +206,50 @@ class Game {
 
         if ($this->isWalkablePosition($targetX, $targetY)) {
             $this->camera->setSpawn($targetX, $targetY, $this->camera->angle);
+            $this->camera->z = $this->floorHeightAt($targetX, $targetY);
             return;
         }
 
         if ($dx !== 0 && $this->isWalkablePosition($this->camera->x + $dx, $this->camera->y)) {
             $this->camera->moveBy($dx, 0);
+            $this->camera->z = $this->floorHeightAt($this->camera->x, $this->camera->y);
         }
         if ($dy !== 0 && $this->isWalkablePosition($this->camera->x, $this->camera->y + $dy)) {
             $this->camera->moveBy(0, $dy);
+            $this->camera->z = $this->floorHeightAt($this->camera->x, $this->camera->y);
         }
+    }
+
+    public function floorHeightAt(int $x, int $y): int {
+        // find the highest floor among sectors whose linedefs are near the point
+        int $bestFloor = 0;
+        int $bestDist = 999999;
+        int $i = 0;
+        while ($i < $this->map->linedefCount) {
+            int $rightSide = $this->map->linedefs[$i]->right_sidedef;
+            if ($rightSide >= 0 && $rightSide < $this->map->sidedefCount) {
+                int $startIndex = $this->map->linedefs[$i]->start_vertex;
+                int $endIndex = $this->map->linedefs[$i]->end_vertex;
+                if ($startIndex >= 0 && $endIndex >= 0 && $startIndex < $this->map->vertexCount && $endIndex < $this->map->vertexCount) {
+                    int $dist = $this->distanceToSegmentSquared(
+                        $x, $y,
+                        $this->map->vertexes[$startIndex]->x,
+                        $this->map->vertexes[$startIndex]->y,
+                        $this->map->vertexes[$endIndex]->x,
+                        $this->map->vertexes[$endIndex]->y
+                    );
+                    if ($dist < $bestDist) {
+                        $bestDist = $dist;
+                        int $sectorIdx = $this->map->sidedefs[$rightSide]->sector_index;
+                        if ($sectorIdx >= 0 && $sectorIdx < $this->map->sectorCount) {
+                            $bestFloor = $this->map->sectors[$sectorIdx]->floor_height;
+                        }
+                    }
+                }
+            }
+            $i += 1;
+        }
+        return $bestFloor;
     }
 
     public function isWalkablePosition(int $x, int $y): bool {
@@ -227,14 +262,14 @@ class Game {
         }
 
         int $i = 0;
-        int $radiusSquared = 28 * 28;
+        int $radiusSquared = 16 * 16;
         while ($i < $this->map->linedefCount) {
             bool $blocking = false;
             if ($this->isSolidLinedef($i)) {
                 if ($this->isBlockingSideOfSolidLinedef($i, $x, $y)) {
                     $blocking = true;
                 }
-            } else if ($this->isBlockingTwoSidedLinedef($i)) {
+            } else if ($this->isBlockingTwoSidedLinedef($i, $this->camera->z)) {
                 $blocking = true;
             }
 
@@ -263,6 +298,12 @@ class Game {
             $i += 1;
         }
 
+        // step check: can't step up more than 24 units from current floor
+        int $targetFloor = $this->floorHeightAt($x, $y);
+        if ($targetFloor - $this->camera->z > 24) {
+            return false;
+        }
+
         return true;
     }
 
@@ -274,7 +315,7 @@ class Game {
         return false;
     }
 
-    public function isBlockingTwoSidedLinedef(int $index): bool {
+    public function isBlockingTwoSidedLinedef(int $index, int $playerZ): bool {
         int $rightSide = $this->map->linedefs[$index]->right_sidedef;
         int $leftSide = $this->map->linedefs[$index]->left_sidedef;
         if ($rightSide < 0 || $leftSide < 0) {
@@ -303,25 +344,12 @@ class Game {
             return true;
         }
 
-        // step too high (> 24 units)
-        int $stepUp = $backFloor - $frontFloor;
-        if ($stepUp < 0) {
-            $stepUp = -$stepUp;
-        }
-        if ($stepUp > 24) {
-            return true;
-        }
-
-        // ceiling too low to pass (< 56 units clearance)
+        // ceiling too low to pass (< 56 units above player)
         int $lowestCeiling = $frontCeiling;
         if ($backCeiling < $lowestCeiling) {
             $lowestCeiling = $backCeiling;
         }
-        int $highestFloor = $frontFloor;
-        if ($backFloor > $highestFloor) {
-            $highestFloor = $backFloor;
-        }
-        if ($lowestCeiling - $highestFloor < 56) {
+        if ($lowestCeiling - $playerZ < 56) {
             return true;
         }
 

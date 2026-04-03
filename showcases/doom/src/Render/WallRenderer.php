@@ -38,7 +38,7 @@ class WallRenderer {
         int $horizonY = intdiv($viewportHeight, 2);
         int $focal = intdiv($viewportWidth * 3, 4);
         int $nearPlane = 12;
-        int $cameraEyeZ = $this->projection->cameraEyeZ($map, $cameraSubSector);
+        int $cameraEyeZ = $camera->z + 41;
         int $maxY = $viewportY + $viewportHeight - 1;
         $clipData = [];
 
