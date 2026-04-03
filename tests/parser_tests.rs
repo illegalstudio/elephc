@@ -1529,6 +1529,27 @@ fn test_parse_property_access() {
 }
 
 #[test]
+fn test_parse_property_array_access() {
+    let stmts = parse_source("<?php echo $obj->items[0];");
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::ArrayAccess { array, index } => {
+                assert!(matches!(index.kind, ExprKind::IntLiteral(0)));
+                match &array.kind {
+                    ExprKind::PropertyAccess { object, property } => {
+                        assert_eq!(property, "items");
+                        assert!(matches!(object.kind, ExprKind::Variable(_)));
+                    }
+                    other => panic!("Expected PropertyAccess, got {:?}", other),
+                }
+            }
+            other => panic!("Expected ArrayAccess, got {:?}", other),
+        },
+        other => panic!("Expected Echo, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_parse_method_call() {
     let stmts = parse_source("<?php $obj->run(1, 2);");
     match &stmts[0].kind {

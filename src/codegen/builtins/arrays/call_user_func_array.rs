@@ -236,7 +236,7 @@ pub fn emit(
     }
 
     let assignments = args::build_arg_assignments(&arg_types, 0);
-    args::load_arg_assignments(emitter, &assignments, arg_types.len());
+    let overflow_bytes = args::materialize_call_args(emitter, &assignments, arg_types.len());
 
     let ret_ty = sig.return_type.clone();
 
@@ -244,6 +244,9 @@ pub fn emit(
     crate::codegen::expr::save_concat_offset_before_nested_call(emitter);
     emitter.instruction("blr x19");                                             // call callback via indirect branch
     crate::codegen::expr::restore_concat_offset_after_nested_call(emitter, &ret_ty);
+    if overflow_bytes > 0 {
+        emitter.instruction(&format!("add sp, sp, #{}", overflow_bytes));       // drop spilled stack callback arguments after the indirect call returns
+    }
 
     Some(ret_ty)
 }

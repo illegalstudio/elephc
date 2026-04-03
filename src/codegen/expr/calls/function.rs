@@ -195,7 +195,7 @@ pub(super) fn emit_function_call(
     }
 
     let assignments = args::build_arg_assignments(&arg_types, 0);
-    args::load_arg_assignments(emitter, &assignments, arg_types.len());
+    let overflow_bytes = args::materialize_call_args(emitter, &assignments, arg_types.len());
 
     let ret_ty = ctx
         .functions
@@ -206,6 +206,9 @@ pub(super) fn emit_function_call(
     super::super::save_concat_offset_before_nested_call(emitter);
     emitter.instruction(&format!("bl {}", function_symbol(name)));              // branch-and-link to compiled PHP function
     super::super::restore_concat_offset_after_nested_call(emitter, &ret_ty);
+    if overflow_bytes > 0 {
+        emitter.instruction(&format!("add sp, sp, #{}", overflow_bytes));       // drop spilled stack arguments after the nested call returns
+    }
 
     ret_ty
 }

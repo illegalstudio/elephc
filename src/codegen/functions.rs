@@ -6,7 +6,25 @@ use super::emit::Emitter;
 use super::stmt;
 use crate::names::{function_epilogue_symbol, function_symbol};
 use crate::parser::ast::{ExprKind, StmtKind, TypeExpr};
-use crate::types::{ClassInfo, FunctionSig, InterfaceInfo, PhpType};
+use crate::types::{
+    ClassInfo, ExternClassInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo,
+    PhpType,
+};
+
+fn emit_load_from_caller_stack(emitter: &mut Emitter, reg: &str, offset: usize) {
+    if offset <= 4095 {
+        emitter.instruction(&format!("ldr {}, [x29, #{}]", reg, offset));      // load spilled incoming argument from the caller stack
+    } else {
+        emitter.instruction("mov x9, x29");                                     // seed a scratch pointer from the caller frame base
+        let mut remaining = offset;
+        while remaining > 0 {
+            let chunk = remaining.min(4080);
+            emitter.instruction(&format!("add x9, x9, #{}", chunk));           // advance the scratch pointer toward the spilled argument slot
+            remaining -= chunk;
+        }
+        emitter.instruction(&format!("ldr {}, [x9]", reg));                    // load spilled incoming argument through the computed address
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn emit_function(
@@ -21,6 +39,10 @@ pub fn emit_function(
     all_static_vars: &HashMap<(String, String), PhpType>,
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: Option<&HashMap<String, ClassInfo>>,
+    packed_classes: &HashMap<String, PackedClassInfo>,
+    extern_functions: &HashMap<String, ExternFunctionSig>,
+    extern_classes: &HashMap<String, ExternClassInfo>,
+    extern_globals: &HashMap<String, PhpType>,
 ) {
     let label = function_symbol(name);
     let epilogue_label = function_epilogue_symbol(name);
@@ -37,6 +59,10 @@ pub fn emit_function(
         all_static_vars,
         interfaces,
         classes,
+        packed_classes,
+        extern_functions,
+        extern_classes,
+        extern_globals,
     );
 }
 
@@ -50,6 +76,10 @@ pub fn emit_closure(
     constants: &HashMap<String, (ExprKind, PhpType)>,
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: &HashMap<String, ClassInfo>,
+    packed_classes: &HashMap<String, PackedClassInfo>,
+    extern_functions: &HashMap<String, ExternFunctionSig>,
+    extern_classes: &HashMap<String, ExternClassInfo>,
+    extern_globals: &HashMap<String, PhpType>,
 ) {
     let epilogue_label = format!("{}_epilogue", label);
     let empty_globals = HashSet::new();
@@ -67,6 +97,10 @@ pub fn emit_closure(
         &empty_statics,
         interfaces,
         Some(classes),
+        packed_classes,
+        extern_functions,
+        extern_classes,
+        extern_globals,
     );
 }
 
@@ -82,7 +116,11 @@ pub fn emit_method(
     constants: &HashMap<String, (ExprKind, PhpType)>,
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: &HashMap<String, ClassInfo>,
+    packed_classes: &HashMap<String, PackedClassInfo>,
     class_name: &str,
+    extern_functions: &HashMap<String, ExternFunctionSig>,
+    extern_classes: &HashMap<String, ExternClassInfo>,
+    extern_globals: &HashMap<String, PhpType>,
 ) {
     let empty_globals = HashSet::new();
     let empty_statics = HashMap::new();
@@ -99,6 +137,10 @@ pub fn emit_method(
         &empty_statics,
         interfaces,
         Some((classes, class_name)),
+        packed_classes,
+        extern_functions,
+        extern_classes,
+        extern_globals,
     );
 }
 
@@ -116,6 +158,10 @@ fn emit_function_with_label(
     all_static_vars: &HashMap<(String, String), PhpType>,
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: Option<&HashMap<String, ClassInfo>>,
+    packed_classes: &HashMap<String, PackedClassInfo>,
+    extern_functions: &HashMap<String, ExternFunctionSig>,
+    extern_classes: &HashMap<String, ExternClassInfo>,
+    extern_globals: &HashMap<String, PhpType>,
 ) {
     // Pass classes to regular functions so they can resolve Object types
     let class_ctx = classes.map(|c| (c, "" as &str));
@@ -132,6 +178,10 @@ fn emit_function_with_label(
         all_static_vars,
         interfaces,
         class_ctx,
+        packed_classes,
+        extern_functions,
+        extern_classes,
+        extern_globals,
     );
 }
 
@@ -149,6 +199,10 @@ fn emit_function_with_label_and_class(
     all_static_vars: &HashMap<(String, String), PhpType>,
     interfaces: &HashMap<String, InterfaceInfo>,
     class_context: Option<(&HashMap<String, ClassInfo>, &str)>,
+    packed_classes: &HashMap<String, PackedClassInfo>,
+    extern_functions: &HashMap<String, ExternFunctionSig>,
+    extern_classes: &HashMap<String, ExternClassInfo>,
+    extern_globals: &HashMap<String, PhpType>,
 ) {
     let mut ctx = Context::new();
     ctx.return_label = Some(epilogue_label.to_string());
@@ -158,6 +212,10 @@ fn emit_function_with_label_and_class(
     ctx.all_global_var_names = all_global_var_names.clone();
     ctx.all_static_vars = all_static_vars.clone();
     ctx.interfaces = interfaces.clone();
+    ctx.packed_classes = packed_classes.clone();
+    ctx.extern_functions = extern_functions.clone();
+    ctx.extern_classes = extern_classes.clone();
+    ctx.extern_globals = extern_globals.clone();
     if let Some((classes, class_name)) = class_context {
         ctx.classes = classes.clone();
         ctx.current_class = Some(class_name.to_string());
@@ -183,7 +241,11 @@ fn emit_function_with_label_and_class(
             ctx.disable_epilogue_cleanup(pname);
         } else {
             ctx.alloc_var(pname, _pty.codegen_repr());
-            ctx.set_var_ownership(pname, HeapOwnership::local_owner_for_type(_pty));
+            if matches!(_pty.codegen_repr(), PhpType::Str) {
+                ctx.set_var_ownership(pname, HeapOwnership::borrowed_alias_for_type(_pty));
+            } else {
+                ctx.set_var_ownership(pname, HeapOwnership::local_owner_for_type(_pty));
+            }
         }
     }
 
@@ -222,6 +284,9 @@ fn emit_function_with_label_and_class(
     // Strings use two consecutive int registers (ptr + len)
     let mut int_reg_idx = 0usize;
     let mut float_reg_idx = 0usize;
+    let mut caller_stack_offset = 32usize;
+    let mut int_stack_only = false;
+    let mut float_stack_only = false;
     for (i, (pname, pty)) in sig.params.iter().enumerate() {
         let is_ref = sig.ref_params.get(i).copied().unwrap_or(false);
         let var = ctx
@@ -230,36 +295,69 @@ fn emit_function_with_label_and_class(
             .expect("codegen bug: param was just allocated but not found in variables map");
         let offset = var.stack_offset;
         if is_ref {
-            // Ref param: store the address (always comes in an integer register)
-            emitter.comment(&format!("param &${} from x{} (ref)", pname, int_reg_idx));
-            super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save address of referenced variable
-            int_reg_idx += 1;
+            if !int_stack_only && int_reg_idx < 8 {
+                emitter.comment(&format!("param &${} from x{} (ref)", pname, int_reg_idx));
+                super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save address of referenced variable from an integer register
+                int_reg_idx += 1;
+            } else {
+                emitter.comment(&format!("param &${} from caller stack +{}", pname, caller_stack_offset));
+                emit_load_from_caller_stack(emitter, "x10", caller_stack_offset);
+                super::abi::store_at_offset(emitter, "x10", offset);            // save the spilled reference argument into the local slot
+                caller_stack_offset += 16;
+                int_stack_only = true;
+            }
         } else {
             match pty {
                 PhpType::Bool | PhpType::Int => {
-                    emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
-                    super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save int/bool param
-                    int_reg_idx += 1;
+                    if !int_stack_only && int_reg_idx < 8 {
+                        emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
+                        super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save int/bool param from an integer register
+                        int_reg_idx += 1;
+                    } else {
+                        emitter.comment(&format!("param ${} from caller stack +{}", pname, caller_stack_offset));
+                        emit_load_from_caller_stack(emitter, "x10", caller_stack_offset);
+                        super::abi::store_at_offset(emitter, "x10", offset);    // save the spilled int/bool parameter into the local slot
+                        caller_stack_offset += 16;
+                        int_stack_only = true;
+                    }
                 }
                 PhpType::Float => {
-                    emitter.comment(&format!("param ${} from d{}", pname, float_reg_idx));
-                    super::abi::store_at_offset(emitter, &format!("d{}", float_reg_idx), offset); // save float param
-                    float_reg_idx += 1;
+                    if !float_stack_only && float_reg_idx < 8 {
+                        emitter.comment(&format!("param ${} from d{}", pname, float_reg_idx));
+                        super::abi::store_at_offset(emitter, &format!("d{}", float_reg_idx), offset); // save float param from a floating-point register
+                        float_reg_idx += 1;
+                    } else {
+                        emitter.comment(&format!("param ${} from caller stack +{}", pname, caller_stack_offset));
+                        emit_load_from_caller_stack(emitter, "d15", caller_stack_offset);
+                        super::abi::store_at_offset(emitter, "d15", offset);    // save the spilled float parameter into the local slot
+                        caller_stack_offset += 16;
+                        float_stack_only = true;
+                    }
                 }
                 PhpType::Str => {
-                    emitter.comment(&format!(
-                        "param ${} from x{},x{}",
-                        pname,
-                        int_reg_idx,
-                        int_reg_idx + 1
-                    ));
-                    super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save string pointer
-                    super::abi::store_at_offset(
-                        emitter,
-                        &format!("x{}", int_reg_idx + 1),
-                        offset - 8,
-                    ); // save string length
-                    int_reg_idx += 2;
+                    if !int_stack_only && int_reg_idx + 1 < 8 {
+                        emitter.comment(&format!(
+                            "param ${} from x{},x{}",
+                            pname,
+                            int_reg_idx,
+                            int_reg_idx + 1
+                        ));
+                        super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save string pointer from the integer-register pair
+                        super::abi::store_at_offset(
+                            emitter,
+                            &format!("x{}", int_reg_idx + 1),
+                            offset - 8,
+                        ); // save string length from the integer-register pair
+                        int_reg_idx += 2;
+                    } else {
+                        emitter.comment(&format!("param ${} from caller stack +{}", pname, caller_stack_offset));
+                        emit_load_from_caller_stack(emitter, "x10", caller_stack_offset);
+                        emit_load_from_caller_stack(emitter, "x11", caller_stack_offset + 8);
+                        super::abi::store_at_offset(emitter, "x10", offset);    // save the spilled string pointer into the local slot
+                        super::abi::store_at_offset(emitter, "x11", offset - 8); // save the spilled string length into the local slot
+                        caller_stack_offset += 16;
+                        int_stack_only = true;
+                    }
                 }
                 PhpType::Void => {}
                 PhpType::Mixed
@@ -271,9 +369,17 @@ fn emit_function_with_label_and_class(
                 | PhpType::Object(_)
                 | PhpType::Packed(_)
                 | PhpType::Pointer(_) => {
-                    emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
-                    super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save array/callable/object/pointer param
-                    int_reg_idx += 1;
+                    if !int_stack_only && int_reg_idx < 8 {
+                        emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
+                        super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save heap/object/callable parameter from an integer register
+                        int_reg_idx += 1;
+                    } else {
+                        emitter.comment(&format!("param ${} from caller stack +{}", pname, caller_stack_offset));
+                        emit_load_from_caller_stack(emitter, "x10", caller_stack_offset);
+                        super::abi::store_at_offset(emitter, "x10", offset);    // save the spilled heap/object/callable parameter into the local slot
+                        caller_stack_offset += 16;
+                        int_stack_only = true;
+                    }
                 }
             }
         }
@@ -310,7 +416,7 @@ fn emit_function_with_label_and_class(
     emitter.label(epilogue_label);
     let needs_return_preserve = epilogue_has_side_effects(&ctx);
     if needs_return_preserve {
-        preserve_return_registers(emitter, &sig.return_type);
+        preserve_return_registers(emitter, &ctx, &sig.return_type);
     }
 
     // Save static vars back to global storage before returning
@@ -380,7 +486,7 @@ fn emit_function_with_label_and_class(
     emit_owned_local_epilogue_cleanup(emitter, &ctx);
 
     if needs_return_preserve {
-        restore_return_registers(emitter, &sig.return_type);
+        restore_return_registers(emitter, &ctx, &sig.return_type);
     }
     if frame_size - 16 <= 504 {
         emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16)); //restore frame ptr & return addr
@@ -411,35 +517,47 @@ fn emit_function_with_label_and_class(
                 constants,
                 interfaces,
                 classes,
+                packed_classes,
+                extern_functions,
+                extern_classes,
+                extern_globals,
             );
         }
     }
 }
 
-fn preserve_return_registers(emitter: &mut Emitter, return_ty: &PhpType) {
+fn preserve_return_registers(emitter: &mut Emitter, ctx: &Context, return_ty: &PhpType) {
+    let return_offset = ctx
+        .pending_return_value_offset
+        .expect("codegen bug: missing pending return spill slot");
     match return_ty {
         PhpType::Float => {
-            emitter.instruction("str d0, [sp, #-16]!");                         // preserve float return value across epilogue side effects
+            super::abi::store_at_offset(emitter, "d0", return_offset);          // preserve the float return value in the hidden frame slot across epilogue side effects
         }
         PhpType::Str => {
-            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve string return registers across epilogue side effects
+            super::abi::store_at_offset(emitter, "x1", return_offset);          // preserve the string return pointer in the hidden frame slot across epilogue side effects
+            super::abi::store_at_offset(emitter, "x2", return_offset - 8);      // preserve the string return length in the hidden frame slot across epilogue side effects
         }
         _ => {
-            emitter.instruction("str x0, [sp, #-16]!");                         // preserve scalar/heap return value across epilogue side effects
+            super::abi::store_at_offset(emitter, "x0", return_offset);          // preserve the scalar/object return value in the hidden frame slot across epilogue side effects
         }
     }
 }
 
-fn restore_return_registers(emitter: &mut Emitter, return_ty: &PhpType) {
+fn restore_return_registers(emitter: &mut Emitter, ctx: &Context, return_ty: &PhpType) {
+    let return_offset = ctx
+        .pending_return_value_offset
+        .expect("codegen bug: missing pending return spill slot");
     match return_ty {
         PhpType::Float => {
-            emitter.instruction("ldr d0, [sp], #16");                           // restore float return value after epilogue cleanup
+            super::abi::load_at_offset(emitter, "d0", return_offset);           // restore the float return value from the hidden frame slot after epilogue cleanup
         }
         PhpType::Str => {
-            emitter.instruction("ldp x1, x2, [sp], #16");                       // restore string return registers after epilogue cleanup
+            super::abi::load_at_offset(emitter, "x1", return_offset);           // restore the string return pointer from the hidden frame slot after epilogue cleanup
+            super::abi::load_at_offset(emitter, "x2", return_offset - 8);       // restore the string return length from the hidden frame slot after epilogue cleanup
         }
         _ => {
-            emitter.instruction("ldr x0, [sp], #16");                           // restore scalar/heap return value after epilogue cleanup
+            super::abi::load_at_offset(emitter, "x0", return_offset);           // restore the scalar/object return value from the hidden frame slot after epilogue cleanup
         }
     }
 }

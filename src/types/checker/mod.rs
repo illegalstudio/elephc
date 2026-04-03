@@ -1,4 +1,4 @@
-mod builtins;
+pub(crate) mod builtins;
 mod functions;
 
 use std::collections::{HashMap, HashSet};
@@ -261,8 +261,12 @@ pub(crate) struct Checker {
     pub interfaces: HashMap<String, InterfaceInfo>,
     /// Class definitions collected during first pass.
     pub classes: HashMap<String, ClassInfo>,
+    /// Canonical class names declared in the program, available for forward references.
+    pub declared_classes: HashSet<String>,
     /// Enum definitions collected during first pass.
     pub enums: HashMap<String, EnumInfo>,
+    /// Canonical interface names declared in the program, available for forward references.
+    pub declared_interfaces: HashSet<String>,
     /// Name of the class currently being type-checked (for $this).
     pub current_class: Option<String>,
     /// Name of the current method, when type-checking a class method body.
@@ -1674,7 +1678,9 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         first_class_callable_targets: HashMap::new(),
         interfaces: HashMap::new(),
         classes: HashMap::new(),
+        declared_classes: HashSet::new(),
         enums: HashMap::new(),
+        declared_interfaces: HashSet::new(),
         current_class: None,
         current_method: None,
         current_method_is_static: false,
@@ -1730,6 +1736,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
         .collect();
     let mut class_map = class_map;
     let mut interface_map = HashMap::new();
+    checker.declared_classes = class_map.keys().cloned().collect();
     for stmt in program {
         if let StmtKind::InterfaceDecl {
             name,
@@ -1758,6 +1765,7 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
             );
         }
     }
+    checker.declared_interfaces = interface_map.keys().cloned().collect();
     if let Err(error) = inject_builtin_throwables(&mut interface_map, &mut class_map) {
         errors.extend(error.flatten());
     }
@@ -2030,69 +2038,73 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
 
     // Post-pass: type-check class method bodies NOW that property types
     // have been updated from new ClassName(args) calls in the main scope.
-    // This ensures methods see correct property types (e.g., Str not Int).
-    for class in &flattened_classes {
-        for method in &class.methods {
-            if method.is_abstract {
-                continue;
-            }
-            let mut method_env: TypeEnv = global_env.clone();
-            if !method.is_static {
-                method_env.insert("this".to_string(), PhpType::Object(class.name.clone()));
-            }
-            // Use param types from ClassInfo sig (updated by MethodCall inference)
-            let method_sig_key = if method.is_static {
-                "static"
-            } else {
-                "instance"
-            };
-            let _ = method_sig_key;
-            let sig_params = if method.is_static {
-                checker
-                    .classes
-                    .get(&class.name)
-                    .and_then(|c| c.static_methods.get(&method.name))
-                    .map(|s| s.params.clone())
-            } else {
-                checker
-                    .classes
-                    .get(&class.name)
-                    .and_then(|c| c.methods.get(&method.name))
-                    .map(|s| s.params.clone())
-            };
-            for (i, (pname, _, _, _)) in method.params.iter().enumerate() {
-                let ty = sig_params
-                    .as_ref()
-                    .and_then(|p| p.get(i))
-                    .map(|(_, t)| t.clone())
-                    .unwrap_or(PhpType::Int);
-                method_env.insert(pname.clone(), ty);
-            }
-            if let Some(variadic_name) = &method.variadic {
-                let ty = sig_params
-                    .as_ref()
-                    .and_then(|p| p.get(method.params.len()))
-                    .map(|(_, t)| t.clone())
-                    .unwrap_or(PhpType::Array(Box::new(PhpType::Int)));
-                method_env.insert(variadic_name.clone(), ty);
-            }
-            // For __construct: infer param types from property types
-            // This updates both the env (for body type-checking) and the sig
-            // (for correct register assignment in codegen prologue)
-            if method.name == "__construct" {
-                if let Some(ci) = checker.classes.get(&class.name).cloned() {
-                    for (i, (pname, _, _, _)) in method.params.iter().enumerate() {
-                        if let Some(Some(prop_name)) = ci.constructor_param_to_prop.get(i) {
-                            if let Some((_, ty)) =
-                                ci.properties.iter().find(|(n, _)| n == prop_name)
-                            {
-                                method_env.insert(pname.clone(), ty.clone());
-                                // Also update the sig in ClassInfo
-                                // (sig.params has user params only, $this added by codegen)
-                                if let Some(ci_mut) = checker.classes.get_mut(&class.name) {
-                                    if let Some(sig) = ci_mut.methods.get_mut("__construct") {
-                                        if i < sig.params.len() {
-                                            sig.params[i].1 = ty.clone();
+    // Some methods also refine class property types that other methods depend on,
+    // so iterate until ClassInfo stabilizes before surfacing method-body errors.
+    let mut method_passes_remaining = (flattened_classes.len().max(1) * 2) + 1;
+    loop {
+        let classes_before_pass = checker.classes.clone();
+        let mut pass_errors = Vec::new();
+
+        for class in &flattened_classes {
+            for method in &class.methods {
+                if method.is_abstract {
+                    continue;
+                }
+                let mut method_env: TypeEnv = global_env.clone();
+                if !method.is_static {
+                    method_env.insert("this".to_string(), PhpType::Object(class.name.clone()));
+                }
+                let sig_params = if method.is_static {
+                    checker
+                        .classes
+                        .get(&class.name)
+                        .and_then(|c| c.static_methods.get(&method.name))
+                        .map(|s| s.params.clone())
+                } else {
+                    checker
+                        .classes
+                        .get(&class.name)
+                        .and_then(|c| c.methods.get(&method.name))
+                        .map(|s| s.params.clone())
+                };
+                for (i, (pname, type_ann, _, _)) in method.params.iter().enumerate() {
+                    let ty = if let Some(type_ann) = type_ann {
+                        checker.resolve_declared_param_type_hint(
+                            type_ann,
+                            method.span,
+                            &format!("Method parameter ${}", pname),
+                        )?
+                    } else {
+                        sig_params
+                            .as_ref()
+                            .and_then(|p| p.get(i))
+                            .map(|(_, t)| t.clone())
+                            .unwrap_or(PhpType::Int)
+                    };
+                    method_env.insert(pname.clone(), ty);
+                }
+                if let Some(variadic_name) = &method.variadic {
+                    let ty = sig_params
+                        .as_ref()
+                        .and_then(|p| p.get(method.params.len()))
+                        .map(|(_, t)| t.clone())
+                        .unwrap_or(PhpType::Array(Box::new(PhpType::Int)));
+                    method_env.insert(variadic_name.clone(), ty);
+                }
+                if method.name == "__construct" {
+                    if let Some(ci) = checker.classes.get(&class.name).cloned() {
+                        for (i, (pname, type_ann, _, _)) in method.params.iter().enumerate() {
+                            if type_ann.is_some() {
+                                continue;
+                            }
+                            if let Some(Some(prop_name)) = ci.constructor_param_to_prop.get(i) {
+                                if let Some((_, ty)) = ci.properties.iter().find(|(n, _)| n == prop_name) {
+                                    method_env.insert(pname.clone(), ty.clone());
+                                    if let Some(ci_mut) = checker.classes.get_mut(&class.name) {
+                                        if let Some(sig) = ci_mut.methods.get_mut("__construct") {
+                                            if i < sig.params.len() {
+                                                sig.params[i].1 = ty.clone();
+                                            }
                                         }
                                     }
                                 }
@@ -2100,82 +2112,89 @@ pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
                         }
                     }
                 }
-            }
-            checker.current_class = Some(class.name.clone());
-            checker.current_method = Some(method.name.clone());
-            checker.current_method_is_static = method.is_static;
-            let method_ref_params: Vec<String> = method
-                .params
-                .iter()
-                .filter(|(_, _, _, is_ref)| *is_ref)
-                .map(|(name, _, _, _)| name.clone())
-                .collect();
-            let mut method_errors = Vec::new();
-            checker.with_local_storage_context(method_ref_params, |checker| {
-                for s in &method.body {
-                    if let Err(error) = checker.check_stmt(s, &mut method_env) {
-                        method_errors.extend(error.flatten());
+                checker.current_class = Some(class.name.clone());
+                checker.current_method = Some(method.name.clone());
+                checker.current_method_is_static = method.is_static;
+                let method_ref_params: Vec<String> = method
+                    .params
+                    .iter()
+                    .filter(|(_, _, _, is_ref)| *is_ref)
+                    .map(|(name, _, _, _)| name.clone())
+                    .collect();
+                let mut method_errors = Vec::new();
+                checker.with_local_storage_context(method_ref_params, |checker| {
+                    for s in &method.body {
+                        if let Err(error) = checker.check_stmt(s, &mut method_env) {
+                            method_errors.extend(error.flatten());
+                        }
                     }
-                }
-                Ok(())
-            })?;
-            let method_has_errors = !method_errors.is_empty();
-            errors.extend(method_errors);
+                    Ok(())
+                })?;
+                let method_has_errors = !method_errors.is_empty();
+                pass_errors.extend(method_errors);
 
-            // Update method return type from full type inference
-            // (must run while current_class is still set so $this resolves)
-            if !method_has_errors {
-                let inferred_return = checker
-                    .find_return_type_in_body(&method.body, &method_env)
-                    .unwrap_or(PhpType::Void);
-                let effective_return = if let Some(type_ann) = method.return_type.as_ref() {
-                    match checker.resolve_declared_return_type_hint(
-                        type_ann,
-                        method.span,
-                        &format!("Method '{}::{}'", class.name, method.name),
-                    ) {
-                        Ok(declared) => {
-                            if let Err(error) = checker.require_compatible_arg_type(
-                                &declared,
-                                &inferred_return,
-                                method.span,
-                                &format!("Method '{}::{}' return type", class.name, method.name),
-                            ) {
-                                errors.extend(error.flatten());
+                if !method_has_errors {
+                    let inferred_return = checker
+                        .find_return_type_in_body(&method.body, &method_env)
+                        .unwrap_or(PhpType::Void);
+                    let effective_return = if let Some(type_ann) = method.return_type.as_ref() {
+                        match checker.resolve_declared_return_type_hint(
+                            type_ann,
+                            method.span,
+                            &format!("Method '{}::{}'", class.name, method.name),
+                        ) {
+                            Ok(declared) => {
+                                if let Err(error) = checker.require_compatible_arg_type(
+                                    &declared,
+                                    &inferred_return,
+                                    method.span,
+                                    &format!("Method '{}::{}' return type", class.name, method.name),
+                                ) {
+                                    pass_errors.extend(error.flatten());
+                                    checker.current_class = None;
+                                    checker.current_method = None;
+                                    checker.current_method_is_static = false;
+                                    continue;
+                                }
+                                declared
+                            }
+                            Err(error) => {
+                                pass_errors.extend(error.flatten());
                                 checker.current_class = None;
                                 checker.current_method = None;
                                 checker.current_method_is_static = false;
                                 continue;
                             }
-                            declared
                         }
-                        Err(error) => {
-                            errors.extend(error.flatten());
-                            checker.current_class = None;
-                            checker.current_method = None;
-                            checker.current_method_is_static = false;
-                            continue;
+                    } else {
+                        inferred_return
+                    };
+                    if !method.is_static {
+                        if let Some(ci) = checker.classes.get_mut(&class.name) {
+                            if let Some(sig) = ci.methods.get_mut(&method.name) {
+                                sig.return_type = effective_return;
+                            }
                         }
-                    }
-                } else {
-                    inferred_return
-                };
-                if !method.is_static {
-                    if let Some(ci) = checker.classes.get_mut(&class.name) {
-                        if let Some(sig) = ci.methods.get_mut(&method.name) {
+                    } else if let Some(ci) = checker.classes.get_mut(&class.name) {
+                        if let Some(sig) = ci.static_methods.get_mut(&method.name) {
                             sig.return_type = effective_return;
                         }
                     }
-                } else if let Some(ci) = checker.classes.get_mut(&class.name) {
-                    if let Some(sig) = ci.static_methods.get_mut(&method.name) {
-                        sig.return_type = effective_return;
-                    }
                 }
+                checker.current_class = None;
+                checker.current_method = None;
+                checker.current_method_is_static = false;
             }
-            checker.current_class = None;
-            checker.current_method = None;
-            checker.current_method_is_static = false;
         }
+
+        let stabilized = checker.classes == classes_before_pass;
+        let out_of_passes = method_passes_remaining == 0;
+        if stabilized || out_of_passes {
+            errors.extend(pass_errors);
+            break;
+        }
+
+        method_passes_remaining -= 1;
     }
 
     if !errors.is_empty() {
@@ -2872,7 +2891,9 @@ impl Checker {
                 "void" => Ok(PhpType::Void),
                 "array" => Ok(PhpType::Array(Box::new(PhpType::Int))),
                 _ if self.classes.contains_key(name.as_str())
+                    || self.declared_classes.contains(name.as_str())
                     || self.interfaces.contains_key(name.as_str())
+                    || self.declared_interfaces.contains(name.as_str())
                     || self.extern_classes.contains_key(name.as_str()) =>
                 {
                     Ok(PhpType::Object(name.as_str().to_string()))

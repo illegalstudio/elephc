@@ -1126,6 +1126,254 @@ echo strlen("bc");
 }
 
 #[test]
+fn test_namespace_class_can_call_global_extern_function() {
+    let out = compile_and_run(
+        r#"<?php
+extern function getpid(): int;
+
+namespace Demo\App;
+
+class Probe {
+    public function ok(): int {
+        return getpid() > 0 ? 1 : 0;
+    }
+}
+
+$probe = new Probe();
+echo $probe->ok();
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_namespace_class_can_call_pointer_builtins_without_global_prefix() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo\App;
+
+class Probe {
+    public function ok(): int {
+        $p = ptr_null();
+        return ptr_is_null($p);
+    }
+}
+
+$probe = new Probe();
+echo $probe->ok();
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_namespace_class_can_call_string_builtin_without_global_prefix() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo\App;
+
+class Probe {
+    public function ok(): int {
+        return strlen("hello");
+    }
+}
+
+$probe = new Probe();
+echo $probe->ok();
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+#[test]
+fn test_namespace_resolves_class_type_hints_in_functions_and_typed_locals() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo\App;
+
+class Box {
+    public $value;
+
+    public function __construct() {
+        $this->value = 7;
+    }
+}
+
+function make_box(): Box {
+    return new Box();
+}
+
+Box $box = make_box();
+echo $box->value;
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_namespace_resolves_packed_class_types_inside_buffers() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo\App;
+
+packed class Vertex {
+    public int $x;
+    public int $y;
+}
+
+class Probe {
+    public function run(): int {
+        buffer<Vertex> $points = buffer_new<Vertex>(1);
+        $points[0]->x = 3;
+        $points[0]->y = 4;
+        return $points[0]->x + $points[0]->y;
+    }
+}
+
+$probe = new Probe();
+echo $probe->run();
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_method_post_pass_converges_property_types_across_classes() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Point {
+    public int $x;
+}
+
+class Box {
+    public $items;
+
+    public function __construct() {
+        $this->items = 0;
+    }
+}
+
+class Loader {
+    public function load(): Box {
+        $box = new Box();
+        buffer<Point> $items = buffer_new<Point>(1);
+        $items[0]->x = 7;
+        $box->items = $items;
+        return $box;
+    }
+}
+
+class Game {
+    public $box;
+
+    public function __construct() {
+        $this->box = 0;
+    }
+
+    public function run(): int {
+        $loader = new Loader();
+        $this->box = $loader->load();
+        return $this->box->items[0]->x;
+    }
+}
+
+$game = new Game();
+echo $game->run();
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_forward_class_reference_in_method_return_type() {
+    let out = compile_and_run(
+        r#"<?php
+class Loader {
+    public function load(): Item {
+        return new Item();
+    }
+}
+
+class Item {
+    public $value;
+
+    public function __construct() {
+        $this->value = 9;
+    }
+}
+
+$loader = new Loader();
+$item = $loader->load();
+echo $item->value;
+"#,
+    );
+    assert_eq!(out, "9");
+}
+
+#[test]
+fn test_property_array_access_after_property_lookup() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag {
+    public $items;
+
+    public function __construct() {
+        $this->items = [10, 20, 30];
+    }
+
+    public function first(): int {
+        return $this->items[0];
+    }
+}
+
+$bag = new Bag();
+echo $bag->first();
+"#,
+    );
+    assert_eq!(out, "10");
+}
+
+#[test]
+fn test_typed_method_param_is_available_with_declared_type_in_body() {
+    let out = compile_and_run(
+        r#"<?php
+class Reader {
+    public function len(string $text): int {
+        return strlen($text);
+    }
+}
+
+$reader = new Reader();
+echo $reader->len("doom");
+"#,
+    );
+    assert_eq!(out, "4");
+}
+
+#[test]
+fn test_typed_constructor_param_is_not_overwritten_by_untyped_property_inference() {
+    let out = compile_and_run(
+        r#"<?php
+class Blob {
+    public $bytes;
+
+    public function __construct(string $bytes) {
+        $this->bytes = $bytes;
+    }
+
+    public function len(): int {
+        return strlen($this->bytes);
+    }
+}
+
+$blob = new Blob("doom");
+echo $blob->len();
+"#,
+    );
+    assert_eq!(out, "4");
+}
+
+#[test]
 fn test_namespace_include_preserves_class_namespace_context() {
     let out = compile_and_run_files(
         &[
@@ -8684,6 +8932,101 @@ echo $x[2];
 }
 
 #[test]
+fn test_ref_array_multi_index_write() {
+    // Writing to two different computed indices of a by-ref array must not corrupt values
+    let out = compile_and_run(
+        r#"<?php
+function write_two(&$arr, int $base, int $val1, int $val2): void {
+    $arr[$base] = $val1;
+    int $idx = $base + 1;
+    $arr[$idx] = $val2;
+}
+
+$data = [0, 0, 0, 0, 0, 0];
+write_two($data, 0, 42, 99);
+echo $data[0] . "\n";
+echo $data[1] . "\n";
+write_two($data, 3, 77, 88);
+echo $data[3] . "\n";
+echo $data[4] . "\n";
+"#,
+    );
+    assert_eq!(out, "42\n99\n77\n88\n");
+}
+
+#[test]
+fn test_ref_array_stride_loop_multi_write() {
+    // Reproduces DOOM showcase bug: loop over stride-3 packed array with read+write
+    let out = compile_and_run(
+        r#"<?php
+function process(&$data, int $width): void {
+    int $col = 0;
+    while ($col < $width) {
+        int $base = $col * 3;
+        int $depthVal = $data[$base];
+        if ($depthVal > 100) {
+            $data[$base] = 50;
+            int $idx1 = $base + 1;
+            $data[$idx1] = 999;
+        }
+        $col += 1;
+    }
+}
+
+$data = [];
+int $i = 0;
+while ($i < 4) {
+    $data[] = 2147483647;
+    $data[] = 0;
+    $data[] = 599;
+    $i += 1;
+}
+process($data, 4);
+echo $data[0] . "\n";
+echo $data[1] . "\n";
+echo $data[2] . "\n";
+echo $data[3] . "\n";
+echo $data[4] . "\n";
+echo $data[5] . "\n";
+"#,
+    );
+    assert_eq!(out, "50\n999\n599\n50\n999\n599\n");
+}
+
+#[test]
+fn test_ref_array_large_offset_multi_write() {
+    // Regression: load_at_offset used x9 as scratch at grow_ready, clobbering the
+    // array index register when the by-ref param lived at stack offset > 255.
+    let out = compile_and_run(
+        r#"<?php
+function big(
+    int $p1, int $p2, int $p3, int $p4, int $p5,
+    int $p6, int $p7, int $p8, int $p9, int $p10,
+    int $p11, int $p12, int $p13, int $p14, int $p15,
+    int $p16, int $p17, int $p18, int $p19, int $p20,
+    int $p21, int $p22, int $p23, int $p24, int $p25,
+    int $p26, int $p27, int $p28, int $p29, int $p30,
+    int $p31, int $p32,
+    &$arr
+): void {
+    int $base = $p1 * 3;
+    $arr[$base] = 50;
+    int $idx = $base + 1;
+    $arr[$idx] = 999;
+    echo $p2 + $p3 + $p4 + $p5 + $p6 + $p7 + $p8 + $p9 + $p10;
+    echo $p11 + $p12 + $p13 + $p14 + $p15 + $p16 + $p17 + $p18 + $p19 + $p20;
+    echo $p21 + $p22 + $p23 + $p24 + $p25 + $p26 + $p27 + $p28 + $p29 + $p30;
+    echo $p31 + $p32;
+}
+$data = [0, 0, 0, 0, 0, 0];
+big(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,$data);
+echo "\n" . $data[0] . "\n" . $data[1] . "\n";
+"#,
+    );
+    assert_eq!(out, "0000\n50\n999\n");
+}
+
+#[test]
 fn test_array_column_string_implode() {
     // Issue #33: array_column on arrays of assoc arrays with string values + implode
     let out = compile_and_run(
@@ -10446,6 +10789,227 @@ echo $g->greet("World");
 "#,
     );
     assert_eq!(out, "Hello World!");
+}
+
+#[test]
+fn test_regression_string_property_survives_constructor_param_cleanup() {
+    let out = compile_and_run(
+        r#"<?php
+class Reader {
+    public $bytes;
+    public function __construct(string $bytes) { $this->bytes = $bytes; }
+    public function head(): string { return substr($this->bytes, 0, 4); }
+}
+$bytes = "AB" . "CD";
+$reader = new Reader($bytes);
+echo $reader->head();
+"#,
+    );
+    assert_eq!(out, "ABCD");
+}
+
+#[test]
+fn test_regression_callee_does_not_free_caller_string_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class Greeter {
+    public $prefix;
+    public function __construct($prefix) {
+        $this->prefix = $prefix;
+    }
+}
+$prefix = "IWAD";
+$greeter = new Greeter($prefix);
+echo $prefix;
+echo "|";
+echo $greeter->prefix;
+"#,
+    );
+    assert_eq!(out, "IWAD|IWAD");
+}
+
+#[test]
+fn test_regression_string_property_persists_heap_slice_across_object_return() {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let path = std::env::temp_dir().join(format!("elephc_str_persist_{}.bin", id));
+    let mut bytes = vec![b'X'; 1024 * 1024];
+    bytes[..8].copy_from_slice(b"PLAYPAL\0");
+    fs::write(&path, &bytes).unwrap();
+
+    let source = format!(
+        r#"<?php
+class WadLike {{
+    public $name;
+    public function __construct() {{
+        $this->name = "";
+    }}
+}}
+
+class Maker {{
+    public function make(): WadLike {{
+        $bytes = file_get_contents("{path}");
+        $name = substr($bytes, 0, 7);
+        $wad = new WadLike();
+        $wad->name = $name;
+        return $wad;
+    }}
+}}
+
+$maker = new Maker();
+$wad = $maker->make();
+echo $wad->name;
+"#,
+        path = path.display()
+    );
+
+    let out = compile_and_run_with_heap_size(&source, 67_108_864);
+    let _ = fs::remove_file(&path);
+    assert_eq!(out, "PLAYPAL");
+}
+
+#[test]
+fn test_regression_returned_object_preserves_loop_built_string_property() {
+    let out = compile_and_run(
+        r#"<?php
+class WadLike {
+    public $kind;
+    public $firstEntryName;
+    public function __construct($kind) {
+        $this->kind = $kind;
+        $this->firstEntryName = "";
+    }
+}
+
+class Maker {
+    public function make(): WadLike {
+        $bytes = "IWADxxxxPLAYPAL\0tail";
+        $kind = substr($bytes, 0, 4);
+        $raw = substr($bytes, 8, 8);
+        $name = "";
+        $i = 0;
+        while ($i < strlen($raw)) {
+            $ch = substr($raw, $i, 1);
+            if (ord($ch) == 0) {
+                break;
+            }
+            $name .= $ch;
+            $i += 1;
+        }
+        $wad = new WadLike($kind);
+        $wad->firstEntryName = $name;
+        return $wad;
+    }
+}
+
+$maker = new Maker();
+$wad = $maker->make();
+echo $wad->kind;
+echo "|";
+echo $wad->firstEntryName;
+"#,
+    );
+    assert_eq!(out, "IWAD|PLAYPAL");
+}
+
+#[test]
+fn test_function_call_supports_stack_passed_overflow_args() {
+    let out = compile_and_run(
+        r#"<?php
+function sum9($a, $b, $c, $d, $e, $f, $g, $h, $i) {
+    echo $a + $b + $c + $d + $e + $f + $g + $h + $i;
+}
+sum9(1, 2, 3, 4, 5, 6, 7, 8, 9);
+"#,
+    );
+    assert_eq!(out, "45");
+}
+
+#[test]
+fn test_instance_method_call_supports_stack_passed_overflow_args() {
+    let out = compile_and_run(
+        r#"<?php
+class GreeterOverflow {
+    public function greet($a, $b, $c, $d, $e, $f, string $message) {
+        echo $message;
+    }
+}
+$g = new GreeterOverflow();
+$g->greet(1, 2, 3, 4, 5, 6, "hello");
+"#,
+    );
+    assert_eq!(out, "hello");
+}
+
+#[test]
+fn test_constructor_call_supports_stack_passed_overflow_args() {
+    let out = compile_and_run(
+        r#"<?php
+class ConstructorOverflow {
+    public $message;
+    public function __construct($a, $b, $c, $d, $e, $f, string $message) {
+        $this->message = $message;
+    }
+}
+$value = new ConstructorOverflow(1, 2, 3, 4, 5, 6, "stack");
+echo $value->message;
+"#,
+    );
+    assert_eq!(out, "stack");
+}
+
+#[test]
+fn test_static_method_call_supports_stack_passed_overflow_args() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticOverflow {
+    public static function pick($a, $b, $c, $d, $e, $f, $g, $h) {
+        echo $h;
+    }
+}
+StaticOverflow::pick(1, 2, 3, 4, 5, 6, 7, 8);
+"#,
+    );
+    assert_eq!(out, "8");
+}
+
+#[test]
+fn test_callable_variable_call_supports_stack_passed_overflow_args() {
+    let out = compile_and_run(
+        r#"<?php
+function sum9($a, $b, $c, $d, $e, $f, $g, $h, $i) {
+    echo $a + $b + $c + $d + $e + $f + $g + $h + $i;
+}
+$fn = sum9(...);
+$fn(1, 2, 3, 4, 5, 6, 7, 8, 9);
+"#,
+    );
+    assert_eq!(out, "45");
+}
+
+#[test]
+fn test_float_call_supports_stack_passed_overflow_args() {
+    let out = compile_and_run(
+        r#"<?php
+function sum9f(float $a, float $b, float $c, float $d, float $e, float $f, float $g, float $h, float $i) {
+    echo (int) ($a + $b + $c + $d + $e + $f + $g + $h + $i);
+}
+sum9f(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0);
+"#,
+    );
+    assert_eq!(out, "45");
+}
+
+#[test]
+fn test_call_user_func_array_supports_stack_passed_overflow_args() {
+    let out = compile_and_run(
+        r#"<?php
+function sum9($a, $b, $c, $d, $e, $f, $g, $h, $i) {
+    echo $a + $b + $c + $d + $e + $f + $g + $h + $i;
+}
+call_user_func_array("sum9", [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+"#,
+    );
+    assert_eq!(out, "45");
 }
 
 // Pattern: static method with string params

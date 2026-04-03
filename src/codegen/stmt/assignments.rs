@@ -351,6 +351,9 @@ pub(super) fn emit_property_assign_stmt(
         }
         PhpType::Str => {
             emitter.instruction("ldp x1, x2, [sp], #16");                       // pop saved string ptr+len
+            emitter.instruction("str x9, [sp, #-16]!");                         // preserve object pointer across string persistence
+            emitter.instruction("bl __rt_str_persist");                         // duplicate string payload so the property owns stable storage
+            emitter.instruction("ldr x9, [sp], #16");                           // restore object pointer after string persistence
             emitter.instruction(&format!("str x1, [x9, #{}]", offset));         // store string pointer into property
             emitter.instruction(&format!("str x2, [x9, #{}]", offset + 8));     // store string length into property
         }

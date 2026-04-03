@@ -130,7 +130,7 @@ impl fmt::Display for PhpType {
 /// Maps variable names to their resolved types.
 pub type TypeEnv = HashMap<String, PhpType>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FunctionSig {
     pub params: Vec<(String, PhpType)>,
     pub defaults: Vec<Option<crate::parser::ast::Expr>>,
@@ -186,7 +186,7 @@ pub struct InterfaceInfo {
     pub method_slots: HashMap<String, usize>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ClassInfo {
     pub class_id: u64,
     pub parent: Option<String>,

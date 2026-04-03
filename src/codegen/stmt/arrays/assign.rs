@@ -206,10 +206,10 @@ pub(super) fn emit_array_assign_stmt(
         emitter.instruction(&format!("b {}", grow_check));                      // continue growing until the target slot fits
         emitter.label(&grow_ready);
         if is_ref {
-            abi::load_at_offset(emitter, "x13", offset);                            // load ref pointer
+            abi::load_at_offset_scratch(emitter, "x13", offset, "x14");            // load ref pointer (x14 scratch avoids clobbering x9 = index)
             emitter.instruction("str x10, [x13]");                              // store the possibly-grown array pointer through the ref
         } else {
-            abi::store_at_offset(emitter, "x10", offset);                           // save possibly-grown array pointer
+            abi::store_at_offset_scratch(emitter, "x10", offset, "x14");           // save possibly-grown array pointer (x14 scratch avoids clobbering x9)
         }
         match &val_ty {
             PhpType::Str => {

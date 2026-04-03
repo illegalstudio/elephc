@@ -206,42 +206,12 @@ fn compute_register_assignments(
     arg_types: &[PhpType],
     first_int_reg: usize,
 ) -> Vec<(PhpType, usize, bool)> {
-    let mut int_reg_idx = first_int_reg;
-    let mut float_reg_idx = 0usize;
-    let mut assignments = Vec::new();
-    for ty in arg_types {
-        if ty.is_float_reg() {
-            assignments.push((ty.clone(), float_reg_idx, true));
-            float_reg_idx += 1;
-        } else {
-            assignments.push((ty.clone(), int_reg_idx, false));
-            int_reg_idx += ty.register_count();
-        }
-    }
-    assignments
+    super::super::calls::args::build_arg_assignments(arg_types, first_int_reg)
 }
 
 /// Pop arguments from the stack into their assigned registers (in reverse order).
-fn pop_args_to_registers(emitter: &mut Emitter, assignments: &[(PhpType, usize, bool)]) {
-    for i in (0..assignments.len()).rev() {
-        let (ty, start_reg, _) = &assignments[i];
-        match ty {
-            PhpType::Float => {
-                emitter.instruction(&format!("ldr d{}, [sp], #16", start_reg)); // pop float arg
-            }
-            PhpType::Str => {
-                emitter.instruction(&format!(                                   // pop string arg pair
-                    "ldp x{}, x{}, [sp], #16",
-                    start_reg,
-                    start_reg + 1
-                ));
-            }
-            PhpType::Void => {}
-            _ => {
-                emitter.instruction(&format!("ldr x{}, [sp], #16", start_reg)); // pop arg into register
-            }
-        }
-    }
+fn pop_args_to_registers(emitter: &mut Emitter, assignments: &[(PhpType, usize, bool)]) -> usize {
+    super::super::calls::args::materialize_call_args(emitter, assignments, assignments.len())
 }
 
 fn resolve_instance_method_dispatch(
@@ -322,8 +292,12 @@ pub(super) fn emit_method_call_with_pushed_args(
 ) -> PhpType {
     let assignments = compute_register_assignments(arg_types, 1);
     emitter.instruction("ldr x0, [sp], #16");                                   // pop $this into x0
-    pop_args_to_registers(emitter, &assignments);
-    emit_dispatch_instance_method(class_name, method, emitter, ctx)
+    let overflow_bytes = pop_args_to_registers(emitter, &assignments);
+    let ret_ty = emit_dispatch_instance_method(class_name, method, emitter, ctx);
+    if overflow_bytes > 0 {
+        emitter.instruction(&format!("add sp, sp, #{}", overflow_bytes));       // drop spilled stack arguments after the method call returns
+    }
+    ret_ty
 }
 
 pub(super) fn emit_method_call(
@@ -554,7 +528,7 @@ pub(super) fn emit_static_method_call(
         let this_reg = if needs_called_class_id { 1 } else { 0 };
         emitter.instruction(&format!("ldr x{}, [sp], #16", this_reg));          // pop implicit $this into its assigned integer register
     }
-    pop_args_to_registers(emitter, &assignments);
+    let overflow_bytes = pop_args_to_registers(emitter, &assignments);
 
     save_concat_offset_before_nested_call(emitter);
     if dynamic_static_dispatch {
@@ -571,6 +545,9 @@ pub(super) fn emit_static_method_call(
         emitter.instruction(&format!("bl {}", label));                          // call resolved static or parent/self target
     }
     restore_concat_offset_after_nested_call(emitter, &ret_ty);
+    if overflow_bytes > 0 {
+        emitter.instruction(&format!("add sp, sp, #{}", overflow_bytes));       // drop spilled stack arguments after the static call returns
+    }
 
     ret_ty
 }

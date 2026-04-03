@@ -57,11 +57,16 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     emitter.instruction("cmp x14, #1");                                         // is this slot occupied?
     emitter.instruction("b.ne __rt_hash_free_deep_next");                       // skip empty or tombstone slots
 
-    // -- free the owned key string for this entry --
-    emitter.instruction("ldr x0, [x13, #8]");                                   // load owned key pointer
+    // -- decref the key string for this entry (keys may be shared after COW clone) --
+    emitter.instruction("ldr x0, [x13, #8]");                                   // load key pointer
     emitter.instruction("str x11, [sp, #24]");                                  // preserve loop index across helper call
-    emitter.instruction("bl __rt_heap_free_safe");                              // free persisted key storage
-    emitter.instruction("ldr x11, [sp, #24]");                                  // restore loop index after helper call
+    emitter.instruction("ldr w15, [x0, #-12]");                                 // load key refcount from heap header
+    emitter.instruction("subs w15, w15, #1");                                   // decrement key refcount
+    emitter.instruction("str w15, [x0, #-12]");                                 // store decremented refcount
+    emitter.instruction("b.ne __rt_hash_free_deep_key_shared");                 // refcount > 0: key is shared, skip free
+    emitter.instruction("bl __rt_heap_free");                                   // refcount = 0: free the key storage
+    emitter.label("__rt_hash_free_deep_key_shared");
+    emitter.instruction("ldr x11, [sp, #24]");                                  // restore loop index after key handling
 
     // -- free the entry value based on the runtime value tag --
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload hash table pointer after helper call

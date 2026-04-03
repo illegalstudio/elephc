@@ -1,7 +1,7 @@
 use crate::codegen::emit::Emitter;
 
 /// str_persist: copy a string to heap for permanent storage.
-/// Used to persist strings that would otherwise live in the volatile concat_buf.
+/// Used to persist strings that would otherwise outlive their current owner.
 /// Input:  x1=ptr, x2=len
 /// Output: x1=new_ptr (on heap), x2=len (unchanged)
 pub fn emit_str_persist(emitter: &mut Emitter) {
@@ -11,15 +11,6 @@ pub fn emit_str_persist(emitter: &mut Emitter) {
 
     // -- handle zero-length strings (no allocation needed) --
     emitter.instruction("cbz x2, __rt_str_persist_done");                       // empty string, return as-is
-
-    // -- skip if string is in .data section (read-only, always permanent) --
-    // We only skip for .data pointers (below concat_buf). Heap strings are
-    // NOT skipped because they may be shared and need independent copies
-    // for correct reference counting and scope-based cleanup.
-    emitter.instruction("adrp x3, _concat_buf@PAGE");                           // load page of concat buffer
-    emitter.instruction("add x3, x3, _concat_buf@PAGEOFF");                     // resolve concat buffer base
-    emitter.instruction("cmp x1, x3");                                          // is ptr below concat_buf?
-    emitter.instruction("b.lo __rt_str_persist_done");                          // yes — .data section, skip (permanent)
 
     // -- set up stack frame (we call heap_alloc which may clobber regs) --
     emitter.instruction("sub sp, sp, #32");                                     // allocate 32 bytes on the stack

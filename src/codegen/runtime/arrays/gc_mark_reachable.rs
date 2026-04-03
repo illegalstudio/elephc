@@ -172,18 +172,8 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("mov x11, #16");                                        // each property slot occupies 16 bytes
     emitter.instruction("mul x11, x9, x11");                                    // compute the byte offset for this property slot
     emitter.instruction("add x11, x11, #8");                                    // skip the leading class_id field
-    emitter.instruction("add x12, x11, #8");                                    // compute the offset of the runtime metadata / length word
-    emitter.instruction("ldr x13, [x10, x12]");                                 // load the runtime metadata / length word for this property slot
-    emitter.instruction("cmp x13, #4");                                         // was this property last written with an indexed array?
-    emitter.instruction("b.eq __rt_gc_mark_reachable_object_child");            // recurse into nested array properties
-    emitter.instruction("cmp x13, #5");                                         // was this property last written with an associative array?
-    emitter.instruction("b.eq __rt_gc_mark_reachable_object_child");            // recurse into nested hash properties
-    emitter.instruction("cmp x13, #6");                                         // was this property last written with an object?
-    emitter.instruction("b.eq __rt_gc_mark_reachable_object_child");            // recurse into nested object properties
-    emitter.instruction("cmp x13, #7");                                         // was this property last written with a boxed mixed value?
-    emitter.instruction("b.eq __rt_gc_mark_reachable_object_child");            // recurse into nested mixed properties
-    emitter.instruction("ldr x13, [sp, #32]");                                  // reload the fallback descriptor pointer
-    emitter.instruction("ldrb w13, [x13, x9]");                                 // load the compile-time fallback tag for this property slot
+    emitter.instruction("ldr x13, [sp, #32]");                                  // reload the descriptor pointer for this property slot
+    emitter.instruction("ldrb w13, [x13, x9]");                                 // load the compile-time property tag
     emitter.instruction("cmp x13, #4");                                         // is this a compile-time indexed-array property?
     emitter.instruction("b.eq __rt_gc_mark_reachable_object_child");            // recurse into nested array properties
     emitter.instruction("cmp x13, #5");                                         // is this a compile-time associative-array property?
@@ -192,6 +182,12 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_gc_mark_reachable_object_child");            // recurse into compile-time object properties
     emitter.instruction("cmp x13, #7");                                         // is this a compile-time mixed property?
     emitter.instruction("b.ne __rt_gc_mark_reachable_object_next");             // scalar and string properties contribute no refcounted edges
+    emitter.instruction("add x12, x11, #8");                                    // compute the offset of the runtime metadata / length word
+    emitter.instruction("ldr x13, [x10, x12]");                                 // load the runtime tag for this mixed property slot
+    emitter.instruction("cmp x13, #4");                                         // does the mixed property currently hold a heap-backed child?
+    emitter.instruction("b.lo __rt_gc_mark_reachable_object_next");             // scalar/string/null mixed payloads contribute no graph edges
+    emitter.instruction("cmp x13, #7");                                         // do the mixed runtime tags stay within the supported heap-backed range?
+    emitter.instruction("b.hi __rt_gc_mark_reachable_object_next");             // unknown mixed payloads are ignored by the collector
     emitter.label("__rt_gc_mark_reachable_object_child");
     emitter.instruction("ldr x0, [x10, x11]");                                  // load the nested child pointer from the property slot
     emitter.instruction("str x9, [sp, #24]");                                   // preserve the property index across recursion
