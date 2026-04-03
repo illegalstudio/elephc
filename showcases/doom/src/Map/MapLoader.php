@@ -198,6 +198,26 @@ class MapLoader {
             $i += 1;
         }
 
+        // open all doors: if a sector has ceiling <= floor, raise ceiling to neighbor's ceiling
+        int $di = 0;
+        while ($di < $map->linedefCount) {
+            int $rSide = $linedefs[$di]->right_sidedef;
+            int $lSide = $linedefs[$di]->left_sidedef;
+            if ($rSide >= 0 && $lSide >= 0 && $rSide < $map->sidedefCount && $lSide < $map->sidedefCount) {
+                int $frontSec = $sidedefs[$rSide]->sector_index;
+                int $backSec = $sidedefs[$lSide]->sector_index;
+                if ($frontSec >= 0 && $backSec >= 0 && $frontSec < $map->sectorCount && $backSec < $map->sectorCount) {
+                    if ($sectors[$backSec]->ceiling_height <= $sectors[$backSec]->floor_height) {
+                        $sectors[$backSec]->ceiling_height = $sectors[$frontSec]->ceiling_height;
+                    }
+                    if ($sectors[$frontSec]->ceiling_height <= $sectors[$frontSec]->floor_height) {
+                        $sectors[$frontSec]->ceiling_height = $sectors[$backSec]->ceiling_height;
+                    }
+                }
+            }
+            $di += 1;
+        }
+
         $map->things = $things;
         $map->linedefs = $linedefs;
         $map->sidedefs = $sidedefs;
