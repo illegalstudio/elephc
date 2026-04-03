@@ -80,7 +80,7 @@ class Game {
                 $this->config->backgroundB
             );
             if ($this->map->isValid()) {
-                $this->renderer->render($this->sdl, $this->config, $this->map, $this->camera);
+                $this->renderer->render($this->sdl, $this->config, $this->map, $this->camera, $this->sdl->ticks());
             }
             $this->sdl->present();
             $this->sdl->delay($this->config->targetFrameMs);

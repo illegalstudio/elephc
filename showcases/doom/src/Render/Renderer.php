@@ -20,10 +20,10 @@ class Renderer {
         $this->walls = new WallRenderer();
     }
 
-    public function render(SDL $sdl, Config $config, MapData $map, Camera $camera): void {
+    public function render(SDL $sdl, Config $config, MapData $map, Camera $camera, int $ticks): void {
         $order = $this->bspWalker->walk($map, $camera);
         $cameraSubSector = $this->bspWalker->findSubSectorIndex($map, $camera);
-        $this->walls->render($sdl, $config, $map, $camera, $order, $cameraSubSector);
+        $this->walls->render($sdl, $config, $map, $camera, $order, $cameraSubSector, $ticks);
         if ($config->renderMode !== RenderMode::World3D) {
             $this->minimap->renderInset($sdl, $config, $map, $camera, $order);
         }

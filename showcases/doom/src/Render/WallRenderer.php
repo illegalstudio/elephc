@@ -23,7 +23,8 @@ class WallRenderer {
         MapData $map,
         Camera $camera,
         $subSectorOrder,
-        int $cameraSubSector
+        int $cameraSubSector,
+        int $ticks
     ): void {
         if (!$map->isValid() || $map->segCount <= 0 || $map->sidedefCount <= 0 || $map->sectorCount <= 0) {
             return;
@@ -84,7 +85,8 @@ class WallRenderer {
                             $nearPlane,
                             $cameraEyeZ,
                             $viewportHeight,
-                            $clipData
+                            $clipData,
+                            $ticks
                         );
                     }
                     $segOffset += 1;
@@ -108,7 +110,8 @@ class WallRenderer {
         int $nearPlane,
         int $cameraEyeZ,
         int $viewportHeight,
-        &$clipData
+        &$clipData,
+        int $ticks
     ): void {
         int $startIndex = $map->segs[$segIndex]->start_vertex;
         int $endIndex = $map->segs[$segIndex]->end_vertex;
@@ -217,7 +220,7 @@ class WallRenderer {
         }
         bool $isDoor = !$oneSided && $backCeiling <= $backFloor;
 
-        int $light = $this->wallLightForSeg($map, $segIndex);
+        int $light = $this->wallLightForSeg($map, $segIndex, $ticks);
         int $segDx = $worldX2 - $worldX1;
         int $segDy = $worldY2 - $worldY1;
         bool $mostlyVertical = $this->absoluteValue($segDy) > $this->absoluteValue($segDx);
@@ -474,15 +477,55 @@ class WallRenderer {
         }
     }
 
-    public function wallLightForSeg(MapData $map, int $segIndex): int {
+    public function wallLightForSeg(MapData $map, int $segIndex, int $ticks): int {
         int $sectorIndex = $this->frontSectorIndexForSeg($map, $segIndex);
         if ($sectorIndex < 0 || $sectorIndex >= $map->sectorCount) {
             return 160;
         }
 
         int $light = $map->sectors[$sectorIndex]->light_level;
+        int $special = $map->sectors[$sectorIndex]->special_type;
+
+        // sector light effects based on DOOM special types
+        int $minLight = 80;
+        if ($light < $minLight) {
+            $minLight = $light;
+        }
+        if ($special === 1 || $special === 17) {
+            // random flicker / fire flicker
+            int $flicker = (($ticks * 7 + $sectorIndex * 31) % 256);
+            if ($flicker > 160) {
+                $light = $minLight;
+            }
+        } else if ($special === 2 || $special === 4) {
+            // strobe fast (every ~500ms)
+            int $phase = intdiv($ticks, 100) + $sectorIndex;
+            if ($phase % 5 === 0) {
+                $light = $minLight;
+            }
+        } else if ($special === 3 || $special === 12) {
+            // strobe slow (every ~1000ms)
+            int $phase = intdiv($ticks, 200) + $sectorIndex;
+            if ($phase % 5 === 0) {
+                $light = $minLight;
+            }
+        } else if ($special === 8) {
+            // oscillating light
+            int $wave = ($ticks * 3 + $sectorIndex * 17) % 512;
+            if ($wave > 255) {
+                $wave = 511 - $wave;
+            }
+            $light = $minLight + intdiv(($light - $minLight) * $wave, 255);
+        } else if ($special === 13) {
+            // strobe fast sync (no sector offset)
+            int $phase = intdiv($ticks, 100);
+            if ($phase % 5 === 0) {
+                $light = $minLight;
+            }
+        }
+
         if ($light < 0) {
-            return 96;
+            return 0;
         }
         if ($light > 255) {
             return 255;
