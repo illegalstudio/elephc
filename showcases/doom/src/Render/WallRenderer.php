@@ -412,39 +412,40 @@ class WallRenderer {
         int $screenBottom = $viewportY + $viewportHeight - 1;
         int $rightEdge = $viewportX + $viewportWidth - 1;
 
-        // sky: scrolling panorama based on camera angle
-        // angle 0..359 maps across a virtual 1440-pixel-wide sky strip
+        // unified fog function: fog = 255 - distSq * 220 / (distSq + 640000)
+        // perspective distance from horizon: dist = focal * eyeHeight / dy
+
+        // sky: scrolling panorama with unified perspective fog
         int $skyOffset = $cameraAngle * 4;
         int $y = $viewportY;
         while ($y < $screenHorizon) {
             int $dy = $screenHorizon - $y;
-            // vertical position: 0 at horizon, grows toward top
-            int $vertProgress = 0;
-            if ($horizonY > 0) {
-                $vertProgress = intdiv($dy * 255, $horizonY);
+            if ($dy < 1) {
+                $dy = 1;
+            }
+            int $ceilDist = intdiv(4800, $dy);
+            int $ceilDistSq = $ceilDist * $ceilDist;
+            int $ceilFog = 255 - intdiv($ceilDistSq * 220, $ceilDistSq + 640000);
+            if ($ceilFog < 20) {
+                $ceilFog = 20;
             }
 
-            // sky base: dark blue at top, lighter near horizon
-            int $skyR = 8 + intdiv((255 - $vertProgress) * 28, 255);
-            int $skyG = 10 + intdiv((255 - $vertProgress) * 32, 255);
-            int $skyB = 30 + intdiv((255 - $vertProgress) * 58, 255);
+            int $skyR = intdiv(18 * $ceilFog, 255);
+            int $skyG = intdiv(22 * $ceilFog, 255);
+            int $skyB = intdiv(68 * $ceilFog, 255);
 
-            // horizontal variation: subtle color banding that scrolls with camera
             int $x = $viewportX;
             while ($x <= $rightEdge) {
                 int $skyX = ($x + $skyOffset) % 360;
-                // sinusoidal-ish variation using triangle wave
                 int $wave = $skyX;
                 if ($wave > 180) {
                     $wave = 360 - $wave;
                 }
-                // wave is 0..180, normalize to -20..+20 brightness variation
                 int $variation = intdiv($wave, 9) - 10;
                 int $pr = $this->clampColor($skyR + $variation);
                 int $pg = $this->clampColor($skyG + $variation);
                 int $pb = $this->clampColor($skyB + intdiv($variation, 2));
                 $sdl->setDrawColor($pr, $pg, $pb);
-                // draw 4-pixel wide strips for performance
                 int $stripEnd = $x + 3;
                 if ($stripEnd > $rightEdge) {
                     $stripEnd = $rightEdge;
@@ -455,22 +456,22 @@ class WallRenderer {
             $y += 1;
         }
 
-        // floor: brown/gray with perspective distance fog per scanline
+        // floor: same unified fog curve
         $y = $screenHorizon;
         while ($y <= $screenBottom) {
             int $dy = $y - $screenHorizon;
             if ($dy < 1) {
                 $dy = 1;
             }
-            int $floorDist = intdiv(600 * 8, $dy);
-            int $floorDistSq = $floorDist * $floorDist;
-            int $floorFog = 255 - intdiv($floorDistSq * 220, $floorDistSq + 640000);
-            if ($floorFog < 25) {
-                $floorFog = 25;
+            int $floorDist = intdiv(4800, $dy);
+            int $dSq = $floorDist * $floorDist;
+            int $fog = 255 - intdiv($dSq * 220, $dSq + 640000);
+            if ($fog < 25) {
+                $fog = 25;
             }
-            int $red = intdiv(72 * $floorFog, 255);
-            int $green = intdiv(56 * $floorFog, 255);
-            int $blue = intdiv(38 * $floorFog, 255);
+            int $red = intdiv(72 * $fog, 255);
+            int $green = intdiv(56 * $fog, 255);
+            int $blue = intdiv(38 * $fog, 255);
             $sdl->setDrawColor($red, $green, $blue);
             $sdl->drawLine($viewportX, $y, $rightEdge, $y);
             $y += 1;
