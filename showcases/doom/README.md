@@ -1,162 +1,115 @@
-# DOOM Showcase
+# DOOM E1M1 — rendered in PHP, compiled to native ARM64
 
-This showcase is the starting scaffold for a DOOM WAD renderer built in elephc.
+This showcase loads original DOOM WAD files and renders levels in real-time, entirely in PHP compiled to a standalone native binary by [elephc](https://github.com/illegalstudio/elephc).
 
-The goal is not to structure it like a C demo with a few giant procedural files. The goal is to keep the project as close as possible to a real PHP codebase:
+No interpreter. No VM. No runtime dependencies beyond SDL2.
 
-- namespaced source files under `src/`
-- regular classes for orchestration and application state
-- enums for modes and lifecycle state
-- `packed class` and `buffer<T>` reserved for the hot path and binary/map data
+## What it does
 
-## Current status
+- Parses the original `DOOM1.WAD` binary format (header, directory, lumps)
+- Loads all E1M1 geometry: vertices, linedefs, sidedefs, sectors, segs, subsectors, BSP nodes
+- Traverses the BSP tree front-to-back for visibility ordering
+- Renders walls with per-column perspective projection and exponential distance fog
+- Per-sector colors from the WAD PLAYPAL palette
+- Per-sector floor/ceiling flat rendering with depth shading
+- Animated sector light effects (flicker, strobe, oscillation)
+- Scrolling panoramic sky
+- Camera movement with WASD + arrow keys
+- Step climbing (up to 24 units)
+- Collision detection against walls, height steps, and low ceilings
+- Doors pre-opened at load time
+- Minimap overlay with player dot and thing markers
+- HUD bar with compass, height indicator, and live FPS counter
+- Closed door detection with distinct metallic color
 
-This directory currently contains:
+## elephc features used
 
-- folder structure
-- bootstrap file with explicit `require_once`
-- the first application shell built around `Application`, `Game`, `Config`, `SDL`, and `Input`
-- empty or near-empty domain classes for WAD / map / BSP / rendering
-- initial `packed class` records for core map data
-
-What works today:
-
-- `main.php` boots a real `Application`
-- SDL initializes, creates a window and renderer, clears the screen, presents frames, and shuts down cleanly
-- the app exits early on `ESC`
-- the loop also auto-exits after a short boot/demo interval so the shell can be run safely during development
-- namespaced classes now call `SDL_*` externs and compiler builtin functions directly, without a global helper layer
-- the WAD layer is no longer just scaffold: `BinaryReader`, `WadEntry`, `WadFile`, and `WadLoader` can parse the WAD header and directory
-- `MapLoader` now resolves a startup map marker and prints structural counts for the main geometry lumps before opening SDL
-- if `DOOM1.WAD` exists in the showcase directory, or `showcases/doom/DOOM1.WAD` exists from the repo root, the shell prints a WAD summary plus the startup map stats before opening SDL
-
-What does not exist yet:
-
-- level loading
-- map geometry parsing into `packed class` / `buffer<T>` storage
-- BSP traversal
-- minimap rendering
-- 3D wall / floor / ceiling rendering
-
-## Why this structure
-
-The project is intentionally split by responsibility instead of by low-level implementation step:
-
-- `App/` holds application lifecycle and top-level runtime state
-- `SDL/` wraps SDL declarations and input-facing helpers
-- `IO/` holds binary-reading helpers
-- `Wad/` owns WAD file and lump concepts
-- `Map/` owns level-level data structures and loaders
-- `Bsp/` owns traversal and visibility helpers
-- `Render/` owns rendering passes
-- `Player/` owns camera and movement state
-- `Data/` contains compact hot-path records as `packed class`
-- `Support/` contains utility helpers
-
-This should let the final showcase read like a PHP project first, and like a low-level renderer second.
-
-## Directory layout
-
-```text
-showcases/doom/
-  main.php
-  README.md
-  .gitignore
-  src/
-    bootstrap.php
-    App/
-      Application.php
-      Config.php
-      Game.php
-      GameState.php
-      RenderMode.php
-    SDL/
-      extern.php
-      SDL.php
-      Input.php
-    IO/
-      BinaryReader.php
-    Wad/
-      WadEntry.php
-      WadFile.php
-      WadLoader.php
-    Map/
-      MapData.php
-      MapLoader.php
-    Bsp/
-      BspWalker.php
-    Render/
-      Renderer.php
-      WallRenderer.php
-      MinimapRenderer.php
-    Player/
-      Camera.php
-    Data/
-      Vertex.php
-      Linedef.php
-      Sidedef.php
-      Seg.php
-      SubSector.php
-      Sector.php
-      Node.php
-      Thing.php
-    Support/
-      Debug.php
-```
-
-## Architectural intent
-
-### High-level PHP layer
-
-These files should remain class-oriented and namespace-oriented:
-
-- `App/Application.php`
-- `App/Game.php`
-- `Map/MapLoader.php`
-- `Render/Renderer.php`
-- `Player/Camera.php`
-
-These are the files where orchestration should live.
-
-### Hot-path / compact-data layer
-
-These files are the right place for compiler-specific data primitives:
-
-- `Data/*.php` as `packed class`
-- future `buffer<T>` storage for vertices, segs, nodes, sectors, clip buffers, and frame data
-
-That keeps the low-level details isolated instead of leaking through the whole application.
+- `packed class` for all WAD data structures (Vertex, Linedef, Sidedef, Sector, Seg, SubSector, Node, Thing)
+- `buffer<T>` for contiguous typed storage of map geometry
+- `extern "SDL2" { ... }` FFI block for SDL2 function declarations
+- `ptr`, `ptr_null()`, `ptr_is_null()`, `ptr_offset()`, `ptr_read8()` for SDL keyboard state
+- Namespaces and `require_once` for modular project structure
+- Regular classes for orchestration (Application, Game, Camera, Renderer)
+- Enums for state machines (GameState, RenderMode)
 
 ## Build
 
-The current shell requires SDL2, like the other SDL examples in the repo:
+Requires SDL2 and a local copy of `DOOM1.WAD` (shareware).
 
 ```bash
-cargo run -- -l SDL2 -L /opt/homebrew/lib showcases/doom/main.php
+# compile
+cargo run -- -l SDL2 -L /opt/homebrew/lib --heap-size=67108864 showcases/doom/main.php
+
+# run
 ./showcases/doom/main
 ```
 
-Expected output without a local WAD:
+Download the shareware WAD: search for "DOOM1.WAD shareware" or extract it from the [original shareware release](https://doomwiki.org/wiki/DOOM1.WAD). Place it in this directory.
 
-```text
-No WAD file at DOOM1.WAD
-DOOM showcase SDL shell running
-ESC quits early
+## Controls
+
+| Key | Action |
+|-----|--------|
+| W / Up | Move forward |
+| S / Down | Move backward |
+| A | Strafe left |
+| D | Strafe right |
+| Left arrow | Turn left |
+| Right arrow | Turn right |
+| Tab | Toggle minimap |
+| ESC | Quit |
+
+## Architecture
+
+```
+main.php                 Entry point
+src/
+  bootstrap.php          Module loader
+  App/
+    Application.php      Top-level shell
+    Config.php           Window size, WAD path, timing
+    Game.php             Game loop, input, camera, collisions
+    GameState.php         Enum: Booting, Running, Stopped
+    RenderMode.php        Enum: Map2D, World3D, Split
+  SDL/
+    extern.php           SDL2 FFI declarations
+    SDL.php              SDL wrapper (init, window, renderer)
+    Input.php            Keyboard state helpers
+  IO/
+    BinaryReader.php     Little-endian binary parsing
+  Wad/
+    WadEntry.php         Lump metadata
+    WadFile.php          WAD file metadata
+    WadLoader.php        WAD header + directory parser
+  Map/
+    MapData.php          All parsed level data
+    MapLoader.php        Lump parser, palette loader, door opener
+  Bsp/
+    BspWalker.php        BSP tree front-to-back traversal
+  Render/
+    Renderer.php         Orchestrator, HUD, thing rendering, FPS counter
+    WallRenderer.php     BSP wall column renderer with fog and palette
+    MinimapRenderer.php  2D map overlay
+    Projection.php       Perspective math helpers
+  Player/
+    Camera.php           Position, height, angle
+  Data/
+    Vertex.php           packed class (x, y)
+    Linedef.php          packed class (7 fields)
+    Sidedef.php          packed class (3 fields)
+    Sector.php           packed class (5 fields)
+    Seg.php              packed class (6 fields)
+    SubSector.php        packed class (2 fields)
+    Node.php             packed class (14 fields)
+    Thing.php            packed class (5 fields)
+  Support/
+    Direction.php        Trig helpers for camera movement
 ```
 
-Expected output with a valid WAD file present starts with a summary like:
+## Known limitations
 
-```text
-Loaded WAD: IWAD | lumps: 1264 | directory: 744152
-First lump: E1M1 @ 12 (0 bytes)
-E1M1: 470 vertices, 486 linedefs, 700 sidedefs, 148 sectors, 140 things, 747 segs, 239 subsectors, 238 nodes
-```
-
-## Future implementation notes
-
-When the real implementation starts, prefer these rules:
-
-- keep parsing, traversal, rendering, and SDL concerns in separate components
-- avoid free-floating global state unless a compiler limitation truly forces it
-- if shared hot-path storage is needed, hide it behind a named component instead of scattered globals
-- keep the public-facing architecture object-oriented even when the innermost loops use `packed class` and `buffer<T>`
+- No wall textures (solid colors from WAD palette)
+- No vertical clipping (far walls can bleed through portal steps) — requires `solidsegs` implementation
+- Doors cannot animate at runtime (compiler limitation: #62/#65)
+- Things rendered as colored columns, not sprites
+- No sound
