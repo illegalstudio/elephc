@@ -56,12 +56,9 @@ pub fn emit_hash_clone_shallow(emitter: &mut Emitter) {
     emitter.instruction("str x4, [sp, #32]");                                   // save source value_hi before helper calls
     emitter.instruction("str x5, [sp, #40]");                                   // save source value_tag before helper calls
 
-    // -- duplicate the owned key string for the cloned hash table --
-    emitter.instruction("ldr x1, [sp, #8]");                                    // x1 = source key pointer
-    emitter.instruction("ldr x2, [sp, #16]");                                   // x2 = source key length
-    emitter.instruction("bl __rt_str_persist");                                 // duplicate the owned key for the cloned hash
-    emitter.instruction("str x1, [sp, #8]");                                    // save cloned key pointer
-    emitter.instruction("str x2, [sp, #16]");                                   // save cloned key length
+    // -- share the key string with the cloned hash via refcount bump --
+    emitter.instruction("ldr x0, [sp, #8]");                                    // x0 = source key pointer for incref
+    emitter.instruction("bl __rt_incref");                                      // retain shared key for the cloned hash
 
     // -- duplicate or retain the entry value according to this entry's runtime tag --
     emitter.instruction("ldr x5, [sp, #40]");                                   // x5 = source entry value_tag

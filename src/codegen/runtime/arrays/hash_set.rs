@@ -161,11 +161,13 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     // -- update existing entry's value --
     emitter.label("__rt_hash_set_update");
     emitter.instruction("ldr x13, [x12, #40]");                                 // load the overwritten entry's per-entry value_tag
+    emitter.instruction("cmp x13, #8");                                         // is the overwritten value null?
+    emitter.instruction("b.eq __rt_hash_set_write_value");                      // null has no heap pointer, skip release
     emitter.instruction("cmp x13, #1");                                         // is the overwritten value a string?
     emitter.instruction("b.eq __rt_hash_set_release_any");                      // strings release through the uniform dispatcher
     emitter.instruction("cmp x13, #4");                                         // is the overwritten value a heap-backed payload?
     emitter.instruction("b.hs __rt_hash_set_release_any");                      // tags 4-7 all release through the uniform dispatcher
-    emitter.instruction("b __rt_hash_set_write_value");                         // scalars/bools/floats/null do not need release before overwrite
+    emitter.instruction("b __rt_hash_set_write_value");                         // scalars/bools/floats do not need release before overwrite
 
     emitter.label("__rt_hash_set_release_any");
     emitter.instruction("ldr x0, [x12, #24]");                                  // load the previous heap-backed value pointer from the entry
