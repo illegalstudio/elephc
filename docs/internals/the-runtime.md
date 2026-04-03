@@ -1,7 +1,8 @@
-# The Runtime
-
-[← Back to Wiki](README.md) | Previous: [The Code Generator](the-codegen.md) | Next: [Memory Model →](memory-model.md)
-
+---
+title: "The Runtime"
+description: "Hand-written assembly routines for strings, arrays, and I/O."
+sidebar:
+  order: 7
 ---
 
 **Source:** `src/codegen/runtime/` — `mod.rs`, `data.rs`, `strings/`, `arrays/`, `buffers/`, `exceptions.rs`, `exceptions/`, `io/`, `system/`, `pointers/`
@@ -496,7 +497,3 @@ When `--heap-debug` is enabled, the runtime also activates `__rt_heap_debug_chec
 Every heap allocation now also carries a uniform 8-byte kind tag in its 16-byte allocator header. The current runtime uses `0=raw/untyped`, `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, and `5=boxed mixed`, which lets runtime dispatch stay independent from each payload's internal layout. The low 16 bits keep the persistent container metadata: low byte = heap kind, bits `8..14` = indexed-array runtime `value_type`, and bit `15` = copy-on-write container flag. The collector reuses higher bits for transient reachable/incoming-edge metadata during `__rt_gc_collect_cycles`. Runtime data also now includes `_gc_collecting`, `_gc_release_suppressed`, `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_vtable_ptrs`, and `_class_static_vtable_ptrs` so deep-free / cycle-collection paths can coordinate nested releases, discover class property traversal metadata, and support both inherited instance dispatch and late static binding.
 
 See [Memory Model](memory-model.md) for details on how these buffers work.
-
----
-
-Next: [Memory Model →](memory-model.md)

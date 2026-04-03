@@ -1,7 +1,8 @@
-# The Pipeline
-
-[← Back to Wiki](README.md) | Previous: [ARM64 Instruction Reference](arm64-instructions.md) | Next: [The Lexer →](the-lexer.md)
-
+---
+title: "The Pipeline"
+description: "The full journey from PHP source to a running binary."
+sidebar:
+  order: 2
 ---
 
 This page walks through the entire compilation process — from PHP source to running binary — using a concrete example.

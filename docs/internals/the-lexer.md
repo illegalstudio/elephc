@@ -1,7 +1,8 @@
-# The Lexer
-
-[← Back to Wiki](README.md) | Previous: [The Pipeline](how-elephc-works.md) | Next: [The Parser →](the-parser.md)
-
+---
+title: "The Lexer"
+description: "How raw text becomes tokens."
+sidebar:
+  order: 3
 ---
 
 **Source:** `src/lexer/` — `mod.rs`, `scan.rs`, `cursor.rs`, `token.rs`, `literals.rs`

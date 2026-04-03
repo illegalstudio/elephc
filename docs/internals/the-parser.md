@@ -1,7 +1,8 @@
-# The Parser
-
-[← Back to Wiki](README.md) | Previous: [The Lexer](the-lexer.md) | Next: [The Type Checker →](the-type-checker.md)
-
+---
+title: "The Parser"
+description: "How tokens become an AST with Pratt parsing."
+sidebar:
+  order: 4
 ---
 
 **Source:** `src/parser/` — `expr.rs`, `stmt.rs`, `control.rs`, `ast.rs`, `mod.rs`

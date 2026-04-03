@@ -1,7 +1,8 @@
-# ARM64 Instruction Reference
-
-[← Back to Wiki](README.md) | Previous: [Introduction to ARM64 Assembly](arm64-assembly.md) | Next: [The Pipeline →](how-elephc-works.md)
-
+---
+title: "ARM64 Instructions"
+description: "ARM64 instruction reference used by elephc."
+sidebar:
+  order: 11
 ---
 
 This is a reference for the ARM64 instructions elephc uses most often, organized by category. Each entry shows the instruction, what it does, and where elephc uses it.
@@ -221,7 +222,3 @@ These aren't CPU instructions — they're commands to the assembler:
 | `.ascii` | `.ascii "hello"` | Emit string bytes (no null terminator) |
 | `.quad` | `.quad 0x4028000000000000` | Emit 8-byte value (used for float constants) |
 | `.comm` | `.comm _heap_buf, 1048576` | Reserve uninitialized memory (BSS section) |
-
----
-
-Next: [The Pipeline →](how-elephc-works.md)

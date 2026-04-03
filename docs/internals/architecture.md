@@ -1,4 +1,9 @@
-# Architecture
+---
+title: "Architecture"
+description: "Module map, calling conventions, and pipeline diagram."
+sidebar:
+  order: 9
+---
 
 ## Compilation pipeline
 

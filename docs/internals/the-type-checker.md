@@ -1,7 +1,8 @@
-# The Type Checker
-
-[← Back to Wiki](README.md) | Previous: [The Parser](the-parser.md) | Next: [The Code Generator →](the-codegen.md)
-
+---
+title: "The Type Checker"
+description: "How elephc infers and validates types at compile time."
+sidebar:
+  order: 5
 ---
 
 **Source:** `src/types/` — `mod.rs`, `traits.rs`, `checker/mod.rs`, `checker/builtins.rs`, `checker/functions.rs`

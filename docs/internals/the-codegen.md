@@ -1,7 +1,8 @@
-# The Code Generator
-
-[← Back to Wiki](README.md) | Previous: [The Type Checker](the-type-checker.md) | Next: [The Runtime →](the-runtime.md)
-
+---
+title: "The Code Generator"
+description: "How AST nodes become ARM64 assembly."
+sidebar:
+  order: 6
 ---
 
 **Source:** `src/codegen/` — `mod.rs`, `expr.rs`, `expr/`, `stmt.rs`, `stmt/`, `functions.rs`, `ffi.rs`, `abi.rs`, `context.rs`, `data_section.rs`, `emit.rs`

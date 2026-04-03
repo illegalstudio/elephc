@@ -1,7 +1,8 @@
-# Introduction to ARM64 Assembly
-
-[← Back to Wiki](README.md) | Previous: [What is a Compiler?](what-is-a-compiler.md) | Next: [ARM64 Instruction Reference →](arm64-instructions.md)
-
+---
+title: "ARM64 Assembly"
+description: "Introduction to ARM64 assembly for compiler output."
+sidebar:
+  order: 10
 ---
 
 ## What is assembly language?
@@ -219,7 +220,3 @@ _float_0: .quad 0x400921FB54442D18  ; 3.14159... stored as raw bits
 ```
 
 String literals are embedded directly in the binary. To use them, you load their address with `adrp` + `add` (see [ARM64 Instruction Reference](arm64-instructions.md)).
-
----
-
-Next: [ARM64 Instruction Reference →](arm64-instructions.md)

@@ -1,7 +1,8 @@
-# What is a Compiler?
-
-[← Back to Wiki](README.md) | Next: [Introduction to ARM64 Assembly →](arm64-assembly.md)
-
+---
+title: "What is a Compiler?"
+description: "What happens when source code becomes a program."
+sidebar:
+  order: 1
 ---
 
 ## The problem

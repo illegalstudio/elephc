@@ -1,7 +1,8 @@
-# Memory Model
-
-[← Back to Wiki](README.md) | Previous: [The Runtime](the-runtime.md)
-
+---
+title: "Memory Model"
+description: "Stack frames, heap allocation, and memory management."
+sidebar:
+  order: 8
 ---
 
 elephc manages memory without calling `malloc`/`free` for PHP values directly. Storage lives on the **stack** (automatic, per-function), in fixed BSS regions, or in a compiler-managed **heap buffer** with a free-list allocator, reference counting, and a targeted cycle collector for array/hash/object graphs. The final binary still links `libSystem` for OS and libc services.
@@ -514,7 +515,3 @@ For a loop like `for ($i = 0; $i < 1000; $i++) { $s .= "x"; }`:
 - Old blocks go to the free list, new blocks come from bump allocation (growing size)
 - Net heap usage is O(N) for the final string, not O(N²)
 - With 8MB heap, this handles thousands of iterations comfortably
-
----
-
-[← Back to Wiki](README.md)
