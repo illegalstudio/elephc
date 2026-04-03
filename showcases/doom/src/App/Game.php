@@ -229,7 +229,16 @@ class Game {
         int $i = 0;
         int $radiusSquared = 28 * 28;
         while ($i < $this->map->linedefCount) {
+            bool $blocking = false;
             if ($this->isSolidLinedef($i)) {
+                if ($this->isBlockingSideOfSolidLinedef($i, $x, $y)) {
+                    $blocking = true;
+                }
+            } else if ($this->isBlockingTwoSidedLinedef($i)) {
+                $blocking = true;
+            }
+
+            if ($blocking) {
                 int $startIndex = $this->map->linedefs[$i]->start_vertex;
                 int $endIndex = $this->map->linedefs[$i]->end_vertex;
                 if (
@@ -237,7 +246,6 @@ class Game {
                     && $endIndex >= 0
                     && $startIndex < $this->map->vertexCount
                     && $endIndex < $this->map->vertexCount
-                    && $this->isBlockingSideOfSolidLinedef($i, $x, $y)
                 ) {
                     int $distanceSquared = $this->distanceToSegmentSquared(
                         $x,
@@ -259,8 +267,65 @@ class Game {
     }
 
     public function isSolidLinedef(int $index): bool {
-        return $this->map->linedefs[$index]->left_sidedef < 0
-            || $this->map->linedefs[$index]->right_sidedef < 0;
+        if ($this->map->linedefs[$index]->left_sidedef < 0
+            || $this->map->linedefs[$index]->right_sidedef < 0) {
+            return true;
+        }
+        return false;
+    }
+
+    public function isBlockingTwoSidedLinedef(int $index): bool {
+        int $rightSide = $this->map->linedefs[$index]->right_sidedef;
+        int $leftSide = $this->map->linedefs[$index]->left_sidedef;
+        if ($rightSide < 0 || $leftSide < 0) {
+            return false;
+        }
+        if ($rightSide >= $this->map->sidedefCount || $leftSide >= $this->map->sidedefCount) {
+            return false;
+        }
+
+        int $frontIdx = $this->map->sidedefs[$rightSide]->sector_index;
+        int $backIdx = $this->map->sidedefs[$leftSide]->sector_index;
+        if ($frontIdx < 0 || $backIdx < 0 || $frontIdx >= $this->map->sectorCount || $backIdx >= $this->map->sectorCount) {
+            return false;
+        }
+
+        int $frontFloor = $this->map->sectors[$frontIdx]->floor_height;
+        int $backFloor = $this->map->sectors[$backIdx]->floor_height;
+        int $frontCeiling = $this->map->sectors[$frontIdx]->ceiling_height;
+        int $backCeiling = $this->map->sectors[$backIdx]->ceiling_height;
+
+        // closed door: ceiling <= floor on either side
+        if ($backCeiling <= $backFloor) {
+            return true;
+        }
+        if ($frontCeiling <= $frontFloor) {
+            return true;
+        }
+
+        // step too high (> 24 units)
+        int $stepUp = $backFloor - $frontFloor;
+        if ($stepUp < 0) {
+            $stepUp = -$stepUp;
+        }
+        if ($stepUp > 24) {
+            return true;
+        }
+
+        // ceiling too low to pass (< 56 units clearance)
+        int $lowestCeiling = $frontCeiling;
+        if ($backCeiling < $lowestCeiling) {
+            $lowestCeiling = $backCeiling;
+        }
+        int $highestFloor = $frontFloor;
+        if ($backFloor > $highestFloor) {
+            $highestFloor = $backFloor;
+        }
+        if ($lowestCeiling - $highestFloor < 56) {
+            return true;
+        }
+
+        return false;
     }
 
     public function isBlockingSideOfSolidLinedef(int $index, int $x, int $y): bool {
