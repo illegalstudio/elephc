@@ -17,12 +17,16 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Set version from tag
+      - name: Set version from tag and commit
         run: |
           VERSION="${GITHUB_REF#refs/tags/v}"
           sed -i '' "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
           echo "Set Cargo.toml version to ${VERSION}"
-          head -3 Cargo.toml
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml
+          git commit -m "chore: bump version to ${VERSION}" || true
+          git push origin HEAD:main
 
       - name: Run tests
         run: cargo test
