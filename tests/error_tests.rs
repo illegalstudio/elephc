@@ -214,6 +214,26 @@ fn test_warning_unused_variable() {
 }
 
 #[test]
+fn test_warning_byref_params_not_flagged_as_unused() {
+    expect_no_warning(
+        "<?php function fill(int &$out): void { $out = 42; }",
+        "Unused variable: $out",
+    );
+    expect_no_warning(
+        "<?php function getColor(int $index, int &$r, int &$g, int &$b): void { $r = 255; $g = 128; $b = 0; }",
+        "Unused variable: $r",
+    );
+    expect_no_warning(
+        "<?php function getColor(int $index, int &$r, int &$g, int &$b): void { $r = 255; $g = 128; $b = 0; }",
+        "Unused variable: $g",
+    );
+    expect_no_warning(
+        "<?php function getColor(int $index, int &$r, int &$g, int &$b): void { $r = 255; $g = 128; $b = 0; }",
+        "Unused variable: $b",
+    );
+}
+
+#[test]
 fn test_warning_unreachable_code() {
     expect_warning("<?php function foo() { return 1; echo 2; }", "Unreachable code");
 }

@@ -70,8 +70,11 @@ fn analyze_function_like_scope(
     warnings: &mut Vec<CompileWarning>,
 ) {
     let mut scope = ScopeUsage::default();
-    for (name, _, _, _) in params {
+    for (name, _, _, is_ref) in params {
         scope.declare(name, declaration_span);
+        if *is_ref {
+            scope.read(name);
+        }
     }
     if let Some(name) = variadic {
         scope.declare(name, declaration_span);
