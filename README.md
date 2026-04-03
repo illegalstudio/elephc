@@ -35,9 +35,9 @@ I made the project as modular as possible. Every function has its own codegen fi
 
 ## What you can expect
 
-You can write PHP using the constructs documented in the [language reference](docs/php/). Classes with single inheritance, interfaces, abstract classes, traits, constructors, instance/static methods, `self::` / `parent::` / `static::` with late static binding, `readonly` properties and classes, enums, named arguments, first-class callables, typed parameters and returns, `try` / `catch` / `finally` / `throw`, visibility modifiers, union and nullable types, copy-on-write arrays, associative arrays with PHP insertion order, closures, namespaces, and includes.
+You can write PHP using the constructs documented in the [docs](docs/). Classes with single inheritance, interfaces, abstract classes, traits, constructors, instance/static methods, `self::` / `parent::` / `static::` with late static binding, `readonly` properties and classes, enums, named arguments, first-class callables, typed parameters and returns, `try` / `catch` / `finally` / `throw`, visibility modifiers, union and nullable types, copy-on-write arrays, associative arrays with PHP insertion order, closures, namespaces, and includes.
 
-For performance-oriented code, elephc also exposes [compiler extensions](docs/beyond-php/) beyond standard PHP — see the Why section above.
+For performance-oriented code, For performance-oriented code, elephc exposes compiler extensions beyond standard PHP — see the Why section above.
 
 Then compile and run:
 
@@ -198,7 +198,7 @@ if ($x === 3) {
 
 ### Supported constructs
 
-The full list of supported constructs, operators, and control structures is in the [language reference](docs/php/). Highlights:
+The full list of supported constructs, operators, and control structures is in the [docs](docs/). Highlights:
 
 - **OOP**: classes, abstract classes, interfaces, traits, enums, `readonly`, static/instance methods, `self::`/`parent::`/`static::`, magic methods (`__toString`, `__get`, `__set`)
 - **Functions**: default parameters, variadic/spread, pass by reference, named arguments, first-class callables, closures, arrow functions
@@ -355,25 +355,17 @@ ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 
 ## Documentation
 
-The `docs/` directory is a **complete wiki** covering every aspect of the compiler — from what a compiler is, to how each phase works, to the ARM64 instruction set. If you're new to compilers or assembly, **start from the top and work your way down**.
+The **[docs/](docs/)** directory is a complete wiki covering every aspect of the compiler. Inside you'll find:
+
+- **PHP syntax reference** — types, operators, control structures, functions, classes, namespaces, and all 200+ built-in functions with signatures and examples
+- **Compiler extensions** — pointers, `buffer<T>`, `packed class`, FFI with `extern`, and conditional compilation with `ifdef` — the features that take PHP beyond the web
+- **Compiler internals** — a step-by-step walkthrough of the full pipeline, from lexing to Pratt parsing to type checking to ARM64 code generation, with every assembly line commented
+- **ARM64 primer** — an introduction to ARM64 assembly for people who've never seen it, plus a quick reference of every instruction elephc uses
+- **Memory model** — how the stack, heap, concat buffer, and hash tables work under the hood
+
+If you're new to compilers or assembly, start from the top and work your way down. No prior low-level knowledge required.
 
 For runnable language samples, see `examples/`. For a focused perf comparison, see `benchmarks/hot-path-buffer-vs-arrays`.
-
-| Guide | What you'll learn |
-|---|---|
-| [What is a compiler?](docs/internals/what-is-a-compiler.md) | The big picture: source code in, binary out |
-| [How elephc works](docs/internals/how-elephc-works.md) | The full pipeline walkthrough, step by step |
-| [The Lexer](docs/internals/the-lexer.md) | How source text becomes a stream of tokens |
-| [The Parser](docs/internals/the-parser.md) | How tokens become an AST (with Pratt parsing) |
-| [The Type Checker](docs/internals/the-type-checker.md) | Static types, inference, and error detection |
-| [The Codegen](docs/internals/the-codegen.md) | How the AST becomes ARM64 assembly |
-| [The Runtime](docs/internals/the-runtime.md) | Runtime routines: strings, arrays, exceptions, hash tables, I/O |
-| [Memory Model](docs/internals/memory-model.md) | Stack, heap, concat buffer, hash tables |
-| [ARM64 Assembly](docs/internals/arm64-assembly.md) | ARM64 primer for people who've never seen assembly |
-| [ARM64 Instructions](docs/internals/arm64-instructions.md) | Quick reference for every instruction elephc uses |
-| [Language Reference](docs/php/) | Types, operators, control structures, functions, built-ins |
-| [Compiler Extensions](docs/beyond-php/) | FFI, pointers, `buffer<T>`, `packed class`, `ifdef` |
-| [Architecture](docs/internals/architecture.md) | Module map, file counts, conventions |
 
 ## License
 
