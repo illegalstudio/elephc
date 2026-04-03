@@ -15,7 +15,7 @@ A PHP-to-native compiler. Takes a subset of PHP and compiles it directly to **AR
 
 The flagship showcase: a real-time 3D renderer that loads original DOOM WAD files and renders E1M1 — BSP traversal, perspective projection, per-column fog, sector lighting, collision detection, step climbing — entirely in PHP compiled to a native ARM64 binary.
 
-https://media.nahi.me/illegalstudio/elephc/elephc-doom-3d-movement-4.mp4
+![DOOM E1M1 rendered in PHP](showcases/doom/demo.gif)
 
 See [showcases/doom/](showcases/doom/) for full source and build instructions.
 
