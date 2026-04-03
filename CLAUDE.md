@@ -201,17 +201,70 @@ When in doubt, test with `php -r '...'` to verify behavior.
 
 ## Documentation
 
-The `docs/` directory contains the project documentation:
+The `docs/` directory is the project's complete documentation, organized into three sections:
 
-- `docs/language-reference.md` — What elephc supports: types, operators, control structures, functions, built-ins, limitations, and known incompatibilities with PHP. Includes examples of what works and what doesn't.
-- `docs/architecture.md` — Compiler internals: pipeline, module map, ARM64 conventions, memory layout.
-- `docs/the-runtime.md` / `docs/memory-model.md` — authoritative references for runtime routine inventory, heap layout, hash-table layout, and runtime metadata tables
+```
+docs/
+├── README.md              # Main index
+├── php/                   # PHP syntax (standard PHP features)
+│   ├── types.md
+│   ├── operators.md
+│   ├── control-structures.md
+│   ├── functions.md
+│   ├── strings.md
+│   ├── arrays.md
+│   ├── math.md
+│   ├── classes.md
+│   ├── namespaces.md
+│   └── system-and-io.md
+├── beyond-php/            # Compiler extensions (not valid PHP)
+│   ├── pointers.md
+│   ├── buffers.md
+│   ├── packed-classes.md
+│   ├── extern.md
+│   └── ifdef.md
+└── internals/             # Compiler internals
+    ├── what-is-a-compiler.md
+    ├── how-elephc-works.md
+    ├── the-lexer.md
+    ├── the-parser.md
+    ├── the-type-checker.md
+    ├── the-codegen.md
+    ├── the-runtime.md
+    ├── memory-model.md
+    ├── architecture.md
+    ├── arm64-assembly.md
+    └── arm64-instructions.md
+```
+
+### Astro compatibility
+
+All docs files are Markdown with YAML frontmatter compatible with Astro content collections. Every `.md` file **must** have this frontmatter format:
+
+```yaml
+---
+title: "Page Title"
+description: "One-line description of the page."
+sidebar:
+  order: N
+---
+```
+
+- `title` replaces the `# Heading` — do **not** add a top-level `# Title` in the body (Astro renders it from frontmatter)
+- `sidebar.order` controls page ordering within its section
+- No navigation links (`[← Back]`, `Next:`, etc.) — Astro handles navigation
+- Use standard Markdown (CommonMark). No custom shortcodes or Astro components inside docs
+
+### Keeping docs up to date
 
 **Documentation must be kept up to date.** When adding a new feature:
-1. Add it to `docs/language-reference.md` — in the relevant section (operators, functions, built-ins, etc.)
-2. If it was previously listed as "not supported", remove that note
-3. If there are known incompatibilities with PHP, document them
-4. Update `docs/architecture.md` if the change affects the pipeline or module structure
+
+1. **PHP syntax feature** (operator, built-in, statement, etc.) → update the relevant page in `docs/php/`. Add the function signature, parameters, return type, and a short example.
+2. **Compiler extension** (pointer, buffer, extern, ifdef) → update the relevant page in `docs/beyond-php/`.
+3. **Compiler internals change** (pipeline, codegen, runtime) → update the relevant page in `docs/internals/`.
+4. If a feature was previously listed as "not supported", remove that note.
+5. If there are known incompatibilities with PHP, document them in `docs/php/types.md` (incompatibilities section).
+6. Update `docs/README.md` index if adding a new page.
 
 ## Roadmap management
 

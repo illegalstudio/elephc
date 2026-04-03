@@ -1,28 +1,49 @@
-# elephc Wiki
+---
+title: "elephc Documentation"
+description: "A PHP-to-native compiler. Compiles a static subset of PHP to ARM64 assembly, producing standalone macOS binaries."
+sidebar:
+  order: 0
+---
 
-A guide to understanding how elephc works — from PHP source code to native ARM64 binary. Written for anyone who wants to learn how compilers work, using a real, working compiler as the reference.
+elephc compiles PHP to native ARM64 binaries — no interpreter, no VM, no runtime dependencies. This documentation covers everything from PHP syntax support to compiler-specific extensions and internal architecture.
 
-## Start here
+## PHP Syntax
 
-- **[What is a Compiler?](what-is-a-compiler.md)** — What happens when source code becomes a program. The big picture of compilation, interpretation, and why elephc exists.
+Standard PHP features supported by elephc. All PHP syntax is **100% compatible** with the PHP interpreter.
 
-## ARM64 Assembly
+- [Types](php/types.md) — int, float, string, bool, array, null, mixed, enum, union types, type casting
+- [Operators](php/operators.md) — arithmetic, comparison, logical, bitwise, string, assignment, ternary, null coalescing
+- [Control Structures](php/control-structures.md) — if/else, while, for, foreach, switch, match, try/catch/finally
+- [Functions](php/functions.md) — declarations, closures, arrow functions, variadic, spread, pass-by-reference, static variables
+- [Strings](php/strings.md) — escape sequences, interpolation, heredoc/nowdoc, 50+ built-in string functions
+- [Arrays](php/arrays.md) — indexed, associative, copy-on-write, 45+ built-in array functions
+- [Math](php/math.md) — abs, floor, ceil, round, trigonometry, logarithms, random, constants
+- [Classes](php/classes.md) — inheritance, interfaces, abstract classes, traits, enums, magic methods
+- [Namespaces](php/namespaces.md) — namespace, use, include/require, constants, superglobals
+- [System & I/O](php/system-and-io.md) — file I/O, date/time, JSON, regex, exec, debugging
 
-- **[Introduction to ARM64 Assembly](arm64-assembly.md)** — What assembly language is, how the CPU executes it, registers, memory, and the mental model you need before reading compiler output.
-- **[ARM64 Instruction Reference](arm64-instructions.md)** — The specific ARM64 instructions elephc uses, organized by category. Each one explained with examples.
+## Beyond PHP
 
-## How elephc works
+Compiler-specific extensions that go beyond standard PHP. These features have no PHP equivalent and exist to enable use cases PHP was never designed for.
 
-- **[The Pipeline](how-elephc-works.md)** — The full journey from `<?php echo "hello";` to a running binary. Overview of each compilation phase and how they connect.
-- **[The Lexer](the-lexer.md)** — How raw text becomes tokens. Cursor, scanning, keywords, string interpolation.
-- **[The Parser](the-parser.md)** — How tokens become an AST. Pratt parsing, binding power, operator precedence.
-- **[The Type Checker](the-type-checker.md)** — How elephc infers and validates types at compile time, without PHP's runtime type system.
-- **[The Code Generator](the-codegen.md)** — How AST nodes become ARM64 assembly. Expressions, statements, function calls, and the push/pop pattern.
-- **[The Runtime](the-runtime.md)** — The hand-written assembly routines that handle string conversion, concatenation, arrays, exception unwinding, and I/O at runtime.
-- **[Memory Model](memory-model.md)** — Stack frames, heap allocation, the string buffer, array layout, and how elephc manages memory with reference counting plus targeted cycle collection.
+- [Pointers](beyond-php/pointers.md) — ptr(), ptr_get(), ptr_set(), pointer arithmetic, typed casting
+- [Buffers](beyond-php/buffers.md) — buffer&lt;T&gt; for fixed-size contiguous arrays, hot-path data
+- [Packed Classes](beyond-php/packed-classes.md) — flat POD records with compile-time field offsets
+- [FFI & Extern](beyond-php/extern.md) — calling C libraries, extern functions/globals/classes, callbacks
+- [Conditional Compilation](beyond-php/ifdef.md) — ifdef blocks, compile-time feature flags, CLI flags
 
-## Reference
+## Compiler Internals
 
-- **[Language Reference](language-reference.md)** — What PHP features elephc supports: types, operators, control flow, functions, built-ins.
-- **[Compiler Extensions](compiler-extensions.md)** — Features beyond PHP: pointers, FFI, hot-path data (`buffer<T>`, `packed class`), `ifdef`, and CLI flags. Complete guide with examples, best practices, and pitfalls.
-- **[Architecture](architecture.md)** — Module map, calling conventions, pipeline diagram (technical reference).
+How elephc works under the hood — from lexing to ARM64 code generation.
+
+- [What is a Compiler?](internals/what-is-a-compiler.md) — the big picture of compilation
+- [The Pipeline](internals/how-elephc-works.md) — from `<?php` to running binary
+- [The Lexer](internals/the-lexer.md) — raw text to tokens
+- [The Parser](internals/the-parser.md) — tokens to AST with Pratt parsing
+- [The Type Checker](internals/the-type-checker.md) — compile-time type inference and validation
+- [The Code Generator](internals/the-codegen.md) — AST to ARM64 assembly
+- [The Runtime](internals/the-runtime.md) — hand-written assembly routines
+- [Memory Model](internals/memory-model.md) — stack frames, heap, reference counting
+- [Architecture](internals/architecture.md) — module map, calling conventions
+- [ARM64 Assembly](internals/arm64-assembly.md) — introduction to ARM64
+- [ARM64 Instructions](internals/arm64-instructions.md) — instruction reference
