@@ -17,6 +17,13 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Set version from tag
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          sed -i '' "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
+          echo "Set Cargo.toml version to ${VERSION}"
+          head -3 Cargo.toml
+
       - name: Run tests
         run: cargo test
 
