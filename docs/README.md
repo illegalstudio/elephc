@@ -7,6 +7,11 @@ sidebar:
 
 elephc compiles PHP to native ARM64 binaries — no interpreter, no VM, no runtime dependencies. This documentation covers everything from PHP syntax support to compiler-specific extensions and internal architecture.
 
+## Getting Started
+
+- [Installation](getting-started/installation.md) — install elephc via Homebrew or from source
+- [Your First Program](getting-started/your-first-program.md) — write, compile, and run your first PHP binary
+
 ## PHP Syntax
 
 Standard PHP features supported by elephc. All PHP syntax is **100% compatible** with the PHP interpreter.
