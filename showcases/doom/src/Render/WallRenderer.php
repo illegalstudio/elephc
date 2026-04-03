@@ -317,14 +317,36 @@ class WallRenderer {
             int $litG = intdiv($baseG * $fog, 255);
             int $litB = intdiv($baseB * $fog, 255);
 
+            // per-sector flat colors (ceiling = dark blue/gray, floor = brown)
+            int $ceilR = $this->clampColor(intdiv($litR * 2, 5));
+            int $ceilG = $this->clampColor(intdiv($litG * 2, 5));
+            int $ceilB = $this->clampColor(intdiv($litB * 3, 5) + 12);
+            int $flrR = $this->clampColor(intdiv($litR * 3, 5) + 10);
+            int $flrG = $this->clampColor(intdiv($litG * 2, 5) + 4);
+            int $flrB = $this->clampColor(intdiv($litB * 1, 5));
+
+            int $wallTop = $horizonBase - intdiv($hFrontCeil, $depth);
+            int $wallBot = $horizonBase - intdiv($hFrontFloor, $depth);
+
+            // draw ceiling span above the wall
+            $this->drawClippedSpan(
+                $sdl, $x, $colCeil, $wallTop - 1,
+                $colCeil, $colFloor,
+                $ceilR, $ceilG, $ceilB
+            );
+            // draw floor span below the wall
+            $this->drawClippedSpan(
+                $sdl, $x, $wallBot + 1, $colFloor,
+                $colCeil, $colFloor,
+                $flrR, $flrG, $flrB
+            );
+
             if ($oneSided || $isDoor) {
                 int $midR = $this->clampColor($litR + 6);
                 int $midG = $this->clampColor($litG + 4);
                 int $midB = $this->clampColor($litB);
-                int $top = $horizonBase - intdiv($hFrontCeil, $depth);
-                int $bottom = $horizonBase - intdiv($hFrontFloor, $depth);
                 $this->drawClippedSpan(
-                    $sdl, $x, $top, $bottom,
+                    $sdl, $x, $wallTop, $wallBot,
                     $colCeil, $colFloor,
                     $midR, $midG, $midB
                 );
