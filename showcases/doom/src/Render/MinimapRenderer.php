@@ -111,6 +111,30 @@ class MinimapRenderer {
             $scale
         );
 
+        // draw things
+        int $ti = 0;
+        while ($ti < $map->thingCount) {
+            int $thingType = $map->things[$ti]->type;
+            if ($thingType !== 1 && $thingType !== 2 && $thingType !== 3 && $thingType !== 4) {
+                int $tx = $this->projectX($map->things[$ti]->x, $map, $originX, $padX, $scale);
+                int $ty = $this->projectY($map->things[$ti]->y, $map, $originY, $padY, $drawHeight, $scale);
+                if ($thingType === 2035) {
+                    $sdl->setDrawColor(200, 60, 40);
+                } else if ($thingType >= 3001 && $thingType <= 3006) {
+                    $sdl->setDrawColor(180, 40, 40);
+                } else if ($thingType >= 2001 && $thingType <= 2006) {
+                    $sdl->setDrawColor(60, 200, 80);
+                } else {
+                    $sdl->setDrawColor(200, 180, 60);
+                }
+                $sdl->drawPoint($tx, $ty);
+                $sdl->drawPoint($tx + 1, $ty);
+                $sdl->drawPoint($tx, $ty + 1);
+                $sdl->drawPoint($tx + 1, $ty + 1);
+            }
+            $ti += 1;
+        }
+
         int $playerX = $this->projectX($camera->x, $map, $originX, $padX, $scale);
         int $playerY = $this->projectY($camera->y, $map, $originY, $padY, $drawHeight, $scale);
         $sdl->setDrawColor(255, 214, 102);

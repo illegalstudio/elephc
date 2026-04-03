@@ -33,6 +33,7 @@ class Renderer {
         if ($config->renderMode !== RenderMode::World3D) {
             $this->minimap->renderInset($sdl, $config, $map, $camera, $order);
         }
+        $this->renderThings3D($sdl, $config, $map, $camera);
         $this->renderCrosshair($sdl, $config);
         $this->renderHUD($sdl, $config, $camera, $ticks);
     }
@@ -143,6 +144,116 @@ class Renderer {
         }
         $sdl->setDrawColor($fpsR, $fpsG, 40);
         $this->drawNumber($sdl, $this->fps, $fpsX, $fpsY);
+    }
+
+    public function renderThings3D(SDL $sdl, Config $config, MapData $map, Camera $camera): void {
+        if ($map->thingCount <= 0) {
+            return;
+        }
+
+        int $centerX = intdiv($config->windowWidth, 2);
+        int $horizonY = intdiv($config->windowHeight, 2);
+        int $focal = intdiv($config->windowWidth * 3, 4);
+        int $eyeZ = $camera->z + 41;
+        int $maxY = $config->windowHeight - 33;
+
+        int $forwardX = $this->walls->direction->unitX($camera->angle);
+        int $forwardY = $this->walls->direction->unitY($camera->angle);
+        int $rightX = -$forwardY;
+        int $rightY = $forwardX;
+
+        int $ti = 0;
+        while ($ti < $map->thingCount) {
+            int $thingType = $map->things[$ti]->type;
+            // skip player starts
+            if ($thingType >= 1 && $thingType <= 4) {
+                $ti = $ti + 1;
+                continue;
+            }
+
+            int $relX = $map->things[$ti]->x - $camera->x;
+            int $relY = $map->things[$ti]->y - $camera->y;
+            int $depth = intdiv(($relX * $forwardX) + ($relY * $forwardY), 1024);
+
+            // behind camera or too far
+            if ($depth < 16 || $depth > 2000) {
+                $ti = $ti + 1;
+                continue;
+            }
+
+            int $side = intdiv(($relX * $rightX) + ($relY * $rightY), 1024);
+            int $screenX = $centerX + intdiv($side * $focal, $depth);
+
+            if ($screenX < 2 || $screenX >= $config->windowWidth - 2) {
+                $ti = $ti + 1;
+                continue;
+            }
+
+            // thing height: 56 units for monsters, 32 for items, 48 for barrels
+            int $thingHeight = 32;
+            if ($thingType >= 3001 && $thingType <= 3006) {
+                $thingHeight = 56;
+            } else if ($thingType === 2035) {
+                $thingHeight = 48;
+            }
+
+            int $thingFloor = $camera->z;
+            int $top = $horizonY - intdiv(($thingFloor + $thingHeight - $eyeZ) * $focal, $depth);
+            int $bottom = $horizonY - intdiv(($thingFloor - $eyeZ) * $focal, $depth);
+            if ($top < 0) {
+                $top = 0;
+            }
+            if ($bottom > $maxY) {
+                $bottom = $maxY;
+            }
+            if ($bottom <= $top) {
+                $ti = $ti + 1;
+                continue;
+            }
+
+            // color by thing type
+            int $r = 200;
+            int $g = 180;
+            int $b = 60;
+            if ($thingType === 2035) {
+                $r = 160; $g = 60; $b = 40;
+            } else if ($thingType >= 3001 && $thingType <= 3006) {
+                $r = 140; $g = 50; $b = 50;
+            } else if ($thingType >= 2001 && $thingType <= 2006) {
+                $r = 60; $g = 160; $b = 80;
+            } else if ($thingType === 46 || $thingType === 70 || $thingType === 2028) {
+                $r = 220; $g = 200; $b = 100;
+            }
+
+            // distance fog
+            int $dSq = $depth * $depth;
+            int $fog = 255 - intdiv($dSq * 220, $dSq + 640000);
+            if ($fog < 35) {
+                $fog = 35;
+            }
+            $r = intdiv($r * $fog, 255);
+            $g = intdiv($g * $fog, 255);
+            $b = intdiv($b * $fog, 255);
+
+            // draw as a narrow column (billboard)
+            int $halfWidth = intdiv(16 * $focal, $depth);
+            if ($halfWidth < 1) {
+                $halfWidth = 1;
+            }
+            if ($halfWidth > 20) {
+                $halfWidth = 20;
+            }
+            $sdl->setDrawColor($r, $g, $b);
+            int $col = $screenX - $halfWidth;
+            while ($col <= $screenX + $halfWidth) {
+                if ($col >= 0 && $col < $config->windowWidth) {
+                    $sdl->drawLine($col, $top, $col, $bottom);
+                }
+                $col = $col + 1;
+            }
+
+            $ti = $ti + 1;
+        }
     }
 
     public function drawNumber(SDL $sdl, int $value, int $x, int $y): void {
