@@ -138,8 +138,15 @@ class MinimapRenderer {
         int $playerX = $this->projectX($camera->x, $map, $originX, $padX, $scale);
         int $playerY = $this->projectY($camera->y, $map, $originY, $padY, $drawHeight, $scale);
         $sdl->setDrawColor(255, 214, 102);
-        $this->drawCross($sdl, $playerX, $playerY);
-        $this->drawHeading($sdl, $playerX, $playerY, $camera->angle);
+        $sdl->drawPoint($playerX, $playerY);
+        $sdl->drawPoint($playerX + 1, $playerY);
+        $sdl->drawPoint($playerX - 1, $playerY);
+        $sdl->drawPoint($playerX, $playerY + 1);
+        $sdl->drawPoint($playerX, $playerY - 1);
+        $sdl->drawPoint($playerX + 1, $playerY + 1);
+        $sdl->drawPoint($playerX - 1, $playerY - 1);
+        $sdl->drawPoint($playerX + 1, $playerY - 1);
+        $sdl->drawPoint($playerX - 1, $playerY + 1);
     }
 
     public function projectX(
