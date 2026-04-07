@@ -17,7 +17,7 @@ pub fn emit_random_uniform(emitter: &mut Emitter) {
     emitter.label("__rt_random_uniform_calc");
     emitter.instruction("neg w9, w0");                                          // compute 2^32 - bound modulo 2^32
     emitter.instruction("udiv w10, w9, w0");                                    // quotient = floor((2^32 - bound) / bound)
-    emitter.instruction("msub w9, w10, w0, w9");                               // threshold = (2^32 % bound)
+    emitter.instruction("msub w9, w10, w0, w9");                                // threshold = (2^32 % bound)
     emitter.instruction("str w9, [sp, #4]");                                    // save the rejection threshold
 
     emitter.label("__rt_random_uniform_loop");
@@ -27,7 +27,7 @@ pub fn emit_random_uniform(emitter: &mut Emitter) {
     emitter.instruction("b.lo __rt_random_uniform_loop");                       // yes — discard and resample
     emitter.instruction("ldr w1, [sp, #0]");                                    // reload the exclusive upper bound
     emitter.instruction("udiv w10, w0, w1");                                    // quotient = candidate / bound
-    emitter.instruction("msub w0, w10, w1, w0");                               // remainder = candidate % bound
+    emitter.instruction("msub w0, w10, w1, w0");                                // remainder = candidate % bound
 
     emitter.label("__rt_random_uniform_done");
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address

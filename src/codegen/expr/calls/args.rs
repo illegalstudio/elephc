@@ -249,16 +249,16 @@ fn emit_adjust_sp(emitter: &mut Emitter, amount: usize, subtract: bool) {
     while remaining > 0 {
         let chunk = remaining.min(4080);
         if subtract {
-            emitter.instruction(&format!("sub sp, sp, #{}", chunk));           // reserve stack space for spilled call arguments
+            emitter.instruction(&format!("sub sp, sp, #{}", chunk));            // reserve stack space for spilled call arguments
         } else {
-            emitter.instruction(&format!("add sp, sp, #{}", chunk));           // release temporary call-argument stack space
+            emitter.instruction(&format!("add sp, sp, #{}", chunk));            // release temporary call-argument stack space
         }
         remaining -= chunk;
     }
 }
 
 fn emit_sp_address(emitter: &mut Emitter, scratch: &str, offset: usize) {
-    emitter.instruction(&format!("mov {}, sp", scratch));                      // start from the current stack pointer
+    emitter.instruction(&format!("mov {}, sp", scratch));                       // start from the current stack pointer
     let mut remaining = offset;
     while remaining > 0 {
         let chunk = remaining.min(4080);
@@ -269,23 +269,23 @@ fn emit_sp_address(emitter: &mut Emitter, scratch: &str, offset: usize) {
 
 fn emit_load_from_sp(emitter: &mut Emitter, reg: &str, offset: usize) {
     if offset == 0 {
-        emitter.instruction(&format!("ldr {}, [sp]", reg));                    // load directly from the top of the stack
+        emitter.instruction(&format!("ldr {}, [sp]", reg));                     // load directly from the top of the stack
     } else if offset <= 4095 {
-        emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, offset));       // load from a nearby stack slot with an immediate offset
+        emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, offset));        // load from a nearby stack slot with an immediate offset
     } else {
         emit_sp_address(emitter, "x9", offset);
-        emitter.instruction(&format!("ldr {}, [x9]", reg));                    // load from a far stack slot through a scratch address
+        emitter.instruction(&format!("ldr {}, [x9]", reg));                     // load from a far stack slot through a scratch address
     }
 }
 
 fn emit_store_to_sp(emitter: &mut Emitter, reg: &str, offset: usize) {
     if offset == 0 {
-        emitter.instruction(&format!("str {}, [sp]", reg));                    // store directly to the top of the stack
+        emitter.instruction(&format!("str {}, [sp]", reg));                     // store directly to the top of the stack
     } else if offset <= 4095 {
-        emitter.instruction(&format!("str {}, [sp, #{}]", reg, offset));       // store to a nearby stack slot with an immediate offset
+        emitter.instruction(&format!("str {}, [sp, #{}]", reg, offset));        // store to a nearby stack slot with an immediate offset
     } else {
         emit_sp_address(emitter, "x9", offset);
-        emitter.instruction(&format!("str {}, [x9]", reg));                    // store to a far stack slot through a scratch address
+        emitter.instruction(&format!("str {}, [x9]", reg));                     // store to a far stack slot through a scratch address
     }
 }
 

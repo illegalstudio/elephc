@@ -13,16 +13,16 @@ use crate::types::{
 
 fn emit_load_from_caller_stack(emitter: &mut Emitter, reg: &str, offset: usize) {
     if offset <= 4095 {
-        emitter.instruction(&format!("ldr {}, [x29, #{}]", reg, offset));      // load spilled incoming argument from the caller stack
+        emitter.instruction(&format!("ldr {}, [x29, #{}]", reg, offset));       // load spilled incoming argument from the caller stack
     } else {
         emitter.instruction("mov x9, x29");                                     // seed a scratch pointer from the caller frame base
         let mut remaining = offset;
         while remaining > 0 {
             let chunk = remaining.min(4080);
-            emitter.instruction(&format!("add x9, x9, #{}", chunk));           // advance the scratch pointer toward the spilled argument slot
+            emitter.instruction(&format!("add x9, x9, #{}", chunk));            // advance the scratch pointer toward the spilled argument slot
             remaining -= chunk;
         }
-        emitter.instruction(&format!("ldr {}, [x9]", reg));                    // load spilled incoming argument through the computed address
+        emitter.instruction(&format!("ldr {}, [x9]", reg));                     // load spilled incoming argument through the computed address
     }
 }
 

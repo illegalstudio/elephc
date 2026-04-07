@@ -126,6 +126,9 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `rawurldecode()` | `rawurldecode($str): string` | URL-decode (RFC 3986) |
 | `base64_encode()` | `base64_encode($str): string` | Base64 encode |
 | `base64_decode()` | `base64_decode($str): string` | Base64 decode |
+| `bin2hex()` | `bin2hex($str): string` | Convert binary data to hex |
+| `hex2bin()` | `hex2bin($str): string` | Convert hex to binary data |
+| `nl2br()` | `nl2br($str): string` | Insert `<br />` before newlines |
 | `ctype_alpha()` | `ctype_alpha($str): bool` | All chars are A-Z/a-z |
 | `ctype_digit()` | `ctype_digit($str): bool` | All chars are 0-9 |
 | `ctype_alnum()` | `ctype_alnum($str): bool` | All chars are alphanumeric |
