@@ -12,6 +12,8 @@ pub(crate) use data::emit_runtime_data_fixed;
 pub(crate) use data::emit_runtime_data_user;
 
 pub(crate) fn emit_runtime(emitter: &mut Emitter) {
+    emit_optional_linux_crypto_decls(emitter);
+
     // String runtime functions
     strings::emit_itoa(emitter);
     strings::emit_ftoa(emitter);
@@ -226,4 +228,31 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     pointers::emit_ptr_check_nonnull(emitter);
     pointers::emit_str_to_cstr(emitter);
     pointers::emit_cstr_to_str(emitter);
+}
+
+fn emit_optional_linux_crypto_decls(emitter: &mut Emitter) {
+    if emitter.platform == super::platform::Platform::Linux {
+        emitter.raw(".weak MD5");
+        emitter.raw(".weak SHA1");
+        emitter.raw(".weak SHA256");
+        emitter.blank();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::Platform;
+
+    #[test]
+    fn test_linux_runtime_marks_crypto_symbols_weak() {
+        let mut emitter = Emitter::new();
+        emitter.platform = Platform::Linux;
+        emit_runtime(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains(".weak MD5\n"));
+        assert!(asm.contains(".weak SHA1\n"));
+        assert!(asm.contains(".weak SHA256\n"));
+    }
 }
