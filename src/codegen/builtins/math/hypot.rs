@@ -26,6 +26,6 @@ pub fn emit(
     }
     emitter.instruction("fmov d1, d0");                                         // move y to d1 (second arg)
     emitter.instruction("ldr d0, [sp], #16");                                   // restore x to d0 (first arg)
-    emitter.instruction("bl _hypot");                                           // call libc hypot(x, y) → d0
+    emitter.bl_c("hypot");                                           // call libc hypot(x, y) → d0
     Some(PhpType::Float)
 }

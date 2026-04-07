@@ -9,8 +9,8 @@ pub fn emit_feof(emitter: &mut Emitter) {
     emitter.label_global("__rt_feof");
 
     // -- load eof flag for this fd from _eof_flags array --
-    emitter.instruction("adrp x9, _eof_flags@PAGE");                            // load page address of eof flags array
-    emitter.instruction("add x9, x9, _eof_flags@PAGEOFF");                      // resolve exact address of eof flags
+    emitter.adrp("x9", "_eof_flags");                            // load page address of eof flags array
+    emitter.add_lo12("x9", "x9", "_eof_flags");                      // resolve exact address of eof flags
     emitter.instruction("ldrb w0, [x9, x0]");                                   // load _eof_flags[fd] into return register
     emitter.instruction("ret");                                                 // return to caller
 }

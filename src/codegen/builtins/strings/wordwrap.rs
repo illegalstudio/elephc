@@ -29,8 +29,8 @@ pub fn emit(
         emitter.instruction("mov x5, x2");                                      // break len
     } else {
         let (label, len) = data.add_string(b"\n");
-        emitter.instruction(&format!("adrp x4, {}@PAGE", label));               // load default break "\n"
-        emitter.instruction(&format!("add x4, x4, {}@PAGEOFF", label));         // resolve address
+        emitter.adrp("x4", &format!("{}", label));               // load default break "\n"
+        emitter.add_lo12("x4", "x4", &format!("{}", label));         // resolve address
         emitter.instruction(&format!("mov x5, #{}", len));                      // break length = 1
     }
     emitter.instruction("ldp x1, x2, [sp], #16");                               // pop input string

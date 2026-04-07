@@ -30,12 +30,11 @@ pub fn emit(
         PhpType::Array(elem_ty) => {
             // -- print "Array\n" --
             let (lbl, len) = data.add_string(b"Array\n");
-            emitter.instruction(&format!("adrp x1, {}@PAGE", lbl));             // load "Array\n" page
-            emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", lbl));       // resolve address
+            emitter.adrp("x1", &format!("{}", lbl));             // load "Array\n" page
+            emitter.add_lo12("x1", "x1", &format!("{}", lbl));       // resolve address
             emitter.instruction(&format!("mov x2, #{}", len));                  // string length
             emitter.instruction("mov x0, #1");                                  // fd = stdout
-            emitter.instruction("mov x16, #4");                                 // syscall write
-            emitter.instruction("svc #0x80");                                   // invoke kernel
+            emitter.syscall(4);
             let _ = elem_ty;
         }
         _ => {

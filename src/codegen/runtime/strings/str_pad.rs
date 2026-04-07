@@ -20,11 +20,11 @@ pub fn emit_str_pad(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_str_pad_noop");                              // already long enough → return copy
 
     // -- set up concat_buf destination --
-    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load concat offset page
-    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve address
+    emitter.adrp("x9", "_concat_off");                           // load concat offset page
+    emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve address
     emitter.instruction("ldr x10, [x9]");                                       // load current offset
-    emitter.instruction("adrp x11, _concat_buf@PAGE");                          // load concat buffer page
-    emitter.instruction("add x11, x11, _concat_buf@PAGEOFF");                   // resolve address
+    emitter.adrp("x11", "_concat_buf");                          // load concat buffer page
+    emitter.add_lo12("x11", "x11", "_concat_buf");                   // resolve address
     emitter.instruction("add x12, x11, x10");                                   // destination pointer
     emitter.instruction("mov x13, x12");                                        // save result start
 
@@ -96,8 +96,8 @@ pub fn emit_str_pad(emitter: &mut Emitter) {
     emitter.label("__rt_str_pad_done");
     emitter.instruction("mov x1, x13");                                         // result pointer
     emitter.instruction("sub x2, x12, x13");                                    // result length
-    emitter.instruction("adrp x9, _concat_off@PAGE");                           // update concat offset
-    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve address
+    emitter.adrp("x9", "_concat_off");                           // update concat offset
+    emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve address
     emitter.instruction("ldr x10, [x9]");                                       // load current offset
     emitter.instruction("add x10, x10, x2");                                    // advance by result length
     emitter.instruction("str x10, [x9]");                                       // store updated offset

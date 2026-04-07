@@ -18,8 +18,7 @@ pub fn emit(
     // -- invoke close syscall --
     let success = ctx.next_label("fclose_ok");
     let done = ctx.next_label("fclose_done");
-    emitter.instruction("mov x16, #6");                                         // syscall 6 = close
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(6);
     emitter.instruction("cmp x0, #0");                                          // check if close succeeded
     emitter.instruction(&format!("b.eq {}", success));                          // branch if no error
     emitter.instruction("mov x0, #0");                                          // return false on error

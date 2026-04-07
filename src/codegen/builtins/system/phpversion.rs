@@ -14,8 +14,8 @@ pub fn emit(
     emitter.comment("phpversion()");
     // -- return hardcoded version string from Cargo.toml --
     let (label, len) = data.add_string(b"0.7.1");
-    emitter.instruction(&format!("adrp x1, {}@PAGE", label));                   // load page address of version string
-    emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", label));             // resolve exact address of version string
+    emitter.adrp("x1", &format!("{}", label));                   // load page address of version string
+    emitter.add_lo12("x1", "x1", &format!("{}", label));             // resolve exact address of version string
     emitter.instruction(&format!("mov x2, #{}", len));                          // string length = 5
     Some(PhpType::Str)
 }

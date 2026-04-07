@@ -20,7 +20,7 @@ pub fn emit_getcwd(emitter: &mut Emitter) {
 
     // -- call libc getcwd --
     emitter.instruction("mov x1, #1024");                                       // buffer size
-    emitter.instruction("bl _getcwd");                                          // getcwd(buf, size), x0=buf on success
+    emitter.bl_c("getcwd");                                          // getcwd(buf, size), x0=buf on success
 
     // -- calculate string length by scanning for null --
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload buffer pointer as string start

@@ -14,8 +14,8 @@ pub fn emit(
     emitter.comment("sys_get_temp_dir()");
     let (lbl, len) = data.add_string(b"/tmp");
     // -- load "/tmp" string literal --
-    emitter.instruction(&format!("adrp x1, {}@PAGE", lbl));                     // load "/tmp" string page address
-    emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", lbl));               // resolve "/tmp" string offset
+    emitter.adrp("x1", &format!("{}", lbl));                     // load "/tmp" string page address
+    emitter.add_lo12("x1", "x1", &format!("{}", lbl));               // resolve "/tmp" string offset
     emitter.instruction(&format!("mov x2, #{}", len));                          // string length = 4
     Some(PhpType::Str)
 }

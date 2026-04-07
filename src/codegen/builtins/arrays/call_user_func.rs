@@ -43,8 +43,8 @@ pub fn emit(
         };
         let label = function_symbol(&func_name);
         sig = ctx.functions.get(&func_name).cloned();
-        emitter.instruction(&format!("adrp x19, {}@PAGE", label));              // load page address of callback function
-        emitter.instruction(&format!("add x19, x19, {}@PAGEOFF", label));       // resolve full address of callback function
+        emitter.adrp("x19", &format!("{}", label));              // load page address of callback function
+        emitter.add_lo12("x19", "x19", &format!("{}", label));       // resolve full address of callback function
     }
     let ret_ty = sig
         .as_ref()
@@ -65,8 +65,8 @@ pub fn emit(
                 if ctx.global_vars.contains(var_name) {
                     let label = format!("_gvar_{}", var_name);
                     emitter.comment(&format!("call_user_func ref arg: address of global ${}", var_name));
-                    emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page of global var
-                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); //resolve global var address
+                    emitter.adrp("x0", &format!("{}", label));   // load page of global var
+                    emitter.add_lo12("x0", "x0", &format!("{}", label)); //resolve global var address
                 } else if ctx.ref_params.contains(var_name) {
                     let var = ctx.variables.get(var_name).expect("undefined ref callback argument");
                     emitter.comment(&format!("call_user_func ref arg: forward underlying reference for ${}", var_name));

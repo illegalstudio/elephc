@@ -88,8 +88,8 @@ pub(super) fn emit_expr_call(
                 if ctx.global_vars.contains(var_name) {
                     let label = format!("_gvar_{}", var_name);
                     emitter.comment(&format!("indirect ref arg: address of global ${}", var_name));
-                    emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page of global var
-                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); //resolve global var address
+                    emitter.adrp("x0", &format!("{}", label));   // load page of global var
+                    emitter.add_lo12("x0", "x0", &format!("{}", label)); //resolve global var address
                 } else if ctx.ref_params.contains(var_name) {
                     let Some(var) = ctx.variables.get(var_name) else {
                         emitter.comment(&format!("WARNING: undefined ref variable ${}", var_name));

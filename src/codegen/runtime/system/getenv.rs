@@ -17,7 +17,7 @@ pub fn emit_getenv(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_cstr");                                        // convert to C string → x0=null-terminated ptr
 
     // -- call libc getenv --
-    emitter.instruction("bl _getenv");                                          // getenv(name) → x0=value ptr or NULL
+    emitter.bl_c("getenv");                                          // getenv(name) → x0=value ptr or NULL
 
     // -- check for NULL return --
     emitter.instruction("cbz x0, __rt_getenv_empty");                           // if NULL, return empty string

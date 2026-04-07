@@ -18,8 +18,7 @@ pub fn emit(
     // -- call lseek(fd, 0, SEEK_SET) to reset position to beginning --
     emitter.instruction("mov x1, #0");                                          // offset = 0
     emitter.instruction("mov x2, #0");                                          // whence = SEEK_SET (0)
-    emitter.instruction("mov x16, #199");                                       // syscall 199 = lseek
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(199);
     emitter.instruction("mov x0, #1");                                          // always return true
     Some(PhpType::Bool)
 }

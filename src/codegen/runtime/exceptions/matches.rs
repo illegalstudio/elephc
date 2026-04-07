@@ -9,11 +9,11 @@ pub fn emit_exception_matches(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_exception_matches_no");                   // null means there is no active exception object to test
     emitter.instruction("ldr x9, [x0]");                                        // x9 = runtime class_id stored in the thrown object header
     emitter.instruction("cbnz x2, __rt_exception_matches_interface");           // x2 != 0 means this catch target is an interface, not a class
-    emitter.instruction("adrp x10, _class_gc_desc_count@PAGE");                 // load page of the emitted class-count table
-    emitter.instruction("add x10, x10, _class_gc_desc_count@PAGEOFF");          // resolve the emitted class-count table address
+    emitter.adrp("x10", "_class_gc_desc_count");                 // load page of the emitted class-count table
+    emitter.add_lo12("x10", "x10", "_class_gc_desc_count");          // resolve the emitted class-count table address
     emitter.instruction("ldr x10, [x10]");                                      // x10 = total number of emitted classes
-    emitter.instruction("adrp x11, _class_parent_ids@PAGE");                    // load page of the runtime parent-id table
-    emitter.instruction("add x11, x11, _class_parent_ids@PAGEOFF");             // resolve the runtime parent-id table address
+    emitter.adrp("x11", "_class_parent_ids");                    // load page of the runtime parent-id table
+    emitter.add_lo12("x11", "x11", "_class_parent_ids");             // resolve the runtime parent-id table address
     emitter.instruction("mov x12, #-1");                                        // x12 = sentinel parent id used for root classes
 
     // -- walk parent links until we either match or hit the root --
@@ -30,13 +30,13 @@ pub fn emit_exception_matches(emitter: &mut Emitter) {
 
     // -- interface catch: scan the class's emitted interface id list --
     emitter.label("__rt_exception_matches_interface");
-    emitter.instruction("adrp x10, _class_gc_desc_count@PAGE");                 // load page of the emitted class-count table
-    emitter.instruction("add x10, x10, _class_gc_desc_count@PAGEOFF");          // resolve the emitted class-count table address
+    emitter.adrp("x10", "_class_gc_desc_count");                 // load page of the emitted class-count table
+    emitter.add_lo12("x10", "x10", "_class_gc_desc_count");          // resolve the emitted class-count table address
     emitter.instruction("ldr x10, [x10]");                                      // x10 = total number of emitted classes
     emitter.instruction("cmp x9, x10");                                         // is the thrown object's class_id within the emitted class table?
     emitter.instruction("b.hs __rt_exception_matches_no");                      // out-of-range class ids cannot satisfy an interface catch safely
-    emitter.instruction("adrp x11, _class_interface_ptrs@PAGE");                // load page of the class-to-interface metadata table
-    emitter.instruction("add x11, x11, _class_interface_ptrs@PAGEOFF");         // resolve the class-to-interface metadata table address
+    emitter.adrp("x11", "_class_interface_ptrs");                // load page of the class-to-interface metadata table
+    emitter.add_lo12("x11", "x11", "_class_interface_ptrs");         // resolve the class-to-interface metadata table address
     emitter.instruction("lsl x12, x9, #3");                                     // scale class_id by 8 bytes per metadata pointer
     emitter.instruction("ldr x11, [x11, x12]");                                 // x11 = pointer to this class's interface metadata block
     emitter.instruction("ldr x12, [x11]");                                      // x12 = number of emitted interfaces for this class

@@ -36,8 +36,8 @@ pub(super) fn emit_enum_case(
 ) -> PhpType {
     let label = crate::names::enum_case_symbol(enum_name, case_name);
     emitter.comment(&format!("load enum case {}::{}", enum_name, case_name));
-    emitter.instruction(&format!("adrp x9, {}@PAGE", label));                   // load page of the enum singleton slot
-    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label));             // resolve the enum singleton slot address
+    emitter.adrp("x9", &format!("{}", label));                   // load page of the enum singleton slot
+    emitter.add_lo12("x9", "x9", &format!("{}", label));             // resolve the enum singleton slot address
     emitter.instruction("ldr x0, [x9]");                                        // load the enum singleton pointer from its global slot
     PhpType::Object(enum_name.to_string())
 }
@@ -48,8 +48,8 @@ pub(super) fn push_magic_property_name_arg(
     data: &mut DataSection,
 ) {
     let (label, len) = data.add_string(property.as_bytes());
-    emitter.instruction(&format!("adrp x1, {}@PAGE", label));                   // load page of the magic-property name string
-    emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", label));             // resolve the magic-property name string address
+    emitter.adrp("x1", &format!("{}", label));                   // load page of the magic-property name string
+    emitter.add_lo12("x1", "x1", &format!("{}", label));             // resolve the magic-property name string address
     emitter.instruction(&format!("mov x2, #{}", len));                          // pass the magic-property name length
     emitter.instruction("stp x1, x2, [sp, #-16]!");                             // push the magic-property name argument
 }

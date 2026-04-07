@@ -16,14 +16,14 @@ pub fn emit_sha1(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x1");                                          // x0 = input string pointer
     emitter.instruction("mov w1, w2");                                          // w1 = input length (CC_LONG = uint32)
     emitter.instruction("add x2, sp, #0");                                      // x2 = output buffer (20 bytes at bottom of frame)
-    emitter.instruction("bl _CC_SHA1");                                         // call CommonCrypto SHA1
+    emitter.bl_c("CC_SHA1");                                         // call CommonCrypto SHA1
 
     // -- convert 20 raw bytes to 40 hex chars --
-    emitter.instruction("adrp x6, _concat_off@PAGE");                           // load concat offset page
-    emitter.instruction("add x6, x6, _concat_off@PAGEOFF");                     // resolve address
+    emitter.adrp("x6", "_concat_off");                           // load concat offset page
+    emitter.add_lo12("x6", "x6", "_concat_off");                     // resolve address
     emitter.instruction("ldr x8, [x6]");                                        // load current offset
-    emitter.instruction("adrp x7, _concat_buf@PAGE");                           // load concat buffer page
-    emitter.instruction("add x7, x7, _concat_buf@PAGEOFF");                     // resolve address
+    emitter.adrp("x7", "_concat_buf");                           // load concat buffer page
+    emitter.add_lo12("x7", "x7", "_concat_buf");                     // resolve address
     emitter.instruction("add x9, x7, x8");                                      // destination pointer
     emitter.instruction("mov x10, x9");                                         // save result start
     emitter.instruction("add x11, sp, #0");                                     // source = raw SHA1 bytes

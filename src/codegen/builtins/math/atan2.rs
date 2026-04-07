@@ -26,6 +26,6 @@ pub fn emit(
     }
     emitter.instruction("fmov d1, d0");                                         // move x to d1 (second arg)
     emitter.instruction("ldr d0, [sp], #16");                                   // restore y to d0 (first arg)
-    emitter.instruction("bl _atan2");                                           // call libc atan2(y, x) → d0
+    emitter.bl_c("atan2");                                           // call libc atan2(y, x) → d0
     Some(PhpType::Float)
 }

@@ -73,14 +73,12 @@ fn emit_missing_tostring_fatal(emitter: &mut Emitter, data: &mut DataSection, cl
     );
     let (label, len) = data.add_string(message.as_bytes());
     emitter.instruction("mov x0, #2");                                          // fd = stderr for fatal conversion diagnostics
-    emitter.instruction(&format!("adrp x1, {}@PAGE", label));                   // load page of the fatal conversion message
-    emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", label));             // resolve the fatal conversion message address
+    emitter.adrp("x1", &format!("{}", label));                   // load page of the fatal conversion message
+    emitter.add_lo12("x1", "x1", &format!("{}", label));             // resolve the fatal conversion message address
     emitter.instruction(&format!("mov x2, #{}", len));                          // pass the fatal conversion message length
-    emitter.instruction("mov x16, #4");                                         // syscall 4 = write on macOS
-    emitter.instruction("svc #0x80");                                           // print the fatal object-to-string error
+    emitter.syscall(4);
     emitter.instruction("mov x0, #1");                                          // exit status 1 indicates abnormal termination
-    emitter.instruction("mov x16, #1");                                         // syscall 1 = exit on macOS
-    emitter.instruction("svc #0x80");                                           // terminate immediately after the fatal conversion error
+    emitter.syscall(1);
 }
 
 /// Replace null sentinel with 0 in x0 (for arithmetic/comparison with null).

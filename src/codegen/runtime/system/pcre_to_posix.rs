@@ -10,8 +10,8 @@ pub(crate) fn emit_pcre_to_posix(emitter: &mut Emitter) {
     emitter.label_global("__rt_pcre_to_posix");
 
     // -- load destination buffer address --
-    emitter.instruction("adrp x9, _cstr_buf@PAGE");                             // load page address of cstr scratch buffer
-    emitter.instruction("add x9, x9, _cstr_buf@PAGEOFF");                       // resolve exact address of cstr buffer
+    emitter.adrp("x9", "_cstr_buf");                             // load page address of cstr scratch buffer
+    emitter.add_lo12("x9", "x9", "_cstr_buf");                       // resolve exact address of cstr buffer
     emitter.instruction("mov x10, x9");                                         // save buffer start for return value
     emitter.instruction("add x11, x1, x2");                                     // x11 = end of source (ptr + len)
 
@@ -53,43 +53,43 @@ pub(crate) fn emit_pcre_to_posix(emitter: &mut Emitter) {
 
     // -- \s → [[:space:]] (11 bytes) --
     emitter.label("__rt_p2p_space");
-    emitter.instruction("adrp x15, _pcre_space@PAGE");                          // load page of replacement string
-    emitter.instruction("add x15, x15, _pcre_space@PAGEOFF");                   // resolve address
+    emitter.adrp("x15", "_pcre_space");                          // load page of replacement string
+    emitter.add_lo12("x15", "x15", "_pcre_space");                   // resolve address
     emitter.instruction("mov x16, #11");                                        // replacement length = 11
     emitter.instruction("b __rt_p2p_replace");                                  // go to copy routine
 
     // -- \d → [[:digit:]] (11 bytes) --
     emitter.label("__rt_p2p_digit");
-    emitter.instruction("adrp x15, _pcre_digit@PAGE");                          // load page of replacement string
-    emitter.instruction("add x15, x15, _pcre_digit@PAGEOFF");                   // resolve address
+    emitter.adrp("x15", "_pcre_digit");                          // load page of replacement string
+    emitter.add_lo12("x15", "x15", "_pcre_digit");                   // resolve address
     emitter.instruction("mov x16, #11");                                        // replacement length = 11
     emitter.instruction("b __rt_p2p_replace");                                  // go to copy routine
 
     // -- \w → [[:alnum:]_] (12 bytes) --
     emitter.label("__rt_p2p_word");
-    emitter.instruction("adrp x15, _pcre_word@PAGE");                           // load page of replacement string
-    emitter.instruction("add x15, x15, _pcre_word@PAGEOFF");                    // resolve address
+    emitter.adrp("x15", "_pcre_word");                           // load page of replacement string
+    emitter.add_lo12("x15", "x15", "_pcre_word");                    // resolve address
     emitter.instruction("mov x16, #12");                                        // replacement length = 12
     emitter.instruction("b __rt_p2p_replace");                                  // go to copy routine
 
     // -- \S → [^[:space:]] (12 bytes) --
     emitter.label("__rt_p2p_nspace");
-    emitter.instruction("adrp x15, _pcre_nspace@PAGE");                         // load page of replacement string
-    emitter.instruction("add x15, x15, _pcre_nspace@PAGEOFF");                  // resolve address
+    emitter.adrp("x15", "_pcre_nspace");                         // load page of replacement string
+    emitter.add_lo12("x15", "x15", "_pcre_nspace");                  // resolve address
     emitter.instruction("mov x16, #12");                                        // replacement length = 12
     emitter.instruction("b __rt_p2p_replace");                                  // go to copy routine
 
     // -- \D → [^[:digit:]] (12 bytes) --
     emitter.label("__rt_p2p_ndigit");
-    emitter.instruction("adrp x15, _pcre_ndigit@PAGE");                         // load page of replacement string
-    emitter.instruction("add x15, x15, _pcre_ndigit@PAGEOFF");                  // resolve address
+    emitter.adrp("x15", "_pcre_ndigit");                         // load page of replacement string
+    emitter.add_lo12("x15", "x15", "_pcre_ndigit");                  // resolve address
     emitter.instruction("mov x16, #12");                                        // replacement length = 12
     emitter.instruction("b __rt_p2p_replace");                                  // go to copy routine
 
     // -- \W → [^[:alnum:]_] (13 bytes) --
     emitter.label("__rt_p2p_nword");
-    emitter.instruction("adrp x15, _pcre_nword@PAGE");                          // load page of replacement string
-    emitter.instruction("add x15, x15, _pcre_nword@PAGEOFF");                   // resolve address
+    emitter.adrp("x15", "_pcre_nword");                          // load page of replacement string
+    emitter.add_lo12("x15", "x15", "_pcre_nword");                   // resolve address
     emitter.instruction("mov x16, #13");                                        // replacement length = 13
 
     // -- copy replacement string to output buffer --

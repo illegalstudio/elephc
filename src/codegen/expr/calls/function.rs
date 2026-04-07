@@ -80,8 +80,8 @@ pub(super) fn emit_function_call(
                 if ctx.global_vars.contains(var_name) {
                     let label = format!("_gvar_{}", var_name);
                     emitter.comment(&format!("ref arg: address of global ${}", var_name));
-                    emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page of global var
-                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); //add page offset
+                    emitter.adrp("x0", &format!("{}", label));   // load page of global var
+                    emitter.add_lo12("x0", "x0", &format!("{}", label)); //add page offset
                 } else if ctx.ref_params.contains(var_name) {
                     let var = match ctx.variables.get(var_name) {
                         Some(v) => v,

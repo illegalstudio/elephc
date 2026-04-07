@@ -17,6 +17,6 @@ pub fn emit(
     emit_expr(&args[0], emitter, ctx, data);
     // -- null-terminate and call libc system() which outputs directly to stdout --
     emitter.instruction("bl __rt_cstr");                                        // null-terminate command string → x0=cstr
-    emitter.instruction("bl _system");                                          // execute command, output goes directly to stdout
+    emitter.bl_c("system");                                          // execute command, output goes directly to stdout
     Some(PhpType::Void)
 }

@@ -36,7 +36,7 @@ pub fn emit(
     emitter.instruction("strb wzr, [x3, x4]");                                  // null-terminate on heap
     // -- call putenv with heap-allocated string --
     emitter.instruction("mov x0, x3");                                          // pass heap cstr to putenv
-    emitter.instruction("bl _putenv");                                          // set env var, returns 0 on success
+    emitter.bl_c("putenv");                                          // set env var, returns 0 on success
     // -- convert return value to bool (0=success → true=1) --
     emitter.instruction("cmp x0, #0");                                          // check if putenv returned 0 (success)
     emitter.instruction("cset x0, eq");                                         // x0 = 1 if success, 0 if failure

@@ -50,7 +50,7 @@ pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_preg_match_nocase");                         // skip if no icase
     emitter.instruction("orr x2, x2, #2");                                      // add REG_ICASE
     emitter.label("__rt_preg_match_nocase");
-    emitter.instruction("bl _regcomp");                                         // compile regex
+    emitter.bl_c("regcomp");                                         // compile regex
     emitter.instruction("cbnz x0, __rt_preg_match_no");                         // compile failed → no match
 
     // -- null-terminate subject --
@@ -65,12 +65,12 @@ pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #1");                                          // nmatch = 1
     emitter.instruction("add x3, sp, #32");                                     // x3 = regmatch_t buffer at sp+32
     emitter.instruction("mov x4, #0");                                          // eflags = 0
-    emitter.instruction("bl _regexec");                                         // regexec → x0=0 if match
+    emitter.bl_c("regexec");                                         // regexec → x0=0 if match
     emitter.instruction("str x0, [sp, #104]");                                  // save regexec result
 
     // -- free compiled regex --
     emitter.instruction("mov x0, sp");                                          // x0 = regex_t
-    emitter.instruction("bl _regfree");                                         // free compiled regex
+    emitter.bl_c("regfree");                                         // free compiled regex
 
     // -- return result --
     emitter.instruction("ldr x0, [sp, #104]");                                  // reload regexec result

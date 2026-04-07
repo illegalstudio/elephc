@@ -15,8 +15,7 @@ pub(crate) fn emit_microtime(emitter: &mut Emitter) {
     // -- call gettimeofday syscall --
     emitter.instruction("add x0, sp, #0");                                      // x0 = pointer to timeval struct on stack
     emitter.instruction("mov x1, #0");                                          // x1 = NULL (timezone not needed)
-    emitter.instruction("mov x16, #116");                                       // syscall 116 = gettimeofday
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(116);
 
     // -- extract tv_sec and tv_usec --
     emitter.instruction("ldr x0, [sp, #0]");                                    // x0 = tv_sec (seconds)

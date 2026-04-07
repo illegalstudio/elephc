@@ -9,8 +9,8 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.label_global("__rt_gc_collect_cycles");
 
     // -- avoid recursive re-entry while the collector is already running --
-    emitter.instruction("adrp x9, _gc_collecting@PAGE");                        // load page of the collector-active flag
-    emitter.instruction("add x9, x9, _gc_collecting@PAGEOFF");                  // resolve the collector-active flag address
+    emitter.adrp("x9", "_gc_collecting");                        // load page of the collector-active flag
+    emitter.add_lo12("x9", "x9", "_gc_collecting");                  // resolve the collector-active flag address
     emitter.instruction("ldr x10, [x9]");                                       // load the current collector-active flag
     emitter.instruction("cbnz x10, __rt_gc_collect_cycles_done");               // nested collection attempts are ignored
 
@@ -31,11 +31,11 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #64");                                    // set up the collector frame pointer
 
     // -- capture heap bounds once for the initial passes --
-    emitter.instruction("adrp x9, _heap_buf@PAGE");                             // load page of the heap buffer
-    emitter.instruction("add x9, x9, _heap_buf@PAGEOFF");                       // resolve the heap buffer base
+    emitter.adrp("x9", "_heap_buf");                             // load page of the heap buffer
+    emitter.add_lo12("x9", "x9", "_heap_buf");                       // resolve the heap buffer base
     emitter.instruction("str x9, [sp, #16]");                                   // save the heap base for later scans
-    emitter.instruction("adrp x10, _heap_off@PAGE");                            // load page of the heap offset
-    emitter.instruction("add x10, x10, _heap_off@PAGEOFF");                     // resolve the heap offset address
+    emitter.adrp("x10", "_heap_off");                            // load page of the heap offset
+    emitter.add_lo12("x10", "x10", "_heap_off");                     // resolve the heap offset address
     emitter.instruction("ldr x10, [x10]");                                      // load the current heap offset
     emitter.instruction("add x10, x9, x10");                                    // compute the current heap end
     emitter.instruction("str x10, [sp, #8]");                                   // save the initial heap end for the metadata passes
@@ -162,13 +162,13 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("sub x13, x13, #8");                                    // subtract the leading class_id field
     emitter.instruction("lsr x13, x13, #4");                                    // divide by 16 to get the number of property slots
     emitter.instruction("ldr x14, [x12]");                                      // load the runtime class_id from the object payload
-    emitter.instruction("adrp x15, _class_gc_desc_count@PAGE");                 // load page of the descriptor count table
-    emitter.instruction("add x15, x15, _class_gc_desc_count@PAGEOFF");          // resolve the descriptor count address
+    emitter.adrp("x15", "_class_gc_desc_count");                 // load page of the descriptor count table
+    emitter.add_lo12("x15", "x15", "_class_gc_desc_count");          // resolve the descriptor count address
     emitter.instruction("ldr x15, [x15]");                                      // load the number of emitted class descriptors
     emitter.instruction("cmp x14, x15");                                        // is the class_id within range?
     emitter.instruction("b.hs __rt_gc_collect_cycles_count_next");              // invalid class ids contribute no traversable edges
-    emitter.instruction("adrp x15, _class_gc_desc_ptrs@PAGE");                  // load page of the descriptor pointer table
-    emitter.instruction("add x15, x15, _class_gc_desc_ptrs@PAGEOFF");           // resolve the descriptor pointer table
+    emitter.adrp("x15", "_class_gc_desc_ptrs");                  // load page of the descriptor pointer table
+    emitter.add_lo12("x15", "x15", "_class_gc_desc_ptrs");           // resolve the descriptor pointer table
     emitter.instruction("lsl x14, x14, #3");                                    // scale class_id by 8 bytes per descriptor pointer
     emitter.instruction("ldr x14, [x15, x14]");                                 // load the property-tag descriptor pointer
     emitter.instruction("mov x15, #0");                                         // initialize the property index to zero
@@ -264,8 +264,8 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
 
     // -- pass 4: free every live refcounted block that was never marked reachable --
     emitter.label("__rt_gc_collect_cycles_free_init");
-    emitter.instruction("adrp x9, _gc_collecting@PAGE");                        // load page of the collector-active flag
-    emitter.instruction("add x9, x9, _gc_collecting@PAGEOFF");                  // resolve the collector-active flag address
+    emitter.adrp("x9", "_gc_collecting");                        // load page of the collector-active flag
+    emitter.add_lo12("x9", "x9", "_gc_collecting");                  // resolve the collector-active flag address
     emitter.instruction("mov x10, #1");                                         // mark the collector as active while reclaiming blocks
     emitter.instruction("str x10, [x9]");                                       // store collector-active = 1
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the heap base
@@ -273,8 +273,8 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.label("__rt_gc_collect_cycles_free_loop");
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the current heap header scan pointer
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the heap base for the dynamic end calculation
-    emitter.instruction("adrp x11, _heap_off@PAGE");                            // load page of the current heap offset
-    emitter.instruction("add x11, x11, _heap_off@PAGEOFF");                     // resolve the heap offset address
+    emitter.adrp("x11", "_heap_off");                            // load page of the current heap offset
+    emitter.add_lo12("x11", "x11", "_heap_off");                     // resolve the heap offset address
     emitter.instruction("ldr x11, [x11]");                                      // load the current heap offset after any tail trimming
     emitter.instruction("add x10, x10, x11");                                   // compute the current heap end after collection frees
     emitter.instruction("cmp x9, x10");                                         // reached the end of the current bump region?
@@ -333,8 +333,8 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b __rt_gc_collect_cycles_free_loop");                  // continue scanning for unreachable graph nodes
 
     emitter.label("__rt_gc_collect_cycles_finish");
-    emitter.instruction("adrp x9, _gc_collecting@PAGE");                        // load page of the collector-active flag
-    emitter.instruction("add x9, x9, _gc_collecting@PAGEOFF");                  // resolve the collector-active flag address
+    emitter.adrp("x9", "_gc_collecting");                        // load page of the collector-active flag
+    emitter.add_lo12("x9", "x9", "_gc_collecting");                  // resolve the collector-active flag address
     emitter.instruction("str xzr, [x9]");                                       // mark the collector as inactive again
     emitter.instruction("ldr x19, [sp, #48]");                                  // restore the callee-saved scratch register after collection
     emitter.instruction("ldr x20, [sp, #56]");                                  // restore the callee-saved payload-size register after collection

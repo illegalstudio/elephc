@@ -28,7 +28,7 @@ pub fn emit_shuffle(emitter: &mut Emitter) {
 
     // -- generate random j in [0, i] using arc4random_uniform(i+1) --
     emitter.instruction("add x0, x19, #1");                                     // x0 = i + 1 (upper bound, exclusive)
-    emitter.instruction("bl _arc4random_uniform");                              // x0 = random value in [0, i]
+    emitter.bl_c("arc4random_uniform");                              // x0 = random value in [0, i]
 
     // -- swap data[i] and data[j] --
     emitter.instruction("ldr x1, [sp, #0]");                                    // x1 = array pointer

@@ -33,11 +33,11 @@ pub fn emit_substr_replace(emitter: &mut Emitter) {
     emitter.instruction("csel x8, x2, x8, gt");                                 // min(end, len)
 
     // -- build result: prefix + replacement + suffix --
-    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load concat offset page
-    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve address
+    emitter.adrp("x9", "_concat_off");                           // load concat offset page
+    emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve address
     emitter.instruction("ldr x10, [x9]");                                       // load current offset
-    emitter.instruction("adrp x11, _concat_buf@PAGE");                          // load concat buffer page
-    emitter.instruction("add x11, x11, _concat_buf@PAGEOFF");                   // resolve address
+    emitter.adrp("x11", "_concat_buf");                          // load concat buffer page
+    emitter.add_lo12("x11", "x11", "_concat_buf");                   // resolve address
     emitter.instruction("add x12, x11, x10");                                   // destination pointer
     emitter.instruction("mov x13, x12");                                        // save result start
 

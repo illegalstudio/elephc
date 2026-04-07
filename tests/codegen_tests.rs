@@ -5,10 +5,16 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
+use elephc::codegen::platform::Platform;
+
 static TEST_ID: AtomicU64 = AtomicU64::new(0);
 static SDK_PATH: OnceLock<String> = OnceLock::new();
 static SDK_VERSION: OnceLock<String> = OnceLock::new();
 static RUNTIME_OBJ: OnceLock<std::path::PathBuf> = OnceLock::new();
+
+fn platform() -> Platform {
+    Platform::detect()
+}
 
 fn get_sdk_path() -> &'static str {
     SDK_PATH.get_or_init(|| {
@@ -39,6 +45,16 @@ fn get_sdk_version() -> &'static str {
     })
 }
 
+/// Get the assembler command for the current platform.
+fn assembler_cmd() -> &'static str {
+    platform().assembler_cmd()
+}
+
+/// Get the linker/gcc command for the current platform.
+fn gcc_cmd() -> &'static str {
+    platform().linker_cmd()
+}
+
 /// Pre-assemble the runtime into a cached .o file. Built once per test
 /// session, reused by every test via two-object linking.
 fn get_runtime_obj() -> &'static Path {
@@ -49,12 +65,13 @@ fn get_runtime_obj() -> &'static Path {
         let asm_path = dir.join("runtime.s");
         let obj_path = dir.join("runtime.o");
         fs::write(&asm_path, &runtime_asm).unwrap();
-        let status = Command::new("as")
-            .args(["-arch", "arm64", "-o"])
-            .arg(&obj_path)
-            .arg(&asm_path)
-            .status()
-            .expect("failed to assemble runtime");
+
+        let mut cmd = Command::new(assembler_cmd());
+        if platform() == Platform::MacOS {
+            cmd.args(["-arch", "arm64"]);
+        }
+        cmd.arg("-o").arg(&obj_path).arg(&asm_path);
+        let status = cmd.status().expect("failed to assemble runtime");
         assert!(status.success(), "runtime assembler failed");
         obj_path
     })
@@ -66,21 +83,33 @@ fn assemble_custom_runtime(heap_size: usize, dir: &Path) -> std::path::PathBuf {
     let asm_path = dir.join("runtime.s");
     let obj_path = dir.join("runtime.o");
     fs::write(&asm_path, &runtime_asm).unwrap();
-    let status = Command::new("as")
-        .args(["-arch", "arm64", "-o"])
-        .arg(&obj_path)
-        .arg(&asm_path)
-        .status()
-        .expect("failed to assemble custom runtime");
+
+    let mut cmd = Command::new(assembler_cmd());
+    if platform() == Platform::MacOS {
+        cmd.args(["-arch", "arm64"]);
+    }
+    cmd.arg("-o").arg(&obj_path).arg(&asm_path);
+    let status = cmd.status().expect("failed to assemble custom runtime");
     assert!(status.success(), "custom runtime assembler failed");
     obj_path
 }
 
 fn default_link_paths() -> Vec<String> {
     let mut paths = Vec::new();
-    for candidate in ["/opt/homebrew/lib", "/usr/local/lib"] {
-        if std::path::Path::new(candidate).exists() {
-            paths.push(candidate.to_string());
+    match platform() {
+        Platform::MacOS => {
+            for candidate in ["/opt/homebrew/lib", "/usr/local/lib"] {
+                if std::path::Path::new(candidate).exists() {
+                    paths.push(candidate.to_string());
+                }
+            }
+        }
+        Platform::Linux => {
+            for candidate in ["/usr/aarch64-linux-gnu/lib", "/usr/lib/aarch64-linux-gnu"] {
+                if std::path::Path::new(candidate).exists() {
+                    paths.push(candidate.to_string());
+                }
+            }
         }
     }
     paths
@@ -94,33 +123,73 @@ fn link_binary(
     extra_link_paths: &[String],
     extra_frameworks: &[String],
 ) {
-    let mut ld_cmd = Command::new("ld");
-    ld_cmd.args(["-arch", "arm64", "-e", "_main", "-o"]);
-    ld_cmd.arg(bin_path);
-    ld_cmd.arg(obj_path);
-    ld_cmd.arg(runtime_obj);
-    ld_cmd.args(["-lSystem", "-syslibroot"]);
-    ld_cmd.arg(get_sdk_path());
-    ld_cmd.args([
-        "-platform_version",
-        "macos",
-        get_sdk_version(),
-        get_sdk_version(),
-    ]);
-    for path in extra_link_paths {
-        ld_cmd.arg(format!("-L{}", path));
-    }
-    for lib in extra_link_libs {
-        if lib != "System" {
-            ld_cmd.arg(format!("-l{}", lib));
+    match platform() {
+        Platform::MacOS => {
+            let mut ld_cmd = Command::new("ld");
+            ld_cmd.args(["-arch", "arm64", "-e", "_main", "-o"]);
+            ld_cmd.arg(bin_path);
+            ld_cmd.arg(obj_path);
+            ld_cmd.arg(runtime_obj);
+            ld_cmd.args(["-lSystem", "-syslibroot"]);
+            ld_cmd.arg(get_sdk_path());
+            ld_cmd.args([
+                "-platform_version",
+                "macos",
+                get_sdk_version(),
+                get_sdk_version(),
+            ]);
+            for path in extra_link_paths {
+                ld_cmd.arg(format!("-L{}", path));
+            }
+            for lib in extra_link_libs {
+                if lib != "System" {
+                    ld_cmd.arg(format!("-l{}", lib));
+                }
+            }
+            for framework in extra_frameworks {
+                ld_cmd.args(["-framework", framework]);
+            }
+            let ld_status = ld_cmd.status().expect("failed to run linker");
+            assert!(ld_status.success(), "linker failed");
+        }
+        Platform::Linux => {
+            let mut ld_cmd = Command::new(gcc_cmd());
+            ld_cmd.arg("-o").arg(bin_path);
+            ld_cmd.arg(obj_path);
+            ld_cmd.arg(runtime_obj);
+            if extra_link_libs.is_empty() {
+                ld_cmd.arg("-static");
+            }
+            for path in extra_link_paths {
+                ld_cmd.arg(format!("-L{}", path));
+            }
+            for lib in extra_link_libs {
+                if lib != "System" {
+                    ld_cmd.arg(format!("-l{}", lib));
+                }
+            }
+            // Math and POSIX regex libraries needed on Linux
+            ld_cmd.args(["-lm", "-lpthread"]);
+            let ld_status = ld_cmd.status().expect("failed to run linker");
+            assert!(ld_status.success(), "linker failed");
         }
     }
-    for framework in extra_frameworks {
-        ld_cmd.args(["-framework", framework]);
-    }
+}
 
-    let ld_status = ld_cmd.status().expect("failed to run linker");
-    assert!(ld_status.success(), "linker failed");
+/// Run a compiled binary, using qemu on Linux x86_64 for ARM64 binaries.
+fn run_binary(bin_path: &Path, dir: &Path) -> std::process::Output {
+    if platform() == Platform::Linux && cfg!(target_arch = "x86_64") {
+        Command::new("qemu-aarch64-static")
+            .arg(bin_path)
+            .current_dir(dir)
+            .output()
+            .expect("failed to run compiled binary via qemu")
+    } else {
+        Command::new(bin_path)
+            .current_dir(dir)
+            .output()
+            .expect("failed to run compiled binary")
+    }
 }
 
 fn assemble_and_run(
@@ -137,12 +206,12 @@ fn assemble_and_run(
 
     fs::write(&asm_path, user_asm).unwrap();
 
-    let as_status = Command::new("as")
-        .args(["-arch", "arm64", "-o"])
-        .arg(&obj_path)
-        .arg(&asm_path)
-        .status()
-        .expect("failed to run assembler");
+    let mut as_cmd = Command::new(assembler_cmd());
+    if platform() == Platform::MacOS {
+        as_cmd.args(["-arch", "arm64"]);
+    }
+    as_cmd.arg("-o").arg(&obj_path).arg(&asm_path);
+    let as_status = as_cmd.status().expect("failed to run assembler");
     assert!(as_status.success(), "assembler failed");
 
     link_binary(
@@ -154,11 +223,8 @@ fn assemble_and_run(
         extra_frameworks,
     );
 
-    let output = Command::new(&bin_path)
-        .current_dir(dir)
-        .output()
-        .expect("failed to run compiled binary");
-    assert!(output.status.success(), "binary exited with error");
+    let output = run_binary(&bin_path, dir);
+    assert!(output.status.success(), "binary exited with error: {}", String::from_utf8_lossy(&output.stderr));
 
     String::from_utf8(output.stdout).unwrap()
 }
@@ -342,12 +408,12 @@ fn assemble_and_run_capture(
 
     fs::write(&asm_path, user_asm).unwrap();
 
-    let as_status = Command::new("as")
-        .args(["-arch", "arm64", "-o"])
-        .arg(&obj_path)
-        .arg(&asm_path)
-        .status()
-        .expect("failed to run assembler");
+    let mut as_cmd = Command::new(assembler_cmd());
+    if platform() == Platform::MacOS {
+        as_cmd.args(["-arch", "arm64"]);
+    }
+    as_cmd.arg("-o").arg(&obj_path).arg(&asm_path);
+    let as_status = as_cmd.status().expect("failed to run assembler");
     assert!(as_status.success(), "assembler failed");
 
     link_binary(
@@ -359,10 +425,7 @@ fn assemble_and_run_capture(
         extra_frameworks,
     );
 
-    let output = Command::new(&bin_path)
-        .current_dir(dir)
-        .output()
-        .expect("failed to run compiled binary");
+    let output = run_binary(&bin_path, dir);
 
     ProgramOutput {
         stdout: String::from_utf8(output.stdout).unwrap(),
@@ -385,12 +448,12 @@ fn assemble_and_run_expect_failure(
 
     fs::write(&asm_path, user_asm).unwrap();
 
-    let as_status = Command::new("as")
-        .args(["-arch", "arm64", "-o"])
-        .arg(&obj_path)
-        .arg(&asm_path)
-        .status()
-        .expect("failed to run assembler");
+    let mut as_cmd = Command::new(assembler_cmd());
+    if platform() == Platform::MacOS {
+        as_cmd.args(["-arch", "arm64"]);
+    }
+    as_cmd.arg("-o").arg(&obj_path).arg(&asm_path);
+    let as_status = as_cmd.status().expect("failed to run assembler");
     assert!(as_status.success(), "assembler failed");
 
     link_binary(
@@ -402,10 +465,7 @@ fn assemble_and_run_expect_failure(
         extra_frameworks,
     );
 
-    let output = Command::new(&bin_path)
-        .current_dir(dir)
-        .output()
-        .expect("failed to run compiled binary");
+    let output = run_binary(&bin_path, dir);
     assert!(!output.status.success(), "binary unexpectedly succeeded");
 
     String::from_utf8(output.stderr).unwrap()
@@ -457,12 +517,18 @@ fn compile_source_to_asm_with_defines(
         gc_stats,
         heap_debug,
     );
+    // user assembly is already platform-correct (emitters handle platform at emit time)
     (user_asm, runtime_asm, check_result.required_libraries)
 }
 
 fn inject_main_exit_harness(asm: &str, harness: &str) -> String {
-    let needle = "    mov x0, #0\n    mov x16, #1\n    svc #0x80";
-    let replacement = format!("{harness}\n    mov x0, #0\n    mov x16, #1\n    svc #0x80");
+    let needle = match platform() {
+        Platform::MacOS => "    mov x0, #0\n    mov x16, #1\n    svc #0x80",
+        Platform::Linux => "    mov x0, #0\n    mov x8, #93\n    svc #0",
+    };
+    // Harness strings are written in macOS assembly dialect; transform for Linux if needed
+    let harness = platform().transform_assembly(harness);
+    let replacement = format!("{harness}\n{needle}");
     let patched = asm.replacen(needle, &replacement, 1);
     assert_ne!(patched, asm, "failed to inject main exit harness");
     patched
@@ -846,10 +912,7 @@ fn compile_cli_file_and_run(source: &str, defines: &[&str]) -> String {
     );
 
     let bin_path = dir.join("main");
-    let output = Command::new(&bin_path)
-        .current_dir(&dir)
-        .output()
-        .expect("failed to run compiled CLI binary");
+    let output = run_binary(&bin_path, &dir);
     assert!(
         output.status.success(),
         "CLI-compiled binary exited with error"
@@ -932,6 +995,7 @@ fn compile_and_run_files_with_defines(
         false,
         false,
     );
+    // user assembly is already platform-correct (emitters handle platform at emit time)
 
     let elephc_out = assemble_and_run(
         &user_asm,
@@ -1499,6 +1563,7 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
         false,
         false,
     );
+    // user assembly is already platform-correct (emitters handle platform at emit time)
 
     let asm_path = dir.join("test.s");
     let obj_path = dir.join("test.o");
@@ -1506,12 +1571,12 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
 
     fs::write(&asm_path, &user_asm).unwrap();
 
-    let as_status = Command::new("as")
-        .args(["-arch", "arm64", "-o"])
-        .arg(&obj_path)
-        .arg(&asm_path)
-        .status()
-        .expect("failed to run assembler");
+    let mut as_cmd = Command::new(assembler_cmd());
+    if platform() == Platform::MacOS {
+        as_cmd.args(["-arch", "arm64"]);
+    }
+    as_cmd.arg("-o").arg(&obj_path).arg(&asm_path);
+    let as_status = as_cmd.status().expect("failed to run assembler");
     assert!(as_status.success(), "assembler failed");
 
     link_binary(
@@ -1524,7 +1589,19 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
     );
 
     use std::io::Write;
-    let mut child = Command::new(&bin_path)
+    let bin_cmd = if platform() == Platform::Linux && cfg!(target_arch = "x86_64") {
+        "qemu-aarch64-static"
+    } else {
+        bin_path.to_str().unwrap()
+    };
+    let mut cmd = if platform() == Platform::Linux && cfg!(target_arch = "x86_64") {
+        let mut c = Command::new(bin_cmd);
+        c.arg(&bin_path);
+        c
+    } else {
+        Command::new(&bin_path)
+    };
+    let mut child = cmd
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -1571,6 +1648,7 @@ fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {
         false,
         false,
     );
+    // user assembly is already platform-correct (emitters handle platform at emit time)
 
     let elephc_out = assemble_and_run(
         &user_asm,
@@ -5416,13 +5494,21 @@ mkdir("sd");
 file_put_contents("sd/a.txt", "a");
 file_put_contents("sd/b.txt", "b");
 $files = scandir("sd");
-echo count($files);
+if (
+    count($files) == 4 &&
+    in_array(".", $files) &&
+    in_array("..", $files) &&
+    in_array("a.txt", $files) &&
+    in_array("b.txt", $files)
+) {
+    echo "ok";
+}
 unlink("sd/a.txt");
 unlink("sd/b.txt");
 rmdir("sd");
 "#,
     );
-    assert_eq!(out, "4");
+    assert_eq!(out, "ok");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -5434,7 +5520,13 @@ mkdir("gd");
 file_put_contents("gd/g1.txt", "a");
 file_put_contents("gd/g2.txt", "b");
 $matches = glob("gd/*.txt");
-if (count($matches) >= 2) { echo "ok"; }
+if (
+    count($matches) == 2 &&
+    in_array("gd/g1.txt", $matches) &&
+    in_array("gd/g2.txt", $matches)
+) {
+    echo "ok";
+}
 unlink("gd/g1.txt");
 unlink("gd/g2.txt");
 rmdir("gd");

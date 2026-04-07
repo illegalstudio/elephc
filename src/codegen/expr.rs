@@ -49,8 +49,8 @@ pub fn emit_expr(
             let (label, len) = data.add_string(bytes);
             emitter.comment(&format!("load string \"{}\"", s.escape_default()));
             // -- load string pointer into x1 and length into x2 --
-            emitter.instruction(&format!("adrp x1, {}@PAGE", label));           // load page base address of string data
-            emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", label));     // add page offset to get exact string pointer
+            emitter.adrp("x1", &format!("{}", label));           // load page base address of string data
+            emitter.add_lo12("x1", "x1", &format!("{}", label));     // add page offset to get exact string pointer
             emitter.instruction(&format!("mov x2, #{}", len));                  // load string byte length into x2
             PhpType::Str
         }
@@ -63,8 +63,8 @@ pub fn emit_expr(
             emitter.comment(&format!("load float {}", f));
             let label = data.add_float(*f);
             // -- load float constant from data section into d0 --
-            emitter.instruction(&format!("adrp x9, {}@PAGE", label));           // load page base of float constant
-            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label));     // add offset to get exact float address
+            emitter.adrp("x9", &format!("{}", label));           // load page base of float constant
+            emitter.add_lo12("x9", "x9", &format!("{}", label));     // add offset to get exact float address
             emitter.instruction("ldr d0, [x9]");                                // load 64-bit double from memory into float reg
             PhpType::Float
         }
@@ -78,18 +78,36 @@ pub fn emit_expr(
                     | PhpType::Buffer(_)
                     | PhpType::Packed(_)
                     | PhpType::Callable => {
-                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); //load page of extern global GOT entry
-                        emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); //resolve extern global address
+                        {
+                            let sym = match emitter.platform {
+                                crate::codegen::platform::Platform::MacOS => format!("_{}", name),
+                                crate::codegen::platform::Platform::Linux => name.to_string(),
+                            };
+                            emitter.adrp_got("x9", &format!("{}", sym)); //load page of extern global GOT entry
+                            emitter.ldr_got_lo12("x9", "x9", &format!("{}", sym)); //resolve extern global address
+                        }
                         emitter.instruction("ldr x0, [x9]");                    // load extern integer/pointer value
                     }
                     PhpType::Float => {
-                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); //load page of extern global GOT entry
-                        emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); //resolve extern global address
+                        {
+                            let sym = match emitter.platform {
+                                crate::codegen::platform::Platform::MacOS => format!("_{}", name),
+                                crate::codegen::platform::Platform::Linux => name.to_string(),
+                            };
+                            emitter.adrp_got("x9", &format!("{}", sym)); //load page of extern global GOT entry
+                            emitter.ldr_got_lo12("x9", "x9", &format!("{}", sym)); //resolve extern global address
+                        }
                         emitter.instruction("ldr d0, [x9]");                    // load extern float value
                     }
                     PhpType::Str => {
-                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); //load page of extern global GOT entry
-                        emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); //resolve extern global address
+                        {
+                            let sym = match emitter.platform {
+                                crate::codegen::platform::Platform::MacOS => format!("_{}", name),
+                                crate::codegen::platform::Platform::Linux => name.to_string(),
+                            };
+                            emitter.adrp_got("x9", &format!("{}", sym)); //load page of extern global GOT entry
+                            emitter.ldr_got_lo12("x9", "x9", &format!("{}", sym)); //resolve extern global address
+                        }
                         emitter.instruction("ldr x0, [x9]");                    // load char* from extern global
                         emitter.instruction("bl __rt_cstr_to_str");             // convert C string to elephc string
                     }
@@ -204,8 +222,8 @@ pub fn emit_expr(
             if thrown_ty.is_refcounted() && expr_result_heap_ownership(inner) != HeapOwnership::Owned {
                 abi::emit_incref_if_refcounted(emitter, &thrown_ty);            // retain borrowed heap values before publishing them as the active exception
             }
-            emitter.instruction("adrp x9, _exc_value@PAGE");                    // load page of the current exception slot
-            emitter.instruction("add x9, x9, _exc_value@PAGEOFF");              // resolve the current exception slot address
+            emitter.adrp("x9", "_exc_value");                    // load page of the current exception slot
+            emitter.add_lo12("x9", "x9", "_exc_value");              // resolve the current exception slot address
             emitter.instruction("str x0, [x9]");                                // publish the thrown object pointer as the active exception
             emitter.instruction("bl __rt_throw_current");                       // unwind to the nearest active exception handler
             PhpType::Void
@@ -266,8 +284,8 @@ pub fn emit_expr(
                 emitter.instruction("add x1, x0, #1");                          // compute incremented value
                                                        // Store new value to global
                 let label = format!("_gvar_{}", name);
-                emitter.instruction(&format!("adrp x9, {}@PAGE", label));       // load page of global var storage
-                emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label)); // add page offset
+                emitter.adrp("x9", &format!("{}", label));       // load page of global var storage
+                emitter.add_lo12("x9", "x9", &format!("{}", label)); // add page offset
                 emitter.instruction("str x1, [x9]");                            // store incremented value to global
                 PhpType::Int
             } else if ctx.ref_params.contains(name) {
@@ -296,8 +314,8 @@ pub fn emit_expr(
                 if ctx.in_main && ctx.all_global_var_names.contains(name) {
                     // Save new value (in x1) to global
                     let label = format!("_gvar_{}", name);
-                    emitter.instruction(&format!("adrp x9, {}@PAGE", label));   // load page of global var storage
-                    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label)); //add page offset
+                    emitter.adrp("x9", &format!("{}", label));   // load page of global var storage
+                    emitter.add_lo12("x9", "x9", &format!("{}", label)); //add page offset
                     emitter.instruction("str x1, [x9]");                        // store incremented value to global
                 }
                 PhpType::Int
@@ -655,8 +673,8 @@ fn emit_function_call(
 }
 
 pub(crate) fn save_concat_offset_before_nested_call(emitter: &mut Emitter) {
-    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of caller concat offset
-    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve caller concat offset address
+    emitter.adrp("x9", "_concat_off");                           // load page of caller concat offset
+    emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve caller concat offset address
     emitter.instruction("ldr x10, [x9]");                                       // read caller concat offset before nested call
     emitter.instruction("str x10, [sp, #-16]!");                                // save caller concat offset across nested call
 }
@@ -666,8 +684,8 @@ pub(crate) fn restore_concat_offset_after_nested_call(emitter: &mut Emitter, ret
         emitter.instruction("bl __rt_str_persist");                             // persist returned string before restoring caller concat cursor
     }
     emitter.instruction("ldr x10, [sp], #16");                                  // pop saved caller concat offset from stack
-    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of caller concat offset
-    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve caller concat offset address
+    emitter.adrp("x9", "_concat_off");                           // load page of caller concat offset
+    emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve caller concat offset address
     emitter.instruction("str x10, [x9]");                                       // restore caller concat offset after nested call
 }
 
@@ -768,8 +786,8 @@ fn emit_null_coalesce(
 /// Quick helper: store x0 to _gvar_NAME (for pre-increment etc. where value is in x0)
 fn emit_global_store_inline(emitter: &mut Emitter, name: &str) {
     let label = format!("_gvar_{}", name);
-    emitter.instruction(&format!("adrp x9, {}@PAGE", label));                   // load page of global var storage
-    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label));             // add page offset
+    emitter.adrp("x9", &format!("{}", label));                   // load page of global var storage
+    emitter.add_lo12("x9", "x9", &format!("{}", label));             // add page offset
     emitter.instruction("str x0, [x9]");                                        // store value to global storage
 }
 

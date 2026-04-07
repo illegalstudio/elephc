@@ -51,7 +51,7 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_preg_match_all_nc");                         // skip
     emitter.instruction("orr x2, x2, #2");                                      // REG_ICASE
     emitter.label("__rt_preg_match_all_nc");
-    emitter.instruction("bl _regcomp");                                         // compile
+    emitter.bl_c("regcomp");                                         // compile
     emitter.instruction("cbnz x0, __rt_preg_match_all_fail");                   // fail
 
     // -- null-terminate subject --
@@ -73,7 +73,7 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #1");                                          // nmatch = 1
     emitter.instruction("add x3, sp, #32");                                     // regmatch_t at sp+32
     emitter.instruction("mov x4, #0");                                          // eflags
-    emitter.instruction("bl _regexec");                                         // execute
+    emitter.bl_c("regexec");                                         // execute
     emitter.instruction("cbnz x0, __rt_preg_match_all_done");                   // no more matches
 
     // -- found a match, increment count --
@@ -94,7 +94,7 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
 
     emitter.label("__rt_preg_match_all_done");
     emitter.instruction("mov x0, sp");                                          // regex_t
-    emitter.instruction("bl _regfree");                                         // free
+    emitter.bl_c("regfree");                                         // free
     emitter.instruction("ldr x0, [sp, #104]");                                  // return count
     emitter.instruction("b __rt_preg_match_all_ret");                           // return
 

@@ -11,22 +11,22 @@ pub(super) fn emit_static_store(
 ) {
     let data_label = static_storage_label(ctx, name);
     emitter.comment(&format!("store to static ${}", name));
-    emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));              // load page of static variable storage
-    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label));        // resolve static storage address
+    emitter.adrp("x9", &format!("{}", data_label));              // load page of static variable storage
+    emitter.add_lo12("x9", "x9", &format!("{}", data_label));        // resolve static storage address
     if matches!(ty, PhpType::Str) {
         emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve incoming string value across old-slot release
         emitter.instruction("ldr x0, [x9]");                                    // load previous string pointer from static slot
         emitter.instruction("bl __rt_heap_free_safe");                          // release previous string storage before overwrite
         emitter.instruction("ldp x1, x2, [sp], #16");                           // restore incoming string value after release
-        emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));          // reload page of static variable storage after call clobbers scratch regs
-        emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label));    // resolve static storage address again
+        emitter.adrp("x9", &format!("{}", data_label));          // reload page of static variable storage after call clobbers scratch regs
+        emitter.add_lo12("x9", "x9", &format!("{}", data_label));    // resolve static storage address again
     } else if ty.is_refcounted() {
         emitter.instruction("str x0, [sp, #-16]!");                             // preserve incoming heap pointer across old-slot decref
         emitter.instruction("ldr x0, [x9]");                                    // load previous heap pointer from static slot
         abi::emit_decref_if_refcounted(emitter, ty);
         emitter.instruction("ldr x0, [sp], #16");                               // restore incoming heap pointer for the store
-        emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));          // reload page of static variable storage after call clobbers scratch regs
-        emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label));    // resolve static storage address again
+        emitter.adrp("x9", &format!("{}", data_label));          // reload page of static variable storage after call clobbers scratch regs
+        emitter.add_lo12("x9", "x9", &format!("{}", data_label));    // resolve static storage address again
     }
     match ty {
         PhpType::Bool | PhpType::Int => {
@@ -53,22 +53,22 @@ pub(super) fn emit_global_store(
 ) {
     let label = format!("_gvar_{}", name);
     emitter.comment(&format!("store to global ${}", name));
-    emitter.instruction(&format!("adrp x9, {}@PAGE", label));                   // load page of global var storage
-    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label));             // add page offset
+    emitter.adrp("x9", &format!("{}", label));                   // load page of global var storage
+    emitter.add_lo12("x9", "x9", &format!("{}", label));             // add page offset
     if matches!(ty, PhpType::Str) {
         emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve incoming string value across old-slot release
         emitter.instruction("ldr x0, [x9]");                                    // load previous string pointer from global slot
         emitter.instruction("bl __rt_heap_free_safe");                          // release previous string storage before overwrite
         emitter.instruction("ldp x1, x2, [sp], #16");                           // restore incoming string value after release
-        emitter.instruction(&format!("adrp x9, {}@PAGE", label));               // reload page of global var storage after call clobbers scratch regs
-        emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label));         // resolve global storage address again
+        emitter.adrp("x9", &format!("{}", label));               // reload page of global var storage after call clobbers scratch regs
+        emitter.add_lo12("x9", "x9", &format!("{}", label));         // resolve global storage address again
     } else if ty.is_refcounted() {
         emitter.instruction("str x0, [sp, #-16]!");                             // preserve incoming heap pointer across old-slot decref
         emitter.instruction("ldr x0, [x9]");                                    // load previous heap pointer from global slot
         abi::emit_decref_if_refcounted(emitter, ty);
         emitter.instruction("ldr x0, [sp], #16");                               // restore incoming heap pointer for the store
-        emitter.instruction(&format!("adrp x9, {}@PAGE", label));               // reload page of global var storage after call clobbers scratch regs
-        emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label));         // resolve global storage address again
+        emitter.adrp("x9", &format!("{}", label));               // reload page of global var storage after call clobbers scratch regs
+        emitter.add_lo12("x9", "x9", &format!("{}", label));         // resolve global storage address again
     }
     match ty {
         PhpType::Bool | PhpType::Int => {
@@ -99,8 +99,8 @@ pub(super) fn emit_global_load(
     }
     let label = format!("_gvar_{}", name);
     emitter.comment(&format!("load from global ${}", name));
-    emitter.instruction(&format!("adrp x9, {}@PAGE", label));                   // load page of global var storage
-    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label));             // add page offset
+    emitter.adrp("x9", &format!("{}", label));                   // load page of global var storage
+    emitter.add_lo12("x9", "x9", &format!("{}", label));             // add page offset
     match ty {
         PhpType::Bool | PhpType::Int => {
             emitter.instruction("ldr x0, [x9]");                                // load int/bool from global storage
@@ -120,8 +120,12 @@ pub(super) fn emit_global_load(
 
 pub(super) fn emit_extern_global_store(emitter: &mut Emitter, name: &str, ty: &PhpType) {
     emitter.comment(&format!("store to extern global ${}", name));
-    emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name));                // load page of extern global GOT entry
-    emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name));        // resolve extern global address
+    let sym = match emitter.platform {
+        crate::codegen::platform::Platform::MacOS => format!("_{}", name),
+        crate::codegen::platform::Platform::Linux => name.to_string(),
+    };
+    emitter.adrp_got("x9", &format!("{}", sym));                // load page of extern global GOT entry
+    emitter.ldr_got_lo12("x9", "x9", &format!("{}", sym));        // resolve extern global address
     match ty {
         PhpType::Bool
         | PhpType::Int
@@ -154,8 +158,12 @@ pub(super) fn emit_extern_global_store(emitter: &mut Emitter, name: &str, ty: &P
 
 pub(super) fn emit_extern_global_load(emitter: &mut Emitter, name: &str, ty: &PhpType) {
     emitter.comment(&format!("load from extern global ${}", name));
-    emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name));                // load page of extern global GOT entry
-    emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name));        // resolve extern global address
+    let sym = match emitter.platform {
+        crate::codegen::platform::Platform::MacOS => format!("_{}", name),
+        crate::codegen::platform::Platform::Linux => name.to_string(),
+    };
+    emitter.adrp_got("x9", &format!("{}", sym));                // load page of extern global GOT entry
+    emitter.ldr_got_lo12("x9", "x9", &format!("{}", sym));        // resolve extern global address
     match ty {
         PhpType::Bool
         | PhpType::Int

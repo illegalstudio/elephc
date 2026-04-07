@@ -17,8 +17,7 @@ pub fn emit(
         // -- evaluate and print prompt string --
         emit_expr(&args[0], emitter, ctx, data);
         emitter.instruction("mov x0, #1");                                      // fd = stdout
-        emitter.instruction("mov x16, #4");                                     // syscall 4 = write
-        emitter.instruction("svc #0x80");                                       // write prompt to stdout
+        emitter.syscall(4);
     }
     // -- read a line from stdin --
     emitter.instruction("mov x0, #0");                                          // fd = stdin (fd 0)

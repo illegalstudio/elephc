@@ -99,7 +99,7 @@ pub(super) fn emit_binop(
             // -- arrange arguments for pow(base, exp) --
             emitter.instruction("fmov d1, d0");                                 // move exponent to d1 (second argument)
             emitter.instruction("ldr d0, [sp], #16");                           // pop base from stack into d0 (first argument)
-            emitter.instruction("bl _pow");                                     // call C library pow(base, exponent)
+            emitter.bl_c("pow");                                     // call C library pow(base, exponent)
             PhpType::Float
         }
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {

@@ -50,8 +50,8 @@ pub fn emit_extern_call(
             match &arg.kind {
                 ExprKind::StringLiteral(func_name) => {
                     let label = function_symbol(func_name);
-                    emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page address of callback target
-                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); //resolve callback function address
+                    emitter.adrp("x0", &format!("{}", label));   // load page address of callback target
+                    emitter.add_lo12("x0", "x0", &format!("{}", label)); //resolve callback function address
                     PhpType::Callable
                 }
                 _ => panic!(
@@ -105,10 +105,14 @@ pub fn emit_extern_call(
 
     // -- call the C function --
     crate::codegen::expr::save_concat_offset_before_nested_call(emitter);
-    emitter.instruction(&format!("bl _{}", name));                              // call extern C function
+    let c_sym = match emitter.platform {
+        crate::codegen::platform::Platform::MacOS => format!("_{}", name),
+        crate::codegen::platform::Platform::Linux => name.to_string(),
+    };
+    emitter.instruction(&format!("bl {}", c_sym));                              // call extern C function
     emitter.instruction("ldr x10, [sp], #16");                                  // pop saved caller concat offset from stack
-    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of caller concat offset
-    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve caller concat offset address
+    emitter.adrp("x9", "_concat_off");                           // load page of caller concat offset
+    emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve caller concat offset address
     emitter.instruction("str x10, [x9]");                                       // restore caller concat offset after extern call
 
     // -- handle return value --

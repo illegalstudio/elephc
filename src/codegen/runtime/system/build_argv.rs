@@ -14,13 +14,13 @@ pub fn emit_build_argv(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #32");                                    // set up new frame pointer
 
     // -- load argc from the global variable --
-    emitter.instruction("adrp x9, _global_argc@PAGE");                          // load page base of _global_argc into x9
-    emitter.instruction("add x9, x9, _global_argc@PAGEOFF");                    // add page offset to get exact address
+    emitter.adrp("x9", "_global_argc");                          // load page base of _global_argc into x9
+    emitter.add_lo12("x9", "x9", "_global_argc");                    // add page offset to get exact address
     emitter.instruction("ldr x19, [x9]");                                       // x19 = argc (callee-saved register)
 
     // -- load argv pointer from the global variable --
-    emitter.instruction("adrp x9, _global_argv@PAGE");                          // load page base of _global_argv into x9
-    emitter.instruction("add x9, x9, _global_argv@PAGEOFF");                    // add page offset to get exact address
+    emitter.adrp("x9", "_global_argv");                          // load page base of _global_argv into x9
+    emitter.add_lo12("x9", "x9", "_global_argv");                    // add page offset to get exact address
     emitter.instruction("ldr x20, [x9]");                                       // x20 = argv pointer (callee-saved register)
 
     // -- save callee-saved registers we're about to use --

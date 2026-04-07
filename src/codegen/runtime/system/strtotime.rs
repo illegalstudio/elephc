@@ -122,7 +122,7 @@ pub fn emit_strtotime(emitter: &mut Emitter) {
 
     // -- call mktime --
     emitter.instruction("mov x0, sp");                                          // x0 = pointer to struct tm
-    emitter.instruction("bl _mktime");                                          // mktime(&tm) → x0=timestamp
+    emitter.bl_c("mktime");                                          // mktime(&tm) → x0=timestamp
     emitter.instruction("b __rt_strtotime_ret");                                // return result
 
     // -- failure: return -1 --

@@ -76,8 +76,8 @@ fn eval_and_push_args(
                 if ctx.global_vars.contains(var_name) {
                     let label = format!("_gvar_{}", var_name);
                     emitter.comment(&format!("method ref arg: address of global ${}", var_name));
-                    emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page of global var
-                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); //resolve global var address
+                    emitter.adrp("x0", &format!("{}", label));   // load page of global var
+                    emitter.add_lo12("x0", "x0", &format!("{}", label)); //resolve global var address
                 } else if ctx.ref_params.contains(var_name) {
                     let Some(var) = ctx.variables.get(var_name) else {
                         emitter.comment(&format!("WARNING: undefined ref variable ${}", var_name));
@@ -265,8 +265,8 @@ pub(super) fn emit_dispatch_instance_method(
     save_concat_offset_before_nested_call(emitter);
     if let Some(slot) = slot {
         emitter.instruction("ldr x10, [x0]");                                   // load dynamic class id from object header
-        emitter.instruction("adrp x11, _class_vtable_ptrs@PAGE");               // load vtable pointer table page
-        emitter.instruction("add x11, x11, _class_vtable_ptrs@PAGEOFF");        // add vtable pointer table offset
+        emitter.adrp("x11", "_class_vtable_ptrs");               // load vtable pointer table page
+        emitter.add_lo12("x11", "x11", "_class_vtable_ptrs");        // add vtable pointer table offset
         emitter.instruction("ldr x11, [x11, x10, lsl #3]");                     // load class-specific vtable pointer
         emitter.instruction(&format!("ldr x11, [x11, #{}]", slot * 8));         // load method entry from vtable slot
         emitter.instruction("blr x11");                                         // call virtual method implementation
@@ -534,8 +534,8 @@ pub(super) fn emit_static_method_call(
     if dynamic_static_dispatch {
         let slot = static_slot.expect("codegen bug: dynamic static dispatch without slot");
         emitter.instruction("mov x10, x0");                                     // preserve forwarded called-class id for static-vtable lookup
-        emitter.instruction("adrp x11, _class_static_vtable_ptrs@PAGE");        // load static-vtable pointer table page
-        emitter.instruction("add x11, x11, _class_static_vtable_ptrs@PAGEOFF"); // add static-vtable pointer table offset
+        emitter.adrp("x11", "_class_static_vtable_ptrs");        // load static-vtable pointer table page
+        emitter.add_lo12("x11", "x11", "_class_static_vtable_ptrs"); // add static-vtable pointer table offset
         emitter.instruction("ldr x11, [x11, x10, lsl #3]");                     // load class-specific static-vtable pointer
         emitter.instruction(&format!("ldr x11, [x11, #{}]", slot * 8));         // load static method entry from static-vtable slot
         emitter.instruction("blr x11");                                         // call late-bound static method implementation
@@ -591,8 +591,8 @@ fn emit_enum_cases(
 
     for (i, case) in enum_info.cases.iter().enumerate() {
         let case_label = enum_case_symbol(enum_name, &case.name);
-        emitter.instruction(&format!("adrp x9, {}@PAGE", case_label));          // load page of the enum singleton slot
-        emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", case_label));    // resolve the enum singleton slot address
+        emitter.adrp("x9", &format!("{}", case_label));          // load page of the enum singleton slot
+        emitter.add_lo12("x9", "x9", &format!("{}", case_label));    // resolve the enum singleton slot address
         emitter.instruction("ldr x0, [x9]");                                    // load the enum singleton pointer from its slot
         crate::codegen::abi::emit_incref_if_refcounted(emitter, &PhpType::Object(enum_name.to_string())); // array storage becomes a new owner of the singleton reference
         emitter.instruction("ldr x9, [sp]");                                    // peek the enum cases array pointer from the stack
@@ -651,8 +651,8 @@ fn emit_enum_from_like(
                 emitter.instruction("cmp x0, x10");                             // compare the input integer with the current enum backing value
                 emitter.instruction(&format!("b.ne {}", next_label));           // continue scanning when the current enum backing value does not match
                 let case_label = enum_case_symbol(enum_name, &case.name);
-                emitter.instruction(&format!("adrp x9, {}@PAGE", case_label));  // load page of the matching enum singleton slot
-                emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", case_label)); //resolve the matching enum singleton slot address
+                emitter.adrp("x9", &format!("{}", case_label));  // load page of the matching enum singleton slot
+                emitter.add_lo12("x9", "x9", &format!("{}", case_label)); //resolve the matching enum singleton slot address
                 emitter.instruction("ldr x0, [x9]");                            // load the matching enum singleton pointer
                 emitter.instruction(&format!("b {}", success_label));           // return the matching enum singleton immediately
                 emitter.label(&next_label);
@@ -668,16 +668,16 @@ fn emit_enum_from_like(
                 let next_label = ctx.next_label("enum_from_next");
                 let (label, len) = data.add_string(value.as_bytes());
                 emitter.instruction("ldp x1, x2, [sp]");                        // reload the input string pointer and length for this candidate
-                emitter.instruction(&format!("adrp x3, {}@PAGE", label));       // load page of the candidate enum backing string
-                emitter.instruction(&format!("add x3, x3, {}@PAGEOFF", label)); // resolve the candidate enum backing string address
+                emitter.adrp("x3", &format!("{}", label));       // load page of the candidate enum backing string
+                emitter.add_lo12("x3", "x3", &format!("{}", label)); // resolve the candidate enum backing string address
                 emitter.instruction(&format!("mov x4, #{}", len));              // materialize the candidate enum backing string length
                 emitter.instruction("bl __rt_str_eq");                          // compare the input string against the candidate backing string
                 emitter.instruction(&format!("cbnz x0, {}", match_label));      // branch when the current enum backing string matches
                 emitter.instruction(&format!("b {}", next_label));              // continue scanning when the current enum backing string does not match
                 emitter.label(&match_label);
                 let case_label = enum_case_symbol(enum_name, &case.name);
-                emitter.instruction(&format!("adrp x9, {}@PAGE", case_label));  // load page of the matching enum singleton slot
-                emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", case_label)); //resolve the matching enum singleton slot address
+                emitter.adrp("x9", &format!("{}", case_label));  // load page of the matching enum singleton slot
+                emitter.add_lo12("x9", "x9", &format!("{}", case_label)); //resolve the matching enum singleton slot address
                 emitter.instruction("ldr x0, [x9]");                            // load the matching enum singleton pointer
                 if let Some(cleanup_label) = &string_cleanup_label {
                     emitter.instruction(&format!("b {}", cleanup_label));       // drop the preserved input string before returning the match

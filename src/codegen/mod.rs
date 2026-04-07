@@ -6,6 +6,7 @@ mod emit;
 mod expr;
 mod ffi;
 mod functions;
+pub mod platform;
 mod runtime;
 mod stmt;
 
@@ -239,7 +240,7 @@ pub fn generate(
     // -- prologue: set up stack frame --
     emitter.raw(".align 2");
     emitter.blank();
-    emitter.label_global("_main");
+    emitter.entry_label();
     emitter.comment("prologue");
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // grow stack for locals + saved regs
     if frame_size - 16 <= 504 {
@@ -252,17 +253,17 @@ pub fn generate(
 
     // -- save argc/argv to globals (for $argv runtime builder) --
     emitter.comment("save argc/argv to globals");
-    emitter.instruction("adrp x9, _global_argc@PAGE");                          // load page of argc global
-    emitter.instruction("add x9, x9, _global_argc@PAGEOFF");                    // add page offset
+    emitter.adrp("x9", "_global_argc");                          // load page of argc global
+    emitter.add_lo12("x9", "x9", "_global_argc");                    // add page offset
     emitter.instruction("str x0, [x9]");                                        // store argc (x0 from OS)
-    emitter.instruction("adrp x9, _global_argv@PAGE");                          // load page of argv global
-    emitter.instruction("add x9, x9, _global_argv@PAGEOFF");                    // add page offset
+    emitter.adrp("x9", "_global_argv");                          // load page of argv global
+    emitter.add_lo12("x9", "x9", "_global_argv");                    // add page offset
     emitter.instruction("str x1, [x9]");                                        // store argv pointer (x1 from OS)
 
     if heap_debug {
         emitter.comment("enable heap debug flag");
-        emitter.instruction("adrp x9, _heap_debug_enabled@PAGE");               // load page of the heap-debug runtime flag
-        emitter.instruction("add x9, x9, _heap_debug_enabled@PAGEOFF");         // resolve the heap-debug runtime flag address
+        emitter.adrp("x9", "_heap_debug_enabled");               // load page of the heap-debug runtime flag
+        emitter.add_lo12("x9", "x9", "_heap_debug_enabled");         // resolve the heap-debug runtime flag address
         emitter.instruction("mov x10, #1");                                     // compile-time option enables heap debug for this binary
         emitter.instruction("str x10, [x9]");                                   // store enabled=1 into the BSS-backed runtime flag
     }
@@ -321,40 +322,35 @@ pub fn generate(
     if gc_stats {
         emitter.comment("gc-stats: print allocation statistics to stderr");
         let (lbl_a, len_a) = data.add_string(b"GC: allocs=");
-        emitter.instruction(&format!("adrp x1, {}@PAGE", lbl_a));               // load gc stats label page
-        emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", lbl_a));         // resolve address
+        emitter.adrp("x1", &format!("{}", lbl_a));               // load gc stats label page
+        emitter.add_lo12("x1", "x1", &format!("{}", lbl_a));         // resolve address
         emitter.instruction(&format!("mov x2, #{}", len_a));                    // string length
         emitter.instruction("mov x0, #2");                                      // fd = stderr
-        emitter.instruction("mov x16, #4");                                     // syscall write
-        emitter.instruction("svc #0x80");                                       // write to stderr
-        emitter.instruction("adrp x9, _gc_allocs@PAGE");                        // load gc_allocs page
-        emitter.instruction("add x9, x9, _gc_allocs@PAGEOFF");                  // resolve address
+        emitter.syscall(4);
+        emitter.adrp("x9", "_gc_allocs");                        // load gc_allocs page
+        emitter.add_lo12("x9", "x9", "_gc_allocs");                  // resolve address
         emitter.instruction("ldr x0, [x9]");                                    // load alloc count
         emitter.instruction("bl __rt_itoa");                                    // convert to string → x1/x2
         emitter.instruction("mov x0, #2");                                      // fd = stderr
-        emitter.instruction("mov x16, #4");                                     // syscall write
-        emitter.instruction("svc #0x80");                                       // write count
+        emitter.syscall(4);
         let (lbl_f, len_f) = data.add_string(b" frees=");
-        emitter.instruction(&format!("adrp x1, {}@PAGE", lbl_f));               // load frees label page
-        emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", lbl_f));         // resolve address
+        emitter.adrp("x1", &format!("{}", lbl_f));               // load frees label page
+        emitter.add_lo12("x1", "x1", &format!("{}", lbl_f));         // resolve address
         emitter.instruction(&format!("mov x2, #{}", len_f));                    // string length
         emitter.instruction("mov x0, #2");                                      // fd = stderr
-        emitter.instruction("mov x16, #4");                                     // syscall write
-        emitter.instruction("svc #0x80");                                       // write label
-        emitter.instruction("adrp x9, _gc_frees@PAGE");                         // load gc_frees page
-        emitter.instruction("add x9, x9, _gc_frees@PAGEOFF");                   // resolve address
+        emitter.syscall(4);
+        emitter.adrp("x9", "_gc_frees");                         // load gc_frees page
+        emitter.add_lo12("x9", "x9", "_gc_frees");                   // resolve address
         emitter.instruction("ldr x0, [x9]");                                    // load free count
         emitter.instruction("bl __rt_itoa");                                    // convert to string → x1/x2
         emitter.instruction("mov x0, #2");                                      // fd = stderr
-        emitter.instruction("mov x16, #4");                                     // syscall write
-        emitter.instruction("svc #0x80");                                       // write count
+        emitter.syscall(4);
         let (lbl_nl, _) = data.add_string(b"\n");
-        emitter.instruction(&format!("adrp x1, {}@PAGE", lbl_nl));              // load newline page
-        emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", lbl_nl));        // resolve address
+        emitter.adrp("x1", &format!("{}", lbl_nl));              // load newline page
+        emitter.add_lo12("x1", "x1", &format!("{}", lbl_nl));        // resolve address
         emitter.instruction("mov x2, #1");                                      // newline length
         emitter.instruction("mov x0, #2");                                      // fd = stderr
-        emitter.instruction("mov x16, #4");                                     // syscall write
-        emitter.instruction("svc #0x80");                                       // write newline
+        emitter.syscall(4);
     }
 
     if heap_debug {
@@ -363,8 +359,7 @@ pub fn generate(
     }
 
     emitter.instruction("mov x0, #0");                                          // exit code 0
-    emitter.instruction("mov x16, #1");                                         // syscall number 1 = exit
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(1);
 
     // -- emit deferred closures --
     emit_deferred_closures(&mut emitter, &mut data, &mut ctx);
@@ -446,8 +441,8 @@ fn emit_enum_singleton_initializers(
                     }
                     EnumCaseValue::Str(value) => {
                         let (label, len) = data.add_string(value.as_bytes());
-                        emitter.instruction(&format!("adrp x10, {}@PAGE", label)); //load page of the enum string backing literal
-                        emitter.instruction(&format!("add x10, x10, {}@PAGEOFF", label)); //resolve the enum string backing literal address
+                        emitter.adrp("x10", &format!("{}", label)); //load page of the enum string backing literal
+                        emitter.add_lo12("x10", "x10", &format!("{}", label)); //resolve the enum string backing literal address
                         emitter.instruction("str x10, [x9, #8]");               // store the string backing pointer in the first property slot
                         emitter.instruction(&format!("mov x10, #{}", len));     // materialize the enum string backing length
                         emitter.instruction("str x10, [x9, #16]");              // store the string backing length in the second property word
@@ -457,8 +452,8 @@ fn emit_enum_singleton_initializers(
 
             emitter.instruction("ldr x0, [sp], #16");                           // pop initialized enum singleton pointer into x0
             let slot_label = enum_case_symbol(enum_name, &case.name);
-            emitter.instruction(&format!("adrp x9, {}@PAGE", slot_label));      // load page of the enum singleton slot
-            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", slot_label)); //resolve the enum singleton slot address
+            emitter.adrp("x9", &format!("{}", slot_label));      // load page of the enum singleton slot
+            emitter.add_lo12("x9", "x9", &format!("{}", slot_label)); //resolve the enum singleton slot address
             emitter.instruction("str x0, [x9]");                                // publish the enum singleton pointer in its global slot
         }
     }
@@ -736,19 +731,19 @@ fn emit_main_activation_record_push(emitter: &mut Emitter, ctx: &Context, cleanu
         .expect("codegen bug: missing main activation frame-base slot");
 
     emitter.comment("register main exception cleanup frame");
-    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                   // load page of the call-frame stack top
-    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");             // resolve the call-frame stack top address
+    emitter.adrp("x9", "_exc_call_frame_top");                   // load page of the call-frame stack top
+    emitter.add_lo12("x9", "x9", "_exc_call_frame_top");             // resolve the call-frame stack top address
     emitter.instruction("ldr x10, [x9]");                                       // load the previous call-frame pointer
     abi::store_at_offset(emitter, "x10", prev_offset);                          // save the previous call-frame pointer in the main activation record
-    emitter.instruction(&format!("adrp x10, {}@PAGE", cleanup_label));          // load page of the main cleanup callback label
-    emitter.instruction(&format!("add x10, x10, {}@PAGEOFF", cleanup_label));   // resolve the main cleanup callback label address
+    emitter.adrp("x10", &format!("{}", cleanup_label));          // load page of the main cleanup callback label
+    emitter.add_lo12("x10", "x10", &format!("{}", cleanup_label));   // resolve the main cleanup callback label address
     abi::store_at_offset(emitter, "x10", cleanup_offset);                       // save the main cleanup callback address in the activation record
     emitter.instruction("mov x10, x29");                                        // x10 = current main frame pointer for cleanup callbacks
     abi::store_at_offset(emitter, "x10", frame_base_offset);                    // save the main frame pointer in the activation record
     abi::store_at_offset(emitter, "xzr", ctx.pending_action_offset.expect("codegen bug: missing main pending-action slot")); // clear any stale finally action before running main
     emitter.instruction(&format!("sub x10, x29, #{}", prev_offset));            // x10 = address of the main activation record's first slot
-    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                   // reload page of the call-frame stack top after stack-slot stores may clobber x9
-    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");             // resolve the call-frame stack top address again
+    emitter.adrp("x9", "_exc_call_frame_top");                   // reload page of the call-frame stack top after stack-slot stores may clobber x9
+    emitter.add_lo12("x9", "x9", "_exc_call_frame_top");             // resolve the call-frame stack top address again
     emitter.instruction("str x10, [x9]");                                       // publish the main activation record as the new call-frame stack top
 }
 
@@ -758,11 +753,11 @@ fn emit_main_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
         .expect("codegen bug: missing main activation prev slot");
 
     emitter.comment("unregister main exception cleanup frame");
-    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                   // load page of the call-frame stack top
-    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");             // resolve the call-frame stack top address
+    emitter.adrp("x9", "_exc_call_frame_top");                   // load page of the call-frame stack top
+    emitter.add_lo12("x9", "x9", "_exc_call_frame_top");             // resolve the call-frame stack top address
     abi::load_at_offset(emitter, "x10", prev_offset);                           // reload the previous call-frame pointer from the main activation record
-    emitter.instruction("adrp x9, _exc_call_frame_top@PAGE");                   // reload page of the call-frame stack top after the load helper may clobber x9
-    emitter.instruction("add x9, x9, _exc_call_frame_top@PAGEOFF");             // resolve the call-frame stack top address again
+    emitter.adrp("x9", "_exc_call_frame_top");                   // reload page of the call-frame stack top after the load helper may clobber x9
+    emitter.add_lo12("x9", "x9", "_exc_call_frame_top");             // resolve the call-frame stack top address again
     emitter.instruction("str x10, [x9]");                                       // restore the previous call-frame stack top before exiting
 }
 

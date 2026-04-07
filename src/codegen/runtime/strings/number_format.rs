@@ -48,16 +48,16 @@ pub fn emit_number_format(emitter: &mut Emitter) {
     emitter.instruction("add x2, sp, #64");                                     // x2 = format string pointer
     emitter.instruction("ldr d0, [sp, #88]");                                   // reload the float value
     emitter.instruction("str d0, [sp, #-16]!");                                 // push double for variadic ABI, adjust sp
-    emitter.instruction("bl _snprintf");                                        // call snprintf; returns char count in x0
+    emitter.bl_c("snprintf");                                        // call snprintf; returns char count in x0
     emitter.instruction("add sp, sp, #16");                                     // pop the variadic argument from stack
     emitter.instruction("str x0, [sp, #80]");                                   // save raw string length
 
     // -- set up concat_buf destination --
-    emitter.instruction("adrp x6, _concat_off@PAGE");                           // load page address of concat offset
-    emitter.instruction("add x6, x6, _concat_off@PAGEOFF");                     // resolve exact address
+    emitter.adrp("x6", "_concat_off");                           // load page address of concat offset
+    emitter.add_lo12("x6", "x6", "_concat_off");                     // resolve exact address
     emitter.instruction("ldr x8, [x6]");                                        // load current concat_buf write offset
-    emitter.instruction("adrp x7, _concat_buf@PAGE");                           // load page address of concat buffer
-    emitter.instruction("add x7, x7, _concat_buf@PAGEOFF");                     // resolve exact buffer base
+    emitter.adrp("x7", "_concat_buf");                           // load page address of concat buffer
+    emitter.add_lo12("x7", "x7", "_concat_buf");                     // resolve exact buffer base
     emitter.instruction("add x10, x7, x8");                                     // compute destination pointer
     emitter.instruction("str x10, [sp, #72]");                                  // save result start pointer
 

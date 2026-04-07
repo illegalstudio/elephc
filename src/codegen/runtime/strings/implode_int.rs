@@ -16,11 +16,11 @@ pub fn emit_implode_int(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp, #16]");                                   // save array pointer
 
     // -- get concat_buf write position --
-    emitter.instruction("adrp x6, _concat_off@PAGE");                           // load page address of concat buffer offset
-    emitter.instruction("add x6, x6, _concat_off@PAGEOFF");                     // resolve exact address of offset variable
+    emitter.adrp("x6", "_concat_off");                           // load page address of concat buffer offset
+    emitter.add_lo12("x6", "x6", "_concat_off");                     // resolve exact address of offset variable
     emitter.instruction("ldr x8, [x6]");                                        // load current write offset
-    emitter.instruction("adrp x7, _concat_buf@PAGE");                           // load page address of concat buffer
-    emitter.instruction("add x7, x7, _concat_buf@PAGEOFF");                     // resolve exact buffer base address
+    emitter.adrp("x7", "_concat_buf");                           // load page address of concat buffer
+    emitter.add_lo12("x7", "x7", "_concat_buf");                     // resolve exact buffer base address
     emitter.instruction("add x9, x7, x8");                                      // compute destination pointer
     emitter.instruction("str x9, [sp, #24]");                                   // save result start pointer
     emitter.instruction("str x6, [sp, #32]");                                   // save offset variable address

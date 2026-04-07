@@ -48,8 +48,8 @@ pub fn emit(
             _ => panic!("array_reduce() callback must be a string literal, callable expression, or callable variable"),
         };
         let label = function_symbol(&func_name);
-        emitter.instruction(&format!("adrp x19, {}@PAGE", label));              // load page address of callback function
-        emitter.instruction(&format!("add x19, x19, {}@PAGEOFF", label));       // resolve full address of callback function
+        emitter.adrp("x19", &format!("{}", label));              // load page address of callback function
+        emitter.add_lo12("x19", "x19", &format!("{}", label));       // resolve full address of callback function
     }
 
     // -- evaluate initial value (third arg) --

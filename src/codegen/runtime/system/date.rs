@@ -37,21 +37,21 @@ pub(crate) fn emit_date(emitter: &mut Emitter) {
     emitter.instruction("cmn x0, #1");                                          // compare x0 with -1 (cmn adds 1, checks if zero)
     emitter.instruction("b.ne __rt_date_have_time");                            // skip if timestamp provided (not -1)
     emitter.instruction("mov x0, #0");                                          // NULL argument
-    emitter.instruction("bl _time");                                            // time(NULL) → x0=current timestamp
+    emitter.bl_c("time");                                            // time(NULL) → x0=current timestamp
     emitter.instruction("str x0, [sp, #0]");                                    // save current timestamp
 
     // -- call localtime to decompose timestamp --
     emitter.label("__rt_date_have_time");
     emitter.instruction("add x0, sp, #0");                                      // x0 = pointer to timestamp on stack
-    emitter.instruction("bl _localtime");                                       // localtime(&timestamp) → x0=pointer to struct tm
+    emitter.bl_c("localtime");                                       // localtime(&timestamp) → x0=pointer to struct tm
     emitter.instruction("str x0, [sp, #24]");                                   // save tm pointer
 
     // -- set up output buffer in concat_buf --
-    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of concat offset
-    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve concat offset address
+    emitter.adrp("x9", "_concat_off");                           // load page of concat offset
+    emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve concat offset address
     emitter.instruction("ldr x10, [x9]");                                       // load current concat offset
-    emitter.instruction("adrp x11, _concat_buf@PAGE");                          // load page of concat buffer
-    emitter.instruction("add x11, x11, _concat_buf@PAGEOFF");                   // resolve concat buffer address
+    emitter.adrp("x11", "_concat_buf");                          // load page of concat buffer
+    emitter.add_lo12("x11", "x11", "_concat_buf");                   // resolve concat buffer address
     emitter.instruction("add x11, x11, x10");                                   // compute write position: buf + offset
     emitter.instruction("str x11, [sp, #32]");                                  // save output write position
     emitter.instruction("str x11, [sp, #40]");                                  // save output start position
@@ -328,8 +328,8 @@ pub(crate) fn emit_date(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // load tm pointer
     emitter.instruction("ldr w0, [x0, #24]");                                   // load tm_wday (0=Sunday)
     emitter.instruction("sxtw x0, w0");                                         // sign-extend
-    emitter.instruction("adrp x1, _day_names@PAGE");                            // load page of day names table
-    emitter.instruction("add x1, x1, _day_names@PAGEOFF");                      // resolve day names address
+    emitter.adrp("x1", "_day_names");                            // load page of day names table
+    emitter.add_lo12("x1", "x1", "_day_names");                      // resolve day names address
     // Each day name entry is 12 bytes: 10 chars + 1 length byte + 1 padding
     emitter.instruction("mov x2, #12");                                         // entry size
     emitter.instruction("mul x2, x0, x2");                                      // offset = wday * 12
@@ -355,8 +355,8 @@ pub(crate) fn emit_date(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // load tm pointer
     emitter.instruction("ldr w0, [x0, #24]");                                   // load tm_wday
     emitter.instruction("sxtw x0, w0");                                         // sign-extend
-    emitter.instruction("adrp x1, _day_names@PAGE");                            // load page of day names
-    emitter.instruction("add x1, x1, _day_names@PAGEOFF");                      // resolve day names address
+    emitter.adrp("x1", "_day_names");                            // load page of day names
+    emitter.add_lo12("x1", "x1", "_day_names");                      // resolve day names address
     emitter.instruction("mov x2, #12");                                         // entry size
     emitter.instruction("mul x2, x0, x2");                                      // offset
     emitter.instruction("add x1, x1, x2");                                      // point to entry
@@ -377,8 +377,8 @@ pub(crate) fn emit_date(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // load tm pointer
     emitter.instruction("ldr w0, [x0, #16]");                                   // load tm_mon (0-based)
     emitter.instruction("sxtw x0, w0");                                         // sign-extend
-    emitter.instruction("adrp x1, _month_names@PAGE");                          // load page of month names
-    emitter.instruction("add x1, x1, _month_names@PAGEOFF");                    // resolve month names address
+    emitter.adrp("x1", "_month_names");                          // load page of month names
+    emitter.add_lo12("x1", "x1", "_month_names");                    // resolve month names address
     // Each month entry is 12 bytes: 10 chars + 1 length byte + 1 padding
     emitter.instruction("mov x2, #12");                                         // entry size
     emitter.instruction("mul x2, x0, x2");                                      // offset = mon * 12
@@ -404,8 +404,8 @@ pub(crate) fn emit_date(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // load tm pointer
     emitter.instruction("ldr w0, [x0, #16]");                                   // load tm_mon
     emitter.instruction("sxtw x0, w0");                                         // sign-extend
-    emitter.instruction("adrp x1, _month_names@PAGE");                          // load page of month names
-    emitter.instruction("add x1, x1, _month_names@PAGEOFF");                    // resolve month names address
+    emitter.adrp("x1", "_month_names");                          // load page of month names
+    emitter.add_lo12("x1", "x1", "_month_names");                    // resolve month names address
     emitter.instruction("mov x2, #12");                                         // entry size
     emitter.instruction("mul x2, x0, x2");                                      // offset
     emitter.instruction("add x1, x1, x2");                                      // point to entry
@@ -435,8 +435,8 @@ pub(crate) fn emit_date(emitter: &mut Emitter) {
     emitter.instruction("sub x2, x9, x1");                                      // x2 = output length
 
     // -- update concat_off --
-    emitter.instruction("adrp x10, _concat_off@PAGE");                          // load page of concat offset
-    emitter.instruction("add x10, x10, _concat_off@PAGEOFF");                   // resolve concat offset address
+    emitter.adrp("x10", "_concat_off");                          // load page of concat offset
+    emitter.add_lo12("x10", "x10", "_concat_off");                   // resolve concat offset address
     emitter.instruction("ldr x11, [x10]");                                      // load current offset
     emitter.instruction("add x11, x11, x2");                                    // add result length
     emitter.instruction("str x11, [x10]");                                      // store updated offset

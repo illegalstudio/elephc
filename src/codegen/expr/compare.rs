@@ -54,7 +54,7 @@ pub(super) fn emit_cast(
                 }
                 PhpType::Str => {
                     emitter.instruction("bl __rt_cstr");                        // null-terminate string (x1=ptr, x2=len → x0=cstr)
-                    emitter.instruction("bl _atof");                            // parse C string as double → d0=result
+                    emitter.bl_c("atof");                            // parse C string as double → d0=result
                 }
                 PhpType::Array(_)
                 | PhpType::AssocArray { .. }

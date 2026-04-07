@@ -17,7 +17,7 @@ pub fn emit(
     emit_expr(&args[0], emitter, ctx, data);
     // -- null-terminate and call libc system() which outputs directly to stdout --
     emitter.instruction("bl __rt_cstr");                                        // null-terminate command string → x0=cstr
-    emitter.instruction("bl _system");                                          // execute command, output goes to stdout
+    emitter.bl_c("system");                                          // execute command, output goes to stdout
     // -- return empty string (system() returns last line, but we let stdout handle it) --
     emitter.instruction("mov x1, #0");                                          // return empty string ptr (null)
     emitter.instruction("mov x2, #0");                                          // return empty string len = 0

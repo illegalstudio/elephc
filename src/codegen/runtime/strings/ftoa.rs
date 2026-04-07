@@ -16,24 +16,24 @@ pub fn emit_ftoa(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #48");                                    // establish new frame pointer
 
     // -- get current concat_buf position --
-    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page address of concat buffer offset
-    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve exact address of offset variable
+    emitter.adrp("x9", "_concat_off");                           // load page address of concat buffer offset
+    emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve exact address of offset variable
     emitter.instruction("ldr x10, [x9]");                                       // load current write offset
     emitter.instruction("str x10, [sp, #32]");                                  // save original offset on stack
     emitter.instruction("str x9, [sp, #40]");                                   // save offset variable address on stack
 
-    emitter.instruction("adrp x11, _concat_buf@PAGE");                          // load page address of concat buffer
-    emitter.instruction("add x11, x11, _concat_buf@PAGEOFF");                   // resolve exact buffer base address
+    emitter.adrp("x11", "_concat_buf");                          // load page address of concat buffer
+    emitter.add_lo12("x11", "x11", "_concat_buf");                   // resolve exact buffer base address
     emitter.instruction("add x0, x11, x10");                                    // compute output buffer: concat_buf + offset
     emitter.instruction("str x0, [sp, #24]");                                   // save output buffer start on stack
 
     // -- call snprintf(buf, 32, "%.14G", double) --
     emitter.instruction("mov x1, #32");                                         // buffer size limit = 32 bytes
-    emitter.instruction("adrp x2, _fmt_g@PAGE");                                // load page address of format string "%.14G"
-    emitter.instruction("add x2, x2, _fmt_g@PAGEOFF");                          // resolve exact address of format string
+    emitter.adrp("x2", "_fmt_g");                                // load page address of format string "%.14G"
+    emitter.add_lo12("x2", "x2", "_fmt_g");                          // resolve exact address of format string
     // -- Apple ARM64 variadic ABI: float arg goes on stack, not in SIMD reg --
     emitter.instruction("str d0, [sp]");                                        // push double onto stack for variadic call
-    emitter.instruction("bl _snprintf");                                        // call snprintf; returns char count in x0
+    emitter.bl_c("snprintf");                                        // call snprintf; returns char count in x0
 
     // -- x0 = number of chars written --
     emitter.instruction("mov x2, x0");                                          // save string length as return value

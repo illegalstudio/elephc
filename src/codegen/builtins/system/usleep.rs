@@ -16,6 +16,6 @@ pub fn emit(
     // -- evaluate microseconds argument --
     emit_expr(&args[0], emitter, ctx, data);
     // -- call libc usleep (x0 = microseconds) --
-    emitter.instruction("bl _usleep");                                          // sleep for x0 microseconds
+    emitter.bl_c("usleep");                                          // sleep for x0 microseconds
     Some(PhpType::Void)
 }

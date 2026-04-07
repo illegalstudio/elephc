@@ -58,8 +58,7 @@ pub fn emit(
 
     // -- write result to stdout --
     emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.instruction("mov x16, #4");                                         // syscall 4 = write
-    emitter.instruction("svc #0x80");                                           // invoke kernel
+    emitter.syscall(4);
 
     // -- return length written --
     emitter.instruction("mov x0, x2");                                          // return char count

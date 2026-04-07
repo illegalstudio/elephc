@@ -7,12 +7,11 @@ use crate::types::PhpType;
 
 fn emit_write_literal(emitter: &mut Emitter, data: &mut DataSection, bytes: &[u8]) {
     let (lbl, len) = data.add_string(bytes);
-    emitter.instruction(&format!("adrp x1, {}@PAGE", lbl));                     // load the literal page address
-    emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", lbl));               // resolve the literal string address
+    emitter.adrp("x1", &format!("{}", lbl));                     // load the literal page address
+    emitter.add_lo12("x1", "x1", &format!("{}", lbl));               // resolve the literal string address
     emitter.instruction(&format!("mov x2, #{}", len));                          // load the literal string length
     emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.instruction("mov x16, #4");                                         // syscall write
-    emitter.instruction("svc #0x80");                                           // invoke kernel
+    emitter.syscall(4);
 }
 
 fn emit_var_dump_int(emitter: &mut Emitter, ctx: &mut Context, data: &mut DataSection) {
@@ -32,8 +31,7 @@ fn emit_var_dump_int(emitter: &mut Emitter, ctx: &mut Context, data: &mut DataSe
     emitter.instruction("ldr x0, [sp], #16");                                   // restore the integer payload after the prefix write
     emitter.instruction("bl __rt_itoa");                                        // convert the integer payload to decimal text
     emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.instruction("mov x16, #4");                                         // syscall write
-    emitter.instruction("svc #0x80");                                           // invoke kernel
+    emitter.syscall(4);
     emit_write_literal(emitter, data, b")\n");
     emitter.label(&done);
 }
@@ -44,8 +42,7 @@ fn emit_var_dump_float(emitter: &mut Emitter, data: &mut DataSection) {
     emit_write_literal(emitter, data, b"float(");
     emitter.instruction("ldp x1, x2, [sp], #16");                               // restore the converted float text
     emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.instruction("mov x16, #4");                                         // syscall write
-    emitter.instruction("svc #0x80");                                           // invoke kernel
+    emitter.syscall(4);
     emit_write_literal(emitter, data, b")\n");
 }
 
@@ -56,13 +53,11 @@ fn emit_var_dump_string(emitter: &mut Emitter, data: &mut DataSection) {
     emitter.instruction("mov x0, x2");                                          // move the string length into the itoa argument register
     emitter.instruction("bl __rt_itoa");                                        // convert the string length to decimal text
     emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.instruction("mov x16, #4");                                         // syscall write
-    emitter.instruction("svc #0x80");                                           // invoke kernel
+    emitter.syscall(4);
     emit_write_literal(emitter, data, b") \"");
     emitter.instruction("ldp x1, x2, [sp], #16");                               // restore the original string payload
     emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.instruction("mov x16, #4");                                         // syscall write
-    emitter.instruction("svc #0x80");                                           // invoke kernel
+    emitter.syscall(4);
     emit_write_literal(emitter, data, b"\"\n");
 }
 
@@ -89,8 +84,7 @@ fn emit_var_dump_array(emitter: &mut Emitter, data: &mut DataSection) {
     emitter.instruction("ldr x0, [x0]");                                        // load the container element count from the header
     emitter.instruction("bl __rt_itoa");                                        // convert the element count to decimal text
     emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.instruction("mov x16, #4");                                         // syscall write
-    emitter.instruction("svc #0x80");                                           // invoke kernel
+    emitter.syscall(4);
     emit_write_literal(emitter, data, b") {\n}\n");
     emitter.instruction("ldr x0, [sp], #16");                                   // restore the array/hash pointer after printing
 }
@@ -227,15 +221,13 @@ pub fn emit(
             // -- print pointer as hex address followed by newline --
             emitter.instruction("bl __rt_ptoa");                                // x0 → x1=ptr, x2=len
             emitter.instruction("mov x0, #1");                                  // fd = stdout
-            emitter.instruction("mov x16, #4");                                 // syscall write
-            emitter.instruction("svc #0x80");                                   // invoke kernel
+            emitter.syscall(4);
             let (lbl, len) = data.add_string(b"\n");
-            emitter.instruction(&format!("adrp x1, {}@PAGE", lbl));             // load newline page
-            emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", lbl));       // resolve address
+            emitter.adrp("x1", &format!("{}", lbl));             // load newline page
+            emitter.add_lo12("x1", "x1", &format!("{}", lbl));       // resolve address
             emitter.instruction(&format!("mov x2, #{}", len));                  // string length
             emitter.instruction("mov x0, #1");                                  // fd = stdout
-            emitter.instruction("mov x16, #4");                                 // syscall write
-            emitter.instruction("svc #0x80");                                   // invoke kernel
+            emitter.syscall(4);
         }
     }
     Some(PhpType::Void)

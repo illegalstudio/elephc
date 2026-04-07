@@ -59,11 +59,11 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("add x22, sp, #384");                                   // args_base (past our frame)
 
     // -- set up concat_buf destination --
-    emitter.instruction("adrp x25, _concat_off@PAGE");                          // load concat offset page
-    emitter.instruction("add x25, x25, _concat_off@PAGEOFF");                   // resolve concat_off address
+    emitter.adrp("x25", "_concat_off");                          // load concat offset page
+    emitter.add_lo12("x25", "x25", "_concat_off");                   // resolve concat_off address
     emitter.instruction("ldr x8, [x25]");                                       // load current offset
-    emitter.instruction("adrp x7, _concat_buf@PAGE");                           // load concat buffer page
-    emitter.instruction("add x7, x7, _concat_buf@PAGEOFF");                     // resolve buffer address
+    emitter.adrp("x7", "_concat_buf");                           // load concat buffer page
+    emitter.add_lo12("x7", "x7", "_concat_buf");                     // resolve buffer address
     emitter.instruction("add x23, x7, x8");                                     // dest pointer = buf + offset
     emitter.instruction("mov x24, x23");                                        // save result start
 
@@ -196,7 +196,7 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("add x0, sp, #112");                                    // output buffer at sp+112
     emitter.instruction("mov x1, #128");                                        // buffer size
     emitter.instruction("add x2, sp, #80");                                     // mini format string at sp+80
-    emitter.instruction("bl _snprintf");                                        // call libc snprintf
+    emitter.bl_c("snprintf");                                        // call libc snprintf
     // x0 = number of chars written
 
     // -- copy snprintf result to concat_buf --
@@ -246,7 +246,7 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("add x0, sp, #112");                                    // output buffer at sp+112
     emitter.instruction("mov x1, #128");                                        // buffer size
     emitter.instruction("add x2, sp, #80");                                     // mini format string at sp+80
-    emitter.instruction("bl _snprintf");                                        // call libc snprintf
+    emitter.bl_c("snprintf");                                        // call libc snprintf
     // x0 = number of chars written
 
     // -- copy snprintf result to concat_buf --
@@ -309,7 +309,7 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("add x0, sp, #112");                                    // output buffer at sp+112
     emitter.instruction("mov x1, #128");                                        // buffer size
     emitter.instruction("add x2, sp, #80");                                     // mini format string at sp+80
-    emitter.instruction("bl _snprintf");                                        // call libc snprintf
+    emitter.bl_c("snprintf");                                        // call libc snprintf
     // x0 = number of chars written
 
     // -- copy snprintf result to concat_buf --

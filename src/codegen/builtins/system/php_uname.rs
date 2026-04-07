@@ -14,8 +14,8 @@ pub fn emit(
     emitter.comment("php_uname()");
     // -- return hardcoded OS name (macOS only for now) --
     let (label, len) = data.add_string(b"Darwin");
-    emitter.instruction(&format!("adrp x1, {}@PAGE", label));                   // load page address of "Darwin" string
-    emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", label));             // resolve exact address of "Darwin" string
+    emitter.adrp("x1", &format!("{}", label));                   // load page address of "Darwin" string
+    emitter.add_lo12("x1", "x1", &format!("{}", label));             // resolve exact address of "Darwin" string
     emitter.instruction(&format!("mov x2, #{}", len));                          // string length = 6
     Some(PhpType::Str)
 }

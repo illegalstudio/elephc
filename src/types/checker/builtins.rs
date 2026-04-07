@@ -238,6 +238,12 @@ pub(crate) fn is_supported_builtin_function(name: &str) -> bool {
 }
 
 impl Checker {
+    fn require_linux_builtin_library(&mut self, library: &str) {
+        if cfg!(target_os = "linux") && !self.required_libraries.iter().any(|lib| lib == library) {
+            self.required_libraries.push(library.to_string());
+        }
+    }
+
     pub fn check_builtin(
         &mut self,
         name: &str,
@@ -769,6 +775,7 @@ impl Checker {
                     return Err(CompileError::new(span, "hash() takes exactly 2 arguments"));
                 }
                 for arg in args { self.infer_type(arg, env)?; }
+                self.require_linux_builtin_library("crypto");
                 Ok(Some(PhpType::Str))
             }
             "sscanf" => {
@@ -783,6 +790,7 @@ impl Checker {
                     return Err(CompileError::new(span, &format!("{}() takes exactly 1 argument", name)));
                 }
                 self.infer_type(&args[0], env)?;
+                self.require_linux_builtin_library("crypto");
                 Ok(Some(PhpType::Str))
             }
             "htmlspecialchars" | "htmlentities" | "html_entity_decode"

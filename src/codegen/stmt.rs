@@ -88,8 +88,8 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
     // -- reset concat buffer at the start of each statement --
     // This is safe because any string that needs to persist beyond the current
     // statement is copied to heap via __rt_str_persist (in emit_store).
-    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of concat offset
-    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve concat offset address
+    emitter.adrp("x9", "_concat_off");                           // load page of concat offset
+    emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve concat offset address
     emitter.instruction("str xzr, [x9]");                                       // reset concat buffer offset to 0
 
     match &stmt.kind {
@@ -251,8 +251,8 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
             let skip_label = ctx.next_label("static_skip");
 
             // -- check if already initialized --
-            emitter.instruction(&format!("adrp x9, {}@PAGE", init_label));      // load page of init flag
-            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", init_label)); //add page offset
+            emitter.adrp("x9", &format!("{}", init_label));      // load page of init flag
+            emitter.add_lo12("x9", "x9", &format!("{}", init_label)); //add page offset
             emitter.instruction("ldr x10, [x9]");                               // load init flag value
             emitter.instruction(&format!("cbnz x10, {}", skip_label));          // skip init if already done
 
@@ -262,8 +262,8 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
             let ty = emit_expr(init, emitter, ctx, data);
             retain_borrowed_heap_result(emitter, init, &ty);
             // Store init value to static storage
-            emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));      // load page of static var storage
-            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); //add page offset
+            emitter.adrp("x9", &format!("{}", data_label));      // load page of static var storage
+            emitter.add_lo12("x9", "x9", &format!("{}", data_label)); //add page offset
             match &ty {
                 PhpType::Bool | PhpType::Int => {
                     emitter.instruction("str x0, [x9]");                        // store initial int/bool value
@@ -282,8 +282,8 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
             emitter.label(&skip_label);
 
             // -- load current value from static storage into local variable --
-            emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));      // load page of static var storage
-            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); //add page offset
+            emitter.adrp("x9", &format!("{}", data_label));      // load page of static var storage
+            emitter.add_lo12("x9", "x9", &format!("{}", data_label)); //add page offset
             let var_info = match ctx.variables.get(name) {
                 Some(v) => v,
                 None => {

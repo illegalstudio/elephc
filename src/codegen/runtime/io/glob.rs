@@ -4,6 +4,8 @@ use crate::codegen::emit::Emitter;
 /// Input:  x1/x2=pattern string
 /// Output: x0=array pointer (array of matching path strings)
 pub fn emit_glob(emitter: &mut Emitter) {
+    let pathv_off = emitter.platform.glob_pathv_offset();
+
     emitter.blank();
     emitter.comment("--- runtime: glob ---");
     emitter.label_global("__rt_glob");
@@ -17,18 +19,12 @@ pub fn emit_glob(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_cstr");                                        // convert pattern to C string, x0=cstr
 
     // -- call glob(pattern, 0, NULL, &glob_result) --
-    // glob_t layout on macOS ARM64 (88 bytes total):
-    //   offset  0: gl_pathc (size_t, 8)
-    //   offset  8: gl_matchc (int, 4) + 4 padding
-    //   offset 16: gl_offs (size_t, 8)
-    //   offset 24: gl_flags (int, 4) + 4 padding
-    //   offset 32: gl_pathv (char**, 8)
-    //   offset 40+: function pointers (48 bytes)
-    // Stack layout: sp+0=cstr, sp+8=retcode, sp+16=glob_t(88), sp+104=array, sp+112=count, sp+120=index
+    // Stack layout: sp+0=cstr, sp+8=retcode, sp+16=glob_t, sp+104=array, sp+112=count, sp+120=index
+    // `gl_pathc` stays at offset 0 on both supported libcs; `gl_pathv` is platform-specific.
     emitter.instruction("add x3, sp, #16");                                     // pointer to glob_t struct on stack
     emitter.instruction("mov x1, #0");                                          // flags = 0
     emitter.instruction("mov x2, #0");                                          // errfunc = NULL
-    emitter.instruction("bl _glob");                                            // call glob(pattern=x0, flags, errfunc, glob_t)
+    emitter.bl_c("glob");                                            // call glob(pattern=x0, flags, errfunc, glob_t)
     emitter.instruction("str x0, [sp, #8]");                                    // save return code
 
     // -- create result array --
@@ -53,7 +49,7 @@ pub fn emit_glob(emitter: &mut Emitter) {
     emitter.instruction("str x11, [sp, #120]");                                 // save current index
 
     // -- load path pointer from pathv[i] --
-    emitter.instruction("ldr x10, [sp, #48]");                                  // load gl_pathv (offset 32 in glob_t = sp+16+32)
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", 16 + pathv_off));        // load gl_pathv from this platform's glob_t layout
     emitter.instruction("lsl x12, x11, #3");                                    // byte offset = index * 8
     emitter.instruction("ldr x1, [x10, x12]");                                  // load pathv[i] = char* to path
 
@@ -80,7 +76,7 @@ pub fn emit_glob(emitter: &mut Emitter) {
     // -- free glob resources --
     emitter.label("__rt_glob_free");
     emitter.instruction("add x0, sp, #16");                                     // pointer to glob_t struct
-    emitter.instruction("bl _globfree");                                        // free glob results
+    emitter.bl_c("globfree");                                        // free glob results
 
     // -- return array pointer --
     emitter.label("__rt_glob_ret");

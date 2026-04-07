@@ -52,7 +52,7 @@ pub(crate) fn emit_preg_split(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_preg_split_nc");                             // skip
     emitter.instruction("orr x2, x2, #2");                                      // REG_ICASE
     emitter.label("__rt_preg_split_nc");
-    emitter.instruction("bl _regcomp");                                         // compile
+    emitter.bl_c("regcomp");                                         // compile
     emitter.instruction("cbnz x0, __rt_preg_split_fail");                       // fail
 
     // -- create new string array --
@@ -83,7 +83,7 @@ pub(crate) fn emit_preg_split(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #1");                                          // nmatch
     emitter.instruction("add x3, sp, #32");                                     // regmatch_t at sp+32
     emitter.instruction("mov x4, #0");                                          // eflags
-    emitter.instruction("bl _regexec");                                         // execute
+    emitter.bl_c("regexec");                                         // execute
     emitter.instruction("cbnz x0, __rt_preg_split_last");                       // no more matches
 
     // -- add segment before match to array --
@@ -119,7 +119,7 @@ pub(crate) fn emit_preg_split(emitter: &mut Emitter) {
 
     // -- free regex and return --
     emitter.instruction("mov x0, sp");                                          // regex_t
-    emitter.instruction("bl _regfree");                                         // free
+    emitter.bl_c("regfree");                                         // free
     emitter.instruction("ldr x0, [sp, #96]");                                   // return array ptr
     emitter.instruction("b __rt_preg_split_ret");                               // return
 

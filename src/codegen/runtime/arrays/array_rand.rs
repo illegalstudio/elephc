@@ -16,7 +16,7 @@ pub fn emit_array_rand(emitter: &mut Emitter) {
 
     // -- get array length and generate random index --
     emitter.instruction("ldr x0, [x0]");                                        // x0 = array length
-    emitter.instruction("bl _arc4random_uniform");                              // x0 = random value in [0, length)
+    emitter.bl_c("arc4random_uniform");                              // x0 = random value in [0, length)
 
     // -- tear down stack frame and return --
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address

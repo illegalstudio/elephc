@@ -18,8 +18,8 @@ pub fn emit_tempnam(emitter: &mut Emitter) {
     emitter.instruction("stp x3, x4, [sp, #16]");                               // save prefix ptr and len
 
     // -- build template path: dir + "/" + prefix + "XXXXXX" in _cstr_buf --
-    emitter.instruction("adrp x9, _cstr_buf@PAGE");                             // load page address of cstr buffer
-    emitter.instruction("add x9, x9, _cstr_buf@PAGEOFF");                       // resolve exact buffer address
+    emitter.adrp("x9", "_cstr_buf");                             // load page address of cstr buffer
+    emitter.add_lo12("x9", "x9", "_cstr_buf");                       // resolve exact buffer address
     emitter.instruction("mov x10, x9");                                         // save buffer start
 
     // -- copy dir bytes --
@@ -59,11 +59,10 @@ pub fn emit_tempnam(emitter: &mut Emitter) {
     // -- call mkstemp to create the temp file (modifies XXXXXX in-place) --
     emitter.instruction("str x10, [sp, #32]");                                  // save buffer start (clobbered by mkstemp)
     emitter.instruction("mov x0, x10");                                         // pass template buffer to mkstemp
-    emitter.instruction("bl _mkstemp");                                         // mkstemp(template), x0=fd
+    emitter.bl_c("mkstemp");                                         // mkstemp(template), x0=fd
 
     // -- close the temp file (we only need the name) --
-    emitter.instruction("mov x16, #6");                                         // syscall 6 = close
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(6);
 
     // -- calculate length of resulting path --
     emitter.instruction("ldr x1, [sp, #32]");                                   // reload buffer start (was clobbered by mkstemp)

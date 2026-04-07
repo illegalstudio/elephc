@@ -23,8 +23,8 @@ pub fn emit(
         emitter.instruction("stp x1, x2, [sp, #-16]!");                         // push pad string
     } else {
         let (label, len) = data.add_string(b" ");
-        emitter.instruction(&format!("adrp x1, {}@PAGE", label));               // load default pad string " "
-        emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", label));         // resolve address
+        emitter.adrp("x1", &format!("{}", label));               // load default pad string " "
+        emitter.add_lo12("x1", "x1", &format!("{}", label));         // resolve address
         emitter.instruction(&format!("mov x2, #{}", len));                      // pad string length = 1
         emitter.instruction("stp x1, x2, [sp, #-16]!");                         // push pad string
     }

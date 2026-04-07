@@ -30,14 +30,12 @@ pub fn emit(
     emitter.label(&zero_label);
     let (err_label, err_len) = data.add_string(b"Fatal error: division by zero\n");
     emitter.instruction("mov x0, #2");                                          // fd = stderr
-    emitter.instruction(&format!("adrp x1, {}@PAGE", err_label));               // load page of error message
-    emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", err_label));         // resolve error message address
+    emitter.adrp("x1", &format!("{}", err_label));               // load page of error message
+    emitter.add_lo12("x1", "x1", &format!("{}", err_label));         // resolve error message address
     emitter.instruction(&format!("mov x2, #{}", err_len));                      // message length
-    emitter.instruction("mov x16, #4");                                         // syscall 4 = sys_write
-    emitter.instruction("svc #0x80");                                           // write error to stderr
+    emitter.syscall(4);
     emitter.instruction("mov x0, #1");                                          // exit code 1
-    emitter.instruction("mov x16, #1");                                         // syscall 1 = sys_exit
-    emitter.instruction("svc #0x80");                                           // terminate process
+    emitter.syscall(1);
 
     emitter.label(&done_label);
     Some(PhpType::Int)

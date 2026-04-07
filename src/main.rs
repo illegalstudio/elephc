@@ -15,6 +15,22 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::process::{self, Command};
 
+use codegen::platform::Platform;
+
+fn run_tool(name: &str, cmd: &mut Command) {
+    match cmd.status() {
+        Ok(s) if s.success() => {}
+        Ok(s) => {
+            eprintln!("{} failed with exit code {}", name, s);
+            process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("Failed to run {}: {}", name, e);
+            process::exit(1);
+        }
+    }
+}
+
 fn macos_sdk_path() -> String {
     Command::new("xcrun")
         .args(["--show-sdk-path"])
@@ -217,6 +233,7 @@ fn main() {
     }
 
     // Concatenate user + runtime into a single assembly file
+    let platform = Platform::detect();
     let mut asm = user_asm;
     asm.push('\n');
     asm.push_str(&runtime_asm);
@@ -227,35 +244,37 @@ fn main() {
     }
 
     // Assemble
-    let sdk_path = macos_sdk_path();
-    let sdk_version = macos_sdk_version();
-
-    let as_status = Command::new("as")
-        .args(["-arch", "arm64", "-o"])
-        .arg(&obj_path)
-        .arg(&asm_path)
-        .status();
-
-    match as_status {
-        Ok(s) if s.success() => {}
-        Ok(s) => {
-            eprintln!("Assembler failed with exit code {}", s);
-            process::exit(1);
-        }
-        Err(e) => {
-            eprintln!("Failed to run assembler: {}", e);
-            process::exit(1);
-        }
+    let mut as_cmd = Command::new(platform.assembler_cmd());
+    if platform == Platform::MacOS {
+        as_cmd.args(["-arch", "arm64"]);
     }
+    as_cmd.arg("-o").arg(&obj_path).arg(&asm_path);
+    run_tool("Assembler", &mut as_cmd);
 
     // Link
-    let mut ld_cmd = Command::new("ld");
-    ld_cmd.args(["-arch", "arm64", "-e", "_main", "-o"]);
-    ld_cmd.arg(&bin_path);
-    ld_cmd.arg(&obj_path);
-    ld_cmd.args(["-lSystem", "-syslibroot"]);
-    ld_cmd.arg(&sdk_path);
-    ld_cmd.args(["-platform_version", "macos", &sdk_version, &sdk_version]);
+    let mut ld_cmd = match platform {
+        Platform::MacOS => {
+            let sdk_path = macos_sdk_path();
+            let sdk_version = macos_sdk_version();
+            let mut cmd = Command::new("ld");
+            cmd.args(["-arch", "arm64", "-e", "_main", "-o"]);
+            cmd.arg(&bin_path);
+            cmd.arg(&obj_path);
+            cmd.args(["-lSystem", "-syslibroot"]);
+            cmd.arg(&sdk_path);
+            cmd.args(["-platform_version", "macos", &sdk_version, &sdk_version]);
+            cmd
+        }
+        Platform::Linux => {
+            let mut cmd = Command::new(platform.linker_cmd());
+            cmd.arg("-o").arg(&bin_path).arg(&obj_path);
+            if extra_link_libs.is_empty() {
+                cmd.arg("-static");
+            }
+            cmd.args(["-lm", "-lpthread"]);
+            cmd
+        }
+    };
     for path in &extra_link_paths {
         ld_cmd.arg(format!("-L{}", path));
     }
@@ -264,22 +283,12 @@ fn main() {
             ld_cmd.arg(format!("-l{}", lib));
         }
     }
-    for fw in &extra_frameworks {
-        ld_cmd.args(["-framework", fw]);
-    }
-    let ld_status = ld_cmd.status();
-
-    match ld_status {
-        Ok(s) if s.success() => {}
-        Ok(s) => {
-            eprintln!("Linker failed with exit code {}", s);
-            process::exit(1);
-        }
-        Err(e) => {
-            eprintln!("Failed to run linker: {}", e);
-            process::exit(1);
+    if platform == Platform::MacOS {
+        for fw in &extra_frameworks {
+            ld_cmd.args(["-framework", fw]);
         }
     }
+    run_tool("Linker", &mut ld_cmd);
 
     // Clean up intermediate files
     let _ = fs::remove_file(&obj_path);

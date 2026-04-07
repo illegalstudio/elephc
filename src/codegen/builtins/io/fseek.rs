@@ -29,8 +29,7 @@ pub fn emit(
     emitter.instruction("ldr x1, [sp], #16");                                   // pop offset → x1
     emitter.instruction("ldr x0, [sp], #16");                                   // pop fd → x0
     // -- invoke lseek syscall --
-    emitter.instruction("mov x16, #199");                                       // syscall 199 = lseek
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel, returns new position in x0
+    emitter.syscall(199);
     // -- map lseek result to PHP fseek convention: 0=success, -1=failure --
     emitter.instruction("cmp x0, #0");                                          // check if lseek returned an error (negative)
     emitter.instruction("cset x0, ge");                                         // x0 = 1 if >= 0 (success), 0 if < 0 (failure)

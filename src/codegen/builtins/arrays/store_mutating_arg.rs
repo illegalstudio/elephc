@@ -10,8 +10,8 @@ pub(crate) fn emit_store_mutating_arg(emitter: &mut Emitter, ctx: &Context, arg:
 
     if ctx.global_vars.contains(name) || (ctx.in_main && ctx.all_global_var_names.contains(name)) {
         let label = format!("_gvar_{}", name);
-        emitter.instruction(&format!("adrp x9, {}@PAGE", label));               // load page of global variable storage for the mutated array/hash
-        emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label));         // resolve the global variable storage address
+        emitter.adrp("x9", &format!("{}", label));               // load page of global variable storage for the mutated array/hash
+        emitter.add_lo12("x9", "x9", &format!("{}", label));         // resolve the global variable storage address
         emitter.instruction("str x0, [x9]");                                    // overwrite the global slot with the updated container pointer
     } else if ctx.ref_params.contains(name) {
         let offset = ctx

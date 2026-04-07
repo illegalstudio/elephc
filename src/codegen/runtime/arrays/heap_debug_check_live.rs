@@ -10,8 +10,8 @@ pub fn emit_heap_debug_check_live(emitter: &mut Emitter) {
     emitter.label_global("__rt_heap_debug_check_live");
     emitter.instruction("ldr w9, [x0, #-12]");                                  // load the current block refcount from the uniform heap header
     emitter.instruction("cbnz w9, __rt_heap_debug_check_live_done");            // nonzero refcount means the block still looks live
-    emitter.instruction("adrp x1, _heap_dbg_bad_refcount_msg@PAGE");            // load page of the bad-refcount debug message
-    emitter.instruction("add x1, x1, _heap_dbg_bad_refcount_msg@PAGEOFF");      // resolve the bad-refcount debug message address
+    emitter.adrp("x1", "_heap_dbg_bad_refcount_msg");            // load page of the bad-refcount debug message
+    emitter.add_lo12("x1", "x1", "_heap_dbg_bad_refcount_msg");      // resolve the bad-refcount debug message address
     emitter.instruction(&format!("mov x2, #{}", msg.len()));                    // pass the exact bad-refcount message length
     emitter.instruction("b __rt_heap_debug_fail");                              // report the heap-debug failure and exit
 

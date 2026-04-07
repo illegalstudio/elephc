@@ -14,8 +14,8 @@ pub fn emit_cstr(emitter: &mut Emitter) {
     emitter.label_global("__rt_cstr");
 
     // -- load destination buffer address --
-    emitter.instruction("adrp x9, _cstr_buf@PAGE");                             // load page address of cstr scratch buffer
-    emitter.instruction("add x9, x9, _cstr_buf@PAGEOFF");                       // resolve exact address of cstr buffer
+    emitter.adrp("x9", "_cstr_buf");                             // load page address of cstr scratch buffer
+    emitter.add_lo12("x9", "x9", "_cstr_buf");                       // resolve exact address of cstr buffer
 
     // -- copy bytes from source to buffer --
     emitter.instruction("mov x10, x9");                                         // save buffer start for return value
@@ -38,8 +38,8 @@ pub fn emit_cstr(emitter: &mut Emitter) {
     emitter.label_global("__rt_cstr2");
 
     // -- load second buffer address --
-    emitter.instruction("adrp x9, _cstr_buf2@PAGE");                            // load page address of second cstr buffer
-    emitter.instruction("add x9, x9, _cstr_buf2@PAGEOFF");                      // resolve exact address of second buffer
+    emitter.adrp("x9", "_cstr_buf2");                            // load page address of second cstr buffer
+    emitter.add_lo12("x9", "x9", "_cstr_buf2");                      // resolve exact address of second buffer
 
     // -- copy bytes from source to buffer --
     emitter.instruction("mov x10, x9");                                         // save buffer start for return value

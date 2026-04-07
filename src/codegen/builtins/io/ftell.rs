@@ -18,7 +18,6 @@ pub fn emit(
     // -- call lseek(fd, 0, SEEK_CUR) to get current position --
     emitter.instruction("mov x1, #0");                                          // offset = 0
     emitter.instruction("mov x2, #1");                                          // whence = SEEK_CUR (1)
-    emitter.instruction("mov x16, #199");                                       // syscall 199 = lseek
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel, returns position in x0
+    emitter.syscall(199);
     Some(PhpType::Int)
 }

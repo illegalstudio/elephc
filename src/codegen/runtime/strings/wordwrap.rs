@@ -13,11 +13,11 @@ pub fn emit_wordwrap(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp, #16]");                                   // save width
 
     // -- set up concat_buf --
-    emitter.instruction("adrp x6, _concat_off@PAGE");                           // load concat offset page
-    emitter.instruction("add x6, x6, _concat_off@PAGEOFF");                     // resolve address
+    emitter.adrp("x6", "_concat_off");                           // load concat offset page
+    emitter.add_lo12("x6", "x6", "_concat_off");                     // resolve address
     emitter.instruction("ldr x8, [x6]");                                        // load current offset
-    emitter.instruction("adrp x7, _concat_buf@PAGE");                           // load concat buffer page
-    emitter.instruction("add x7, x7, _concat_buf@PAGEOFF");                     // resolve address
+    emitter.adrp("x7", "_concat_buf");                           // load concat buffer page
+    emitter.add_lo12("x7", "x7", "_concat_buf");                     // resolve address
     emitter.instruction("add x9, x7, x8");                                      // destination pointer
     emitter.instruction("str x9, [sp, #24]");                                   // save result start
     emitter.instruction("mov x10, #0");                                         // current line length
@@ -60,8 +60,8 @@ pub fn emit_wordwrap(emitter: &mut Emitter) {
     emitter.label("__rt_wordwrap_done");
     emitter.instruction("ldr x1, [sp, #24]");                                   // result pointer
     emitter.instruction("sub x2, x9, x1");                                      // result length
-    emitter.instruction("adrp x6, _concat_off@PAGE");                           // update concat offset
-    emitter.instruction("add x6, x6, _concat_off@PAGEOFF");                     // resolve address
+    emitter.adrp("x6", "_concat_off");                           // update concat offset
+    emitter.add_lo12("x6", "x6", "_concat_off");                     // resolve address
     emitter.instruction("ldr x8, [x6]");                                        // load current offset
     emitter.instruction("add x8, x8, x2");                                      // advance
     emitter.instruction("str x8, [x6]");                                        // store

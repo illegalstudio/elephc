@@ -20,8 +20,7 @@ pub fn emit(
         emitter.instruction("mov x0, #0");                                      // set exit code to 0 (success)
     }
     // -- invoke macOS kernel exit syscall --
-    emitter.instruction("mov x16, #1");                                         // load syscall number 1 (SYS_exit) into x16
-    emitter.instruction("svc #0x80");                                           // trigger supervisor call to execute kernel exit
+    emitter.syscall(1);
 
     Some(PhpType::Void)
 }

@@ -58,7 +58,7 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_preg_replace_nc");                           // skip
     emitter.instruction("orr x2, x2, #2");                                      // REG_ICASE
     emitter.label("__rt_preg_replace_nc");
-    emitter.instruction("bl _regcomp");                                         // compile
+    emitter.bl_c("regcomp");                                         // compile
     emitter.instruction("cbnz x0, __rt_preg_replace_fail");                     // fail → return original
 
     // -- null-terminate subject --
@@ -68,11 +68,11 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #112]");                                  // save subject C string
 
     // -- set up output buffer in concat_buf --
-    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of concat offset
-    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve address
+    emitter.adrp("x9", "_concat_off");                           // load page of concat offset
+    emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve address
     emitter.instruction("ldr x10, [x9]");                                       // load current offset
-    emitter.instruction("adrp x11, _concat_buf@PAGE");                          // load page of concat buffer
-    emitter.instruction("add x11, x11, _concat_buf@PAGEOFF");                   // resolve address
+    emitter.adrp("x11", "_concat_buf");                          // load page of concat buffer
+    emitter.add_lo12("x11", "x11", "_concat_buf");                   // resolve address
     emitter.instruction("add x11, x11, x10");                                   // output position
     emitter.instruction("str x11, [sp, #120]");                                 // save output start
     emitter.instruction("str x11, [sp, #128]");                                 // save output write pos
@@ -91,7 +91,7 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #1");                                          // nmatch
     emitter.instruction("add x3, sp, #32");                                     // regmatch_t at sp+32
     emitter.instruction("mov x4, #0");                                          // eflags
-    emitter.instruction("bl _regexec");                                         // execute
+    emitter.bl_c("regexec");                                         // execute
     emitter.instruction("cbnz x0, __rt_preg_replace_tail");                     // no more matches, copy rest
 
     // -- copy text before match (rm_so bytes) --
@@ -147,7 +147,7 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction("str x11, [sp, #128]");                                 // save final write pos
     // -- free regex --
     emitter.instruction("mov x0, sp");                                          // regex_t
-    emitter.instruction("bl _regfree");                                         // free
+    emitter.bl_c("regfree");                                         // free
 
     // -- compute result --
     emitter.instruction("ldr x1, [sp, #120]");                                  // output start
@@ -155,8 +155,8 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction("sub x2, x11, x1");                                     // result length
 
     // -- update concat_off --
-    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of concat offset
-    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve address
+    emitter.adrp("x9", "_concat_off");                           // load page of concat offset
+    emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve address
     emitter.instruction("ldr x10, [x9]");                                       // load current offset
     emitter.instruction("add x10, x10, x2");                                    // add result length
     emitter.instruction("str x10, [x9]");                                       // store updated offset

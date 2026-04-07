@@ -7,9 +7,7 @@ pub fn emit_heap_debug_fail(emitter: &mut Emitter) {
     emitter.comment("--- runtime: heap_debug_fail ---");
     emitter.label_global("__rt_heap_debug_fail");
     emitter.instruction("mov x0, #2");                                          // fd = stderr
-    emitter.instruction("mov x16, #4");                                         // syscall 4 = sys_write
-    emitter.instruction("svc #0x80");                                           // write the heap-debug error message
+    emitter.syscall(4);
     emitter.instruction("mov x0, #1");                                          // exit code 1 for heap-debug failures
-    emitter.instruction("mov x16, #1");                                         // syscall 1 = sys_exit
-    emitter.instruction("svc #0x80");                                           // terminate the process immediately
+    emitter.syscall(1);
 }

@@ -14,11 +14,11 @@ pub fn emit_strtolower(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish new frame pointer
 
     // -- get concat_buf write position --
-    emitter.instruction("adrp x6, _concat_off@PAGE");                           // load page address of concat buffer offset
-    emitter.instruction("add x6, x6, _concat_off@PAGEOFF");                     // resolve exact address of offset variable
+    emitter.adrp("x6", "_concat_off");                           // load page address of concat buffer offset
+    emitter.add_lo12("x6", "x6", "_concat_off");                     // resolve exact address of offset variable
     emitter.instruction("ldr x8, [x6]");                                        // load current write offset
-    emitter.instruction("adrp x7, _concat_buf@PAGE");                           // load page address of concat buffer
-    emitter.instruction("add x7, x7, _concat_buf@PAGEOFF");                     // resolve exact buffer base address
+    emitter.adrp("x7", "_concat_buf");                           // load page address of concat buffer
+    emitter.add_lo12("x7", "x7", "_concat_buf");                     // resolve exact buffer base address
     emitter.instruction("add x9, x7, x8");                                      // compute destination pointer
     emitter.instruction("mov x10, x9");                                         // save destination start for return value
     emitter.instruction("mov x11, x2");                                         // copy length as loop counter

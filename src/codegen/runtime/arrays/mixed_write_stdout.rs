@@ -22,8 +22,7 @@ pub fn emit_mixed_write_stdout(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [x0, #8]");                                    // load the boxed string pointer
     emitter.instruction("ldr x2, [x0, #16]");                                   // load the boxed string length
     emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.instruction("mov x16, #4");                                         // syscall 4 = write
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel to print the boxed string
+    emitter.syscall(4);
     emitter.instruction("b __rt_mixed_write_stdout_done");                      // restore x30 and return after printing the boxed string
 
     emitter.label("__rt_mixed_write_stdout_bool");
@@ -31,16 +30,14 @@ pub fn emit_mixed_write_stdout(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_mixed_write_stdout_done");                // false prints an empty string
     emitter.instruction("bl __rt_itoa");                                        // true prints as integer 1
     emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.instruction("mov x16, #4");                                         // syscall 4 = write
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel to print the boxed bool
+    emitter.syscall(4);
     emitter.instruction("b __rt_mixed_write_stdout_done");                      // restore x30 and return after printing the boxed bool
 
     emitter.label("__rt_mixed_write_stdout_int");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the boxed integer payload
     emitter.instruction("bl __rt_itoa");                                        // convert the boxed integer to a decimal string
     emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.instruction("mov x16, #4");                                         // syscall 4 = write
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel to print the boxed integer
+    emitter.syscall(4);
     emitter.instruction("b __rt_mixed_write_stdout_done");                      // restore x30 and return after printing the boxed integer
 
     emitter.label("__rt_mixed_write_stdout_float");
@@ -48,8 +45,7 @@ pub fn emit_mixed_write_stdout(emitter: &mut Emitter) {
     emitter.instruction("fmov d0, x9");                                         // move the boxed float bits into the FP return register
     emitter.instruction("bl __rt_ftoa");                                        // convert the boxed float to a printable string
     emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.instruction("mov x16, #4");                                         // syscall 4 = write
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel to print the boxed float
+    emitter.syscall(4);
     emitter.instruction("b __rt_mixed_write_stdout_done");                      // restore x30 and return after printing the boxed float
 
     emitter.label("__rt_mixed_write_stdout_done");

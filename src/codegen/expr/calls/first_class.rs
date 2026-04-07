@@ -160,7 +160,7 @@ pub(super) fn emit_first_class_callable(
     });
 
     emitter.comment("first-class callable: load wrapper address");
-    emitter.instruction(&format!("adrp x0, {}@PAGE", wrapper_label));           // load page base of synthesized callable wrapper
-    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", wrapper_label));     // resolve callable wrapper address
+    emitter.adrp("x0", &format!("{}", wrapper_label));           // load page base of synthesized callable wrapper
+    emitter.add_lo12("x0", "x0", &format!("{}", wrapper_label));     // resolve callable wrapper address
     PhpType::Callable
 }

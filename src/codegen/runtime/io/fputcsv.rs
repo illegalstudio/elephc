@@ -33,11 +33,10 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
     // -- write comma separator before 2nd+ fields --
     emitter.instruction("cbz x9, __rt_fputcsv_field");                          // skip comma for first field
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
-    emitter.instruction("adrp x1, __rt_fputcsv_comma_lit@PAGE");                // load comma literal address
-    emitter.instruction("add x1, x1, __rt_fputcsv_comma_lit@PAGEOFF");          // resolve exact address
+    emitter.adrp("x1", "__rt_fputcsv_comma_lit");                // load comma literal address
+    emitter.add_lo12("x1", "x1", "__rt_fputcsv_comma_lit");          // resolve exact address
     emitter.instruction("mov x2, #1");                                          // write 1 byte (comma)
-    emitter.instruction("mov x16, #4");                                         // syscall 4 = write
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(4);
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
     emitter.instruction("add x9, x9, x0");                                      // add bytes written
     emitter.instruction("str x9, [sp, #16]");                                   // save updated total
@@ -78,11 +77,10 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
 
     // -- write opening quote --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
-    emitter.instruction("adrp x1, __rt_fputcsv_quote_lit@PAGE");                // load quote literal address
-    emitter.instruction("add x1, x1, __rt_fputcsv_quote_lit@PAGEOFF");          // resolve exact address
+    emitter.adrp("x1", "__rt_fputcsv_quote_lit");                // load quote literal address
+    emitter.add_lo12("x1", "x1", "__rt_fputcsv_quote_lit");          // resolve exact address
     emitter.instruction("mov x2, #1");                                          // write 1 byte (quote)
-    emitter.instruction("mov x16, #4");                                         // syscall 4 = write
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(4);
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
     emitter.instruction("add x9, x9, x0");                                      // add bytes written
     emitter.instruction("str x9, [sp, #16]");                                   // save updated total
@@ -101,11 +99,10 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
 
     // -- escape quote by writing two quotes --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
-    emitter.instruction("adrp x1, __rt_fputcsv_quote_lit@PAGE");                // load quote literal address
-    emitter.instruction("add x1, x1, __rt_fputcsv_quote_lit@PAGEOFF");          // resolve exact address
+    emitter.adrp("x1", "__rt_fputcsv_quote_lit");                // load quote literal address
+    emitter.add_lo12("x1", "x1", "__rt_fputcsv_quote_lit");          // resolve exact address
     emitter.instruction("mov x2, #1");                                          // write 1 byte (escape quote)
-    emitter.instruction("mov x16, #4");                                         // syscall 4 = write
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(4);
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
     emitter.instruction("add x9, x9, x0");                                      // add bytes written
     emitter.instruction("str x9, [sp, #16]");                                   // save updated total
@@ -118,8 +115,7 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
     emitter.instruction("add x1, x3, x9");                                      // pointer to the byte
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
     emitter.instruction("mov x2, #1");                                          // write 1 byte
-    emitter.instruction("mov x16, #4");                                         // syscall 4 = write
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(4);
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
     emitter.instruction("add x9, x9, x0");                                      // add bytes written
     emitter.instruction("str x9, [sp, #16]");                                   // save updated total
@@ -130,11 +126,10 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
     // -- write closing quote --
     emitter.label("__rt_fputcsv_close_q");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
-    emitter.instruction("adrp x1, __rt_fputcsv_quote_lit@PAGE");                // load quote literal address
-    emitter.instruction("add x1, x1, __rt_fputcsv_quote_lit@PAGEOFF");          // resolve exact address
+    emitter.adrp("x1", "__rt_fputcsv_quote_lit");                // load quote literal address
+    emitter.add_lo12("x1", "x1", "__rt_fputcsv_quote_lit");          // resolve exact address
     emitter.instruction("mov x2, #1");                                          // write 1 byte (quote)
-    emitter.instruction("mov x16, #4");                                         // syscall 4 = write
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(4);
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
     emitter.instruction("add x9, x9, x0");                                      // add bytes written
     emitter.instruction("str x9, [sp, #16]");                                   // save updated total
@@ -145,8 +140,7 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
     emitter.instruction("mov x1, x3");                                          // field pointer
     emitter.instruction("mov x2, x4");                                          // field length
-    emitter.instruction("mov x16, #4");                                         // syscall 4 = write
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(4);
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
     emitter.instruction("add x9, x9, x0");                                      // add bytes written
     emitter.instruction("str x9, [sp, #16]");                                   // save updated total
@@ -161,11 +155,10 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
     // -- write trailing newline --
     emitter.label("__rt_fputcsv_newline");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
-    emitter.instruction("adrp x1, __rt_fputcsv_nl_lit@PAGE");                   // load newline literal address
-    emitter.instruction("add x1, x1, __rt_fputcsv_nl_lit@PAGEOFF");             // resolve exact address
+    emitter.adrp("x1", "__rt_fputcsv_nl_lit");                   // load newline literal address
+    emitter.add_lo12("x1", "x1", "__rt_fputcsv_nl_lit");             // resolve exact address
     emitter.instruction("mov x2, #1");                                          // write 1 byte (newline)
-    emitter.instruction("mov x16, #4");                                         // syscall 4 = write
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(4);
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
     emitter.instruction("add x9, x9, x0");                                      // add final bytes written
     emitter.instruction("str x9, [sp, #16]");                                   // save final total

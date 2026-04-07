@@ -9,14 +9,14 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
     emitter.label_global("__rt_heap_debug_validate_free_list");
 
     // -- load heap bounds and current free-list head --
-    emitter.instruction("adrp x9, _heap_buf@PAGE");                             // load page of the heap buffer
-    emitter.instruction("add x9, x9, _heap_buf@PAGEOFF");                       // resolve the heap buffer base address
-    emitter.instruction("adrp x10, _heap_off@PAGE");                            // load page of the current heap offset
-    emitter.instruction("add x10, x10, _heap_off@PAGEOFF");                     // resolve the heap offset address
+    emitter.adrp("x9", "_heap_buf");                             // load page of the heap buffer
+    emitter.add_lo12("x9", "x9", "_heap_buf");                       // resolve the heap buffer base address
+    emitter.adrp("x10", "_heap_off");                            // load page of the current heap offset
+    emitter.add_lo12("x10", "x10", "_heap_off");                     // resolve the heap offset address
     emitter.instruction("ldr x10, [x10]");                                      // load the current bump offset
     emitter.instruction("add x10, x9, x10");                                    // compute the current heap end address
-    emitter.instruction("adrp x11, _heap_free_list@PAGE");                      // load page of the free-list head pointer
-    emitter.instruction("add x11, x11, _heap_free_list@PAGEOFF");               // resolve the free-list head pointer address
+    emitter.adrp("x11", "_heap_free_list");                      // load page of the free-list head pointer
+    emitter.add_lo12("x11", "x11", "_heap_free_list");               // resolve the free-list head pointer address
     emitter.instruction("ldr x11, [x11]");                                      // x11 = current free block header
 
     emitter.label("__rt_heap_debug_validate_free_list_loop");
@@ -44,15 +44,15 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
     emitter.instruction("b __rt_heap_debug_validate_free_list_loop");           // continue validating the ordered free list
 
     emitter.label("__rt_heap_debug_validate_free_list_fail");
-    emitter.instruction("adrp x1, _heap_dbg_free_list_msg@PAGE");               // load page of the free-list corruption message
-    emitter.instruction("add x1, x1, _heap_dbg_free_list_msg@PAGEOFF");         // resolve the free-list corruption message address
+    emitter.adrp("x1", "_heap_dbg_free_list_msg");               // load page of the free-list corruption message
+    emitter.add_lo12("x1", "x1", "_heap_dbg_free_list_msg");         // resolve the free-list corruption message address
     emitter.instruction(&format!("mov x2, #{}", msg.len()));                    // pass the exact free-list corruption message length
     emitter.instruction("b __rt_heap_debug_fail");                              // report corruption and terminate immediately
 
     // -- small segregated bins must also point at valid cached blocks --
     emitter.label("__rt_heap_debug_validate_free_list_done");
-    emitter.instruction("adrp x11, _heap_small_bins@PAGE");                     // load page of the segregated small-bin head array
-    emitter.instruction("add x11, x11, _heap_small_bins@PAGEOFF");              // resolve the segregated small-bin head array address
+    emitter.adrp("x11", "_heap_small_bins");                     // load page of the segregated small-bin head array
+    emitter.add_lo12("x11", "x11", "_heap_small_bins");              // resolve the segregated small-bin head array address
     emitter.instruction("mov x12, #0");                                         // start with the <=8-byte bin offset
 
     emitter.label("__rt_heap_debug_validate_small_bins");
@@ -76,8 +76,8 @@ pub fn emit_heap_debug_validate_free_list(emitter: &mut Emitter) {
     emitter.instruction("mov x16, #64");                                        // set the inclusive upper bound for the <=64-byte class
 
     emitter.label("__rt_heap_debug_validate_small_bin_ready");
-    emitter.instruction("adrp x13, _heap_off@PAGE");                            // load page of the current heap offset for chain-length budgeting
-    emitter.instruction("add x13, x13, _heap_off@PAGEOFF");                     // resolve the heap offset address
+    emitter.adrp("x13", "_heap_off");                            // load page of the current heap offset for chain-length budgeting
+    emitter.add_lo12("x13", "x13", "_heap_off");                     // resolve the heap offset address
     emitter.instruction("ldr x13, [x13]");                                      // x13 = total live heap bytes available to bound the cached chain walk
 
     emitter.label("__rt_heap_debug_validate_small_bin_loop");

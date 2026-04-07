@@ -37,7 +37,7 @@ pub fn emit(
         emitter.instruction("str d1, [sp, #-16]!");                             // push precision as float onto stack
         emitter.instruction("fmov d0, #10.0");                                  // d0 = 10.0 (base)
         emitter.instruction("ldr d1, [sp], #16");                               // pop precision into d1 (exponent)
-        emitter.instruction("bl _pow");                                         // call pow(10.0, precision) → d0 = multiplier
+        emitter.bl_c("pow");                                         // call pow(10.0, precision) → d0 = multiplier
 
         // -- multiply value by multiplier, round, divide --
         emitter.instruction("ldr d1, [sp], #16");                               // pop original value into d1

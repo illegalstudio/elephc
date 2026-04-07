@@ -50,44 +50,44 @@ pub fn emit(
         emitter.instruction(&format!("b {}", null_case));                       // null and unknown tags fall back to PHP's NULL type name
 
         emitter.label(&integer_case);
-        emitter.instruction(&format!("adrp x1, {}@PAGE", integer_label));       // load page address of the integer type name
-        emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", integer_label)); // resolve the integer type name address
+        emitter.adrp("x1", &format!("{}", integer_label));       // load page address of the integer type name
+        emitter.add_lo12("x1", "x1", &format!("{}", integer_label)); // resolve the integer type name address
         emitter.instruction(&format!("mov x2, #{}", integer_len));              // load the integer type name length
         emitter.instruction(&format!("b {}", done));                            // finish after selecting the integer type string
 
         emitter.label(&double_case);
-        emitter.instruction(&format!("adrp x1, {}@PAGE", double_label));        // load page address of the double type name
-        emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", double_label));  // resolve the double type name address
+        emitter.adrp("x1", &format!("{}", double_label));        // load page address of the double type name
+        emitter.add_lo12("x1", "x1", &format!("{}", double_label));  // resolve the double type name address
         emitter.instruction(&format!("mov x2, #{}", double_len));               // load the double type name length
         emitter.instruction(&format!("b {}", done));                            // finish after selecting the double type string
 
         emitter.label(&string_case);
-        emitter.instruction(&format!("adrp x1, {}@PAGE", string_label));        // load page address of the string type name
-        emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", string_label));  // resolve the string type name address
+        emitter.adrp("x1", &format!("{}", string_label));        // load page address of the string type name
+        emitter.add_lo12("x1", "x1", &format!("{}", string_label));  // resolve the string type name address
         emitter.instruction(&format!("mov x2, #{}", string_len));               // load the string type name length
         emitter.instruction(&format!("b {}", done));                            // finish after selecting the string type string
 
         emitter.label(&boolean_case);
-        emitter.instruction(&format!("adrp x1, {}@PAGE", boolean_label));       // load page address of the boolean type name
-        emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", boolean_label)); // resolve the boolean type name address
+        emitter.adrp("x1", &format!("{}", boolean_label));       // load page address of the boolean type name
+        emitter.add_lo12("x1", "x1", &format!("{}", boolean_label)); // resolve the boolean type name address
         emitter.instruction(&format!("mov x2, #{}", boolean_len));              // load the boolean type name length
         emitter.instruction(&format!("b {}", done));                            // finish after selecting the boolean type string
 
         emitter.label(&null_case);
-        emitter.instruction(&format!("adrp x1, {}@PAGE", null_label));          // load page address of the NULL type name
-        emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", null_label));    // resolve the NULL type name address
+        emitter.adrp("x1", &format!("{}", null_label));          // load page address of the NULL type name
+        emitter.add_lo12("x1", "x1", &format!("{}", null_label));    // resolve the NULL type name address
         emitter.instruction(&format!("mov x2, #{}", null_len));                 // load the NULL type name length
         emitter.instruction(&format!("b {}", done));                            // finish after selecting the NULL type string
 
         emitter.label(&array_case);
-        emitter.instruction(&format!("adrp x1, {}@PAGE", array_label));         // load page address of the array type name
-        emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", array_label));   // resolve the array type name address
+        emitter.adrp("x1", &format!("{}", array_label));         // load page address of the array type name
+        emitter.add_lo12("x1", "x1", &format!("{}", array_label));   // resolve the array type name address
         emitter.instruction(&format!("mov x2, #{}", array_len));                // load the array type name length
         emitter.instruction(&format!("b {}", done));                            // finish after selecting the array type string
 
         emitter.label(&object_case);
-        emitter.instruction(&format!("adrp x1, {}@PAGE", object_label));        // load page address of the object type name
-        emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", object_label));  // resolve the object type name address
+        emitter.adrp("x1", &format!("{}", object_label));        // load page address of the object type name
+        emitter.add_lo12("x1", "x1", &format!("{}", object_label));  // resolve the object type name address
         emitter.instruction(&format!("mov x2, #{}", object_len));               // load the object type name length
         emitter.label(&done);
         return Some(PhpType::Str);
@@ -108,8 +108,8 @@ pub fn emit(
         PhpType::Mixed | PhpType::Union(_) => unreachable!("mixed handled above"),
     };
     let (label, len) = data.add_string(type_str.as_bytes());
-    emitter.instruction(&format!("adrp x1, {}@PAGE", label));                   // load page address of type name string
-    emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", label));             // add page offset to get full address
+    emitter.adrp("x1", &format!("{}", label));                   // load page address of type name string
+    emitter.add_lo12("x1", "x1", &format!("{}", label));             // add page offset to get full address
     emitter.instruction(&format!("mov x2, #{}", len));                          // load string length into x2
     Some(PhpType::Str)
 }

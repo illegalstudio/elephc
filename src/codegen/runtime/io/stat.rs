@@ -4,6 +4,14 @@ use crate::codegen::emit::Emitter;
 /// filesize, filemtime.
 /// All take x1/x2=path string, return result in x0.
 pub fn emit_stat(emitter: &mut Emitter) {
+    let plat = emitter.platform;
+    let stat_buf = plat.stat_buf_size();
+    let frame_size = (stat_buf + 32 + 15) & !15; // 16-byte aligned: stat buf + saved regs
+    let save_offset = frame_size - 16;
+    let mode_off = plat.stat_mode_offset();
+    let size_off = plat.stat_size_offset();
+    let mtime_off = plat.stat_mtime_offset();
+
     // ================================================================
     // __rt_file_exists: check if a path exists
     // Input:  x1/x2=path
@@ -14,23 +22,22 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.label_global("__rt_file_exists");
 
     // -- set up stack frame --
-    emitter.instruction("sub sp, sp, #176");                                    // allocate 176 bytes (144 stat + frame)
-    emitter.instruction("stp x29, x30, [sp, #160]");                            // save frame pointer and return address
-    emitter.instruction("add x29, sp, #160");                                   // establish new frame pointer
+    emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for stat buf + frame
+    emitter.instruction(&format!("stp x29, x30, [sp, #{}]", save_offset));      // save frame pointer and return address
+    emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
 
     // -- null-terminate path and call stat64 --
     emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
-    emitter.instruction("mov x16, #338");                                       // syscall 338 = stat64
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(338);
 
     // -- check return value: 0=success (exists), -1=error (not found) --
     emitter.instruction("cmp x0, #0");                                          // check syscall result
     emitter.instruction("cset x0, eq");                                         // x0 = 1 if stat succeeded (file exists)
 
     // -- restore frame and return --
-    emitter.instruction("ldp x29, x30, [sp, #160]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #176");                                    // deallocate stack frame
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 
     // ================================================================
@@ -43,22 +50,21 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.label_global("__rt_is_file");
 
     // -- set up stack frame --
-    emitter.instruction("sub sp, sp, #176");                                    // allocate 176 bytes (144 stat + frame)
-    emitter.instruction("stp x29, x30, [sp, #160]");                            // save frame pointer and return address
-    emitter.instruction("add x29, sp, #160");                                   // establish new frame pointer
+    emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for stat buf + frame
+    emitter.instruction(&format!("stp x29, x30, [sp, #{}]", save_offset));      // save frame pointer and return address
+    emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
 
     // -- null-terminate path and call stat64 --
     emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
-    emitter.instruction("mov x16, #338");                                       // syscall 338 = stat64
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(338);
 
     // -- check if stat failed --
     emitter.instruction("cmp x0, #0");                                          // check syscall result
     emitter.instruction("b.ne __rt_is_file_no");                                // if stat failed, not a file
 
     // -- check st_mode & S_IFMT == S_IFREG --
-    emitter.instruction("ldrh w9, [sp, #4]");                                   // load st_mode (uint16 at offset 4)
+    emitter.instruction(&plat.stat_mode_load_instr("w9", "sp", mode_off));      // load st_mode from stat struct
     emitter.instruction("and w9, w9, #0xF000");                                 // mask with S_IFMT
     emitter.instruction("mov w10, #0x8000");                                    // S_IFREG = 0x8000
     emitter.instruction("cmp w9, w10");                                         // compare with regular file type
@@ -69,8 +75,8 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #0");                                          // not a regular file
 
     emitter.label("__rt_is_file_ret");
-    emitter.instruction("ldp x29, x30, [sp, #160]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #176");                                    // deallocate stack frame
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 
     // ================================================================
@@ -83,22 +89,21 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.label_global("__rt_is_dir");
 
     // -- set up stack frame --
-    emitter.instruction("sub sp, sp, #176");                                    // allocate 176 bytes (144 stat + frame)
-    emitter.instruction("stp x29, x30, [sp, #160]");                            // save frame pointer and return address
-    emitter.instruction("add x29, sp, #160");                                   // establish new frame pointer
+    emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for stat buf + frame
+    emitter.instruction(&format!("stp x29, x30, [sp, #{}]", save_offset));      // save frame pointer and return address
+    emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
 
     // -- null-terminate path and call stat64 --
     emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
-    emitter.instruction("mov x16, #338");                                       // syscall 338 = stat64
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(338);
 
     // -- check if stat failed --
     emitter.instruction("cmp x0, #0");                                          // check syscall result
     emitter.instruction("b.ne __rt_is_dir_no");                                 // if stat failed, not a directory
 
     // -- check st_mode & S_IFMT == S_IFDIR --
-    emitter.instruction("ldrh w9, [sp, #4]");                                   // load st_mode (uint16 at offset 4)
+    emitter.instruction(&plat.stat_mode_load_instr("w9", "sp", mode_off));      // load st_mode from stat struct
     emitter.instruction("and w9, w9, #0xF000");                                 // mask with S_IFMT
     emitter.instruction("mov w10, #0x4000");                                    // S_IFDIR = 0x4000
     emitter.instruction("cmp w9, w10");                                         // compare with directory type
@@ -109,8 +114,8 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #0");                                          // not a directory
 
     emitter.label("__rt_is_dir_ret");
-    emitter.instruction("ldp x29, x30, [sp, #160]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #176");                                    // deallocate stack frame
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 
     // ================================================================
@@ -132,8 +137,7 @@ pub fn emit_stat(emitter: &mut Emitter) {
 
     // -- call access(path, R_OK) --
     emitter.instruction("mov x1, #4");                                          // R_OK = 4 (read permission check)
-    emitter.instruction("mov x16, #33");                                        // syscall 33 = access
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(33);
 
     // -- return 1 if accessible, 0 if not --
     emitter.instruction("cmp x0, #0");                                          // check syscall result
@@ -163,8 +167,7 @@ pub fn emit_stat(emitter: &mut Emitter) {
 
     // -- call access(path, W_OK) --
     emitter.instruction("mov x1, #2");                                          // W_OK = 2 (write permission check)
-    emitter.instruction("mov x16, #33");                                        // syscall 33 = access
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(33);
 
     // -- return 1 if accessible, 0 if not --
     emitter.instruction("cmp x0, #0");                                          // check syscall result
@@ -185,22 +188,21 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.label_global("__rt_filesize");
 
     // -- set up stack frame --
-    emitter.instruction("sub sp, sp, #176");                                    // allocate 176 bytes (144 stat + frame)
-    emitter.instruction("stp x29, x30, [sp, #160]");                            // save frame pointer and return address
-    emitter.instruction("add x29, sp, #160");                                   // establish new frame pointer
+    emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for stat buf + frame
+    emitter.instruction(&format!("stp x29, x30, [sp, #{}]", save_offset));      // save frame pointer and return address
+    emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
 
     // -- null-terminate path and call stat64 --
     emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
-    emitter.instruction("mov x16, #338");                                       // syscall 338 = stat64
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(338);
 
     // -- extract st_size from stat struct --
-    emitter.instruction("ldr x0, [sp, #96]");                                   // load st_size (int64 at offset 96)
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", size_off));               // load st_size from stat struct
 
     // -- restore frame and return --
-    emitter.instruction("ldp x29, x30, [sp, #160]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #176");                                    // deallocate stack frame
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 
     // ================================================================
@@ -213,21 +215,20 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.label_global("__rt_filemtime");
 
     // -- set up stack frame --
-    emitter.instruction("sub sp, sp, #176");                                    // allocate 176 bytes (144 stat + frame)
-    emitter.instruction("stp x29, x30, [sp, #160]");                            // save frame pointer and return address
-    emitter.instruction("add x29, sp, #160");                                   // establish new frame pointer
+    emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for stat buf + frame
+    emitter.instruction(&format!("stp x29, x30, [sp, #{}]", save_offset));      // save frame pointer and return address
+    emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
 
     // -- null-terminate path and call stat64 --
     emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
-    emitter.instruction("mov x16, #338");                                       // syscall 338 = stat64
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(338);
 
     // -- extract st_mtimespec.tv_sec from stat struct --
-    emitter.instruction("ldr x0, [sp, #48]");                                   // load tv_sec (int64 at offset 48)
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", mtime_off));              // load mtime tv_sec from stat struct
 
     // -- restore frame and return --
-    emitter.instruction("ldp x29, x30, [sp, #160]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #176");                                    // deallocate stack frame
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 }

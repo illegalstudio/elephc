@@ -21,6 +21,6 @@ pub fn emit(
     if t1 != PhpType::Float { emitter.instruction("scvtf d0, x0"); }            // convert exponent to float if int
     emitter.instruction("fmov d1, d0");                                         // move exponent to d1 (second arg)
     emitter.instruction("ldr d0, [sp], #16");                                   // pop base into d0 (first arg)
-    emitter.instruction("bl _pow");                                             // call C library pow(base, exponent)
+    emitter.bl_c("pow");                                             // call C library pow(base, exponent)
     Some(PhpType::Float)
 }

@@ -180,8 +180,8 @@ pub(super) fn emit_closure(
     });
 
     emitter.comment("closure: load function address");
-    emitter.instruction(&format!("adrp x0, {}@PAGE", closure_label));           // load page base of closure function
-    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", closure_label));     // add page offset to get exact closure address
+    emitter.adrp("x0", &format!("{}", closure_label));           // load page base of closure function
+    emitter.add_lo12("x0", "x0", &format!("{}", closure_label));     // add page offset to get exact closure address
     PhpType::Callable
 }
 
@@ -261,8 +261,8 @@ pub(super) fn emit_closure_call(
                 if ctx.global_vars.contains(var_name) {
                     let label = format!("_gvar_{}", var_name);
                     emitter.comment(&format!("closure ref arg: address of global ${}", var_name));
-                    emitter.instruction(&format!("adrp x0, {}@PAGE", label));   // load page of global var
-                    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label)); //resolve global var address
+                    emitter.adrp("x0", &format!("{}", label));   // load page of global var
+                    emitter.add_lo12("x0", "x0", &format!("{}", label)); //resolve global var address
                 } else if ctx.ref_params.contains(var_name) {
                     let cap_info = match ctx.variables.get(var_name) {
                         Some(v) => v,

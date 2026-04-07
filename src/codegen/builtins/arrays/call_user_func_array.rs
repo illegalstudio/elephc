@@ -66,8 +66,8 @@ pub fn emit(
             _ => panic!("call_user_func_array() callback must be a string literal, callable expression, or callable variable"),
         };
         let label = function_symbol(&func_name);
-        emitter.instruction(&format!("adrp x19, {}@PAGE", label));              // load page address of callback function
-        emitter.instruction(&format!("add x19, x19, {}@PAGEOFF", label));       // resolve full address of callback
+        emitter.adrp("x19", &format!("{}", label));              // load page address of callback function
+        emitter.add_lo12("x19", "x19", &format!("{}", label));       // resolve full address of callback
         ctx.functions
             .get(&func_name)
             .expect("call_user_func_array: function not found")

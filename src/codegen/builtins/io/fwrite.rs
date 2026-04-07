@@ -21,7 +21,6 @@ pub fn emit(
     // x1=data ptr, x2=data len after emit_expr
     emitter.instruction("ldr x0, [sp], #16");                                   // pop fd → x0
     // -- invoke write syscall --
-    emitter.instruction("mov x16, #4");                                         // syscall 4 = write
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel, returns bytes written in x0
+    emitter.syscall(4);
     Some(PhpType::Int)
 }

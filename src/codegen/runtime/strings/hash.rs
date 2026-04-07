@@ -25,7 +25,7 @@ pub fn emit_hash(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #72]");                                   // w1 = data len
     emitter.instruction("mov w1, w1");                                          // truncate to 32-bit CC_LONG
     emitter.instruction("add x2, sp, #0");                                      // output buffer
-    emitter.instruction("bl _CC_MD5");                                          // call CommonCrypto MD5
+    emitter.bl_c("CC_MD5");                                          // call CommonCrypto MD5
     emitter.instruction("mov x5, #16");                                         // hash size = 16 bytes
     emitter.instruction("b __rt_hash_hex");                                     // convert to hex
 
@@ -42,7 +42,7 @@ pub fn emit_hash(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #72]");                                   // data len
     emitter.instruction("mov w1, w1");                                          // truncate to CC_LONG
     emitter.instruction("add x2, sp, #0");                                      // output buffer (32 bytes)
-    emitter.instruction("bl _CC_SHA256");                                       // call CommonCrypto SHA256
+    emitter.bl_c("CC_SHA256");                                       // call CommonCrypto SHA256
     emitter.instruction("mov x5, #32");                                         // hash size = 32 bytes
     emitter.instruction("b __rt_hash_hex");                                     // convert to hex
 
@@ -51,7 +51,7 @@ pub fn emit_hash(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #72]");                                   // data len
     emitter.instruction("mov w1, w1");                                          // truncate to CC_LONG
     emitter.instruction("add x2, sp, #0");                                      // output buffer (20 bytes)
-    emitter.instruction("bl _CC_SHA1");                                         // call CommonCrypto SHA1
+    emitter.bl_c("CC_SHA1");                                         // call CommonCrypto SHA1
     emitter.instruction("mov x5, #20");                                         // hash size = 20 bytes
     emitter.instruction("b __rt_hash_hex");                                     // convert to hex
 
@@ -62,11 +62,11 @@ pub fn emit_hash(emitter: &mut Emitter) {
 
     // -- convert raw hash bytes to hex string --
     emitter.label("__rt_hash_hex");
-    emitter.instruction("adrp x6, _concat_off@PAGE");                           // load concat offset page
-    emitter.instruction("add x6, x6, _concat_off@PAGEOFF");                     // resolve address
+    emitter.adrp("x6", "_concat_off");                           // load concat offset page
+    emitter.add_lo12("x6", "x6", "_concat_off");                     // resolve address
     emitter.instruction("ldr x8, [x6]");                                        // load current offset
-    emitter.instruction("adrp x7, _concat_buf@PAGE");                           // load concat buffer page
-    emitter.instruction("add x7, x7, _concat_buf@PAGEOFF");                     // resolve address
+    emitter.adrp("x7", "_concat_buf");                           // load concat buffer page
+    emitter.add_lo12("x7", "x7", "_concat_buf");                     // resolve address
     emitter.instruction("add x9, x7, x8");                                      // destination pointer
     emitter.instruction("mov x10, x9");                                         // save result start
     emitter.instruction("add x11, sp, #0");                                     // source = raw hash bytes

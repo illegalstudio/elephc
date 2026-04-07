@@ -19,8 +19,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
 
     // -- null-terminate path and call unlink --
     emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
-    emitter.instruction("mov x16, #10");                                        // syscall 10 = unlink
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(10);
 
     // -- return success/failure --
     emitter.instruction("cmp x0, #0");                                          // check syscall result
@@ -48,8 +47,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
     // -- null-terminate path and call mkdir --
     emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
     emitter.instruction("mov x1, #0x1ED");                                      // mode 0755 (octal)
-    emitter.instruction("mov x16, #136");                                       // syscall 136 = mkdir
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(136);
 
     // -- return success/failure --
     emitter.instruction("cmp x0, #0");                                          // check syscall result
@@ -76,8 +74,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
 
     // -- null-terminate path and call rmdir --
     emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
-    emitter.instruction("mov x16, #137");                                       // syscall 137 = rmdir
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(137);
 
     // -- return success/failure --
     emitter.instruction("cmp x0, #0");                                          // check syscall result
@@ -104,8 +101,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
 
     // -- null-terminate path and call chdir --
     emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
-    emitter.instruction("mov x16, #12");                                        // syscall 12 = chdir
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(12);
 
     // -- return success/failure --
     emitter.instruction("cmp x0, #0");                                          // check syscall result
@@ -145,8 +141,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
     // -- call rename syscall --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload source cstr path
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload destination cstr path
-    emitter.instruction("mov x16, #128");                                       // syscall 128 = rename
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(128);
 
     // -- return success/failure --
     emitter.instruction("cmp x0, #0");                                          // check syscall result

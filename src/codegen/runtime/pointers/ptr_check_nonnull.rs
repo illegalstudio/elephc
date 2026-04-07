@@ -15,14 +15,12 @@ pub(crate) fn emit_ptr_check_nonnull(emitter: &mut Emitter) {
 
     // -- fatal error: null pointer dereference --
     emitter.instruction("mov x0, #2");                                          // fd = stderr
-    emitter.instruction("adrp x1, _ptr_null_err_msg@PAGE");                     // load page of null dereference message
-    emitter.instruction("add x1, x1, _ptr_null_err_msg@PAGEOFF");               // resolve message address
+    emitter.adrp("x1", "_ptr_null_err_msg");                     // load page of null dereference message
+    emitter.add_lo12("x1", "x1", "_ptr_null_err_msg");               // resolve message address
     emitter.instruction("mov x2, #38");                                         // message length: "Fatal error: null pointer dereference\n"
-    emitter.instruction("mov x16, #4");                                         // syscall 4 = sys_write
-    emitter.instruction("svc #0x80");                                           // write error to stderr
+    emitter.syscall(4);
     emitter.instruction("mov x0, #1");                                          // exit code 1
-    emitter.instruction("mov x16, #1");                                         // syscall 1 = sys_exit
-    emitter.instruction("svc #0x80");                                           // terminate process
+    emitter.syscall(1);
 
     // -- success path --
     emitter.label("__rt_ptr_check_nonnull_ok");

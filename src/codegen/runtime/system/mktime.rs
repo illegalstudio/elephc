@@ -35,7 +35,7 @@ pub fn emit_mktime(emitter: &mut Emitter) {
 
     // -- call libc mktime --
     emitter.instruction("mov x0, sp");                                          // x0 = pointer to struct tm
-    emitter.instruction("bl _mktime");                                          // mktime(&tm) → x0=time_t
+    emitter.bl_c("mktime");                                          // mktime(&tm) → x0=time_t
 
     // -- tear down stack frame --
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address

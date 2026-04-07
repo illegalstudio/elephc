@@ -26,8 +26,8 @@ pub fn emit(
         } else if let Some(label) = ctx.global_vars.get(var_name) {
             // Global variable — use its static storage address
             let label = label.clone();
-            emitter.instruction(&format!("adrp x0, {}@PAGE", label));           // load page of global variable
-            emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label));     // resolve global variable address
+            emitter.adrp("x0", &format!("{}", label));           // load page of global variable
+            emitter.add_lo12("x0", "x0", &format!("{}", label));     // resolve global variable address
         } else {
             // Variable not found — return null pointer
             emitter.instruction("mov x0, #0");                                  // null pointer for unknown variable

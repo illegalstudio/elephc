@@ -34,12 +34,12 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.label("__rt_fopen_check_w");
     emitter.instruction("cmp w9, #0x77");                                       // compare with 'w'
     emitter.instruction("b.ne __rt_fopen_check_a");                             // if not 'w', check for 'a'
-    emitter.instruction("mov x1, #0x601");                                      // O_WRONLY|O_CREAT|O_TRUNC
+    emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat_trunc())); // O_WRONLY|O_CREAT|O_TRUNC
     emitter.instruction("b __rt_fopen_check_plus");                             // proceed to check for '+' modifier
 
     // -- check for 'a' mode (append) --
     emitter.label("__rt_fopen_check_a");
-    emitter.instruction("mov x1, #0x209");                                      // O_WRONLY|O_CREAT|O_APPEND
+    emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat_append())); // O_WRONLY|O_CREAT|O_APPEND
     // fall through to check_plus
 
     // -- check if second char is '+' to enable read+write --
@@ -57,11 +57,13 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.label("__rt_fopen_do_open");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload null-terminated path
     emitter.instruction("mov x2, #0x1A4");                                      // file mode 0644 (octal)
-    emitter.instruction("mov x16, #5");                                         // syscall 5 = open
-    emitter.instruction("svc #0x80");                                           // invoke macOS kernel
+    emitter.syscall(5);
 
-    // -- check if open failed (carry flag set on macOS syscall error) --
-    emitter.instruction("b.cc __rt_fopen_ok");                                  // if carry clear, syscall succeeded
+    // -- check if open failed --
+    if emitter.platform.needs_cmp_before_error_branch() {
+        emitter.instruction("cmp x0, #0");                                      // Linux: check if return value is negative
+    }
+    emitter.instruction(&emitter.platform.branch_on_syscall_success("__rt_fopen_ok")); // branch if syscall succeeded
     emitter.instruction("mov x0, #-1");                                         // return -1 to indicate failure
 
     // -- restore frame and return fd in x0 --

@@ -19,8 +19,8 @@ pub fn emit(
     }
     // -- multiply by 180.0 / M_PI to convert radians to degrees --
     let label = data.add_float(180.0 / std::f64::consts::PI);
-    emitter.instruction(&format!("adrp x9, {}@PAGE", label));                   // load page address of conversion factor
-    emitter.instruction(&format!("ldr d1, [x9, {}@PAGEOFF]", label));           // load 180/M_PI into d1
+    emitter.adrp("x9", &format!("{}", label));                   // load page address of conversion factor
+    emitter.ldr_lo12("d1", "x9", &format!("{}", label));           // load 180/M_PI into d1
     emitter.instruction("fmul d0, d0, d1");                                     // multiply radians by conversion factor
     Some(PhpType::Float)
 }

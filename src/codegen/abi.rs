@@ -157,29 +157,25 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
         PhpType::Str => {
             // x1=ptr, x2=len already set by the expression evaluator
             emitter.instruction("mov x0, #1");                                  // fd = stdout
-            emitter.instruction("mov x16, #4");                                 // syscall 4 = write
-            emitter.instruction("svc #0x80");                                   // invoke kernel
+            emitter.syscall(4);
         }
         PhpType::Bool | PhpType::Int => {
             // Convert integer in x0 to decimal string, then write
             emitter.instruction("bl __rt_itoa");                                // x0 → x1=ptr, x2=len
             emitter.instruction("mov x0, #1");                                  // fd = stdout
-            emitter.instruction("mov x16, #4");                                 // syscall 4 = write
-            emitter.instruction("svc #0x80");                                   // invoke kernel
+            emitter.syscall(4);
         }
         PhpType::Float => {
             // Convert float in d0 to string via snprintf, then write
             emitter.instruction("bl __rt_ftoa");                                // d0 → x1=ptr, x2=len
             emitter.instruction("mov x0, #1");                                  // fd = stdout
-            emitter.instruction("mov x16, #4");                                 // syscall 4 = write
-            emitter.instruction("svc #0x80");                                   // invoke kernel
+            emitter.syscall(4);
         }
         PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_) => {
             // Convert pointer address in x0 to hex string, then write
             emitter.instruction("bl __rt_ptoa");                                // x0 → x1=ptr, x2=len
             emitter.instruction("mov x0, #1");                                  // fd = stdout
-            emitter.instruction("mov x16, #4");                                 // syscall 4 = write
-            emitter.instruction("svc #0x80");                                   // invoke kernel
+            emitter.syscall(4);
         }
         PhpType::Mixed | PhpType::Union(_) => {
             emitter.instruction("bl __rt_mixed_write_stdout");                  // inspect boxed mixed payload and print if scalar/string

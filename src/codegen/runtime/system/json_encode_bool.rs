@@ -11,15 +11,15 @@ pub(crate) fn emit_json_encode_bool(emitter: &mut Emitter) {
     emitter.instruction("cbnz x0, __rt_json_encode_true");                      // if true, emit "true"
 
     // -- false --
-    emitter.instruction("adrp x1, _json_false@PAGE");                           // load page of "false" string
-    emitter.instruction("add x1, x1, _json_false@PAGEOFF");                     // resolve "false" address
+    emitter.adrp("x1", "_json_false");                           // load page of "false" string
+    emitter.add_lo12("x1", "x1", "_json_false");                     // resolve "false" address
     emitter.instruction("mov x2, #5");                                          // length of "false"
     emitter.instruction("ret");                                                 // return
 
     // -- true --
     emitter.label("__rt_json_encode_true");
-    emitter.instruction("adrp x1, _json_true@PAGE");                            // load page of "true" string
-    emitter.instruction("add x1, x1, _json_true@PAGEOFF");                      // resolve "true" address
+    emitter.adrp("x1", "_json_true");                            // load page of "true" string
+    emitter.add_lo12("x1", "x1", "_json_true");                      // resolve "true" address
     emitter.instruction("mov x2, #4");                                          // length of "true"
     emitter.instruction("ret");                                                 // return
 }

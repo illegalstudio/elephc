@@ -17,6 +17,6 @@ pub fn emit(
     if ty != PhpType::Float {
         emitter.instruction("scvtf d0, x0");                                    // convert int to float
     }
-    emitter.instruction("bl _tanh");                                            // call libc tanh(d0) → d0
+    emitter.bl_c("tanh");                                            // call libc tanh(d0) → d0
     Some(PhpType::Float)
 }
