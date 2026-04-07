@@ -73,12 +73,13 @@ fn map_syscall(macos_num: u32) -> u32 {
 /// On Linux ELF, these are referenced without the leading underscore.
 #[allow(dead_code)]
 const C_SYMBOLS: &[&str] = &[
-    "acos", "arc4random", "arc4random_uniform", "asin", "atan", "atan2", "atof",
+    "abs", "acos", "arc4random", "arc4random_uniform", "asin", "atan", "atan2", "atof", "atoi",
     "closedir", "cos", "cosh",
     "exp",
-    "fgetc", "getcwd", "getenv", "glob", "globfree",
+    "fgetc", "free", "getcwd", "getenv", "glob", "globfree",
     "hypot",
     "localtime", "log", "log10", "log2", "longjmp",
+    "malloc", "memcpy", "memset",
     "mkstemp", "mktime",
     "opendir",
     "pclose", "popen", "pow", "putenv",
@@ -476,6 +477,56 @@ impl Platform {
         }
     }
 
+    /// Size of libc's opaque `regex_t`.
+    pub fn regex_t_size(&self) -> usize {
+        match self {
+            Platform::MacOS => 32,
+            Platform::Linux => 64,
+        }
+    }
+
+    /// Size of libc's `regmatch_t`.
+    pub fn regmatch_t_size(&self) -> usize {
+        match self {
+            Platform::MacOS => 16,
+            Platform::Linux => {
+                if cfg!(target_env = "musl") {
+                    16
+                } else {
+                    8
+                }
+            }
+        }
+    }
+
+    /// Offset of `rm_eo` inside `regmatch_t`.
+    pub fn regmatch_rm_eo_offset(&self) -> usize {
+        match self {
+            Platform::MacOS => 8,
+            Platform::Linux => {
+                if cfg!(target_env = "musl") {
+                    8
+                } else {
+                    4
+                }
+            }
+        }
+    }
+
+    /// Load a signed `regoff_t` from `regmatch_t`.
+    pub fn regoff_load_instr(&self, dest: &str, base: &str, offset: usize) -> String {
+        match self {
+            Platform::MacOS => format!("ldr {}, [{}, #{}]", dest, base, offset),
+            Platform::Linux => {
+                if cfg!(target_env = "musl") {
+                    format!("ldr {}, [{}, #{}]", dest, base, offset)
+                } else {
+                    format!("ldrsw {}, [{}, #{}]", dest, base, offset)
+                }
+            }
+        }
+    }
+
     pub fn line_comment_prefix(&self) -> &'static str {
         match self {
             Platform::MacOS => ";",
@@ -691,5 +742,16 @@ _main:
         assert_eq!(Platform::Linux.dirent_name_offset(), 19);
         assert_eq!(Platform::MacOS.glob_pathv_offset(), 32);
         assert_eq!(Platform::Linux.glob_pathv_offset(), 8);
+        assert_eq!(Platform::MacOS.regex_t_size(), 32);
+        assert_eq!(Platform::Linux.regex_t_size(), 64);
+        assert_eq!(Platform::MacOS.regmatch_t_size(), 16);
+        assert_eq!(Platform::Linux.regmatch_t_size(), if cfg!(target_env = "musl") { 16 } else { 8 });
+        assert_eq!(Platform::MacOS.regmatch_rm_eo_offset(), 8);
+        assert_eq!(Platform::Linux.regmatch_rm_eo_offset(), if cfg!(target_env = "musl") { 8 } else { 4 });
+        assert_eq!(Platform::MacOS.regoff_load_instr("x9", "sp", 32), "ldr x9, [sp, #32]");
+        assert_eq!(
+            Platform::Linux.regoff_load_instr("x9", "sp", 32),
+            if cfg!(target_env = "musl") { "ldr x9, [sp, #32]" } else { "ldrsw x9, [sp, #32]" }
+        );
     }
 }
