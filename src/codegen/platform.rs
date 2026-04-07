@@ -476,6 +476,13 @@ impl Platform {
         }
     }
 
+    pub fn line_comment_prefix(&self) -> &'static str {
+        match self {
+            Platform::MacOS => ";",
+            Platform::Linux => "//",
+        }
+    }
+
     /// Emit the Linux syscall sequence for a given macOS syscall number.
     /// Handles AT_FDCWD argument shifting for *at syscall variants.
     pub fn emit_linux_syscall(emitter: &mut super::emit::Emitter, macos_num: u32) {

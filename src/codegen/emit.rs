@@ -30,7 +30,7 @@ impl Emitter {
     }
 
     pub fn comment(&mut self, text: &str) {
-        let _ = writeln!(self.buf, "    ; {}", text);
+        let _ = writeln!(self.buf, "    {} {}", self.platform.line_comment_prefix(), text);
     }
 
     pub fn blank(&mut self) {
@@ -134,5 +134,23 @@ impl Emitter {
             Platform::MacOS => self.label_global("_main"),
             Platform::Linux => self.label_global("main"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_comment_prefix_is_platform_aware() {
+        let mut mac = Emitter::new();
+        mac.platform = Platform::MacOS;
+        mac.comment("-- block --");
+        assert_eq!(mac.output(), "    ; -- block --\n");
+
+        let mut linux = Emitter::new();
+        linux.platform = Platform::Linux;
+        linux.comment("-- block --");
+        assert_eq!(linux.output(), "    // -- block --\n");
     }
 }
