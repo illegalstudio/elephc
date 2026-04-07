@@ -110,6 +110,9 @@ pub fn emit_extern_call(
         crate::codegen::platform::Platform::Linux => name.to_string(),
     };
     emitter.instruction(&format!("bl {}", c_sym));                              // call extern C function
+    if sig.return_type == PhpType::Int {
+        emitter.instruction("sxtw x0, w0");                                     // sign-extend 32-bit C int returns before PHP comparisons use x0
+    }
     emitter.instruction("ldr x10, [sp], #16");                                  // pop saved caller concat offset from stack
     emitter.adrp("x9", "_concat_off");                           // load page of caller concat offset
     emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve caller concat offset address
