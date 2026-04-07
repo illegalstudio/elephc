@@ -11,6 +11,7 @@ static TEST_ID: AtomicU64 = AtomicU64::new(0);
 static SDK_PATH: OnceLock<String> = OnceLock::new();
 static SDK_VERSION: OnceLock<String> = OnceLock::new();
 static RUNTIME_OBJ: OnceLock<std::path::PathBuf> = OnceLock::new();
+static QEMU_SYSROOT: OnceLock<Option<String>> = OnceLock::new();
 
 fn platform() -> Platform {
     Platform::detect()
@@ -115,6 +116,41 @@ fn default_link_paths() -> Vec<String> {
     paths
 }
 
+fn effective_link_libs(extra_link_libs: &[String]) -> Vec<&str> {
+    extra_link_libs
+        .iter()
+        .map(String::as_str)
+        .filter(|lib| *lib != "System")
+        .collect()
+}
+
+fn qemu_sysroot() -> Option<&'static str> {
+    QEMU_SYSROOT
+        .get_or_init(|| {
+            match platform() {
+                Platform::Linux => {
+                    let compiler = gcc_cmd();
+                    if let Ok(output) = Command::new(compiler).arg("-print-sysroot").output() {
+                        let sysroot = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                        if !sysroot.is_empty() && sysroot != "/" && std::path::Path::new(&sysroot).exists() {
+                            return Some(sysroot);
+                        }
+                    }
+                    for candidate in ["/usr/aarch64-linux-gnu", "/usr/local/aarch64-linux-gnu"] {
+                        if std::path::Path::new(candidate).join("lib/ld-linux-aarch64.so.1").exists()
+                            || std::path::Path::new(candidate).join("lib64/ld-linux-aarch64.so.1").exists()
+                        {
+                            return Some(candidate.to_string());
+                        }
+                    }
+                    None
+                }
+                Platform::MacOS => None,
+            }
+        })
+        .as_deref()
+}
+
 fn link_binary(
     obj_path: &Path,
     runtime_obj: &Path,
@@ -123,6 +159,8 @@ fn link_binary(
     extra_link_paths: &[String],
     extra_frameworks: &[String],
 ) {
+    let actual_link_libs = effective_link_libs(extra_link_libs);
+
     match platform() {
         Platform::MacOS => {
             let mut ld_cmd = Command::new("ld");
@@ -141,10 +179,8 @@ fn link_binary(
             for path in extra_link_paths {
                 ld_cmd.arg(format!("-L{}", path));
             }
-            for lib in extra_link_libs {
-                if lib != "System" {
-                    ld_cmd.arg(format!("-l{}", lib));
-                }
+            for lib in &actual_link_libs {
+                ld_cmd.arg(format!("-l{}", lib));
             }
             for framework in extra_frameworks {
                 ld_cmd.args(["-framework", framework]);
@@ -157,16 +193,20 @@ fn link_binary(
             ld_cmd.arg("-o").arg(bin_path);
             ld_cmd.arg(obj_path);
             ld_cmd.arg(runtime_obj);
-            if extra_link_libs.is_empty() {
+            if actual_link_libs.is_empty() {
                 ld_cmd.arg("-static");
+            }
+            if !actual_link_libs.is_empty() {
+                ld_cmd.arg("-Wl,--no-as-needed");
             }
             for path in extra_link_paths {
                 ld_cmd.arg(format!("-L{}", path));
             }
-            for lib in extra_link_libs {
-                if lib != "System" {
-                    ld_cmd.arg(format!("-l{}", lib));
-                }
+            for lib in &actual_link_libs {
+                ld_cmd.arg(format!("-l{}", lib));
+            }
+            if !actual_link_libs.is_empty() {
+                ld_cmd.arg("-Wl,--as-needed");
             }
             // Math and POSIX regex libraries needed on Linux
             ld_cmd.args(["-lm", "-lpthread"]);
@@ -179,8 +219,11 @@ fn link_binary(
 /// Run a compiled binary, using qemu on Linux x86_64 for ARM64 binaries.
 fn run_binary(bin_path: &Path, dir: &Path) -> std::process::Output {
     if platform() == Platform::Linux && cfg!(target_arch = "x86_64") {
-        Command::new("qemu-aarch64-static")
-            .arg(bin_path)
+        let mut cmd = Command::new("qemu-aarch64-static");
+        if let Some(sysroot) = qemu_sysroot() {
+            cmd.args(["-L", sysroot]);
+        }
+        cmd.arg(bin_path)
             .current_dir(dir)
             .output()
             .expect("failed to run compiled binary via qemu")
@@ -190,6 +233,12 @@ fn run_binary(bin_path: &Path, dir: &Path) -> std::process::Output {
             .output()
             .expect("failed to run compiled binary")
     }
+}
+
+#[test]
+fn test_effective_link_libs_ignores_system() {
+    let libs = vec!["System".to_string(), "crypto".to_string()];
+    assert_eq!(effective_link_libs(&libs), vec!["crypto"]);
 }
 
 fn assemble_and_run(
@@ -897,8 +946,14 @@ fn compile_cli_file_and_run(source: &str, defines: &[&str]) -> String {
     let php_path = dir.join("main.php");
     fs::write(&php_path, source).unwrap();
 
-    let elephc_bin =
-        std::env::var("CARGO_BIN_EXE_elephc").expect("CARGO_BIN_EXE_elephc not set by cargo test");
+    let elephc_bin = std::env::var("CARGO_BIN_EXE_elephc").unwrap_or_else(|_| {
+        let mut path = std::env::current_exe().expect("failed to resolve current test binary");
+        path.pop();
+        if path.ends_with("deps") {
+            path.pop();
+        }
+        path.join("elephc").to_string_lossy().into_owned()
+    });
     let mut compile_cmd = Command::new(elephc_bin);
     for define in defines {
         compile_cmd.arg("--define").arg(define);

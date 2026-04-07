@@ -271,6 +271,9 @@ fn main() {
             if extra_link_libs.is_empty() {
                 cmd.arg("-static");
             }
+            if !extra_link_libs.is_empty() {
+                cmd.arg("-Wl,--no-as-needed");
+            }
             cmd.args(["-lm", "-lpthread"]);
             cmd
         }
@@ -282,6 +285,9 @@ fn main() {
         if lib != "System" {
             ld_cmd.arg(format!("-l{}", lib));
         }
+    }
+    if platform == Platform::Linux && !extra_link_libs.is_empty() {
+        ld_cmd.arg("-Wl,--as-needed");
     }
     if platform == Platform::MacOS {
         for fw in &extra_frameworks {
