@@ -117,6 +117,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_array_push_int(emitter);
     arrays::emit_array_push_refcounted(emitter);
     arrays::emit_array_push_str(emitter);
+    arrays::emit_random_u32(emitter);
+    arrays::emit_random_uniform(emitter);
     arrays::emit_sort_int(emitter, false);
     arrays::emit_sort_int(emitter, true);
     arrays::emit_hash_fnv1a(emitter);
@@ -254,5 +256,6 @@ mod tests {
         assert!(asm.contains(".weak MD5\n"));
         assert!(asm.contains(".weak SHA1\n"));
         assert!(asm.contains(".weak SHA256\n"));
+        assert!(!asm.contains("arc4random_uniform"));
     }
 }

@@ -21,8 +21,7 @@ pub fn emit(
     emitter.instruction("sub x0, x0, x9");                                      // x0 = max - min
     emitter.instruction("add x0, x0, #1");                                      // x0 = range size (max - min + 1)
     emitter.instruction("str x9, [sp, #-16]!");                                 // push min back for later use
-    emitter.instruction("mov w0, w0");                                          // zero-extend w0 to x0 (32-bit arg)
-    emitter.bl_c("arc4random_uniform");                              // call arc4random_uniform(range) -> [0,range)
+    emitter.instruction("bl __rt_random_uniform");                              // generate a uniform random offset in [0, range)
     emitter.instruction("ldr x9, [sp], #16");                                   // pop min value back into x9
     emitter.instruction("add x0, x0, x9");                                      // x0 = random + min (shift into range)
     Some(PhpType::Int)

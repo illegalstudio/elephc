@@ -3,7 +3,6 @@ use crate::codegen::emit::Emitter;
 /// shuffle: shuffle an integer array in place using Fisher-Yates algorithm.
 /// Input: x0 = array pointer
 /// Modifies array in place, no return value.
-/// Uses _arc4random_uniform for random number generation.
 pub fn emit_shuffle(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: shuffle ---");
@@ -26,9 +25,9 @@ pub fn emit_shuffle(emitter: &mut Emitter) {
     emitter.instruction("cmp x19, #1");                                         // check if i < 1
     emitter.instruction("b.lt __rt_shuffle_done");                              // if so, shuffling complete
 
-    // -- generate random j in [0, i] using arc4random_uniform(i+1) --
+    // -- generate random j in [0, i] --
     emitter.instruction("add x0, x19, #1");                                     // x0 = i + 1 (upper bound, exclusive)
-    emitter.bl_c("arc4random_uniform");                              // x0 = random value in [0, i]
+    emitter.instruction("bl __rt_random_uniform");                              // x0 = random value in [0, i]
 
     // -- swap data[i] and data[j] --
     emitter.instruction("ldr x1, [sp, #0]");                                    // x1 = array pointer
