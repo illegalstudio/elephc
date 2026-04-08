@@ -282,8 +282,6 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
             emitter.label(&skip_label);
 
             // -- load current value from static storage into local variable --
-            emitter.adrp("x9", &format!("{}", data_label));      // load page of static var storage
-            emitter.add_lo12("x9", "x9", &format!("{}", data_label)); //add page offset
             let var_info = match ctx.variables.get(name) {
                 Some(v) => v,
                 None => {
@@ -296,28 +294,7 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
             };
             let offset = var_info.stack_offset;
             let var_ty = var_info.ty.clone();
-            // Note: x9 holds the static storage address, so use x10 as scratch for large offsets
-            match &var_ty {
-                PhpType::Bool | PhpType::Int => {
-                    emitter.instruction("ldr x0, [x9]");                        // load static int/bool value
-                    abi::store_at_offset_scratch(emitter, "x0", offset, "x10"); // store to local stack slot
-                }
-                PhpType::Float => {
-                    emitter.instruction("ldr d0, [x9]");                        // load static float value
-                    abi::store_at_offset_scratch(emitter, "d0", offset, "x10"); // store to local stack slot
-                }
-                PhpType::Str => {
-                    emitter.instruction("ldr x1, [x9]");                        // load static string pointer
-                    emitter.instruction("ldr x2, [x9, #8]");                    // load static string length
-                    abi::store_at_offset_scratch(emitter, "x1", offset, "x10"); // store string ptr to stack
-                    abi::store_at_offset_scratch(emitter, "x2", offset - 8, "x10");
-                    // store string len to stack
-                }
-                _ => {
-                    emitter.instruction("ldr x0, [x9]");                        // load static value
-                    abi::store_at_offset_scratch(emitter, "x0", offset, "x10"); // store to local stack slot
-                }
-            }
+            abi::emit_load_symbol_to_local_slot(emitter, &data_label, &var_ty, offset);
             ctx.update_var_type_and_ownership(
                 name,
                 var_ty.clone(),

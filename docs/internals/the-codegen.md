@@ -880,7 +880,7 @@ Compiles a user-defined function:
 3. **Emit prologue** — call the shared ABI frame helper
 4. **Store parameters** — lower incoming arguments through the ABI helpers into stack slots, marking by-value heap params as `Owned` and by-reference params as borrowed aliases of the caller's storage
 5. **Emit body** — all statements
-6. **Emit epilogue** — preserve return registers, save static locals back to BSS, clean up only `Owned` + `epilogue_cleanup_safe` heap locals, then call the shared ABI frame-restore helper and `ret`
+6. **Emit epilogue** — preserve return registers, save static locals back to BSS through the shared ABI storage helpers, clean up only `Owned` + `epilogue_cleanup_safe` heap locals, then call the shared ABI frame-restore helper and `ret`
 
 ### Pass by reference
 

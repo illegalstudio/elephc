@@ -322,55 +322,7 @@ fn emit_function_with_label_and_class(
             let offset = var.stack_offset;
             let ty = var.ty.clone();
             emitter.comment(&format!("save static ${} back", static_var));
-            emitter.adrp("x9", &format!("{}", data_label));      // load page of static var storage
-            emitter.add_lo12("x9", "x9", &format!("{}", data_label)); //add page offset
-                                                                                 // Note: x9 holds the global storage address, so we use x8 as scratch for large offsets
-            match &ty {
-                PhpType::Bool | PhpType::Int => {
-                    if offset <= 255 {
-                        emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); //load local value
-                    } else {
-                        emitter.instruction(&format!("sub x8, x29, #{}", offset)); //compute stack address for large offset
-                        emitter.instruction("ldr x10, [x8]");                   // load local value via computed address
-                    }
-                    emitter.instruction("str x10, [x9]");                       // save to static storage
-                }
-                PhpType::Float => {
-                    if offset <= 255 {
-                        emitter.instruction(&format!("ldur d0, [x29, #-{}]", offset)); //load local float
-                    } else {
-                        emitter.instruction(&format!("sub x8, x29, #{}", offset)); //compute stack address for large offset
-                        emitter.instruction("ldr d0, [x8]");                    // load local float via computed address
-                    }
-                    emitter.instruction("str d0, [x9]");                        // save to static storage
-                }
-                PhpType::Str => {
-                    if offset <= 255 {
-                        emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); //load string ptr
-                    } else {
-                        emitter.instruction(&format!("sub x8, x29, #{}", offset)); //compute stack address for large offset
-                        emitter.instruction("ldr x10, [x8]");                   // load string ptr via computed address
-                    }
-                    let len_offset = offset - 8;
-                    if len_offset <= 255 {
-                        emitter.instruction(&format!("ldur x11, [x29, #-{}]", len_offset)); //load string len
-                    } else {
-                        emitter.instruction(&format!("sub x8, x29, #{}", len_offset)); //compute stack address for large offset
-                        emitter.instruction("ldr x11, [x8]");                   // load string len via computed address
-                    }
-                    emitter.instruction("str x10, [x9]");                       // save ptr to static storage
-                    emitter.instruction("str x11, [x9, #8]");                   // save len to static storage
-                }
-                _ => {
-                    if offset <= 255 {
-                        emitter.instruction(&format!("ldur x10, [x29, #-{}]", offset)); //load local value
-                    } else {
-                        emitter.instruction(&format!("sub x8, x29, #{}", offset)); //compute stack address for large offset
-                        emitter.instruction("ldr x10, [x8]");                   // load local value via computed address
-                    }
-                    emitter.instruction("str x10, [x9]");                       // save to static storage
-                }
-            }
+            super::abi::emit_store_local_slot_to_symbol(emitter, &data_label, &ty, offset);
         }
     }
 
