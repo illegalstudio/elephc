@@ -433,9 +433,7 @@ fn emit_activation_record_push(emitter: &mut Emitter, ctx: &Context, cleanup_lab
         .expect("codegen bug: missing activation frame-base slot");
 
     emitter.comment("register exception cleanup frame");
-    emitter.adrp("x9", "_exc_call_frame_top");                   // load page of the call-frame stack top
-    emitter.add_lo12("x9", "x9", "_exc_call_frame_top");             // resolve the call-frame stack top address
-    emitter.instruction("ldr x10, [x9]");                                       // load the previous call-frame pointer
+    super::abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
     super::abi::store_at_offset(emitter, "x10", prev_offset); // save the previous call-frame pointer in this frame record
     emitter.adrp("x10", &format!("{}", cleanup_label));          // load page of the cleanup callback label
     emitter.add_lo12("x10", "x10", &format!("{}", cleanup_label));   // resolve the cleanup callback label address
@@ -449,9 +447,7 @@ fn emit_activation_record_push(emitter: &mut Emitter, ctx: &Context, cleanup_lab
             .expect("codegen bug: missing pending-action slot"),
     ); // clear pending finally action for this activation
     super::abi::emit_frame_slot_address(emitter, "x10", prev_offset);          // compute the address of this activation record's first slot
-    emitter.adrp("x9", "_exc_call_frame_top");                   // reload page of the call-frame stack top after stack-slot stores may clobber x9
-    emitter.add_lo12("x9", "x9", "_exc_call_frame_top");             // resolve the call-frame stack top address again
-    emitter.instruction("str x10, [x9]");                                       // publish this activation record as the new call-frame stack top
+    super::abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_call_frame_top", 0);
 }
 
 fn emit_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
@@ -460,12 +456,8 @@ fn emit_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
         .expect("codegen bug: missing activation prev slot");
 
     emitter.comment("unregister exception cleanup frame");
-    emitter.adrp("x9", "_exc_call_frame_top");                   // load page of the call-frame stack top
-    emitter.add_lo12("x9", "x9", "_exc_call_frame_top");             // resolve the call-frame stack top address
     super::abi::load_at_offset(emitter, "x10", prev_offset); // reload the previous call-frame pointer from this activation
-    emitter.adrp("x9", "_exc_call_frame_top");                   // reload page of the call-frame stack top after the load helper may clobber x9
-    emitter.add_lo12("x9", "x9", "_exc_call_frame_top");             // resolve the call-frame stack top address again
-    emitter.instruction("str x10, [x9]");                                       // restore the previous call-frame stack top before returning
+    super::abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_call_frame_top", 0);
 }
 
 fn emit_frame_cleanup_callback(emitter: &mut Emitter, ctx: &Context, cleanup_label: &str) {

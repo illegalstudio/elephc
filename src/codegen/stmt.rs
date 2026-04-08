@@ -262,23 +262,7 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
             let ty = emit_expr(init, emitter, ctx, data);
             retain_borrowed_heap_result(emitter, init, &ty);
             // Store init value to static storage
-            emitter.adrp("x9", &format!("{}", data_label));      // load page of static var storage
-            emitter.add_lo12("x9", "x9", &format!("{}", data_label)); //add page offset
-            match &ty {
-                PhpType::Bool | PhpType::Int => {
-                    emitter.instruction("str x0, [x9]");                        // store initial int/bool value
-                }
-                PhpType::Float => {
-                    emitter.instruction("str d0, [x9]");                        // store initial float value
-                }
-                PhpType::Str => {
-                    emitter.instruction("str x1, [x9]");                        // store initial string pointer
-                    emitter.instruction("str x2, [x9, #8]");                    // store initial string length
-                }
-                _ => {
-                    emitter.instruction("str x0, [x9]");                        // store initial value
-                }
-            }
+            abi::emit_store_result_to_symbol(emitter, &data_label, &ty, false);
             emitter.label(&skip_label);
 
             // -- load current value from static storage into local variable --

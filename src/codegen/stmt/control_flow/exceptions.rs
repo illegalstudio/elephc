@@ -20,9 +20,7 @@ pub(super) fn emit_throw_stmt(
     emitter.comment("throw");
     let thrown_ty = emit_expr(expr, emitter, ctx, data);
     super::super::retain_borrowed_heap_result(emitter, expr, &thrown_ty);
-    emitter.adrp("x9", "_exc_value");                            // load page of the current exception slot
-    emitter.add_lo12("x9", "x9", "_exc_value");                      // resolve the current exception slot address
-    emitter.instruction("str x0, [x9]");                                        // publish the thrown object pointer as the active exception
+    abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
     emitter.instruction("bl __rt_throw_current");                               // unwind to the nearest active exception handler
 }
 
@@ -96,9 +94,7 @@ pub(super) fn emit_try_stmt(
                     ctx.next_label("catch_type_next")
                 };
 
-                emitter.adrp("x9", "_exc_value");                // load page of the current exception slot
-                emitter.add_lo12("x9", "x9", "_exc_value");          // resolve the current exception slot address
-                emitter.instruction("ldr x0, [x9]");                            // load the active exception object for catch matching
+                abi::emit_load_symbol_to_reg(emitter, "x0", "_exc_value", 0);
                 emitter.instruction(&format!("mov x1, #{}", catch_id));         // materialize the catch target id for runtime matching
                 emitter.instruction(&format!("mov x2, #{}", catch_kind));       // tell the runtime whether this catch target is a class or interface
                 emitter.instruction("bl __rt_exception_matches");               // test whether the current exception matches this catch target
@@ -271,26 +267,18 @@ fn emit_try_handler_push(emitter: &mut Emitter, ctx: &Context, handler_offset: u
         .expect("codegen bug: missing activation prev slot");
 
     emitter.comment("push exception handler");
-    emitter.adrp("x9", "_exc_handler_top");                      // load page of the exception-handler stack top
-    emitter.add_lo12("x9", "x9", "_exc_handler_top");                // resolve the exception-handler stack top address
-    emitter.instruction("ldr x10, [x9]");                                       // load the previous exception handler pointer
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
     abi::store_at_offset(emitter, "x10", handler_offset);                          // save the previous handler pointer in this try slot
     abi::emit_frame_slot_address(emitter, "x10", activation_prev_offset);       // compute the address of the current activation record
     abi::store_at_offset(emitter, "x10", handler_offset - 8);                      // remember which activation frame should survive this catch
     abi::emit_frame_slot_address(emitter, "x10", handler_offset);               // compute the address of this try slot's handler header
-    emitter.adrp("x9", "_exc_handler_top");                      // reload page of the exception-handler stack top after stack-slot stores may clobber x9
-    emitter.add_lo12("x9", "x9", "_exc_handler_top");                // resolve the exception-handler stack top address again
-    emitter.instruction("str x10, [x9]");                                       // publish this handler as the current exception target
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
 }
 
 fn emit_try_handler_pop(emitter: &mut Emitter, handler_offset: usize) {
     emitter.comment("pop exception handler");
-    emitter.adrp("x9", "_exc_handler_top");                      // load page of the exception-handler stack top
-    emitter.add_lo12("x9", "x9", "_exc_handler_top");                // resolve the exception-handler stack top address
     abi::load_at_offset(emitter, "x10", handler_offset);                           // reload the previous handler pointer from this try slot
-    emitter.adrp("x9", "_exc_handler_top");                      // reload page of the exception-handler stack top after the load helper may clobber x9
-    emitter.add_lo12("x9", "x9", "_exc_handler_top");                // resolve the exception-handler stack top address again
-    emitter.instruction("str x10, [x9]");                                       // restore the previous exception handler pointer
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
 }
 
 fn emit_handler_jmpbuf_address(emitter: &mut Emitter, handler_offset: usize, dest_reg: &str) {
@@ -314,10 +302,8 @@ fn bind_catch_variable(catch_clause: &CatchClause, emitter: &mut Emitter, ctx: &
         abi::load_at_offset(emitter, "x0", var.stack_offset);                   // load the previous heap-backed catch-slot value before overwriting it
         abi::emit_decref_if_refcounted(emitter, &var.ty);                       // release the previous owned heap value in the catch slot
     }
-    emitter.adrp("x9", "_exc_value");                            // load page of the current exception slot
-    emitter.add_lo12("x9", "x9", "_exc_value");                      // resolve the current exception slot address
-    emitter.instruction("ldr x0, [x9]");                                        // load the current exception object pointer for the matching catch
-    emitter.instruction("str xzr, [x9]");                                       // clear the global current exception slot now that catch owns it
+    abi::emit_load_symbol_to_reg(emitter, "x0", "_exc_value", 0);
+    abi::emit_store_reg_to_symbol(emitter, "xzr", "_exc_value", 0);
     abi::emit_store(emitter, &var.ty, var.stack_offset);                        // move the caught exception into the catch variable slot
 }
 

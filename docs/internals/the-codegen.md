@@ -834,6 +834,8 @@ Outgoing calls now use ABI-owned helpers as well:
 
 That logic is shared by ordinary function calls, indirect/callable dispatch, object/method calls, constructor/static dispatch, and helpers such as `call_user_func_array()`. The implementation is still AArch64-specific, but the call ABI rules now live in one place instead of being duplicated across several dispatch paths.
 
+The same `abi.rs` layer now also owns symbol-slot plumbing for compiler-managed globals such as `_gvar_*`, `_static_*`, and `_exc_*`: computing symbol addresses, moving result registers into symbol storage, loading symbol storage back into result registers, and copying local frame slots into symbol-backed storage during epilogues.
+
 ### `emit_store(emitter, type, offset)`
 
 Stores the current result to a stack variable. Uses `store_at_offset()` internally to handle large offsets:

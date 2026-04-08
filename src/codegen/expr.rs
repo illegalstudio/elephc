@@ -207,9 +207,7 @@ pub fn emit_expr(
             if thrown_ty.is_refcounted() && expr_result_heap_ownership(inner) != HeapOwnership::Owned {
                 abi::emit_incref_if_refcounted(emitter, &thrown_ty);            // retain borrowed heap values before publishing them as the active exception
             }
-            emitter.adrp("x9", "_exc_value");                    // load page of the current exception slot
-            emitter.add_lo12("x9", "x9", "_exc_value");              // resolve the current exception slot address
-            emitter.instruction("str x0, [x9]");                                // publish the thrown object pointer as the active exception
+            abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
             emitter.instruction("bl __rt_throw_current");                       // unwind to the nearest active exception handler
             PhpType::Void
         }
@@ -267,11 +265,8 @@ pub fn emit_expr(
                 emitter.comment(&format!("${}++ (global)", name));
                 super::stmt::emit_global_load(emitter, ctx, name, &ty);
                 emitter.instruction("add x1, x0, #1");                          // compute incremented value
-                                                       // Store new value to global
                 let label = format!("_gvar_{}", name);
-                emitter.adrp("x9", &format!("{}", label));       // load page of global var storage
-                emitter.add_lo12("x9", "x9", &format!("{}", label)); // add page offset
-                emitter.instruction("str x1, [x9]");                            // store incremented value to global
+                abi::emit_store_reg_to_symbol(emitter, "x1", &label, 0);
                 PhpType::Int
             } else if ctx.ref_params.contains(name) {
                 let Some(var) = ctx.variables.get(name) else {
@@ -297,11 +292,8 @@ pub fn emit_expr(
                 emitter.instruction("add x1, x0, #1");                          // compute incremented value in scratch register
                 abi::store_at_offset(emitter, "x1", offset); // write new value back; x0 still has old value
                 if ctx.in_main && ctx.all_global_var_names.contains(name) {
-                    // Save new value (in x1) to global
                     let label = format!("_gvar_{}", name);
-                    emitter.adrp("x9", &format!("{}", label));   // load page of global var storage
-                    emitter.add_lo12("x9", "x9", &format!("{}", label)); //add page offset
-                    emitter.instruction("str x1, [x9]");                        // store incremented value to global
+                    abi::emit_store_reg_to_symbol(emitter, "x1", &label, 0);
                 }
                 PhpType::Int
             }
@@ -771,9 +763,7 @@ fn emit_null_coalesce(
 /// Quick helper: store x0 to _gvar_NAME (for pre-increment etc. where value is in x0)
 fn emit_global_store_inline(emitter: &mut Emitter, name: &str) {
     let label = format!("_gvar_{}", name);
-    emitter.adrp("x9", &format!("{}", label));                   // load page of global var storage
-    emitter.add_lo12("x9", "x9", &format!("{}", label));             // add page offset
-    emitter.instruction("str x0, [x9]");                                        // store value to global storage
+    abi::emit_store_reg_to_symbol(emitter, "x0", &label, 0);
 }
 
 fn load_immediate(emitter: &mut Emitter, reg: &str, value: i64) {

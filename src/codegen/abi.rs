@@ -561,8 +561,7 @@ pub fn emit_store_local_slot_to_symbol(
     ty: &PhpType,
     offset: usize,
 ) {
-    emitter.adrp("x9", &format!("{}", symbol));                                // load the page of the destination symbol storage
-    emitter.add_lo12("x9", "x9", &format!("{}", symbol));                      // resolve the exact destination symbol address
+    emit_symbol_address(emitter, "x9", symbol);
     match ty.codegen_repr() {
         PhpType::Float => {
             load_at_offset_scratch(emitter, "d0", offset, "x8");               // load the local float value from its frame slot
@@ -588,8 +587,7 @@ pub fn emit_load_symbol_to_local_slot(
     ty: &PhpType,
     offset: usize,
 ) {
-    emitter.adrp("x9", &format!("{}", symbol));                                // load the page of the source symbol storage
-    emitter.add_lo12("x9", "x9", &format!("{}", symbol));                      // resolve the exact source symbol address
+    emit_symbol_address(emitter, "x9", symbol);
     match ty.codegen_repr() {
         PhpType::Float => {
             emitter.instruction("ldr d0, [x9]");                               // load the float value from symbol storage
@@ -605,6 +603,81 @@ pub fn emit_load_symbol_to_local_slot(
         _ => {
             emitter.instruction("ldr x0, [x9]");                               // load the scalar or pointer-like value from symbol storage
             store_at_offset_scratch(emitter, "x0", offset, "x10");             // write the loaded scalar or pointer-like value into the local frame slot
+        }
+    }
+}
+
+pub fn emit_symbol_address(emitter: &mut Emitter, dest: &str, symbol: &str) {
+    emitter.adrp(dest, &format!("{}", symbol));                                // load the page of the requested symbol storage
+    emitter.add_lo12(dest, dest, &format!("{}", symbol));                      // resolve the exact address of the requested symbol storage
+}
+
+pub fn emit_load_symbol_to_reg(emitter: &mut Emitter, reg: &str, symbol: &str, byte_offset: usize) {
+    emit_symbol_address(emitter, "x9", symbol);
+    if byte_offset == 0 {
+        emitter.instruction(&format!("ldr {}, [x9]", reg));                    // load the symbol payload directly from its base address
+    } else {
+        emitter.instruction(&format!("ldr {}, [x9, #{}]", reg, byte_offset));  // load the symbol payload from the requested byte offset
+    }
+}
+
+pub fn emit_store_reg_to_symbol(emitter: &mut Emitter, reg: &str, symbol: &str, byte_offset: usize) {
+    emit_symbol_address(emitter, "x9", symbol);
+    if byte_offset == 0 {
+        emitter.instruction(&format!("str {}, [x9]", reg));                    // store the register payload directly into the symbol base slot
+    } else {
+        emitter.instruction(&format!("str {}, [x9, #{}]", reg, byte_offset));  // store the register payload into the requested symbol byte offset
+    }
+}
+
+pub fn emit_load_symbol_to_result(emitter: &mut Emitter, symbol: &str, ty: &PhpType) {
+    match ty.codegen_repr() {
+        PhpType::Float => {
+            emit_load_symbol_to_reg(emitter, "d0", symbol, 0);                 // load the float payload from symbol storage into the result register
+        }
+        PhpType::Str => {
+            emit_load_symbol_to_reg(emitter, "x1", symbol, 0);                 // load the string pointer from symbol storage into the result register pair
+            emit_load_symbol_to_reg(emitter, "x2", symbol, 8);                 // load the string length from symbol storage into the result register pair
+        }
+        PhpType::Void => {}
+        _ => {
+            emit_load_symbol_to_reg(emitter, "x0", symbol, 0);                 // load the scalar or pointer-like payload from symbol storage into x0
+        }
+    }
+}
+
+pub fn emit_store_result_to_symbol(
+    emitter: &mut Emitter,
+    symbol: &str,
+    ty: &PhpType,
+    release_previous: bool,
+) {
+    let ty = ty.codegen_repr();
+    if release_previous {
+        if matches!(ty, PhpType::Str) {
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                    // preserve the incoming string result while releasing the previous symbol payload
+            emit_load_symbol_to_reg(emitter, "x0", symbol, 0);
+            emitter.instruction("bl __rt_heap_free_safe");                      // release the previous string allocation before overwriting the symbol slot
+            emitter.instruction("ldp x1, x2, [sp], #16");                      // restore the incoming string result after the release helper call
+        } else if ty.is_refcounted() {
+            emitter.instruction("str x0, [sp, #-16]!");                        // preserve the incoming heap pointer while decreffing the previous symbol payload
+            emit_load_symbol_to_reg(emitter, "x0", symbol, 0);
+            emit_decref_if_refcounted(emitter, &ty);
+            emitter.instruction("ldr x0, [sp], #16");                          // restore the incoming heap pointer after decreffing the previous payload
+        }
+    }
+
+    match ty {
+        PhpType::Float => {
+            emit_store_reg_to_symbol(emitter, "d0", symbol, 0);                // store the float result into symbol storage
+        }
+        PhpType::Str => {
+            emit_store_reg_to_symbol(emitter, "x1", symbol, 0);                // store the string pointer result into symbol storage
+            emit_store_reg_to_symbol(emitter, "x2", symbol, 8);                // store the string length result into symbol storage
+        }
+        PhpType::Void => {}
+        _ => {
+            emit_store_reg_to_symbol(emitter, "x0", symbol, 0);                // store the scalar or pointer-like result into symbol storage
         }
     }
 }
@@ -852,6 +925,33 @@ mod tests {
         assert!(out.contains("    ldr x7, [sp, #32]\n"));
         assert!(out.contains("    str x10, [sp, #144]\n"));
         assert!(out.contains("    add sp, sp, #144\n"));
+    }
+
+    #[test]
+    fn test_emit_symbol_address_uses_platform_relocations() {
+        let mut emitter = test_emitter();
+        emit_symbol_address(&mut emitter, "x9", "_demo_symbol");
+
+        assert_eq!(
+            emitter.output(),
+            concat!(
+                "    adrp x9, _demo_symbol@PAGE\n",
+                "    add x9, x9, _demo_symbol@PAGEOFF\n",
+            )
+        );
+    }
+
+    #[test]
+    fn test_emit_store_and_load_result_to_symbol_for_string() {
+        let mut emitter = test_emitter();
+        emit_store_result_to_symbol(&mut emitter, "_demo_symbol", &PhpType::Str, false);
+        emit_load_symbol_to_result(&mut emitter, "_demo_symbol", &PhpType::Str);
+        let out = emitter.output();
+
+        assert!(out.contains("    str x1, [x9]\n"));
+        assert!(out.contains("    str x2, [x9, #8]\n"));
+        assert!(out.contains("    ldr x1, [x9]\n"));
+        assert!(out.contains("    ldr x2, [x9, #8]\n"));
     }
 
     #[test]
