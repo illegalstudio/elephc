@@ -49,6 +49,13 @@ impl Emitter {
         self.buf.push('\n');
     }
 
+    pub fn emit_text_prelude(&mut self) {
+        if self.target.arch == Arch::X86_64 {
+            self.raw(".intel_syntax noprefix");
+        }
+        self.raw(".text");
+    }
+
     pub fn output(self) -> String {
         self.buf
     }
@@ -169,5 +176,20 @@ mod tests {
         let mut linux = Emitter::new(Target::new(Platform::Linux, Arch::AArch64));
         linux.comment("-- block --");
         assert_eq!(linux.output(), "    // -- block --\n");
+
+        let mut linux_x86 = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        linux_x86.comment("-- block --");
+        assert_eq!(linux_x86.output(), "    # -- block --\n");
+    }
+
+    #[test]
+    fn test_text_prelude_switches_x86_to_intel_syntax() {
+        let mut mac = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        mac.emit_text_prelude();
+        assert_eq!(mac.output(), ".text\n");
+
+        let mut linux_x86 = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        linux_x86.emit_text_prelude();
+        assert_eq!(linux_x86.output(), ".intel_syntax noprefix\n.text\n");
     }
 }

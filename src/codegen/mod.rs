@@ -41,6 +41,9 @@ pub fn generate(
 ) -> (String, String) {
     target.ensure_aarch64_backend("code generation");
     let mut emitter = Emitter::new(target);
+    if target.arch == platform::Arch::X86_64 {
+        emitter.emit_text_prelude();
+    }
     let mut data = DataSection::new();
 
     // Pre-scan for compile-time constants (const declarations and define() calls)
@@ -374,7 +377,7 @@ pub fn generate(
 pub fn generate_runtime(heap_size: usize, target: Target) -> String {
     target.ensure_aarch64_backend("runtime code generation");
     let mut emitter = Emitter::new(target);
-    emitter.raw(".text");
+    emitter.emit_text_prelude();
     runtime::emit_runtime(&mut emitter);
     let mut output = emitter.output();
     output.push('\n');
