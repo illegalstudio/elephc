@@ -823,16 +823,24 @@ The cursor tracks:
 - when argument passing has overflowed to the caller stack
 - the caller-stack byte offset for subsequent spilled parameters
 
-The implementation is still AArch64-specific today, but the structure is important: function codegen now delegates the ABI rulebook for incoming params instead of open-coding it inline.
+Those helpers now understand both the existing AArch64 calling convention and the in-progress `linux-x86_64` SysV AMD64 target. Function codegen delegates incoming-parameter lowering to the ABI layer instead of open-coding register names or caller-stack offsets inline.
 
 ### Outgoing call argument lowering
 
 Outgoing calls now use ABI-owned helpers as well:
 
-- `build_outgoing_arg_assignments()` decides whether each argument lands in an integer register, a floating-point register, or overflows onto the caller-visible stack area
+- `build_outgoing_arg_assignments_for_target()` decides whether each argument lands in an integer register, a floating-point register, or overflows onto the caller-visible stack area for the selected target
 - `materialize_outgoing_args()` rewrites the temporary pushed-argument stack into the final ABI layout expected at the call site
 
-That logic is shared by ordinary function calls, indirect/callable dispatch, object/method calls, constructor/static dispatch, and helpers such as `call_user_func_array()`. The implementation is still AArch64-specific, but the call ABI rules now live in one place instead of being duplicated across several dispatch paths.
+That logic is shared by ordinary function calls, indirect/callable dispatch, object/method calls, constructor/static dispatch, and helpers such as `call_user_func_array()`. The assignment/materialization rules now cover both AArch64 and the in-progress `linux-x86_64` SysV layout, so the call ABI policy lives in one place instead of being duplicated across several dispatch paths.
+
+The same module now also owns a thin layer of call-site and temporary-stack primitives used by higher-level walkers:
+
+- `emit_call_label()` / `emit_call_reg()` emit direct and indirect calls for the current target
+- `emit_push_reg()`, `emit_push_float_reg()`, `emit_push_reg_pair()`, and `emit_push_result_value()` manage the temporary argument stack without hardcoding ARM64 push/pop forms in each call path
+- `emit_release_temporary_stack()` and `emit_store_zero_to_local_slot()` centralize target-specific stack cleanup and zero-initialization details
+
+That keeps phase-3 `linux-x86_64` work focused inside `abi.rs` instead of scattering `call`, `blr`, `add sp`, `rsp`, or zero-register assumptions across function, closure, callable, and method dispatch code.
 
 The same `abi.rs` layer now also owns symbol-slot plumbing for compiler-managed globals such as `_gvar_*`, `_static_*`, `_exc_*`, `_global_*`, and the high-frequency runtime symbols used by string builders, heap bookkeeping, and GC state such as `_concat_off`, `_heap_*`, and `_gc_*`: computing symbol addresses, moving result registers into symbol storage, loading symbol storage back into result registers, and copying local frame slots into symbol-backed storage during epilogues.
 

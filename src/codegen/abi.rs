@@ -93,6 +93,13 @@ fn tertiary_scratch_reg(emitter: &Emitter) -> &'static str {
     }
 }
 
+pub fn nested_call_reg(emitter: &Emitter) -> &'static str {
+    match emitter.target.arch {
+        Arch::AArch64 => "x19",
+        Arch::X86_64 => "r12",
+    }
+}
+
 fn is_float_register(reg: &str) -> bool {
     reg.starts_with('d') || reg.starts_with("xmm")
 }
@@ -223,6 +230,28 @@ pub fn emit_cleanup_callback_epilogue(emitter: &mut Emitter) {
         }
     }
     emit_return(emitter);
+}
+
+pub fn emit_call_label(emitter: &mut Emitter, label: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("bl {}", label));                              // branch-and-link to the named direct-call target
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("call {}", label));                            // call the named direct-call target through the native x86_64 instruction
+        }
+    }
+}
+
+pub fn emit_call_reg(emitter: &mut Emitter, reg: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("blr {}", reg));                               // branch to the indirect-call target held in the requested register
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("call {}", reg));                              // call the indirect target held in the requested register
+        }
+    }
 }
 
 pub fn emit_frame_slot_address(emitter: &mut Emitter, dest: &str, offset: usize) {
@@ -367,13 +396,21 @@ pub fn emit_store_incoming_param(
     is_ref: bool,
     cursor: &mut IncomingArgCursor,
 ) {
-    emitter.target.ensure_aarch64_backend("incoming parameter spill");
     let ty = ty.codegen_repr();
+    let float_spill_reg = match emitter.target.arch {
+        Arch::AArch64 => "d15",
+        Arch::X86_64 => "xmm15",
+    };
+    let int_spill_reg = secondary_scratch_reg(emitter);
+    let int_hi_spill_reg = tertiary_scratch_reg(emitter);
+    let int_reg_limit = int_arg_reg_limit(emitter.target);
+    let float_reg_limit = float_arg_reg_limit(emitter.target);
 
     if is_ref {
-        if !cursor.int_stack_only && cursor.int_reg_idx < MAX_INT_ARG_REGS {
-            emitter.comment(&format!("param &${} from x{} (ref)", name, cursor.int_reg_idx));
-            store_at_offset(emitter, &format!("x{}", cursor.int_reg_idx), offset); // save the by-reference address from the integer argument register
+        if !cursor.int_stack_only && cursor.int_reg_idx < int_reg_limit {
+            let reg = int_arg_reg_name(emitter.target, cursor.int_reg_idx);
+            emitter.comment(&format!("param &${} from {} (ref)", name, reg));
+            store_at_offset(emitter, reg, offset);                                // save the by-reference address from the incoming integer argument register
             cursor.int_reg_idx += 1;
         } else {
             emitter.comment(&format!(
@@ -381,8 +418,8 @@ pub fn emit_store_incoming_param(
                 name,
                 cursor.caller_stack_offset
             ));
-            load_from_caller_stack(emitter, "x10", cursor.caller_stack_offset);
-            store_at_offset(emitter, "x10", offset);                            // save the spilled by-reference address into the local param slot
+            load_from_caller_stack(emitter, int_spill_reg, cursor.caller_stack_offset);
+            store_at_offset(emitter, int_spill_reg, offset);                    // save the spilled by-reference address into the local param slot
             cursor.caller_stack_offset += 16;
             cursor.int_stack_only = true;
         }
@@ -391,9 +428,10 @@ pub fn emit_store_incoming_param(
 
     match ty {
         PhpType::Bool | PhpType::Int => {
-            if !cursor.int_stack_only && cursor.int_reg_idx < MAX_INT_ARG_REGS {
-                emitter.comment(&format!("param ${} from x{}", name, cursor.int_reg_idx));
-                store_at_offset(emitter, &format!("x{}", cursor.int_reg_idx), offset); // save the scalar parameter from the integer argument register
+            if !cursor.int_stack_only && cursor.int_reg_idx < int_reg_limit {
+                let reg = int_arg_reg_name(emitter.target, cursor.int_reg_idx);
+                emitter.comment(&format!("param ${} from {}", name, reg));
+                store_at_offset(emitter, reg, offset);                           // save the scalar parameter from the incoming integer argument register
                 cursor.int_reg_idx += 1;
             } else {
                 emitter.comment(&format!(
@@ -401,16 +439,17 @@ pub fn emit_store_incoming_param(
                     name,
                     cursor.caller_stack_offset
                 ));
-                load_from_caller_stack(emitter, "x10", cursor.caller_stack_offset);
-                store_at_offset(emitter, "x10", offset);                        // save the spilled scalar parameter into the local param slot
+                load_from_caller_stack(emitter, int_spill_reg, cursor.caller_stack_offset);
+                store_at_offset(emitter, int_spill_reg, offset);                // save the spilled scalar parameter into the local param slot
                 cursor.caller_stack_offset += 16;
                 cursor.int_stack_only = true;
             }
         }
         PhpType::Float => {
-            if !cursor.float_stack_only && cursor.float_reg_idx < MAX_FLOAT_ARG_REGS {
-                emitter.comment(&format!("param ${} from d{}", name, cursor.float_reg_idx));
-                store_at_offset(emitter, &format!("d{}", cursor.float_reg_idx), offset); // save the float parameter from the floating-point argument register
+            if !cursor.float_stack_only && cursor.float_reg_idx < float_reg_limit {
+                let reg = float_arg_reg_name(emitter.target, cursor.float_reg_idx);
+                emitter.comment(&format!("param ${} from {}", name, reg));
+                store_at_offset(emitter, reg, offset);                           // save the float parameter from the incoming floating-point argument register
                 cursor.float_reg_idx += 1;
             } else {
                 emitter.comment(&format!(
@@ -418,22 +457,22 @@ pub fn emit_store_incoming_param(
                     name,
                     cursor.caller_stack_offset
                 ));
-                load_from_caller_stack(emitter, "d15", cursor.caller_stack_offset);
-                store_at_offset(emitter, "d15", offset);                        // save the spilled float parameter into the local param slot
+                load_from_caller_stack(emitter, float_spill_reg, cursor.caller_stack_offset);
+                store_at_offset(emitter, float_spill_reg, offset);              // save the spilled float parameter into the local param slot
                 cursor.caller_stack_offset += 16;
                 cursor.float_stack_only = true;
             }
         }
         PhpType::Str => {
-            if !cursor.int_stack_only && cursor.int_reg_idx + 1 < MAX_INT_ARG_REGS {
+            if !cursor.int_stack_only && cursor.int_reg_idx + 1 < int_reg_limit {
+                let ptr_reg = int_arg_reg_name(emitter.target, cursor.int_reg_idx);
+                let len_reg = int_arg_reg_name(emitter.target, cursor.int_reg_idx + 1);
                 emitter.comment(&format!(
-                    "param ${} from x{},x{}",
-                    name,
-                    cursor.int_reg_idx,
-                    cursor.int_reg_idx + 1
+                    "param ${} from {},{}",
+                    name, ptr_reg, len_reg
                 ));
-                store_at_offset(emitter, &format!("x{}", cursor.int_reg_idx), offset); // save the string pointer from the integer-register pair
-                store_at_offset(emitter, &format!("x{}", cursor.int_reg_idx + 1), offset - 8); // save the string length from the integer-register pair
+                store_at_offset(emitter, ptr_reg, offset);                       // save the string pointer from the incoming integer-register pair
+                store_at_offset(emitter, len_reg, offset - 8);                   // save the string length from the incoming integer-register pair
                 cursor.int_reg_idx += 2;
             } else {
                 emitter.comment(&format!(
@@ -441,10 +480,10 @@ pub fn emit_store_incoming_param(
                     name,
                     cursor.caller_stack_offset
                 ));
-                load_from_caller_stack(emitter, "x10", cursor.caller_stack_offset);
-                load_from_caller_stack(emitter, "x11", cursor.caller_stack_offset + 8);
-                store_at_offset(emitter, "x10", offset);                        // save the spilled string pointer into the local param slot
-                store_at_offset(emitter, "x11", offset - 8);                    // save the spilled string length into the local param slot
+                load_from_caller_stack(emitter, int_spill_reg, cursor.caller_stack_offset);
+                load_from_caller_stack(emitter, int_hi_spill_reg, cursor.caller_stack_offset + 8);
+                store_at_offset(emitter, int_spill_reg, offset);                // save the spilled string pointer into the local param slot
+                store_at_offset(emitter, int_hi_spill_reg, offset - 8);         // save the spilled string length into the local param slot
                 cursor.caller_stack_offset += 16;
                 cursor.int_stack_only = true;
             }
@@ -459,9 +498,10 @@ pub fn emit_store_incoming_param(
         | PhpType::Object(_)
         | PhpType::Packed(_)
         | PhpType::Pointer(_) => {
-            if !cursor.int_stack_only && cursor.int_reg_idx < MAX_INT_ARG_REGS {
-                emitter.comment(&format!("param ${} from x{}", name, cursor.int_reg_idx));
-                store_at_offset(emitter, &format!("x{}", cursor.int_reg_idx), offset); // save the pointer-like parameter from the integer argument register
+            if !cursor.int_stack_only && cursor.int_reg_idx < int_reg_limit {
+                let reg = int_arg_reg_name(emitter.target, cursor.int_reg_idx);
+                emitter.comment(&format!("param ${} from {}", name, reg));
+                store_at_offset(emitter, reg, offset);                           // save the pointer-like parameter from the incoming integer argument register
                 cursor.int_reg_idx += 1;
             } else {
                 emitter.comment(&format!(
@@ -469,10 +509,100 @@ pub fn emit_store_incoming_param(
                     name,
                     cursor.caller_stack_offset
                 ));
-                load_from_caller_stack(emitter, "x10", cursor.caller_stack_offset);
-                store_at_offset(emitter, "x10", offset);                        // save the spilled pointer-like parameter into the local param slot
+                load_from_caller_stack(emitter, int_spill_reg, cursor.caller_stack_offset);
+                store_at_offset(emitter, int_spill_reg, offset);                // save the spilled pointer-like parameter into the local param slot
                 cursor.caller_stack_offset += 16;
                 cursor.int_stack_only = true;
+            }
+        }
+    }
+}
+
+pub fn emit_push_reg(emitter: &mut Emitter, reg: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("str {}, [sp, #-16]!", reg));                  // push the requested integer or pointer register onto the temporary stack
+        }
+        Arch::X86_64 => {
+            emitter.instruction("sub rsp, 16");                                          // reserve one temporary stack slot for the pushed integer or pointer value
+            emitter.instruction(&format!("mov QWORD PTR [rsp], {}", reg));              // store the requested integer or pointer register into the new stack slot
+        }
+    }
+}
+
+pub fn emit_pop_reg(emitter: &mut Emitter, reg: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr {}, [sp], #16", reg));                    // pop the requested integer or pointer register from the temporary stack
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov {}, QWORD PTR [rsp]", reg));              // reload the requested integer or pointer register from the temporary stack slot
+            emitter.instruction("add rsp, 16");                                          // release the temporary stack slot after the integer or pointer pop
+        }
+    }
+}
+
+pub fn emit_push_float_reg(emitter: &mut Emitter, reg: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("str {}, [sp, #-16]!", reg));                  // push the requested floating-point register onto the temporary stack
+        }
+        Arch::X86_64 => {
+            emitter.instruction("sub rsp, 16");                                          // reserve one temporary stack slot for the pushed floating-point value
+            emitter.instruction(&format!("movsd QWORD PTR [rsp], {}", reg));            // store the requested floating-point register into the new stack slot
+        }
+    }
+}
+
+pub fn emit_push_reg_pair(emitter: &mut Emitter, lo_reg: &str, hi_reg: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("stp {}, {}, [sp, #-16]!", lo_reg, hi_reg));   // push the requested register pair into one temporary 16-byte stack slot
+        }
+        Arch::X86_64 => {
+            emitter.instruction("sub rsp, 16");                                          // reserve one temporary stack slot for the pushed register pair
+            emitter.instruction(&format!("mov QWORD PTR [rsp], {}", lo_reg));           // store the first register into the low half of the temporary slot
+            emitter.instruction(&format!("mov QWORD PTR [rsp + 8], {}", hi_reg));       // store the second register into the high half of the temporary slot
+        }
+    }
+}
+
+pub fn emit_push_result_value(emitter: &mut Emitter, ty: &PhpType) {
+    match ty.codegen_repr() {
+        PhpType::Bool
+        | PhpType::Int
+        | PhpType::Mixed
+        | PhpType::Union(_)
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Buffer(_)
+        | PhpType::Callable
+        | PhpType::Object(_)
+        | PhpType::Packed(_)
+        | PhpType::Pointer(_) => {
+            emit_push_reg(emitter, int_result_reg(emitter));                             // push the current scalar or pointer result register onto the temporary arg stack
+        }
+        PhpType::Float => {
+            emit_push_float_reg(emitter, float_result_reg(emitter));                     // push the current floating-point result register onto the temporary arg stack
+        }
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = string_result_regs(emitter);
+            emit_push_reg_pair(emitter, ptr_reg, len_reg);                               // push the current string result register pair onto the temporary arg stack
+        }
+        PhpType::Void => {}
+    }
+}
+
+pub fn emit_store_zero_to_local_slot(emitter: &mut Emitter, offset: usize) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            store_at_offset(emitter, "xzr", offset);                                     // zero-initialize the local slot with the architectural zero register
+        }
+        Arch::X86_64 => {
+            if offset == 0 {
+                emitter.instruction(&format!("mov QWORD PTR [{}], 0", frame_pointer_reg(emitter))); // zero-initialize the frame-base slot directly through rbp
+            } else {
+                emitter.instruction(&format!("mov QWORD PTR [{} - {}], 0", frame_pointer_reg(emitter), offset)); // zero-initialize the requested local slot relative to rbp
             }
         }
     }
@@ -593,6 +723,10 @@ fn emit_adjust_sp(emitter: &mut Emitter, amount: usize, subtract: bool) {
             }
         }
     }
+}
+
+pub fn emit_release_temporary_stack(emitter: &mut Emitter, amount: usize) {
+    emit_adjust_sp(emitter, amount, false);
 }
 
 fn emit_sp_address(emitter: &mut Emitter, scratch: &str, offset: usize) {
@@ -1386,10 +1520,10 @@ mod tests {
 
         assert!(out.contains("    adrp x9, _static_demo_name@PAGE\n"));
         assert!(out.contains("    add x9, x9, _static_demo_name@PAGEOFF\n"));
-        assert!(out.contains("    mov x8, x29\n"));
-        assert!(out.contains("    sub x8, x8, #4095\n"));
-        assert!(out.contains("    ldr x10, [x8]\n"));
-        assert!(out.contains("    ldr x11, [x8]\n"));
+        assert!(out.contains("    mov x9, x29\n"));
+        assert!(out.contains("    sub x9, x9, #4095\n"));
+        assert!(out.contains("    ldr x10, [x9]\n"));
+        assert!(out.contains("    ldr x11, [x9]\n"));
         assert!(out.contains("    str x10, [x9]\n"));
         assert!(out.contains("    str x11, [x9, #8]\n"));
     }
@@ -1407,7 +1541,9 @@ mod tests {
         assert!(out.contains("    mov x10, x29\n"));
         assert!(out.contains("    sub x10, x10, #4095\n"));
         assert!(out.contains("    str x1, [x10]\n"));
-        assert!(out.contains("    str x2, [x10]\n"));
+        assert!(out.contains("    mov x11, x29\n"));
+        assert!(out.contains("    sub x11, x11, #4095\n"));
+        assert!(out.contains("    str x2, [x11]\n"));
     }
 
     #[test]
@@ -1458,5 +1594,87 @@ mod tests {
         assert!(out.contains("    mov QWORD PTR [r11 + 8], rdx\n"));
         assert!(out.contains("    mov rax, QWORD PTR [rip + _demo_symbol]\n"));
         assert!(out.contains("    mov rdx, QWORD PTR [r11 + 8]\n"));
+    }
+
+    #[test]
+    fn test_emit_store_incoming_param_linux_x86_64_uses_sysv_registers_and_stack() {
+        let mut emitter = test_emitter_x86();
+        let mut cursor = IncomingArgCursor::for_target(Target::new(Platform::Linux, Arch::X86_64), 0);
+
+        emit_store_incoming_param(&mut emitter, "a", &PhpType::Int, 8, false, &mut cursor);
+        emit_store_incoming_param(&mut emitter, "b", &PhpType::Float, 16, false, &mut cursor);
+        emit_store_incoming_param(&mut emitter, "c", &PhpType::Str, 32, false, &mut cursor);
+
+        let mut stack_cursor =
+            IncomingArgCursor::for_target(Target::new(Platform::Linux, Arch::X86_64), 6);
+        emit_store_incoming_param(&mut emitter, "d", &PhpType::Int, 40, false, &mut stack_cursor);
+
+        let out = emitter.output();
+
+        assert!(out.contains("    # param $a from rdi\n"));
+        assert!(out.contains("    mov QWORD PTR [rbp - 8], rdi\n"));
+        assert!(out.contains("    # param $b from xmm0\n"));
+        assert!(out.contains("    movsd QWORD PTR [rbp - 16], xmm0\n"));
+        assert!(out.contains("    # param $c from rsi,rdx\n"));
+        assert!(out.contains("    mov QWORD PTR [rbp - 32], rsi\n"));
+        assert!(out.contains("    mov QWORD PTR [rbp - 24], rdx\n"));
+        assert!(out.contains("    # param $d from caller stack +16\n"));
+        assert!(out.contains("    mov r10, QWORD PTR [rbp + 16]\n"));
+        assert!(out.contains("    mov QWORD PTR [rbp - 40], r10\n"));
+    }
+
+    #[test]
+    fn test_emit_call_and_temporary_stack_helpers_linux_x86_64() {
+        let mut emitter = test_emitter_x86();
+
+        emit_push_reg(&mut emitter, "r12");
+        emit_pop_reg(&mut emitter, "r12");
+        emit_push_float_reg(&mut emitter, "xmm3");
+        emit_push_reg_pair(&mut emitter, "rax", "rdx");
+        emit_call_label(&mut emitter, "_fn_demo");
+        emit_call_reg(&mut emitter, "r12");
+        emit_release_temporary_stack(&mut emitter, 32);
+        emit_store_zero_to_local_slot(&mut emitter, 24);
+
+        assert_eq!(
+            emitter.output(),
+            concat!(
+                "    sub rsp, 16\n",
+                "    mov QWORD PTR [rsp], r12\n",
+                "    mov r12, QWORD PTR [rsp]\n",
+                "    add rsp, 16\n",
+                "    sub rsp, 16\n",
+                "    movsd QWORD PTR [rsp], xmm3\n",
+                "    sub rsp, 16\n",
+                "    mov QWORD PTR [rsp], rax\n",
+                "    mov QWORD PTR [rsp + 8], rdx\n",
+                "    call _fn_demo\n",
+                "    call r12\n",
+                "    add rsp, 32\n",
+                "    mov QWORD PTR [rbp - 24], 0\n",
+            )
+        );
+    }
+
+    #[test]
+    fn test_emit_push_result_value_linux_x86_64_uses_native_result_registers() {
+        let mut emitter = test_emitter_x86();
+
+        emit_push_result_value(&mut emitter, &PhpType::Int);
+        emit_push_result_value(&mut emitter, &PhpType::Float);
+        emit_push_result_value(&mut emitter, &PhpType::Str);
+
+        assert_eq!(
+            emitter.output(),
+            concat!(
+                "    sub rsp, 16\n",
+                "    mov QWORD PTR [rsp], rax\n",
+                "    sub rsp, 16\n",
+                "    movsd QWORD PTR [rsp], xmm0\n",
+                "    sub rsp, 16\n",
+                "    mov QWORD PTR [rsp], rax\n",
+                "    mov QWORD PTR [rsp + 8], rdx\n",
+            )
+        );
     }
 }

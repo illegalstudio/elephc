@@ -256,9 +256,10 @@ fn emit_function_with_label_and_class(
     emitter.label_global(label);
     super::abi::emit_frame_prologue(emitter, frame_size);
 
-    // -- save parameters from registers to local stack slots --
-    // ARM64 ABI: int/bool/array args in x0-x7, float args in d0-d7
-    // Strings use two consecutive int registers (ptr + len)
+    // -- save parameters from incoming ABI locations to local stack slots --
+    // Scalars and pointers use the target integer argument registers, floats use
+    // the target floating-point argument registers, and strings consume two
+    // integer slots (ptr + len) on both supported ABIs.
     let mut incoming_args = super::abi::IncomingArgCursor::for_target(emitter.target, 0);
     for (i, (pname, pty)) in sig.params.iter().enumerate() {
         let is_ref = sig.ref_params.get(i).copied().unwrap_or(false);
@@ -294,7 +295,7 @@ fn emit_function_with_label_and_class(
                 | PhpType::AssocArray { .. }
                 | PhpType::Object(_)
         ) {
-            super::abi::store_at_offset(emitter, "xzr", var.stack_offset); // zero-init to prevent stale ptr free
+            super::abi::emit_store_zero_to_local_slot(emitter, var.stack_offset); // zero-init to prevent stale ptr free
         }
     }
     emit_activation_record_push(emitter, &ctx, &cleanup_label);

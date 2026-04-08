@@ -16,6 +16,11 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("call_user_func()");
+    let call_reg = abi::nested_call_reg(emitter);
+    let result_reg = match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => "x0",
+        crate::codegen::platform::Arch::X86_64 => "rax",
+    };
 
     // -- resolve callback function address --
     let is_callable_expr = matches!(
@@ -25,14 +30,14 @@ pub fn emit(
     let mut sig: Option<FunctionSig> = None;
     if is_callable_expr {
         emit_expr(&args[0], emitter, ctx, data);
-        emitter.instruction("mov x19, x0");                                     // move synthesized callback address to x19
+        emitter.instruction(&format!("mov {}, {}", call_reg, result_reg));      // move the synthesized callback address into the nested-call scratch register
         if let Some(deferred) = ctx.deferred_closures.last() {
             sig = Some(deferred.sig.clone());
         }
     } else if let ExprKind::Variable(var_name) = &args[0].kind {
         let var = ctx.variables.get(var_name).expect("undefined callback variable");
         let offset = var.stack_offset;
-        abi::load_at_offset(emitter, "x19", offset);                                // load callback address from callable variable
+        abi::load_at_offset(emitter, call_reg, offset);                          // load the callback address from the callable variable slot
         if let Some(closure_sig) = ctx.closure_sigs.get(var_name) {
             sig = Some(closure_sig.clone());
         }
@@ -43,8 +48,7 @@ pub fn emit(
         };
         let label = function_symbol(&func_name);
         sig = ctx.functions.get(&func_name).cloned();
-        emitter.adrp("x19", &format!("{}", label));              // load page address of callback function
-        emitter.add_lo12("x19", "x19", &format!("{}", label));       // resolve full address of callback function
+        abi::emit_symbol_address(emitter, call_reg, &label);
     }
     let ret_ty = sig
         .as_ref()
@@ -97,11 +101,9 @@ pub fn emit(
 
     // -- load callback address and call via blr --
     crate::codegen::expr::save_concat_offset_before_nested_call(emitter);
-    emitter.instruction("blr x19");                                             // call callback function via indirect branch
+    abi::emit_call_reg(emitter, call_reg);
     crate::codegen::expr::restore_concat_offset_after_nested_call(emitter, &ret_ty);
-    if overflow_bytes > 0 {
-        emitter.instruction(&format!("add sp, sp, #{}", overflow_bytes));       // drop spilled stack callback arguments after the indirect call returns
-    }
+    abi::emit_release_temporary_stack(emitter, overflow_bytes);
 
     Some(ret_ty)
 }

@@ -88,13 +88,18 @@ pub(super) fn emit_expr_call(
     }
 
     let _callee_ty = super::super::emit_expr(callee, emitter, ctx, data);
-    emitter.instruction("mov x9, x0");                                          // save closure address to x9
-    emitter.instruction("str x9, [sp, #-16]!");                                 // push closure address temporarily
+    let call_reg = crate::codegen::abi::nested_call_reg(emitter);
+    let result_reg = match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => "x0",
+        crate::codegen::platform::Arch::X86_64 => "rax",
+    };
+    emitter.instruction(&format!("mov {}, {}", call_reg, result_reg));          // preserve the computed callable address in the nested-call scratch register
+    crate::codegen::abi::emit_push_reg(emitter, call_reg);
 
     let assignments =
         crate::codegen::abi::build_outgoing_arg_assignments_for_target(emitter.target, &arg_types, 0);
 
-    emitter.instruction("ldr x9, [sp], #16");                                   // pop closure function address into x9
+    crate::codegen::abi::emit_pop_reg(emitter, call_reg);
     let overflow_bytes = crate::codegen::abi::materialize_outgoing_args(emitter, &assignments);
 
     let ret_ty = callee_sig
@@ -105,13 +110,10 @@ pub(super) fn emit_expr_call(
             _ => PhpType::Int,
         });
 
-    emitter.instruction("mov x19, x9");                                         // preserve closure address across concat-offset save
     super::super::save_concat_offset_before_nested_call(emitter);
-    emitter.instruction("blr x19");                                             // branch to closure via function pointer in x19
+    crate::codegen::abi::emit_call_reg(emitter, call_reg);
     super::super::restore_concat_offset_after_nested_call(emitter, &ret_ty);
-    if overflow_bytes > 0 {
-        emitter.instruction(&format!("add sp, sp, #{}", overflow_bytes));       // drop spilled stack arguments after the indirect call returns
-    }
+    crate::codegen::abi::emit_release_temporary_stack(emitter, overflow_bytes);
 
     ret_ty
 }

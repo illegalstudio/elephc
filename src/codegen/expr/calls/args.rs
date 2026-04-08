@@ -147,28 +147,7 @@ pub(crate) fn declared_target_ty<'a>(
 }
 
 pub(crate) fn push_arg_value(emitter: &mut Emitter, ty: &PhpType) {
-    match ty {
-        PhpType::Bool
-        | PhpType::Int
-        | PhpType::Mixed
-        | PhpType::Union(_)
-        | PhpType::Array(_)
-        | PhpType::AssocArray { .. }
-        | PhpType::Buffer(_)
-        | PhpType::Callable
-        | PhpType::Object(_)
-        | PhpType::Packed(_)
-        | PhpType::Pointer(_) => {
-            emitter.instruction("str x0, [sp, #-16]!");                         // push int/bool/array/callable/pointer arg onto stack
-        }
-        PhpType::Float => {
-            emitter.instruction("str d0, [sp, #-16]!");                         // push float arg onto stack
-        }
-        PhpType::Str => {
-            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // push string ptr+len arg onto stack
-        }
-        PhpType::Void => {}
-    }
+    abi::emit_push_result_value(emitter, ty);
 }
 
 pub(crate) fn emit_ref_arg_variable_address(
@@ -428,7 +407,7 @@ pub(crate) fn emit_spread_variadic_array_arg(
     emitter.comment(context_label);
     let spread_ty = super::super::emit_expr(spread_expr, emitter, ctx, data);
     super::super::retain_borrowed_heap_arg(emitter, spread_expr, &spread_ty);
-    emitter.instruction("str x0, [sp, #-16]!");                                 // push the spread array pointer as the variadic argument payload
+    abi::emit_push_result_value(emitter, &spread_ty);
     spread_ty
 }
 
@@ -437,7 +416,7 @@ pub(crate) fn emit_empty_variadic_array_arg(context_label: &str, emitter: &mut E
     emitter.instruction("mov x0, #4");                                          // initial capacity: 4 elements for an empty variadic array
     emitter.instruction("mov x1, #8");                                          // element size defaults to 8 bytes for empty variadic payloads
     emitter.instruction("bl __rt_array_new");                                   // allocate the empty variadic array container
-    emitter.instruction("str x0, [sp, #-16]!");                                 // push the empty variadic array pointer onto the outgoing-arg stack
+    abi::emit_push_result_value(emitter, &PhpType::Array(Box::new(PhpType::Int)));
     PhpType::Array(Box::new(PhpType::Int))
 }
 
@@ -461,7 +440,7 @@ pub(crate) fn emit_variadic_array_arg_from_exprs(
     emitter.instruction(&format!("mov x0, #{}", elem_count));                   // capacity matches the exact variadic element count
     emitter.instruction(&format!("mov x1, #{}", elem_size));                    // set the array payload stride for the first inferred element type
     emitter.instruction("bl __rt_array_new");                                   // allocate storage for the packed variadic array payload
-    emitter.instruction("str x0, [sp, #-16]!");                                 // save the variadic array pointer on the outgoing-arg stack
+    abi::emit_push_result_value(emitter, &PhpType::Array(Box::new(first_elem_ty.clone())));
 
     for (idx, variadic_arg) in variadic_args.iter().enumerate() {
         let elem_ty = super::super::emit_expr(variadic_arg, emitter, ctx, data);

@@ -303,32 +303,8 @@ pub(super) fn emit_closure_call(
             }
         };
         let cap_offset = cap_info.stack_offset;
-        match cap_ty {
-            PhpType::Bool
-            | PhpType::Int
-            | PhpType::Mixed
-            | PhpType::Union(_)
-            | PhpType::Array(_)
-            | PhpType::AssocArray { .. }
-            | PhpType::Buffer(_)
-            | PhpType::Callable
-            | PhpType::Object(_)
-            | PhpType::Packed(_)
-            | PhpType::Pointer(_) => {
-                crate::codegen::abi::load_at_offset(emitter, "x0", cap_offset); // load captured int/bool/array value
-                emitter.instruction("str x0, [sp, #-16]!");                     // push captured value onto stack
-            }
-            PhpType::Float => {
-                crate::codegen::abi::load_at_offset(emitter, "d0", cap_offset); // load captured float value
-                emitter.instruction("str d0, [sp, #-16]!");                     // push captured float onto stack
-            }
-            PhpType::Str => {
-                crate::codegen::abi::load_at_offset(emitter, "x1", cap_offset); // load captured string pointer
-                crate::codegen::abi::load_at_offset(emitter, "x2", cap_offset - 8); // load captured string length
-                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push captured string ptr+len onto stack
-            }
-            PhpType::Void => {}
-        }
+        crate::codegen::abi::emit_load(emitter, cap_ty, cap_offset);
+        super::args::push_arg_value(emitter, cap_ty);
         arg_types.push(cap_ty.clone());
     }
     let var_info = match ctx.variables.get(var) {
@@ -339,13 +315,14 @@ pub(super) fn emit_closure_call(
         }
     };
     let var_offset = var_info.stack_offset;
-    crate::codegen::abi::load_at_offset(emitter, "x9", var_offset); // load closure function address from stack
-    emitter.instruction("str x9, [sp, #-16]!");                                 // push closure address temporarily
+    let call_reg = crate::codegen::abi::nested_call_reg(emitter);
+    crate::codegen::abi::load_at_offset(emitter, call_reg, var_offset);         // load the closure function address into the nested-call scratch register
+    crate::codegen::abi::emit_push_reg(emitter, call_reg);
 
     let assignments =
         crate::codegen::abi::build_outgoing_arg_assignments_for_target(emitter.target, &arg_types, 0);
 
-    emitter.instruction("ldr x9, [sp], #16");                                   // pop closure function address into x9
+    crate::codegen::abi::emit_pop_reg(emitter, call_reg);
     let overflow_bytes = crate::codegen::abi::materialize_outgoing_args(emitter, &assignments);
 
     let ret_ty = ctx
@@ -354,13 +331,10 @@ pub(super) fn emit_closure_call(
         .map(|s| s.return_type.clone())
         .unwrap_or(PhpType::Int);
 
-    emitter.instruction("mov x19, x9");                                         // preserve closure address across concat-offset save
     super::super::save_concat_offset_before_nested_call(emitter);
-    emitter.instruction("blr x19");                                             // branch to closure via function pointer in x19
+    crate::codegen::abi::emit_call_reg(emitter, call_reg);
     super::super::restore_concat_offset_after_nested_call(emitter, &ret_ty);
-    if overflow_bytes > 0 {
-        emitter.instruction(&format!("add sp, sp, #{}", overflow_bytes));       // drop spilled stack arguments after the closure call returns
-    }
+    crate::codegen::abi::emit_release_temporary_stack(emitter, overflow_bytes);
 
     ret_ty
 }
