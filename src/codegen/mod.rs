@@ -21,6 +21,7 @@ use crate::types::{
 use context::Context;
 use data_section::DataSection;
 use emit::Emitter;
+use platform::Target;
 
 pub fn generate(
     program: &Program,
@@ -36,8 +37,10 @@ pub fn generate(
     heap_size: usize,
     gc_stats: bool,
     heap_debug: bool,
+    target: Target,
 ) -> (String, String) {
-    let mut emitter = Emitter::new();
+    target.ensure_aarch64_backend("code generation");
+    let mut emitter = Emitter::new(target);
     let mut data = DataSection::new();
 
     // Pre-scan for compile-time constants (const declarations and define() calls)
@@ -384,7 +387,7 @@ pub fn generate(
     user_asm.push_str(&user_data);
 
     // -- build runtime assembly (routines + fixed data) --
-    let runtime_asm = generate_runtime(heap_size);
+    let runtime_asm = generate_runtime(heap_size, target);
 
     (user_asm, runtime_asm)
 }
@@ -392,8 +395,9 @@ pub fn generate(
 /// Generate the runtime assembly string independently.
 /// This output is identical for all programs compiled with the same heap_size
 /// and can be pre-assembled and cached.
-pub fn generate_runtime(heap_size: usize) -> String {
-    let mut emitter = Emitter::new();
+pub fn generate_runtime(heap_size: usize, target: Target) -> String {
+    target.ensure_aarch64_backend("runtime code generation");
+    let mut emitter = Emitter::new(target);
     emitter.raw(".text");
     runtime::emit_runtime(&mut emitter);
     let mut output = emitter.output();

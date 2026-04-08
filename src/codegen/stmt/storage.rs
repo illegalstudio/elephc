@@ -120,10 +120,7 @@ pub(super) fn emit_global_load(
 
 pub(super) fn emit_extern_global_store(emitter: &mut Emitter, name: &str, ty: &PhpType) {
     emitter.comment(&format!("store to extern global ${}", name));
-    let sym = match emitter.platform {
-        crate::codegen::platform::Platform::MacOS => format!("_{}", name),
-        crate::codegen::platform::Platform::Linux => name.to_string(),
-    };
+    let sym = emitter.target.extern_symbol(name);
     emitter.adrp_got("x9", &format!("{}", sym));                // load page of extern global GOT entry
     emitter.ldr_got_lo12("x9", "x9", &format!("{}", sym));        // resolve extern global address
     match ty {
@@ -158,10 +155,7 @@ pub(super) fn emit_extern_global_store(emitter: &mut Emitter, name: &str, ty: &P
 
 pub(super) fn emit_extern_global_load(emitter: &mut Emitter, name: &str, ty: &PhpType) {
     emitter.comment(&format!("load from extern global ${}", name));
-    let sym = match emitter.platform {
-        crate::codegen::platform::Platform::MacOS => format!("_{}", name),
-        crate::codegen::platform::Platform::Linux => name.to_string(),
-    };
+    let sym = emitter.target.extern_symbol(name);
     emitter.adrp_got("x9", &format!("{}", sym));                // load page of extern global GOT entry
     emitter.ldr_got_lo12("x9", "x9", &format!("{}", sym));        // resolve extern global address
     match ty {

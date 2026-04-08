@@ -15,30 +15,112 @@ pub enum Platform {
     Linux,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Arch {
+    AArch64,
+    X86_64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Target {
+    pub platform: Platform,
+    pub arch: Arch,
+}
+
 impl Platform {
-    /// Auto-detect the platform we are compiling *on* (i.e. the host).
-    pub fn detect() -> Self {
+    /// Auto-detect the host operating system.
+    pub fn detect_host() -> Self {
         if cfg!(target_os = "macos") {
             Platform::MacOS
         } else {
             Platform::Linux
         }
     }
+}
 
-    /// Transform macOS-flavoured ARM64 assembly into Linux ARM64 (ELF) assembly.
+impl Arch {
+    /// Auto-detect the host architecture.
+    pub fn detect_host() -> Self {
+        if cfg!(target_arch = "aarch64") {
+            Arch::AArch64
+        } else if cfg!(target_arch = "x86_64") {
+            Arch::X86_64
+        } else {
+            panic!("unsupported host architecture for elephc")
+        }
+    }
+}
+
+impl Target {
+    pub const fn new(platform: Platform, arch: Arch) -> Self {
+        Self { platform, arch }
+    }
+
+    /// Auto-detect the platform + architecture we are compiling on.
+    pub fn detect_host() -> Self {
+        Self::new(Platform::detect_host(), Arch::detect_host())
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "macos-aarch64" | "macos-arm64" | "aarch64-apple-darwin" => {
+                Ok(Self::new(Platform::MacOS, Arch::AArch64))
+            }
+            "macos-x86_64" | "x86_64-apple-darwin" => {
+                Ok(Self::new(Platform::MacOS, Arch::X86_64))
+            }
+            "linux-aarch64" | "linux-arm64" | "aarch64-unknown-linux-gnu" => {
+                Ok(Self::new(Platform::Linux, Arch::AArch64))
+            }
+            "linux-x86_64" | "x86_64-unknown-linux-gnu" => {
+                Ok(Self::new(Platform::Linux, Arch::X86_64))
+            }
+            _ => Err(format!(
+                "unsupported target '{}'; expected one of: macos-aarch64, macos-x86_64, linux-aarch64, linux-x86_64",
+                value
+            )),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match (self.platform, self.arch) {
+            (Platform::MacOS, Arch::AArch64) => "macos-aarch64",
+            (Platform::MacOS, Arch::X86_64) => "macos-x86_64",
+            (Platform::Linux, Arch::AArch64) => "linux-aarch64",
+            (Platform::Linux, Arch::X86_64) => "linux-x86_64",
+        }
+    }
+
+    pub fn supports_current_backend(&self) -> bool {
+        self.arch == Arch::AArch64
+    }
+
+    pub fn ensure_aarch64_backend(&self, feature: &str) {
+        assert!(
+            self.arch == Arch::AArch64,
+            "{} is not implemented yet for target {}",
+            feature,
+            self.as_str()
+        );
+    }
+
+    /// Transform macOS-flavoured AArch64 assembly into Linux AArch64 (ELF) assembly.
     ///
-    /// This is a no-op when the platform is macOS.  For Linux it rewrites:
-    ///   - `@PAGE` / `@PAGEOFF` relocations → bare symbol / `:lo12:symbol`
-    ///   - `mov x16, #N` + `svc #0x80` → `mov x8, #M` + `svc #0`
-    ///   - `_main` entry point → `main`
-    ///   - C library calls: `bl _func` → `bl func` (strip Mach-O underscore)
-    ///   - data labels: `.globl _sym` / `_sym:` → `.globl sym` / `sym:`
+    /// This remains a same-ISA post-processing step. Cross-ISA targets such as
+    /// Linux x86_64 must use native emission rather than textual rewriting.
     #[allow(dead_code)]
     pub fn transform_assembly(&self, asm: &str) -> String {
-        match self {
-            Platform::MacOS => asm.to_string(),
-            Platform::Linux => transform_for_linux(asm),
+        match (self.platform, self.arch) {
+            (Platform::MacOS, Arch::AArch64) => asm.to_string(),
+            (Platform::Linux, Arch::AArch64) => transform_for_linux(asm),
+            _ => asm.to_string(),
         }
+    }
+}
+
+impl std::fmt::Display for Target {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -50,22 +132,25 @@ impl Platform {
 #[allow(dead_code)]
 fn map_syscall(macos_num: u32) -> u32 {
     match macos_num {
-        1 => 93,     // exit
-        3 => 63,     // read
-        4 => 64,     // write
-        5 => 56,     // openat (Linux aarch64 has no `open`; we use openat with AT_FDCWD)
-        6 => 57,     // close
-        10 => 35,    // unlinkat (Linux aarch64 has no `unlink`; we use unlinkat)
-        12 => 49,    // chdir
-        15 => 52,    // fchmod (placeholder — chmod maps to fchmodat on Linux)
-        33 => 48,    // faccessat (Linux aarch64 has no `access`)
-        116 => 169,  // gettimeofday
-        128 => 38,   // renameat (Linux aarch64 has no `rename`)
-        136 => 34,   // mkdirat (Linux aarch64 has no `mkdir`)
-        137 => 35,   // unlinkat (rmdir uses unlinkat with AT_REMOVEDIR flag)
-        199 => 62,   // lseek
-        338 => 79,   // fstatat (Linux aarch64 has no `stat`; uses fstatat/newfstatat)
-        _ => panic!("unknown macOS syscall number {} — cannot map to Linux", macos_num),
+        1 => 93,    // exit
+        3 => 63,    // read
+        4 => 64,    // write
+        5 => 56,    // openat (Linux aarch64 has no `open`; we use openat with AT_FDCWD)
+        6 => 57,    // close
+        10 => 35,   // unlinkat (Linux aarch64 has no `unlink`; we use unlinkat)
+        12 => 49,   // chdir
+        15 => 52,   // fchmod (placeholder — chmod maps to fchmodat on Linux)
+        33 => 48,   // faccessat (Linux aarch64 has no `access`)
+        116 => 169, // gettimeofday
+        128 => 38,  // renameat (Linux aarch64 has no `rename`)
+        136 => 34,  // mkdirat (Linux aarch64 has no `mkdir`)
+        137 => 35,  // unlinkat (rmdir uses unlinkat with AT_REMOVEDIR flag)
+        199 => 62,  // lseek
+        338 => 79,  // fstatat (Linux aarch64 has no `stat`; uses fstatat/newfstatat)
+        _ => panic!(
+            "unknown macOS syscall number {} — cannot map to Linux",
+            macos_num
+        ),
     }
 }
 
@@ -73,19 +158,54 @@ fn map_syscall(macos_num: u32) -> u32 {
 /// On Linux ELF, these are referenced without the leading underscore.
 #[allow(dead_code)]
 const C_SYMBOLS: &[&str] = &[
-    "abs", "acos", "arc4random", "arc4random_uniform", "asin", "atan", "atan2", "atof", "atoi",
-    "closedir", "cos", "cosh",
+    "abs",
+    "acos",
+    "arc4random",
+    "arc4random_uniform",
+    "asin",
+    "atan",
+    "atan2",
+    "atof",
+    "atoi",
+    "closedir",
+    "cos",
+    "cosh",
     "exp",
-    "fgetc", "free", "getcwd", "getenv", "glob", "globfree",
+    "fgetc",
+    "free",
+    "getcwd",
+    "getenv",
+    "glob",
+    "globfree",
     "hypot",
-    "localtime", "log", "log10", "log2", "longjmp",
-    "malloc", "memcpy", "memset",
-    "mkstemp", "mktime",
+    "localtime",
+    "log",
+    "log10",
+    "log2",
+    "longjmp",
+    "malloc",
+    "memcpy",
+    "memset",
+    "mkstemp",
+    "mktime",
     "opendir",
-    "pclose", "popen", "pow", "putenv",
-    "readdir", "regcomp", "regexec", "regfree",
-    "setjmp", "sin", "sinh", "sleep", "snprintf", "system",
-    "tan", "tanh", "time",
+    "pclose",
+    "popen",
+    "pow",
+    "putenv",
+    "readdir",
+    "regcomp",
+    "regexec",
+    "regfree",
+    "setjmp",
+    "sin",
+    "sinh",
+    "sleep",
+    "snprintf",
+    "system",
+    "tan",
+    "tanh",
+    "time",
     "usleep",
 ];
 
@@ -160,55 +280,56 @@ fn transform_for_linux(asm: &str) -> String {
                     128 => {
                         // rename(old, new) → renameat(AT_FDCWD, old, AT_FDCWD, new)
                         // x0=old, x1=new → x0=AT_FDCWD, x1=old, x2=AT_FDCWD, x3=new
-                        result.push_str(&format!("{}mov x3, x1\n", indent));        // shift new path to x3
-                        result.push_str(&format!("{}mov x1, x0\n", indent));        // shift old path to x1
-                        result.push_str(&format!("{}mov x2, #-100\n", indent));     // AT_FDCWD for new path dir
-                        result.push_str(&format!("{}mov x0, #-100\n", indent));     // AT_FDCWD for old path dir
+                        result.push_str(&format!("{}mov x3, x1\n", indent)); // shift new path to x3
+                        result.push_str(&format!("{}mov x1, x0\n", indent)); // shift old path to x1
+                        result.push_str(&format!("{}mov x2, #-100\n", indent)); // AT_FDCWD for new path dir
+                        result.push_str(&format!("{}mov x0, #-100\n", indent)); // AT_FDCWD for old path dir
                     }
                     338 => {
                         // stat64(path, buf) → fstatat(AT_FDCWD, path, buf, 0)
                         // x0=path, x1=buf → x0=AT_FDCWD, x1=path, x2=buf, x3=0
-                        result.push_str(&format!("{}mov x2, x1\n", indent));        // shift buf to x2
-                        result.push_str(&format!("{}mov x1, x0\n", indent));        // shift path to x1
-                        result.push_str(&format!("{}mov x0, #-100\n", indent));     // AT_FDCWD
-                        result.push_str(&format!("{}mov x3, #0\n", indent));        // flags = 0
+                        result.push_str(&format!("{}mov x2, x1\n", indent)); // shift buf to x2
+                        result.push_str(&format!("{}mov x1, x0\n", indent)); // shift path to x1
+                        result.push_str(&format!("{}mov x0, #-100\n", indent)); // AT_FDCWD
+                        result.push_str(&format!("{}mov x3, #0\n", indent)); // flags = 0
                     }
                     5 => {
                         // open(path, flags, mode) → openat(AT_FDCWD, path, flags, mode)
                         // x0=path, x1=flags, x2=mode → x0=AT_FDCWD, x1=path, x2=flags, x3=mode
-                        result.push_str(&format!("{}mov x3, x2\n", indent));        // shift mode to x3
-                        result.push_str(&format!("{}mov x2, x1\n", indent));        // shift flags to x2
-                        result.push_str(&format!("{}mov x1, x0\n", indent));        // shift path to x1
-                        result.push_str(&format!("{}mov x0, #-100\n", indent));     // AT_FDCWD
+                        result.push_str(&format!("{}mov x3, x2\n", indent)); // shift mode to x3
+                        result.push_str(&format!("{}mov x2, x1\n", indent)); // shift flags to x2
+                        result.push_str(&format!("{}mov x1, x0\n", indent)); // shift path to x1
+                        result.push_str(&format!("{}mov x0, #-100\n", indent)); // AT_FDCWD
                     }
                     136 => {
                         // mkdir(path, mode) → mkdirat(AT_FDCWD, path, mode)
                         // x0=path, x1=mode → x0=AT_FDCWD, x1=path, x2=mode
-                        result.push_str(&format!("{}mov x2, x1\n", indent));        // shift mode to x2
-                        result.push_str(&format!("{}mov x1, x0\n", indent));        // shift path to x1
-                        result.push_str(&format!("{}mov x0, #-100\n", indent));     // AT_FDCWD
+                        result.push_str(&format!("{}mov x2, x1\n", indent)); // shift mode to x2
+                        result.push_str(&format!("{}mov x1, x0\n", indent)); // shift path to x1
+                        result.push_str(&format!("{}mov x0, #-100\n", indent)); // AT_FDCWD
                     }
                     10 => {
                         // unlink(path) → unlinkat(AT_FDCWD, path, 0)
                         // x0=path → x0=AT_FDCWD, x1=path, x2=0
-                        result.push_str(&format!("{}mov x1, x0\n", indent));        // shift path to x1
-                        result.push_str(&format!("{}mov x0, #-100\n", indent));     // AT_FDCWD
-                        result.push_str(&format!("{}mov x2, #0\n", indent));        // flags = 0
+                        result.push_str(&format!("{}mov x1, x0\n", indent)); // shift path to x1
+                        result.push_str(&format!("{}mov x0, #-100\n", indent)); // AT_FDCWD
+                        result.push_str(&format!("{}mov x2, #0\n", indent)); // flags = 0
                     }
                     137 => {
                         // rmdir(path) → unlinkat(AT_FDCWD, path, AT_REMOVEDIR)
                         // x0=path → x0=AT_FDCWD, x1=path, x2=0x200
-                        result.push_str(&format!("{}mov x1, x0\n", indent));        // shift path to x1
-                        result.push_str(&format!("{}mov x0, #-100\n", indent));     // AT_FDCWD
-                        result.push_str(&format!("{}mov x2, #0x200\n", indent));    // AT_REMOVEDIR
+                        result.push_str(&format!("{}mov x1, x0\n", indent)); // shift path to x1
+                        result.push_str(&format!("{}mov x0, #-100\n", indent)); // AT_FDCWD
+                        result.push_str(&format!("{}mov x2, #0x200\n", indent));
+                        // AT_REMOVEDIR
                     }
                     33 => {
                         // access(path, mode) → faccessat(AT_FDCWD, path, mode, 0)
                         // x0=path, x1=mode → x0=AT_FDCWD, x1=path, x2=mode, x3=0
-                        result.push_str(&format!("{}mov x2, x1\n", indent));        // shift mode to x2
-                        result.push_str(&format!("{}mov x1, x0\n", indent));        // shift path to x1
-                        result.push_str(&format!("{}mov x0, #-100\n", indent));     // AT_FDCWD
-                        result.push_str(&format!("{}mov x3, #0\n", indent));        // flags = 0
+                        result.push_str(&format!("{}mov x2, x1\n", indent)); // shift mode to x2
+                        result.push_str(&format!("{}mov x1, x0\n", indent)); // shift path to x1
+                        result.push_str(&format!("{}mov x0, #-100\n", indent)); // AT_FDCWD
+                        result.push_str(&format!("{}mov x3, #0\n", indent)); // flags = 0
                     }
                     _ => unreachable!(),
                 }
@@ -220,7 +341,10 @@ fn transform_for_linux(asm: &str) -> String {
         }
 
         // ── svc #0x80 → svc #0 ───────────────────────────────────────
-        if trimmed == "svc #0x80" || trimmed.starts_with("svc #0x80 ") || trimmed.starts_with("svc #0x80\t") {
+        if trimmed == "svc #0x80"
+            || trimmed.starts_with("svc #0x80 ")
+            || trimmed.starts_with("svc #0x80\t")
+        {
             let indent = &line[..line.len() - trimmed.len()];
             result.push_str(indent);
             result.push_str("svc #0\n");
@@ -294,28 +418,45 @@ fn transform_relocation(line: &str) -> Option<String> {
             let rest: String = chars.clone().collect();
             if rest.starts_with("@GOTPAGEOFF") {
                 // Replace "symbol@GOTPAGEOFF" with ":got_lo12:symbol"
-                let symbol_start = result.rfind(|c: char| !c.is_alphanumeric() && c != '_').map(|i| i + 1).unwrap_or(0);
+                let symbol_start = result
+                    .rfind(|c: char| !c.is_alphanumeric() && c != '_')
+                    .map(|i| i + 1)
+                    .unwrap_or(0);
                 let symbol = result[symbol_start..].to_string();
                 result.truncate(symbol_start);
                 result.push_str(&format!(":got_lo12:{}", symbol));
-                for _ in 0..11 { chars.next(); } // skip "@GOTPAGEOFF"
+                for _ in 0..11 {
+                    chars.next();
+                } // skip "@GOTPAGEOFF"
             } else if rest.starts_with("@GOTPAGE") {
                 // Replace "symbol@GOTPAGE" with ":got:symbol"
-                let symbol_start = result.rfind(|c: char| !c.is_alphanumeric() && c != '_').map(|i| i + 1).unwrap_or(0);
+                let symbol_start = result
+                    .rfind(|c: char| !c.is_alphanumeric() && c != '_')
+                    .map(|i| i + 1)
+                    .unwrap_or(0);
                 let symbol = result[symbol_start..].to_string();
                 result.truncate(symbol_start);
                 result.push_str(&format!(":got:{}", symbol));
-                for _ in 0..8 { chars.next(); } // skip "@GOTPAGE"
+                for _ in 0..8 {
+                    chars.next();
+                } // skip "@GOTPAGE"
             } else if rest.starts_with("@PAGEOFF") {
                 // Replace "symbol@PAGEOFF" with ":lo12:symbol"
-                let symbol_start = result.rfind(|c: char| !c.is_alphanumeric() && c != '_').map(|i| i + 1).unwrap_or(0);
+                let symbol_start = result
+                    .rfind(|c: char| !c.is_alphanumeric() && c != '_')
+                    .map(|i| i + 1)
+                    .unwrap_or(0);
                 let symbol = result[symbol_start..].to_string();
                 result.truncate(symbol_start);
                 result.push_str(&format!(":lo12:{}", symbol));
-                for _ in 0..8 { chars.next(); } // skip "@PAGEOFF"
+                for _ in 0..8 {
+                    chars.next();
+                } // skip "@PAGEOFF"
             } else if rest.starts_with("@PAGE") {
                 // Just remove "@PAGE"
-                for _ in 0..5 { chars.next(); }
+                for _ in 0..5 {
+                    chars.next();
+                }
             } else {
                 result.push(ch);
                 chars.next();
@@ -374,35 +515,34 @@ fn transform_c_call(trimmed: &str) -> Option<String> {
     None
 }
 
-
 // ────────────────────────────────────────────────────────────────────────────
 // Platform-dependent struct layout constants
 // ────────────────────────────────────────────────────────────────────────────
 
-impl Platform {
-    fn host_has_native_aarch64_toolchain() -> bool {
-        static NATIVE_AARCH64: OnceLock<bool> = OnceLock::new();
-        *NATIVE_AARCH64.get_or_init(|| {
-            Command::new("gcc")
-                .arg("-dumpmachine")
-                .output()
-                .map(|output| String::from_utf8_lossy(&output.stdout).contains("aarch64"))
-                .unwrap_or(false)
-        })
-    }
+fn host_has_native_aarch64_toolchain() -> bool {
+    static NATIVE_AARCH64: OnceLock<bool> = OnceLock::new();
+    *NATIVE_AARCH64.get_or_init(|| {
+        Command::new("gcc")
+            .arg("-dumpmachine")
+            .output()
+            .map(|output| String::from_utf8_lossy(&output.stdout).contains("aarch64"))
+            .unwrap_or(false)
+    })
+}
 
+impl Platform {
     // File open flags (differ between macOS and Linux)
     pub fn o_wronly_creat_trunc(&self) -> u32 {
         match self {
-            Platform::MacOS => 0x601,  // O_WRONLY(1)|O_CREAT(0x200)|O_TRUNC(0x400)
-            Platform::Linux => 0x241,  // O_WRONLY(1)|O_CREAT(0x40)|O_TRUNC(0x200)
+            Platform::MacOS => 0x601, // O_WRONLY(1)|O_CREAT(0x200)|O_TRUNC(0x400)
+            Platform::Linux => 0x241, // O_WRONLY(1)|O_CREAT(0x40)|O_TRUNC(0x200)
         }
     }
 
     pub fn o_wronly_creat_append(&self) -> u32 {
         match self {
-            Platform::MacOS => 0x209,  // O_WRONLY(1)|O_CREAT(0x200)|O_APPEND(8)
-            Platform::Linux => 0x441,  // O_WRONLY(1)|O_CREAT(0x40)|O_APPEND(0x400)
+            Platform::MacOS => 0x209, // O_WRONLY(1)|O_CREAT(0x200)|O_APPEND(8)
+            Platform::Linux => 0x441, // O_WRONLY(1)|O_CREAT(0x40)|O_APPEND(0x400)
         }
     }
 
@@ -410,8 +550,8 @@ impl Platform {
     /// macOS uses carry flag; Linux uses negative return value.
     pub fn branch_on_syscall_success(&self, label: &str) -> String {
         match self {
-            Platform::MacOS => format!("b.cc {}", label),  // carry clear = success
-            Platform::Linux => format!("b.ge {}", label),  // x0 >= 0 = success (after cmp x0, #0)
+            Platform::MacOS => format!("b.cc {}", label), // carry clear = success
+            Platform::Linux => format!("b.ge {}", label), // x0 >= 0 = success (after cmp x0, #0)
         }
     }
 
@@ -526,66 +666,70 @@ impl Platform {
             }
         }
     }
+}
 
+impl Target {
     pub fn line_comment_prefix(&self) -> &'static str {
-        match self {
-            Platform::MacOS => ";",
-            Platform::Linux => "//",
+        match (self.platform, self.arch) {
+            (Platform::MacOS, Arch::AArch64) => ";",
+            (Platform::Linux, Arch::AArch64) => "//",
+            (_, Arch::X86_64) => "#",
         }
     }
 
     /// Emit the Linux syscall sequence for a given macOS syscall number.
     /// Handles AT_FDCWD argument shifting for *at syscall variants.
-    pub fn emit_linux_syscall(emitter: &mut super::emit::Emitter, macos_num: u32) {
+    pub fn emit_linux_syscall(&self, emitter: &mut super::emit::Emitter, macos_num: u32) {
+        self.ensure_aarch64_backend("linux syscall emission");
         let linux_num = map_syscall(macos_num);
 
         if needs_at_fdcwd(macos_num) {
             match macos_num {
                 128 => {
                     // rename(old, new) → renameat(AT_FDCWD, old, AT_FDCWD, new)
-                    emitter.instruction("mov x3, x1");                          // shift new path to x3
-                    emitter.instruction("mov x1, x0");                          // shift old path to x1
-                    emitter.instruction("mov x2, #-100");                       // AT_FDCWD for new path dir
-                    emitter.instruction("mov x0, #-100");                       // AT_FDCWD for old path dir
+                    emitter.instruction("mov x3, x1"); // shift new path to x3
+                    emitter.instruction("mov x1, x0"); // shift old path to x1
+                    emitter.instruction("mov x2, #-100"); // AT_FDCWD for new path dir
+                    emitter.instruction("mov x0, #-100"); // AT_FDCWD for old path dir
                 }
                 338 => {
                     // stat64(path, buf) → fstatat(AT_FDCWD, path, buf, 0)
-                    emitter.instruction("mov x2, x1");                          // shift buf to x2
-                    emitter.instruction("mov x1, x0");                          // shift path to x1
-                    emitter.instruction("mov x0, #-100");                       // AT_FDCWD
-                    emitter.instruction("mov x3, #0");                          // flags = 0
+                    emitter.instruction("mov x2, x1"); // shift buf to x2
+                    emitter.instruction("mov x1, x0"); // shift path to x1
+                    emitter.instruction("mov x0, #-100"); // AT_FDCWD
+                    emitter.instruction("mov x3, #0"); // flags = 0
                 }
                 5 => {
                     // open(path, flags, mode) → openat(AT_FDCWD, path, flags, mode)
-                    emitter.instruction("mov x3, x2");                          // shift mode to x3
-                    emitter.instruction("mov x2, x1");                          // shift flags to x2
-                    emitter.instruction("mov x1, x0");                          // shift path to x1
-                    emitter.instruction("mov x0, #-100");                       // AT_FDCWD
+                    emitter.instruction("mov x3, x2"); // shift mode to x3
+                    emitter.instruction("mov x2, x1"); // shift flags to x2
+                    emitter.instruction("mov x1, x0"); // shift path to x1
+                    emitter.instruction("mov x0, #-100"); // AT_FDCWD
                 }
                 136 => {
                     // mkdir(path, mode) → mkdirat(AT_FDCWD, path, mode)
-                    emitter.instruction("mov x2, x1");                          // shift mode to x2
-                    emitter.instruction("mov x1, x0");                          // shift path to x1
-                    emitter.instruction("mov x0, #-100");                       // AT_FDCWD
+                    emitter.instruction("mov x2, x1"); // shift mode to x2
+                    emitter.instruction("mov x1, x0"); // shift path to x1
+                    emitter.instruction("mov x0, #-100"); // AT_FDCWD
                 }
                 10 => {
                     // unlink(path) → unlinkat(AT_FDCWD, path, 0)
-                    emitter.instruction("mov x1, x0");                          // shift path to x1
-                    emitter.instruction("mov x0, #-100");                       // AT_FDCWD
-                    emitter.instruction("mov x2, #0");                          // flags = 0
+                    emitter.instruction("mov x1, x0"); // shift path to x1
+                    emitter.instruction("mov x0, #-100"); // AT_FDCWD
+                    emitter.instruction("mov x2, #0"); // flags = 0
                 }
                 137 => {
                     // rmdir(path) → unlinkat(AT_FDCWD, path, AT_REMOVEDIR)
-                    emitter.instruction("mov x1, x0");                          // shift path to x1
-                    emitter.instruction("mov x0, #-100");                       // AT_FDCWD
-                    emitter.instruction("mov x2, #0x200");                      // AT_REMOVEDIR
+                    emitter.instruction("mov x1, x0"); // shift path to x1
+                    emitter.instruction("mov x0, #-100"); // AT_FDCWD
+                    emitter.instruction("mov x2, #0x200"); // AT_REMOVEDIR
                 }
                 33 => {
                     // access(path, mode) → faccessat(AT_FDCWD, path, mode, 0)
-                    emitter.instruction("mov x2, x1");                          // shift mode to x2
-                    emitter.instruction("mov x1, x0");                          // shift path to x1
-                    emitter.instruction("mov x0, #-100");                       // AT_FDCWD
-                    emitter.instruction("mov x3, #0");                          // flags = 0
+                    emitter.instruction("mov x2, x1"); // shift mode to x2
+                    emitter.instruction("mov x1, x0"); // shift path to x1
+                    emitter.instruction("mov x0, #-100"); // AT_FDCWD
+                    emitter.instruction("mov x3, #0"); // flags = 0
                 }
                 _ => unreachable!(),
             }
@@ -595,42 +739,55 @@ impl Platform {
         emitter.instruction("svc #0");
     }
 
-    /// Remap a C library symbol name for Linux if needed.
-    /// E.g. CommonCrypto functions → OpenSSL/libcrypto names.
-    pub fn remap_c_symbol(name: &str) -> &str {
-        match name {
-            "CC_MD5" => "MD5",
-            "CC_SHA1" => "SHA1",
-            "CC_SHA256" => "SHA256",
-            _ => name,
+    /// Remap a C library symbol name for the target when needed.
+    /// E.g. CommonCrypto functions → OpenSSL/libcrypto names on Linux.
+    pub fn remap_c_symbol<'a>(&self, name: &'a str) -> &'a str {
+        match self.platform {
+            Platform::MacOS => name,
+            Platform::Linux => match name {
+                "CC_MD5" => "MD5",
+                "CC_SHA1" => "SHA1",
+                "CC_SHA256" => "SHA256",
+                _ => name,
+            },
         }
     }
 
-    /// Get the assembler command for this platform.
+    /// Apply the platform's external symbol naming convention.
+    pub fn extern_symbol(&self, name: &str) -> String {
+        match self.platform {
+            Platform::MacOS => format!("_{}", name),
+            Platform::Linux => name.to_string(),
+        }
+    }
+
+    /// Get the assembler command for this target.
     pub fn assembler_cmd(&self) -> &'static str {
-        match self {
-            Platform::MacOS => "as",
-            Platform::Linux => {
-                if Self::host_has_native_aarch64_toolchain() {
+        match (self.platform, self.arch) {
+            (Platform::MacOS, Arch::AArch64 | Arch::X86_64) => "as",
+            (Platform::Linux, Arch::AArch64) => {
+                if host_has_native_aarch64_toolchain() {
                     "as"
                 } else {
                     "aarch64-linux-gnu-as"
                 }
             }
+            (Platform::Linux, Arch::X86_64) => "as",
         }
     }
 
-    /// Get the linker/gcc command for this platform.
+    /// Get the linker/gcc command for this target.
     pub fn linker_cmd(&self) -> &'static str {
-        match self {
-            Platform::MacOS => "ld",
-            Platform::Linux => {
-                if Self::host_has_native_aarch64_toolchain() {
+        match (self.platform, self.arch) {
+            (Platform::MacOS, Arch::AArch64 | Arch::X86_64) => "ld",
+            (Platform::Linux, Arch::AArch64) => {
+                if host_has_native_aarch64_toolchain() {
                     "gcc"
                 } else {
                     "aarch64-linux-gnu-gcc"
                 }
             }
+            (Platform::Linux, Arch::X86_64) => "gcc",
         }
     }
 }
@@ -638,6 +795,22 @@ impl Platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_target_parse() {
+        assert_eq!(
+            Target::parse("linux-aarch64").unwrap(),
+            Target::new(Platform::Linux, Arch::AArch64)
+        );
+        assert_eq!(
+            Target::parse("linux-x86_64").unwrap(),
+            Target::new(Platform::Linux, Arch::X86_64)
+        );
+        assert_eq!(
+            Target::parse("aarch64-apple-darwin").unwrap(),
+            Target::new(Platform::MacOS, Arch::AArch64)
+        );
+    }
 
     #[test]
     fn test_transform_relocation_page() {
@@ -675,15 +848,18 @@ mod tests {
 
     #[test]
     fn test_map_syscall() {
-        assert_eq!(map_syscall(1), 93);   // exit
-        assert_eq!(map_syscall(4), 64);   // write
-        assert_eq!(map_syscall(5), 56);   // open → openat
+        assert_eq!(map_syscall(1), 93); // exit
+        assert_eq!(map_syscall(4), 64); // write
+        assert_eq!(map_syscall(5), 56); // open → openat
         assert_eq!(map_syscall(338), 79); // stat64 → fstatat
     }
 
     #[test]
     fn test_transform_c_call() {
-        assert_eq!(transform_c_call("bl _snprintf"), Some("bl snprintf".to_string()));
+        assert_eq!(
+            transform_c_call("bl _snprintf"),
+            Some("bl snprintf".to_string())
+        );
         assert_eq!(transform_c_call("bl __rt_itoa"), None); // internal, not touched
         assert_eq!(transform_c_call("bl _sin"), Some("bl sin".to_string()));
         assert_eq!(transform_c_call("bl _CC_MD5"), Some("bl MD5".to_string()));
@@ -716,10 +892,10 @@ _main:
         assert!(linux_asm.contains("main:\n"));
         assert!(linux_asm.contains("adrp x9, _global_argc\n"));
         assert!(linux_asm.contains("add x9, x9, :lo12:_global_argc\n"));
-        assert!(linux_asm.contains("mov x8, #64\n"));   // write
+        assert!(linux_asm.contains("mov x8, #64\n")); // write
         assert!(linux_asm.contains("svc #0\n"));
         assert!(linux_asm.contains("bl snprintf\n"));
-        assert!(linux_asm.contains("mov x8, #93\n"));   // exit
+        assert!(linux_asm.contains("mov x8, #93\n")); // exit
         assert!(!linux_asm.contains("x16"));
         assert!(!linux_asm.contains("@PAGE"));
     }
@@ -729,11 +905,11 @@ _main:
         // open(path, flags, mode) → openat(AT_FDCWD, path, flags, mode)
         let macos_asm = "    mov x16, #5\n    svc #0x80\n";
         let linux_asm = transform_for_linux(macos_asm);
-        assert!(linux_asm.contains("mov x3, x2"));    // shift mode
-        assert!(linux_asm.contains("mov x2, x1"));    // shift flags
-        assert!(linux_asm.contains("mov x1, x0"));    // shift path
+        assert!(linux_asm.contains("mov x3, x2")); // shift mode
+        assert!(linux_asm.contains("mov x2, x1")); // shift flags
+        assert!(linux_asm.contains("mov x1, x0")); // shift path
         assert!(linux_asm.contains("mov x0, #-100")); // AT_FDCWD
-        assert!(linux_asm.contains("mov x8, #56"));   // openat
+        assert!(linux_asm.contains("mov x8, #56")); // openat
     }
 
     #[test]
@@ -745,13 +921,26 @@ _main:
         assert_eq!(Platform::MacOS.regex_t_size(), 32);
         assert_eq!(Platform::Linux.regex_t_size(), 64);
         assert_eq!(Platform::MacOS.regmatch_t_size(), 16);
-        assert_eq!(Platform::Linux.regmatch_t_size(), if cfg!(target_env = "musl") { 16 } else { 8 });
+        assert_eq!(
+            Platform::Linux.regmatch_t_size(),
+            if cfg!(target_env = "musl") { 16 } else { 8 }
+        );
         assert_eq!(Platform::MacOS.regmatch_rm_eo_offset(), 8);
-        assert_eq!(Platform::Linux.regmatch_rm_eo_offset(), if cfg!(target_env = "musl") { 8 } else { 4 });
-        assert_eq!(Platform::MacOS.regoff_load_instr("x9", "sp", 32), "ldr x9, [sp, #32]");
+        assert_eq!(
+            Platform::Linux.regmatch_rm_eo_offset(),
+            if cfg!(target_env = "musl") { 8 } else { 4 }
+        );
+        assert_eq!(
+            Platform::MacOS.regoff_load_instr("x9", "sp", 32),
+            "ldr x9, [sp, #32]"
+        );
         assert_eq!(
             Platform::Linux.regoff_load_instr("x9", "sp", 32),
-            if cfg!(target_env = "musl") { "ldr x9, [sp, #32]" } else { "ldrsw x9, [sp, #32]" }
+            if cfg!(target_env = "musl") {
+                "ldr x9, [sp, #32]"
+            } else {
+                "ldrsw x9, [sp, #32]"
+            }
         );
     }
 }

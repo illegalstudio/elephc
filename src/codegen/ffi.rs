@@ -105,10 +105,7 @@ pub fn emit_extern_call(
 
     // -- call the C function --
     crate::codegen::expr::save_concat_offset_before_nested_call(emitter);
-    let c_sym = match emitter.platform {
-        crate::codegen::platform::Platform::MacOS => format!("_{}", name),
-        crate::codegen::platform::Platform::Linux => name.to_string(),
-    };
+    let c_sym = emitter.target.extern_symbol(name);
     emitter.instruction(&format!("bl {}", c_sym));                              // call extern C function
     if sig.return_type == PhpType::Int {
         emitter.instruction("sxtw x0, w0");                                     // sign-extend 32-bit C int returns before PHP comparisons use x0

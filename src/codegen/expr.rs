@@ -78,36 +78,21 @@ pub fn emit_expr(
                     | PhpType::Buffer(_)
                     | PhpType::Packed(_)
                     | PhpType::Callable => {
-                        {
-                            let sym = match emitter.platform {
-                                crate::codegen::platform::Platform::MacOS => format!("_{}", name),
-                                crate::codegen::platform::Platform::Linux => name.to_string(),
-                            };
-                            emitter.adrp_got("x9", &format!("{}", sym)); //load page of extern global GOT entry
-                            emitter.ldr_got_lo12("x9", "x9", &format!("{}", sym)); //resolve extern global address
-                        }
+                        let sym = emitter.target.extern_symbol(name);
+                        emitter.adrp_got("x9", &sym);                           // load page of extern global GOT entry
+                        emitter.ldr_got_lo12("x9", "x9", &sym);                 // resolve extern global address
                         emitter.instruction("ldr x0, [x9]");                    // load extern integer/pointer value
                     }
                     PhpType::Float => {
-                        {
-                            let sym = match emitter.platform {
-                                crate::codegen::platform::Platform::MacOS => format!("_{}", name),
-                                crate::codegen::platform::Platform::Linux => name.to_string(),
-                            };
-                            emitter.adrp_got("x9", &format!("{}", sym)); //load page of extern global GOT entry
-                            emitter.ldr_got_lo12("x9", "x9", &format!("{}", sym)); //resolve extern global address
-                        }
+                        let sym = emitter.target.extern_symbol(name);
+                        emitter.adrp_got("x9", &sym);                           // load page of extern global GOT entry
+                        emitter.ldr_got_lo12("x9", "x9", &sym);                 // resolve extern global address
                         emitter.instruction("ldr d0, [x9]");                    // load extern float value
                     }
                     PhpType::Str => {
-                        {
-                            let sym = match emitter.platform {
-                                crate::codegen::platform::Platform::MacOS => format!("_{}", name),
-                                crate::codegen::platform::Platform::Linux => name.to_string(),
-                            };
-                            emitter.adrp_got("x9", &format!("{}", sym)); //load page of extern global GOT entry
-                            emitter.ldr_got_lo12("x9", "x9", &format!("{}", sym)); //resolve extern global address
-                        }
+                        let sym = emitter.target.extern_symbol(name);
+                        emitter.adrp_got("x9", &sym);                           // load page of extern global GOT entry
+                        emitter.ldr_got_lo12("x9", "x9", &sym);                 // resolve extern global address
                         emitter.instruction("ldr x0, [x9]");                    // load char* from extern global
                         emitter.instruction("bl __rt_cstr_to_str");             // convert C string to elephc string
                     }

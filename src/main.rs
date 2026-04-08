@@ -2,20 +2,22 @@ mod codegen;
 mod conditional;
 mod errors;
 mod lexer;
-mod names;
 mod name_resolver;
+mod names;
 mod parser;
 mod resolver;
 mod span;
 mod types;
 
+use std::collections::HashSet;
 use std::env;
 use std::fs;
-use std::collections::HashSet;
 use std::path::Path;
 use std::process::{self, Command};
 
-use codegen::platform::Platform;
+use codegen::platform::{Platform, Target};
+
+const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] <source.php>";
 
 fn run_tool(name: &str, cmd: &mut Command) {
     match cmd.status() {
@@ -60,7 +62,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: elephc [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] <source.php>");
+        eprintln!("{USAGE}");
         process::exit(1);
     }
 
@@ -69,6 +71,7 @@ fn main() {
     let mut gc_stats = false;
     let mut heap_debug = false;
     let mut filename_arg = None;
+    let mut target = Target::detect_host();
     let mut extra_link_libs: Vec<String> = Vec::new();
     let mut extra_link_paths: Vec<String> = Vec::new();
     let mut extra_frameworks: Vec<String> = Vec::new();
@@ -82,6 +85,28 @@ fn main() {
                 Ok(n) if n >= 65536 => n,
                 _ => {
                     eprintln!("Invalid --heap-size: must be a number >= 65536");
+                    process::exit(1);
+                }
+            };
+        } else if arg == "--target" {
+            i += 1;
+            if i < args.len() {
+                target = match Target::parse(&args[i]) {
+                    Ok(target) => target,
+                    Err(err) => {
+                        eprintln!("{}", err);
+                        process::exit(1);
+                    }
+                };
+            } else {
+                eprintln!("Missing target after --target");
+                process::exit(1);
+            }
+        } else if let Some(value) = arg.strip_prefix("--target=") {
+            target = match Target::parse(value) {
+                Ok(target) => target,
+                Err(err) => {
+                    eprintln!("{}", err);
                     process::exit(1);
                 }
             };
@@ -143,7 +168,7 @@ fn main() {
     let filename = match filename_arg {
         Some(f) => f,
         None => {
-            eprintln!("Usage: elephc [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] <source.php>");
+            eprintln!("{USAGE}");
             process::exit(1);
         }
     };
@@ -209,6 +234,14 @@ fn main() {
         errors::report_warning(warning);
     }
 
+    if !target.supports_current_backend() {
+        eprintln!(
+            "Target '{}' is recognized, but only the AArch64 backend is implemented today",
+            target
+        );
+        process::exit(1);
+    }
+
     let (user_asm, runtime_asm) = codegen::generate(
         &ast,
         &check_result.global_env,
@@ -223,6 +256,7 @@ fn main() {
         heap_size,
         gc_stats,
         heap_debug,
+        target,
     );
 
     // Merge extern-required libraries with CLI-specified ones
@@ -233,7 +267,6 @@ fn main() {
     }
 
     // Concatenate user + runtime into a single assembly file
-    let platform = Platform::detect();
     let mut asm = user_asm;
     asm.push('\n');
     asm.push_str(&runtime_asm);
@@ -244,15 +277,15 @@ fn main() {
     }
 
     // Assemble
-    let mut as_cmd = Command::new(platform.assembler_cmd());
-    if platform == Platform::MacOS {
+    let mut as_cmd = Command::new(target.assembler_cmd());
+    if target.platform == Platform::MacOS {
         as_cmd.args(["-arch", "arm64"]);
     }
     as_cmd.arg("-o").arg(&obj_path).arg(&asm_path);
     run_tool("Assembler", &mut as_cmd);
 
     // Link
-    let mut ld_cmd = match platform {
+    let mut ld_cmd = match target.platform {
         Platform::MacOS => {
             let sdk_path = macos_sdk_path();
             let sdk_version = macos_sdk_version();
@@ -266,7 +299,7 @@ fn main() {
             cmd
         }
         Platform::Linux => {
-            let mut cmd = Command::new(platform.linker_cmd());
+            let mut cmd = Command::new(target.linker_cmd());
             cmd.arg("-o").arg(&bin_path).arg(&obj_path);
             if extra_link_libs.is_empty() {
                 cmd.arg("-static");
@@ -286,10 +319,10 @@ fn main() {
             ld_cmd.arg(format!("-l{}", lib));
         }
     }
-    if platform == Platform::Linux && !extra_link_libs.is_empty() {
+    if target.platform == Platform::Linux && !extra_link_libs.is_empty() {
         ld_cmd.arg("-Wl,--as-needed");
     }
-    if platform == Platform::MacOS {
+    if target.platform == Platform::MacOS {
         for fw in &extra_frameworks {
             ld_cmd.args(["-framework", fw]);
         }

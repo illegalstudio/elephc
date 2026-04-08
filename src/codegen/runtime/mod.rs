@@ -8,6 +8,7 @@ mod strings;
 mod system;
 
 use super::emit::Emitter;
+use super::platform::Platform;
 pub(crate) use data::emit_runtime_data_fixed;
 pub(crate) use data::emit_runtime_data_user;
 
@@ -233,7 +234,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
 }
 
 fn emit_optional_linux_crypto_decls(emitter: &mut Emitter) {
-    if emitter.platform == super::platform::Platform::Linux {
+    if emitter.target.platform == Platform::Linux {
         emitter.raw(".weak MD5");
         emitter.raw(".weak SHA1");
         emitter.raw(".weak SHA256");
@@ -244,12 +245,11 @@ fn emit_optional_linux_crypto_decls(emitter: &mut Emitter) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::platform::Platform;
+    use crate::codegen::platform::{Arch, Platform, Target};
 
     #[test]
     fn test_linux_runtime_marks_crypto_symbols_weak() {
-        let mut emitter = Emitter::new();
-        emitter.platform = Platform::Linux;
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::AArch64));
         emit_runtime(&mut emitter);
         let asm = emitter.output();
 

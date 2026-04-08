@@ -1,17 +1,19 @@
 use std::fmt::Write;
 
-use super::platform::Platform;
+use super::platform::{Arch, Platform, Target};
 
 pub struct Emitter {
     buf: String,
+    pub target: Target,
     pub platform: Platform,
 }
 
 impl Emitter {
-    pub fn new() -> Self {
+    pub fn new(target: Target) -> Self {
         Self {
             buf: String::with_capacity(4096),
-            platform: Platform::detect(),
+            target,
+            platform: target.platform,
         }
     }
 
@@ -30,7 +32,12 @@ impl Emitter {
     }
 
     pub fn comment(&mut self, text: &str) {
-        let _ = writeln!(self.buf, "    {} {}", self.platform.line_comment_prefix(), text);
+        let _ = writeln!(
+            self.buf,
+            "    {} {}",
+            self.target.line_comment_prefix(),
+            text
+        );
     }
 
     pub fn blank(&mut self) {
@@ -50,6 +57,8 @@ impl Emitter {
 
     /// Emit `adrp reg, sym@PAGE` (macOS) or `adrp reg, sym` (Linux).
     pub fn adrp(&mut self, reg: &str, sym: &str) {
+        self.target
+            .ensure_aarch64_backend("adrp relocation emission");
         match self.platform {
             Platform::MacOS => self.instruction(&format!("adrp {}, {}@PAGE", reg, sym)),
             Platform::Linux => self.instruction(&format!("adrp {}, {}", reg, sym)),
@@ -58,6 +67,8 @@ impl Emitter {
 
     /// Emit `add dst, src, sym@PAGEOFF` (macOS) or `add dst, src, :lo12:sym` (Linux).
     pub fn add_lo12(&mut self, dst: &str, src: &str, sym: &str) {
+        self.target
+            .ensure_aarch64_backend("lo12 relocation emission");
         match self.platform {
             Platform::MacOS => self.instruction(&format!("add {}, {}, {}@PAGEOFF", dst, src, sym)),
             Platform::Linux => self.instruction(&format!("add {}, {}, :lo12:{}", dst, src, sym)),
@@ -66,18 +77,19 @@ impl Emitter {
 
     /// Emit `ldr reg, [base, sym@PAGEOFF]` (macOS) or `ldr reg, [base, :lo12:sym]` (Linux).
     pub fn ldr_lo12(&mut self, reg: &str, base: &str, sym: &str) {
+        self.target.ensure_aarch64_backend("lo12 load emission");
         match self.platform {
             Platform::MacOS => {
                 self.instruction(&format!("ldr {}, [{}, {}@PAGEOFF]", reg, base, sym))
             }
-            Platform::Linux => {
-                self.instruction(&format!("ldr {}, [{}, :lo12:{}]", reg, base, sym))
-            }
+            Platform::Linux => self.instruction(&format!("ldr {}, [{}, :lo12:{}]", reg, base, sym)),
         }
     }
 
     /// Emit `adrp reg, sym@GOTPAGE` (macOS) or `adrp reg, :got:sym` (Linux).
     pub fn adrp_got(&mut self, reg: &str, sym: &str) {
+        self.target
+            .ensure_aarch64_backend("GOT page relocation emission");
         match self.platform {
             Platform::MacOS => self.instruction(&format!("adrp {}, {}@GOTPAGE", reg, sym)),
             Platform::Linux => self.instruction(&format!("adrp {}, :got:{}", reg, sym)),
@@ -86,6 +98,7 @@ impl Emitter {
 
     /// Emit `ldr reg, [base, sym@GOTPAGEOFF]` (macOS) or `ldr reg, [base, :got_lo12:sym]` (Linux).
     pub fn ldr_got_lo12(&mut self, reg: &str, base: &str, sym: &str) {
+        self.target.ensure_aarch64_backend("GOT lo12 load emission");
         match self.platform {
             Platform::MacOS => {
                 self.instruction(&format!("ldr {}, [{}, {}@GOTPAGEOFF]", reg, base, sym))
@@ -102,13 +115,15 @@ impl Emitter {
     /// On macOS: `mov x16, #N` + `svc #0x80`.
     /// On Linux: optional AT_FDCWD arg shift + `mov x8, #M` + `svc #0`.
     pub fn syscall(&mut self, macos_num: u32) {
+        self.target.ensure_aarch64_backend("syscall emission");
         match self.platform {
             Platform::MacOS => {
                 self.instruction(&format!("mov x16, #{}", macos_num));
                 self.instruction("svc #0x80");
             }
             Platform::Linux => {
-                Platform::emit_linux_syscall(self, macos_num);
+                let target = self.target;
+                target.emit_linux_syscall(self, macos_num);
             }
         }
     }
@@ -117,10 +132,11 @@ impl Emitter {
 
     /// Emit `bl _func` (macOS) or `bl func` (Linux) for C library calls.
     pub fn bl_c(&mut self, func: &str) {
+        self.target.ensure_aarch64_backend("AArch64 C symbol calls");
         match self.platform {
             Platform::MacOS => self.instruction(&format!("bl _{}", func)),
             Platform::Linux => {
-                let remapped = Platform::remap_c_symbol(func);
+                let remapped = self.target.remap_c_symbol(func);
                 self.instruction(&format!("bl {}", remapped));
             }
         }
@@ -130,9 +146,12 @@ impl Emitter {
 
     /// Emit the program entry point label: `_main` (macOS) or `main` (Linux).
     pub fn entry_label(&mut self) {
-        match self.platform {
-            Platform::MacOS => self.label_global("_main"),
-            Platform::Linux => self.label_global("main"),
+        match self.target.arch {
+            Arch::AArch64 => match self.platform {
+                Platform::MacOS => self.label_global("_main"),
+                Platform::Linux => self.label_global("main"),
+            },
+            Arch::X86_64 => self.label_global("main"),
         }
     }
 }
@@ -143,13 +162,11 @@ mod tests {
 
     #[test]
     fn test_comment_prefix_is_platform_aware() {
-        let mut mac = Emitter::new();
-        mac.platform = Platform::MacOS;
+        let mut mac = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
         mac.comment("-- block --");
         assert_eq!(mac.output(), "    ; -- block --\n");
 
-        let mut linux = Emitter::new();
-        linux.platform = Platform::Linux;
+        let mut linux = Emitter::new(Target::new(Platform::Linux, Arch::AArch64));
         linux.comment("-- block --");
         assert_eq!(linux.output(), "    // -- block --\n");
     }

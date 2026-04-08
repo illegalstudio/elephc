@@ -5,16 +5,22 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
-use elephc::codegen::platform::Platform;
+use elephc::codegen::platform::{Arch, Platform, Target};
 
 static TEST_ID: AtomicU64 = AtomicU64::new(0);
 static SDK_PATH: OnceLock<String> = OnceLock::new();
 static SDK_VERSION: OnceLock<String> = OnceLock::new();
 static RUNTIME_OBJ: OnceLock<std::path::PathBuf> = OnceLock::new();
 static QEMU_SYSROOT: OnceLock<Option<String>> = OnceLock::new();
+static TEST_TARGET: OnceLock<Target> = OnceLock::new();
 
-fn platform() -> Platform {
-    Platform::detect()
+fn target() -> Target {
+    *TEST_TARGET.get_or_init(|| {
+        std::env::var("ELEPHC_TEST_TARGET")
+            .ok()
+            .map(|value| Target::parse(&value).expect("invalid ELEPHC_TEST_TARGET"))
+            .unwrap_or_else(Target::detect_host)
+    })
 }
 
 fn get_sdk_path() -> &'static str {
@@ -48,12 +54,12 @@ fn get_sdk_version() -> &'static str {
 
 /// Get the assembler command for the current platform.
 fn assembler_cmd() -> &'static str {
-    platform().assembler_cmd()
+    target().assembler_cmd()
 }
 
 /// Get the linker/gcc command for the current platform.
 fn gcc_cmd() -> &'static str {
-    platform().linker_cmd()
+    target().linker_cmd()
 }
 
 /// Pre-assemble the runtime into a cached .o file. Built once per test
@@ -62,13 +68,13 @@ fn get_runtime_obj() -> &'static Path {
     RUNTIME_OBJ.get_or_init(|| {
         let dir = std::env::temp_dir().join(format!("elephc_test_runtime_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        let runtime_asm = elephc::codegen::generate_runtime(8_388_608);
+        let runtime_asm = elephc::codegen::generate_runtime(8_388_608, target());
         let asm_path = dir.join("runtime.s");
         let obj_path = dir.join("runtime.o");
         fs::write(&asm_path, &runtime_asm).unwrap();
 
         let mut cmd = Command::new(assembler_cmd());
-        if platform() == Platform::MacOS {
+        if target().platform == Platform::MacOS {
             cmd.args(["-arch", "arm64"]);
         }
         cmd.arg("-o").arg(&obj_path).arg(&asm_path);
@@ -80,13 +86,13 @@ fn get_runtime_obj() -> &'static Path {
 
 /// Assemble a custom runtime for tests that need a non-default heap size.
 fn assemble_custom_runtime(heap_size: usize, dir: &Path) -> std::path::PathBuf {
-    let runtime_asm = elephc::codegen::generate_runtime(heap_size);
+    let runtime_asm = elephc::codegen::generate_runtime(heap_size, target());
     let asm_path = dir.join("runtime.s");
     let obj_path = dir.join("runtime.o");
     fs::write(&asm_path, &runtime_asm).unwrap();
 
     let mut cmd = Command::new(assembler_cmd());
-    if platform() == Platform::MacOS {
+    if target().platform == Platform::MacOS {
         cmd.args(["-arch", "arm64"]);
     }
     cmd.arg("-o").arg(&obj_path).arg(&asm_path);
@@ -97,7 +103,7 @@ fn assemble_custom_runtime(heap_size: usize, dir: &Path) -> std::path::PathBuf {
 
 fn default_link_paths() -> Vec<String> {
     let mut paths = Vec::new();
-    match platform() {
+    match target().platform {
         Platform::MacOS => {
             for candidate in ["/opt/homebrew/lib", "/usr/local/lib"] {
                 if std::path::Path::new(candidate).exists() {
@@ -126,27 +132,32 @@ fn effective_link_libs(extra_link_libs: &[String]) -> Vec<&str> {
 
 fn qemu_sysroot() -> Option<&'static str> {
     QEMU_SYSROOT
-        .get_or_init(|| {
-            match platform() {
-                Platform::Linux => {
-                    let compiler = gcc_cmd();
-                    if let Ok(output) = Command::new(compiler).arg("-print-sysroot").output() {
-                        let sysroot = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                        if !sysroot.is_empty() && sysroot != "/" && std::path::Path::new(&sysroot).exists() {
-                            return Some(sysroot);
-                        }
+        .get_or_init(|| match target().platform {
+            Platform::Linux => {
+                let compiler = gcc_cmd();
+                if let Ok(output) = Command::new(compiler).arg("-print-sysroot").output() {
+                    let sysroot = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if !sysroot.is_empty()
+                        && sysroot != "/"
+                        && std::path::Path::new(&sysroot).exists()
+                    {
+                        return Some(sysroot);
                     }
-                    for candidate in ["/usr/aarch64-linux-gnu", "/usr/local/aarch64-linux-gnu"] {
-                        if std::path::Path::new(candidate).join("lib/ld-linux-aarch64.so.1").exists()
-                            || std::path::Path::new(candidate).join("lib64/ld-linux-aarch64.so.1").exists()
-                        {
-                            return Some(candidate.to_string());
-                        }
-                    }
-                    None
                 }
-                Platform::MacOS => None,
+                for candidate in ["/usr/aarch64-linux-gnu", "/usr/local/aarch64-linux-gnu"] {
+                    if std::path::Path::new(candidate)
+                        .join("lib/ld-linux-aarch64.so.1")
+                        .exists()
+                        || std::path::Path::new(candidate)
+                            .join("lib64/ld-linux-aarch64.so.1")
+                            .exists()
+                    {
+                        return Some(candidate.to_string());
+                    }
+                }
+                None
             }
+            Platform::MacOS => None,
         })
         .as_deref()
 }
@@ -161,7 +172,7 @@ fn link_binary(
 ) {
     let actual_link_libs = effective_link_libs(extra_link_libs);
 
-    match platform() {
+    match target().platform {
         Platform::MacOS => {
             let mut ld_cmd = Command::new("ld");
             ld_cmd.args(["-arch", "arm64", "-e", "_main", "-o"]);
@@ -218,7 +229,10 @@ fn link_binary(
 
 /// Run a compiled binary, using qemu on Linux x86_64 for ARM64 binaries.
 fn run_binary(bin_path: &Path, dir: &Path) -> std::process::Output {
-    if platform() == Platform::Linux && cfg!(target_arch = "x86_64") {
+    if target().platform == Platform::Linux
+        && target().arch == Arch::AArch64
+        && cfg!(target_arch = "x86_64")
+    {
         let mut cmd = Command::new("qemu-aarch64-static");
         if let Some(sysroot) = qemu_sysroot() {
             cmd.args(["-L", sysroot]);
@@ -256,7 +270,7 @@ fn assemble_and_run(
     fs::write(&asm_path, user_asm).unwrap();
 
     let mut as_cmd = Command::new(assembler_cmd());
-    if platform() == Platform::MacOS {
+    if target().platform == Platform::MacOS {
         as_cmd.args(["-arch", "arm64"]);
     }
     as_cmd.arg("-o").arg(&obj_path).arg(&asm_path);
@@ -273,7 +287,11 @@ fn assemble_and_run(
     );
 
     let output = run_binary(&bin_path, dir);
-    assert!(output.status.success(), "binary exited with error: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "binary exited with error: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     String::from_utf8(output.stdout).unwrap()
 }
@@ -458,7 +476,7 @@ fn assemble_and_run_capture(
     fs::write(&asm_path, user_asm).unwrap();
 
     let mut as_cmd = Command::new(assembler_cmd());
-    if platform() == Platform::MacOS {
+    if target().platform == Platform::MacOS {
         as_cmd.args(["-arch", "arm64"]);
     }
     as_cmd.arg("-o").arg(&obj_path).arg(&asm_path);
@@ -498,7 +516,7 @@ fn assemble_and_run_expect_failure(
     fs::write(&asm_path, user_asm).unwrap();
 
     let mut as_cmd = Command::new(assembler_cmd());
-    if platform() == Platform::MacOS {
+    if target().platform == Platform::MacOS {
         as_cmd.args(["-arch", "arm64"]);
     }
     as_cmd.arg("-o").arg(&obj_path).arg(&asm_path);
@@ -565,18 +583,23 @@ fn compile_source_to_asm_with_defines(
         heap_size,
         gc_stats,
         heap_debug,
+        target(),
     );
     // user assembly is already platform-correct (emitters handle platform at emit time)
     (user_asm, runtime_asm, check_result.required_libraries)
 }
 
 fn inject_main_exit_harness(asm: &str, harness: &str) -> String {
-    let needle = match platform() {
-        Platform::MacOS => "    mov x0, #0\n    mov x16, #1\n    svc #0x80",
-        Platform::Linux => "    mov x0, #0\n    mov x8, #93\n    svc #0",
+    let needle = match (target().platform, target().arch) {
+        (Platform::MacOS, Arch::AArch64) => "    mov x0, #0\n    mov x16, #1\n    svc #0x80",
+        (Platform::Linux, Arch::AArch64) => "    mov x0, #0\n    mov x8, #93\n    svc #0",
+        (_, Arch::X86_64) => panic!(
+            "main exit harness is not implemented yet for target {}",
+            target()
+        ),
     };
     // Harness strings are written in macOS assembly dialect; transform for Linux if needed
-    let harness = platform().transform_assembly(harness);
+    let harness = target().transform_assembly(harness);
     let replacement = format!("{harness}\n{needle}");
     let patched = asm.replacen(needle, &replacement, 1);
     assert_ne!(patched, asm, "failed to inject main exit harness");
@@ -1049,6 +1072,7 @@ fn compile_and_run_files_with_defines(
         8_388_608,
         false,
         false,
+        target(),
     );
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
@@ -1617,6 +1641,7 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
         8_388_608,
         false,
         false,
+        target(),
     );
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
@@ -1627,7 +1652,7 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
     fs::write(&asm_path, &user_asm).unwrap();
 
     let mut as_cmd = Command::new(assembler_cmd());
-    if platform() == Platform::MacOS {
+    if target().platform == Platform::MacOS {
         as_cmd.args(["-arch", "arm64"]);
     }
     as_cmd.arg("-o").arg(&obj_path).arg(&asm_path);
@@ -1644,12 +1669,18 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
     );
 
     use std::io::Write;
-    let bin_cmd = if platform() == Platform::Linux && cfg!(target_arch = "x86_64") {
+    let bin_cmd = if target().platform == Platform::Linux
+        && target().arch == Arch::AArch64
+        && cfg!(target_arch = "x86_64")
+    {
         "qemu-aarch64-static"
     } else {
         bin_path.to_str().unwrap()
     };
-    let mut cmd = if platform() == Platform::Linux && cfg!(target_arch = "x86_64") {
+    let mut cmd = if target().platform == Platform::Linux
+        && target().arch == Arch::AArch64
+        && cfg!(target_arch = "x86_64")
+    {
         let mut c = Command::new(bin_cmd);
         c.arg(&bin_path);
         c
@@ -1702,6 +1733,7 @@ fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {
         8_388_608,
         false,
         false,
+        target(),
     );
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
@@ -12253,7 +12285,7 @@ unset($map);
     );
     // The scalar-only GC skip logic lives in the runtime, not user code.
     // Verify it exists in the runtime assembly.
-    let runtime_asm = elephc::codegen::generate_runtime(8_388_608);
+    let runtime_asm = elephc::codegen::generate_runtime(8_388_608, target());
     assert!(
         runtime_asm.contains("__rt_hash_may_have_cyclic_values"),
         "runtime missing cyclic-value check"
