@@ -20,11 +20,9 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save hash ptr
 
     // -- get output position in concat_buf --
-    emitter.adrp("x9", "_concat_off");                           // load page of concat offset
-    emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve address
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [x9]");                                       // load current offset
-    emitter.adrp("x11", "_concat_buf");                          // load page of concat buffer
-    emitter.add_lo12("x11", "x11", "_concat_buf");                   // resolve address
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
     emitter.instruction("add x11, x11, x10");                                   // output position
     emitter.instruction("str x11, [sp, #8]");                                   // save output start
     emitter.instruction("str x11, [sp, #16]");                                  // save output write pos
@@ -103,11 +101,9 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
 
     // -- move concat_off to the current write position so nested encoders append safely --
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload the current output write position
-    emitter.adrp("x10", "_concat_buf");                          // load page of concat buffer
-    emitter.add_lo12("x10", "x10", "_concat_buf");                   // resolve concat buffer base address
+    crate::codegen::abi::emit_symbol_address(emitter, "x10", "_concat_buf");
     emitter.instruction("sub x12, x11, x10");                                   // x12 = absolute concat offset for the current write position
-    emitter.adrp("x9", "_concat_off");                           // load page of concat offset
-    emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve concat offset address
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("str x12, [x9]");                                       // nested JSON/string encoders append after the existing key prefix
 
     // -- encode the value according to its per-entry runtime tag --
@@ -195,10 +191,8 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("sub x2, x11, x1");                                     // x2 = total length
 
     // -- update concat_off --
-    emitter.adrp("x9", "_concat_off");                           // load page of concat offset
-    emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve address
-    emitter.adrp("x10", "_concat_buf");                          // load page of concat buffer
-    emitter.add_lo12("x10", "x10", "_concat_buf");                   // resolve concat buffer base address
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    crate::codegen::abi::emit_symbol_address(emitter, "x10", "_concat_buf");
     emitter.instruction("sub x10, x11, x10");                                   // compute the absolute concat offset after the closing brace
     emitter.instruction("str x10, [x9]");                                       // store updated offset
 

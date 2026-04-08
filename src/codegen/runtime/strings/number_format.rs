@@ -53,11 +53,9 @@ pub fn emit_number_format(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #80]");                                   // save raw string length
 
     // -- set up concat_buf destination --
-    emitter.adrp("x6", "_concat_off");                           // load page address of concat offset
-    emitter.add_lo12("x6", "x6", "_concat_off");                     // resolve exact address
+    crate::codegen::abi::emit_symbol_address(emitter, "x6", "_concat_off");
     emitter.instruction("ldr x8, [x6]");                                        // load current concat_buf write offset
-    emitter.adrp("x7", "_concat_buf");                           // load page address of concat buffer
-    emitter.add_lo12("x7", "x7", "_concat_buf");                     // resolve exact buffer base
+    crate::codegen::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
     emitter.instruction("add x10, x7, x8");                                     // compute destination pointer
     emitter.instruction("str x10, [sp, #72]");                                  // save result start pointer
 

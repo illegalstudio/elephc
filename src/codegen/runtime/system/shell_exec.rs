@@ -27,8 +27,7 @@ pub fn emit_shell_exec(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save FILE* on stack
 
     // -- set up output buffer using concat_buf --
-    emitter.adrp("x9", "_concat_buf");                           // load page of concat buffer
-    emitter.add_lo12("x9", "x9", "_concat_buf");                     // resolve concat buffer address
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_concat_buf");
     emitter.instruction("str x9, [sp, #8]");                                    // save buffer start ptr
     emitter.instruction("mov x10, #0");                                         // x10 = bytes written counter
     emitter.instruction("str x10, [sp, #16]");                                  // save counter on stack

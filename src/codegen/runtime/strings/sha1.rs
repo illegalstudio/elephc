@@ -19,11 +19,9 @@ pub fn emit_sha1(emitter: &mut Emitter) {
     emitter.bl_c("CC_SHA1");                                         // call CommonCrypto SHA1
 
     // -- convert 20 raw bytes to 40 hex chars --
-    emitter.adrp("x6", "_concat_off");                           // load concat offset page
-    emitter.add_lo12("x6", "x6", "_concat_off");                     // resolve address
+    crate::codegen::abi::emit_symbol_address(emitter, "x6", "_concat_off");
     emitter.instruction("ldr x8, [x6]");                                        // load current offset
-    emitter.adrp("x7", "_concat_buf");                           // load concat buffer page
-    emitter.add_lo12("x7", "x7", "_concat_buf");                     // resolve address
+    crate::codegen::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
     emitter.instruction("add x9, x7, x8");                                      // destination pointer
     emitter.instruction("mov x10, x9");                                         // save result start
     emitter.instruction("add x11, sp, #0");                                     // source = raw SHA1 bytes

@@ -8,11 +8,9 @@ pub fn emit_urldecode(emitter: &mut Emitter) {
     emitter.label_global("__rt_urldecode");
 
     // -- set up concat_buf destination --
-    emitter.adrp("x6", "_concat_off");                           // load concat offset page
-    emitter.add_lo12("x6", "x6", "_concat_off");                     // resolve address
+    crate::codegen::abi::emit_symbol_address(emitter, "x6", "_concat_off");
     emitter.instruction("ldr x8, [x6]");                                        // load current offset
-    emitter.adrp("x7", "_concat_buf");                           // load concat buffer page
-    emitter.add_lo12("x7", "x7", "_concat_buf");                     // resolve address
+    crate::codegen::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
     emitter.instruction("add x9, x7, x8");                                      // destination pointer
     emitter.instruction("mov x10, x9");                                         // save result start
     emitter.instruction("mov x11, x2");                                         // remaining byte count

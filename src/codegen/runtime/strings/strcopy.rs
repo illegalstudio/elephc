@@ -14,11 +14,9 @@ pub fn emit_strcopy(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish new frame pointer
 
     // -- get concat_buf write position --
-    emitter.adrp("x6", "_concat_off");                           // load page address of concat buffer offset
-    emitter.add_lo12("x6", "x6", "_concat_off");                     // resolve exact address of offset variable
+    crate::codegen::abi::emit_symbol_address(emitter, "x6", "_concat_off");
     emitter.instruction("ldr x8, [x6]");                                        // load current write offset into concat_buf
-    emitter.adrp("x7", "_concat_buf");                           // load page address of concat buffer
-    emitter.add_lo12("x7", "x7", "_concat_buf");                     // resolve exact buffer base address
+    crate::codegen::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
     emitter.instruction("add x9, x7, x8");                                      // compute destination: buf + offset
 
     // -- copy bytes from source to concat_buf --

@@ -16,14 +16,12 @@ pub fn emit_ftoa(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #48");                                    // establish new frame pointer
 
     // -- get current concat_buf position --
-    emitter.adrp("x9", "_concat_off");                           // load page address of concat buffer offset
-    emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve exact address of offset variable
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [x9]");                                       // load current write offset
     emitter.instruction("str x10, [sp, #32]");                                  // save original offset on stack
     emitter.instruction("str x9, [sp, #40]");                                   // save offset variable address on stack
 
-    emitter.adrp("x11", "_concat_buf");                          // load page address of concat buffer
-    emitter.add_lo12("x11", "x11", "_concat_buf");                   // resolve exact buffer base address
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
     emitter.instruction("add x0, x11, x10");                                    // compute output buffer: concat_buf + offset
     emitter.instruction("str x0, [sp, #24]");                                   // save output buffer start on stack
 

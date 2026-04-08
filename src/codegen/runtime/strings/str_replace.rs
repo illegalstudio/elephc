@@ -19,11 +19,9 @@ pub fn emit_str_replace(emitter: &mut Emitter) {
     emitter.instruction("stp x5, x6, [sp, #32]");                               // save subject string ptr and length
 
     // -- get concat_buf destination --
-    emitter.adrp("x9", "_concat_off");                           // load page address of concat buffer offset
-    emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve exact address of offset variable
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [x9]");                                       // load current write offset
-    emitter.adrp("x11", "_concat_buf");                          // load page address of concat buffer
-    emitter.add_lo12("x11", "x11", "_concat_buf");                   // resolve exact buffer base address
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
     emitter.instruction("add x12, x11, x10");                                   // compute destination pointer
     emitter.instruction("str x12, [sp, #48]");                                  // save result start pointer
     emitter.instruction("str x9, [sp, #56]");                                   // save offset variable address

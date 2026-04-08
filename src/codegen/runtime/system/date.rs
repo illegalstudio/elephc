@@ -47,11 +47,9 @@ pub(crate) fn emit_date(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #24]");                                   // save tm pointer
 
     // -- set up output buffer in concat_buf --
-    emitter.adrp("x9", "_concat_off");                           // load page of concat offset
-    emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve concat offset address
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [x9]");                                       // load current concat offset
-    emitter.adrp("x11", "_concat_buf");                          // load page of concat buffer
-    emitter.add_lo12("x11", "x11", "_concat_buf");                   // resolve concat buffer address
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
     emitter.instruction("add x11, x11, x10");                                   // compute write position: buf + offset
     emitter.instruction("str x11, [sp, #32]");                                  // save output write position
     emitter.instruction("str x11, [sp, #40]");                                  // save output start position
@@ -435,8 +433,7 @@ pub(crate) fn emit_date(emitter: &mut Emitter) {
     emitter.instruction("sub x2, x9, x1");                                      // x2 = output length
 
     // -- update concat_off --
-    emitter.adrp("x10", "_concat_off");                          // load page of concat offset
-    emitter.add_lo12("x10", "x10", "_concat_off");                   // resolve concat offset address
+    crate::codegen::abi::emit_symbol_address(emitter, "x10", "_concat_off");
     emitter.instruction("ldr x11, [x10]");                                      // load current offset
     emitter.instruction("add x11, x11, x2");                                    // add result length
     emitter.instruction("str x11, [x10]");                                      // store updated offset

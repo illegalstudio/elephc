@@ -88,8 +88,7 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
     // -- reset concat buffer at the start of each statement --
     // This is safe because any string that needs to persist beyond the current
     // statement is copied to heap via __rt_str_persist (in emit_store).
-    emitter.adrp("x9", "_concat_off");                           // load page of concat offset
-    emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve concat offset address
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("str xzr, [x9]");                                       // reset concat buffer offset to 0
 
     match &stmt.kind {

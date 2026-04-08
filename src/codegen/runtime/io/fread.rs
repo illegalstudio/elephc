@@ -18,11 +18,9 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save requested read length
 
     // -- get concat_buf write position --
-    emitter.adrp("x9", "_concat_off");                           // load page address of concat buffer offset
-    emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve exact address
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [x9]");                                       // load current write offset
-    emitter.adrp("x11", "_concat_buf");                          // load page address of concat buffer
-    emitter.add_lo12("x11", "x11", "_concat_buf");                   // resolve exact buffer base address
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
     emitter.instruction("add x12, x11, x10");                                   // compute write pointer: buf + offset
     emitter.instruction("str x12, [sp, #16]");                                  // save start pointer for return value
 
@@ -34,8 +32,7 @@ pub fn emit_fread(emitter: &mut Emitter) {
 
     // -- update concat_off by actual bytes read --
     emitter.instruction("str x0, [sp, #24]");                                   // save actual bytes read
-    emitter.adrp("x9", "_concat_off");                           // reload concat_off address
-    emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve exact address
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [x9]");                                       // load current offset
     emitter.instruction("add x10, x10, x0");                                    // advance offset by bytes read
     emitter.instruction("str x10, [x9]");                                       // store updated offset
@@ -44,8 +41,7 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload bytes read
     emitter.instruction("cbnz x0, __rt_fread_done");                            // if bytes > 0, skip eof flag
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
-    emitter.adrp("x9", "_eof_flags");                            // load page address of eof flags
-    emitter.add_lo12("x9", "x9", "_eof_flags");                      // resolve exact address
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_eof_flags");
     emitter.instruction("mov w10, #1");                                         // eof marker value
     emitter.instruction("strb w10, [x9, x0]");                                  // set _eof_flags[fd] = 1
 

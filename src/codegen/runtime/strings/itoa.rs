@@ -14,11 +14,9 @@ pub fn emit_itoa(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish new frame pointer
 
     // -- get concat_buf write position --
-    emitter.adrp("x6", "_concat_off");                           // load page address of concat buffer offset
-    emitter.add_lo12("x6", "x6", "_concat_off");                     // add page offset to get exact address
+    crate::codegen::abi::emit_symbol_address(emitter, "x6", "_concat_off");
     emitter.instruction("ldr x8, [x6]");                                        // load current offset into concat_buf
-    emitter.adrp("x7", "_concat_buf");                           // load page address of concat buffer
-    emitter.add_lo12("x7", "x7", "_concat_buf");                     // add page offset to get buffer base
+    crate::codegen::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
     emitter.instruction("add x9, x7, x8");                                      // compute write position: buf + offset
     emitter.instruction("add x9, x9, #20");                                     // advance to end of 21-byte scratch area (digits written right-to-left)
 

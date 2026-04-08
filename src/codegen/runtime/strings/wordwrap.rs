@@ -13,11 +13,9 @@ pub fn emit_wordwrap(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp, #16]");                                   // save width
 
     // -- set up concat_buf --
-    emitter.adrp("x6", "_concat_off");                           // load concat offset page
-    emitter.add_lo12("x6", "x6", "_concat_off");                     // resolve address
+    crate::codegen::abi::emit_symbol_address(emitter, "x6", "_concat_off");
     emitter.instruction("ldr x8, [x6]");                                        // load current offset
-    emitter.adrp("x7", "_concat_buf");                           // load concat buffer page
-    emitter.add_lo12("x7", "x7", "_concat_buf");                     // resolve address
+    crate::codegen::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
     emitter.instruction("add x9, x7, x8");                                      // destination pointer
     emitter.instruction("str x9, [sp, #24]");                                   // save result start
     emitter.instruction("mov x10, #0");                                         // current line length
@@ -60,8 +58,7 @@ pub fn emit_wordwrap(emitter: &mut Emitter) {
     emitter.label("__rt_wordwrap_done");
     emitter.instruction("ldr x1, [sp, #24]");                                   // result pointer
     emitter.instruction("sub x2, x9, x1");                                      // result length
-    emitter.adrp("x6", "_concat_off");                           // update concat offset
-    emitter.add_lo12("x6", "x6", "_concat_off");                     // resolve address
+    crate::codegen::abi::emit_symbol_address(emitter, "x6", "_concat_off");
     emitter.instruction("ldr x8, [x6]");                                        // load current offset
     emitter.instruction("add x8, x8, x2");                                      // advance
     emitter.instruction("str x8, [x6]");                                        // store
