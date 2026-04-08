@@ -5,7 +5,7 @@ sidebar:
   order: 6
 ---
 
-**Source:** `src/codegen/` — `mod.rs`, `expr.rs`, `expr/`, `stmt.rs`, `stmt/`, `functions.rs`, `ffi.rs`, `abi.rs`, `context.rs`, `data_section.rs`, `emit.rs`
+**Source:** `src/codegen/` — `mod.rs`, `expr.rs`, `expr/`, `stmt.rs`, `stmt/`, `functions/`, `ffi.rs`, `abi/`, `context.rs`, `data_section.rs`, `emit.rs`
 
 The code generator (codegen) is the heart of the compiler. It takes the typed AST and produces ARM64 assembly text — the actual instructions the CPU will execute. For an introduction to ARM64, see [Introduction to ARM64 Assembly](arm64-assembly.md).
 
@@ -787,7 +787,7 @@ bl _static_Point_origin              ; call static method
 
 ## The ABI module
 
-**File:** `src/codegen/abi.rs`
+**Files:** `src/codegen/abi/mod.rs`, `src/codegen/abi/`
 
 Centralizes register conventions so they're consistent everywhere:
 
@@ -804,7 +804,7 @@ This means all codegen that accesses stack variables goes through the ABI helper
 
 ### Frame and return-value helpers
 
-`abi.rs` now also centralizes the frame-management primitives used by both `_main` and ordinary functions:
+The `abi/` module now centralizes the frame-management primitives used by both `_main` and ordinary functions:
 
 - `emit_frame_prologue()` / `emit_frame_restore()` — shared stack-frame setup and teardown
 - `emit_cleanup_callback_prologue()` / `emit_cleanup_callback_epilogue()` — tiny helper frames used by exception cleanup callbacks
@@ -841,9 +841,9 @@ The same module now also owns a thin layer of call-site and temporary-stack prim
 - `emit_release_temporary_stack()` and `emit_store_zero_to_local_slot()` centralize target-specific stack cleanup and zero-initialization details
 - `emit_store_process_args_to_globals()`, `emit_enable_heap_debug_flag()`, `emit_copy_frame_pointer()`, and `emit_exit()` cover the `_main` bootstrap/teardown path without hardcoding process-entry registers or exit sequences in the higher-level driver
 
-That keeps phase-3 `linux-x86_64` work focused inside `abi.rs` instead of scattering `call`, `blr`, `add sp`, `rsp`, or zero-register assumptions across function, closure, callable, and method dispatch code.
+That keeps phase-3 `linux-x86_64` work focused inside `abi/` instead of scattering `call`, `blr`, `add sp`, `rsp`, or zero-register assumptions across function, closure, callable, and method dispatch code.
 
-The same `abi.rs` layer now also owns symbol-slot plumbing for compiler-managed globals such as `_gvar_*`, `_static_*`, `_exc_*`, `_global_*`, and the high-frequency runtime symbols used by string builders, heap bookkeeping, and GC state such as `_concat_off`, `_heap_*`, and `_gc_*`: computing symbol addresses, moving result registers into symbol storage, loading symbol storage back into result registers, and copying local frame slots into symbol-backed storage during epilogues.
+The same `abi/` layer now also owns symbol-slot plumbing for compiler-managed globals such as `_gvar_*`, `_static_*`, `_exc_*`, `_global_*`, and the high-frequency runtime symbols used by string builders, heap bookkeeping, and GC state such as `_concat_off`, `_heap_*`, and `_gc_*`: computing symbol addresses, moving result registers into symbol storage, loading symbol storage back into result registers, and copying local frame slots into symbol-backed storage during epilogues.
 
 ### `emit_store(emitter, type, offset)`
 
@@ -880,7 +880,7 @@ Emits code to print a value to stdout:
 
 ## Function codegen
 
-**File:** `src/codegen/functions.rs`
+**Files:** `src/codegen/functions/mod.rs`, `src/codegen/functions/`
 
 ### `emit_function()`
 
@@ -940,7 +940,7 @@ When a call site omits an argument that has a default value, the codegen fills i
 
 Pre-scans the function body AST to find every variable that will be used. This is necessary because stack space must be allocated in the prologue, before any code runs.
 
-It walks the statement tree before code emission and handles the major local-binding forms recursively (`Assign`, control-flow blocks, `For`/`Foreach`, `ListUnpack`, `Global`, `StaticVar`, and related cases). The exact match is implementation-driven in `functions.rs`, so this list is illustrative rather than exhaustive.
+It walks the statement tree before code emission and handles the major local-binding forms recursively (`Assign`, control-flow blocks, `For`/`Foreach`, `ListUnpack`, `Global`, `StaticVar`, and related cases). The exact match is implementation-driven in the `functions/` module, so this list is illustrative rather than exhaustive.
 
 ## Main program codegen
 
