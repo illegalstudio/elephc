@@ -30,6 +30,20 @@ fn caller_stack_start_offset(target: Target) -> usize {
     }
 }
 
+fn int_arg_reg_name(target: Target, idx: usize) -> &'static str {
+    match target.arch {
+        Arch::AArch64 => ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"][idx],
+        Arch::X86_64 => ["rdi", "rsi", "rdx", "rcx", "r8", "r9"][idx],
+    }
+}
+
+fn float_arg_reg_name(target: Target, idx: usize) -> &'static str {
+    match target.arch {
+        Arch::AArch64 => ["d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7"][idx],
+        Arch::X86_64 => ["xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7"][idx],
+    }
+}
+
 fn int_result_reg(emitter: &Emitter) -> &'static str {
     match emitter.target.arch {
         Arch::AArch64 => "x0",
@@ -555,66 +569,129 @@ fn arg_slot_size(ty: &PhpType) -> usize {
 }
 
 fn emit_adjust_sp(emitter: &mut Emitter, amount: usize, subtract: bool) {
-    let mut remaining = amount;
-    while remaining > 0 {
-        let chunk = remaining.min(4080);
-        if subtract {
-            emitter.instruction(&format!("sub sp, sp, #{}", chunk));            // reserve stack space for spilled outgoing call arguments
-        } else {
-            emitter.instruction(&format!("add sp, sp, #{}", chunk));            // release temporary outgoing call-argument stack space
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            let mut remaining = amount;
+            while remaining > 0 {
+                let chunk = remaining.min(4080);
+                if subtract {
+                    emitter.instruction(&format!("sub sp, sp, #{}", chunk));            // reserve stack space for spilled outgoing call arguments
+                } else {
+                    emitter.instruction(&format!("add sp, sp, #{}", chunk));            // release temporary outgoing call-argument stack space
+                }
+                remaining -= chunk;
+            }
         }
-        remaining -= chunk;
+        Arch::X86_64 => {
+            if amount == 0 {
+                return;
+            }
+            if subtract {
+                emitter.instruction(&format!("sub rsp, {}", amount));                    // reserve stack space for spilled outgoing call arguments
+            } else {
+                emitter.instruction(&format!("add rsp, {}", amount));                    // release temporary outgoing call-argument stack space
+            }
+        }
     }
 }
 
 fn emit_sp_address(emitter: &mut Emitter, scratch: &str, offset: usize) {
-    emitter.instruction(&format!("mov {}, sp", scratch));                       // seed a scratch pointer from the current stack pointer
-    let mut remaining = offset;
-    while remaining > 0 {
-        let chunk = remaining.min(4080);
-        emitter.instruction(&format!("add {}, {}, #{}", scratch, scratch, chunk)); // advance the scratch pointer toward the desired stack slot
-        remaining -= chunk;
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("mov {}, sp", scratch));                       // seed a scratch pointer from the current stack pointer
+            let mut remaining = offset;
+            while remaining > 0 {
+                let chunk = remaining.min(4080);
+                emitter.instruction(&format!("add {}, {}, #{}", scratch, scratch, chunk)); // advance the scratch pointer toward the desired stack slot
+                remaining -= chunk;
+            }
+        }
+        Arch::X86_64 => {
+            if offset == 0 {
+                emitter.instruction(&format!("mov {}, rsp", scratch));                  // copy the current stack pointer when the requested stack slot is at rsp
+            } else {
+                emitter.instruction(&format!("lea {}, [rsp + {}]", scratch, offset));   // materialize the temporary stack-slot address relative to rsp
+            }
+        }
     }
 }
 
 fn emit_load_from_sp(emitter: &mut Emitter, reg: &str, offset: usize) {
-    if offset == 0 {
-        emitter.instruction(&format!("ldr {}, [sp]", reg));                     // load directly from the top of the temporary argument stack
-    } else if offset <= 4095 {
-        emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, offset));        // load from a nearby temporary argument slot with an immediate offset
-    } else {
-        emit_sp_address(emitter, "x9", offset);
-        emitter.instruction(&format!("ldr {}, [x9]", reg));                     // load from a distant temporary argument slot through a scratch address
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            if offset == 0 {
+                emitter.instruction(&format!("ldr {}, [sp]", reg));                     // load directly from the top of the temporary argument stack
+            } else if offset <= 4095 {
+                emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, offset));        // load from a nearby temporary argument slot with an immediate offset
+            } else {
+                emit_sp_address(emitter, "x9", offset);
+                emitter.instruction(&format!("ldr {}, [x9]", reg));                     // load from a distant temporary argument slot through a scratch address
+            }
+        }
+        Arch::X86_64 => {
+            let slot = if offset == 0 {
+                "[rsp]".to_string()
+            } else {
+                format!("[rsp + {}]", offset)
+            };
+            if is_float_register(reg) {
+                emitter.instruction(&format!("movsd {}, QWORD PTR {}", reg, slot));     // load the floating-point payload from the temporary outgoing-arg stack
+            } else {
+                emitter.instruction(&format!("mov {}, QWORD PTR {}", reg, slot));       // load the integer or pointer payload from the temporary outgoing-arg stack
+            }
+        }
     }
 }
 
 fn emit_store_to_sp(emitter: &mut Emitter, reg: &str, offset: usize) {
-    if offset == 0 {
-        emitter.instruction(&format!("str {}, [sp]", reg));                     // store directly to the top of the outgoing stack-argument area
-    } else if offset <= 4095 {
-        emitter.instruction(&format!("str {}, [sp, #{}]", reg, offset));        // store to a nearby outgoing stack-argument slot with an immediate offset
-    } else {
-        emit_sp_address(emitter, "x9", offset);
-        emitter.instruction(&format!("str {}, [x9]", reg));                     // store to a distant outgoing stack-argument slot through a scratch address
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            if offset == 0 {
+                emitter.instruction(&format!("str {}, [sp]", reg));                     // store directly to the top of the outgoing stack-argument area
+            } else if offset <= 4095 {
+                emitter.instruction(&format!("str {}, [sp, #{}]", reg, offset));        // store to a nearby outgoing stack-argument slot with an immediate offset
+            } else {
+                emit_sp_address(emitter, "x9", offset);
+                emitter.instruction(&format!("str {}, [x9]", reg));                     // store to a distant outgoing stack-argument slot through a scratch address
+            }
+        }
+        Arch::X86_64 => {
+            let slot = if offset == 0 {
+                "[rsp]".to_string()
+            } else {
+                format!("[rsp + {}]", offset)
+            };
+            if is_float_register(reg) {
+                emitter.instruction(&format!("movsd QWORD PTR {}, {}", slot, reg));     // store the floating-point payload into the outgoing stack-argument area
+            } else {
+                emitter.instruction(&format!("mov QWORD PTR {}, {}", slot, reg));       // store the integer or pointer payload into the outgoing stack-argument area
+            }
+        }
     }
 }
 
 fn emit_copy_stack_arg_slot(emitter: &mut Emitter, ty: &PhpType, src_offset: usize, dst_offset: usize) {
+    let int_reg = secondary_scratch_reg(emitter);
+    let int_hi_reg = tertiary_scratch_reg(emitter);
+    let float_reg = match emitter.target.arch {
+        Arch::AArch64 => "d15",
+        Arch::X86_64 => "xmm15",
+    };
     match ty {
         PhpType::Float => {
-            emit_load_from_sp(emitter, "d15", src_offset);
-            emit_store_to_sp(emitter, "d15", dst_offset);
+            emit_load_from_sp(emitter, float_reg, src_offset);
+            emit_store_to_sp(emitter, float_reg, dst_offset);
         }
         PhpType::Str => {
-            emit_load_from_sp(emitter, "x10", src_offset);
-            emit_load_from_sp(emitter, "x11", src_offset + 8);
-            emit_store_to_sp(emitter, "x10", dst_offset);
-            emit_store_to_sp(emitter, "x11", dst_offset + 8);
+            emit_load_from_sp(emitter, int_reg, src_offset);
+            emit_load_from_sp(emitter, int_hi_reg, src_offset + 8);
+            emit_store_to_sp(emitter, int_reg, dst_offset);
+            emit_store_to_sp(emitter, int_hi_reg, dst_offset + 8);
         }
         PhpType::Void => {}
         _ => {
-            emit_load_from_sp(emitter, "x10", src_offset);
-            emit_store_to_sp(emitter, "x10", dst_offset);
+            emit_load_from_sp(emitter, int_reg, src_offset);
+            emit_store_to_sp(emitter, int_reg, dst_offset);
         }
     }
 }
@@ -660,18 +737,18 @@ pub fn materialize_outgoing_args(
             | PhpType::Array(_)
             | PhpType::AssocArray { .. }
             | PhpType::Buffer(_)
-            | PhpType::Callable
-            | PhpType::Object(_)
-            | PhpType::Packed(_)
-            | PhpType::Pointer(_) => {
-                emit_load_from_sp(emitter, &format!("x{}", assignment.start_reg), src_offset);
+        | PhpType::Callable
+        | PhpType::Object(_)
+        | PhpType::Packed(_)
+        | PhpType::Pointer(_) => {
+                emit_load_from_sp(emitter, int_arg_reg_name(emitter.target, assignment.start_reg), src_offset);
             }
             PhpType::Float => {
-                emit_load_from_sp(emitter, &format!("d{}", assignment.start_reg), src_offset);
+                emit_load_from_sp(emitter, float_arg_reg_name(emitter.target, assignment.start_reg), src_offset);
             }
             PhpType::Str => {
-                emit_load_from_sp(emitter, &format!("x{}", assignment.start_reg), src_offset);
-                emit_load_from_sp(emitter, &format!("x{}", assignment.start_reg + 1), src_offset + 8);
+                emit_load_from_sp(emitter, int_arg_reg_name(emitter.target, assignment.start_reg), src_offset);
+                emit_load_from_sp(emitter, int_arg_reg_name(emitter.target, assignment.start_reg + 1), src_offset + 8);
             }
             PhpType::Void => {}
         }
@@ -1243,6 +1320,35 @@ mod tests {
         assert!(out.contains("    ldr x7, [sp, #32]\n"));
         assert!(out.contains("    str x10, [sp, #144]\n"));
         assert!(out.contains("    add sp, sp, #144\n"));
+    }
+
+    #[test]
+    fn test_materialize_outgoing_args_for_linux_x86_64_uses_sysv_registers() {
+        let mut emitter = test_emitter_x86();
+        let assignments = build_outgoing_arg_assignments_for_target(
+            Target::new(Platform::Linux, Arch::X86_64),
+            &[
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+            ],
+            0,
+        );
+
+        let overflow_bytes = materialize_outgoing_args(&mut emitter, &assignments);
+        let out = emitter.output();
+
+        assert_eq!(overflow_bytes, 16);
+        assert!(out.contains("    sub rsp, 16\n"));
+        assert!(out.contains("    mov rdi, QWORD PTR [rsp + 112]\n"));
+        assert!(out.contains("    mov r9, QWORD PTR [rsp + 32]\n"));
+        assert!(out.contains("    mov r10, QWORD PTR [rsp + 16]\n"));
+        assert!(out.contains("    mov QWORD PTR [rsp + 112], r10\n"));
+        assert!(out.contains("    add rsp, 112\n"));
     }
 
     #[test]
