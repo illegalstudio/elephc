@@ -15,29 +15,51 @@ pub(super) fn coerce_to_string(
     match ty {
         PhpType::Int => {
             // -- convert integer in x0 to string in x1/x2 --
-            emitter.instruction("bl __rt_itoa");                                // runtime: integer-to-ASCII string conversion
+            abi::emit_call_label(emitter, "__rt_itoa");                         // runtime: integer-to-ASCII string conversion
         }
         PhpType::Float => {
             // -- convert float in d0 to string in x1/x2 --
-            emitter.instruction("bl __rt_ftoa");                                // runtime: float-to-ASCII string conversion
+            abi::emit_call_label(emitter, "__rt_ftoa");                         // runtime: float-to-ASCII string conversion
         }
         PhpType::Bool => {
             // true -> "1" (via itoa), false -> "" (len=0)
             // -- convert bool to string: true="1", false="" --
-            emitter.instruction("cbz x0, 1f");                                  // if false (zero), skip to empty string path
-            emitter.instruction("bl __rt_itoa");                                // convert true (1) to string "1"
-            emitter.instruction("b 2f");                                        // skip over the empty-string fallback
-            emitter.raw("1:");
-            emitter.instruction("mov x2, #0");                                  // false produces empty string (length = 0)
-            emitter.raw("2:");
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("cbz x0, 1f");                          // if false (zero), skip to empty string path
+                    abi::emit_call_label(emitter, "__rt_itoa");                 // convert true (1) to string "1"
+                    emitter.instruction("b 2f");                                // skip over the empty-string fallback
+                    emitter.raw("1:");
+                    emitter.instruction("mov x2, #0");                          // false produces empty string (length = 0)
+                    emitter.raw("2:");
+                }
+                Arch::X86_64 => {
+                    let false_label = ctx.next_label("bool_to_str_false");
+                    let done_label = ctx.next_label("bool_to_str_done");
+                    emitter.instruction("test rax, rax");                       // test whether the boolean payload is false
+                    emitter.instruction(&format!("je {}", false_label));        // skip to the empty-string path when the boolean is false
+                    abi::emit_call_label(emitter, "__rt_itoa");                 // convert true (1) to string "1"
+                    emitter.instruction(&format!("jmp {}", done_label));        // skip over the empty-string fallback after conversion
+                    emitter.label(&false_label);
+                    emitter.instruction("mov rdx, 0");                          // false produces empty string (length = 0)
+                    emitter.label(&done_label);
+                }
+            }
         }
         PhpType::Void => {
             // -- null coerces to empty string in PHP --
-            emitter.instruction("mov x2, #0");                                  // null produces empty string (length = 0)
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("mov x2, #0");                          // null produces empty string (length = 0)
+                }
+                Arch::X86_64 => {
+                    emitter.instruction("mov rdx, 0");                          // null produces empty string (length = 0)
+                }
+            }
         }
         PhpType::Mixed | PhpType::Union(_) => {
             // -- mixed strings dispatch on the boxed payload at runtime --
-            emitter.instruction("bl __rt_mixed_cast_string");                   // cast the boxed mixed payload to string in x1/x2
+            abi::emit_call_label(emitter, "__rt_mixed_cast_string");            // cast the boxed mixed payload to string in the ABI string result registers
         }
         PhpType::Object(class_name) => {
             if ctx
@@ -131,24 +153,57 @@ pub(super) fn coerce_to_truthiness(emitter: &mut Emitter, ctx: &mut Context, ty:
         let falsy_label = ctx.next_label("str_falsy");
         let truthy_label = ctx.next_label("str_truthy");
         let done_label = ctx.next_label("str_truth_done");
-        emitter.instruction(&format!("cbz x2, {falsy_label}"));                 // empty string is falsy
-        emitter.instruction("cmp x2, #1");                                      // check if length is 1
-        emitter.instruction(&format!("b.ne {truthy_label}"));                   // length != 1 means truthy
-        emitter.instruction("ldrb w9, [x1]");                                   // load first byte of string
-        emitter.instruction("cmp w9, #48");                                     // compare with ASCII '0'
-        emitter.instruction(&format!("b.eq {falsy_label}"));                    // string "0" is falsy
-        emitter.label(&truthy_label);
-        emitter.instruction("mov x0, #1");                                      // truthy: set x0 = 1
-        emitter.instruction(&format!("b {done_label}"));                        // skip falsy path
-        emitter.label(&falsy_label);
-        emitter.instruction("mov x0, #0");                                      // falsy: set x0 = 0
-        emitter.label(&done_label);
+        let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("cbz {}, {falsy_label}", len_reg)); // empty string is falsy
+                emitter.instruction(&format!("cmp {}, #1", len_reg));            // check if length is 1
+                emitter.instruction(&format!("b.ne {truthy_label}"));            // length != 1 means truthy
+                emitter.instruction(&format!("ldrb w9, [{}]", ptr_reg));         // load first byte of string
+                emitter.instruction("cmp w9, #48");                              // compare with ASCII '0'
+                emitter.instruction(&format!("b.eq {falsy_label}"));             // string "0" is falsy
+                emitter.label(&truthy_label);
+                emitter.instruction(&format!("mov {}, #1", abi::int_result_reg(emitter))); // truthy: set result = 1
+                emitter.instruction(&format!("b {done_label}"));                 // skip falsy path
+                emitter.label(&falsy_label);
+                emitter.instruction(&format!("mov {}, #0", abi::int_result_reg(emitter))); // falsy: set result = 0
+                emitter.label(&done_label);
+            }
+            Arch::X86_64 => {
+                let scratch = abi::temp_int_reg(emitter.target);
+                emitter.instruction(&format!("test {}, {}", len_reg, len_reg)); // empty string is falsy
+                emitter.instruction(&format!("je {}", falsy_label));             // branch to falsy path when the string length is zero
+                emitter.instruction(&format!("cmp {}, 1", len_reg));             // check if length is 1
+                emitter.instruction(&format!("jne {}", truthy_label));           // any other non-empty length is truthy
+                emitter.instruction(&format!("movzx {}d, BYTE PTR [{}]", scratch, ptr_reg)); // load the first byte of the one-character string
+                emitter.instruction(&format!("cmp {}d, 48", scratch));           // compare against ASCII '0'
+                emitter.instruction(&format!("je {}", falsy_label));             // the string \"0\" is falsy in PHP
+                emitter.label(&truthy_label);
+                emitter.instruction(&format!("mov {}, 1", abi::int_result_reg(emitter))); // truthy: set result = 1
+                emitter.instruction(&format!("jmp {}", done_label));             // skip the falsy path once the result is known
+                emitter.label(&falsy_label);
+                emitter.instruction(&format!("mov {}, 0", abi::int_result_reg(emitter))); // falsy: set result = 0
+                emitter.label(&done_label);
+            }
+        }
     } else if *ty == PhpType::Float {
         // -- float truthiness: 0.0 is falsy --
-        emitter.instruction("fcmp d0, #0.0");                                   // compare float against zero
-        emitter.instruction("cset x0, ne");                                     // x0=1 if nonzero (truthy), 0 if zero
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("fcmp d0, #0.0");                           // compare float against zero
+                emitter.instruction("cset x0, ne");                             // x0=1 if nonzero (truthy), 0 if zero
+            }
+            Arch::X86_64 => {
+                let bits_reg = abi::temp_int_reg(emitter.target);
+                emitter.instruction(&format!("movq {}, xmm0", bits_reg));       // move the current float bits into a scratch integer register
+                emitter.instruction(&format!("shl {}, 1", bits_reg));           // discard the sign bit so +0.0 and -0.0 both normalize to zero
+                emitter.instruction(&format!("cmp {}, 0", bits_reg));           // compare the signless float bits against zero
+                emitter.instruction("setne al");                                // set al when the float payload is non-zero
+                emitter.instruction("movzx rax, al");                           // widen the boolean byte into the full integer result register
+            }
+        }
     } else if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
         // -- mixed/union truthiness dispatches on the boxed payload at runtime --
-        emitter.instruction("bl __rt_mixed_cast_bool");                         // normalize the boxed mixed payload to PHP truthiness
+        abi::emit_call_label(emitter, "__rt_mixed_cast_bool");                  // normalize the boxed mixed payload to PHP truthiness
     }
 }

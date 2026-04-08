@@ -134,6 +134,29 @@ pub(super) fn emit_bit_not(
     PhpType::Int
 }
 
+pub(super) fn emit_not(
+    inner: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let ty = super::emit_expr(inner, emitter, ctx, data);
+    emitter.comment("logical not");
+    super::coerce_to_truthiness(emitter, ctx, &ty);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #0");                                          // test if the coerced truthiness result is falsy
+            emitter.instruction("cset x0, eq");                                         // return 1 when the coerced truthiness result was false, else 0
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, 0");                                          // test if the coerced truthiness result is falsy
+            emitter.instruction("sete al");                                             // write 1 to the low byte when the coerced truthiness result was false
+            emitter.instruction("movzx rax, al");                                       // widen the boolean low byte back into the full integer result register
+        }
+    }
+    PhpType::Bool
+}
+
 fn emit_load_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -220,5 +243,22 @@ mod tests {
         assert!(out.contains("    neg rax\n"));
         assert!(out.contains("    mov rax, 3\n"));
         assert!(out.contains("    not rax\n"));
+    }
+
+    #[test]
+    fn test_emit_not_for_linux_x86_64_uses_native_boolean_normalization() {
+        let mut emitter = test_emitter_x86();
+        let mut ctx = Context::new();
+        let mut data = DataSection::new();
+
+        emit_not(&Expr::int_lit(0), &mut emitter, &mut ctx, &mut data);
+        emit_not(&Expr::string_lit("0"), &mut emitter, &mut ctx, &mut data);
+
+        let out = emitter.output();
+        assert!(out.contains("    cmp rax, 0\n"));
+        assert!(out.contains("    sete al\n"));
+        assert!(out.contains("    movzx rax, al\n"));
+        assert!(out.contains("    test rdx, rdx\n"));
+        assert!(out.contains("    movzx r10d, BYTE PTR [rax]\n"));
     }
 }

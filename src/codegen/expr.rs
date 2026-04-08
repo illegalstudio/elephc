@@ -150,13 +150,7 @@ pub fn emit_expr(
             arrays::emit_buffer_new(element_type, len, emitter, ctx, data)
         }
         ExprKind::Not(inner) => {
-            let ty = emit_expr(inner, emitter, ctx, data);
-            emitter.comment("logical not");
-            coerce_to_truthiness(emitter, ctx, &ty);
-            // -- PHP !$x: invert truthiness --
-            emitter.instruction("cmp x0, #0");                                  // test if value is falsy (zero)
-            emitter.instruction("cset x0, eq");                                 // x0=1 if was falsy, x0=0 if was truthy
-            PhpType::Bool
+            scalars::emit_not(inner, emitter, ctx, data)
         }
         ExprKind::BitNot(inner) => {
             scalars::emit_bit_not(inner, emitter, ctx, data)
