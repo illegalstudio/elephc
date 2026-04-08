@@ -839,6 +839,7 @@ The same module now also owns a thin layer of call-site and temporary-stack prim
 - `emit_call_label()` / `emit_call_reg()` emit direct and indirect calls for the current target
 - `emit_push_reg()`, `emit_push_float_reg()`, `emit_push_reg_pair()`, and `emit_push_result_value()` manage the temporary argument stack without hardcoding ARM64 push/pop forms in each call path
 - `emit_release_temporary_stack()` and `emit_store_zero_to_local_slot()` centralize target-specific stack cleanup and zero-initialization details
+- `emit_store_process_args_to_globals()`, `emit_enable_heap_debug_flag()`, `emit_copy_frame_pointer()`, and `emit_exit()` cover the `_main` bootstrap/teardown path without hardcoding process-entry registers or exit sequences in the higher-level driver
 
 That keeps phase-3 `linux-x86_64` work focused inside `abi.rs` instead of scattering `call`, `blr`, `add sp`, `rsp`, or zero-register assumptions across function, closure, callable, and method dispatch code.
 

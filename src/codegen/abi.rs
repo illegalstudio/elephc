@@ -93,6 +93,27 @@ fn tertiary_scratch_reg(emitter: &Emitter) -> &'static str {
     }
 }
 
+pub fn temp_int_reg(target: Target) -> &'static str {
+    match target.arch {
+        Arch::AArch64 => "x10",
+        Arch::X86_64 => "r10",
+    }
+}
+
+pub fn process_argc_reg(target: Target) -> &'static str {
+    match target.arch {
+        Arch::AArch64 => "x0",
+        Arch::X86_64 => "rdi",
+    }
+}
+
+pub fn process_argv_reg(target: Target) -> &'static str {
+    match target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rsi",
+    }
+}
+
 pub fn nested_call_reg(emitter: &Emitter) -> &'static str {
     match emitter.target.arch {
         Arch::AArch64 => "x19",
@@ -232,6 +253,28 @@ pub fn emit_cleanup_callback_epilogue(emitter: &mut Emitter) {
     emit_return(emitter);
 }
 
+pub fn emit_store_process_args_to_globals(emitter: &mut Emitter) {
+    emit_store_reg_to_symbol(emitter, process_argc_reg(emitter.target), "_global_argc", 0);
+    emit_store_reg_to_symbol(emitter, process_argv_reg(emitter.target), "_global_argv", 0);
+}
+
+pub fn emit_enable_heap_debug_flag(emitter: &mut Emitter) {
+    let scratch = temp_int_reg(emitter.target);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("mov {}, #1", scratch));                       // materialize the enabled heap-debug flag in the temporary integer register
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov {}, 1", scratch));                        // materialize the enabled heap-debug flag in the temporary integer register
+        }
+    }
+    emit_store_reg_to_symbol(emitter, scratch, "_heap_debug_enabled", 0);
+}
+
+pub fn emit_copy_frame_pointer(emitter: &mut Emitter, dest: &str) {
+    emitter.instruction(&format!("mov {}, {}", dest, frame_pointer_reg(emitter)));      // copy the current frame pointer into the requested scratch register
+}
+
 pub fn emit_call_label(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -250,6 +293,24 @@ pub fn emit_call_reg(emitter: &mut Emitter, reg: &str) {
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("call {}", reg));                              // call the indirect target held in the requested register
+        }
+    }
+}
+
+pub fn emit_exit(emitter: &mut Emitter, code: u32) {
+    match (emitter.target.platform, emitter.target.arch) {
+        (super::platform::Platform::MacOS, Arch::AArch64)
+        | (super::platform::Platform::Linux, Arch::AArch64) => {
+            emitter.instruction(&format!("mov x0, #{}", code));                          // load the requested process exit code into the ABI return register
+            emitter.syscall(1);
+        }
+        (super::platform::Platform::Linux, Arch::X86_64) => {
+            emitter.instruction(&format!("mov edi, {}", code));                         // load the requested process exit code into the SysV first-argument register
+            emitter.instruction("mov eax, 60");                                          // Linux x86_64 syscall 60 = exit
+            emitter.instruction("syscall");                                              // terminate the process through the Linux x86_64 syscall ABI
+        }
+        (super::platform::Platform::MacOS, Arch::X86_64) => {
+            panic!("process exit emission is not implemented yet for target macos-x86_64");
         }
     }
 }
@@ -1594,6 +1655,27 @@ mod tests {
         assert!(out.contains("    mov QWORD PTR [r11 + 8], rdx\n"));
         assert!(out.contains("    mov rax, QWORD PTR [rip + _demo_symbol]\n"));
         assert!(out.contains("    mov rdx, QWORD PTR [r11 + 8]\n"));
+    }
+
+    #[test]
+    fn test_process_entry_helpers_linux_x86_64() {
+        let mut emitter = test_emitter_x86();
+
+        emit_store_process_args_to_globals(&mut emitter);
+        emit_enable_heap_debug_flag(&mut emitter);
+        emit_copy_frame_pointer(&mut emitter, "r10");
+        emit_exit(&mut emitter, 7);
+
+        let out = emitter.output();
+
+        assert!(out.contains("    mov QWORD PTR [rip + _global_argc], rdi\n"));
+        assert!(out.contains("    mov QWORD PTR [rip + _global_argv], rsi\n"));
+        assert!(out.contains("    mov r10, 1\n"));
+        assert!(out.contains("    mov QWORD PTR [rip + _heap_debug_enabled], r10\n"));
+        assert!(out.contains("    mov r10, rbp\n"));
+        assert!(out.contains("    mov edi, 7\n"));
+        assert!(out.contains("    mov eax, 60\n"));
+        assert!(out.contains("    syscall\n"));
     }
 
     #[test]

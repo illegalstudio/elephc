@@ -251,24 +251,23 @@ pub fn generate(
 
     // -- save argc/argv to globals (for $argv runtime builder) --
     emitter.comment("save argc/argv to globals");
-    abi::emit_store_reg_to_symbol(&mut emitter, "x0", "_global_argc", 0);
-    abi::emit_store_reg_to_symbol(&mut emitter, "x1", "_global_argv", 0);
+    abi::emit_store_process_args_to_globals(&mut emitter);
 
     if heap_debug {
         emitter.comment("enable heap debug flag");
-        emitter.instruction("mov x10, #1");                                     // compile-time option enables heap debug for this binary
-        abi::emit_store_reg_to_symbol(&mut emitter, "x10", "_heap_debug_enabled", 0);
+        abi::emit_enable_heap_debug_flag(&mut emitter);
     }
 
     // -- store $argc in local variable --
     let argc_offset = ctx.variables.get("argc").expect("codegen bug: $argc not pre-allocated in main scope").stack_offset;
-    abi::store_at_offset(&mut emitter, "x0", argc_offset);                        // $argc = OS argc
+    let argc_reg = abi::process_argc_reg(emitter.target);
+    abi::store_at_offset(&mut emitter, argc_reg, argc_offset);                  // $argc = OS argc
 
     // -- build $argv array from OS C strings --
     let argv_offset = ctx.variables.get("argv").expect("codegen bug: $argv not pre-allocated in main scope").stack_offset;
     emitter.comment("build $argv array from OS argv");
     emitter.instruction("bl __rt_build_argv");                                  // returns array ptr in x0
-    abi::store_at_offset(&mut emitter, "x0", argv_offset);                      // $argv = array
+    abi::emit_store(&mut emitter, &PhpType::Array(Box::new(PhpType::Str)), argv_offset); // store the built argv array through the ABI result-register helper
 
     // -- zero-initialize local variables that may be decref'd on reassignment --
     let main_skip = HashSet::from(["argc".to_string(), "argv".to_string()]);
@@ -278,7 +277,7 @@ pub fn generate(
             &var.ty,
             PhpType::Str | PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
         ) {
-            abi::store_at_offset(&mut emitter, "xzr", var.stack_offset);        // zero-init to prevent stale ptr free
+            abi::emit_store_zero_to_local_slot(&mut emitter, var.stack_offset); // zero-init to prevent stale ptr free
         }
     }
     emit_main_activation_record_push(&mut emitter, &ctx, &main_cleanup_label);
@@ -340,8 +339,7 @@ pub fn generate(
         emitter.instruction("bl __rt_heap_debug_report");                       // emit the heap-debug summary at process exit
     }
 
-    emitter.instruction("mov x0, #0");                                          // exit code 0
-    emitter.syscall(1);
+    abi::emit_exit(&mut emitter, 0);
 
     // -- emit deferred closures --
     emit_deferred_closures(&mut emitter, &mut data, &mut ctx);
@@ -714,16 +712,16 @@ fn emit_main_activation_record_push(emitter: &mut Emitter, ctx: &Context, cleanu
         .expect("codegen bug: missing main activation frame-base slot");
 
     emitter.comment("register main exception cleanup frame");
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
-    abi::store_at_offset(emitter, "x10", prev_offset);                          // save the previous call-frame pointer in the main activation record
-    emitter.adrp("x10", &format!("{}", cleanup_label));          // load page of the main cleanup callback label
-    emitter.add_lo12("x10", "x10", &format!("{}", cleanup_label));   // resolve the main cleanup callback label address
-    abi::store_at_offset(emitter, "x10", cleanup_offset);                       // save the main cleanup callback address in the activation record
-    emitter.instruction("mov x10, x29");                                        // x10 = current main frame pointer for cleanup callbacks
-    abi::store_at_offset(emitter, "x10", frame_base_offset);                    // save the main frame pointer in the activation record
-    abi::store_at_offset(emitter, "xzr", ctx.pending_action_offset.expect("codegen bug: missing main pending-action slot")); // clear any stale finally action before running main
-    abi::emit_frame_slot_address(emitter, "x10", prev_offset);                 // compute the address of the main activation record's first slot
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_call_frame_top", 0);
+    let scratch = abi::temp_int_reg(emitter.target);
+    abi::emit_load_symbol_to_reg(emitter, scratch, "_exc_call_frame_top", 0);
+    abi::store_at_offset(emitter, scratch, prev_offset);                        // save the previous call-frame pointer in the main activation record
+    abi::emit_symbol_address(emitter, scratch, cleanup_label);
+    abi::store_at_offset(emitter, scratch, cleanup_offset);                     // save the main cleanup callback address in the activation record
+    abi::emit_copy_frame_pointer(emitter, scratch);
+    abi::store_at_offset(emitter, scratch, frame_base_offset);                  // save the main frame pointer in the activation record
+    abi::emit_store_zero_to_local_slot(emitter, ctx.pending_action_offset.expect("codegen bug: missing main pending-action slot")); // clear any stale finally action before running main
+    abi::emit_frame_slot_address(emitter, scratch, prev_offset);                // compute the address of the main activation record's first slot
+    abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);
 }
 
 fn emit_main_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
@@ -732,8 +730,9 @@ fn emit_main_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
         .expect("codegen bug: missing main activation prev slot");
 
     emitter.comment("unregister main exception cleanup frame");
-    abi::load_at_offset(emitter, "x10", prev_offset);                           // reload the previous call-frame pointer from the main activation record
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_call_frame_top", 0);
+    let scratch = abi::temp_int_reg(emitter.target);
+    abi::load_at_offset(emitter, scratch, prev_offset);                         // reload the previous call-frame pointer from the main activation record
+    abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);
 }
 
 fn emit_main_cleanup_callback(emitter: &mut Emitter, cleanup_label: &str, ctx: &Context) {

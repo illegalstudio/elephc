@@ -434,21 +434,20 @@ fn emit_activation_record_push(emitter: &mut Emitter, ctx: &Context, cleanup_lab
         .expect("codegen bug: missing activation frame-base slot");
 
     emitter.comment("register exception cleanup frame");
-    super::abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
-    super::abi::store_at_offset(emitter, "x10", prev_offset); // save the previous call-frame pointer in this frame record
-    emitter.adrp("x10", &format!("{}", cleanup_label));          // load page of the cleanup callback label
-    emitter.add_lo12("x10", "x10", &format!("{}", cleanup_label));   // resolve the cleanup callback label address
-    super::abi::store_at_offset(emitter, "x10", cleanup_offset); // save the cleanup callback address in this frame record
-    emitter.instruction("mov x10, x29");                                        // x10 = current frame pointer for cleanup callbacks
-    super::abi::store_at_offset(emitter, "x10", frame_base_offset); // save the current frame pointer in this frame record
-    super::abi::store_at_offset(
+    let scratch = super::abi::temp_int_reg(emitter.target);
+    super::abi::emit_load_symbol_to_reg(emitter, scratch, "_exc_call_frame_top", 0);
+    super::abi::store_at_offset(emitter, scratch, prev_offset);                 // save the previous call-frame pointer in this frame record
+    super::abi::emit_symbol_address(emitter, scratch, cleanup_label);
+    super::abi::store_at_offset(emitter, scratch, cleanup_offset);              // save the cleanup callback address in this frame record
+    super::abi::emit_copy_frame_pointer(emitter, scratch);
+    super::abi::store_at_offset(emitter, scratch, frame_base_offset);           // save the current frame pointer in this frame record
+    super::abi::emit_store_zero_to_local_slot(
         emitter,
-        "xzr",
         ctx.pending_action_offset
             .expect("codegen bug: missing pending-action slot"),
     ); // clear pending finally action for this activation
-    super::abi::emit_frame_slot_address(emitter, "x10", prev_offset);          // compute the address of this activation record's first slot
-    super::abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_call_frame_top", 0);
+    super::abi::emit_frame_slot_address(emitter, scratch, prev_offset);         // compute the address of this activation record's first slot
+    super::abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);
 }
 
 fn emit_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
@@ -457,8 +456,9 @@ fn emit_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
         .expect("codegen bug: missing activation prev slot");
 
     emitter.comment("unregister exception cleanup frame");
-    super::abi::load_at_offset(emitter, "x10", prev_offset); // reload the previous call-frame pointer from this activation
-    super::abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_call_frame_top", 0);
+    let scratch = super::abi::temp_int_reg(emitter.target);
+    super::abi::load_at_offset(emitter, scratch, prev_offset);                  // reload the previous call-frame pointer from this activation
+    super::abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);
 }
 
 fn emit_frame_cleanup_callback(emitter: &mut Emitter, ctx: &Context, cleanup_label: &str) {
