@@ -258,41 +258,14 @@ pub(super) fn emit_closure_call(
         let target_ty = args::declared_target_ty(sig.as_ref(), i);
         if is_ref {
             if let ExprKind::Variable(var_name) = &arg.kind {
-                if ctx.global_vars.contains(var_name) {
-                    let label = format!("_gvar_{}", var_name);
-                    emitter.comment(&format!("closure ref arg: address of global ${}", var_name));
-                    emitter.adrp("x0", &format!("{}", label));   // load page of global var
-                    emitter.add_lo12("x0", "x0", &format!("{}", label)); //resolve global var address
-                } else if ctx.ref_params.contains(var_name) {
-                    let cap_info = match ctx.variables.get(var_name) {
-                        Some(v) => v,
-                        None => {
-                            emitter
-                                .comment(&format!("WARNING: undefined ref variable ${}", var_name));
-                            continue;
-                        }
-                    };
-                    emitter.comment(&format!(
-                        "closure ref arg: forward underlying reference for ${}",
-                        var_name
-                    ));
-                    crate::codegen::abi::load_at_offset(emitter, "x0", cap_info.stack_offset); // load existing reference pointer
-                } else {
-                    let cap_info = match ctx.variables.get(var_name) {
-                        Some(v) => v,
-                        None => {
-                            emitter.comment(&format!("WARNING: undefined variable ${}", var_name));
-                            continue;
-                        }
-                    };
-                    emitter.comment(&format!("closure ref arg: address of ${}", var_name));
-                    emitter.instruction(&format!("sub x0, x29, #{}", cap_info.stack_offset)); //compute address of local variable
+                if !args::emit_ref_arg_variable_address(var_name, "closure ref arg", emitter, ctx) {
+                    continue;
                 }
             } else {
                 let ty = super::super::emit_expr(arg, emitter, ctx, data);
                 super::super::retain_borrowed_heap_arg(emitter, arg, &ty);
             }
-            emitter.instruction("str x0, [sp, #-16]!");                         // push address for by-ref argument
+            args::push_arg_value(emitter, &PhpType::Int);
             arg_types.push(PhpType::Int);
         } else {
             let pushed_ty = args::push_expr_arg(arg, target_ty, emitter, ctx, data);

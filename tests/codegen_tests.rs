@@ -11180,6 +11180,18 @@ $fn(1, 2, 3, 4, 5, 6, 7, 8, 9);
 }
 
 #[test]
+fn test_by_ref_argument_supports_large_stack_offsets() {
+    let mut source = String::from("<?php\nfunction bump(&$value) { $value = $value + 1; }\nfunction large_frame() {\n");
+    for i in 0..520 {
+        source.push_str(&format!("    $slot{} = {};\n", i, i));
+    }
+    source.push_str("    bump($slot519);\n    echo $slot519;\n}\nlarge_frame();\n");
+
+    let out = compile_and_run(&source);
+    assert_eq!(out, "520");
+}
+
+#[test]
 fn test_float_call_supports_stack_passed_overflow_args() {
     let out = compile_and_run(
         r#"<?php

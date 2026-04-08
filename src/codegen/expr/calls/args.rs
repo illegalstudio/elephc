@@ -101,6 +101,40 @@ pub(crate) fn push_arg_value(emitter: &mut Emitter, ty: &PhpType) {
     }
 }
 
+pub(crate) fn emit_ref_arg_variable_address(
+    var_name: &str,
+    context_label: &str,
+    emitter: &mut Emitter,
+    ctx: &Context,
+) -> bool {
+    if ctx.global_vars.contains(var_name) {
+        let label = format!("_gvar_{}", var_name);
+        emitter.comment(&format!("{}: address of global ${}", context_label, var_name));
+        emitter.adrp("x0", &format!("{}", label));                              // load page of the referenced global variable slot
+        emitter.add_lo12("x0", "x0", &format!("{}", label));                    // resolve the referenced global variable address
+        true
+    } else if ctx.ref_params.contains(var_name) {
+        let Some(var) = ctx.variables.get(var_name) else {
+            emitter.comment(&format!("WARNING: undefined ref variable ${}", var_name));
+            return false;
+        };
+        emitter.comment(&format!(
+            "{}: forward underlying reference for ${}",
+            context_label, var_name
+        ));
+        abi::load_at_offset(emitter, "x0", var.stack_offset);                   // load the existing by-reference pointer from the current frame slot
+        true
+    } else {
+        let Some(var) = ctx.variables.get(var_name) else {
+            emitter.comment(&format!("WARNING: undefined variable ${}", var_name));
+            return false;
+        };
+        emitter.comment(&format!("{}: address of ${}", context_label, var_name));
+        abi::emit_frame_slot_address(emitter, "x0", var.stack_offset);          // compute the local variable's frame-slot address through the ABI helper
+        true
+    }
+}
+
 pub(crate) fn coerce_current_value_to_target(
     emitter: &mut Emitter,
     ctx: &mut Context,

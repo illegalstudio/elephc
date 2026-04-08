@@ -62,24 +62,13 @@ pub fn emit(
         let target_ty = args::declared_target_ty(sig.as_ref(), i);
         if is_ref {
             if let ExprKind::Variable(var_name) = &arg.kind {
-                if ctx.global_vars.contains(var_name) {
-                    let label = format!("_gvar_{}", var_name);
-                    emitter.comment(&format!("call_user_func ref arg: address of global ${}", var_name));
-                    emitter.adrp("x0", &format!("{}", label));   // load page of global var
-                    emitter.add_lo12("x0", "x0", &format!("{}", label)); //resolve global var address
-                } else if ctx.ref_params.contains(var_name) {
-                    let var = ctx.variables.get(var_name).expect("undefined ref callback argument");
-                    emitter.comment(&format!("call_user_func ref arg: forward underlying reference for ${}", var_name));
-                    abi::load_at_offset(emitter, "x0", var.stack_offset);            // load existing reference pointer
-                } else {
-                    let var = ctx.variables.get(var_name).expect("undefined callback argument");
-                    emitter.comment(&format!("call_user_func ref arg: address of ${}", var_name));
-                    emitter.instruction(&format!("sub x0, x29, #{}", var.stack_offset)); //compute address of local variable
+                if !args::emit_ref_arg_variable_address(var_name, "call_user_func ref arg", emitter, ctx) {
+                    panic!("call_user_func() by-reference callback argument variable not found");
                 }
             } else {
                 panic!("call_user_func() by-reference callback argument must be a variable");
             }
-            emitter.instruction("str x0, [sp, #-16]!");                         // push argument address onto stack
+            args::push_arg_value(emitter, &PhpType::Int);
             arg_types.push(PhpType::Int);
             continue;
         }

@@ -275,9 +275,9 @@ fn emit_try_handler_push(emitter: &mut Emitter, ctx: &Context, handler_offset: u
     emitter.add_lo12("x9", "x9", "_exc_handler_top");                // resolve the exception-handler stack top address
     emitter.instruction("ldr x10, [x9]");                                       // load the previous exception handler pointer
     abi::store_at_offset(emitter, "x10", handler_offset);                          // save the previous handler pointer in this try slot
-    emitter.instruction(&format!("sub x10, x29, #{}", activation_prev_offset)); // x10 = address of the current activation record
+    abi::emit_frame_slot_address(emitter, "x10", activation_prev_offset);       // compute the address of the current activation record
     abi::store_at_offset(emitter, "x10", handler_offset - 8);                      // remember which activation frame should survive this catch
-    emitter.instruction(&format!("sub x10, x29, #{}", handler_offset));         // x10 = address of this try slot's handler header
+    abi::emit_frame_slot_address(emitter, "x10", handler_offset);               // compute the address of this try slot's handler header
     emitter.adrp("x9", "_exc_handler_top");                      // reload page of the exception-handler stack top after stack-slot stores may clobber x9
     emitter.add_lo12("x9", "x9", "_exc_handler_top");                // resolve the exception-handler stack top address again
     emitter.instruction("str x10, [x9]");                                       // publish this handler as the current exception target

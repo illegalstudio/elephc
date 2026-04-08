@@ -800,6 +800,8 @@ ARM64's `stur`/`ldur` instructions only support 9-bit signed immediates (offsets
 
 This means all codegen that accesses stack variables goes through the ABI helpers rather than emitting `stur`/`ldur` directly, so large stack frames work automatically.
 
+`emit_frame_slot_address()` complements those helpers when codegen needs the address of a local slot itself rather than the value stored there. By-reference calls, `ptr($var)`, and exception-frame bookkeeping now all reuse that helper instead of open-coding frame-slot address math.
+
 ### Frame and return-value helpers
 
 `abi.rs` now also centralizes the frame-management primitives used by both `_main` and ordinary functions:

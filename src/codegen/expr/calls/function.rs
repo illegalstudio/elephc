@@ -77,38 +77,13 @@ pub(super) fn emit_function_call(
         let target_ty = args::declared_target_ty(sig.as_ref(), i);
         if is_ref {
             if let ExprKind::Variable(var_name) = &arg.kind {
-                if ctx.global_vars.contains(var_name) {
-                    let label = format!("_gvar_{}", var_name);
-                    emitter.comment(&format!("ref arg: address of global ${}", var_name));
-                    emitter.adrp("x0", &format!("{}", label));   // load page of global var
-                    emitter.add_lo12("x0", "x0", &format!("{}", label)); //add page offset
-                } else if ctx.ref_params.contains(var_name) {
-                    let var = match ctx.variables.get(var_name) {
-                        Some(v) => v,
-                        None => {
-                            emitter.comment(&format!("WARNING: undefined ref variable ${}", var_name));
-                            continue;
-                        }
-                    };
-                    let offset = var.stack_offset;
-                    emitter.comment(&format!("ref arg: forward underlying reference for ${}", var_name));
-                    crate::codegen::abi::load_at_offset(emitter, "x0", offset); // load existing address stored by by-ref param
-                } else {
-                    let var = match ctx.variables.get(var_name) {
-                        Some(v) => v,
-                        None => {
-                            emitter.comment(&format!("WARNING: undefined variable ${}", var_name));
-                            continue;
-                        }
-                    };
-                    let offset = var.stack_offset;
-                    emitter.comment(&format!("ref arg: address of ${}", var_name));
-                    emitter.instruction(&format!("sub x0, x29, #{}", offset));  // compute address of local variable
+                if !args::emit_ref_arg_variable_address(var_name, "ref arg", emitter, ctx) {
+                    continue;
                 }
             } else {
                 super::super::emit_expr(arg, emitter, ctx, data);
             }
-            emitter.instruction("str x0, [sp, #-16]!");                         // push address onto stack
+            args::push_arg_value(emitter, &PhpType::Int);
             arg_types.push(PhpType::Int);
         } else {
             let pushed_ty = args::push_expr_arg(arg, target_ty, emitter, ctx, data);

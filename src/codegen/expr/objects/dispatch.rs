@@ -73,31 +73,19 @@ fn eval_and_push_args(
         let target_ty = super::super::calls::args::declared_target_ty(sig, i);
         if is_ref {
             if let ExprKind::Variable(var_name) = &arg.kind {
-                if ctx.global_vars.contains(var_name) {
-                    let label = format!("_gvar_{}", var_name);
-                    emitter.comment(&format!("method ref arg: address of global ${}", var_name));
-                    emitter.adrp("x0", &format!("{}", label));   // load page of global var
-                    emitter.add_lo12("x0", "x0", &format!("{}", label)); //resolve global var address
-                } else if ctx.ref_params.contains(var_name) {
-                    let Some(var) = ctx.variables.get(var_name) else {
-                        emitter.comment(&format!("WARNING: undefined ref variable ${}", var_name));
-                        continue;
-                    };
-                    emitter.comment(&format!("method ref arg: forward underlying reference for ${}", var_name));
-                    crate::codegen::abi::load_at_offset(emitter, "x0", var.stack_offset); // load existing reference pointer
-                } else {
-                    let Some(var) = ctx.variables.get(var_name) else {
-                        emitter.comment(&format!("WARNING: undefined variable ${}", var_name));
-                        continue;
-                    };
-                    emitter.comment(&format!("method ref arg: address of ${}", var_name));
-                    emitter.instruction(&format!("sub x0, x29, #{}", var.stack_offset)); //compute address of local variable
+                if !super::super::calls::args::emit_ref_arg_variable_address(
+                    var_name,
+                    "method ref arg",
+                    emitter,
+                    ctx,
+                ) {
+                    continue;
                 }
             } else {
                 let ty = emit_expr(arg, emitter, ctx, data);
                 retain_borrowed_heap_arg(emitter, arg, &ty);
             }
-            emitter.instruction("str x0, [sp, #-16]!");                         // push address for by-ref argument
+            super::super::calls::args::push_arg_value(emitter, &PhpType::Int);
             arg_types.push(PhpType::Int);
         } else {
             let pushed_ty = super::super::calls::args::push_expr_arg(arg, target_ty, emitter, ctx, data);

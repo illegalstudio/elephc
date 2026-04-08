@@ -731,7 +731,7 @@ fn emit_main_activation_record_push(emitter: &mut Emitter, ctx: &Context, cleanu
     emitter.instruction("mov x10, x29");                                        // x10 = current main frame pointer for cleanup callbacks
     abi::store_at_offset(emitter, "x10", frame_base_offset);                    // save the main frame pointer in the activation record
     abi::store_at_offset(emitter, "xzr", ctx.pending_action_offset.expect("codegen bug: missing main pending-action slot")); // clear any stale finally action before running main
-    emitter.instruction(&format!("sub x10, x29, #{}", prev_offset));            // x10 = address of the main activation record's first slot
+    abi::emit_frame_slot_address(emitter, "x10", prev_offset);                 // compute the address of the main activation record's first slot
     emitter.adrp("x9", "_exc_call_frame_top");                   // reload page of the call-frame stack top after stack-slot stores may clobber x9
     emitter.add_lo12("x9", "x9", "_exc_call_frame_top");             // resolve the call-frame stack top address again
     emitter.instruction("str x10, [x9]");                                       // publish the main activation record as the new call-frame stack top

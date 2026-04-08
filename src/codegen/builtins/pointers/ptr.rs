@@ -17,12 +17,7 @@ pub fn emit(
         if let Some(info) = ctx.variables.get(var_name) {
             let offset = info.stack_offset;
             // -- compute address of variable's stack slot --
-            if offset <= 4095 {
-                emitter.instruction(&format!("sub x0, x29, #{}", offset));      // x0 = address of variable on stack
-            } else {
-                emitter.instruction(&format!("mov x9, #{}", offset));           // load large offset into scratch
-                emitter.instruction("sub x0, x29, x9");                         // x0 = address of variable on stack
-            }
+            crate::codegen::abi::emit_frame_slot_address(emitter, "x0", offset);
         } else if let Some(label) = ctx.global_vars.get(var_name) {
             // Global variable — use its static storage address
             let label = label.clone();

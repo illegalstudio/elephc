@@ -49,25 +49,27 @@ impl OutgoingArgAssignment {
 pub fn emit_frame_prologue(emitter: &mut Emitter, frame_size: usize) {
     emitter.target.ensure_aarch64_backend("function frame setup");
     emitter.comment("prologue");
-    emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack space for locals and saved frame state
-    if frame_size - 16 <= 504 {
-        emitter.instruction(&format!("stp x29, x30, [sp, #{}]", frame_size - 16)); // save frame pointer and return address in the fixed frame footer
+    emit_adjust_sp(emitter, frame_size, true);
+    let footer_offset = frame_size - 16;
+    if footer_offset <= 504 {
+        emitter.instruction(&format!("stp x29, x30, [sp, #{}]", footer_offset)); // save frame pointer and return address in the fixed frame footer
     } else {
-        emitter.instruction(&format!("add x9, sp, #{}", frame_size - 16));      // compute the address of the saved frame footer for a large frame
+        emit_sp_address(emitter, "x9", footer_offset);
         emitter.instruction("stp x29, x30, [x9]");                              // save frame pointer and return address through the computed footer pointer
     }
-    emitter.instruction(&format!("add x29, sp, #{}", frame_size - 16));         // establish the new frame pointer for local addressing
+    emit_sp_address(emitter, "x29", footer_offset);
 }
 
 pub fn emit_frame_restore(emitter: &mut Emitter, frame_size: usize) {
     emitter.target.ensure_aarch64_backend("function frame teardown");
-    if frame_size - 16 <= 504 {
-        emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16)); // restore frame pointer and return address from the fixed frame footer
+    let footer_offset = frame_size - 16;
+    if footer_offset <= 504 {
+        emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", footer_offset)); // restore frame pointer and return address from the fixed frame footer
     } else {
-        emitter.instruction(&format!("add x9, sp, #{}", frame_size - 16));      // recompute the saved frame footer address for a large frame
+        emit_sp_address(emitter, "x9", footer_offset);
         emitter.instruction("ldp x29, x30, [x9]");                              // restore frame pointer and return address through the computed footer pointer
     }
-    emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // release the current stack frame and restore the caller stack pointer
+    emit_adjust_sp(emitter, frame_size, false);
 }
 
 pub fn emit_return(emitter: &mut Emitter) {
@@ -89,6 +91,23 @@ pub fn emit_cleanup_callback_epilogue(emitter: &mut Emitter) {
     emit_return(emitter);
 }
 
+pub fn emit_frame_slot_address(emitter: &mut Emitter, dest: &str, offset: usize) {
+    emitter.target.ensure_aarch64_backend("frame-slot address materialization");
+    if offset == 0 {
+        emitter.instruction(&format!("mov {}, x29", dest));                     // copy the frame pointer when the requested slot is the frame base itself
+    } else if offset <= 4095 {
+        emitter.instruction(&format!("sub {}, x29, #{}", dest, offset));        // compute the local-slot address directly from the frame pointer
+    } else {
+        emitter.instruction(&format!("mov {}, x29", dest));                     // seed the destination register from the frame pointer for a far local-slot address
+        let mut remaining = offset;
+        while remaining > 0 {
+            let chunk = remaining.min(4095);
+            emitter.instruction(&format!("sub {}, {}, #{}", dest, dest, chunk)); // walk the destination register down toward the distant local-slot address
+            remaining -= chunk;
+        }
+    }
+}
+
 /// Emit a store of `reg` at `[x29, #-offset]`, handling large offsets.
 /// Uses x9 as scratch register for offsets > 255.
 ///
@@ -106,7 +125,7 @@ pub fn store_at_offset_scratch(emitter: &mut Emitter, reg: &str, offset: usize, 
     if offset <= 255 {
         emitter.instruction(&format!("stur {}, [x29, #-{}]", reg, offset));     // store via unscaled immediate offset
     } else {
-        emitter.instruction(&format!("sub {}, x29, #{}", scratch, offset));     // compute stack address for large offset
+        emit_frame_slot_address(emitter, scratch, offset);
         emitter.instruction(&format!("str {}, [{}]", reg, scratch));            // store via computed address
     }
 }
@@ -128,7 +147,7 @@ pub fn load_at_offset_scratch(emitter: &mut Emitter, reg: &str, offset: usize, s
     if offset <= 255 {
         emitter.instruction(&format!("ldur {}, [x29, #-{}]", reg, offset));     // load via unscaled immediate offset
     } else {
-        emitter.instruction(&format!("sub {}, x29, #{}", scratch, offset));     // compute stack address for large offset
+        emit_frame_slot_address(emitter, scratch, offset);
         emitter.instruction(&format!("ldr {}, [{}]", reg, scratch));            // load via computed address
     }
 }
@@ -699,6 +718,21 @@ mod tests {
                 "    stur x2, [x29, #-24]\n",
                 "    ldur x1, [x29, #-32]\n",
                 "    ldur x2, [x29, #-24]\n",
+            )
+        );
+    }
+
+    #[test]
+    fn test_emit_frame_slot_address_large_offset() {
+        let mut emitter = test_emitter();
+        emit_frame_slot_address(&mut emitter, "x0", 5000);
+
+        assert_eq!(
+            emitter.output(),
+            concat!(
+                "    mov x0, x29\n",
+                "    sub x0, x0, #4095\n",
+                "    sub x0, x0, #905\n",
             )
         );
     }
