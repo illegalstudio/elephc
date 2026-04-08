@@ -2818,6 +2818,12 @@ fn test_argc_exists() {
     assert_eq!(out, "1");
 }
 
+#[test]
+fn test_argv_count_exists() {
+    let out = compile_and_run("<?php echo count($argv);");
+    assert_eq!(out, "1");
+}
+
 // --- Arrays ---
 
 #[test]
@@ -12901,6 +12907,17 @@ echo strlen("hello world");
 "#,
     );
     assert_eq!(out, "11");
+}
+
+#[test]
+fn test_ffi_extern_call_in_concat_restores_concat_cursor() {
+    let out = compile_and_run(
+        r#"<?php
+extern function strlen(string $s): int;
+echo "len=" . strlen("hello");
+"#,
+    );
+    assert_eq!(out, "len=5");
 }
 
 #[test]

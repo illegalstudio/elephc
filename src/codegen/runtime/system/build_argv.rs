@@ -1,4 +1,4 @@
-use crate::codegen::emit::Emitter;
+use crate::codegen::{abi, emit::Emitter};
 
 /// build_argv: create a PHP $argv array from OS argc/argv.
 /// Reads _global_argc and _global_argv, builds a string array.
@@ -14,14 +14,10 @@ pub fn emit_build_argv(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #32");                                    // set up new frame pointer
 
     // -- load argc from the global variable --
-    emitter.adrp("x9", "_global_argc");                          // load page base of _global_argc into x9
-    emitter.add_lo12("x9", "x9", "_global_argc");                    // add page offset to get exact address
-    emitter.instruction("ldr x19, [x9]");                                       // x19 = argc (callee-saved register)
+    abi::emit_load_symbol_to_reg(emitter, "x19", "_global_argc", 0);
 
     // -- load argv pointer from the global variable --
-    emitter.adrp("x9", "_global_argv");                          // load page base of _global_argv into x9
-    emitter.add_lo12("x9", "x9", "_global_argv");                    // add page offset to get exact address
-    emitter.instruction("ldr x20, [x9]");                                       // x20 = argv pointer (callee-saved register)
+    abi::emit_load_symbol_to_reg(emitter, "x20", "_global_argv", 0);
 
     // -- save callee-saved registers we're about to use --
     emitter.instruction("stp x19, x20, [sp, #0]");                              // save x19 (argc) and x20 (argv) to stack

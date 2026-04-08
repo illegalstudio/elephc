@@ -111,9 +111,7 @@ pub fn emit_extern_call(
         emitter.instruction("sxtw x0, w0");                                     // sign-extend 32-bit C int returns before PHP comparisons use x0
     }
     emitter.instruction("ldr x10, [sp], #16");                                  // pop saved caller concat offset from stack
-    emitter.adrp("x9", "_concat_off");                           // load page of caller concat offset
-    emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve caller concat offset address
-    emitter.instruction("str x10, [x9]");                                       // restore caller concat offset after extern call
+    crate::codegen::abi::emit_store_reg_to_symbol(emitter, "x10", "_concat_off", 0);
 
     // -- handle return value --
     if sig.return_type == PhpType::Str {

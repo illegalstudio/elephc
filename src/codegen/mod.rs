@@ -248,19 +248,13 @@ pub fn generate(
 
     // -- save argc/argv to globals (for $argv runtime builder) --
     emitter.comment("save argc/argv to globals");
-    emitter.adrp("x9", "_global_argc");                          // load page of argc global
-    emitter.add_lo12("x9", "x9", "_global_argc");                    // add page offset
-    emitter.instruction("str x0, [x9]");                                        // store argc (x0 from OS)
-    emitter.adrp("x9", "_global_argv");                          // load page of argv global
-    emitter.add_lo12("x9", "x9", "_global_argv");                    // add page offset
-    emitter.instruction("str x1, [x9]");                                        // store argv pointer (x1 from OS)
+    abi::emit_store_reg_to_symbol(&mut emitter, "x0", "_global_argc", 0);
+    abi::emit_store_reg_to_symbol(&mut emitter, "x1", "_global_argv", 0);
 
     if heap_debug {
         emitter.comment("enable heap debug flag");
-        emitter.adrp("x9", "_heap_debug_enabled");               // load page of the heap-debug runtime flag
-        emitter.add_lo12("x9", "x9", "_heap_debug_enabled");         // resolve the heap-debug runtime flag address
         emitter.instruction("mov x10, #1");                                     // compile-time option enables heap debug for this binary
-        emitter.instruction("str x10, [x9]");                                   // store enabled=1 into the BSS-backed runtime flag
+        abi::emit_store_reg_to_symbol(&mut emitter, "x10", "_heap_debug_enabled", 0);
     }
 
     // -- store $argc in local variable --
@@ -316,9 +310,7 @@ pub fn generate(
         emitter.instruction(&format!("mov x2, #{}", len_a));                    // string length
         emitter.instruction("mov x0, #2");                                      // fd = stderr
         emitter.syscall(4);
-        emitter.adrp("x9", "_gc_allocs");                        // load gc_allocs page
-        emitter.add_lo12("x9", "x9", "_gc_allocs");                  // resolve address
-        emitter.instruction("ldr x0, [x9]");                                    // load alloc count
+        abi::emit_load_symbol_to_reg(&mut emitter, "x0", "_gc_allocs", 0);
         emitter.instruction("bl __rt_itoa");                                    // convert to string → x1/x2
         emitter.instruction("mov x0, #2");                                      // fd = stderr
         emitter.syscall(4);
@@ -328,9 +320,7 @@ pub fn generate(
         emitter.instruction(&format!("mov x2, #{}", len_f));                    // string length
         emitter.instruction("mov x0, #2");                                      // fd = stderr
         emitter.syscall(4);
-        emitter.adrp("x9", "_gc_frees");                         // load gc_frees page
-        emitter.add_lo12("x9", "x9", "_gc_frees");                   // resolve address
-        emitter.instruction("ldr x0, [x9]");                                    // load free count
+        abi::emit_load_symbol_to_reg(&mut emitter, "x0", "_gc_frees", 0);
         emitter.instruction("bl __rt_itoa");                                    // convert to string → x1/x2
         emitter.instruction("mov x0, #2");                                      // fd = stderr
         emitter.syscall(4);
@@ -721,9 +711,7 @@ fn emit_main_activation_record_push(emitter: &mut Emitter, ctx: &Context, cleanu
         .expect("codegen bug: missing main activation frame-base slot");
 
     emitter.comment("register main exception cleanup frame");
-    emitter.adrp("x9", "_exc_call_frame_top");                   // load page of the call-frame stack top
-    emitter.add_lo12("x9", "x9", "_exc_call_frame_top");             // resolve the call-frame stack top address
-    emitter.instruction("ldr x10, [x9]");                                       // load the previous call-frame pointer
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
     abi::store_at_offset(emitter, "x10", prev_offset);                          // save the previous call-frame pointer in the main activation record
     emitter.adrp("x10", &format!("{}", cleanup_label));          // load page of the main cleanup callback label
     emitter.add_lo12("x10", "x10", &format!("{}", cleanup_label));   // resolve the main cleanup callback label address
@@ -732,9 +720,7 @@ fn emit_main_activation_record_push(emitter: &mut Emitter, ctx: &Context, cleanu
     abi::store_at_offset(emitter, "x10", frame_base_offset);                    // save the main frame pointer in the activation record
     abi::store_at_offset(emitter, "xzr", ctx.pending_action_offset.expect("codegen bug: missing main pending-action slot")); // clear any stale finally action before running main
     abi::emit_frame_slot_address(emitter, "x10", prev_offset);                 // compute the address of the main activation record's first slot
-    emitter.adrp("x9", "_exc_call_frame_top");                   // reload page of the call-frame stack top after stack-slot stores may clobber x9
-    emitter.add_lo12("x9", "x9", "_exc_call_frame_top");             // resolve the call-frame stack top address again
-    emitter.instruction("str x10, [x9]");                                       // publish the main activation record as the new call-frame stack top
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_call_frame_top", 0);
 }
 
 fn emit_main_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
@@ -743,12 +729,8 @@ fn emit_main_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
         .expect("codegen bug: missing main activation prev slot");
 
     emitter.comment("unregister main exception cleanup frame");
-    emitter.adrp("x9", "_exc_call_frame_top");                   // load page of the call-frame stack top
-    emitter.add_lo12("x9", "x9", "_exc_call_frame_top");             // resolve the call-frame stack top address
     abi::load_at_offset(emitter, "x10", prev_offset);                           // reload the previous call-frame pointer from the main activation record
-    emitter.adrp("x9", "_exc_call_frame_top");                   // reload page of the call-frame stack top after the load helper may clobber x9
-    emitter.add_lo12("x9", "x9", "_exc_call_frame_top");             // resolve the call-frame stack top address again
-    emitter.instruction("str x10, [x9]");                                       // restore the previous call-frame stack top before exiting
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_call_frame_top", 0);
 }
 
 fn emit_main_cleanup_callback(emitter: &mut Emitter, cleanup_label: &str, ctx: &Context) {

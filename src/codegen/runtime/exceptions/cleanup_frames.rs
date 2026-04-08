@@ -1,4 +1,4 @@
-use crate::codegen::emit::Emitter;
+use crate::codegen::{abi, emit::Emitter};
 
 pub fn emit_exception_cleanup_frames(emitter: &mut Emitter) {
     emitter.blank();
@@ -11,9 +11,7 @@ pub fn emit_exception_cleanup_frames(emitter: &mut Emitter) {
     emitter.instruction("stp x19, x20, [sp, #16]");                             // preserve callee-saved registers that track the walk state
     emitter.instruction("add x29, sp, #32");                                    // install the cleanup walker's frame pointer
     emitter.instruction("mov x19, x0");                                         // x19 = activation record that should remain on top after unwinding
-    emitter.adrp("x9", "_exc_call_frame_top");                   // load page of the call-frame stack top
-    emitter.add_lo12("x9", "x9", "_exc_call_frame_top");             // resolve the call-frame stack top address
-    emitter.instruction("ldr x20, [x9]");                                       // x20 = current activation record being examined
+    abi::emit_load_symbol_to_reg(emitter, "x20", "_exc_call_frame_top", 0);
 
     // -- walk and clean every activation above the target stop frame --
     emitter.label("__rt_exception_cleanup_frames_loop");
@@ -32,9 +30,7 @@ pub fn emit_exception_cleanup_frames(emitter: &mut Emitter) {
 
     // -- publish the surviving activation record as the new top --
     emitter.label("__rt_exception_cleanup_frames_done");
-    emitter.adrp("x9", "_exc_call_frame_top");                   // reload page of the call-frame stack top after callback calls
-    emitter.add_lo12("x9", "x9", "_exc_call_frame_top");             // resolve the call-frame stack top address again
-    emitter.instruction("str x19, [x9]");                                       // store the surviving activation record as the new call-frame top
+    abi::emit_store_reg_to_symbol(emitter, "x19", "_exc_call_frame_top", 0);
     emitter.instruction("ldp x19, x20, [sp, #16]");                             // restore the callee-saved walk-state registers
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the caller frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the cleanup walker's stack frame

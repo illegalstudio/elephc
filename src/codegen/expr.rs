@@ -650,9 +650,7 @@ fn emit_function_call(
 }
 
 pub(crate) fn save_concat_offset_before_nested_call(emitter: &mut Emitter) {
-    emitter.adrp("x9", "_concat_off");                           // load page of caller concat offset
-    emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve caller concat offset address
-    emitter.instruction("ldr x10, [x9]");                                       // read caller concat offset before nested call
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_concat_off", 0);
     emitter.instruction("str x10, [sp, #-16]!");                                // save caller concat offset across nested call
 }
 
@@ -661,9 +659,7 @@ pub(crate) fn restore_concat_offset_after_nested_call(emitter: &mut Emitter, ret
         emitter.instruction("bl __rt_str_persist");                             // persist returned string before restoring caller concat cursor
     }
     emitter.instruction("ldr x10, [sp], #16");                                  // pop saved caller concat offset from stack
-    emitter.adrp("x9", "_concat_off");                           // load page of caller concat offset
-    emitter.add_lo12("x9", "x9", "_concat_off");                     // resolve caller concat offset address
-    emitter.instruction("str x10, [x9]");                                       // restore caller concat offset after nested call
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_concat_off", 0);
 }
 
 pub(crate) fn expr_result_heap_ownership(expr: &Expr) -> HeapOwnership {
