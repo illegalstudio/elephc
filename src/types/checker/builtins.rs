@@ -239,7 +239,9 @@ pub(crate) fn is_supported_builtin_function(name: &str) -> bool {
 
 impl Checker {
     fn require_linux_builtin_library(&mut self, library: &str) {
-        if cfg!(target_os = "linux") && !self.required_libraries.iter().any(|lib| lib == library) {
+        if self.target_platform == crate::codegen::platform::Platform::Linux
+            && !self.required_libraries.iter().any(|lib| lib == library)
+        {
             self.required_libraries.push(library.to_string());
         }
     }

@@ -5,6 +5,7 @@ mod warnings;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
+use crate::codegen::platform::{Platform, Target};
 use crate::errors::{CompileError, CompileWarning};
 use crate::parser::ast::{CType, ClassMethod, Program, Visibility};
 
@@ -326,6 +327,35 @@ pub fn packed_type_size(
     }
 }
 
+#[allow(dead_code)]
 pub fn check(program: &Program) -> Result<CheckResult, CompileError> {
-    checker::check_types(program)
+    checker::check_types(program, Platform::detect_host())
+}
+
+pub fn check_with_target(program: &Program, target: Target) -> Result<CheckResult, CompileError> {
+    checker::check_types(program, target.platform)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::{Arch, Target};
+
+    fn parse_program(source: &str) -> Program {
+        let tokens = crate::lexer::tokenize(source).expect("tokenize failed");
+        crate::parser::parse(&tokens).expect("parse failed")
+    }
+
+    #[test]
+    fn test_linux_crypto_builtin_linking_tracks_target_not_host() {
+        let program = parse_program("<?php echo md5(\"abc\");");
+
+        let linux = check_with_target(&program, Target::new(Platform::Linux, Arch::AArch64))
+            .expect("linux type check failed");
+        assert_eq!(linux.required_libraries, vec!["crypto"]);
+
+        let mac = check_with_target(&program, Target::new(Platform::MacOS, Arch::AArch64))
+            .expect("mac type check failed");
+        assert!(mac.required_libraries.is_empty());
+    }
 }

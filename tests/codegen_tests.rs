@@ -75,7 +75,7 @@ fn get_runtime_obj() -> &'static Path {
 
         let mut cmd = Command::new(assembler_cmd());
         if target().platform == Platform::MacOS {
-            cmd.args(["-arch", "arm64"]);
+            cmd.args(["-arch", target().darwin_arch_name()]);
         }
         cmd.arg("-o").arg(&obj_path).arg(&asm_path);
         let status = cmd.status().expect("failed to assemble runtime");
@@ -93,7 +93,7 @@ fn assemble_custom_runtime(heap_size: usize, dir: &Path) -> std::path::PathBuf {
 
     let mut cmd = Command::new(assembler_cmd());
     if target().platform == Platform::MacOS {
-        cmd.args(["-arch", "arm64"]);
+        cmd.args(["-arch", target().darwin_arch_name()]);
     }
     cmd.arg("-o").arg(&obj_path).arg(&asm_path);
     let status = cmd.status().expect("failed to assemble custom runtime");
@@ -175,7 +175,7 @@ fn link_binary(
     match target().platform {
         Platform::MacOS => {
             let mut ld_cmd = Command::new("ld");
-            ld_cmd.args(["-arch", "arm64", "-e", "_main", "-o"]);
+            ld_cmd.args(["-arch", target().darwin_arch_name(), "-e", "_main", "-o"]);
             ld_cmd.arg(bin_path);
             ld_cmd.arg(obj_path);
             ld_cmd.arg(runtime_obj);
@@ -271,7 +271,7 @@ fn assemble_and_run(
 
     let mut as_cmd = Command::new(assembler_cmd());
     if target().platform == Platform::MacOS {
-        as_cmd.args(["-arch", "arm64"]);
+        as_cmd.args(["-arch", target().darwin_arch_name()]);
     }
     as_cmd.arg("-o").arg(&obj_path).arg(&asm_path);
     let as_status = as_cmd.status().expect("failed to run assembler");
@@ -477,7 +477,7 @@ fn assemble_and_run_capture(
 
     let mut as_cmd = Command::new(assembler_cmd());
     if target().platform == Platform::MacOS {
-        as_cmd.args(["-arch", "arm64"]);
+        as_cmd.args(["-arch", target().darwin_arch_name()]);
     }
     as_cmd.arg("-o").arg(&obj_path).arg(&asm_path);
     let as_status = as_cmd.status().expect("failed to run assembler");
@@ -517,7 +517,7 @@ fn assemble_and_run_expect_failure(
 
     let mut as_cmd = Command::new(assembler_cmd());
     if target().platform == Platform::MacOS {
-        as_cmd.args(["-arch", "arm64"]);
+        as_cmd.args(["-arch", target().darwin_arch_name()]);
     }
     as_cmd.arg("-o").arg(&obj_path).arg(&asm_path);
     let as_status = as_cmd.status().expect("failed to run assembler");
@@ -568,7 +568,7 @@ fn compile_source_to_asm_with_defines(
     let ast = elephc::conditional::apply(ast, defines);
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-    let check_result = elephc::types::check(&resolved).expect("type check failed");
+    let check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let (user_asm, runtime_asm) = elephc::codegen::generate(
         &resolved,
         &check_result.global_env,
@@ -1057,7 +1057,8 @@ fn compile_and_run_files_with_defines(
     let ast = elephc::conditional::apply(ast, &define_set);
     let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-    let check_result = elephc::types::check(&resolved).expect("type check failed");
+    let check_result =
+        elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let (user_asm, _runtime_asm) = elephc::codegen::generate(
         &resolved,
         &check_result.global_env,
@@ -1124,7 +1125,7 @@ fn compile_files_fails_with_defines(
         let ast = elephc::conditional::apply(ast, &define_set);
         let resolved = elephc::resolver::resolve(ast, base_dir)?;
         let resolved = elephc::name_resolver::resolve(resolved)?;
-        elephc::types::check(&resolved)?;
+        elephc::types::check_with_target(&resolved, target())?;
         Ok(())
     })();
 
@@ -1626,7 +1627,7 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
     let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-    let check_result = elephc::types::check(&resolved).expect("type check failed");
+    let check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let (user_asm, _runtime_asm) = elephc::codegen::generate(
         &resolved,
         &check_result.global_env,
@@ -1653,7 +1654,7 @@ fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
 
     let mut as_cmd = Command::new(assembler_cmd());
     if target().platform == Platform::MacOS {
-        as_cmd.args(["-arch", "arm64"]);
+        as_cmd.args(["-arch", target().darwin_arch_name()]);
     }
     as_cmd.arg("-o").arg(&obj_path).arg(&asm_path);
     let as_status = as_cmd.status().expect("failed to run assembler");
@@ -1718,7 +1719,7 @@ fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBuf) {
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
     let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-    let check_result = elephc::types::check(&resolved).expect("type check failed");
+    let check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let (user_asm, _runtime_asm) = elephc::codegen::generate(
         &resolved,
         &check_result.global_env,

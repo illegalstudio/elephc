@@ -10,6 +10,7 @@ mod type_compat;
 
 use std::collections::{HashMap, HashSet};
 
+use crate::codegen::platform::Platform;
 use crate::errors::CompileError;
 use crate::parser::ast::{
     CallableTarget, Expr, Program, StmtKind, TypeExpr,
@@ -33,6 +34,7 @@ use schema::{
 };
 
 pub(crate) struct Checker {
+    pub target_platform: Platform,
     pub fn_decls: HashMap<String, FnDecl>,
     pub functions: HashMap<String, FunctionSig>,
     pub constants: HashMap<String, PhpType>,
@@ -90,8 +92,9 @@ pub(crate) struct FnDecl {
     pub body: Vec<crate::parser::ast::Stmt>,
 }
 
-pub fn check_types(program: &Program) -> Result<CheckResult, CompileError> {
+pub fn check_types(program: &Program, target_platform: Platform) -> Result<CheckResult, CompileError> {
     let mut checker = Checker {
+        target_platform,
         fn_decls: HashMap::new(),
         functions: HashMap::new(),
         constants: HashMap::new(),

@@ -223,7 +223,7 @@ fn main() {
         }
     };
 
-    let check_result = match types::check(&ast) {
+    let check_result = match types::check_with_target(&ast, target) {
         Ok(result) => result,
         Err(e) => {
             errors::report(&e);
@@ -279,7 +279,7 @@ fn main() {
     // Assemble
     let mut as_cmd = Command::new(target.assembler_cmd());
     if target.platform == Platform::MacOS {
-        as_cmd.args(["-arch", "arm64"]);
+        as_cmd.args(["-arch", target.darwin_arch_name()]);
     }
     as_cmd.arg("-o").arg(&obj_path).arg(&asm_path);
     run_tool("Assembler", &mut as_cmd);
@@ -290,7 +290,7 @@ fn main() {
             let sdk_path = macos_sdk_path();
             let sdk_version = macos_sdk_version();
             let mut cmd = Command::new("ld");
-            cmd.args(["-arch", "arm64", "-e", "_main", "-o"]);
+            cmd.args(["-arch", target.darwin_arch_name(), "-e", "_main", "-o"]);
             cmd.arg(&bin_path);
             cmd.arg(&obj_path);
             cmd.args(["-lSystem", "-syslibroot"]);

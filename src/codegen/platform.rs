@@ -3,12 +3,12 @@ use std::sync::OnceLock;
 
 /// Target platform for code generation.
 ///
-/// elephc always emits ARM64 assembly but the syscall convention, relocation
-/// syntax, symbol naming, and struct layouts differ between macOS and Linux.
-/// Rather than threading the platform through every emitter call, we generate
-/// macOS-flavoured assembly and then post-process it into Linux assembly when
-/// the target is Linux.  Only the handful of places where struct layouts
-/// differ (e.g. `stat`) need to consult the platform at emit time.
+/// elephc currently emits real AArch64 assembly only, but target selection is
+/// already split into platform and architecture so backend-specific work can
+/// grow without reintroducing "Linux => ARM64" assumptions. Platform still
+/// controls the syscall convention, relocation syntax, symbol naming, and
+/// struct layouts. On AArch64 Linux we currently reuse the existing same-ISA
+/// post-processing path from the macOS-flavoured backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
     MacOS,
@@ -93,6 +93,13 @@ impl Target {
 
     pub fn supports_current_backend(&self) -> bool {
         self.arch == Arch::AArch64
+    }
+
+    pub fn darwin_arch_name(&self) -> &'static str {
+        match self.arch {
+            Arch::AArch64 => "arm64",
+            Arch::X86_64 => "x86_64",
+        }
     }
 
     pub fn ensure_aarch64_backend(&self, feature: &str) {
