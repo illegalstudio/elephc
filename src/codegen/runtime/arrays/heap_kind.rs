@@ -12,14 +12,12 @@ pub fn emit_heap_kind(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_heap_kind_zero");                         // null pointers have no heap kind
 
     // -- heap range check: x0 >= _heap_buf --
-    emitter.adrp("x9", "_heap_buf");                             // load page of the heap buffer
-    emitter.add_lo12("x9", "x9", "_heap_buf");                       // resolve the heap buffer base address
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
     emitter.instruction("cmp x0, x9");                                          // is the pointer below the heap base?
     emitter.instruction("b.lo __rt_heap_kind_zero");                            // non-heap pointers report kind 0
 
     // -- heap range check: x0 < _heap_buf + _heap_off --
-    emitter.adrp("x10", "_heap_off");                            // load page of the current heap offset
-    emitter.add_lo12("x10", "x10", "_heap_off");                     // resolve the heap offset address
+    crate::codegen::abi::emit_symbol_address(emitter, "x10", "_heap_off");
     emitter.instruction("ldr x10, [x10]");                                      // load the current bump offset
     emitter.instruction("add x10, x9, x10");                                    // compute the current heap end
     emitter.instruction("cmp x0, x10");                                         // is the pointer at or beyond the heap end?

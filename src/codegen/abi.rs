@@ -57,7 +57,13 @@ pub fn emit_frame_prologue(emitter: &mut Emitter, frame_size: usize) {
         emit_sp_address(emitter, "x9", footer_offset);
         emitter.instruction("stp x29, x30, [x9]");                              // save frame pointer and return address through the computed footer pointer
     }
-    emit_sp_address(emitter, "x29", footer_offset);
+    if footer_offset == 0 {
+        emitter.instruction("mov x29, sp");                                   // use the current stack pointer directly when the frame footer starts at sp
+    } else if footer_offset <= 4095 {
+        emitter.instruction(&format!("add x29, sp, #{}", footer_offset));      // point the frame pointer at the nearby fixed frame footer
+    } else {
+        emit_sp_address(emitter, "x29", footer_offset);
+    }
 }
 
 pub fn emit_frame_restore(emitter: &mut Emitter, frame_size: usize) {

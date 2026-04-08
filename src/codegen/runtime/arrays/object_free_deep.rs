@@ -10,12 +10,10 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
 
     // -- null and heap-range checks --
     emitter.instruction("cbz x0, __rt_object_free_deep_done");                  // skip null objects
-    emitter.adrp("x9", "_heap_buf");                             // load page of the heap buffer
-    emitter.add_lo12("x9", "x9", "_heap_buf");                       // resolve the heap buffer base
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
     emitter.instruction("cmp x0, x9");                                          // is the object below the heap buffer?
     emitter.instruction("b.lo __rt_object_free_deep_done");                     // skip non-heap pointers
-    emitter.adrp("x10", "_heap_off");                            // load page of the heap offset
-    emitter.add_lo12("x10", "x10", "_heap_off");                     // resolve the heap offset address
+    crate::codegen::abi::emit_symbol_address(emitter, "x10", "_heap_off");
     emitter.instruction("ldr x10, [x10]");                                      // load the current heap offset
     emitter.instruction("add x10, x9, x10");                                    // compute the current heap end
     emitter.instruction("cmp x0, x10");                                         // is the object at or beyond the heap end?
@@ -33,8 +31,7 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // set up the new frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the object pointer
-    emitter.adrp("x9", "_gc_release_suppressed");                // load page of the release-suppression flag
-    emitter.add_lo12("x9", "x9", "_gc_release_suppressed");          // resolve the release-suppression flag address
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_gc_release_suppressed");
     emitter.instruction("mov x10, #1");                                         // ordinary deep-free walks suppress nested collector runs
     emitter.instruction("str x10, [x9]");                                       // store release-suppressed = 1 for child cleanup
 
@@ -46,13 +43,11 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
 
     // -- resolve the per-class property tag descriptor --
     emitter.instruction("ldr x10, [x0]");                                       // load the runtime class_id from the object payload
-    emitter.adrp("x11", "_class_gc_desc_count");                 // load page of the descriptor count table
-    emitter.add_lo12("x11", "x11", "_class_gc_desc_count");          // resolve the descriptor count address
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_class_gc_desc_count");
     emitter.instruction("ldr x11, [x11]");                                      // load the number of emitted class descriptors
     emitter.instruction("cmp x10, x11");                                        // is class_id within the descriptor table?
     emitter.instruction("b.hs __rt_object_free_deep_struct");                   // invalid class ids fall back to a shallow free
-    emitter.adrp("x11", "_class_gc_desc_ptrs");                  // load page of the descriptor pointer table
-    emitter.add_lo12("x11", "x11", "_class_gc_desc_ptrs");           // resolve the descriptor pointer table
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_class_gc_desc_ptrs");
     emitter.instruction("lsl x12, x10, #3");                                    // scale class_id by 8 bytes per descriptor pointer
     emitter.instruction("ldr x11, [x11, x12]");                                 // load the tag descriptor pointer for this class
     emitter.instruction("str x11, [sp, #8]");                                   // save descriptor pointer for the cleanup loop
@@ -97,8 +92,7 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
 
     // -- free the object storage itself --
     emitter.label("__rt_object_free_deep_struct");
-    emitter.adrp("x9", "_gc_release_suppressed");                // load page of the release-suppression flag
-    emitter.add_lo12("x9", "x9", "_gc_release_suppressed");          // resolve the release-suppression flag address
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_gc_release_suppressed");
     emitter.instruction("str xzr, [x9]");                                       // clear release suppression before freeing the object storage
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer before freeing it
     emitter.instruction("bl __rt_heap_free");                                   // return the object storage to the heap allocator

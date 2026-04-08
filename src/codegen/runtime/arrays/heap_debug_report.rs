@@ -12,15 +12,12 @@ pub fn emit_heap_debug_report(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #48");                                    // set up the frame pointer
 
     // -- compute alloc/free/live counters once for the full report --
-    emitter.adrp("x9", "_gc_allocs");                            // load page of the allocation counter
-    emitter.add_lo12("x9", "x9", "_gc_allocs");                      // resolve the allocation counter address
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_gc_allocs");
     emitter.instruction("ldr x9, [x9]");                                        // load the total allocation count
-    emitter.adrp("x10", "_gc_frees");                            // load page of the free counter
-    emitter.add_lo12("x10", "x10", "_gc_frees");                     // resolve the free counter address
+    crate::codegen::abi::emit_symbol_address(emitter, "x10", "_gc_frees");
     emitter.instruction("ldr x10, [x10]");                                      // load the total free count
     emitter.instruction("sub x11, x9, x10");                                    // live_blocks = allocs - frees
-    emitter.adrp("x12", "_gc_live");                             // load page of the live-byte counter
-    emitter.add_lo12("x12", "x12", "_gc_live");                      // resolve the live-byte counter address
+    crate::codegen::abi::emit_symbol_address(emitter, "x12", "_gc_live");
     emitter.instruction("ldr x12, [x12]");                                      // load current live bytes
     emitter.instruction("str x9, [sp, #24]");                                   // save alloc count across syscalls and nested itoa calls
     emitter.instruction("str x10, [sp, #16]");                                  // save free count across nested itoa calls
@@ -79,8 +76,7 @@ pub fn emit_heap_debug_report(emitter: &mut Emitter) {
     emitter.add_lo12("x1", "x1", "_heap_dbg_peak_label");            // resolve the peak-live-bytes label address
     emitter.instruction("mov x2, #17");                                         // " peak_live_bytes=" length
     emitter.syscall(4);
-    emitter.adrp("x9", "_gc_peak");                              // load page of the peak-live-bytes counter
-    emitter.add_lo12("x9", "x9", "_gc_peak");                        // resolve the peak-live-bytes counter address
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_gc_peak");
     emitter.instruction("ldr x0, [x9]");                                        // load peak live bytes
     emitter.instruction("bl __rt_itoa");                                        // convert peak live bytes to decimal string
     emitter.instruction("mov x0, #2");                                          // fd = stderr

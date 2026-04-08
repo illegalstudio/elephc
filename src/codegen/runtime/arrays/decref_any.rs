@@ -10,12 +10,10 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
 
     // -- null and heap-range checks --
     emitter.instruction("cbz x0, __rt_decref_any_done");                        // skip null values immediately
-    emitter.adrp("x9", "_heap_buf");                             // load page of the heap buffer
-    emitter.add_lo12("x9", "x9", "_heap_buf");                       // resolve the heap buffer base
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
     emitter.instruction("cmp x0, x9");                                          // is the pointer below the heap buffer?
     emitter.instruction("b.lo __rt_decref_any_done");                           // non-heap values need no release
-    emitter.adrp("x10", "_heap_off");                            // load page of the heap offset
-    emitter.add_lo12("x10", "x10", "_heap_off");                     // resolve the heap offset address
+    crate::codegen::abi::emit_symbol_address(emitter, "x10", "_heap_off");
     emitter.instruction("ldr x10, [x10]");                                      // load the current heap offset
     emitter.instruction("add x10, x9, x10");                                    // compute the current heap end
     emitter.instruction("cmp x0, x10");                                         // is the pointer at or beyond the heap end?
@@ -25,8 +23,7 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [x0, #-8]");                                  // load the full 64-bit kind word from the heap header
 
     // -- during cycle collection, skip unreachable refcounted children because they will be freed directly --
-    emitter.adrp("x12", "_gc_collecting");                       // load page of the collector-active flag
-    emitter.add_lo12("x12", "x12", "_gc_collecting");                // resolve the collector-active flag address
+    crate::codegen::abi::emit_symbol_address(emitter, "x12", "_gc_collecting");
     emitter.instruction("ldr x12, [x12]");                                      // load the collector-active flag
     emitter.instruction("cbz x12, __rt_decref_any_dispatch");                   // ordinary release path when no collection is running
     emitter.instruction("and x13, x11, #0xff");                                 // isolate the low-byte heap kind tag

@@ -12,12 +12,10 @@ pub fn emit_array_free_deep(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_array_free_deep_done");                   // skip if null
 
     // -- heap range check (same as heap_free_safe) --
-    emitter.adrp("x9", "_heap_buf");                             // load page of heap buffer
-    emitter.add_lo12("x9", "x9", "_heap_buf");                       // resolve heap buffer base
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
     emitter.instruction("cmp x0, x9");                                          // below heap start?
     emitter.instruction("b.lo __rt_array_free_deep_done");                      // not on heap, skip
-    emitter.adrp("x10", "_heap_off");                            // load page of heap offset
-    emitter.add_lo12("x10", "x10", "_heap_off");                     // resolve heap offset address
+    crate::codegen::abi::emit_symbol_address(emitter, "x10", "_heap_off");
     emitter.instruction("ldr x10, [x10]");                                      // current heap offset
     emitter.instruction("add x10, x9, x10");                                    // heap end = base + offset
     emitter.instruction("cmp x0, x10");                                         // beyond heap end?
@@ -28,8 +26,7 @@ pub fn emit_array_free_deep(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #16");                                    // set up frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save array pointer
-    emitter.adrp("x9", "_gc_release_suppressed");                // load page of the release-suppression flag
-    emitter.add_lo12("x9", "x9", "_gc_release_suppressed");          // resolve the release-suppression flag address
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_gc_release_suppressed");
     emitter.instruction("mov x10, #1");                                         // ordinary deep-free walks suppress nested collector runs
     emitter.instruction("str x10, [x9]");                                       // store release-suppressed = 1 for child cleanup
 
@@ -95,8 +92,7 @@ pub fn emit_array_free_deep(emitter: &mut Emitter) {
 
     // -- free the array struct itself --
     emitter.label("__rt_array_free_deep_struct");
-    emitter.adrp("x9", "_gc_release_suppressed");                // load page of the release-suppression flag
-    emitter.add_lo12("x9", "x9", "_gc_release_suppressed");          // resolve the release-suppression flag address
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_gc_release_suppressed");
     emitter.instruction("str xzr, [x9]");                                       // clear release suppression before freeing the container storage
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload array pointer
     emitter.instruction("bl __rt_heap_free");                                   // free array struct

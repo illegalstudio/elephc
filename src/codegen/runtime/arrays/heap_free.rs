@@ -23,8 +23,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_heap_free_done");                         // skip if null pointer
 
     // -- debug mode: validate the free list before mutating it --
-    emitter.adrp("x16", "_heap_debug_enabled");                  // load page of the heap-debug enabled flag
-    emitter.add_lo12("x16", "x16", "_heap_debug_enabled");           // resolve the heap-debug enabled flag address
+    crate::codegen::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
     emitter.instruction("ldr x16, [x16]");                                      // load the heap-debug enabled flag
     emitter.instruction("cbz x16, __rt_heap_free_debug_checked");               // skip validation when heap-debug mode is disabled
     emitter.instruction("stp x0, x30, [sp, #-16]!");                            // preserve the freed pointer and caller return address before nested validation
@@ -35,8 +34,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     // -- compute header address and block end --
     emitter.instruction("sub x9, x0, #16");                                     // x9 = header address (block_size lives here)
     emitter.instruction("ldr w11, [x9]");                                       // x11 = block size (32-bit, zero-extends)
-    emitter.adrp("x16", "_heap_debug_enabled");                  // load page of the heap-debug enabled flag
-    emitter.add_lo12("x16", "x16", "_heap_debug_enabled");           // resolve the heap-debug enabled flag address
+    crate::codegen::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
     emitter.instruction("ldr x16, [x16]");                                      // load the heap-debug enabled flag
     emitter.instruction("cbz x16, __rt_heap_free_poison_done");                 // skip freed-block poisoning when heap-debug mode is disabled
     emitter.instruction("mov x12, x0");                                         // start poisoning at the beginning of the user payload
@@ -50,17 +48,14 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.label("__rt_heap_free_poison_done");
     // -- update current live heap footprint before the block joins the free list --
     emitter.instruction("add x12, x11, #16");                                   // include the 16-byte header in the freed block footprint
-    emitter.adrp("x13", "_gc_live");                             // load gc_live page
-    emitter.add_lo12("x13", "x13", "_gc_live");                      // resolve the current-live-bytes counter address
+    crate::codegen::abi::emit_symbol_address(emitter, "x13", "_gc_live");
     emitter.instruction("ldr x14, [x13]");                                      // load current live bytes
     emitter.instruction("sub x14, x14, x12");                                   // subtract the freed block footprint from the live-byte total
     emitter.instruction("str x14, [x13]");                                      // store updated live bytes
     emitter.instruction("str wzr, [x9, #4]");                                   // mark the block header as not live while it is being freed
     emitter.instruction("str xzr, [x9, #8]");                                   // clear the heap kind while the block sits on the free list
-    emitter.adrp("x15", "_heap_buf");                            // load page of heap buffer
-    emitter.add_lo12("x15", "x15", "_heap_buf");                     // resolve heap buffer base
-    emitter.adrp("x13", "_heap_off");                            // load page of heap offset
-    emitter.add_lo12("x13", "x13", "_heap_off");                     // resolve heap offset address
+    crate::codegen::abi::emit_symbol_address(emitter, "x15", "_heap_buf");
+    crate::codegen::abi::emit_symbol_address(emitter, "x13", "_heap_off");
     emitter.instruction("ldr x14, [x13]");                                      // x14 = current heap offset
     emitter.instruction("add x14, x15, x14");                                   // x14 = heap_buf + heap_off = heap end
 
@@ -78,8 +73,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.label("__rt_heap_free_cache_small");
     emitter.instruction("cmp x11, #64");                                        // does this payload fit in the segregated small-bin cache?
     emitter.instruction("b.hi __rt_heap_free_insert");                          // no — keep using the general coalescing free list
-    emitter.adrp("x10", "_heap_small_bins");                     // load page of the segregated small-bin head array
-    emitter.add_lo12("x10", "x10", "_heap_small_bins");              // resolve the segregated small-bin head array address
+    crate::codegen::abi::emit_symbol_address(emitter, "x10", "_heap_small_bins");
     emitter.instruction("mov x12, #0");                                         // default to the <=8-byte bin offset
     emitter.instruction("cmp x11, #8");                                         // does the freed payload fit in the smallest class?
     emitter.instruction("b.ls __rt_heap_free_cache_small_ready");               // yes — keep the <=8-byte bin offset
@@ -92,8 +86,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("mov x12, #24");                                        // the remaining cached case is the <=64-byte bin
     emitter.label("__rt_heap_free_cache_small_ready");
     emitter.instruction("add x10, x10, x12");                                   // x10 = address of the chosen small-bin head slot
-    emitter.adrp("x16", "_heap_debug_enabled");                  // load page of the heap-debug enabled flag
-    emitter.add_lo12("x16", "x16", "_heap_debug_enabled");           // resolve the heap-debug enabled flag address
+    crate::codegen::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
     emitter.instruction("ldr x16, [x16]");                                      // load the heap-debug enabled flag
     emitter.instruction("cbz x16, __rt_heap_free_cache_small_insert");          // skip duplicate detection when heap-debug mode is disabled
     emitter.instruction("ldr x12, [x10]");                                      // x12 = current cached block while checking for duplicates
@@ -105,8 +98,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("b __rt_heap_free_cache_small_scan");                   // keep scanning the small-bin chain for duplicates
 
     emitter.label("__rt_heap_free_cache_small_duplicate");
-    emitter.adrp("x1", "_heap_dbg_double_free_msg");             // load page of the double-free debug message
-    emitter.add_lo12("x1", "x1", "_heap_dbg_double_free_msg");       // resolve the double-free debug message address
+    crate::codegen::abi::emit_symbol_address(emitter, "x1", "_heap_dbg_double_free_msg");
     emitter.instruction(&format!("mov x2, #{}", double_free_msg.len()));        // pass the exact double-free debug message length
     emitter.instruction("b __rt_heap_debug_fail");                              // report the duplicate cached block and terminate immediately
 
@@ -118,8 +110,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
 
     // -- larger blocks still use the ordered free list for coalescing --
     emitter.label("__rt_heap_free_insert");
-    emitter.adrp("x10", "_heap_free_list");                      // load page of free list head
-    emitter.add_lo12("x10", "x10", "_heap_free_list");               // resolve address of free list head
+    crate::codegen::abi::emit_symbol_address(emitter, "x10", "_heap_free_list");
     emitter.instruction("ldr x12, [x10]");                                      // x12 = current free block while scanning for insertion point
 
     emitter.label("__rt_heap_free_insert_loop");
@@ -132,12 +123,10 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("b __rt_heap_free_insert_loop");                        // continue scanning the ordered free list
 
     emitter.label("__rt_heap_free_duplicate_candidate");
-    emitter.adrp("x16", "_heap_debug_enabled");                  // load page of the heap-debug enabled flag
-    emitter.add_lo12("x16", "x16", "_heap_debug_enabled");           // resolve the heap-debug enabled flag address
+    crate::codegen::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
     emitter.instruction("ldr x16, [x16]");                                      // load the heap-debug enabled flag
     emitter.instruction("cbz x16, __rt_heap_free_insert_here");                 // keep legacy behavior when heap-debug mode is disabled
-    emitter.adrp("x1", "_heap_dbg_double_free_msg");             // load page of the double-free debug message
-    emitter.add_lo12("x1", "x1", "_heap_dbg_double_free_msg");       // resolve the double-free debug message address
+    crate::codegen::abi::emit_symbol_address(emitter, "x1", "_heap_dbg_double_free_msg");
     emitter.instruction(&format!("mov x2, #{}", double_free_msg.len()));        // pass the exact double-free debug message length
     emitter.instruction("b __rt_heap_debug_fail");                              // report the double-free and terminate immediately
 
@@ -160,8 +149,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
 
     // -- merge with the previous free block when it is immediately adjacent --
     emitter.label("__rt_heap_free_merge_prev");
-    emitter.adrp("x14", "_heap_free_list");                      // load page of free list head
-    emitter.add_lo12("x14", "x14", "_heap_free_list");               // resolve address of the free list head pointer
+    crate::codegen::abi::emit_symbol_address(emitter, "x14", "_heap_free_list");
     emitter.instruction("cmp x10, x14");                                        // was the block inserted at the head of the list?
     emitter.instruction("b.eq __rt_heap_free_trim_tail");                       // yes — there is no previous block to merge with
     emitter.instruction("sub x14, x10, #16");                                   // x14 = previous free block header (prev_next_addr - 16)
@@ -178,14 +166,11 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
 
     // -- repeatedly trim any free block that now touches the bump tail --
     emitter.label("__rt_heap_free_trim_tail");
-    emitter.adrp("x13", "_heap_off");                            // load page of heap offset
-    emitter.add_lo12("x13", "x13", "_heap_off");                     // resolve heap offset address
+    crate::codegen::abi::emit_symbol_address(emitter, "x13", "_heap_off");
     emitter.instruction("ldr x14, [x13]");                                      // x14 = current heap offset
-    emitter.adrp("x15", "_heap_buf");                            // load page of heap buffer
-    emitter.add_lo12("x15", "x15", "_heap_buf");                     // resolve heap buffer base
+    crate::codegen::abi::emit_symbol_address(emitter, "x15", "_heap_buf");
     emitter.instruction("add x14, x15, x14");                                   // x14 = current heap end
-    emitter.adrp("x10", "_heap_free_list");                      // load page of free list head
-    emitter.add_lo12("x10", "x10", "_heap_free_list");               // resolve address of free list head pointer
+    crate::codegen::abi::emit_symbol_address(emitter, "x10", "_heap_free_list");
     emitter.instruction("ldr x11, [x10]");                                      // x11 = first free block header
 
     emitter.label("__rt_heap_free_trim_tail_scan");
@@ -208,8 +193,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
 
     // -- debug mode: validate the free list after mutation --
     emitter.label("__rt_heap_free_post_validate");
-    emitter.adrp("x16", "_heap_debug_enabled");                  // load page of the heap-debug enabled flag
-    emitter.add_lo12("x16", "x16", "_heap_debug_enabled");           // resolve the heap-debug enabled flag address
+    crate::codegen::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
     emitter.instruction("ldr x16, [x16]");                                      // load the heap-debug enabled flag
     emitter.instruction("cbz x16, __rt_heap_free_count");                       // skip validation when heap-debug mode is disabled
     emitter.instruction("stp x0, x30, [sp, #-16]!");                            // preserve the freed pointer and caller return address before nested validation
@@ -218,8 +202,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
 
     // -- increment gc_frees counter --
     emitter.label("__rt_heap_free_count");
-    emitter.adrp("x10", "_gc_frees");                            // load gc_frees page
-    emitter.add_lo12("x10", "x10", "_gc_frees");                     // resolve address
+    crate::codegen::abi::emit_symbol_address(emitter, "x10", "_gc_frees");
     emitter.instruction("ldr x11, [x10]");                                      // load current count
     emitter.instruction("add x11, x11, #1");                                    // increment
     emitter.instruction("str x11, [x10]");                                      // store back
@@ -238,14 +221,12 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_heap_free_safe_skip");                    // skip if null pointer
 
     // -- check lower bound: x0 >= _heap_buf --
-    emitter.adrp("x9", "_heap_buf");                             // load page of heap buffer
-    emitter.add_lo12("x9", "x9", "_heap_buf");                       // resolve heap buffer base address
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
     emitter.instruction("cmp x0, x9");                                          // is pointer below heap start?
     emitter.instruction("b.lo __rt_heap_free_safe_skip");                       // yes — not a heap pointer, skip
 
     // -- check upper bound: x0 < _heap_buf + _heap_off --
-    emitter.adrp("x10", "_heap_off");                            // load page of heap offset
-    emitter.add_lo12("x10", "x10", "_heap_off");                     // resolve heap offset address
+    crate::codegen::abi::emit_symbol_address(emitter, "x10", "_heap_off");
     emitter.instruction("ldr x10, [x10]");                                      // x10 = current heap offset
     emitter.instruction("add x10, x9, x10");                                    // x10 = heap_buf + heap_off = heap end
     emitter.instruction("cmp x0, x10");                                         // is pointer at or beyond heap end?

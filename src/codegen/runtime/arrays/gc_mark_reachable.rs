@@ -10,12 +10,10 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
 
     // -- reject null, non-heap, freed, and non-refcounted values --
     emitter.instruction("cbz x0, __rt_gc_mark_reachable_done");                 // ignore null roots
-    emitter.adrp("x9", "_heap_buf");                             // load page of the heap buffer
-    emitter.add_lo12("x9", "x9", "_heap_buf");                       // resolve the heap buffer base
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
     emitter.instruction("cmp x0, x9");                                          // is the pointer below the heap buffer?
     emitter.instruction("b.lo __rt_gc_mark_reachable_done");                    // only heap pointers can be marked
-    emitter.adrp("x10", "_heap_off");                            // load page of the heap offset
-    emitter.add_lo12("x10", "x10", "_heap_off");                     // resolve the heap offset address
+    crate::codegen::abi::emit_symbol_address(emitter, "x10", "_heap_off");
     emitter.instruction("ldr x10, [x10]");                                      // load the current heap offset
     emitter.instruction("add x10, x9, x10");                                    // compute the current heap end
     emitter.instruction("cmp x0, x10");                                         // is the pointer at or beyond the heap end?
@@ -152,13 +150,11 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("lsr x9, x9, #4");                                      // divide by 16 to get the property count
     emitter.instruction("str x9, [sp, #16]");                                   // save the property count for the loop bound
     emitter.instruction("ldr x10, [x0]");                                       // load the runtime class_id from the object payload
-    emitter.adrp("x11", "_class_gc_desc_count");                 // load page of the descriptor count table
-    emitter.add_lo12("x11", "x11", "_class_gc_desc_count");          // resolve the descriptor count address
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_class_gc_desc_count");
     emitter.instruction("ldr x11, [x11]");                                      // load the number of emitted class descriptors
     emitter.instruction("cmp x10, x11");                                        // is the class_id within range?
     emitter.instruction("b.hs __rt_gc_mark_reachable_return");                  // invalid class ids contribute no traversable edges
-    emitter.adrp("x11", "_class_gc_desc_ptrs");                  // load page of the descriptor pointer table
-    emitter.add_lo12("x11", "x11", "_class_gc_desc_ptrs");           // resolve the descriptor pointer table
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_class_gc_desc_ptrs");
     emitter.instruction("lsl x12, x10, #3");                                    // scale class_id by 8 bytes per descriptor pointer
     emitter.instruction("ldr x11, [x11, x12]");                                 // load the property-tag descriptor pointer
     emitter.instruction("str x11, [sp, #32]");                                  // save the property-tag descriptor pointer

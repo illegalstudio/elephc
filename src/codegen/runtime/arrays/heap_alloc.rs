@@ -18,8 +18,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.label("__rt_heap_alloc_start");
 
     // -- debug mode: validate the free list before consuming it --
-    emitter.adrp("x9", "_heap_debug_enabled");                   // load page of the heap-debug enabled flag
-    emitter.add_lo12("x9", "x9", "_heap_debug_enabled");             // resolve the heap-debug enabled flag address
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_heap_debug_enabled");
     emitter.instruction("ldr x9, [x9]");                                        // load the heap-debug enabled flag
     emitter.instruction("cbz x9, __rt_heap_alloc_debug_checked");               // skip validation when heap-debug mode is disabled
     emitter.instruction("mov x15, x0");                                         // preserve the requested allocation size across validation
@@ -43,8 +42,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("b.ls __rt_heap_alloc_small_bins");                     // yes — search from the <=32-byte bin upward
     emitter.instruction("mov x13, #24");                                        // requests up to 64 bytes start at the largest small-bin class
     emitter.label("__rt_heap_alloc_small_bins");
-    emitter.adrp("x9", "_heap_small_bins");                      // load page of the segregated small-bin head array
-    emitter.add_lo12("x9", "x9", "_heap_small_bins");                // resolve the segregated small-bin head array address
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_heap_small_bins");
     emitter.instruction("add x9, x9, x13");                                     // x9 = address of the first candidate bin head
     emitter.label("__rt_heap_alloc_small_bin_loop");
     emitter.instruction("ldr x10, [x9]");                                       // x10 = current small-bin head block (0 if this bin is empty)
@@ -67,8 +65,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     // -- walk the general free list looking for first-fit block --
     // x0 = requested size, x9 = prev_next_addr, x10 = current block header
     emitter.label("__rt_heap_alloc_fl_start");
-    emitter.adrp("x9", "_heap_free_list");                       // load page of free list head pointer
-    emitter.add_lo12("x9", "x9", "_heap_free_list");                 // resolve address of free list head
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_heap_free_list");
     emitter.instruction("ldr x10, [x9]");                                       // x10 = first free block header (0 if empty)
 
     // -- walk the free list looking for first-fit block --
@@ -114,21 +111,18 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
 
     emitter.label("__rt_heap_alloc_count");
     // -- increment gc_allocs counter --
-    emitter.adrp("x12", "_gc_allocs");                           // load gc_allocs page
-    emitter.add_lo12("x12", "x12", "_gc_allocs");                    // resolve address
+    crate::codegen::abi::emit_symbol_address(emitter, "x12", "_gc_allocs");
     emitter.instruction("ldr x13, [x12]");                                      // load current count
     emitter.instruction("add x13, x13, #1");                                    // increment
     emitter.instruction("str x13, [x12]");                                      // store back
     // -- update current/peak live heap footprint --
     emitter.instruction("ldr w14, [x10]");                                      // load the allocated payload size from the finalized header
     emitter.instruction("add x14, x14, #16");                                   // include the 16-byte header in the live-footprint accounting
-    emitter.adrp("x12", "_gc_live");                             // load gc_live page
-    emitter.add_lo12("x12", "x12", "_gc_live");                      // resolve the current-live-bytes counter address
+    crate::codegen::abi::emit_symbol_address(emitter, "x12", "_gc_live");
     emitter.instruction("ldr x13, [x12]");                                      // load current live bytes
     emitter.instruction("add x13, x13, x14");                                   // add this block's total footprint to live bytes
     emitter.instruction("str x13, [x12]");                                      // store updated live bytes
-    emitter.adrp("x12", "_gc_peak");                             // load gc_peak page
-    emitter.add_lo12("x12", "x12", "_gc_peak");                      // resolve the peak-live-bytes counter address
+    crate::codegen::abi::emit_symbol_address(emitter, "x12", "_gc_peak");
     emitter.instruction("ldr x15, [x12]");                                      // load the previous live-byte high watermark
     emitter.instruction("cmp x13, x15");                                        // did this allocation raise the live-byte peak?
     emitter.instruction("csel x15, x13, x15, hi");                              // keep the larger of current live bytes and the previous peak
@@ -139,22 +133,19 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.label("__rt_heap_alloc_bump");
 
     // -- load current heap offset --
-    emitter.adrp("x9", "_heap_off");                             // load page base of _heap_off
-    emitter.add_lo12("x9", "x9", "_heap_off");                       // resolve exact address of _heap_off
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_heap_off");
     emitter.instruction("ldr x10, [x9]");                                       // x10 = current heap offset
 
     // -- bounds check: offset + 16 + requested <= heap_max --
     emitter.instruction("add x12, x10, x0");                                    // x12 = offset + requested size
     emitter.instruction("add x12, x12, #16");                                   // x12 = offset + requested + header (16 bytes)
-    emitter.adrp("x13", "_heap_max");                            // load page of heap max constant
-    emitter.add_lo12("x13", "x13", "_heap_max");                     // resolve address of heap max
+    crate::codegen::abi::emit_symbol_address(emitter, "x13", "_heap_max");
     emitter.instruction("ldr x13, [x13]");                                      // x13 = heap max size in bytes
     emitter.instruction("cmp x12, x13");                                        // does the allocation fit?
     emitter.instruction("b.gt __rt_heap_exhausted");                            // no — fatal error
 
     // -- compute base address of heap buffer --
-    emitter.adrp("x11", "_heap_buf");                            // load page base of _heap_buf
-    emitter.add_lo12("x11", "x11", "_heap_buf");                     // resolve exact buffer base address
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_heap_buf");
 
     // -- write header and bump offset --
     emitter.instruction("add x14, x11, x10");                                   // x14 = buf + offset (header location)
@@ -172,8 +163,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     // -- fatal error: heap memory exhausted --
     emitter.label("__rt_heap_exhausted");
     emitter.instruction("mov x0, #2");                                          // fd = stderr
-    emitter.adrp("x1", "_heap_err_msg");                         // load page of error message
-    emitter.add_lo12("x1", "x1", "_heap_err_msg");                   // resolve error message address
+    crate::codegen::abi::emit_symbol_address(emitter, "x1", "_heap_err_msg");
     emitter.instruction("mov x2, #35");                                         // message length: "Fatal error: heap memory exhausted\n"
     emitter.syscall(4);
     emitter.instruction("mov x0, #1");                                          // exit code 1
