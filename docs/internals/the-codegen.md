@@ -910,7 +910,7 @@ sum(...$arr);  // spread
 **Variadic functions**: The last parameter can be prefixed with `...` to collect all remaining arguments into an array. At the call site, the codegen:
 
 1. Passes regular (non-variadic) arguments normally via registers
-2. Builds a new indexed array for the variadic arguments by calling `__rt_array_new` and `__rt_array_push_int`/`__rt_array_push_str` for each extra argument
+2. Uses the shared helpers in `src/codegen/expr/calls/args.rs` to lower variadic payloads, spread-into-named parameters, and the array build needed for the trailing variadic argument
 3. Passes the array pointer as the last argument register
 
 **Spread operator** (`...$arr`): When calling a function with `...$arr`, the array is passed directly as the variadic parameter without unpacking individual elements. In array literals, the spread operator uses `__rt_array_merge_into` to append all elements from the spread array into the target array.

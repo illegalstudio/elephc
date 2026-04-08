@@ -275,83 +275,45 @@ pub(super) fn emit_closure_call(
 
     if spread_into_named {
         if let Some(spread_expr) = spread_arg {
-            let remaining = regular_param_count.saturating_sub(spread_at_index);
-            emitter.comment(&format!("unpack spread into {} closure params", remaining));
-            let spread_ty = functions::infer_contextual_type(spread_expr, ctx);
-            let source_elem_ty = match &spread_ty {
-                PhpType::Array(elem) => (**elem).clone(),
-                PhpType::AssocArray { value, .. } => (**value).clone(),
-                _ => PhpType::Int,
-            };
-            let elem_stride = args::array_element_stride(&source_elem_ty);
-            let _ = super::super::emit_expr(spread_expr, emitter, ctx, data);
-            emitter.instruction("mov x20, x0");                                 // preserve the spread array pointer across boxing/incref helper calls
-            emitter.instruction("add x20, x20, #24");                           // skip 24-byte array header to reach data
-            for idx in 0..remaining {
-                let target_ty = args::declared_target_ty(sig.as_ref(), spread_at_index + idx);
-                args::load_array_element_to_result(emitter, &source_elem_ty, "x20", idx * elem_stride);
-                let pushed_ty =
-                    args::push_loaded_array_element_arg(&source_elem_ty, target_ty, emitter, ctx, data);
-                arg_types.push(pushed_ty);
-            }
+            args::emit_spread_into_named_params(
+                spread_expr,
+                sig.as_ref(),
+                spread_at_index,
+                regular_param_count,
+                "closure params",
+                emitter,
+                ctx,
+                data,
+                &mut arg_types,
+            );
         }
     }
 
     if is_variadic {
         if let Some(spread_expr) = spread_arg {
-            emitter.comment("spread array as variadic closure param");
-            let ty = super::super::emit_expr(spread_expr, emitter, ctx, data);
-            super::super::retain_borrowed_heap_arg(emitter, spread_expr, &ty);
-            emitter.instruction("str x0, [sp, #-16]!");                         // push variadic array pointer onto stack
+            let ty = args::emit_spread_variadic_array_arg(
+                spread_expr,
+                "spread array as variadic closure param",
+                emitter,
+                ctx,
+                data,
+            );
             arg_types.push(ty);
         } else if variadic_args.is_empty() {
-            emitter.comment("empty variadic closure array");
-            emitter.instruction("mov x0, #4");                                  // initial capacity: 4 (grows dynamically)
-            emitter.instruction("mov x1, #8");                                  // element size: 8 bytes
-            emitter.instruction("bl __rt_array_new");                           // allocate empty array for variadic param
-            emitter.instruction("str x0, [sp, #-16]!");                         // push empty variadic array onto stack
-            arg_types.push(PhpType::Array(Box::new(PhpType::Int)));
+            arg_types.push(args::emit_empty_variadic_array_arg(
+                "empty variadic closure array",
+                emitter,
+            ));
         } else {
-            let n = variadic_args.len();
-            emitter.comment(&format!("build variadic closure array ({} elements)", n));
-            let first_elem_ty = functions::infer_contextual_type(variadic_args[0], ctx);
-            let es: usize = match &first_elem_ty {
-                PhpType::Str => 16,
-                _ => 8,
-            };
-            emitter.instruction(&format!("mov x0, #{}", n));                    // capacity: exact element count
-            emitter.instruction(&format!("mov x1, #{}", es));                   // element size in bytes
-            emitter.instruction("bl __rt_array_new");                           // allocate array for variadic args
-            emitter.instruction("str x0, [sp, #-16]!");                         // save variadic array pointer on stack
-
-            for (i, varg) in variadic_args.iter().enumerate() {
-                let ty = super::super::emit_expr(varg, emitter, ctx, data);
-                super::super::retain_borrowed_heap_arg(emitter, varg, &ty);
-                emitter.instruction("ldr x9, [sp]");                            // peek variadic array pointer from stack
-                if i == 0 {
-                    super::super::arrays::emit_array_value_type_stamp(emitter, "x9", &ty);
-                }
-                match &ty {
-                    PhpType::Int | PhpType::Bool | PhpType::Callable => {
-                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); //store int-like element in variadic array
-                    }
-                    PhpType::Float => {
-                        emitter.instruction(&format!("str d0, [x9, #{}]", 24 + i * 8)); //store float element in variadic array
-                    }
-                    PhpType::Str => {
-                        emitter.instruction(&format!("str x1, [x9, #{}]", 24 + i * 16)); //store variadic string pointer
-                        emitter.instruction(&format!("str x2, [x9, #{}]", 24 + i * 16 + 8)); //store variadic string length
-                    }
-                    PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
-                        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); //store refcounted variadic payload
-                    }
-                    _ => {}
-                }
-                emitter.instruction(&format!("mov x10, #{}", i + 1));           // new variadic array length after this element
-                emitter.instruction("str x10, [x9]");                           // persist updated variadic array length
-            }
-
-            arg_types.push(PhpType::Array(Box::new(first_elem_ty)));
+            arg_types.push(args::emit_variadic_array_arg_from_exprs(
+                &variadic_args,
+                "build variadic closure array",
+                true,
+                true,
+                emitter,
+                ctx,
+                data,
+            ));
         }
     }
 
