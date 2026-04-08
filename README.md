@@ -355,7 +355,7 @@ cargo test                      # all tests
 cargo test -- --include-ignored # all tests, including ignored integration tests
 cargo test test_my_feature      # run specific tests
 ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
-./scripts/test-linux.sh         # Linux ARM64 suite in Docker
+./scripts/test-linux-arm64.sh   # Linux ARM64 suite in Docker
 ./scripts/test-linux-x86_64.sh  # Linux x86_64 suite in Docker
 ```
 

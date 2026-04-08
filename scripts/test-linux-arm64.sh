@@ -2,9 +2,9 @@
 # Run the elephc test suite inside a Linux ARM64 Docker container.
 #
 # Usage:
-#   ./scripts/test-linux.sh                # run all tests
-#   ./scripts/test-linux.sh test_fizz      # run tests matching a pattern
-#   ./scripts/test-linux.sh --rebuild      # force rebuild the Docker image
+#   ./scripts/test-linux-arm64.sh                # run all tests
+#   ./scripts/test-linux-arm64.sh test_fizz      # run tests matching a pattern
+#   ./scripts/test-linux-arm64.sh --rebuild      # force rebuild the Docker image
 #
 set -euo pipefail
 
@@ -26,7 +26,7 @@ done
 # Build the image if it doesn't exist or --rebuild was passed
 if $REBUILD || ! docker image inspect "$IMAGE" &>/dev/null; then
     echo "Building Docker image '$IMAGE' for $PLATFORM..."
-    docker build --platform "$PLATFORM" -t "$IMAGE" -f "$PROJECT_DIR/Dockerfile.test-linux" "$PROJECT_DIR"
+    docker build --platform "$PLATFORM" -t "$IMAGE" -f "$PROJECT_DIR/Dockerfile.test-linux-arm64" "$PROJECT_DIR"
 fi
 
 # Run tests with the project mounted as a volume
