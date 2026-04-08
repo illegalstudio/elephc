@@ -144,7 +144,11 @@ pub(super) fn emit_new_object(
             arg_types.push(ty);
         }
 
-        let assignments = crate::codegen::abi::build_outgoing_arg_assignments(&arg_types, 1);
+        let assignments = crate::codegen::abi::build_outgoing_arg_assignments_for_target(
+            emitter.target,
+            &arg_types,
+            1,
+        );
         let overflow_bytes =
             crate::codegen::abi::materialize_outgoing_args(emitter, &assignments);
 

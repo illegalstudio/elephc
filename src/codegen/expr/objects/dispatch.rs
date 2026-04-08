@@ -83,10 +83,15 @@ fn eval_and_push_args(
 /// Compute outgoing call-argument placement for the given arg types, starting
 /// integer register numbering at `first_int_reg`.
 fn compute_register_assignments(
+    emitter: &Emitter,
     arg_types: &[PhpType],
     first_int_reg: usize,
 ) -> Vec<crate::codegen::abi::OutgoingArgAssignment> {
-    crate::codegen::abi::build_outgoing_arg_assignments(arg_types, first_int_reg)
+    crate::codegen::abi::build_outgoing_arg_assignments_for_target(
+        emitter.target,
+        arg_types,
+        first_int_reg,
+    )
 }
 
 /// Materialize outgoing call arguments into their assigned registers/stack area.
@@ -173,7 +178,7 @@ pub(super) fn emit_method_call_with_pushed_args(
     emitter: &mut Emitter,
     ctx: &mut Context,
 ) -> PhpType {
-    let assignments = compute_register_assignments(arg_types, 1);
+    let assignments = compute_register_assignments(emitter, arg_types, 1);
     emitter.instruction("ldr x0, [sp], #16");                                   // pop $this into x0
     let overflow_bytes = pop_args_to_registers(emitter, &assignments);
     let ret_ty = emit_dispatch_instance_method(class_name, method, emitter, ctx);
@@ -375,7 +380,7 @@ pub(super) fn emit_static_method_call(
 
     let first_int_reg = (if needs_called_class_id { 1 } else { 0 })
         + (if needs_this { 1 } else { 0 });
-    let assignments = compute_register_assignments(&arg_types, first_int_reg);
+    let assignments = compute_register_assignments(emitter, &arg_types, first_int_reg);
 
     if needs_called_class_id {
         if forwarded_call {

@@ -259,7 +259,7 @@ fn emit_function_with_label_and_class(
     // -- save parameters from registers to local stack slots --
     // ARM64 ABI: int/bool/array args in x0-x7, float args in d0-d7
     // Strings use two consecutive int registers (ptr + len)
-    let mut incoming_args = super::abi::IncomingArgCursor::default();
+    let mut incoming_args = super::abi::IncomingArgCursor::for_target(emitter.target, 0);
     for (i, (pname, pty)) in sig.params.iter().enumerate() {
         let is_ref = sig.ref_params.get(i).copied().unwrap_or(false);
         let var = ctx

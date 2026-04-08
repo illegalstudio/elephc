@@ -342,7 +342,8 @@ pub(super) fn emit_closure_call(
     crate::codegen::abi::load_at_offset(emitter, "x9", var_offset); // load closure function address from stack
     emitter.instruction("str x9, [sp, #-16]!");                                 // push closure address temporarily
 
-    let assignments = crate::codegen::abi::build_outgoing_arg_assignments(&arg_types, 0);
+    let assignments =
+        crate::codegen::abi::build_outgoing_arg_assignments_for_target(emitter.target, &arg_types, 0);
 
     emitter.instruction("ldr x9, [sp], #16");                                   // pop closure function address into x9
     let overflow_bytes = crate::codegen::abi::materialize_outgoing_args(emitter, &assignments);

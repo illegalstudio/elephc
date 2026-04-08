@@ -91,7 +91,8 @@ pub(super) fn emit_expr_call(
     emitter.instruction("mov x9, x0");                                          // save closure address to x9
     emitter.instruction("str x9, [sp, #-16]!");                                 // push closure address temporarily
 
-    let assignments = crate::codegen::abi::build_outgoing_arg_assignments(&arg_types, 0);
+    let assignments =
+        crate::codegen::abi::build_outgoing_arg_assignments_for_target(emitter.target, &arg_types, 0);
 
     emitter.instruction("ldr x9, [sp], #16");                                   // pop closure function address into x9
     let overflow_bytes = crate::codegen::abi::materialize_outgoing_args(emitter, &assignments);

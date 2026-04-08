@@ -1,10 +1,34 @@
-use super::{emit::Emitter, platform::Arch};
+use super::{
+    emit::Emitter,
+    platform::{Arch, Target},
+};
 use crate::types::PhpType;
 
 const MAX_INT_ARG_REGS: usize = 8;
 const MAX_FLOAT_ARG_REGS: usize = 8;
 const CALLER_STACK_START_OFFSET: usize = 32;
 const STACK_ARG_SENTINEL: usize = usize::MAX;
+
+fn int_arg_reg_limit(target: Target) -> usize {
+    match target.arch {
+        Arch::AArch64 => MAX_INT_ARG_REGS,
+        Arch::X86_64 => 6,
+    }
+}
+
+fn float_arg_reg_limit(target: Target) -> usize {
+    match target.arch {
+        Arch::AArch64 => MAX_FLOAT_ARG_REGS,
+        Arch::X86_64 => MAX_FLOAT_ARG_REGS,
+    }
+}
+
+fn caller_stack_start_offset(target: Target) -> usize {
+    match target.arch {
+        Arch::AArch64 => CALLER_STACK_START_OFFSET,
+        Arch::X86_64 => 16,
+    }
+}
 
 fn int_result_reg(emitter: &Emitter) -> &'static str {
     match emitter.target.arch {
@@ -70,11 +94,15 @@ pub struct IncomingArgCursor {
 
 impl IncomingArgCursor {
     pub fn new(initial_int_reg_idx: usize) -> Self {
+        Self::for_target(Target::new(super::platform::Platform::MacOS, Arch::AArch64), initial_int_reg_idx)
+    }
+
+    pub fn for_target(target: Target, initial_int_reg_idx: usize) -> Self {
         Self {
             int_reg_idx: initial_int_reg_idx,
             float_reg_idx: 0,
-            caller_stack_offset: CALLER_STACK_START_OFFSET,
-            int_stack_only: initial_int_reg_idx >= MAX_INT_ARG_REGS,
+            caller_stack_offset: caller_stack_start_offset(target),
+            int_stack_only: initial_int_reg_idx >= int_arg_reg_limit(target),
             float_stack_only: false,
         }
     }
@@ -468,19 +496,20 @@ pub fn emit_restore_return_value(emitter: &mut Emitter, return_ty: &PhpType, ret
     }
 }
 
-pub fn build_outgoing_arg_assignments(
+pub fn build_outgoing_arg_assignments_for_target(
+    target: Target,
     arg_types: &[PhpType],
     initial_int_reg_idx: usize,
 ) -> Vec<OutgoingArgAssignment> {
     let mut assignments = Vec::new();
     let mut int_reg_idx = initial_int_reg_idx;
     let mut float_reg_idx = 0usize;
-    let mut int_stack_only = initial_int_reg_idx >= MAX_INT_ARG_REGS;
+    let mut int_stack_only = initial_int_reg_idx >= int_arg_reg_limit(target);
     let mut float_stack_only = false;
 
     for ty in arg_types {
         if ty.is_float_reg() {
-            if !float_stack_only && float_reg_idx < MAX_FLOAT_ARG_REGS {
+            if !float_stack_only && float_reg_idx < float_arg_reg_limit(target) {
                 assignments.push(OutgoingArgAssignment {
                     ty: ty.clone(),
                     start_reg: float_reg_idx,
@@ -497,7 +526,7 @@ pub fn build_outgoing_arg_assignments(
             }
         } else {
             let reg_count = ty.register_count();
-            if !int_stack_only && int_reg_idx + reg_count <= MAX_INT_ARG_REGS {
+            if !int_stack_only && int_reg_idx + reg_count <= int_arg_reg_limit(target) {
                 assignments.push(OutgoingArgAssignment {
                     ty: ty.clone(),
                     start_reg: int_reg_idx,
@@ -1107,7 +1136,8 @@ mod tests {
 
     #[test]
     fn test_build_outgoing_arg_assignments_respects_register_limits() {
-        let assignments = build_outgoing_arg_assignments(
+        let assignments = build_outgoing_arg_assignments_for_target(
+            Target::new(Platform::MacOS, Arch::AArch64),
             &[
                 PhpType::Int,
                 PhpType::Int,
@@ -1140,9 +1170,56 @@ mod tests {
     }
 
     #[test]
+    fn test_build_outgoing_arg_assignments_for_linux_x86_64_respects_sysv_limits() {
+        let assignments = build_outgoing_arg_assignments_for_target(
+            Target::new(Platform::Linux, Arch::X86_64),
+            &[
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Str,
+                PhpType::Float,
+                PhpType::Float,
+                PhpType::Float,
+                PhpType::Float,
+                PhpType::Float,
+                PhpType::Float,
+                PhpType::Float,
+                PhpType::Float,
+                PhpType::Float,
+            ],
+            0,
+        );
+
+        assert_eq!(assignments[0].start_reg, 0);
+        assert_eq!(assignments[5].start_reg, 5);
+        assert_eq!(assignments[6].start_reg, STACK_ARG_SENTINEL);
+        assert_eq!(assignments[7].start_reg, STACK_ARG_SENTINEL);
+        assert!(assignments[8].is_float);
+        assert_eq!(assignments[15].start_reg, 7);
+        assert_eq!(assignments[16].start_reg, STACK_ARG_SENTINEL);
+    }
+
+    #[test]
+    fn test_incoming_arg_cursor_for_linux_x86_64_uses_sysv_defaults() {
+        let cursor = IncomingArgCursor::for_target(Target::new(Platform::Linux, Arch::X86_64), 0);
+        assert_eq!(cursor.caller_stack_offset, 16);
+        assert!(!cursor.int_stack_only);
+
+        let stack_only_cursor =
+            IncomingArgCursor::for_target(Target::new(Platform::Linux, Arch::X86_64), 6);
+        assert!(stack_only_cursor.int_stack_only);
+    }
+
+    #[test]
     fn test_materialize_outgoing_args_keeps_overflow_on_stack() {
         let mut emitter = test_emitter();
-        let assignments = build_outgoing_arg_assignments(
+        let assignments = build_outgoing_arg_assignments_for_target(
+            Target::new(Platform::MacOS, Arch::AArch64),
             &[
                 PhpType::Int,
                 PhpType::Int,
