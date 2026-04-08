@@ -800,6 +800,29 @@ ARM64's `stur`/`ldur` instructions only support 9-bit signed immediates (offsets
 
 This means all codegen that accesses stack variables goes through the ABI helpers rather than emitting `stur`/`ldur` directly, so large stack frames work automatically.
 
+### Frame and return-value helpers
+
+`abi.rs` now also centralizes the frame-management primitives used by both `_main` and ordinary functions:
+
+- `emit_frame_prologue()` / `emit_frame_restore()` — shared stack-frame setup and teardown
+- `emit_cleanup_callback_prologue()` / `emit_cleanup_callback_epilogue()` — tiny helper frames used by exception cleanup callbacks
+- `emit_preserve_return_value()` / `emit_restore_return_value()` — spill/reload of scalar, float, and string returns across epilogue side effects or `finally` dispatch
+
+That moves prologue/epilogue mechanics out of the higher-level walkers and makes the ABI layer responsible for more than just local-slot addressing.
+
+### Incoming argument lowering
+
+Incoming parameter decoding now goes through `IncomingArgCursor` plus `emit_store_incoming_param()`.
+
+The cursor tracks:
+
+- current integer argument register index
+- current floating-point argument register index
+- when argument passing has overflowed to the caller stack
+- the caller-stack byte offset for subsequent spilled parameters
+
+The implementation is still AArch64-specific today, but the structure is important: function codegen now delegates the ABI rulebook for incoming params instead of open-coding it inline.
+
 ### `emit_store(emitter, type, offset)`
 
 Stores the current result to a stack variable. Uses `store_at_offset()` internally to handle large offsets:
@@ -843,10 +866,10 @@ Compiles a user-defined function:
 
 1. **Collect local variables** — scan the function body to find all variables and their types
 2. **Calculate stack frame size** — 16-byte aligned, includes space for all locals
-3. **Emit prologue** — `sub sp`, `stp x29, x30`, `add x29`
-4. **Store parameters** — move from argument registers to stack slots, marking by-value heap params as `Owned` and by-reference params as borrowed aliases of the caller's storage
+3. **Emit prologue** — call the shared ABI frame helper
+4. **Store parameters** — lower incoming arguments through the ABI helpers into stack slots, marking by-value heap params as `Owned` and by-reference params as borrowed aliases of the caller's storage
 5. **Emit body** — all statements
-6. **Emit epilogue** — preserve return registers, save static locals back to BSS, clean up only `Owned` + `epilogue_cleanup_safe` heap locals, then `ldp x29, x30`, `add sp`, `ret`
+6. **Emit epilogue** — preserve return registers, save static locals back to BSS, clean up only `Owned` + `epilogue_cleanup_safe` heap locals, then call the shared ABI frame-restore helper and `ret`
 
 ### Pass by reference
 

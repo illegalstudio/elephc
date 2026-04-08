@@ -1,6 +1,80 @@
 use super::emit::Emitter;
 use crate::types::PhpType;
 
+const MAX_INT_ARG_REGS: usize = 8;
+const MAX_FLOAT_ARG_REGS: usize = 8;
+const CALLER_STACK_START_OFFSET: usize = 32;
+
+#[derive(Debug, Clone, Copy)]
+pub struct IncomingArgCursor {
+    int_reg_idx: usize,
+    float_reg_idx: usize,
+    caller_stack_offset: usize,
+    int_stack_only: bool,
+    float_stack_only: bool,
+}
+
+impl IncomingArgCursor {
+    pub fn new(initial_int_reg_idx: usize) -> Self {
+        Self {
+            int_reg_idx: initial_int_reg_idx,
+            float_reg_idx: 0,
+            caller_stack_offset: CALLER_STACK_START_OFFSET,
+            int_stack_only: initial_int_reg_idx >= MAX_INT_ARG_REGS,
+            float_stack_only: false,
+        }
+    }
+}
+
+impl Default for IncomingArgCursor {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
+pub fn emit_frame_prologue(emitter: &mut Emitter, frame_size: usize) {
+    emitter.target.ensure_aarch64_backend("function frame setup");
+    emitter.comment("prologue");
+    emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack space for locals and saved frame state
+    if frame_size - 16 <= 504 {
+        emitter.instruction(&format!("stp x29, x30, [sp, #{}]", frame_size - 16)); // save frame pointer and return address in the fixed frame footer
+    } else {
+        emitter.instruction(&format!("add x9, sp, #{}", frame_size - 16));      // compute the address of the saved frame footer for a large frame
+        emitter.instruction("stp x29, x30, [x9]");                              // save frame pointer and return address through the computed footer pointer
+    }
+    emitter.instruction(&format!("add x29, sp, #{}", frame_size - 16));         // establish the new frame pointer for local addressing
+}
+
+pub fn emit_frame_restore(emitter: &mut Emitter, frame_size: usize) {
+    emitter.target.ensure_aarch64_backend("function frame teardown");
+    if frame_size - 16 <= 504 {
+        emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16)); // restore frame pointer and return address from the fixed frame footer
+    } else {
+        emitter.instruction(&format!("add x9, sp, #{}", frame_size - 16));      // recompute the saved frame footer address for a large frame
+        emitter.instruction("ldp x29, x30, [x9]");                              // restore frame pointer and return address through the computed footer pointer
+    }
+    emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // release the current stack frame and restore the caller stack pointer
+}
+
+pub fn emit_return(emitter: &mut Emitter) {
+    emitter.target.ensure_aarch64_backend("function return");
+    emitter.instruction("ret");                                                 // return to the caller using the restored link register
+}
+
+pub fn emit_cleanup_callback_prologue(emitter: &mut Emitter, frame_base_reg: &str) {
+    emitter.target.ensure_aarch64_backend("cleanup callback frame setup");
+    emitter.instruction("sub sp, sp, #16");                                     // reserve spill space for the callback's saved frame state
+    emitter.instruction("stp x29, x30, [sp, #0]");                              // save the callback caller's frame pointer and return address
+    emitter.instruction(&format!("mov x29, {}", frame_base_reg));               // treat the unwound frame base as the temporary frame pointer during cleanup
+}
+
+pub fn emit_cleanup_callback_epilogue(emitter: &mut Emitter) {
+    emitter.target.ensure_aarch64_backend("cleanup callback frame teardown");
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore the callback caller's frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the callback spill space
+    emit_return(emitter);
+}
+
 /// Emit a store of `reg` at `[x29, #-offset]`, handling large offsets.
 /// Uses x9 as scratch register for offsets > 255.
 ///
@@ -42,6 +116,173 @@ pub fn load_at_offset_scratch(emitter: &mut Emitter, reg: &str, offset: usize, s
     } else {
         emitter.instruction(&format!("sub {}, x29, #{}", scratch, offset));     // compute stack address for large offset
         emitter.instruction(&format!("ldr {}, [{}]", reg, scratch));            // load via computed address
+    }
+}
+
+pub fn load_from_caller_stack(emitter: &mut Emitter, reg: &str, offset: usize) {
+    emitter.target.ensure_aarch64_backend("incoming caller-stack argument loads");
+    if offset <= 4095 {
+        emitter.instruction(&format!("ldr {}, [x29, #{}]", reg, offset));       // load a spilled incoming argument from the caller stack
+    } else {
+        emitter.instruction("mov x9, x29");                                     // seed a scratch pointer from the current frame base
+        let mut remaining = offset;
+        while remaining > 0 {
+            let chunk = remaining.min(4080);
+            emitter.instruction(&format!("add x9, x9, #{}", chunk));            // advance the scratch pointer toward the distant caller-stack slot
+            remaining -= chunk;
+        }
+        emitter.instruction(&format!("ldr {}, [x9]", reg));                     // load the spilled incoming argument through the computed caller-stack pointer
+    }
+}
+
+pub fn emit_store_incoming_param(
+    emitter: &mut Emitter,
+    name: &str,
+    ty: &PhpType,
+    offset: usize,
+    is_ref: bool,
+    cursor: &mut IncomingArgCursor,
+) {
+    emitter.target.ensure_aarch64_backend("incoming parameter spill");
+    let ty = ty.codegen_repr();
+
+    if is_ref {
+        if !cursor.int_stack_only && cursor.int_reg_idx < MAX_INT_ARG_REGS {
+            emitter.comment(&format!("param &${} from x{} (ref)", name, cursor.int_reg_idx));
+            store_at_offset(emitter, &format!("x{}", cursor.int_reg_idx), offset); // save the by-reference address from the integer argument register
+            cursor.int_reg_idx += 1;
+        } else {
+            emitter.comment(&format!(
+                "param &${} from caller stack +{}",
+                name,
+                cursor.caller_stack_offset
+            ));
+            load_from_caller_stack(emitter, "x10", cursor.caller_stack_offset);
+            store_at_offset(emitter, "x10", offset);                            // save the spilled by-reference address into the local param slot
+            cursor.caller_stack_offset += 16;
+            cursor.int_stack_only = true;
+        }
+        return;
+    }
+
+    match ty {
+        PhpType::Bool | PhpType::Int => {
+            if !cursor.int_stack_only && cursor.int_reg_idx < MAX_INT_ARG_REGS {
+                emitter.comment(&format!("param ${} from x{}", name, cursor.int_reg_idx));
+                store_at_offset(emitter, &format!("x{}", cursor.int_reg_idx), offset); // save the scalar parameter from the integer argument register
+                cursor.int_reg_idx += 1;
+            } else {
+                emitter.comment(&format!(
+                    "param ${} from caller stack +{}",
+                    name,
+                    cursor.caller_stack_offset
+                ));
+                load_from_caller_stack(emitter, "x10", cursor.caller_stack_offset);
+                store_at_offset(emitter, "x10", offset);                        // save the spilled scalar parameter into the local param slot
+                cursor.caller_stack_offset += 16;
+                cursor.int_stack_only = true;
+            }
+        }
+        PhpType::Float => {
+            if !cursor.float_stack_only && cursor.float_reg_idx < MAX_FLOAT_ARG_REGS {
+                emitter.comment(&format!("param ${} from d{}", name, cursor.float_reg_idx));
+                store_at_offset(emitter, &format!("d{}", cursor.float_reg_idx), offset); // save the float parameter from the floating-point argument register
+                cursor.float_reg_idx += 1;
+            } else {
+                emitter.comment(&format!(
+                    "param ${} from caller stack +{}",
+                    name,
+                    cursor.caller_stack_offset
+                ));
+                load_from_caller_stack(emitter, "d15", cursor.caller_stack_offset);
+                store_at_offset(emitter, "d15", offset);                        // save the spilled float parameter into the local param slot
+                cursor.caller_stack_offset += 16;
+                cursor.float_stack_only = true;
+            }
+        }
+        PhpType::Str => {
+            if !cursor.int_stack_only && cursor.int_reg_idx + 1 < MAX_INT_ARG_REGS {
+                emitter.comment(&format!(
+                    "param ${} from x{},x{}",
+                    name,
+                    cursor.int_reg_idx,
+                    cursor.int_reg_idx + 1
+                ));
+                store_at_offset(emitter, &format!("x{}", cursor.int_reg_idx), offset); // save the string pointer from the integer-register pair
+                store_at_offset(emitter, &format!("x{}", cursor.int_reg_idx + 1), offset - 8); // save the string length from the integer-register pair
+                cursor.int_reg_idx += 2;
+            } else {
+                emitter.comment(&format!(
+                    "param ${} from caller stack +{}",
+                    name,
+                    cursor.caller_stack_offset
+                ));
+                load_from_caller_stack(emitter, "x10", cursor.caller_stack_offset);
+                load_from_caller_stack(emitter, "x11", cursor.caller_stack_offset + 8);
+                store_at_offset(emitter, "x10", offset);                        // save the spilled string pointer into the local param slot
+                store_at_offset(emitter, "x11", offset - 8);                    // save the spilled string length into the local param slot
+                cursor.caller_stack_offset += 16;
+                cursor.int_stack_only = true;
+            }
+        }
+        PhpType::Void => {}
+        PhpType::Mixed
+        | PhpType::Union(_)
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Buffer(_)
+        | PhpType::Callable
+        | PhpType::Object(_)
+        | PhpType::Packed(_)
+        | PhpType::Pointer(_) => {
+            if !cursor.int_stack_only && cursor.int_reg_idx < MAX_INT_ARG_REGS {
+                emitter.comment(&format!("param ${} from x{}", name, cursor.int_reg_idx));
+                store_at_offset(emitter, &format!("x{}", cursor.int_reg_idx), offset); // save the pointer-like parameter from the integer argument register
+                cursor.int_reg_idx += 1;
+            } else {
+                emitter.comment(&format!(
+                    "param ${} from caller stack +{}",
+                    name,
+                    cursor.caller_stack_offset
+                ));
+                load_from_caller_stack(emitter, "x10", cursor.caller_stack_offset);
+                store_at_offset(emitter, "x10", offset);                        // save the spilled pointer-like parameter into the local param slot
+                cursor.caller_stack_offset += 16;
+                cursor.int_stack_only = true;
+            }
+        }
+    }
+}
+
+pub fn emit_preserve_return_value(emitter: &mut Emitter, return_ty: &PhpType, return_offset: usize) {
+    emitter.target.ensure_aarch64_backend("return-value spill");
+    match return_ty.codegen_repr() {
+        PhpType::Float => {
+            store_at_offset(emitter, "d0", return_offset);                      // preserve the float return value in the hidden frame slot
+        }
+        PhpType::Str => {
+            store_at_offset(emitter, "x1", return_offset);                      // preserve the string return pointer in the hidden frame slot
+            store_at_offset(emitter, "x2", return_offset - 8);                  // preserve the string return length in the hidden frame slot
+        }
+        _ => {
+            store_at_offset(emitter, "x0", return_offset);                      // preserve the scalar or pointer-like return value in the hidden frame slot
+        }
+    }
+}
+
+pub fn emit_restore_return_value(emitter: &mut Emitter, return_ty: &PhpType, return_offset: usize) {
+    emitter.target.ensure_aarch64_backend("return-value reload");
+    match return_ty.codegen_repr() {
+        PhpType::Float => {
+            load_at_offset(emitter, "d0", return_offset);                       // restore the preserved float return value from the hidden frame slot
+        }
+        PhpType::Str => {
+            load_at_offset(emitter, "x1", return_offset);                       // restore the preserved string return pointer from the hidden frame slot
+            load_at_offset(emitter, "x2", return_offset - 8);                   // restore the preserved string return length from the hidden frame slot
+        }
+        _ => {
+            load_at_offset(emitter, "x0", return_offset);                       // restore the preserved scalar or pointer-like return value from the hidden frame slot
+        }
     }
 }
 
@@ -181,5 +422,74 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
             emitter.instruction("bl __rt_mixed_write_stdout");                  // inspect boxed mixed payload and print if scalar/string
         }
         PhpType::Void | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable | PhpType::Object(_) => {} // null/array/callable/object: nothing to print
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::{Arch, Platform, Target};
+
+    fn test_emitter() -> Emitter {
+        Emitter::new(Target::new(Platform::MacOS, Arch::AArch64))
+    }
+
+    #[test]
+    fn test_emit_frame_helpers_small_frame() {
+        let mut emitter = test_emitter();
+        emit_frame_prologue(&mut emitter, 64);
+        emit_frame_restore(&mut emitter, 64);
+        emit_return(&mut emitter);
+
+        assert_eq!(
+            emitter.output(),
+            concat!(
+                "    ; prologue\n",
+                "    sub sp, sp, #64\n",
+                "    stp x29, x30, [sp, #48]\n",
+                "    add x29, sp, #48\n",
+                "    ldp x29, x30, [sp, #48]\n",
+                "    add sp, sp, #64\n",
+                "    ret\n",
+            )
+        );
+    }
+
+    #[test]
+    fn test_emit_store_incoming_param_uses_registers_then_caller_stack() {
+        let mut emitter = test_emitter();
+        let mut cursor = IncomingArgCursor::default();
+
+        emit_store_incoming_param(&mut emitter, "a", &PhpType::Int, 8, false, &mut cursor);
+        emit_store_incoming_param(&mut emitter, "b", &PhpType::Int, 16, false, &mut cursor);
+        emit_store_incoming_param(&mut emitter, "c", &PhpType::Int, 24, false, &mut cursor);
+        emit_store_incoming_param(&mut emitter, "d", &PhpType::Int, 32, false, &mut cursor);
+        emit_store_incoming_param(&mut emitter, "e", &PhpType::Int, 40, false, &mut cursor);
+        emit_store_incoming_param(&mut emitter, "f", &PhpType::Int, 48, false, &mut cursor);
+        emit_store_incoming_param(&mut emitter, "g", &PhpType::Int, 56, false, &mut cursor);
+        emit_store_incoming_param(&mut emitter, "h", &PhpType::Int, 64, false, &mut cursor);
+        emit_store_incoming_param(&mut emitter, "i", &PhpType::Int, 72, false, &mut cursor);
+
+        let out = emitter.output();
+        assert!(out.contains("    ; param $h from x7\n"));
+        assert!(out.contains("    ; param $i from caller stack +32\n"));
+        assert!(out.contains("    ldr x10, [x29, #32]\n"));
+    }
+
+    #[test]
+    fn test_emit_preserve_and_restore_return_value_for_strings() {
+        let mut emitter = test_emitter();
+        emit_preserve_return_value(&mut emitter, &PhpType::Str, 32);
+        emit_restore_return_value(&mut emitter, &PhpType::Str, 32);
+
+        assert_eq!(
+            emitter.output(),
+            concat!(
+                "    stur x1, [x29, #-32]\n",
+                "    stur x2, [x29, #-24]\n",
+                "    ldur x1, [x29, #-32]\n",
+                "    ldur x2, [x29, #-24]\n",
+            )
+        );
     }
 }

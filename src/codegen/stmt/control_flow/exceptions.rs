@@ -207,18 +207,7 @@ fn emit_set_pending_action(
         let return_offset = ctx
             .pending_return_value_offset
             .expect("codegen bug: missing pending return spill slot");
-        match &ctx.return_type {
-            PhpType::Float => {
-                abi::store_at_offset(emitter, "d0", return_offset);               // preserve the float return value across finally execution
-            }
-            PhpType::Str => {
-                abi::store_at_offset(emitter, "x1", return_offset);               // preserve the string return pointer across finally execution
-                abi::store_at_offset(emitter, "x2", return_offset - 8);           // preserve the string return length across finally execution
-            }
-            _ => {
-                abi::store_at_offset(emitter, "x0", return_offset);               // preserve the scalar/object return value across finally execution
-            }
-        }
+        abi::emit_preserve_return_value(emitter, &ctx.return_type, return_offset);
     }
 }
 
@@ -273,18 +262,7 @@ fn restore_pending_return_value(emitter: &mut Emitter, ctx: &Context) {
     let return_offset = ctx
         .pending_return_value_offset
         .expect("codegen bug: missing pending return spill slot");
-    match &ctx.return_type {
-        PhpType::Float => {
-            abi::load_at_offset(emitter, "d0", return_offset);                     // restore the preserved float return value after finally
-        }
-        PhpType::Str => {
-            abi::load_at_offset(emitter, "x1", return_offset);                     // restore the preserved string return pointer after finally
-            abi::load_at_offset(emitter, "x2", return_offset - 8);                 // restore the preserved string return length after finally
-        }
-        _ => {
-            abi::load_at_offset(emitter, "x0", return_offset);                     // restore the preserved scalar/object return value after finally
-        }
-    }
+    abi::emit_restore_return_value(emitter, &ctx.return_type, return_offset);
 }
 
 fn emit_try_handler_push(emitter: &mut Emitter, ctx: &Context, handler_offset: usize) {

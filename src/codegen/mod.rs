@@ -244,15 +244,7 @@ pub fn generate(
     emitter.raw(".align 2");
     emitter.blank();
     emitter.entry_label();
-    emitter.comment("prologue");
-    emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // grow stack for locals + saved regs
-    if frame_size - 16 <= 504 {
-        emitter.instruction(&format!("stp x29, x30, [sp, #{}]", frame_size - 16)); //save frame pointer & return address
-    } else {
-        emitter.instruction(&format!("add x9, sp, #{}", frame_size - 16));      // compute address of the saved frame-link area for a large main frame
-        emitter.instruction("stp x29, x30, [x9]");                              // save frame pointer & return address through the computed address
-    }
-    emitter.instruction(&format!("add x29, sp, #{}", frame_size - 16));         // set new frame pointer
+    abi::emit_frame_prologue(&mut emitter, frame_size);
 
     // -- save argc/argv to globals (for $argv runtime builder) --
     emitter.comment("save argc/argv to globals");
@@ -314,13 +306,7 @@ pub fn generate(
     emitter.comment("epilogue + exit(0)");
     functions::emit_owned_local_epilogue_cleanup(&mut emitter, &ctx);
     emit_main_activation_record_pop(&mut emitter, &ctx);
-    if frame_size - 16 <= 504 {
-        emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16)); //restore frame pointer & return address
-    } else {
-        emitter.instruction(&format!("add x9, sp, #{}", frame_size - 16));      // compute address of the saved frame-link area for a large main frame
-        emitter.instruction("ldp x29, x30, [x9]");                              // restore frame pointer & return address through the computed address
-    }
-    emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
+    abi::emit_frame_restore(&mut emitter, frame_size);
     // -- GC statistics (printed to stderr if --gc-stats flag was set) --
     if gc_stats {
         emitter.comment("gc-stats: print allocation statistics to stderr");
@@ -767,13 +753,9 @@ fn emit_main_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
 
 fn emit_main_cleanup_callback(emitter: &mut Emitter, cleanup_label: &str, ctx: &Context) {
     emitter.label(cleanup_label);
-    emitter.instruction("sub sp, sp, #16");                                     // reserve callback spill space for x29/x30
-    emitter.instruction("stp x29, x30, [sp, #0]");                              // save the caller frame pointer and return address
-    emitter.instruction("mov x29, x0");                                         // treat the unwound main frame pointer as our temporary base
+    abi::emit_cleanup_callback_prologue(emitter, "x0");
     functions::emit_owned_local_epilogue_cleanup(emitter, ctx);
-    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore the callback frame pointer and return address
-    emitter.instruction("add sp, sp, #16");                                     // release the callback spill space
-    emitter.instruction("ret");                                                 // finish unwound-main cleanup callback before catch dispatch
+    abi::emit_cleanup_callback_epilogue(emitter);
     emitter.blank();
 }
 

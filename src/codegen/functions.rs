@@ -11,21 +11,6 @@ use crate::types::{
     PhpType,
 };
 
-fn emit_load_from_caller_stack(emitter: &mut Emitter, reg: &str, offset: usize) {
-    if offset <= 4095 {
-        emitter.instruction(&format!("ldr {}, [x29, #{}]", reg, offset));       // load spilled incoming argument from the caller stack
-    } else {
-        emitter.instruction("mov x9, x29");                                     // seed a scratch pointer from the caller frame base
-        let mut remaining = offset;
-        while remaining > 0 {
-            let chunk = remaining.min(4080);
-            emitter.instruction(&format!("add x9, x9, #{}", chunk));            // advance the scratch pointer toward the spilled argument slot
-            remaining -= chunk;
-        }
-        emitter.instruction(&format!("ldr {}, [x9]", reg));                     // load spilled incoming argument through the computed address
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 pub fn emit_function(
     emitter: &mut Emitter,
@@ -269,24 +254,12 @@ fn emit_function_with_label_and_class(
     // -- function prologue: set up stack frame --
     emitter.raw(".align 2");
     emitter.label_global(label);
-    emitter.comment("prologue");
-    emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for locals
-    if frame_size - 16 <= 504 {
-        emitter.instruction(&format!("stp x29, x30, [sp, #{}]", frame_size - 16)); //save caller's frame ptr & return addr
-    } else {
-        emitter.instruction(&format!("add x9, sp, #{}", frame_size - 16));      // compute address of the saved frame-link area for large frames
-        emitter.instruction("stp x29, x30, [x9]");                              // save caller's frame ptr & return addr through the computed address
-    }
-    emitter.instruction(&format!("add x29, sp, #{}", frame_size - 16));         // set new frame pointer
+    super::abi::emit_frame_prologue(emitter, frame_size);
 
     // -- save parameters from registers to local stack slots --
     // ARM64 ABI: int/bool/array args in x0-x7, float args in d0-d7
     // Strings use two consecutive int registers (ptr + len)
-    let mut int_reg_idx = 0usize;
-    let mut float_reg_idx = 0usize;
-    let mut caller_stack_offset = 32usize;
-    let mut int_stack_only = false;
-    let mut float_stack_only = false;
+    let mut incoming_args = super::abi::IncomingArgCursor::default();
     for (i, (pname, pty)) in sig.params.iter().enumerate() {
         let is_ref = sig.ref_params.get(i).copied().unwrap_or(false);
         let var = ctx
@@ -294,95 +267,14 @@ fn emit_function_with_label_and_class(
             .get(pname)
             .expect("codegen bug: param was just allocated but not found in variables map");
         let offset = var.stack_offset;
-        if is_ref {
-            if !int_stack_only && int_reg_idx < 8 {
-                emitter.comment(&format!("param &${} from x{} (ref)", pname, int_reg_idx));
-                super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save address of referenced variable from an integer register
-                int_reg_idx += 1;
-            } else {
-                emitter.comment(&format!("param &${} from caller stack +{}", pname, caller_stack_offset));
-                emit_load_from_caller_stack(emitter, "x10", caller_stack_offset);
-                super::abi::store_at_offset(emitter, "x10", offset);            // save the spilled reference argument into the local slot
-                caller_stack_offset += 16;
-                int_stack_only = true;
-            }
-        } else {
-            match pty {
-                PhpType::Bool | PhpType::Int => {
-                    if !int_stack_only && int_reg_idx < 8 {
-                        emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
-                        super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save int/bool param from an integer register
-                        int_reg_idx += 1;
-                    } else {
-                        emitter.comment(&format!("param ${} from caller stack +{}", pname, caller_stack_offset));
-                        emit_load_from_caller_stack(emitter, "x10", caller_stack_offset);
-                        super::abi::store_at_offset(emitter, "x10", offset);    // save the spilled int/bool parameter into the local slot
-                        caller_stack_offset += 16;
-                        int_stack_only = true;
-                    }
-                }
-                PhpType::Float => {
-                    if !float_stack_only && float_reg_idx < 8 {
-                        emitter.comment(&format!("param ${} from d{}", pname, float_reg_idx));
-                        super::abi::store_at_offset(emitter, &format!("d{}", float_reg_idx), offset); // save float param from a floating-point register
-                        float_reg_idx += 1;
-                    } else {
-                        emitter.comment(&format!("param ${} from caller stack +{}", pname, caller_stack_offset));
-                        emit_load_from_caller_stack(emitter, "d15", caller_stack_offset);
-                        super::abi::store_at_offset(emitter, "d15", offset);    // save the spilled float parameter into the local slot
-                        caller_stack_offset += 16;
-                        float_stack_only = true;
-                    }
-                }
-                PhpType::Str => {
-                    if !int_stack_only && int_reg_idx + 1 < 8 {
-                        emitter.comment(&format!(
-                            "param ${} from x{},x{}",
-                            pname,
-                            int_reg_idx,
-                            int_reg_idx + 1
-                        ));
-                        super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save string pointer from the integer-register pair
-                        super::abi::store_at_offset(
-                            emitter,
-                            &format!("x{}", int_reg_idx + 1),
-                            offset - 8,
-                        ); // save string length from the integer-register pair
-                        int_reg_idx += 2;
-                    } else {
-                        emitter.comment(&format!("param ${} from caller stack +{}", pname, caller_stack_offset));
-                        emit_load_from_caller_stack(emitter, "x10", caller_stack_offset);
-                        emit_load_from_caller_stack(emitter, "x11", caller_stack_offset + 8);
-                        super::abi::store_at_offset(emitter, "x10", offset);    // save the spilled string pointer into the local slot
-                        super::abi::store_at_offset(emitter, "x11", offset - 8); // save the spilled string length into the local slot
-                        caller_stack_offset += 16;
-                        int_stack_only = true;
-                    }
-                }
-                PhpType::Void => {}
-                PhpType::Mixed
-                | PhpType::Union(_)
-                | PhpType::Array(_)
-                | PhpType::AssocArray { .. }
-                | PhpType::Buffer(_)
-                | PhpType::Callable
-                | PhpType::Object(_)
-                | PhpType::Packed(_)
-                | PhpType::Pointer(_) => {
-                    if !int_stack_only && int_reg_idx < 8 {
-                        emitter.comment(&format!("param ${} from x{}", pname, int_reg_idx));
-                        super::abi::store_at_offset(emitter, &format!("x{}", int_reg_idx), offset); // save heap/object/callable parameter from an integer register
-                        int_reg_idx += 1;
-                    } else {
-                        emitter.comment(&format!("param ${} from caller stack +{}", pname, caller_stack_offset));
-                        emit_load_from_caller_stack(emitter, "x10", caller_stack_offset);
-                        super::abi::store_at_offset(emitter, "x10", offset);    // save the spilled heap/object/callable parameter into the local slot
-                        caller_stack_offset += 16;
-                        int_stack_only = true;
-                    }
-                }
-            }
-        }
+        super::abi::emit_store_incoming_param(
+            emitter,
+            pname,
+            pty,
+            offset,
+            is_ref,
+            &mut incoming_args,
+        );
     }
 
     // -- zero-initialize local variables that may be deep-freed on reassignment --
@@ -488,14 +380,8 @@ fn emit_function_with_label_and_class(
     if needs_return_preserve {
         restore_return_registers(emitter, &ctx, &sig.return_type);
     }
-    if frame_size - 16 <= 504 {
-        emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_size - 16)); //restore frame ptr & return addr
-    } else {
-        emitter.instruction(&format!("add x9, sp, #{}", frame_size - 16));      // compute address of the saved frame-link area for large frames
-        emitter.instruction("ldp x29, x30, [x9]");                              // restore frame ptr & return addr through the computed address
-    }
-    emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
-    emitter.instruction("ret");                                                 // return to caller
+    super::abi::emit_frame_restore(emitter, frame_size);
+    super::abi::emit_return(emitter);
     emitter.blank();
     emit_frame_cleanup_callback(emitter, &ctx, &cleanup_label);
 
@@ -530,36 +416,14 @@ fn preserve_return_registers(emitter: &mut Emitter, ctx: &Context, return_ty: &P
     let return_offset = ctx
         .pending_return_value_offset
         .expect("codegen bug: missing pending return spill slot");
-    match return_ty {
-        PhpType::Float => {
-            super::abi::store_at_offset(emitter, "d0", return_offset);          // preserve the float return value in the hidden frame slot across epilogue side effects
-        }
-        PhpType::Str => {
-            super::abi::store_at_offset(emitter, "x1", return_offset);          // preserve the string return pointer in the hidden frame slot across epilogue side effects
-            super::abi::store_at_offset(emitter, "x2", return_offset - 8);      // preserve the string return length in the hidden frame slot across epilogue side effects
-        }
-        _ => {
-            super::abi::store_at_offset(emitter, "x0", return_offset);          // preserve the scalar/object return value in the hidden frame slot across epilogue side effects
-        }
-    }
+    super::abi::emit_preserve_return_value(emitter, return_ty, return_offset);
 }
 
 fn restore_return_registers(emitter: &mut Emitter, ctx: &Context, return_ty: &PhpType) {
     let return_offset = ctx
         .pending_return_value_offset
         .expect("codegen bug: missing pending return spill slot");
-    match return_ty {
-        PhpType::Float => {
-            super::abi::load_at_offset(emitter, "d0", return_offset);           // restore the float return value from the hidden frame slot after epilogue cleanup
-        }
-        PhpType::Str => {
-            super::abi::load_at_offset(emitter, "x1", return_offset);           // restore the string return pointer from the hidden frame slot after epilogue cleanup
-            super::abi::load_at_offset(emitter, "x2", return_offset - 8);       // restore the string return length from the hidden frame slot after epilogue cleanup
-        }
-        _ => {
-            super::abi::load_at_offset(emitter, "x0", return_offset);           // restore the scalar/object return value from the hidden frame slot after epilogue cleanup
-        }
-    }
+    super::abi::emit_restore_return_value(emitter, return_ty, return_offset);
 }
 
 fn epilogue_has_side_effects(ctx: &Context) -> bool {
@@ -654,13 +518,9 @@ fn emit_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
 
 fn emit_frame_cleanup_callback(emitter: &mut Emitter, ctx: &Context, cleanup_label: &str) {
     emitter.label(cleanup_label);
-    emitter.instruction("sub sp, sp, #16");                                     // reserve callback spill space for x29/x30
-    emitter.instruction("stp x29, x30, [sp, #0]");                              // save the caller frame pointer and return address
-    emitter.instruction("mov x29, x0");                                         // treat the unwound activation's frame pointer as our temporary base
+    super::abi::emit_cleanup_callback_prologue(emitter, "x0");
     emit_owned_local_epilogue_cleanup(emitter, ctx);
-    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore the callback frame pointer and return address
-    emitter.instruction("add sp, sp, #16");                                     // release the callback spill space
-    emitter.instruction("ret");                                                 // finish unwound-frame cleanup callback
+    super::abi::emit_cleanup_callback_epilogue(emitter);
     emitter.blank();
 }
 
