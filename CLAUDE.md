@@ -280,3 +280,4 @@ sidebar:
 - Keep commit messages concise
 - Run `cargo test` before committing — all tests must pass
 - Zero compiler warnings policy (`cargo build` must be clean)
+- Never run `cargo fmt` in this repo. Use targeted manual edits only; global formatting creates noisy churn here.
