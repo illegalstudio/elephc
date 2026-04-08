@@ -3,9 +3,30 @@ use crate::codegen::{abi, context::Context, data_section::DataSection, functions
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
 
+pub(crate) struct PreparedCallArgs {
+    pub(crate) all_args: Vec<Expr>,
+    pub(crate) variadic_args: Vec<Expr>,
+    pub(crate) spread_arg: Option<Expr>,
+    pub(crate) spread_at_index: usize,
+    pub(crate) regular_param_count: usize,
+    pub(crate) is_variadic: bool,
+    pub(crate) spread_into_named: bool,
+}
+
 pub(crate) fn has_named_args(args: &[Expr]) -> bool {
     args.iter()
         .any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
+}
+
+pub(crate) fn regular_param_count(sig: Option<&FunctionSig>, fallback_arg_count: usize) -> usize {
+    sig.map(|sig| {
+        if sig.variadic.is_some() {
+            sig.params.len().saturating_sub(1)
+        } else {
+            sig.params.len()
+        }
+    })
+    .unwrap_or(fallback_arg_count)
 }
 
 pub(crate) fn normalize_named_call_args(
@@ -54,6 +75,55 @@ pub(crate) fn normalize_named_call_args(
     }
     normalized.extend(variadic_args);
     normalized
+}
+
+pub(crate) fn prepare_call_args(
+    sig: Option<&FunctionSig>,
+    args_exprs: &[Expr],
+    regular_param_count: usize,
+) -> PreparedCallArgs {
+    let is_variadic = sig.map(|s| s.variadic.is_some()).unwrap_or(false);
+    let normalized_args = sig
+        .map(|sig| normalize_named_call_args(sig, args_exprs, regular_param_count))
+        .unwrap_or_else(|| args_exprs.to_vec());
+
+    let mut regular_args = Vec::new();
+    let mut variadic_args = Vec::new();
+    let mut spread_arg = None;
+    let mut spread_at_index = 0usize;
+
+    for (idx, arg) in normalized_args.iter().enumerate() {
+        if let ExprKind::Spread(inner) = &arg.kind {
+            spread_arg = Some((**inner).clone());
+            spread_at_index = regular_args.len();
+        } else if is_variadic && idx >= regular_param_count {
+            variadic_args.push(arg.clone());
+        } else {
+            regular_args.push(arg.clone());
+        }
+    }
+
+    let spread_into_named = spread_arg.is_some() && !is_variadic;
+    let mut all_args = regular_args;
+    if !spread_into_named {
+        if let Some(sig) = sig {
+            for idx in all_args.len()..regular_param_count {
+                if let Some(Some(default)) = sig.defaults.get(idx) {
+                    all_args.push(default.clone());
+                }
+            }
+        }
+    }
+
+    PreparedCallArgs {
+        all_args,
+        variadic_args,
+        spread_arg,
+        spread_at_index,
+        regular_param_count,
+        is_variadic,
+        spread_into_named,
+    }
 }
 
 pub(crate) fn declared_target_ty<'a>(
@@ -170,6 +240,46 @@ pub(crate) fn push_expr_arg(
     }
     push_arg_value(emitter, &pushed_ty);
     pushed_ty
+}
+
+pub(crate) fn emit_pushed_non_variadic_args(
+    all_args: &[Expr],
+    sig: Option<&FunctionSig>,
+    ref_arg_context_label: &str,
+    retain_non_variable_ref_args: bool,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Vec<PhpType> {
+    let mut arg_types = Vec::new();
+
+    for (idx, arg) in all_args.iter().enumerate() {
+        let is_ref = sig
+            .and_then(|sig| sig.ref_params.get(idx))
+            .copied()
+            .unwrap_or(false);
+        let target_ty = declared_target_ty(sig, idx);
+
+        if is_ref {
+            if let ExprKind::Variable(var_name) = &arg.kind {
+                if !emit_ref_arg_variable_address(var_name, ref_arg_context_label, emitter, ctx) {
+                    continue;
+                }
+            } else {
+                let source_ty = super::super::emit_expr(arg, emitter, ctx, data);
+                if retain_non_variable_ref_args {
+                    super::super::retain_borrowed_heap_arg(emitter, arg, &source_ty);
+                }
+            }
+            push_arg_value(emitter, &PhpType::Int);
+            arg_types.push(PhpType::Int);
+        } else {
+            let pushed_ty = push_expr_arg(arg, target_ty, emitter, ctx, data);
+            arg_types.push(pushed_ty);
+        }
+    }
+
+    arg_types
 }
 
 pub(crate) fn load_array_element_to_result(
@@ -332,7 +442,7 @@ pub(crate) fn emit_empty_variadic_array_arg(context_label: &str, emitter: &mut E
 }
 
 pub(crate) fn emit_variadic_array_arg_from_exprs(
-    variadic_args: &[&Expr],
+    variadic_args: &[Expr],
     context_label: &str,
     retain_heap_values: bool,
     stamp_value_type: bool,
@@ -341,7 +451,7 @@ pub(crate) fn emit_variadic_array_arg_from_exprs(
     data: &mut DataSection,
 ) -> PhpType {
     let elem_count = variadic_args.len();
-    let first_elem_ty = functions::infer_contextual_type(variadic_args[0], ctx);
+    let first_elem_ty = functions::infer_contextual_type(&variadic_args[0], ctx);
     let elem_size = match first_elem_ty.codegen_repr() {
         PhpType::Str => 16,
         _ => 8,

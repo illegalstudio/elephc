@@ -3,12 +3,11 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::functions;
 use crate::names::{enum_case_symbol, method_symbol, static_method_symbol};
-use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Visibility};
+use crate::parser::ast::{Expr, StaticReceiver, Visibility};
 use crate::types::{EnumCaseValue, FunctionSig, PhpType};
 
 use super::super::{
-    emit_expr, restore_concat_offset_after_nested_call, retain_borrowed_heap_arg,
-    save_concat_offset_before_nested_call,
+    emit_expr, restore_concat_offset_after_nested_call, save_concat_offset_before_nested_call,
 };
 
 /// Evaluate arguments, retain borrowed heap values, and push each onto the stack.
@@ -20,86 +19,28 @@ fn eval_and_push_args(
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> Vec<PhpType> {
-    let is_variadic = sig.map(|s| s.variadic.is_some()).unwrap_or(false);
-    let regular_param_count = sig
-        .map(|s| {
-            if s.variadic.is_some() {
-                s.params.len().saturating_sub(1)
-            } else {
-                s.params.len()
-            }
-        })
-        .unwrap_or(args.len());
-    let normalized_args = sig
-        .map(|sig| super::super::calls::args::normalize_named_call_args(sig, args, regular_param_count))
-        .unwrap_or_else(|| args.to_vec());
-    let args = normalized_args.as_slice();
-    let mut regular_args: Vec<&Expr> = Vec::new();
-    let mut variadic_args: Vec<&Expr> = Vec::new();
-    let mut spread_arg: Option<&Expr> = None;
-    let mut spread_at_index: usize = 0;
-    for (i, arg) in args.iter().enumerate() {
-        if let ExprKind::Spread(inner) = &arg.kind {
-            spread_arg = Some(inner.as_ref());
-            spread_at_index = regular_args.len();
-        } else if is_variadic && i >= regular_param_count {
-            variadic_args.push(arg);
-        } else {
-            regular_args.push(arg);
-        }
-    }
-    let spread_into_named = spread_arg.is_some() && !is_variadic;
+    let prepared = super::super::calls::args::prepare_call_args(
+        sig,
+        args,
+        super::super::calls::args::regular_param_count(sig, args.len()),
+    );
+    let mut arg_types = super::super::calls::args::emit_pushed_non_variadic_args(
+        &prepared.all_args,
+        sig,
+        "method ref arg",
+        true,
+        emitter,
+        ctx,
+        data,
+    );
 
-    let mut all_args: Vec<&Expr> = regular_args;
-    let mut default_exprs: Vec<Expr> = Vec::new();
-    if !spread_into_named {
-        if let Some(sig) = sig {
-            for i in all_args.len()..regular_param_count {
-                if let Some(Some(default)) = sig.defaults.get(i) {
-                    default_exprs.push(default.clone());
-                }
-            }
-        }
-        let default_refs: Vec<&Expr> = default_exprs.iter().collect();
-        all_args.extend(default_refs);
-    }
-
-    let mut arg_types = Vec::new();
-    for (i, arg) in all_args.iter().enumerate() {
-        let is_ref = sig
-            .and_then(|sig| sig.ref_params.get(i))
-            .copied()
-            .unwrap_or(false);
-        let target_ty = super::super::calls::args::declared_target_ty(sig, i);
-        if is_ref {
-            if let ExprKind::Variable(var_name) = &arg.kind {
-                if !super::super::calls::args::emit_ref_arg_variable_address(
-                    var_name,
-                    "method ref arg",
-                    emitter,
-                    ctx,
-                ) {
-                    continue;
-                }
-            } else {
-                let ty = emit_expr(arg, emitter, ctx, data);
-                retain_borrowed_heap_arg(emitter, arg, &ty);
-            }
-            super::super::calls::args::push_arg_value(emitter, &PhpType::Int);
-            arg_types.push(PhpType::Int);
-        } else {
-            let pushed_ty = super::super::calls::args::push_expr_arg(arg, target_ty, emitter, ctx, data);
-            arg_types.push(pushed_ty);
-        }
-    }
-
-    if spread_into_named {
-        if let Some(spread_expr) = spread_arg {
+    if prepared.spread_into_named {
+        if let Some(spread_expr) = prepared.spread_arg.as_ref() {
             super::super::calls::args::emit_spread_into_named_params(
                 spread_expr,
                 sig,
-                spread_at_index,
-                regular_param_count,
+                prepared.spread_at_index,
+                prepared.regular_param_count,
                 "method params",
                 emitter,
                 ctx,
@@ -109,8 +50,8 @@ fn eval_and_push_args(
         }
     }
 
-    if is_variadic {
-        if let Some(spread_expr) = spread_arg {
+    if prepared.is_variadic {
+        if let Some(spread_expr) = prepared.spread_arg.as_ref() {
             let ty = super::super::calls::args::emit_spread_variadic_array_arg(
                 spread_expr,
                 "spread array as variadic method param",
@@ -119,14 +60,14 @@ fn eval_and_push_args(
                 data,
             );
             arg_types.push(ty);
-        } else if variadic_args.is_empty() {
+        } else if prepared.variadic_args.is_empty() {
             arg_types.push(super::super::calls::args::emit_empty_variadic_array_arg(
                 "empty variadic method array",
                 emitter,
             ));
         } else {
             arg_types.push(super::super::calls::args::emit_variadic_array_arg_from_exprs(
-                &variadic_args,
+                &prepared.variadic_args,
                 "build variadic method array",
                 true,
                 true,

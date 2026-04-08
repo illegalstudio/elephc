@@ -2,7 +2,7 @@ use crate::codegen::context::{Context, DeferredClosure};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::functions;
-use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind, TypeExpr};
+use crate::parser::ast::{Expr, Stmt, StmtKind, TypeExpr};
 use crate::types::{FunctionSig, PhpType};
 
 use super::args;
@@ -202,84 +202,26 @@ pub(super) fn emit_closure_call(
         .unwrap_or(args_exprs.len());
     let regular_param_count = sig
         .as_ref()
-        .map(|s| {
-            if s.variadic.is_some() {
-                visible_param_count.saturating_sub(1)
-            } else {
-                visible_param_count
-            }
-        })
+        .map(|s| if s.variadic.is_some() { visible_param_count.saturating_sub(1) } else { visible_param_count })
         .unwrap_or(args_exprs.len());
-    let is_variadic = sig.as_ref().map(|s| s.variadic.is_some()).unwrap_or(false);
-    let normalized_args = sig
-        .as_ref()
-        .map(|sig| args::normalize_named_call_args(sig, args_exprs, regular_param_count))
-        .unwrap_or_else(|| args_exprs.to_vec());
-    let args_exprs = normalized_args.as_slice();
+    let prepared = args::prepare_call_args(sig.as_ref(), args_exprs, regular_param_count);
+    let mut arg_types = args::emit_pushed_non_variadic_args(
+        &prepared.all_args,
+        sig.as_ref(),
+        "closure ref arg",
+        true,
+        emitter,
+        ctx,
+        data,
+    );
 
-    let mut regular_args: Vec<&Expr> = Vec::new();
-    let mut variadic_args: Vec<&Expr> = Vec::new();
-    let mut spread_arg: Option<&Expr> = None;
-    let mut spread_at_index: usize = 0;
-    for (i, arg) in args_exprs.iter().enumerate() {
-        if let ExprKind::Spread(inner) = &arg.kind {
-            spread_arg = Some(inner.as_ref());
-            spread_at_index = regular_args.len();
-        } else if is_variadic && i >= regular_param_count {
-            variadic_args.push(arg);
-        } else {
-            regular_args.push(arg);
-        }
-    }
-    let spread_into_named = spread_arg.is_some() && !is_variadic;
-
-    let mut all_args: Vec<&Expr> = regular_args;
-    let mut default_exprs: Vec<Expr> = Vec::new();
-    if !spread_into_named {
-        if let Some(ref s) = sig {
-            for i in all_args.len()..regular_param_count {
-                if let Some(Some(default)) = s.defaults.get(i) {
-                    default_exprs.push(default.clone());
-                }
-            }
-        }
-        let default_refs: Vec<&Expr> = default_exprs.iter().collect();
-        all_args.extend(default_refs);
-    }
-
-    let ref_params = sig
-        .as_ref()
-        .map(|s| s.ref_params.clone())
-        .unwrap_or_default();
-
-    let mut arg_types = Vec::new();
-    for (i, arg) in all_args.iter().enumerate() {
-        let is_ref = ref_params.get(i).copied().unwrap_or(false);
-        let target_ty = args::declared_target_ty(sig.as_ref(), i);
-        if is_ref {
-            if let ExprKind::Variable(var_name) = &arg.kind {
-                if !args::emit_ref_arg_variable_address(var_name, "closure ref arg", emitter, ctx) {
-                    continue;
-                }
-            } else {
-                let ty = super::super::emit_expr(arg, emitter, ctx, data);
-                super::super::retain_borrowed_heap_arg(emitter, arg, &ty);
-            }
-            args::push_arg_value(emitter, &PhpType::Int);
-            arg_types.push(PhpType::Int);
-        } else {
-            let pushed_ty = args::push_expr_arg(arg, target_ty, emitter, ctx, data);
-            arg_types.push(pushed_ty);
-        }
-    }
-
-    if spread_into_named {
-        if let Some(spread_expr) = spread_arg {
+    if prepared.spread_into_named {
+        if let Some(spread_expr) = prepared.spread_arg.as_ref() {
             args::emit_spread_into_named_params(
                 spread_expr,
                 sig.as_ref(),
-                spread_at_index,
-                regular_param_count,
+                prepared.spread_at_index,
+                prepared.regular_param_count,
                 "closure params",
                 emitter,
                 ctx,
@@ -289,8 +231,8 @@ pub(super) fn emit_closure_call(
         }
     }
 
-    if is_variadic {
-        if let Some(spread_expr) = spread_arg {
+    if prepared.is_variadic {
+        if let Some(spread_expr) = prepared.spread_arg.as_ref() {
             let ty = args::emit_spread_variadic_array_arg(
                 spread_expr,
                 "spread array as variadic closure param",
@@ -299,14 +241,14 @@ pub(super) fn emit_closure_call(
                 data,
             );
             arg_types.push(ty);
-        } else if variadic_args.is_empty() {
+        } else if prepared.variadic_args.is_empty() {
             arg_types.push(args::emit_empty_variadic_array_arg(
                 "empty variadic closure array",
                 emitter,
             ));
         } else {
             arg_types.push(args::emit_variadic_array_arg_from_exprs(
-                &variadic_args,
+                &prepared.variadic_args,
                 "build variadic closure array",
                 true,
                 true,
