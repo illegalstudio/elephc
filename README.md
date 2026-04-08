@@ -107,6 +107,10 @@ elephc --define DEBUG app.php
 
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
+
+# Experimental target selection plumbing
+# AArch64 emission works today; linux-x86_64 is recognized but not emitted yet
+elephc --target linux-aarch64 hello.php
 ```
 
 Or via cargo:

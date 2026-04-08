@@ -56,15 +56,25 @@ PHP source (.php)
 ┌─────────┐
 │ Codegen  │  src/codegen/
 │          │  mod.rs, expr.rs + expr/, stmt.rs + stmt/, functions.rs, abi.rs
-│          │  AST → ARM64 assembly string (.s file)
+│          │  AST → target assembly string (.s file)
 └────┬─────┘
      │
      ▼
 ┌─────────┐
 │ as + ld  │  System assembler and linker
-│          │  .s → .o → Mach-O binary
+│          │  .s → .o → target-native binary
 └─────────┘
 ```
+
+## Target Model
+
+The compiler now distinguishes the operating-system side of a target from the instruction set:
+
+- `Platform` describes OS / binary format / libc concerns such as macOS vs Linux.
+- `Arch` describes the instruction set and calling convention such as `AArch64` vs `X86_64`.
+- `Target` combines both and is threaded from the CLI into codegen and the test harness.
+
+Today the emitted backend is still AArch64-only. The explicit `Target` model exists so new ISAs can be added without reusing the old assumption that `Linux` automatically means ARM64.
 
 ## Module map
 
