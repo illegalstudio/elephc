@@ -6789,6 +6789,19 @@ echo $result;
 }
 
 #[test]
+fn test_call_user_func_supports_stack_passed_overflow_args() {
+    let out = compile_and_run(
+        r#"<?php
+function sum9($a, $b, $c, $d, $e, $f, $g, $h, $i) {
+    return $a + $b + $c + $d + $e + $f + $g + $h + $i;
+}
+echo call_user_func("sum9", 1, 2, 3, 4, 5, 6, 7, 8, 9);
+"#,
+    );
+    assert_eq!(out, "45");
+}
+
+#[test]
 fn test_function_exists_true() {
     let out = compile_and_run(
         r#"<?php

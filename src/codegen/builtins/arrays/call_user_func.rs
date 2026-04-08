@@ -103,35 +103,16 @@ pub fn emit(
         }
     }
 
-    // -- pop arguments back into ABI registers in reverse --
-    let mut int_reg = 0usize;
-    let mut reg_assignments: Vec<(PhpType, usize)> = Vec::new();
-    for ty in &arg_types {
-        reg_assignments.push((ty.clone(), int_reg));
-        int_reg += ty.register_count();
-    }
-    for i in (0..arg_types.len()).rev() {
-        let (ty, start_reg) = &reg_assignments[i];
-        match ty {
-            PhpType::Str => {
-                emitter.instruction(&format!(                                   // pop string ptr+len into registers
-                    "ldp x{}, x{}, [sp], #16",
-                    start_reg, start_reg + 1
-                ));
-            }
-            _ => {
-                emitter.instruction(&format!(                                   // pop int/bool/array arg into register
-                    "ldr x{}, [sp], #16",
-                    start_reg
-                ));
-            }
-        }
-    }
+    let assignments = abi::build_outgoing_arg_assignments(&arg_types, 0);
+    let overflow_bytes = abi::materialize_outgoing_args(emitter, &assignments);
 
     // -- load callback address and call via blr --
     crate::codegen::expr::save_concat_offset_before_nested_call(emitter);
     emitter.instruction("blr x19");                                             // call callback function via indirect branch
     crate::codegen::expr::restore_concat_offset_after_nested_call(emitter, &ret_ty);
+    if overflow_bytes > 0 {
+        emitter.instruction(&format!("add sp, sp, #{}", overflow_bytes));       // drop spilled stack callback arguments after the indirect call returns
+    }
 
     Some(ret_ty)
 }
