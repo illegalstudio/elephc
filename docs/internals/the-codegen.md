@@ -823,6 +823,15 @@ The cursor tracks:
 
 The implementation is still AArch64-specific today, but the structure is important: function codegen now delegates the ABI rulebook for incoming params instead of open-coding it inline.
 
+### Outgoing call argument lowering
+
+Outgoing calls now use ABI-owned helpers as well:
+
+- `build_outgoing_arg_assignments()` decides whether each argument lands in an integer register, a floating-point register, or overflows onto the caller-visible stack area
+- `materialize_outgoing_args()` rewrites the temporary pushed-argument stack into the final ABI layout expected at the call site
+
+That logic is shared by ordinary function calls, indirect/callable dispatch, object/method calls, constructor/static dispatch, and helpers such as `call_user_func_array()`. The implementation is still AArch64-specific, but the call ABI rules now live in one place instead of being duplicated across several dispatch paths.
+
 ### `emit_store(emitter, type, offset)`
 
 Stores the current result to a stack variable. Uses `store_at_offset()` internally to handle large offsets:

@@ -454,8 +454,6 @@ pub(super) fn emit_closure_call(
         }
         arg_types.push(cap_ty.clone());
     }
-    let total_args = arg_types.len();
-
     let var_info = match ctx.variables.get(var) {
         Some(v) => v,
         None => {
@@ -467,10 +465,10 @@ pub(super) fn emit_closure_call(
     crate::codegen::abi::load_at_offset(emitter, "x9", var_offset); // load closure function address from stack
     emitter.instruction("str x9, [sp, #-16]!");                                 // push closure address temporarily
 
-    let assignments = args::build_arg_assignments(&arg_types, 0);
+    let assignments = crate::codegen::abi::build_outgoing_arg_assignments(&arg_types, 0);
 
     emitter.instruction("ldr x9, [sp], #16");                                   // pop closure function address into x9
-    let overflow_bytes = args::materialize_call_args(emitter, &assignments, total_args);
+    let overflow_bytes = crate::codegen::abi::materialize_outgoing_args(emitter, &assignments);
 
     let ret_ty = ctx
         .closure_sigs

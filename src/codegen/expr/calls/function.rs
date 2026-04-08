@@ -194,8 +194,8 @@ pub(super) fn emit_function_call(
         arg_types.push(PhpType::Array(Box::new(PhpType::Int)));
     }
 
-    let assignments = args::build_arg_assignments(&arg_types, 0);
-    let overflow_bytes = args::materialize_call_args(emitter, &assignments, arg_types.len());
+    let assignments = crate::codegen::abi::build_outgoing_arg_assignments(&arg_types, 0);
+    let overflow_bytes = crate::codegen::abi::materialize_outgoing_args(emitter, &assignments);
 
     let ret_ty = ctx
         .functions

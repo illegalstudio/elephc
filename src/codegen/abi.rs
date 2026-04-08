@@ -4,6 +4,7 @@ use crate::types::PhpType;
 const MAX_INT_ARG_REGS: usize = 8;
 const MAX_FLOAT_ARG_REGS: usize = 8;
 const CALLER_STACK_START_OFFSET: usize = 32;
+const STACK_ARG_SENTINEL: usize = usize::MAX;
 
 #[derive(Debug, Clone, Copy)]
 pub struct IncomingArgCursor {
@@ -29,6 +30,19 @@ impl IncomingArgCursor {
 impl Default for IncomingArgCursor {
     fn default() -> Self {
         Self::new(0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutgoingArgAssignment {
+    pub ty: PhpType,
+    pub start_reg: usize,
+    pub is_float: bool,
+}
+
+impl OutgoingArgAssignment {
+    fn in_register(&self) -> bool {
+        self.start_reg != STACK_ARG_SENTINEL
     }
 }
 
@@ -286,6 +300,202 @@ pub fn emit_restore_return_value(emitter: &mut Emitter, return_ty: &PhpType, ret
     }
 }
 
+pub fn build_outgoing_arg_assignments(
+    arg_types: &[PhpType],
+    initial_int_reg_idx: usize,
+) -> Vec<OutgoingArgAssignment> {
+    let mut assignments = Vec::new();
+    let mut int_reg_idx = initial_int_reg_idx;
+    let mut float_reg_idx = 0usize;
+    let mut int_stack_only = initial_int_reg_idx >= MAX_INT_ARG_REGS;
+    let mut float_stack_only = false;
+
+    for ty in arg_types {
+        if ty.is_float_reg() {
+            if !float_stack_only && float_reg_idx < MAX_FLOAT_ARG_REGS {
+                assignments.push(OutgoingArgAssignment {
+                    ty: ty.clone(),
+                    start_reg: float_reg_idx,
+                    is_float: true,
+                });
+                float_reg_idx += 1;
+            } else {
+                assignments.push(OutgoingArgAssignment {
+                    ty: ty.clone(),
+                    start_reg: STACK_ARG_SENTINEL,
+                    is_float: true,
+                });
+                float_stack_only = true;
+            }
+        } else {
+            let reg_count = ty.register_count();
+            if !int_stack_only && int_reg_idx + reg_count <= MAX_INT_ARG_REGS {
+                assignments.push(OutgoingArgAssignment {
+                    ty: ty.clone(),
+                    start_reg: int_reg_idx,
+                    is_float: false,
+                });
+                int_reg_idx += reg_count;
+            } else {
+                assignments.push(OutgoingArgAssignment {
+                    ty: ty.clone(),
+                    start_reg: STACK_ARG_SENTINEL,
+                    is_float: false,
+                });
+                int_stack_only = true;
+            }
+        }
+    }
+
+    assignments
+}
+
+fn arg_slot_size(ty: &PhpType) -> usize {
+    match ty {
+        PhpType::Void => 0,
+        _ => 16,
+    }
+}
+
+fn emit_adjust_sp(emitter: &mut Emitter, amount: usize, subtract: bool) {
+    let mut remaining = amount;
+    while remaining > 0 {
+        let chunk = remaining.min(4080);
+        if subtract {
+            emitter.instruction(&format!("sub sp, sp, #{}", chunk));            // reserve stack space for spilled outgoing call arguments
+        } else {
+            emitter.instruction(&format!("add sp, sp, #{}", chunk));            // release temporary outgoing call-argument stack space
+        }
+        remaining -= chunk;
+    }
+}
+
+fn emit_sp_address(emitter: &mut Emitter, scratch: &str, offset: usize) {
+    emitter.instruction(&format!("mov {}, sp", scratch));                       // seed a scratch pointer from the current stack pointer
+    let mut remaining = offset;
+    while remaining > 0 {
+        let chunk = remaining.min(4080);
+        emitter.instruction(&format!("add {}, {}, #{}", scratch, scratch, chunk)); // advance the scratch pointer toward the desired stack slot
+        remaining -= chunk;
+    }
+}
+
+fn emit_load_from_sp(emitter: &mut Emitter, reg: &str, offset: usize) {
+    if offset == 0 {
+        emitter.instruction(&format!("ldr {}, [sp]", reg));                     // load directly from the top of the temporary argument stack
+    } else if offset <= 4095 {
+        emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, offset));        // load from a nearby temporary argument slot with an immediate offset
+    } else {
+        emit_sp_address(emitter, "x9", offset);
+        emitter.instruction(&format!("ldr {}, [x9]", reg));                     // load from a distant temporary argument slot through a scratch address
+    }
+}
+
+fn emit_store_to_sp(emitter: &mut Emitter, reg: &str, offset: usize) {
+    if offset == 0 {
+        emitter.instruction(&format!("str {}, [sp]", reg));                     // store directly to the top of the outgoing stack-argument area
+    } else if offset <= 4095 {
+        emitter.instruction(&format!("str {}, [sp, #{}]", reg, offset));        // store to a nearby outgoing stack-argument slot with an immediate offset
+    } else {
+        emit_sp_address(emitter, "x9", offset);
+        emitter.instruction(&format!("str {}, [x9]", reg));                     // store to a distant outgoing stack-argument slot through a scratch address
+    }
+}
+
+fn emit_copy_stack_arg_slot(emitter: &mut Emitter, ty: &PhpType, src_offset: usize, dst_offset: usize) {
+    match ty {
+        PhpType::Float => {
+            emit_load_from_sp(emitter, "d15", src_offset);
+            emit_store_to_sp(emitter, "d15", dst_offset);
+        }
+        PhpType::Str => {
+            emit_load_from_sp(emitter, "x10", src_offset);
+            emit_load_from_sp(emitter, "x11", src_offset + 8);
+            emit_store_to_sp(emitter, "x10", dst_offset);
+            emit_store_to_sp(emitter, "x11", dst_offset + 8);
+        }
+        PhpType::Void => {}
+        _ => {
+            emit_load_from_sp(emitter, "x10", src_offset);
+            emit_store_to_sp(emitter, "x10", dst_offset);
+        }
+    }
+}
+
+pub fn materialize_outgoing_args(
+    emitter: &mut Emitter,
+    assignments: &[OutgoingArgAssignment],
+) -> usize {
+    let slot_sizes: Vec<usize> = assignments
+        .iter()
+        .map(|assignment| arg_slot_size(&assignment.ty))
+        .collect();
+    let total_temp_bytes: usize = slot_sizes.iter().sum();
+    let mut temp_offsets = vec![0usize; assignments.len()];
+    let mut running_offset = 0usize;
+    for i in (0..assignments.len()).rev() {
+        temp_offsets[i] = running_offset;
+        running_offset += slot_sizes[i];
+    }
+
+    let overflow_indices: Vec<usize> = assignments
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, assignment)| (!assignment.in_register()).then_some(idx))
+        .collect();
+    let overflow_bytes: usize = overflow_indices.iter().map(|idx| slot_sizes[*idx]).sum();
+
+    if overflow_bytes > 0 {
+        emit_adjust_sp(emitter, overflow_bytes, true);
+    }
+
+    let base_shift = overflow_bytes;
+    for (i, assignment) in assignments.iter().enumerate() {
+        if !assignment.in_register() {
+            continue;
+        }
+        let src_offset = base_shift + temp_offsets[i];
+        match &assignment.ty {
+            PhpType::Bool
+            | PhpType::Int
+            | PhpType::Mixed
+            | PhpType::Union(_)
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Buffer(_)
+            | PhpType::Callable
+            | PhpType::Object(_)
+            | PhpType::Packed(_)
+            | PhpType::Pointer(_) => {
+                emit_load_from_sp(emitter, &format!("x{}", assignment.start_reg), src_offset);
+            }
+            PhpType::Float => {
+                emit_load_from_sp(emitter, &format!("d{}", assignment.start_reg), src_offset);
+            }
+            PhpType::Str => {
+                emit_load_from_sp(emitter, &format!("x{}", assignment.start_reg), src_offset);
+                emit_load_from_sp(emitter, &format!("x{}", assignment.start_reg + 1), src_offset + 8);
+            }
+            PhpType::Void => {}
+        }
+    }
+
+    if overflow_bytes > 0 {
+        let mut dst_offset = total_temp_bytes;
+        for idx in &overflow_indices {
+            let src_offset = overflow_bytes + temp_offsets[*idx];
+            emit_copy_stack_arg_slot(emitter, &assignments[*idx].ty, src_offset, dst_offset);
+            dst_offset += slot_sizes[*idx];
+        }
+    }
+
+    if total_temp_bytes > 0 {
+        emit_adjust_sp(emitter, total_temp_bytes, false);
+    }
+
+    overflow_bytes
+}
+
 /// Store the current result registers to a local variable on the stack.
 ///
 /// ARM64 register conventions for each PHP type:
@@ -491,5 +701,68 @@ mod tests {
                 "    ldur x2, [x29, #-24]\n",
             )
         );
+    }
+
+    #[test]
+    fn test_build_outgoing_arg_assignments_respects_register_limits() {
+        let assignments = build_outgoing_arg_assignments(
+            &[
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Float,
+                PhpType::Float,
+                PhpType::Float,
+                PhpType::Float,
+                PhpType::Float,
+                PhpType::Float,
+                PhpType::Float,
+                PhpType::Float,
+                PhpType::Float,
+            ],
+            0,
+        );
+
+        assert_eq!(assignments[0].start_reg, 0);
+        assert_eq!(assignments[7].start_reg, 7);
+        assert_eq!(assignments[8].start_reg, STACK_ARG_SENTINEL);
+        assert!(assignments[9].is_float);
+        assert_eq!(assignments[16].start_reg, 7);
+        assert_eq!(assignments[17].start_reg, STACK_ARG_SENTINEL);
+    }
+
+    #[test]
+    fn test_materialize_outgoing_args_keeps_overflow_on_stack() {
+        let mut emitter = test_emitter();
+        let assignments = build_outgoing_arg_assignments(
+            &[
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+                PhpType::Int,
+            ],
+            0,
+        );
+
+        let overflow_bytes = materialize_outgoing_args(&mut emitter, &assignments);
+        let out = emitter.output();
+
+        assert_eq!(overflow_bytes, 16);
+        assert!(out.contains("    sub sp, sp, #16\n"));
+        assert!(out.contains("    ldr x0, [sp, #144]\n"));
+        assert!(out.contains("    ldr x7, [sp, #32]\n"));
+        assert!(out.contains("    str x10, [sp, #144]\n"));
+        assert!(out.contains("    add sp, sp, #144\n"));
     }
 }

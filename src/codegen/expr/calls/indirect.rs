@@ -203,10 +203,10 @@ pub(super) fn emit_expr_call(
     emitter.instruction("mov x9, x0");                                          // save closure address to x9
     emitter.instruction("str x9, [sp, #-16]!");                                 // push closure address temporarily
 
-    let assignments = args::build_arg_assignments(&arg_types, 0);
+    let assignments = crate::codegen::abi::build_outgoing_arg_assignments(&arg_types, 0);
 
     emitter.instruction("ldr x9, [sp], #16");                                   // pop closure function address into x9
-    let overflow_bytes = args::materialize_call_args(emitter, &assignments, arg_types.len());
+    let overflow_bytes = crate::codegen::abi::materialize_outgoing_args(emitter, &assignments);
 
     let ret_ty = callee_sig
         .as_ref()

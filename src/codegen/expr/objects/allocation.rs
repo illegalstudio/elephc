@@ -144,9 +144,9 @@ pub(super) fn emit_new_object(
             arg_types.push(ty);
         }
 
-        let assignments = crate::codegen::expr::calls::args::build_arg_assignments(&arg_types, 1);
+        let assignments = crate::codegen::abi::build_outgoing_arg_assignments(&arg_types, 1);
         let overflow_bytes =
-            crate::codegen::expr::calls::args::materialize_call_args(emitter, &assignments, arg_types.len());
+            crate::codegen::abi::materialize_outgoing_args(emitter, &assignments);
 
         if overflow_bytes == 0 {
             emitter.instruction("ldr x0, [sp]");                                // load $this directly from the top of the stack when all args stayed in registers

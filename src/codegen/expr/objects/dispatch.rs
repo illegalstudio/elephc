@@ -200,18 +200,21 @@ fn eval_and_push_args(
     arg_types
 }
 
-/// Compute register assignments for the given arg types, starting integer
-/// register numbering at `first_int_reg`. Returns (assignments, next_int_reg, next_float_reg).
+/// Compute outgoing call-argument placement for the given arg types, starting
+/// integer register numbering at `first_int_reg`.
 fn compute_register_assignments(
     arg_types: &[PhpType],
     first_int_reg: usize,
-) -> Vec<(PhpType, usize, bool)> {
-    super::super::calls::args::build_arg_assignments(arg_types, first_int_reg)
+) -> Vec<crate::codegen::abi::OutgoingArgAssignment> {
+    crate::codegen::abi::build_outgoing_arg_assignments(arg_types, first_int_reg)
 }
 
-/// Pop arguments from the stack into their assigned registers (in reverse order).
-fn pop_args_to_registers(emitter: &mut Emitter, assignments: &[(PhpType, usize, bool)]) -> usize {
-    super::super::calls::args::materialize_call_args(emitter, assignments, assignments.len())
+/// Materialize outgoing call arguments into their assigned registers/stack area.
+fn pop_args_to_registers(
+    emitter: &mut Emitter,
+    assignments: &[crate::codegen::abi::OutgoingArgAssignment],
+) -> usize {
+    crate::codegen::abi::materialize_outgoing_args(emitter, assignments)
 }
 
 fn resolve_instance_method_dispatch(
