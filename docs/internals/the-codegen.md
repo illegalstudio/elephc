@@ -169,7 +169,7 @@ Floats are stored as their raw 64-bit IEEE 754 bit patterns (`.quad` directive).
 
 **Files:** `src/codegen/expr.rs`, `src/codegen/expr/`
 
-`emit_expr()` takes an expression node and emits code that leaves the result in the standard registers. The top-level `expr.rs` file now mainly dispatches into focused helpers under `expr/` such as `binops.rs`, `arrays.rs`, `compare.rs`, `calls/`, and `objects/`.
+`emit_expr()` takes an expression node and emits code that leaves the result in the standard registers. The top-level `expr.rs` file now mainly dispatches into focused helpers under `expr/` such as `scalars.rs`, `binops.rs`, `arrays.rs`, `compare.rs`, `calls/`, and `objects/`.
 
 | Type | Result location |
 |---|---|

@@ -29,9 +29,10 @@ pub use registers::{
 pub use symbols::{
     emit_load_symbol_to_local_slot, emit_load_symbol_to_reg, emit_load_symbol_to_result,
     emit_store_local_slot_to_symbol, emit_store_reg_to_symbol, emit_store_result_to_symbol,
-    emit_symbol_address,
+    emit_store_zero_to_symbol, emit_symbol_address,
 };
 pub use values::{
     emit_decref_if_refcounted, emit_incref_if_refcounted, emit_load, emit_store,
     emit_write_stdout,
 };
+pub(crate) use registers::{float_result_reg, int_result_reg, string_result_regs, symbol_scratch_reg};

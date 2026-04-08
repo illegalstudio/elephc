@@ -148,6 +148,23 @@ pub fn emit_store_reg_to_symbol(
     }
 }
 
+pub fn emit_store_zero_to_symbol(emitter: &mut Emitter, symbol: &str, byte_offset: usize) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emit_store_reg_to_symbol(emitter, "xzr", symbol, byte_offset);              // store architectural zero directly into symbol-backed storage
+        }
+        Arch::X86_64 => {
+            let scratch = symbol_scratch_reg(emitter);
+            if byte_offset == 0 {
+                emitter.instruction(&format!("mov QWORD PTR [rip + {}], 0", symbol));   // zero the symbol base slot through RIP-relative addressing
+            } else {
+                emit_symbol_address(emitter, scratch, symbol);
+                emitter.instruction(&format!("mov QWORD PTR [{} + {}], 0", scratch, byte_offset)); // zero the requested symbol byte offset through the computed address
+            }
+        }
+    }
+}
+
 pub fn emit_load_symbol_to_result(emitter: &mut Emitter, symbol: &str, ty: &PhpType) {
     match ty.codegen_repr() {
         PhpType::Float => {

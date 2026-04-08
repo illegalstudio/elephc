@@ -1,6 +1,7 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
+use crate::codegen::{abi, platform::Arch};
 use crate::types::PhpType;
 
 /// Coerce a value to string (x1=ptr, x2=len) for concatenation.
@@ -86,20 +87,37 @@ fn emit_missing_tostring_fatal(emitter: &mut Emitter, data: &mut DataSection, cl
 /// that was assigned null - sentinel value in x0).
 pub(super) fn coerce_null_to_zero(emitter: &mut Emitter, ty: &PhpType) {
     if *ty == PhpType::Void {
-        // -- compile-time null: just load zero --
-        emitter.instruction("mov x0, #0");                                      // null is zero in arithmetic/comparison context
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("mov x0, #0");                              // null is zero in arithmetic/comparison context
+            }
+            Arch::X86_64 => {
+                emitter.instruction("mov rax, 0");                              // null is zero in arithmetic/comparison context
+            }
+        }
     } else if *ty == PhpType::Bool {
         // Bool is already 0/1 in x0, compatible with Int arithmetic
     } else if *ty == PhpType::Float {
         // Float is already in d0, no null sentinel to check
     } else if *ty == PhpType::Int {
-        // -- runtime null check: compare x0 against sentinel value --
-        emitter.instruction("movz x9, #0xFFFE");                                // build null sentinel in x9: bits 0-15
-        emitter.instruction("movk x9, #0xFFFF, lsl #16");                       // null sentinel bits 16-31
-        emitter.instruction("movk x9, #0xFFFF, lsl #32");                       // null sentinel bits 32-47
-        emitter.instruction("movk x9, #0x7FFF, lsl #48");                       // null sentinel bits 48-63, completing value
-        emitter.instruction("cmp x0, x9");                                      // compare value against null sentinel
-        emitter.instruction("csel x0, xzr, x0, eq");                            // if x0 == sentinel, replace with zero
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("movz x9, #0xFFFE");                        // build null sentinel in x9: bits 0-15
+                emitter.instruction("movk x9, #0xFFFF, lsl #16");               // null sentinel bits 16-31
+                emitter.instruction("movk x9, #0xFFFF, lsl #32");               // null sentinel bits 32-47
+                emitter.instruction("movk x9, #0x7FFF, lsl #48");               // null sentinel bits 48-63, completing value
+                emitter.instruction("cmp x0, x9");                              // compare value against null sentinel
+                emitter.instruction("csel x0, xzr, x0, eq");                    // if x0 == sentinel, replace with zero
+            }
+            Arch::X86_64 => {
+                let sentinel_reg = abi::temp_int_reg(emitter.target);
+                let zero_reg = abi::symbol_scratch_reg(emitter);
+                emitter.instruction(&format!("mov {}, 9223372036854775806", sentinel_reg)); // materialize the runtime null sentinel in a scratch register
+                emitter.instruction(&format!("xor {}, {}", zero_reg, zero_reg));            // materialize an integer zero in a second scratch register
+                emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(emitter), sentinel_reg)); // compare the current integer result against the runtime null sentinel
+                emitter.instruction(&format!("cmove {}, {}", abi::int_result_reg(emitter), zero_reg));   // replace the sentinel with zero while leaving ordinary integers unchanged
+            }
+        }
     }
 }
 

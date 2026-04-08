@@ -6,6 +6,7 @@ mod compare;
 mod helpers;
 mod objects;
 mod ownership;
+mod scalars;
 
 use super::abi;
 use super::context::{Context, HeapOwnership};
@@ -27,46 +28,19 @@ pub fn emit_expr(
 ) -> PhpType {
     match &expr.kind {
         ExprKind::BoolLiteral(b) => {
-            emitter.comment(&format!("bool {}", b));
-            // -- load boolean as integer 0 or 1 --
-            emitter.instruction(&format!(                                       // store boolean: true=1, false=0
-                "mov x0, #{}",
-                if *b { 1 } else { 0 }
-            ));
-            PhpType::Bool
+            scalars::emit_bool_literal(*b, emitter)
         }
         ExprKind::Null => {
-            emitter.comment("null");
-            // -- load null sentinel value (0x7FFF_FFFF_FFFF_FFFE) into x0 --
-            emitter.instruction("movz x0, #0xFFFE");                            // load lowest 16 bits of null sentinel
-            emitter.instruction("movk x0, #0xFFFF, lsl #16");                   // insert bits 16-31 of null sentinel
-            emitter.instruction("movk x0, #0xFFFF, lsl #32");                   // insert bits 32-47 of null sentinel
-            emitter.instruction("movk x0, #0x7FFF, lsl #48");                   // insert bits 48-63, completing 0x7FFFFFFFFFFFFFFE
-            PhpType::Void
+            scalars::emit_null_literal(emitter)
         }
         ExprKind::StringLiteral(s) => {
-            let bytes = s.as_bytes();
-            let (label, len) = data.add_string(bytes);
-            emitter.comment(&format!("load string \"{}\"", s.escape_default()));
-            // -- load string pointer into x1 and length into x2 --
-            emitter.adrp("x1", &format!("{}", label));           // load page base address of string data
-            emitter.add_lo12("x1", "x1", &format!("{}", label));     // add page offset to get exact string pointer
-            emitter.instruction(&format!("mov x2, #{}", len));                  // load string byte length into x2
-            PhpType::Str
+            scalars::emit_string_literal(s, emitter, data)
         }
         ExprKind::IntLiteral(n) => {
-            emitter.comment(&format!("load int {}", n));
-            load_immediate(emitter, "x0", *n);
-            PhpType::Int
+            scalars::emit_int_literal(*n, emitter)
         }
         ExprKind::FloatLiteral(f) => {
-            emitter.comment(&format!("load float {}", f));
-            let label = data.add_float(*f);
-            // -- load float constant from data section into d0 --
-            emitter.adrp("x9", &format!("{}", label));           // load page base of float constant
-            emitter.add_lo12("x9", "x9", &format!("{}", label));     // add offset to get exact float address
-            emitter.instruction("ldr d0, [x9]");                                // load 64-bit double from memory into float reg
-            PhpType::Float
+            scalars::emit_float_literal(*f, emitter, data)
         }
         ExprKind::Variable(name) => {
             if let Some(ty) = ctx.extern_globals.get(name).cloned() {
@@ -160,17 +134,7 @@ pub fn emit_expr(
             }
         }
         ExprKind::Negate(inner) => {
-            let ty = emit_expr(inner, emitter, ctx, data);
-            emitter.comment("negate");
-            if ty == PhpType::Float {
-                // -- negate floating-point value --
-                emitter.instruction("fneg d0, d0");                             // flip the sign bit of double-precision float
-                PhpType::Float
-            } else {
-                // -- negate integer value --
-                emitter.instruction("neg x0, x0");                              // two's complement negation of 64-bit integer
-                PhpType::Int
-            }
+            scalars::emit_negate(inner, emitter, ctx, data)
         }
         ExprKind::ArrayLiteral(elems) => emit_array_literal(elems, emitter, ctx, data),
         ExprKind::ArrayLiteralAssoc(pairs) => emit_assoc_array_literal(pairs, emitter, ctx, data),
@@ -195,12 +159,7 @@ pub fn emit_expr(
             PhpType::Bool
         }
         ExprKind::BitNot(inner) => {
-            let ty = emit_expr(inner, emitter, ctx, data);
-            coerce_null_to_zero(emitter, &ty);
-            emitter.comment("bitwise not");
-            // -- PHP ~$x: invert all bits --
-            emitter.instruction("mvn x0, x0");                                  // bitwise complement of all 64 bits
-            PhpType::Int
+            scalars::emit_bit_not(inner, emitter, ctx, data)
         }
         ExprKind::Throw(inner) => {
             let thrown_ty = emit_expr(inner, emitter, ctx, data);
@@ -760,43 +719,4 @@ fn emit_null_coalesce(
 fn emit_global_store_inline(emitter: &mut Emitter, name: &str) {
     let label = format!("_gvar_{}", name);
     abi::emit_store_reg_to_symbol(emitter, "x0", &label, 0);
-}
-
-fn load_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
-    if (0..=65535).contains(&value) {
-        // -- small non-negative immediate fits in single MOV --
-        emitter.instruction(&format!("mov {}, #{}", reg, value));               // load small immediate value directly
-    } else if (-65536..0).contains(&value) {
-        // -- small negative immediate fits in single MOV --
-        emitter.instruction(&format!("mov {}, #{}", reg, value));               // load small negative immediate directly
-    } else {
-        // -- large immediate: build 64-bit value in 16-bit chunks --
-        let uval = value as u64;
-        emitter.instruction(&format!(                                           // load bits 0-15 and zero upper bits
-            "movz {}, #0x{:x}",
-            reg,
-            uval & 0xFFFF
-        ));
-        if (uval >> 16) & 0xFFFF != 0 {
-            emitter.instruction(&format!(                                       // insert bits 16-31 keeping other bits
-                "movk {}, #0x{:x}, lsl #16",
-                reg,
-                (uval >> 16) & 0xFFFF
-            ));
-        }
-        if (uval >> 32) & 0xFFFF != 0 {
-            emitter.instruction(&format!(                                       // insert bits 32-47 keeping other bits
-                "movk {}, #0x{:x}, lsl #32",
-                reg,
-                (uval >> 32) & 0xFFFF
-            ));
-        }
-        if (uval >> 48) & 0xFFFF != 0 {
-            emitter.instruction(&format!(                                       // insert bits 48-63 keeping other bits
-                "movk {}, #0x{:x}, lsl #48",
-                reg,
-                (uval >> 48) & 0xFFFF
-            ));
-        }
-    }
 }

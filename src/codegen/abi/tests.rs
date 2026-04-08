@@ -324,6 +324,20 @@ fn test_emit_symbol_address_uses_rip_relative_on_linux_x86_64() {
 }
 
 #[test]
+fn test_emit_store_zero_to_symbol_uses_native_zero_store_on_linux_x86_64() {
+    let mut emitter = test_emitter_x86();
+    emit_store_zero_to_symbol(&mut emitter, "_demo_symbol", 8);
+
+    assert_eq!(
+        emitter.output(),
+        concat!(
+            "    lea r11, [rip + _demo_symbol]\n",
+            "    mov QWORD PTR [r11 + 8], 0\n",
+        )
+    );
+}
+
+#[test]
 fn test_emit_store_and_load_result_to_symbol_for_string_linux_x86_64() {
     let mut emitter = test_emitter_x86();
     emit_store_result_to_symbol(&mut emitter, "_demo_symbol", &PhpType::Str, false);
