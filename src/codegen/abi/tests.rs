@@ -316,6 +316,25 @@ fn test_emit_frame_slot_address_linux_x86_64() {
 }
 
 #[test]
+fn test_emit_load_and_store_to_address_linux_x86_64() {
+    let mut emitter = test_emitter_x86();
+    emit_load_from_address(&mut emitter, "rax", "r11", 0);
+    emit_load_from_address(&mut emitter, "xmm0", "r11", 8);
+    emit_store_to_address(&mut emitter, "r10", "r11", 0);
+    emit_store_to_address(&mut emitter, "xmm1", "r11", 8);
+
+    assert_eq!(
+        emitter.output(),
+        concat!(
+            "    mov rax, QWORD PTR [r11]\n",
+            "    movsd xmm0, QWORD PTR [r11 + 8]\n",
+            "    mov QWORD PTR [r11], r10\n",
+            "    movsd QWORD PTR [r11 + 8], xmm1\n",
+        )
+    );
+}
+
+#[test]
 fn test_emit_symbol_address_uses_rip_relative_on_linux_x86_64() {
     let mut emitter = test_emitter_x86();
     emit_symbol_address(&mut emitter, "r11", "_demo_symbol");

@@ -7,6 +7,7 @@ mod helpers;
 mod objects;
 mod ownership;
 mod scalars;
+mod variables;
 
 use super::abi;
 use super::context::{Context, HeapOwnership};
@@ -43,95 +44,7 @@ pub fn emit_expr(
             scalars::emit_float_literal(*f, emitter, data)
         }
         ExprKind::Variable(name) => {
-            if let Some(ty) = ctx.extern_globals.get(name).cloned() {
-                emitter.comment(&format!("load extern global ${}", name));
-                match &ty {
-                    PhpType::Bool
-                    | PhpType::Int
-                    | PhpType::Pointer(_)
-                    | PhpType::Buffer(_)
-                    | PhpType::Packed(_)
-                    | PhpType::Callable => {
-                        let sym = emitter.target.extern_symbol(name);
-                        emitter.adrp_got("x9", &sym);                           // load page of extern global GOT entry
-                        emitter.ldr_got_lo12("x9", "x9", &sym);                 // resolve extern global address
-                        emitter.instruction("ldr x0, [x9]");                    // load extern integer/pointer value
-                    }
-                    PhpType::Float => {
-                        let sym = emitter.target.extern_symbol(name);
-                        emitter.adrp_got("x9", &sym);                           // load page of extern global GOT entry
-                        emitter.ldr_got_lo12("x9", "x9", &sym);                 // resolve extern global address
-                        emitter.instruction("ldr d0, [x9]");                    // load extern float value
-                    }
-                    PhpType::Str => {
-                        let sym = emitter.target.extern_symbol(name);
-                        emitter.adrp_got("x9", &sym);                           // load page of extern global GOT entry
-                        emitter.ldr_got_lo12("x9", "x9", &sym);                 // resolve extern global address
-                        emitter.instruction("ldr x0, [x9]");                    // load char* from extern global
-                        emitter.instruction("bl __rt_cstr_to_str");             // convert C string to elephc string
-                    }
-                    PhpType::Void
-                    | PhpType::Mixed
-                    | PhpType::Union(_)
-                    | PhpType::Array(_)
-                    | PhpType::AssocArray { .. }
-                    | PhpType::Object(_) => {
-                        emitter.comment(&format!(
-                            "WARNING: unsupported extern global type for ${}",
-                            name
-                        ));
-                        return PhpType::Int;
-                    }
-                }
-                ty
-            } else if ctx.global_vars.contains(name)
-                || (ctx.in_main && ctx.all_global_var_names.contains(name))
-            {
-                // Load from global storage
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let ty = var.ty.clone();
-                super::stmt::emit_global_load(emitter, ctx, name, &ty);
-                ty
-            } else if ctx.ref_params.contains(name) {
-                // Load through reference pointer
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let offset = var.stack_offset;
-                let ty = var.ty.clone();
-                emitter.comment(&format!("load ref ${}", name));
-                abi::load_at_offset(emitter, "x9", offset); // load pointer to referenced variable
-                match &ty {
-                    PhpType::Bool | PhpType::Int => {
-                        emitter.instruction("ldr x0, [x9]");                    // dereference to get int/bool value
-                    }
-                    PhpType::Float => {
-                        emitter.instruction("ldr d0, [x9]");                    // dereference to get float value
-                    }
-                    PhpType::Str => {
-                        emitter.instruction("ldr x1, [x9]");                    // dereference to get string pointer
-                        emitter.instruction("ldr x2, [x9, #8]");                // dereference to get string length
-                    }
-                    _ => {
-                        emitter.instruction("ldr x0, [x9]");                    // dereference to get value
-                    }
-                }
-                ty
-            } else {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let offset = var.stack_offset;
-                let ty = var.ty.clone();
-                emitter.comment(&format!("load ${}", name));
-                abi::emit_load(emitter, &ty, offset);
-                ty
-            }
+            variables::emit_variable(name, emitter, ctx)
         }
         ExprKind::Negate(inner) => {
             scalars::emit_negate(inner, emitter, ctx, data)
@@ -156,165 +69,22 @@ pub fn emit_expr(
             scalars::emit_bit_not(inner, emitter, ctx, data)
         }
         ExprKind::Throw(inner) => {
-            let thrown_ty = emit_expr(inner, emitter, ctx, data);
-            if thrown_ty.is_refcounted() && expr_result_heap_ownership(inner) != HeapOwnership::Owned {
-                abi::emit_incref_if_refcounted(emitter, &thrown_ty);            // retain borrowed heap values before publishing them as the active exception
-            }
-            abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
-            emitter.instruction("bl __rt_throw_current");                       // unwind to the nearest active exception handler
-            PhpType::Void
+            variables::emit_throw(inner, emitter, ctx, data)
         }
         ExprKind::NullCoalesce { value, default } => {
             emit_null_coalesce(value, default, emitter, ctx, data)
         }
         ExprKind::PreIncrement(name) => {
-            if ctx.global_vars.contains(name) {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let ty = var.ty.clone();
-                emitter.comment(&format!("++${} (global)", name));
-                super::stmt::emit_global_load(emitter, ctx, name, &ty);
-                emitter.instruction("add x0, x0, #1");                          // increment the value by 1
-                emit_global_store_inline(emitter, name);
-                PhpType::Int
-            } else if ctx.ref_params.contains(name) {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let offset = var.stack_offset;
-                emitter.comment(&format!("++${} (ref)", name));
-                abi::load_at_offset(emitter, "x9", offset); // load ref pointer
-                emitter.instruction("ldr x0, [x9]");                            // dereference
-                emitter.instruction("add x0, x0, #1");                          // increment
-                emitter.instruction("str x0, [x9]");                            // store back through pointer
-                PhpType::Int
-            } else {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let offset = var.stack_offset;
-                emitter.comment(&format!("++${}", name));
-                // -- pre-increment: add 1 then return new value --
-                abi::load_at_offset(emitter, "x0", offset); // load current variable value from stack frame
-                emitter.instruction("add x0, x0, #1");                          // increment the value by 1
-                abi::store_at_offset(emitter, "x0", offset); // store incremented value back to stack frame
-                if ctx.in_main && ctx.all_global_var_names.contains(name) {
-                    emit_global_store_inline(emitter, name);
-                }
-                PhpType::Int
-            }
+            variables::emit_pre_increment(name, emitter, ctx)
         }
         ExprKind::PostIncrement(name) => {
-            if ctx.global_vars.contains(name) {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let ty = var.ty.clone();
-                emitter.comment(&format!("${}++ (global)", name));
-                super::stmt::emit_global_load(emitter, ctx, name, &ty);
-                emitter.instruction("add x1, x0, #1");                          // compute incremented value
-                let label = format!("_gvar_{}", name);
-                abi::emit_store_reg_to_symbol(emitter, "x1", &label, 0);
-                PhpType::Int
-            } else if ctx.ref_params.contains(name) {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let offset = var.stack_offset;
-                emitter.comment(&format!("${}++ (ref)", name));
-                abi::load_at_offset(emitter, "x9", offset); // load ref pointer
-                emitter.instruction("ldr x0, [x9]");                            // dereference
-                emitter.instruction("add x1, x0, #1");                          // compute incremented value
-                emitter.instruction("str x1, [x9]");                            // store back through pointer
-                PhpType::Int
-            } else {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let offset = var.stack_offset;
-                emitter.comment(&format!("${}++", name));
-                // -- post-increment: return old value, then add 1 --
-                abi::load_at_offset(emitter, "x0", offset); // load current value into x0 (returned to caller)
-                emitter.instruction("add x1, x0, #1");                          // compute incremented value in scratch register
-                abi::store_at_offset(emitter, "x1", offset); // write new value back; x0 still has old value
-                if ctx.in_main && ctx.all_global_var_names.contains(name) {
-                    let label = format!("_gvar_{}", name);
-                    abi::emit_store_reg_to_symbol(emitter, "x1", &label, 0);
-                }
-                PhpType::Int
-            }
+            variables::emit_post_increment(name, emitter, ctx)
         }
         ExprKind::PreDecrement(name) => {
-            if ctx.global_vars.contains(name) {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let ty = var.ty.clone();
-                emitter.comment(&format!("--${} (global)", name));
-                super::stmt::emit_global_load(emitter, ctx, name, &ty);
-                emitter.instruction("sub x0, x0, #1");                          // decrement the value by 1
-                emit_global_store_inline(emitter, name);
-                PhpType::Int
-            } else if ctx.ref_params.contains(name) {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let offset = var.stack_offset;
-                emitter.comment(&format!("--${} (ref)", name));
-                abi::load_at_offset(emitter, "x9", offset); // load ref pointer
-                emitter.instruction("ldr x0, [x9]");                            // dereference
-                emitter.instruction("sub x0, x0, #1");                          // decrement
-                emitter.instruction("str x0, [x9]");                            // store back through pointer
-                PhpType::Int
-            } else {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let offset = var.stack_offset;
-                emitter.comment(&format!("--${}", name));
-                // -- pre-decrement: subtract 1 then return new value --
-                abi::load_at_offset(emitter, "x0", offset); // load current variable value from stack frame
-                emitter.instruction("sub x0, x0, #1");                          // decrement the value by 1
-                abi::store_at_offset(emitter, "x0", offset); // store decremented value back to stack frame
-                PhpType::Int
-            }
+            variables::emit_pre_decrement(name, emitter, ctx)
         }
         ExprKind::PostDecrement(name) => {
-            if ctx.ref_params.contains(name) {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let offset = var.stack_offset;
-                emitter.comment(&format!("${}-- (ref)", name));
-                abi::load_at_offset(emitter, "x9", offset); // load ref pointer
-                emitter.instruction("ldr x0, [x9]");                            // dereference
-                emitter.instruction("sub x1, x0, #1");                          // compute decremented value
-                emitter.instruction("str x1, [x9]");                            // store back through pointer
-                PhpType::Int
-            } else {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let offset = var.stack_offset;
-                emitter.comment(&format!("${}--", name));
-                // -- post-decrement: return old value, then subtract 1 --
-                abi::load_at_offset(emitter, "x0", offset); // load current value into x0 (returned to caller)
-                emitter.instruction("sub x1, x0, #1");                          // compute decremented value in scratch register
-                abi::store_at_offset(emitter, "x1", offset); // write new value back; x0 still has old value
-                PhpType::Int
-            }
+            variables::emit_post_decrement(name, emitter, ctx)
         }
         ExprKind::Ternary {
             condition,
@@ -433,18 +203,7 @@ pub fn emit_expr(
             args,
         } => emit_static_method_call(receiver, method, args, emitter, ctx, data),
         ExprKind::This => {
-            emitter.comment("$this");
-            let var = match ctx.variables.get("this") {
-                Some(v) => v,
-                None => {
-                    emitter.comment("WARNING: $this used outside class scope");
-                    return PhpType::Int;
-                }
-            };
-            let offset = var.stack_offset;
-            abi::load_at_offset(emitter, "x0", offset);          // load $this object pointer
-            let class_name = ctx.current_class.clone().unwrap_or_default();
-            PhpType::Object(class_name)
+            variables::emit_this(emitter, ctx)
         }
         ExprKind::PtrCast { target_type, expr } => {
             emitter.comment(&format!("ptr_cast<{}>()", target_type));
@@ -706,10 +465,4 @@ fn emit_null_coalesce(
     data: &mut DataSection,
 ) -> PhpType {
     compare::emit_null_coalesce(value, default, emitter, ctx, data)
-}
-
-/// Quick helper: store x0 to _gvar_NAME (for pre-increment etc. where value is in x0)
-fn emit_global_store_inline(emitter: &mut Emitter, name: &str) {
-    let label = format!("_gvar_{}", name);
-    abi::emit_store_reg_to_symbol(emitter, "x0", &label, 0);
 }

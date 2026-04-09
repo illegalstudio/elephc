@@ -174,6 +174,59 @@ pub fn load_at_offset_scratch(emitter: &mut Emitter, reg: &str, offset: usize, s
     }
 }
 
+pub fn emit_load_from_address(emitter: &mut Emitter, reg: &str, addr_reg: &str, byte_offset: usize) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            if byte_offset == 0 {
+                emitter.instruction(&format!("ldr {}, [{}]", reg, addr_reg));          // load the requested value directly from the computed address register
+            } else {
+                emitter.instruction(&format!("ldr {}, [{}, #{}]", reg, addr_reg, byte_offset)); // load the requested value from the computed address register plus byte offset
+            }
+        }
+        Arch::X86_64 => {
+            let slot = if byte_offset == 0 {
+                format!("[{}]", addr_reg)
+            } else {
+                format!("[{} + {}]", addr_reg, byte_offset)
+            };
+            if is_float_register(reg) {
+                emitter.instruction(&format!("movsd {}, QWORD PTR {}", reg, slot));     // load the floating-point payload through the computed address register
+            } else {
+                emitter.instruction(&format!("mov {}, QWORD PTR {}", reg, slot));       // load the integer or pointer payload through the computed address register
+            }
+        }
+    }
+}
+
+pub fn emit_store_to_address(
+    emitter: &mut Emitter,
+    reg: &str,
+    addr_reg: &str,
+    byte_offset: usize,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            if byte_offset == 0 {
+                emitter.instruction(&format!("str {}, [{}]", reg, addr_reg));          // store the requested value directly through the computed address register
+            } else {
+                emitter.instruction(&format!("str {}, [{}, #{}]", reg, addr_reg, byte_offset)); // store the requested value through the computed address register plus byte offset
+            }
+        }
+        Arch::X86_64 => {
+            let slot = if byte_offset == 0 {
+                format!("[{}]", addr_reg)
+            } else {
+                format!("[{} + {}]", addr_reg, byte_offset)
+            };
+            if is_float_register(reg) {
+                emitter.instruction(&format!("movsd QWORD PTR {}, {}", slot, reg));     // store the floating-point payload through the computed address register
+            } else {
+                emitter.instruction(&format!("mov QWORD PTR {}, {}", slot, reg));       // store the integer or pointer payload through the computed address register
+            }
+        }
+    }
+}
+
 pub fn load_from_caller_stack(emitter: &mut Emitter, reg: &str, offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
