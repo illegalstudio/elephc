@@ -18,7 +18,7 @@ use crate::types::{
     ClassInfo, EnumCaseValue, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig,
     InterfaceInfo, PackedClassInfo, PhpType, TypeEnv,
 };
-use context::Context;
+use context::{Context, HeapOwnership};
 use data_section::DataSection;
 use emit::Emitter;
 use platform::Target;
@@ -280,14 +280,15 @@ pub fn generate(
     }
 
     if uses_argv {
-        if target.arch == platform::Arch::X86_64 {
-            panic!("$argv support is not implemented yet for target {}", target);
-        }
         // -- build $argv array from OS C strings --
         let argv_offset = ctx.variables.get("argv").expect("codegen bug: $argv not pre-allocated in main scope").stack_offset;
         emitter.comment("build $argv array from OS argv");
-        emitter.instruction("bl __rt_build_argv");                              // returns array ptr in x0
+        abi::emit_call_label(&mut emitter, "__rt_build_argv");                  // returns array ptr in the target integer result register
         abi::emit_store(&mut emitter, &PhpType::Array(Box::new(PhpType::Str)), argv_offset); // store the built argv array through the ABI result-register helper
+        if let Some(argv_var) = ctx.variables.get_mut("argv") {
+            argv_var.ownership = HeapOwnership::Borrowed;
+            argv_var.epilogue_cleanup_safe = false;
+        }
     }
 
     // -- zero-initialize local variables that may be decref'd on reassignment --

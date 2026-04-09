@@ -2,6 +2,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -15,7 +16,8 @@ pub fn emit(
     emitter.comment("count()");
     emit_expr(&args[0], emitter, ctx, data);
     // -- read element count from array header --
-    emitter.instruction("ldr x0, [x0]");                                        // load array length from first field of array struct
+    let result_reg = abi::int_result_reg(emitter);
+    abi::emit_load_from_address(emitter, result_reg, result_reg, 0);            // load array length from the first field of the array header
 
     Some(PhpType::Int)
 }
