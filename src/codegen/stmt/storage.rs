@@ -43,8 +43,6 @@ pub(super) fn emit_global_load(
 pub(super) fn emit_extern_global_store(emitter: &mut Emitter, name: &str, ty: &PhpType) {
     emitter.comment(&format!("store to extern global ${}", name));
     let sym = emitter.target.extern_symbol(name);
-    emitter.adrp_got("x9", &format!("{}", sym));                // load page of extern global GOT entry
-    emitter.ldr_got_lo12("x9", "x9", &format!("{}", sym));        // resolve extern global address
     match ty {
         PhpType::Bool
         | PhpType::Int
@@ -52,14 +50,14 @@ pub(super) fn emit_extern_global_store(emitter: &mut Emitter, name: &str, ty: &P
         | PhpType::Buffer(_)
         | PhpType::Packed(_)
         | PhpType::Callable => {
-            emitter.instruction("str x0, [x9]");                                // store integer/pointer into extern global
+            abi::emit_store_reg_to_extern_symbol(emitter, abi::int_result_reg(emitter), &sym, 0); // store integer or pointer payload into extern global storage
         }
         PhpType::Float => {
-            emitter.instruction("str d0, [x9]");                                // store float into extern global
+            abi::emit_store_reg_to_extern_symbol(emitter, abi::float_result_reg(emitter), &sym, 0); // store floating-point payload into extern global storage
         }
         PhpType::Str => {
-            emitter.instruction("bl __rt_str_to_cstr");                         // allocate null-terminated copy for C global
-            emitter.instruction("str x0, [x9]");                                // store char* into extern global
+            abi::emit_call_label(emitter, "__rt_str_to_cstr");                 // allocate a null-terminated copy before publishing it to C-owned global storage
+            abi::emit_store_reg_to_extern_symbol(emitter, abi::int_result_reg(emitter), &sym, 0); // store the returned char* into the extern global slot
         }
         PhpType::Void
         | PhpType::Mixed
@@ -78,8 +76,6 @@ pub(super) fn emit_extern_global_store(emitter: &mut Emitter, name: &str, ty: &P
 pub(super) fn emit_extern_global_load(emitter: &mut Emitter, name: &str, ty: &PhpType) {
     emitter.comment(&format!("load from extern global ${}", name));
     let sym = emitter.target.extern_symbol(name);
-    emitter.adrp_got("x9", &format!("{}", sym));                // load page of extern global GOT entry
-    emitter.ldr_got_lo12("x9", "x9", &format!("{}", sym));        // resolve extern global address
     match ty {
         PhpType::Bool
         | PhpType::Int
@@ -87,14 +83,14 @@ pub(super) fn emit_extern_global_load(emitter: &mut Emitter, name: &str, ty: &Ph
         | PhpType::Buffer(_)
         | PhpType::Packed(_)
         | PhpType::Callable => {
-            emitter.instruction("ldr x0, [x9]");                                // load integer/pointer from extern global
+            abi::emit_load_extern_symbol_to_reg(emitter, abi::int_result_reg(emitter), &sym, 0); // load integer or pointer payload from extern global storage
         }
         PhpType::Float => {
-            emitter.instruction("ldr d0, [x9]");                                // load float from extern global
+            abi::emit_load_extern_symbol_to_reg(emitter, abi::float_result_reg(emitter), &sym, 0); // load floating-point payload from extern global storage
         }
         PhpType::Str => {
-            emitter.instruction("ldr x0, [x9]");                                // load char* from extern global
-            emitter.instruction("bl __rt_cstr_to_str");                         // convert C string to elephc string
+            abi::emit_load_extern_symbol_to_reg(emitter, abi::int_result_reg(emitter), &sym, 0); // load the borrowed char* from extern global storage
+            abi::emit_call_label(emitter, "__rt_cstr_to_str");                 // convert the borrowed C string into the elephc string result convention
         }
         PhpType::Void
         | PhpType::Mixed

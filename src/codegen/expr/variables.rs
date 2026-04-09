@@ -8,45 +8,7 @@ use super::{expr_result_heap_ownership, Expr, PhpType};
 
 pub(super) fn emit_variable(name: &str, emitter: &mut Emitter, ctx: &mut Context) -> PhpType {
     if let Some(ty) = ctx.extern_globals.get(name).cloned() {
-        emitter.comment(&format!("load extern global ${}", name));
-        match &ty {
-            PhpType::Bool
-            | PhpType::Int
-            | PhpType::Pointer(_)
-            | PhpType::Buffer(_)
-            | PhpType::Packed(_)
-            | PhpType::Callable => {
-                let sym = emitter.target.extern_symbol(name);
-                emitter.adrp_got("x9", &sym);                                       // load page of extern global GOT entry
-                emitter.ldr_got_lo12("x9", "x9", &sym);                             // resolve extern global address
-                emitter.instruction("ldr x0, [x9]");                                // load extern integer or pointer value
-            }
-            PhpType::Float => {
-                let sym = emitter.target.extern_symbol(name);
-                emitter.adrp_got("x9", &sym);                                       // load page of extern global GOT entry
-                emitter.ldr_got_lo12("x9", "x9", &sym);                             // resolve extern global address
-                emitter.instruction("ldr d0, [x9]");                                // load extern float value
-            }
-            PhpType::Str => {
-                let sym = emitter.target.extern_symbol(name);
-                emitter.adrp_got("x9", &sym);                                       // load page of extern global GOT entry
-                emitter.ldr_got_lo12("x9", "x9", &sym);                             // resolve extern global address
-                emitter.instruction("ldr x0, [x9]");                                // load char* from the extern global
-                abi::emit_call_label(emitter, "__rt_cstr_to_str");                  // convert the C string into the elephc string result convention
-            }
-            PhpType::Void
-            | PhpType::Mixed
-            | PhpType::Union(_)
-            | PhpType::Array(_)
-            | PhpType::AssocArray { .. }
-            | PhpType::Object(_) => {
-                emitter.comment(&format!(
-                    "WARNING: unsupported extern global type for ${}",
-                    name
-                ));
-                return PhpType::Int;
-            }
-        }
+        super::super::stmt::emit_global_load(emitter, ctx, name, &ty);
         return ty;
     }
 

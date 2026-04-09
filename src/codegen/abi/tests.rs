@@ -343,6 +343,54 @@ fn test_emit_symbol_address_uses_rip_relative_on_linux_x86_64() {
 }
 
 #[test]
+fn test_emit_extern_symbol_address_uses_got_relocations_on_aarch64() {
+    let mut emitter = test_emitter();
+    super::symbols::emit_extern_symbol_address(&mut emitter, "x9", "_demo_extern");
+
+    assert_eq!(
+        emitter.output(),
+        concat!(
+            "    adrp x9, _demo_extern@GOTPAGE\n",
+            "    ldr x9, [x9, _demo_extern@GOTPAGEOFF]\n",
+        )
+    );
+}
+
+#[test]
+fn test_emit_extern_symbol_address_uses_gotpcrel_on_linux_x86_64() {
+    let mut emitter = test_emitter_x86();
+    super::symbols::emit_extern_symbol_address(&mut emitter, "r11", "demo_extern");
+
+    assert_eq!(
+        emitter.output(),
+        "    mov r11, QWORD PTR demo_extern@GOTPCREL[rip]\n"
+    );
+}
+
+#[test]
+fn test_emit_load_and_store_extern_symbol_linux_x86_64_use_shared_helpers() {
+    let mut emitter = test_emitter_x86();
+    emit_load_extern_symbol_to_reg(&mut emitter, "rax", "demo_extern", 0);
+    emit_load_extern_symbol_to_reg(&mut emitter, "xmm0", "demo_extern", 8);
+    emit_store_reg_to_extern_symbol(&mut emitter, "r10", "demo_extern", 0);
+    emit_store_reg_to_extern_symbol(&mut emitter, "xmm1", "demo_extern", 8);
+
+    assert_eq!(
+        emitter.output(),
+        concat!(
+            "    mov r11, QWORD PTR demo_extern@GOTPCREL[rip]\n",
+            "    mov rax, QWORD PTR [r11]\n",
+            "    mov r11, QWORD PTR demo_extern@GOTPCREL[rip]\n",
+            "    movsd xmm0, QWORD PTR [r11 + 8]\n",
+            "    mov r11, QWORD PTR demo_extern@GOTPCREL[rip]\n",
+            "    mov QWORD PTR [r11], r10\n",
+            "    mov r11, QWORD PTR demo_extern@GOTPCREL[rip]\n",
+            "    movsd QWORD PTR [r11 + 8], xmm1\n",
+        )
+    );
+}
+
+#[test]
 fn test_emit_store_zero_to_symbol_uses_native_zero_store_on_linux_x86_64() {
     let mut emitter = test_emitter_x86();
     emit_store_zero_to_symbol(&mut emitter, "_demo_symbol", 8);

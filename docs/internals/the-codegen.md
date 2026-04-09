@@ -843,7 +843,7 @@ The same module now also owns a thin layer of call-site and temporary-stack prim
 
 That keeps phase-3 `linux-x86_64` work focused inside `abi/` instead of scattering `call`, `blr`, `add sp`, `rsp`, or zero-register assumptions across function, closure, callable, and method dispatch code.
 
-The same `abi/` layer now also owns symbol-slot plumbing for compiler-managed globals such as `_gvar_*`, `_static_*`, `_exc_*`, `_global_*`, and the high-frequency runtime symbols used by string builders, heap bookkeeping, and GC state such as `_concat_off`, `_heap_*`, and `_gc_*`: computing symbol addresses, moving result registers into symbol storage, loading symbol storage back into result registers, and copying local frame slots into symbol-backed storage during epilogues.
+The same `abi/` layer now also owns symbol-slot plumbing for compiler-managed globals such as `_gvar_*`, `_static_*`, `_exc_*`, `_global_*`, and the high-frequency runtime symbols used by string builders, heap bookkeeping, and GC state such as `_concat_off`, `_heap_*`, and `_gc_*`: computing symbol addresses, moving result registers into symbol storage, loading symbol storage back into result registers, and copying local frame slots into symbol-backed storage during epilogues. Extern globals now use the same boundary too, so GOT/GOTPCREL address materialization lives in `abi/` instead of being open-coded separately in expression and statement lowering.
 
 ### `emit_store(emitter, type, offset)`
 

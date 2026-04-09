@@ -2,7 +2,7 @@ use crate::codegen::{emit::Emitter, platform::Arch};
 use crate::types::PhpType;
 
 use super::frame::{
-    load_at_offset_scratch, store_at_offset_scratch,
+    emit_load_from_address, emit_store_to_address, load_at_offset_scratch, store_at_offset_scratch,
 };
 use super::registers::{
     float_result_reg, int_result_reg, is_float_register, secondary_scratch_reg,
@@ -76,6 +76,40 @@ pub fn emit_symbol_address(emitter: &mut Emitter, dest: &str, symbol: &str) {
             emitter.instruction(&format!("lea {}, [rip + {}]", dest, symbol));          // materialize the symbol address through a RIP-relative LEA
         }
     }
+}
+
+pub fn emit_extern_symbol_address(emitter: &mut Emitter, dest: &str, symbol: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.adrp_got(dest, symbol);                                          // load the GOT page that points at the requested extern symbol
+            emitter.ldr_got_lo12(dest, dest, symbol);                                // resolve the GOT entry into the actual extern symbol address
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov {}, QWORD PTR {}@GOTPCREL[rip]", dest, symbol)); // materialize the extern symbol address through the ELF GOTPCREL slot
+        }
+    }
+}
+
+pub fn emit_load_extern_symbol_to_reg(
+    emitter: &mut Emitter,
+    reg: &str,
+    symbol: &str,
+    byte_offset: usize,
+) {
+    let scratch = symbol_scratch_reg(emitter);
+    emit_extern_symbol_address(emitter, scratch, symbol);
+    emit_load_from_address(emitter, reg, scratch, byte_offset);
+}
+
+pub fn emit_store_reg_to_extern_symbol(
+    emitter: &mut Emitter,
+    reg: &str,
+    symbol: &str,
+    byte_offset: usize,
+) {
+    let scratch = symbol_scratch_reg(emitter);
+    emit_extern_symbol_address(emitter, scratch, symbol);
+    emit_store_to_address(emitter, reg, scratch, byte_offset);
 }
 
 pub fn emit_load_symbol_to_reg(

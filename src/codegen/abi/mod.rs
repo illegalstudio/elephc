@@ -28,8 +28,9 @@ pub use registers::{
     OutgoingArgAssignment,
 };
 pub use symbols::{
-    emit_load_symbol_to_local_slot, emit_load_symbol_to_reg, emit_load_symbol_to_result,
-    emit_store_local_slot_to_symbol, emit_store_reg_to_symbol, emit_store_result_to_symbol,
+    emit_load_extern_symbol_to_reg, emit_load_symbol_to_local_slot, emit_load_symbol_to_reg,
+    emit_load_symbol_to_result, emit_store_local_slot_to_symbol,
+    emit_store_reg_to_extern_symbol, emit_store_reg_to_symbol, emit_store_result_to_symbol,
     emit_store_zero_to_symbol, emit_symbol_address,
 };
 pub use values::{
