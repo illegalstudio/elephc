@@ -322,6 +322,7 @@ fn test_emit_load_and_store_to_address_linux_x86_64() {
     emit_load_from_address(&mut emitter, "xmm0", "r11", 8);
     emit_store_to_address(&mut emitter, "r10", "r11", 0);
     emit_store_to_address(&mut emitter, "xmm1", "r11", 8);
+    emit_store_zero_to_address(&mut emitter, "r11", 16);
 
     assert_eq!(
         emitter.output(),
@@ -330,6 +331,7 @@ fn test_emit_load_and_store_to_address_linux_x86_64() {
             "    movsd xmm0, QWORD PTR [r11 + 8]\n",
             "    mov QWORD PTR [r11], r10\n",
             "    movsd QWORD PTR [r11 + 8], xmm1\n",
+            "    mov QWORD PTR [r11 + 16], 0\n",
         )
     );
 }

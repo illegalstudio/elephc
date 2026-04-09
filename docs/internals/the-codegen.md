@@ -500,7 +500,7 @@ So the behavior is slice-like, but it does not call `substr()` or a dedicated ru
 
 **Files:** `src/codegen/stmt.rs`, `src/codegen/stmt/`
 
-`emit_stmt()` is similarly split across focused helpers under `stmt/`: assignment/storage logic, array statements, and control-flow lowering (`branching`, `foreach`, `loops`) now live outside the thin top-level dispatcher. Small shared statement-side policies such as borrowed-result retention, local-slot ownership updates, static-init guards, and indexed-array metadata stamping now sit in `stmt/helpers.rs` instead of bloating `stmt.rs` itself.
+`emit_stmt()` is similarly split across focused helpers under `stmt/`: assignment/storage logic, array statements, and control-flow lowering (`branching`, `foreach`, `loops`) now live outside the thin top-level dispatcher. Small shared statement-side policies such as borrowed-result retention, local-slot ownership updates, static-init guards, and indexed-array metadata stamping now sit in `stmt/helpers.rs` instead of bloating `stmt.rs` itself. Assignment lowering is also split one level deeper: `stmt/assignments/locals.rs` handles plain local/global/ref writes, while `stmt/assignments/properties.rs` owns property and field writes.
 
 ### Echo
 

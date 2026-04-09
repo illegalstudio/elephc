@@ -227,6 +227,26 @@ pub fn emit_store_to_address(
     }
 }
 
+pub fn emit_store_zero_to_address(emitter: &mut Emitter, addr_reg: &str, byte_offset: usize) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            if byte_offset == 0 {
+                emitter.instruction(&format!("str xzr, [{}]", addr_reg));                // store architectural zero directly through the computed address register
+            } else {
+                emitter.instruction(&format!("str xzr, [{}, #{}]", addr_reg, byte_offset)); // store architectural zero through the computed address register plus byte offset
+            }
+        }
+        Arch::X86_64 => {
+            let slot = if byte_offset == 0 {
+                format!("[{}]", addr_reg)
+            } else {
+                format!("[{} + {}]", addr_reg, byte_offset)
+            };
+            emitter.instruction(&format!("mov QWORD PTR {}, 0", slot));                  // store an integer zero through the computed address register
+        }
+    }
+}
+
 pub fn load_from_caller_stack(emitter: &mut Emitter, reg: &str, offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
