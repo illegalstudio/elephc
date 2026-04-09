@@ -66,8 +66,24 @@ impl DataSection {
             out.push_str("\"\n");
         }
         for (label, bits) in &self.float_entries {
-            out.push_str(&format!(".align 3\n.globl {}\n{}:\n    .quad 0x{:016x}\n", label, label, bits));
+            out.push_str(&format!(".p2align 3\n.globl {}\n{}:\n    .quad 0x{:016x}\n", label, label, bits));
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DataSection;
+
+    #[test]
+    fn test_float_constants_use_power_of_two_alignment_directive() {
+        let mut data = DataSection::new();
+        data.add_float(3.14);
+
+        let asm = data.emit();
+
+        assert!(asm.contains(".p2align 3\n"));
+        assert!(!asm.contains(".align 3\n"));
     }
 }

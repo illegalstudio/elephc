@@ -241,6 +241,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
 fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     emit_optional_linux_crypto_decls(emitter);
     strings::emit_itoa(emitter);
+    strings::emit_ftoa(emitter);
 }
 
 fn emit_optional_linux_crypto_decls(emitter: &mut Emitter) {
@@ -276,7 +277,7 @@ mod tests {
         let asm = emitter.output();
 
         assert!(asm.contains("__rt_itoa:\n"));
+        assert!(asm.contains("__rt_ftoa:\n"));
         assert!(!asm.contains("__rt_build_argv:\n"));
-        assert!(!asm.contains("__rt_ftoa:\n"));
     }
 }
