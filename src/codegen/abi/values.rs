@@ -1,4 +1,5 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 use crate::types::PhpType;
 
 use super::frame::{load_at_offset, store_at_offset};
@@ -111,6 +112,45 @@ pub fn emit_branch_if_int_result_nonzero(emitter: &mut Emitter, label: &str) {
         crate::codegen::platform::Arch::X86_64 => {
             emitter.instruction(&format!("test {}, {}", int_result_reg(emitter), int_result_reg(emitter))); // test whether the coerced integer truthiness result is non-zero
             emitter.instruction(&format!("jne {}", label));                            // branch when the coerced integer truthiness result is non-zero
+        }
+    }
+}
+
+pub fn emit_load_int_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            if (0..=65535).contains(&value) {
+                emitter.instruction(&format!("mov {}, #{}", reg, value));               // load a small non-negative immediate directly into the target register
+            } else if (-65536..0).contains(&value) {
+                emitter.instruction(&format!("mov {}, #{}", reg, value));               // load a small negative immediate directly into the target register
+            } else {
+                let uval = value as u64;
+                emitter.instruction(&format!("movz {}, #0x{:x}", reg, uval & 0xFFFF)); // seed the low 16 bits of the wider immediate value
+                if (uval >> 16) & 0xFFFF != 0 {
+                    emitter.instruction(&format!(
+                        "movk {}, #0x{:x}, lsl #16",
+                        reg,
+                        (uval >> 16) & 0xFFFF
+                    )); // patch bits 16-31 of the wider immediate value
+                }
+                if (uval >> 32) & 0xFFFF != 0 {
+                    emitter.instruction(&format!(
+                        "movk {}, #0x{:x}, lsl #32",
+                        reg,
+                        (uval >> 32) & 0xFFFF
+                    )); // patch bits 32-47 of the wider immediate value
+                }
+                if (uval >> 48) & 0xFFFF != 0 {
+                    emitter.instruction(&format!(
+                        "movk {}, #0x{:x}, lsl #48",
+                        reg,
+                        (uval >> 48) & 0xFFFF
+                    )); // patch bits 48-63 of the wider immediate value
+                }
+            }
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov {}, {}", reg, value));                    // load the immediate directly into the native x86_64 register
         }
     }
 }

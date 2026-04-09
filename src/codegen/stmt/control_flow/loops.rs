@@ -136,7 +136,7 @@ pub(super) fn emit_return_stmt(
     emitter.comment("return");
     if let Some(e) = expr {
         let ty = emit_expr(e, emitter, ctx, data);
-        super::super::retain_borrowed_heap_result(emitter, e, &ty);
+        super::super::helpers::retain_borrowed_heap_result(emitter, e, &ty);
         if matches!(ty, PhpType::Str)
             && expr_result_heap_ownership(e) != HeapOwnership::Owned
         {

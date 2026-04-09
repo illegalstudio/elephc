@@ -112,7 +112,7 @@ pub(super) fn emit_array_assign_stmt(
             super::super::super::emit_box_current_value_as_mixed(emitter, &val_ty);
             val_ty = PhpType::Mixed;
         } else {
-            super::super::retain_borrowed_heap_result(emitter, value, &val_ty);
+            super::super::helpers::retain_borrowed_heap_result(emitter, value, &val_ty);
         }
         let (val_lo, val_hi) = match &val_ty {
             PhpType::Int | PhpType::Bool => ("x0", "xzr"),
@@ -156,7 +156,7 @@ pub(super) fn emit_array_assign_stmt(
         emit_expr(index, emitter, ctx, data);
         emitter.instruction("str x0, [sp, #-16]!");                             // push computed index onto stack
         let val_ty = emit_expr(value, emitter, ctx, data);
-        super::super::retain_borrowed_heap_result(emitter, value, &val_ty);
+        super::super::helpers::retain_borrowed_heap_result(emitter, value, &val_ty);
         match &val_ty {
             PhpType::Str => {
                 emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve string pointer/length across growth helpers
@@ -181,7 +181,7 @@ pub(super) fn emit_array_assign_stmt(
             ctx.update_var_type_and_ownership(
                 array,
                 updated_ty.clone(),
-                super::super::local_slot_ownership_after_store(&updated_ty),
+                super::super::helpers::local_slot_ownership_after_store(&updated_ty),
             );
         }
         let stores_refcounted_pointer = matches!(
@@ -265,7 +265,7 @@ pub(super) fn emit_array_assign_stmt(
             emitter.instruction("ldr x10, [sp], #16");                          // restore array pointer after decref
             emitter.instruction("ldp x0, x9, [sp], #16");                       // restore new nested pointer and index after decref
             emitter.label(&skip_release);
-            super::super::stamp_indexed_array_value_type(emitter, "x10", &val_ty);
+            super::super::helpers::stamp_indexed_array_value_type(emitter, "x10", &val_ty);
             emitter.instruction("add x12, x10, #24");                           // compute base of array data region
             emitter.instruction("str x0, [x12, x9, lsl #3]");                   // store pointer at data[index]
         } else {
@@ -293,7 +293,7 @@ pub(super) fn emit_array_assign_stmt(
                     emitter.instruction("ldp x9, x10, [sp], #16");              // restore index and array pointer after old-string release
                     emitter.instruction("ldp x1, x2, [sp], #16");               // restore new string ptr/len after old-string release
                     emitter.label(&skip_release);
-                    super::super::stamp_indexed_array_value_type(emitter, "x10", &val_ty);
+                    super::super::helpers::stamp_indexed_array_value_type(emitter, "x10", &val_ty);
                     emitter.instruction("lsl x12, x9, #4");                     // multiply index by 16 without clobbering the logical index register
                     emitter.instruction("add x12, x10, x12");                   // offset into array data region without clobbering the array pointer
                     emitter.instruction("add x12, x12, #24");                   // skip 24-byte array header

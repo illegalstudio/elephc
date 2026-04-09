@@ -43,7 +43,7 @@ pub(super) fn emit_array_push_stmt(
         crate::codegen::emit_box_current_value_as_mixed(emitter, &val_ty);
         val_ty = PhpType::Mixed;
     } else {
-        super::super::retain_borrowed_heap_result(emitter, value, &val_ty);
+        super::super::helpers::retain_borrowed_heap_result(emitter, value, &val_ty);
     }
     emitter.instruction("ldr x9, [sp], #16");                                   // pop saved array pointer into x9
     if elem_ty != val_ty {
@@ -51,7 +51,7 @@ pub(super) fn emit_array_push_stmt(
         ctx.update_var_type_and_ownership(
             array,
             updated_ty.clone(),
-            super::super::local_slot_ownership_after_store(&updated_ty),
+            super::super::helpers::local_slot_ownership_after_store(&updated_ty),
         );
     }
     match &val_ty {

@@ -19,7 +19,7 @@ pub(super) fn emit_throw_stmt(
     emitter.blank();
     emitter.comment("throw");
     let thrown_ty = emit_expr(expr, emitter, ctx, data);
-    super::super::retain_borrowed_heap_result(emitter, expr, &thrown_ty);
+    super::super::helpers::retain_borrowed_heap_result(emitter, expr, &thrown_ty);
     abi::emit_store_reg_to_symbol(emitter, abi::int_result_reg(emitter), "_exc_value", 0);
     abi::emit_call_label(emitter, "__rt_throw_current");                       // unwind to the nearest active exception handler
 }

@@ -36,7 +36,7 @@ pub use symbols::{
     emit_store_zero_to_symbol, emit_symbol_address,
 };
 pub use values::{
-    emit_branch_if_int_result_nonzero, emit_branch_if_int_result_zero,
+    emit_branch_if_int_result_nonzero, emit_branch_if_int_result_zero, emit_load_int_immediate,
     emit_decref_if_refcounted, emit_incref_if_refcounted, emit_load, emit_store,
     emit_write_stdout,
 };

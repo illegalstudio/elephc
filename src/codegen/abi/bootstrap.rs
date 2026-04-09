@@ -1,7 +1,7 @@
 use crate::codegen::{emit::Emitter, platform::Arch};
 
 use super::{
-    emit_store_reg_to_symbol,
+    emit_load_int_immediate, emit_store_reg_to_symbol,
     process_argc_reg,
     process_argv_reg,
     temp_int_reg,
@@ -14,14 +14,7 @@ pub fn emit_store_process_args_to_globals(emitter: &mut Emitter) {
 
 pub fn emit_enable_heap_debug_flag(emitter: &mut Emitter) {
     let scratch = temp_int_reg(emitter.target);
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("mov {}, #1", scratch));                       // materialize the enabled heap-debug flag in the temporary integer register
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("mov {}, 1", scratch));                        // materialize the enabled heap-debug flag in the temporary integer register
-        }
-    }
+    emit_load_int_immediate(emitter, scratch, 1);
     emit_store_reg_to_symbol(emitter, scratch, "_heap_debug_enabled", 0);
 }
 

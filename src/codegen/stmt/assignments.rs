@@ -33,7 +33,7 @@ pub(super) fn emit_assign_stmt(
         super::emit_extern_global_store(emitter, name, &ty);
     } else if ctx.global_vars.contains(name) {
         if !dest_needs_mixed_box {
-            super::retain_borrowed_heap_result(emitter, value, &ty);
+            super::helpers::retain_borrowed_heap_result(emitter, value, &ty);
         }
         super::emit_global_store(emitter, ctx, name, &ty);
     } else if ctx.ref_params.contains(name) {
@@ -52,7 +52,7 @@ pub(super) fn emit_assign_stmt(
             super::super::emit_box_current_value_as_mixed(emitter, &ty);
             ty = PhpType::Mixed;
         } else {
-            super::retain_borrowed_heap_result(emitter, value, &ty);
+            super::helpers::retain_borrowed_heap_result(emitter, value, &ty);
         }
         emitter.comment(&format!("write through ref ${}", name));
         abi::load_at_offset(emitter, "x9", offset);                             // load pointer to referenced variable
@@ -102,22 +102,22 @@ pub(super) fn emit_assign_stmt(
 
         if ctx.static_vars.contains(name) {
             if !dest_needs_mixed_box {
-                super::retain_borrowed_heap_result(emitter, value, &ty);
+                super::helpers::retain_borrowed_heap_result(emitter, value, &ty);
             }
             super::emit_static_store(emitter, ctx, name, &ty);
         } else {
             if !dest_needs_mixed_box {
-                super::retain_borrowed_heap_result(emitter, value, &ty);
+                super::helpers::retain_borrowed_heap_result(emitter, value, &ty);
             }
             let needs_save_x0 = !matches!(&ty, PhpType::Str | PhpType::Float);
-            super::release_owned_slot(emitter, &old_ty, offset, needs_save_x0);
+            super::helpers::release_owned_slot(emitter, &old_ty, offset, needs_save_x0);
         }
 
         abi::emit_store(emitter, &ty, offset);
         ctx.update_var_type_and_ownership(
             name,
             ty.clone(),
-            super::local_slot_ownership_after_store(&ty),
+            super::helpers::local_slot_ownership_after_store(&ty),
         );
 
         if ctx.in_main && ctx.all_global_var_names.contains(name) {
@@ -163,7 +163,7 @@ pub(super) fn emit_assign_stmt(
             ctx.update_var_type_and_ownership(
                 name,
                 ty.clone(),
-                super::local_slot_ownership_after_store(&ty),
+                super::helpers::local_slot_ownership_after_store(&ty),
             );
         }
     }
@@ -183,7 +183,7 @@ pub(super) fn emit_property_assign_stmt(
     let magic_set_class = resolve_magic_set_target(object, property, ctx);
     let val_ty = emit_expr(value, emitter, ctx, data);
     if magic_set_class.is_none() {
-        super::retain_borrowed_heap_result(emitter, value, &val_ty);
+        super::helpers::retain_borrowed_heap_result(emitter, value, &val_ty);
     }
 
     match &val_ty {
