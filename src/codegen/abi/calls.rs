@@ -196,6 +196,18 @@ pub fn emit_push_float_reg(emitter: &mut Emitter, reg: &str) {
     }
 }
 
+pub fn emit_pop_float_reg(emitter: &mut Emitter, reg: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr {}, [sp], #16", reg));                    // pop the requested floating-point register from the temporary stack
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("movsd {}, QWORD PTR [rsp]", reg));            // reload the requested floating-point register from the temporary stack slot
+            emitter.instruction("add rsp, 16");                                         // release the temporary stack slot after the floating-point pop
+        }
+    }
+}
+
 pub fn emit_push_reg_pair(emitter: &mut Emitter, lo_reg: &str, hi_reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -205,6 +217,19 @@ pub fn emit_push_reg_pair(emitter: &mut Emitter, lo_reg: &str, hi_reg: &str) {
             emitter.instruction("sub rsp, 16");                                         // reserve one temporary stack slot for the pushed register pair
             emitter.instruction(&format!("mov QWORD PTR [rsp], {}", lo_reg));           // store the first register into the low half of the temporary slot
             emitter.instruction(&format!("mov QWORD PTR [rsp + 8], {}", hi_reg));       // store the second register into the high half of the temporary slot
+        }
+    }
+}
+
+pub fn emit_pop_reg_pair(emitter: &mut Emitter, lo_reg: &str, hi_reg: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldp {}, {}, [sp], #16", lo_reg, hi_reg));    // pop the requested register pair from one temporary 16-byte stack slot
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov {}, QWORD PTR [rsp]", lo_reg));           // reload the first register from the low half of the temporary stack slot
+            emitter.instruction(&format!("mov {}, QWORD PTR [rsp + 8]", hi_reg));       // reload the second register from the high half of the temporary stack slot
+            emitter.instruction("add rsp, 16");                                         // release the temporary stack slot after the register-pair pop
         }
     }
 }
@@ -297,7 +322,15 @@ pub fn emit_release_temporary_stack(emitter: &mut Emitter, amount: usize) {
     emit_adjust_sp(emitter, amount, false);
 }
 
-fn emit_load_from_sp(emitter: &mut Emitter, reg: &str, offset: usize) {
+pub fn emit_reserve_temporary_stack(emitter: &mut Emitter, amount: usize) {
+    emit_adjust_sp(emitter, amount, true);
+}
+
+pub fn emit_temporary_stack_address(emitter: &mut Emitter, scratch: &str, offset: usize) {
+    emit_sp_address(emitter, scratch, offset);
+}
+
+pub fn emit_load_temporary_stack_slot(emitter: &mut Emitter, reg: &str, offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
             if offset == 0 {
@@ -360,18 +393,18 @@ fn emit_copy_stack_arg_slot(emitter: &mut Emitter, ty: &PhpType, src_offset: usi
     };
     match ty {
         PhpType::Float => {
-            emit_load_from_sp(emitter, float_reg, src_offset);
+            emit_load_temporary_stack_slot(emitter, float_reg, src_offset);
             emit_store_to_sp(emitter, float_reg, dst_offset);
         }
         PhpType::Str => {
-            emit_load_from_sp(emitter, int_reg, src_offset);
-            emit_load_from_sp(emitter, int_hi_reg, src_offset + 8);
+            emit_load_temporary_stack_slot(emitter, int_reg, src_offset);
+            emit_load_temporary_stack_slot(emitter, int_hi_reg, src_offset + 8);
             emit_store_to_sp(emitter, int_reg, dst_offset);
             emit_store_to_sp(emitter, int_hi_reg, dst_offset + 8);
         }
         PhpType::Void => {}
         _ => {
-            emit_load_from_sp(emitter, int_reg, src_offset);
+            emit_load_temporary_stack_slot(emitter, int_reg, src_offset);
             emit_store_to_sp(emitter, int_reg, dst_offset);
         }
     }
@@ -422,26 +455,26 @@ pub fn materialize_outgoing_args(
             | PhpType::Object(_)
             | PhpType::Packed(_)
             | PhpType::Pointer(_) => {
-                emit_load_from_sp(
+                emit_load_temporary_stack_slot(
                     emitter,
                     int_arg_reg_name(emitter.target, assignment.start_reg),
                     src_offset,
                 );
             }
             PhpType::Float => {
-                emit_load_from_sp(
+                emit_load_temporary_stack_slot(
                     emitter,
                     float_arg_reg_name(emitter.target, assignment.start_reg),
                     src_offset,
                 );
             }
             PhpType::Str => {
-                emit_load_from_sp(
+                emit_load_temporary_stack_slot(
                     emitter,
                     int_arg_reg_name(emitter.target, assignment.start_reg),
                     src_offset,
                 );
-                emit_load_from_sp(
+                emit_load_temporary_stack_slot(
                     emitter,
                     int_arg_reg_name(emitter.target, assignment.start_reg + 1),
                     src_offset + 8,

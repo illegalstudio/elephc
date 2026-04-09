@@ -490,7 +490,12 @@ fn test_emit_call_and_temporary_stack_helpers_linux_x86_64() {
     emit_push_reg(&mut emitter, "r12");
     super::calls::emit_pop_reg(&mut emitter, "r12");
     super::calls::emit_push_float_reg(&mut emitter, "xmm3");
+    emit_pop_float_reg(&mut emitter, "xmm3");
     super::calls::emit_push_reg_pair(&mut emitter, "rax", "rdx");
+    emit_pop_reg_pair(&mut emitter, "rax", "rdx");
+    emit_reserve_temporary_stack(&mut emitter, 32);
+    emit_temporary_stack_address(&mut emitter, "r10", 16);
+    emit_load_temporary_stack_slot(&mut emitter, "r11", 24);
     emit_call_label(&mut emitter, "_fn_demo");
     emit_call_reg(&mut emitter, "r12");
     emit_release_temporary_stack(&mut emitter, 32);
@@ -505,9 +510,17 @@ fn test_emit_call_and_temporary_stack_helpers_linux_x86_64() {
             "    add rsp, 16\n",
             "    sub rsp, 16\n",
             "    movsd QWORD PTR [rsp], xmm3\n",
+            "    movsd xmm3, QWORD PTR [rsp]\n",
+            "    add rsp, 16\n",
             "    sub rsp, 16\n",
             "    mov QWORD PTR [rsp], rax\n",
             "    mov QWORD PTR [rsp + 8], rdx\n",
+            "    mov rax, QWORD PTR [rsp]\n",
+            "    mov rdx, QWORD PTR [rsp + 8]\n",
+            "    add rsp, 16\n",
+            "    sub rsp, 32\n",
+            "    lea r10, [rsp + 16]\n",
+            "    mov r11, QWORD PTR [rsp + 24]\n",
             "    call _fn_demo\n",
             "    call r12\n",
             "    add rsp, 32\n",

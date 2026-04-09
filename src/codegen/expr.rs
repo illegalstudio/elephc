@@ -361,16 +361,18 @@ fn emit_function_call(
 }
 
 pub(crate) fn save_concat_offset_before_nested_call(emitter: &mut Emitter) {
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_concat_off", 0);
-    emitter.instruction("str x10, [sp, #-16]!");                                // save caller concat offset across nested call
+    let scratch = abi::temp_int_reg(emitter.target);
+    abi::emit_load_symbol_to_reg(emitter, scratch, "_concat_off", 0);
+    abi::emit_push_reg(emitter, scratch);                                        // save caller concat offset across nested call on the temporary stack
 }
 
 pub(crate) fn restore_concat_offset_after_nested_call(emitter: &mut Emitter, return_ty: &PhpType) {
     if *return_ty == PhpType::Str {
-        emitter.instruction("bl __rt_str_persist");                             // persist returned string before restoring caller concat cursor
+        abi::emit_call_label(emitter, "__rt_str_persist");                      // persist returned string before restoring caller concat cursor
     }
-    emitter.instruction("ldr x10, [sp], #16");                                  // pop saved caller concat offset from stack
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_concat_off", 0);
+    let scratch = abi::temp_int_reg(emitter.target);
+    abi::emit_pop_reg(emitter, scratch);                                        // pop the saved caller concat offset from the temporary stack
+    abi::emit_store_reg_to_symbol(emitter, scratch, "_concat_off", 0);
 }
 
 pub(crate) fn expr_result_heap_ownership(expr: &Expr) -> HeapOwnership {

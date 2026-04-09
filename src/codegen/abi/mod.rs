@@ -13,8 +13,10 @@ pub use bootstrap::{
 };
 pub use calls::{
     build_outgoing_arg_assignments_for_target, emit_call_label, emit_call_reg, emit_pop_reg,
-    emit_push_reg, emit_push_result_value, emit_release_temporary_stack,
-    emit_store_incoming_param, materialize_outgoing_args,
+    emit_pop_float_reg, emit_pop_reg_pair, emit_push_float_reg, emit_push_reg,
+    emit_push_reg_pair, emit_push_result_value, emit_release_temporary_stack,
+    emit_reserve_temporary_stack, emit_store_incoming_param, emit_temporary_stack_address,
+    emit_load_temporary_stack_slot, materialize_outgoing_args,
 };
 pub use frame::{
     emit_cleanup_callback_epilogue, emit_cleanup_callback_prologue, emit_frame_prologue,

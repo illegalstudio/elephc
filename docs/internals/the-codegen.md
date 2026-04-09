@@ -837,7 +837,8 @@ That logic is shared by ordinary function calls, indirect/callable dispatch, obj
 The same module now also owns a thin layer of call-site and temporary-stack primitives used by higher-level walkers:
 
 - `emit_call_label()` / `emit_call_reg()` emit direct and indirect calls for the current target
-- `emit_push_reg()`, `emit_push_float_reg()`, `emit_push_reg_pair()`, and `emit_push_result_value()` manage the temporary argument stack without hardcoding ARM64 push/pop forms in each call path
+- `emit_push_reg()`, `emit_pop_reg()`, `emit_push_float_reg()`, `emit_pop_float_reg()`, `emit_push_reg_pair()`, `emit_pop_reg_pair()`, and `emit_push_result_value()` manage the temporary argument stack without hardcoding ARM64 push/pop forms in each call path
+- `emit_reserve_temporary_stack()`, `emit_temporary_stack_address()`, and `emit_load_temporary_stack_slot()` now also back the FFI extern-call path, where borrowed C-string temporaries are tracked and released after the foreign call returns
 - `emit_release_temporary_stack()` and `emit_store_zero_to_local_slot()` centralize target-specific stack cleanup and zero-initialization details
 - `emit_store_process_args_to_globals()`, `emit_enable_heap_debug_flag()`, `emit_copy_frame_pointer()`, and `emit_exit()` cover the `_main` bootstrap/teardown path without hardcoding process-entry registers or exit sequences in the higher-level driver
 
