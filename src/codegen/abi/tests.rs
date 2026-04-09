@@ -552,3 +552,22 @@ fn test_emit_push_result_value_linux_x86_64_uses_native_result_registers() {
         )
     );
 }
+
+#[test]
+fn test_emit_write_stdout_linux_x86_64_uses_syscall_registers() {
+    let mut emitter = test_emitter_x86();
+
+    emit_write_stdout(&mut emitter, &PhpType::Int);
+
+    assert_eq!(
+        emitter.output(),
+        concat!(
+            "    call __rt_itoa\n",
+            "    mov rsi, rax\n",
+            "    mov rdx, rdx\n",
+            "    mov edi, 1\n",
+            "    mov eax, 1\n",
+            "    syscall\n",
+        )
+    );
+}

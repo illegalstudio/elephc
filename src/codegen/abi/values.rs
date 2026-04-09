@@ -2,6 +2,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::types::PhpType;
 
+use super::calls::emit_call_label;
 use super::frame::{load_at_offset, store_at_offset};
 use super::registers::{float_result_reg, int_result_reg, string_result_regs};
 
@@ -158,31 +159,44 @@ pub fn emit_load_int_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
 pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
         PhpType::Str => {
-            emitter.instruction("mov x0, #1");                                          // fd = stdout
-            emitter.syscall(4);
+            emit_write_current_string_stdout(emitter);
         }
         PhpType::Bool | PhpType::Int => {
-            emitter.instruction("bl __rt_itoa");                                        // x0 → x1=ptr, x2=len
-            emitter.instruction("mov x0, #1");                                          // fd = stdout
-            emitter.syscall(4);
+            emit_call_label(emitter, "__rt_itoa");
+            emit_write_current_string_stdout(emitter);
         }
         PhpType::Float => {
-            emitter.instruction("bl __rt_ftoa");                                        // d0 → x1=ptr, x2=len
-            emitter.instruction("mov x0, #1");                                          // fd = stdout
-            emitter.syscall(4);
+            emit_call_label(emitter, "__rt_ftoa");
+            emit_write_current_string_stdout(emitter);
         }
         PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_) => {
-            emitter.instruction("bl __rt_ptoa");                                        // x0 → x1=ptr, x2=len
-            emitter.instruction("mov x0, #1");                                          // fd = stdout
-            emitter.syscall(4);
+            emit_call_label(emitter, "__rt_ptoa");
+            emit_write_current_string_stdout(emitter);
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            emitter.instruction("bl __rt_mixed_write_stdout");                          // inspect boxed mixed payload and print if scalar/string
+            emit_call_label(emitter, "__rt_mixed_write_stdout");
         }
         PhpType::Void
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
         | PhpType::Callable
         | PhpType::Object(_) => {}
+    }
+}
+
+fn emit_write_current_string_stdout(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x0, #1");                                          // fd = stdout
+            emitter.syscall(4);
+        }
+        Arch::X86_64 => {
+            let (ptr_reg, len_reg) = string_result_regs(emitter);
+            emitter.instruction(&format!("mov rsi, {}", ptr_reg));                      // move the current string pointer into the Linux write buffer register
+            emitter.instruction(&format!("mov rdx, {}", len_reg));                      // move the current string length into the Linux write length register
+            emitter.instruction("mov edi, 1");                                          // fd = stdout
+            emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
+            emitter.instruction("syscall");                                             // write the current string payload to stdout
+        }
     }
 }

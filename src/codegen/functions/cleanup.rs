@@ -100,7 +100,10 @@ pub(super) fn emit_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
 
 pub(super) fn emit_frame_cleanup_callback(emitter: &mut Emitter, ctx: &Context, cleanup_label: &str) {
     emitter.label(cleanup_label);
-    super::super::abi::emit_cleanup_callback_prologue(emitter, "x0");
+    super::super::abi::emit_cleanup_callback_prologue(
+        emitter,
+        super::super::abi::int_result_reg(emitter),
+    );
     emit_owned_local_epilogue_cleanup(emitter, ctx);
     super::super::abi::emit_cleanup_callback_epilogue(emitter);
     emitter.blank();

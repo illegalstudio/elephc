@@ -8,11 +8,16 @@ mod strings;
 mod system;
 
 use super::emit::Emitter;
-use super::platform::Platform;
+use super::platform::{Arch, Platform};
 pub(crate) use data::emit_runtime_data_fixed;
 pub(crate) use data::emit_runtime_data_user;
 
 pub(crate) fn emit_runtime(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_runtime_linux_x86_64_minimal(emitter);
+        return;
+    }
+
     emit_optional_linux_crypto_decls(emitter);
 
     // String runtime functions
@@ -233,6 +238,11 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     pointers::emit_cstr_to_str(emitter);
 }
 
+fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
+    emit_optional_linux_crypto_decls(emitter);
+    strings::emit_itoa(emitter);
+}
+
 fn emit_optional_linux_crypto_decls(emitter: &mut Emitter) {
     if emitter.target.platform == Platform::Linux {
         emitter.raw(".weak MD5");
@@ -257,5 +267,16 @@ mod tests {
         assert!(asm.contains(".weak SHA1\n"));
         assert!(asm.contains(".weak SHA256\n"));
         assert!(!asm.contains("arc4random_uniform"));
+    }
+
+    #[test]
+    fn test_linux_x86_64_runtime_is_minimal_for_now() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_runtime(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("__rt_itoa:\n"));
+        assert!(!asm.contains("__rt_build_argv:\n"));
+        assert!(!asm.contains("__rt_ftoa:\n"));
     }
 }

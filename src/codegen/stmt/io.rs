@@ -3,6 +3,7 @@ use super::super::context::Context;
 use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
 use super::super::expr::{coerce_to_string, emit_expr};
+use super::super::platform::Arch;
 use super::PhpType;
 use crate::parser::ast::Expr;
 
@@ -19,18 +20,24 @@ pub(super) fn emit_echo_stmt(
         PhpType::Void => {}
         PhpType::Bool => {
             let skip_label = ctx.next_label("echo_skip_false");
-            emitter.instruction(&format!("cbz x0, {}", skip_label));            // branch to skip label if x0 is zero (false)
+            abi::emit_branch_if_int_result_zero(emitter, &skip_label);
             abi::emit_write_stdout(emitter, &ty);
             emitter.label(&skip_label);
         }
         PhpType::Int => {
             let skip_label = ctx.next_label("echo_skip_null");
-            emitter.instruction("movz x9, #0xFFFE");                            // load lowest 16 bits of null sentinel into x9
-            emitter.instruction("movk x9, #0xFFFF, lsl #16");                   // insert bits 16-31 of null sentinel
-            emitter.instruction("movk x9, #0xFFFF, lsl #32");                   // insert bits 32-47 of null sentinel
-            emitter.instruction("movk x9, #0x7FFF, lsl #48");                   // insert bits 48-63 of null sentinel
-            emitter.instruction("cmp x0, x9");                                  // compare integer value against null sentinel
-            emitter.instruction(&format!("b.eq {}", skip_label));               // skip echo if value is the null sentinel
+            let sentinel_reg = abi::symbol_scratch_reg(emitter);
+            abi::emit_load_int_immediate(emitter, sentinel_reg, 0x7fff_ffff_ffff_fffe);
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(emitter), sentinel_reg)); // compare integer value against the runtime null sentinel
+                    emitter.instruction(&format!("b.eq {}", skip_label));           // skip echo if value is the null sentinel
+                }
+                Arch::X86_64 => {
+                    emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(emitter), sentinel_reg)); // compare integer value against the runtime null sentinel
+                    emitter.instruction(&format!("je {}", skip_label));             // skip echo if value is the null sentinel
+                }
+            }
             abi::emit_write_stdout(emitter, &ty);
             emitter.label(&skip_label);
         }

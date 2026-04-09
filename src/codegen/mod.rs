@@ -13,7 +13,7 @@ mod stmt;
 use std::collections::{HashMap, HashSet};
 
 use crate::names::{enum_case_symbol, method_symbol, static_method_symbol};
-use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind};
 use crate::types::{
     ClassInfo, EnumCaseValue, EnumInfo, ExternClassInfo, ExternFunctionSig, FunctionSig,
     InterfaceInfo, PackedClassInfo, PhpType, TypeEnv,
@@ -39,7 +39,6 @@ pub fn generate(
     heap_debug: bool,
     target: Target,
 ) -> (String, String) {
-    target.ensure_aarch64_backend("code generation");
     let mut emitter = Emitter::new(target);
     if target.arch == platform::Arch::X86_64 {
         emitter.emit_text_prelude();
@@ -81,7 +80,19 @@ pub fn generate(
     }
 
     // Emit flattened class methods in class-id order for deterministic output.
-    let mut sorted_classes: Vec<(&String, &ClassInfo)> = classes.iter().collect();
+    let emitted_class_names = if target.arch == platform::Arch::X86_64 {
+        Some(collect_declared_class_names(program))
+    } else {
+        None
+    };
+    let mut sorted_classes: Vec<(&String, &ClassInfo)> = classes
+        .iter()
+        .filter(|(class_name, _)| {
+            emitted_class_names
+                .as_ref()
+                .is_none_or(|declared| declared.contains(*class_name))
+        })
+        .collect();
     sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
     for (class_name, class_info) in sorted_classes {
         for method in &class_info.method_decls {
@@ -221,11 +232,14 @@ pub fn generate(
     ctx.extern_classes = extern_classes.clone();
     ctx.extern_globals = extern_globals.clone();
 
-    // Pre-allocate $argc and $argv superglobals
-    if !global_env.contains_key("argc") {
+    let uses_argc = program_uses_variable(program, "argc");
+    let uses_argv = program_uses_variable(program, "argv");
+
+    // Pre-allocate $argc and $argv superglobals only when the program actually reads them.
+    if uses_argc && !global_env.contains_key("argc") {
         ctx.alloc_var("argc", PhpType::Int);
     }
-    if !global_env.contains_key("argv") {
+    if uses_argv && !global_env.contains_key("argv") {
         ctx.alloc_var("argv", PhpType::Array(Box::new(PhpType::Str)));
     }
     for (name, ty) in global_env {
@@ -258,19 +272,32 @@ pub fn generate(
         abi::emit_enable_heap_debug_flag(&mut emitter);
     }
 
-    // -- store $argc in local variable --
-    let argc_offset = ctx.variables.get("argc").expect("codegen bug: $argc not pre-allocated in main scope").stack_offset;
-    let argc_reg = abi::process_argc_reg(emitter.target);
-    abi::store_at_offset(&mut emitter, argc_reg, argc_offset);                  // $argc = OS argc
+    if uses_argc {
+        // -- store $argc in local variable --
+        let argc_offset = ctx.variables.get("argc").expect("codegen bug: $argc not pre-allocated in main scope").stack_offset;
+        let argc_reg = abi::process_argc_reg(emitter.target);
+        abi::store_at_offset(&mut emitter, argc_reg, argc_offset);              // $argc = OS argc
+    }
 
-    // -- build $argv array from OS C strings --
-    let argv_offset = ctx.variables.get("argv").expect("codegen bug: $argv not pre-allocated in main scope").stack_offset;
-    emitter.comment("build $argv array from OS argv");
-    emitter.instruction("bl __rt_build_argv");                                  // returns array ptr in x0
-    abi::emit_store(&mut emitter, &PhpType::Array(Box::new(PhpType::Str)), argv_offset); // store the built argv array through the ABI result-register helper
+    if uses_argv {
+        if target.arch == platform::Arch::X86_64 {
+            panic!("$argv support is not implemented yet for target {}", target);
+        }
+        // -- build $argv array from OS C strings --
+        let argv_offset = ctx.variables.get("argv").expect("codegen bug: $argv not pre-allocated in main scope").stack_offset;
+        emitter.comment("build $argv array from OS argv");
+        emitter.instruction("bl __rt_build_argv");                              // returns array ptr in x0
+        abi::emit_store(&mut emitter, &PhpType::Array(Box::new(PhpType::Str)), argv_offset); // store the built argv array through the ABI result-register helper
+    }
 
     // -- zero-initialize local variables that may be decref'd on reassignment --
-    let main_skip = HashSet::from(["argc".to_string(), "argv".to_string()]);
+    let mut main_skip = HashSet::new();
+    if uses_argc {
+        main_skip.insert("argc".to_string());
+    }
+    if uses_argv {
+        main_skip.insert("argv".to_string());
+    }
     for (name, var) in &ctx.variables {
         if main_skip.contains(name) { continue; }
         if matches!(
@@ -353,6 +380,7 @@ pub fn generate(
         interfaces,
         classes,
         enums,
+        emitted_class_names.as_ref(),
     );
 
     let mut user_asm = emitter.output();
@@ -373,7 +401,6 @@ pub fn generate(
 /// This output is identical for all programs compiled with the same heap_size
 /// and can be pre-assembled and cached.
 pub fn generate_runtime(heap_size: usize, target: Target) -> String {
-    target.ensure_aarch64_backend("runtime code generation");
     let mut emitter = Emitter::new(target);
     emitter.emit_text_prelude();
     runtime::emit_runtime(&mut emitter);
@@ -700,6 +727,228 @@ fn collect_main_try_slots(stmts: &[Stmt], ctx: &mut Context) {
     }
 }
 
+fn collect_declared_class_names(program: &Program) -> HashSet<String> {
+    let mut names = HashSet::new();
+    collect_declared_class_names_in_body(program, &mut names);
+    names
+}
+
+fn collect_declared_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<String>) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::ClassDecl { name, .. } => {
+                names.insert(name.clone());
+            }
+            StmtKind::NamespaceBlock { body, .. } => {
+                collect_declared_class_names_in_body(body, names);
+            }
+            StmtKind::IfDef {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_declared_class_names_in_body(then_body, names);
+                if let Some(body) = else_body {
+                    collect_declared_class_names_in_body(body, names);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn program_uses_variable(program: &Program, needle: &str) -> bool {
+    program.iter().any(|stmt| stmt_uses_variable(stmt, needle))
+}
+
+fn stmt_uses_variable(stmt: &Stmt, needle: &str) -> bool {
+    match &stmt.kind {
+        StmtKind::Assign { value, .. }
+        | StmtKind::TypedAssign { value, .. }
+        | StmtKind::Echo(value)
+        | StmtKind::Throw(value)
+        | StmtKind::ExprStmt(value)
+        | StmtKind::ConstDecl { value, .. } => expr_uses_variable(value, needle),
+        StmtKind::Return(Some(value)) => expr_uses_variable(value, needle),
+        StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue => false,
+        StmtKind::ArrayAssign { array, index, value } => {
+            array == needle || expr_uses_variable(index, needle) || expr_uses_variable(value, needle)
+        }
+        StmtKind::ArrayPush { array, value } => array == needle || expr_uses_variable(value, needle),
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            expr_uses_variable(condition, needle)
+                || then_body.iter().any(|stmt| stmt_uses_variable(stmt, needle))
+                || elseif_clauses.iter().any(|(cond, body)| {
+                    expr_uses_variable(cond, needle)
+                        || body.iter().any(|stmt| stmt_uses_variable(stmt, needle))
+                })
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| body.iter().any(|stmt| stmt_uses_variable(stmt, needle)))
+        }
+        StmtKind::IfDef { then_body, else_body, .. } => {
+            then_body.iter().any(|stmt| stmt_uses_variable(stmt, needle))
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| body.iter().any(|stmt| stmt_uses_variable(stmt, needle)))
+        }
+        StmtKind::While { condition, body } => {
+            expr_uses_variable(condition, needle)
+                || body.iter().any(|stmt| stmt_uses_variable(stmt, needle))
+        }
+        StmtKind::DoWhile { body, condition } => {
+            body.iter().any(|stmt| stmt_uses_variable(stmt, needle))
+                || expr_uses_variable(condition, needle)
+        }
+        StmtKind::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_ref().is_some_and(|stmt| stmt_uses_variable(stmt, needle))
+                || condition.as_ref().is_some_and(|expr| expr_uses_variable(expr, needle))
+                || update.as_ref().is_some_and(|stmt| stmt_uses_variable(stmt, needle))
+                || body.iter().any(|stmt| stmt_uses_variable(stmt, needle))
+        }
+        StmtKind::Foreach { array, body, .. } => {
+            expr_uses_variable(array, needle)
+                || body.iter().any(|stmt| stmt_uses_variable(stmt, needle))
+        }
+        StmtKind::Switch { subject, cases, default } => {
+            expr_uses_variable(subject, needle)
+                || cases.iter().any(|(values, body)| {
+                    values.iter().any(|expr| expr_uses_variable(expr, needle))
+                        || body.iter().any(|stmt| stmt_uses_variable(stmt, needle))
+                })
+                || default
+                    .as_ref()
+                    .is_some_and(|body| body.iter().any(|stmt| stmt_uses_variable(stmt, needle)))
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            try_body.iter().any(|stmt| stmt_uses_variable(stmt, needle))
+                || catches
+                    .iter()
+                    .any(|catch_clause| catch_clause.body.iter().any(|stmt| stmt_uses_variable(stmt, needle)))
+                || finally_body
+                    .as_ref()
+                    .is_some_and(|body| body.iter().any(|stmt| stmt_uses_variable(stmt, needle)))
+        }
+        StmtKind::ListUnpack { value, .. } => expr_uses_variable(value, needle),
+        StmtKind::StaticVar { init, .. } => expr_uses_variable(init, needle),
+        StmtKind::PropertyAssign { object, value, .. } => {
+            expr_uses_variable(object, needle) || expr_uses_variable(value, needle)
+        }
+        StmtKind::FunctionDecl { body, .. } | StmtKind::NamespaceBlock { body, .. } => {
+            body.iter().any(|stmt| stmt_uses_variable(stmt, needle))
+        }
+        StmtKind::ClassDecl { methods, .. }
+        | StmtKind::TraitDecl { methods, .. }
+        | StmtKind::InterfaceDecl { methods, .. } => methods.iter().any(|method| {
+            method.body.iter().any(|stmt| stmt_uses_variable(stmt, needle))
+        }),
+        StmtKind::EnumDecl { cases, .. } => cases
+            .iter()
+            .any(|case| case.value.as_ref().is_some_and(|expr| expr_uses_variable(expr, needle))),
+        StmtKind::Global { vars } => vars.iter().any(|name| name == needle),
+        StmtKind::PackedClassDecl { .. }
+        | StmtKind::Include { .. }
+        | StmtKind::NamespaceDecl { .. }
+        | StmtKind::UseDecl { .. }
+        | StmtKind::ExternFunctionDecl { .. }
+        | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ExternGlobalDecl { .. } => false,
+    }
+}
+
+fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(name) => name == needle,
+        ExprKind::BinaryOp { left, right, .. } => {
+            expr_uses_variable(left, needle) || expr_uses_variable(right, needle)
+        }
+        ExprKind::Negate(inner)
+        | ExprKind::Not(inner)
+        | ExprKind::BitNot(inner)
+        | ExprKind::Throw(inner)
+        | ExprKind::Spread(inner)
+        | ExprKind::PtrCast { expr: inner, .. } => expr_uses_variable(inner, needle),
+        ExprKind::NullCoalesce { value, default } => {
+            expr_uses_variable(value, needle) || expr_uses_variable(default, needle)
+        }
+        ExprKind::PreIncrement(name)
+        | ExprKind::PostIncrement(name)
+        | ExprKind::PreDecrement(name)
+        | ExprKind::PostDecrement(name) => name == needle,
+        ExprKind::FunctionCall { args, .. }
+        | ExprKind::NewObject { args, .. }
+        | ExprKind::ClosureCall { args, .. }
+        | ExprKind::StaticMethodCall { args, .. } => {
+            args.iter().any(|arg| expr_uses_variable(arg, needle))
+        }
+        ExprKind::ExprCall { callee, args } => {
+            expr_uses_variable(callee, needle)
+                || args.iter().any(|arg| expr_uses_variable(arg, needle))
+        }
+        ExprKind::ArrayLiteral(items) => items.iter().any(|item| expr_uses_variable(item, needle)),
+        ExprKind::ArrayLiteralAssoc(items) => items
+            .iter()
+            .any(|(key, value)| expr_uses_variable(key, needle) || expr_uses_variable(value, needle)),
+        ExprKind::Match { subject, arms, default } => {
+            expr_uses_variable(subject, needle)
+                || arms.iter().any(|(values, value)| {
+                    values.iter().any(|expr| expr_uses_variable(expr, needle))
+                        || expr_uses_variable(value, needle)
+                })
+                || default
+                    .as_ref()
+                    .is_some_and(|expr| expr_uses_variable(expr, needle))
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            expr_uses_variable(array, needle) || expr_uses_variable(index, needle)
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            expr_uses_variable(condition, needle)
+                || expr_uses_variable(then_expr, needle)
+                || expr_uses_variable(else_expr, needle)
+        }
+        ExprKind::Cast { expr, .. }
+        | ExprKind::NamedArg { value: expr, .. }
+        | ExprKind::BufferNew { len: expr, .. } => expr_uses_variable(expr, needle),
+        ExprKind::Closure { body, .. } => body.iter().any(|stmt| stmt_uses_variable(stmt, needle)),
+        ExprKind::PropertyAccess { object, .. } => expr_uses_variable(object, needle),
+        ExprKind::MethodCall { object, args, .. } => {
+            expr_uses_variable(object, needle)
+                || args.iter().any(|arg| expr_uses_variable(arg, needle))
+        }
+        ExprKind::FirstClassCallable(callable) => match callable {
+            crate::parser::ast::CallableTarget::Function(_) | crate::parser::ast::CallableTarget::StaticMethod { .. } => false,
+            crate::parser::ast::CallableTarget::Method { object, .. } => expr_uses_variable(object, needle),
+        },
+        ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::ConstRef(_)
+        | ExprKind::EnumCase { .. }
+        | ExprKind::This => false,
+    }
+}
+
 fn emit_main_activation_record_push(emitter: &mut Emitter, ctx: &Context, cleanup_label: &str) {
     let prev_offset = ctx
         .activation_prev_offset
@@ -737,7 +986,7 @@ fn emit_main_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
 
 fn emit_main_cleanup_callback(emitter: &mut Emitter, cleanup_label: &str, ctx: &Context) {
     emitter.label(cleanup_label);
-    abi::emit_cleanup_callback_prologue(emitter, "x0");
+    abi::emit_cleanup_callback_prologue(emitter, abi::int_result_reg(emitter));
     functions::emit_owned_local_epilogue_cleanup(emitter, ctx);
     abi::emit_cleanup_callback_epilogue(emitter);
     emitter.blank();

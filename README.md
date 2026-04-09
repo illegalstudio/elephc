@@ -109,7 +109,8 @@ elephc --define DEBUG app.php
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 
 # Experimental target selection plumbing
-# AArch64 emission works today; linux-x86_64 is recognized but not emitted yet
+# AArch64 emission works today; linux-x86_64 is in progress and already supports
+# a small end-to-end slice used by the Docker x86_64 test harness
 elephc --target linux-aarch64 hello.php
 ```
 
