@@ -91,6 +91,30 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     }
 }
 
+pub fn emit_branch_if_int_result_zero(emitter: &mut Emitter, label: &str) {
+    match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            emitter.instruction(&format!("cbz {}, {}", int_result_reg(emitter), label)); // branch when the coerced integer truthiness result is zero
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            emitter.instruction(&format!("test {}, {}", int_result_reg(emitter), int_result_reg(emitter))); // test whether the coerced integer truthiness result is zero
+            emitter.instruction(&format!("je {}", label));                            // branch when the coerced integer truthiness result is zero
+        }
+    }
+}
+
+pub fn emit_branch_if_int_result_nonzero(emitter: &mut Emitter, label: &str) {
+    match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            emitter.instruction(&format!("cbnz {}, {}", int_result_reg(emitter), label)); // branch when the coerced integer truthiness result is non-zero
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            emitter.instruction(&format!("test {}, {}", int_result_reg(emitter), int_result_reg(emitter))); // test whether the coerced integer truthiness result is non-zero
+            emitter.instruction(&format!("jne {}", label));                            // branch when the coerced integer truthiness result is non-zero
+        }
+    }
+}
+
 pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
         PhpType::Str => {

@@ -33,8 +33,7 @@ pub(super) fn emit_do_while_stmt(
     emitter.label(&loop_cond);
     let cond_ty = emit_expr(condition, emitter, ctx, data);
     crate::codegen::expr::coerce_to_truthiness(emitter, ctx, &cond_ty);
-    emitter.instruction("cmp x0, #0");                                          // test if do-while condition is zero (falsy)
-    emitter.instruction(&format!("b.ne {}", loop_start));                       // loop back to start if condition is nonzero (truthy)
+    crate::codegen::abi::emit_branch_if_int_result_nonzero(emitter, &loop_start);
     emitter.label(&loop_end);
 }
 
@@ -53,8 +52,7 @@ pub(super) fn emit_while_stmt(
     emitter.label(&loop_start);
     let cond_ty = emit_expr(condition, emitter, ctx, data);
     crate::codegen::expr::coerce_to_truthiness(emitter, ctx, &cond_ty);
-    emitter.instruction("cmp x0, #0");                                          // test if while condition is zero (falsy)
-    emitter.instruction(&format!("b.eq {}", loop_end));                         // exit loop if condition is false
+    crate::codegen::abi::emit_branch_if_int_result_zero(emitter, &loop_end);
 
     ctx.loop_stack.push(LoopLabels {
         continue_label: loop_start.clone(),
@@ -95,8 +93,7 @@ pub(super) fn emit_for_stmt(
     if let Some(cond) = condition {
         let cond_ty = emit_expr(cond, emitter, ctx, data);
         crate::codegen::expr::coerce_to_truthiness(emitter, ctx, &cond_ty);
-        emitter.instruction("cmp x0, #0");                                      // test if for-loop condition is zero (falsy)
-        emitter.instruction(&format!("b.eq {}", loop_end));                     // exit loop if condition is false
+        crate::codegen::abi::emit_branch_if_int_result_zero(emitter, &loop_end);
     }
 
     ctx.loop_stack.push(LoopLabels {

@@ -338,6 +338,23 @@ fn test_emit_store_zero_to_symbol_uses_native_zero_store_on_linux_x86_64() {
 }
 
 #[test]
+fn test_emit_branch_helpers_use_native_zero_checks_on_linux_x86_64() {
+    let mut emitter = test_emitter_x86();
+    emit_branch_if_int_result_zero(&mut emitter, "zero_label");
+    emit_branch_if_int_result_nonzero(&mut emitter, "nonzero_label");
+
+    assert_eq!(
+        emitter.output(),
+        concat!(
+            "    test rax, rax\n",
+            "    je zero_label\n",
+            "    test rax, rax\n",
+            "    jne nonzero_label\n",
+        )
+    );
+}
+
+#[test]
 fn test_emit_store_and_load_result_to_symbol_for_string_linux_x86_64() {
     let mut emitter = test_emitter_x86();
     emit_store_result_to_symbol(&mut emitter, "_demo_symbol", &PhpType::Str, false);

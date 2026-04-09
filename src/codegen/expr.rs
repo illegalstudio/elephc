@@ -327,8 +327,7 @@ pub fn emit_expr(
             let cond_ty = emit_expr(condition, emitter, ctx, data);
             coerce_to_truthiness(emitter, ctx, &cond_ty);
             // -- branch based on ternary condition --
-            emitter.instruction("cmp x0, #0");                                  // test if condition is falsy
-            emitter.instruction(&format!("b.eq {}", else_label));               // jump to else branch if condition was false
+            abi::emit_branch_if_int_result_zero(emitter, &else_label);
                                                                   // -- determine result type: widen to the broader type --
             let dummy_sig = FunctionSig {
                 params: vec![],

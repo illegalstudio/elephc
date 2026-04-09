@@ -21,8 +21,7 @@ pub(super) fn emit_if_stmt(
     let cond_ty = emit_expr(condition, emitter, ctx, data);
     crate::codegen::expr::coerce_to_truthiness(emitter, ctx, &cond_ty);
     let mut next_label = ctx.next_label("if_else");
-    emitter.instruction("cmp x0, #0");                                          // test if condition result is zero (falsy)
-    emitter.instruction(&format!("b.eq {}", next_label));                       // branch to else/elseif if condition is false
+    crate::codegen::abi::emit_branch_if_int_result_zero(emitter, &next_label);
 
     for s in then_body {
         super::super::emit_stmt(s, emitter, ctx, data);
@@ -35,8 +34,7 @@ pub(super) fn emit_if_stmt(
         let cond_ty = emit_expr(cond, emitter, ctx, data);
         crate::codegen::expr::coerce_to_truthiness(emitter, ctx, &cond_ty);
         next_label = ctx.next_label("if_else");
-        emitter.instruction("cmp x0, #0");                                      // test if elseif condition is zero (falsy)
-        emitter.instruction(&format!("b.eq {}", next_label));                   // branch to next elseif/else if condition is false
+        crate::codegen::abi::emit_branch_if_int_result_zero(emitter, &next_label);
 
         for s in body {
             super::super::emit_stmt(s, emitter, ctx, data);
