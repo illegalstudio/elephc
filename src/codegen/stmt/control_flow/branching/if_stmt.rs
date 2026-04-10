@@ -2,6 +2,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::abi;
 use crate::codegen::stmt::emit_stmt;
 use crate::parser::ast::{Expr, Stmt};
 
@@ -26,7 +27,7 @@ pub(super) fn emit_if_stmt(
     for s in then_body {
         emit_stmt(s, emitter, ctx, data);
     }
-    emitter.instruction(&format!("b {}", end_label));                           // unconditional jump past all else/elseif branches
+    abi::emit_jump(emitter, &end_label);                                        // unconditional jump past all else/elseif branches
 
     for (cond, body) in elseif_clauses {
         emitter.label(&next_label);
@@ -39,7 +40,7 @@ pub(super) fn emit_if_stmt(
         for s in body {
             emit_stmt(s, emitter, ctx, data);
         }
-        emitter.instruction(&format!("b {}", end_label));                       // unconditional jump past remaining branches
+        abi::emit_jump(emitter, &end_label);                                    // unconditional jump past remaining branches
     }
 
     emitter.label(&next_label);

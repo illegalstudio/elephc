@@ -117,6 +117,43 @@ pub fn emit_branch_if_int_result_nonzero(emitter: &mut Emitter, label: &str) {
     }
 }
 
+pub fn emit_jump(emitter: &mut Emitter, label: &str) {
+    match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            emitter.instruction(&format!("b {}", label));                       // jump unconditionally to the target label
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            emitter.instruction(&format!("jmp {}", label));                     // jump unconditionally to the target label
+        }
+    }
+}
+
+pub fn emit_int_result_to_float_result(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            let inst = format!("scvtf {}, {}", float_result_reg(emitter), int_result_reg(emitter));
+            emitter.instruction(&inst);                                         // promote the integer result into the floating-point result register
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            let inst = format!("cvtsi2sd {}, {}", float_result_reg(emitter), int_result_reg(emitter));
+            emitter.instruction(&inst);                                         // promote the integer result into the floating-point result register
+        }
+    }
+}
+
+pub fn emit_float_result_to_int_result(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            let inst = format!("fcvtzs {}, {}", int_result_reg(emitter), float_result_reg(emitter));
+            emitter.instruction(&inst);                                         // truncate the floating-point result into the integer result register
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            let inst = format!("cvttsd2si {}, {}", int_result_reg(emitter), float_result_reg(emitter));
+            emitter.instruction(&inst);                                         // truncate the floating-point result into the integer result register
+        }
+    }
+}
+
 pub fn emit_load_int_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
     match emitter.target.arch {
         Arch::AArch64 => {

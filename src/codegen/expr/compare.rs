@@ -1,6 +1,7 @@
 use super::super::context::Context;
 use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
+use super::super::abi;
 use super::{coerce_null_to_zero, coerce_result_to_type, coerce_to_string, emit_expr};
 use super::{widen_codegen_type, BinOp, Expr, ExprKind, PhpType};
 
@@ -19,11 +20,11 @@ pub(super) fn emit_cast(
             match &src_ty {
                 PhpType::Int => {}
                 PhpType::Float => {
-                    emitter.instruction("fcvtzs x0, d0");                       // convert double to signed 64-bit int (toward zero)
+                    abi::emit_float_result_to_int_result(emitter);              // convert double to signed 64-bit int (toward zero)
                 }
                 PhpType::Bool => {}
                 PhpType::Void => {
-                    emitter.instruction("mov x0, #0");                          // null casts to integer zero
+                    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
                 }
                 PhpType::Str => {
                     emitter.instruction("bl __rt_atoi");                        // runtime: ASCII string to integer conversion
@@ -46,11 +47,11 @@ pub(super) fn emit_cast(
             match &src_ty {
                 PhpType::Float => {}
                 PhpType::Int | PhpType::Bool => {
-                    emitter.instruction("scvtf d0, x0");                        // signed int to double conversion
+                    abi::emit_int_result_to_float_result(emitter);              // signed int to double conversion
                 }
                 PhpType::Void => {
-                    emitter.instruction("mov x0, #0");                          // load zero integer
-                    emitter.instruction("scvtf d0, x0");                        // convert to 0.0 double
+                    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+                    abi::emit_int_result_to_float_result(emitter);              // convert to 0.0 double
                 }
                 PhpType::Str => {
                     emitter.instruction("bl __rt_cstr");                        // null-terminate string (x1=ptr, x2=len → x0=cstr)
@@ -65,8 +66,8 @@ pub(super) fn emit_cast(
                 | PhpType::Buffer(_)
                 | PhpType::Packed(_)
                 | PhpType::Pointer(_) => {
-                    emitter.instruction("mov x0, #0");                          // load zero integer
-                    emitter.instruction("scvtf d0, x0");                        // convert to 0.0 double
+                    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+                    abi::emit_int_result_to_float_result(emitter);              // convert to 0.0 double
                 }
             }
             PhpType::Float

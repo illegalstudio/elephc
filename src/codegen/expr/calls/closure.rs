@@ -193,6 +193,11 @@ pub(super) fn emit_closure_call(
     data: &mut DataSection,
 ) -> PhpType {
     emitter.comment(&format!("call ${}()", var));
+    let save_concat_before_args =
+        emitter.target.arch == crate::codegen::platform::Arch::X86_64;
+    if save_concat_before_args {
+        super::super::save_concat_offset_before_nested_call(emitter);
+    }
 
     let sig = ctx.closure_sigs.get(var).cloned();
     let captures = ctx.closure_captures.get(var).cloned().unwrap_or_default();
@@ -311,6 +316,9 @@ pub(super) fn emit_closure_call(
         Some(v) => v,
         None => {
             emitter.comment(&format!("WARNING: undefined closure variable ${}", var));
+            if save_concat_before_args {
+                super::super::restore_concat_offset_after_nested_call(emitter, &PhpType::Int);
+            }
             return PhpType::Int;
         }
     };
@@ -331,10 +339,17 @@ pub(super) fn emit_closure_call(
         .map(|s| s.return_type.clone())
         .unwrap_or(PhpType::Int);
 
-    super::super::save_concat_offset_before_nested_call(emitter);
+    if !save_concat_before_args {
+        super::super::save_concat_offset_before_nested_call(emitter);
+    }
     crate::codegen::abi::emit_call_reg(emitter, call_reg);
-    super::super::restore_concat_offset_after_nested_call(emitter, &ret_ty);
-    crate::codegen::abi::emit_release_temporary_stack(emitter, overflow_bytes);
+    if save_concat_before_args {
+        crate::codegen::abi::emit_release_temporary_stack(emitter, overflow_bytes);
+        super::super::restore_concat_offset_after_nested_call(emitter, &ret_ty);
+    } else {
+        super::super::restore_concat_offset_after_nested_call(emitter, &ret_ty);
+        crate::codegen::abi::emit_release_temporary_stack(emitter, overflow_bytes);
+    }
 
     ret_ty
 }
