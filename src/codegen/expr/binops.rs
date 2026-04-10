@@ -1,6 +1,7 @@
 use super::super::context::Context;
 use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
+use super::super::{abi, platform::Arch};
 use super::{
     coerce_null_to_zero, coerce_to_string, coerce_to_truthiness, emit_expr, emit_null_coalesce,
     emit_strict_compare, expr_result_heap_ownership, BinOp, Expr, HeapOwnership, PhpType,
@@ -290,17 +291,27 @@ pub(super) fn emit_binop(
             let left_ty = emit_expr(left, emitter, ctx, data);
             coerce_to_string(emitter, ctx, data, &left_ty);
             if expr_result_heap_ownership(left) == HeapOwnership::NonHeap {
-                emitter.instruction("bl __rt_str_persist");                     // persist transient left strings before the right operand can reuse concat buffers
+                abi::emit_call_label(emitter, "__rt_str_persist");              // persist transient left strings before the right operand can reuse concat buffers
             }
             // -- save left string while evaluating right operand --
-            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // push left string ptr+len onto stack
+            let (left_ptr_reg, left_len_reg) = abi::string_result_regs(emitter);
+            abi::emit_push_reg_pair(emitter, left_ptr_reg, left_len_reg);        // push left string ptr+len onto stack
             let right_ty = emit_expr(right, emitter, ctx, data);
             coerce_to_string(emitter, ctx, data, &right_ty);
             // -- set up concat(left_ptr, left_len, right_ptr, right_len) --
-            emitter.instruction("mov x3, x1");                                  // move right string pointer to 3rd arg
-            emitter.instruction("mov x4, x2");                                  // move right string length to 4th arg
-            emitter.instruction("ldp x1, x2, [sp], #16");                       // pop left string ptr/len into 1st/2nd args
-            emitter.instruction("bl __rt_concat");                              // call runtime to concatenate two strings
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("mov x3, x1");                          // move right string pointer to 3rd arg
+                    emitter.instruction("mov x4, x2");                          // move right string length to 4th arg
+                    abi::emit_pop_reg_pair(emitter, "x1", "x2");                // pop left string ptr/len into 1st/2nd args
+                }
+                Arch::X86_64 => {
+                    emitter.instruction("mov rdi, rax");                        // move right string pointer to the x86_64 concat argument register
+                    emitter.instruction("mov rsi, rdx");                        // move right string length to the x86_64 concat argument register
+                    abi::emit_pop_reg_pair(emitter, "rax", "rdx");              // pop left string ptr/len into the x86_64 concat argument registers
+                }
+            }
+            abi::emit_call_label(emitter, "__rt_concat");                       // call runtime to concatenate two strings
             PhpType::Str
         }
         BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight => {

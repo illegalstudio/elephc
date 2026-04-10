@@ -242,6 +242,8 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     emit_optional_linux_crypto_decls(emitter);
     strings::emit_itoa(emitter);
     strings::emit_ftoa(emitter);
+    strings::emit_concat(emitter);
+    strings::emit_str_persist(emitter);
     system::emit_build_argv(emitter);
 }
 
@@ -279,6 +281,8 @@ mod tests {
 
         assert!(asm.contains("__rt_itoa:\n"));
         assert!(asm.contains("__rt_ftoa:\n"));
+        assert!(asm.contains("__rt_concat:\n"));
+        assert!(asm.contains("__rt_str_persist:\n"));
         assert!(asm.contains("__rt_build_argv:\n"));
     }
 }

@@ -1,10 +1,15 @@
-use crate::codegen::emit::Emitter;
+use crate::codegen::{emit::Emitter, platform::Arch};
 
 /// str_persist: copy a string to heap for permanent storage.
 /// Used to persist strings that would otherwise outlive their current owner.
 /// Input:  x1=ptr, x2=len
 /// Output: x1=new_ptr (on heap), x2=len (unchanged)
 pub fn emit_str_persist(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_str_persist_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: str_persist ---");
     emitter.label_global("__rt_str_persist");
@@ -61,4 +66,29 @@ pub fn emit_str_persist(emitter: &mut Emitter) {
 
     emitter.label("__rt_str_persist_done");
     emitter.instruction("ret");                                                 // return to caller
+}
+
+fn emit_str_persist_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: str_persist ---");
+    emitter.label_global("__rt_str_persist");
+    emitter.instruction("ret");                                                 // temporary x86_64 runtime: concat buffer strings are append-only for current slices
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen::platform::{Arch, Platform, Target};
+
+    use super::*;
+
+    #[test]
+    fn test_emit_str_persist_linux_x86_64_is_temporary_noop() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_str_persist(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("__rt_str_persist:\n"));
+        assert!(asm.contains("ret\n"));
+        assert!(!asm.contains("bl __rt_heap_alloc\n"));
+    }
 }
