@@ -124,10 +124,10 @@ pub fn emit_expr(
                 if result_ty == PhpType::Str {
                     coerce_to_string(emitter, ctx, data, &then_ty);
                 } else if result_ty == PhpType::Float && then_ty == PhpType::Int {
-                    emitter.instruction("scvtf d0, x0");                        // convert int to float for unified result type
+                    abi::emit_int_result_to_float_result(emitter);              // convert int to float for unified result type
                 }
             }
-            emitter.instruction(&format!("b {}", end_label));                   // skip else branch after evaluating then-expr
+            abi::emit_jump(emitter, &end_label);                                // skip else branch after evaluating then-expr
             emitter.label(&else_label);
             let else_ty = emit_expr(else_expr, emitter, ctx, data);
             // -- coerce else-branch to result type if needed --
@@ -135,7 +135,7 @@ pub fn emit_expr(
                 if result_ty == PhpType::Str {
                     coerce_to_string(emitter, ctx, data, &else_ty);
                 } else if result_ty == PhpType::Float && else_ty == PhpType::Int {
-                    emitter.instruction("scvtf d0, x0");                        // convert int to float for unified result type
+                    abi::emit_int_result_to_float_result(emitter);              // convert int to float for unified result type
                 }
             }
             emitter.label(&end_label);

@@ -63,7 +63,7 @@ pub(crate) fn emit_while_stmt(
     }
     ctx.loop_stack.pop();
 
-    emitter.instruction(&format!("b {}", loop_start));                             // unconditional branch back to loop start
+    crate::codegen::abi::emit_jump(emitter, &loop_start);                       // unconditional branch back to loop start
     emitter.label(&loop_end);
 }
 
@@ -109,6 +109,6 @@ pub(crate) fn emit_for_stmt(
     if let Some(s) = update {
         super::super::super::emit_stmt(s, emitter, ctx, data);
     }
-    emitter.instruction(&format!("b {}", loop_start));                             // unconditional branch back to loop start
+    crate::codegen::abi::emit_jump(emitter, &loop_start);                       // unconditional branch back to loop start
     emitter.label(&loop_end);
 }

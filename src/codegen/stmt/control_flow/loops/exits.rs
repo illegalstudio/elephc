@@ -13,7 +13,7 @@ pub(crate) fn emit_break_stmt(emitter: &mut Emitter, ctx: &Context) {
     if !ctx.finally_stack.is_empty() {
         super::super::emit_branch_through_finally(emitter, ctx, &labels.break_label);
     } else {
-        emitter.instruction(&format!("b {}", labels.break_label));                   // unconditional branch to loop exit label
+        crate::codegen::abi::emit_jump(emitter, &labels.break_label);            // unconditional branch to loop exit label
     }
 }
 
@@ -29,7 +29,7 @@ pub(crate) fn emit_return_stmt(
         let ty = emit_expr(e, emitter, ctx, data);
         super::super::super::helpers::retain_borrowed_heap_result(emitter, e, &ty);
         if matches!(ty, PhpType::Str) && expr_result_heap_ownership(e) != HeapOwnership::Owned {
-            emitter.instruction("bl __rt_str_persist");                              // persist borrowed string before locals are freed
+            crate::codegen::abi::emit_call_label(emitter, "__rt_str_persist");   // persist borrowed string before locals are freed
         }
         let target_ty = ctx.return_type.clone();
         coerce_result_to_type(emitter, ctx, data, &ty, &target_ty);
@@ -37,12 +37,12 @@ pub(crate) fn emit_return_stmt(
     if let Some(label) = &ctx.return_label {
         let sp_total: usize = ctx.loop_stack.iter().map(|l| l.sp_adjust).sum();
         if sp_total > 0 {
-            emitter.instruction(&format!("add sp, sp, #{}", sp_total));              // pop switch subjects before returning
+            crate::codegen::abi::emit_release_temporary_stack(emitter, sp_total); // pop switch subjects before returning
         }
         if !ctx.finally_stack.is_empty() {
             super::super::exceptions::emit_return_through_finally(emitter, ctx);
         } else {
-            emitter.instruction(&format!("b {}", label));                            // branch to function epilogue for stack cleanup and ret
+            crate::codegen::abi::emit_jump(emitter, label);                      // branch to function epilogue for stack cleanup and ret
         }
     }
 }
@@ -55,6 +55,6 @@ pub(crate) fn emit_continue_stmt(emitter: &mut Emitter, ctx: &Context) {
     if !ctx.finally_stack.is_empty() {
         super::super::emit_branch_through_finally(emitter, ctx, &labels.continue_label);
     } else {
-        emitter.instruction(&format!("b {}", labels.continue_label));                // unconditional branch to loop continue label
+        crate::codegen::abi::emit_jump(emitter, &labels.continue_label);         // unconditional branch to loop continue label
     }
 }

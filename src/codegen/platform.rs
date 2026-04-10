@@ -92,7 +92,12 @@ impl Target {
     }
 
     pub fn supports_current_backend(&self) -> bool {
-        self.arch == Arch::AArch64
+        matches!(
+            (self.platform, self.arch),
+            (Platform::MacOS, Arch::AArch64)
+                | (Platform::Linux, Arch::AArch64)
+                | (Platform::Linux, Arch::X86_64)
+        )
     }
 
     pub fn darwin_arch_name(&self) -> &'static str {
