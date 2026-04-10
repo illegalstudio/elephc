@@ -2824,6 +2824,12 @@ fn test_argv_count_exists() {
     assert_eq!(out, "1");
 }
 
+#[test]
+fn test_argv_first_entry_exists() {
+    let out = compile_and_run("<?php echo $argv[0];");
+    assert!(out.ends_with("/test"), "unexpected argv[0]: {out}");
+}
+
 // --- Arrays ---
 
 #[test]

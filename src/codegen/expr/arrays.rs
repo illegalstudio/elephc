@@ -1,6 +1,7 @@
 use super::super::context::Context;
 use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
+use super::super::{abi, platform::Arch};
 use crate::parser::ast::TypeExpr;
 use crate::types::packed_type_size;
 use super::{emit_expr, retain_borrowed_heap_arg, Expr, ExprKind, PhpType};
@@ -428,9 +429,12 @@ pub(super) fn emit_array_access(
         return val_ty;
     }
 
-    emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer while evaluating index
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the array pointer while evaluating the index expression
     emit_expr(index, emitter, ctx, data);
-    emitter.instruction("ldr x9, [sp], #16");                                   // pop array pointer into scratch register x9
+    let array_reg = abi::symbol_scratch_reg(emitter);
+    let len_reg = abi::temp_int_reg(emitter.target);
+    let result_reg = abi::int_result_reg(emitter);
+    abi::emit_pop_reg(emitter, array_reg);                                      // restore the array pointer into a scratch register
     emitter.comment("array access");
     let elem_ty = match &arr_ty {
         PhpType::Array(t) => *t.clone(),
@@ -439,37 +443,76 @@ pub(super) fn emit_array_access(
 
     let null_label = ctx.next_label("arr_null");
     let ok_label = ctx.next_label("arr_ok");
-    emitter.instruction("cmp x0, #0");                                          // check if index is negative
-    emitter.instruction(&format!("b.lt {null_label}"));                         // negative index → null sentinel
-    emitter.instruction("ldr x10, [x9]");                                       // load array length from header (offset 0)
-    emitter.instruction("cmp x0, x10");                                         // compare index against array length
-    emitter.instruction(&format!("b.ge {null_label}"));                         // index >= length → null sentinel
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #0");                                  // check if index is negative
+            emitter.instruction(&format!("b.lt {null_label}"));                 // negative index → null sentinel
+            abi::emit_load_from_address(emitter, len_reg, array_reg, 0);         // load array length from header (offset 0)
+            emitter.instruction(&format!("cmp {}, {}", result_reg, len_reg));   // compare index against array length
+            emitter.instruction(&format!("b.ge {null_label}"));                 // index >= length → null sentinel
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {}, 0", result_reg));             // check if index is negative
+            emitter.instruction(&format!("jl {null_label}"));                   // negative index → null sentinel
+            abi::emit_load_from_address(emitter, len_reg, array_reg, 0);         // load array length from header (offset 0)
+            emitter.instruction(&format!("cmp {}, {}", result_reg, len_reg));   // compare index against array length
+            emitter.instruction(&format!("jge {null_label}"));                  // index >= length → null sentinel
+        }
+    }
 
     match &elem_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
-            emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header to reach data
-            emitter.instruction("ldr x0, [x9, x0, lsl #3]");                    // load element at x9 + index*8
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip 24-byte array header to reach data
+                    emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", result_reg, array_reg, result_reg)); // load element at array + index*8
+                }
+                Arch::X86_64 => {
+                    emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip 24-byte array header to reach data
+                    emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", result_reg, array_reg, result_reg)); // load element at array + index*8
+                }
+            }
         }
         PhpType::Str => {
-            emitter.instruction("lsl x0, x0, #4");                              // multiply index by 16 (string = ptr+len pair)
-            emitter.instruction("add x9, x9, x0");                              // add scaled index offset to array base
-            emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header to reach data
-            emitter.instruction("ldr x1, [x9]");                                // load string pointer from element slot
-            emitter.instruction("ldr x2, [x9, #8]");                            // load string length from element slot
+            let (ptr_reg, len_result_reg) = abi::string_result_regs(emitter);
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction(&format!("lsl {}, {}, #4", result_reg, result_reg)); // multiply index by 16 (string = ptr+len pair)
+                    emitter.instruction(&format!("add {}, {}, {}", array_reg, array_reg, result_reg)); // add scaled index offset to array base
+                    emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip 24-byte array header to reach data
+                    abi::emit_load_from_address(emitter, ptr_reg, array_reg, 0); // load string pointer from element slot
+                    abi::emit_load_from_address(emitter, len_result_reg, array_reg, 8); // load string length from element slot
+                }
+                Arch::X86_64 => {
+                    emitter.instruction(&format!("shl {}, 4", result_reg));     // multiply index by 16 (string = ptr+len pair)
+                    emitter.instruction(&format!("add {}, {}", array_reg, result_reg)); // add scaled index offset to array base
+                    emitter.instruction(&format!("add {}, 24", array_reg));     // skip 24-byte array header to reach data
+                    abi::emit_load_from_address(emitter, ptr_reg, array_reg, 0); // load string pointer from element slot
+                    abi::emit_load_from_address(emitter, len_result_reg, array_reg, 8); // load string length from element slot
+                }
+            }
         }
         PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
-            emitter.instruction("add x9, x9, #24");                             // skip 24-byte array header to reach data
-            emitter.instruction("ldr x0, [x9, x0, lsl #3]");                    // load pointer at index
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip 24-byte array header to reach data
+                    emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", result_reg, array_reg, result_reg)); // load pointer at index
+                }
+                Arch::X86_64 => {
+                    emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip 24-byte array header to reach data
+                    emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", result_reg, array_reg, result_reg)); // load pointer at index
+                }
+            }
         }
         _ => {}
     }
-    emitter.instruction(&format!("b {ok_label}"));                              // skip null sentinel fallback
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction(&format!("b {ok_label}")),         // skip null sentinel fallback
+        Arch::X86_64 => emitter.instruction(&format!("jmp {ok_label}")),        // skip null sentinel fallback
+    }
 
     emitter.label(&null_label);
-    emitter.instruction("movz x0, #0xFFFE");                                    // load lowest 16 bits of null sentinel
-    emitter.instruction("movk x0, #0xFFFF, lsl #16");                           // insert bits 16-31 of null sentinel
-    emitter.instruction("movk x0, #0xFFFF, lsl #32");                           // insert bits 32-47 of null sentinel
-    emitter.instruction("movk x0, #0x7FFF, lsl #48");                           // insert bits 48-63 of null sentinel
+    abi::emit_load_int_immediate(emitter, result_reg, 0x7fff_ffff_ffff_fffe);   // materialize the runtime null sentinel for out-of-bounds access
     emitter.label(&ok_label);
 
     elem_ty
