@@ -12,6 +12,10 @@ pub(super) fn emit_array_literal(
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> PhpType {
+    if emitter.target.arch == Arch::X86_64 && !elems.iter().any(|e| matches!(e.kind, ExprKind::Spread(_))) {
+        return emit_array_literal_linux_x86_64(elems, emitter, ctx, data);
+    }
+
     if elems.is_empty() {
         emitter.instruction("mov x0, #4");                                      // initial capacity: 4 (grows dynamically)
         emitter.instruction("mov x1, #16");                                     // element size: 16 bytes (supports int and string)
@@ -74,6 +78,67 @@ pub(super) fn emit_array_literal(
     }
 
     emitter.instruction("ldr x0, [sp], #16");                                   // pop array pointer from stack into x0
+    PhpType::Array(Box::new(actual_elem_ty))
+}
+
+fn emit_array_literal_linux_x86_64(
+    elems: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let first_ty = match elems.first().map(|expr| &expr.kind) {
+        Some(ExprKind::StringLiteral(_)) => PhpType::Str,
+        Some(ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)) => {
+            PhpType::Array(Box::new(PhpType::Int))
+        }
+        _ => PhpType::Int,
+    };
+    let elem_size = match &first_ty {
+        PhpType::Str => 16,
+        _ => 8,
+    };
+    let capacity = elems.len().max(4);
+    let allocation_bytes = 24 + capacity * elem_size;
+
+    emitter.comment("array literal");
+    abi::emit_load_int_immediate(emitter, "rdi", allocation_bytes as i64);
+    abi::emit_call_label(emitter, "malloc");
+    abi::emit_load_int_immediate(emitter, abi::temp_int_reg(emitter.target), elems.len() as i64);
+    abi::emit_store_to_address(emitter, abi::temp_int_reg(emitter.target), abi::int_result_reg(emitter), 0);
+    abi::emit_load_int_immediate(emitter, abi::temp_int_reg(emitter.target), capacity as i64);
+    abi::emit_store_to_address(emitter, abi::temp_int_reg(emitter.target), abi::int_result_reg(emitter), 8);
+    abi::emit_load_int_immediate(emitter, abi::temp_int_reg(emitter.target), elem_size as i64);
+    abi::emit_store_to_address(emitter, abi::temp_int_reg(emitter.target), abi::int_result_reg(emitter), 16);
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // save array pointer on stack while filling literal elements
+
+    let mut actual_elem_ty = first_ty;
+    for (i, elem) in elems.iter().enumerate() {
+        let ty = emit_expr(elem, emitter, ctx, data);
+        if i == 0 {
+            actual_elem_ty = ty.clone();
+        }
+        emitter.instruction("mov r11, QWORD PTR [rsp]");                        // peek array pointer from the temporary stack slot
+        match &ty {
+            PhpType::Int | PhpType::Bool | PhpType::Callable => {
+                abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), "r11", 24 + i * 8);
+            }
+            PhpType::Float => {
+                abi::emit_store_to_address(emitter, abi::float_result_reg(emitter), "r11", 24 + i * 8);
+            }
+            PhpType::Str => {
+                let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+                abi::emit_store_to_address(emitter, ptr_reg, "r11", 24 + i * 16);
+                abi::emit_store_to_address(emitter, len_reg, "r11", 24 + i * 16 + 8);
+            }
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+                abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), "r11", 24 + i * 8);
+            }
+            _ => {}
+        }
+    }
+
+    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // return array pointer in the target integer result register
     PhpType::Array(Box::new(actual_elem_ty))
 }
 

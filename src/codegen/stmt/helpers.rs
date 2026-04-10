@@ -60,6 +60,10 @@ pub(super) fn release_owned_slot(
     offset: usize,
     preserve_result: bool,
 ) {
+    if emitter.target.arch == Arch::X86_64 && (matches!(ty, PhpType::Str) || ty.is_refcounted()) {
+        return;
+    }
+
     let result_reg = abi::int_result_reg(emitter);
     if preserve_result {
         abi::emit_push_reg(emitter, result_reg);
