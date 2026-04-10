@@ -16,6 +16,11 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("call_user_func()");
+    let save_concat_before_args =
+        emitter.target.arch == crate::codegen::platform::Arch::X86_64;
+    if save_concat_before_args {
+        crate::codegen::expr::save_concat_offset_before_nested_call(emitter);
+    }
     let call_reg = abi::nested_call_reg(emitter);
     let result_reg = match emitter.target.arch {
         crate::codegen::platform::Arch::AArch64 => "x0",
@@ -100,10 +105,17 @@ pub fn emit(
     let overflow_bytes = abi::materialize_outgoing_args(emitter, &assignments);
 
     // -- load callback address and call via blr --
-    crate::codegen::expr::save_concat_offset_before_nested_call(emitter);
+    if !save_concat_before_args {
+        crate::codegen::expr::save_concat_offset_before_nested_call(emitter);
+    }
     abi::emit_call_reg(emitter, call_reg);
-    crate::codegen::expr::restore_concat_offset_after_nested_call(emitter, &ret_ty);
-    abi::emit_release_temporary_stack(emitter, overflow_bytes);
+    if save_concat_before_args {
+        abi::emit_release_temporary_stack(emitter, overflow_bytes);
+        crate::codegen::expr::restore_concat_offset_after_nested_call(emitter, &ret_ty);
+    } else {
+        crate::codegen::expr::restore_concat_offset_after_nested_call(emitter, &ret_ty);
+        abi::emit_release_temporary_stack(emitter, overflow_bytes);
+    }
 
     Some(ret_ty)
 }
