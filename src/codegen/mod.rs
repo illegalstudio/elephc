@@ -1015,42 +1015,102 @@ pub(crate) fn emit_box_runtime_payload_as_mixed(
     value_lo_reg: &str,
     value_hi_reg: &str,
 ) {
-    emitter.instruction(&format!("mov x0, {}", value_tag_reg));                 // x0 = runtime value tag for the mixed boxing helper
-    emitter.instruction(&format!("mov x1, {}", value_lo_reg));                  // x1 = low payload word for the mixed boxing helper
-    emitter.instruction(&format!("mov x2, {}", value_hi_reg));                  // x2 = high payload word for the mixed boxing helper
-    emitter.instruction("bl __rt_mixed_from_value");                            // retain/persist the payload as needed and return a boxed mixed cell
+    match emitter.target.arch {
+        platform::Arch::AArch64 => {
+            emitter.instruction(&format!("mov x0, {}", value_tag_reg));         // x0 = runtime value tag for the mixed boxing helper
+            emitter.instruction(&format!("mov x1, {}", value_lo_reg));          // x1 = low payload word for the mixed boxing helper
+            emitter.instruction(&format!("mov x2, {}", value_hi_reg));          // x2 = high payload word for the mixed boxing helper
+            emitter.instruction("bl __rt_mixed_from_value");                    // retain/persist the payload as needed and return a boxed mixed cell
+        }
+        platform::Arch::X86_64 => {
+            emitter.instruction(&format!("mov rax, {}", value_tag_reg));        // rax = runtime value tag for the mixed boxing helper
+            emitter.instruction(&format!("mov rdi, {}", value_lo_reg));         // rdi = low payload word for the mixed boxing helper
+            emitter.instruction(&format!("mov rsi, {}", value_hi_reg));         // rsi = high payload word for the mixed boxing helper
+            emitter.instruction("call __rt_mixed_from_value");                  // box the payload into a temporary mixed cell on x86_64
+        }
+    }
 }
 
 pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
         PhpType::Mixed | PhpType::Union(_) => {}
         PhpType::Int | PhpType::Bool | PhpType::Void => {
-            emitter.instruction("mov x1, x0");                                  // move the current scalar payload into the mixed helper argument register
-            emitter.instruction("mov x2, xzr");                                 // scalar mixed payloads do not use a second word
-            emitter.instruction(&format!("mov x0, #{}", runtime_value_tag(ty))); //materialize the static value tag for this scalar
-            emitter.instruction("bl __rt_mixed_from_value");                    // box the scalar payload into a mixed cell
+            match emitter.target.arch {
+                platform::Arch::AArch64 => {
+                    emitter.instruction("mov x1, x0");                          // move the current scalar payload into the mixed helper argument register
+                    emitter.instruction("mov x2, xzr");                         // scalar mixed payloads do not use a second word
+                    emitter.instruction(&format!("mov x0, #{}", runtime_value_tag(ty))); // materialize the static value tag for this scalar
+                    emitter.instruction("bl __rt_mixed_from_value");            // box the scalar payload into a mixed cell
+                }
+                platform::Arch::X86_64 => {
+                    emitter.instruction("mov rdi, rax");                        // move the current scalar payload into the mixed helper low-word register
+                    emitter.instruction("xor rsi, rsi");                        // scalar mixed payloads do not use a second word
+                    abi::emit_load_int_immediate(emitter, "rax", runtime_value_tag(ty) as i64);
+                    emitter.instruction("call __rt_mixed_from_value");          // box the scalar payload into a mixed cell
+                }
+            }
         }
         PhpType::Float => {
-            emitter.instruction("fmov x1, d0");                                 // move the current float bits into the mixed helper payload register
-            emitter.instruction("mov x2, xzr");                                 // float payloads only use the low word
-            emitter.instruction("mov x0, #2");                                  // runtime tag 2 = float
-            emitter.instruction("bl __rt_mixed_from_value");                    // box the float payload into a mixed cell
+            match emitter.target.arch {
+                platform::Arch::AArch64 => {
+                    emitter.instruction("fmov x1, d0");                         // move the current float bits into the mixed helper payload register
+                    emitter.instruction("mov x2, xzr");                         // float payloads only use the low word
+                    emitter.instruction("mov x0, #2");                          // runtime tag 2 = float
+                    emitter.instruction("bl __rt_mixed_from_value");            // box the float payload into a mixed cell
+                }
+                platform::Arch::X86_64 => {
+                    emitter.instruction("movq rdi, xmm0");                      // move the current float bits into the mixed helper payload register
+                    emitter.instruction("xor rsi, rsi");                        // float payloads only use the low word
+                    abi::emit_load_int_immediate(emitter, "rax", 2);
+                    emitter.instruction("call __rt_mixed_from_value");          // box the float payload into a mixed cell
+                }
+            }
         }
         PhpType::Str => {
-            emitter.instruction("mov x0, #1");                                  // runtime tag 1 = string
-            emitter.instruction("bl __rt_mixed_from_value");                    // persist the string payload and box it into a mixed cell
+            match emitter.target.arch {
+                platform::Arch::AArch64 => {
+                    emitter.instruction("mov x0, #1");                          // runtime tag 1 = string
+                    emitter.instruction("bl __rt_mixed_from_value");            // persist the string payload and box it into a mixed cell
+                }
+                platform::Arch::X86_64 => {
+                    emitter.instruction("mov rdi, rax");                        // move the current string pointer into the mixed helper low-word register
+                    emitter.instruction("mov rsi, rdx");                        // move the current string length into the mixed helper high-word register
+                    abi::emit_load_int_immediate(emitter, "rax", 1);
+                    emitter.instruction("call __rt_mixed_from_value");          // box the string payload into a mixed cell
+                }
+            }
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
-            emitter.instruction("mov x1, x0");                                  // move the current heap pointer into the mixed helper payload register
-            emitter.instruction("mov x2, xzr");                                 // heap-backed payloads only use the low word
-            emitter.instruction(&format!("mov x0, #{}", runtime_value_tag(ty))); //materialize the heap payload tag for the mixed helper
-            emitter.instruction("bl __rt_mixed_from_value");                    // retain the heap child and box it into a mixed cell
+            match emitter.target.arch {
+                platform::Arch::AArch64 => {
+                    emitter.instruction("mov x1, x0");                          // move the current heap pointer into the mixed helper payload register
+                    emitter.instruction("mov x2, xzr");                         // heap-backed payloads only use the low word
+                    emitter.instruction(&format!("mov x0, #{}", runtime_value_tag(ty))); // materialize the heap payload tag for the mixed helper
+                    emitter.instruction("bl __rt_mixed_from_value");            // retain the heap child and box it into a mixed cell
+                }
+                platform::Arch::X86_64 => {
+                    emitter.instruction("mov rdi, rax");                        // move the current heap pointer into the mixed helper payload register
+                    emitter.instruction("xor rsi, rsi");                        // heap-backed payloads only use the low word
+                    abi::emit_load_int_immediate(emitter, "rax", runtime_value_tag(ty) as i64);
+                    emitter.instruction("call __rt_mixed_from_value");          // box the heap child into a mixed cell
+                }
+            }
         }
         PhpType::Callable | PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_) => {
-            emitter.instruction("mov x1, x0");                                  // move the raw pointer into the mixed helper payload register
-            emitter.instruction("mov x2, xzr");                                 // raw pointers only use the low word
-            emitter.instruction("mov x0, #0");                                  // treat unsupported raw pointers as integer-like payloads for now
-            emitter.instruction("bl __rt_mixed_from_value");                    // box the raw pointer bits into a mixed cell
+            match emitter.target.arch {
+                platform::Arch::AArch64 => {
+                    emitter.instruction("mov x1, x0");                          // move the raw pointer into the mixed helper payload register
+                    emitter.instruction("mov x2, xzr");                         // raw pointers only use the low word
+                    emitter.instruction("mov x0, #0");                          // treat unsupported raw pointers as integer-like payloads for now
+                    emitter.instruction("bl __rt_mixed_from_value");            // box the raw pointer bits into a mixed cell
+                }
+                platform::Arch::X86_64 => {
+                    emitter.instruction("mov rdi, rax");                        // move the raw pointer into the mixed helper payload register
+                    emitter.instruction("xor rsi, rsi");                        // raw pointers only use the low word
+                    abi::emit_load_int_immediate(emitter, "rax", 0);
+                    emitter.instruction("call __rt_mixed_from_value");          // box the raw pointer bits into a mixed cell
+                }
+            }
         }
     }
 }

@@ -230,13 +230,26 @@ pub(super) fn emit_array_value_type_stamp(
         PhpType::Void => 8,
         _ => return,
     };
-    emitter.instruction(&format!("ldr x10, [{}, #-8]", array_reg));             // load the packed array kind word from the heap header
-    emitter.instruction("mov x12, #0x80ff");                                    // preserve the indexed-array kind and persistent COW flag
-    emitter.instruction("and x10, x10, x12");                                   // keep only the persistent indexed-array metadata bits
-    emitter.instruction(&format!("mov x11, #{}", value_type_tag));              // materialize the runtime array value_type tag
-    emitter.instruction("lsl x11, x11, #8");                                    // move the value_type tag into the packed kind-word byte lane
-    emitter.instruction("orr x10, x10, x11");                                   // combine the heap kind with the array value_type tag
-    emitter.instruction(&format!("str x10, [{}, #-8]", array_reg));             // persist the packed array kind word in the heap header
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x10, [{}, #-8]", array_reg));     // load the packed array kind word from the heap header
+            emitter.instruction("mov x12, #0x80ff");                            // preserve the indexed-array kind and persistent COW flag
+            emitter.instruction("and x10, x10, x12");                           // keep only the persistent indexed-array metadata bits
+            emitter.instruction(&format!("mov x11, #{}", value_type_tag));      // materialize the runtime array value_type tag
+            emitter.instruction("lsl x11, x11, #8");                            // move the value_type tag into the packed kind-word byte lane
+            emitter.instruction("orr x10, x10, x11");                           // combine the heap kind with the array value_type tag
+            emitter.instruction(&format!("str x10, [{}, #-8]", array_reg));     // persist the packed array kind word in the heap header
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov r10, QWORD PTR [{} - 8]", array_reg)); // load the packed array kind word from the heap header
+            emitter.instruction("mov r11, 0x80ff");                             // preserve the indexed-array kind and persistent COW flag
+            emitter.instruction("and r10, r11");                                // keep only the persistent indexed-array metadata bits
+            emitter.instruction(&format!("mov rcx, {}", value_type_tag));       // materialize the runtime array value_type tag
+            emitter.instruction("shl rcx, 8");                                  // move the value_type tag into the packed kind-word byte lane
+            emitter.instruction("or r10, rcx");                                 // combine the heap kind with the array value_type tag
+            emitter.instruction(&format!("mov QWORD PTR [{} - 8], r10", array_reg)); // persist the packed array kind word in the heap header
+        }
+    }
 }
 
 pub(super) fn emit_assoc_array_literal(

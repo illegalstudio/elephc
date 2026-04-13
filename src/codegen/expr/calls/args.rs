@@ -159,8 +159,7 @@ pub(crate) fn emit_ref_arg_variable_address(
     if ctx.global_vars.contains(var_name) {
         let label = format!("_gvar_{}", var_name);
         emitter.comment(&format!("{}: address of global ${}", context_label, var_name));
-        emitter.adrp("x0", &format!("{}", label));                              // load page of the referenced global variable slot
-        emitter.add_lo12("x0", "x0", &format!("{}", label));                    // resolve the referenced global variable address
+        abi::emit_symbol_address(emitter, abi::int_result_reg(emitter), &label);
         true
     } else if ctx.ref_params.contains(var_name) {
         let Some(var) = ctx.variables.get(var_name) else {
@@ -171,7 +170,7 @@ pub(crate) fn emit_ref_arg_variable_address(
             "{}: forward underlying reference for ${}",
             context_label, var_name
         ));
-        abi::load_at_offset(emitter, "x0", var.stack_offset);                   // load the existing by-reference pointer from the current frame slot
+        abi::load_at_offset(emitter, abi::int_result_reg(emitter), var.stack_offset); // load the existing by-reference pointer from the current frame slot
         true
     } else {
         let Some(var) = ctx.variables.get(var_name) else {
@@ -179,7 +178,7 @@ pub(crate) fn emit_ref_arg_variable_address(
             return false;
         };
         emitter.comment(&format!("{}: address of ${}", context_label, var_name));
-        abi::emit_frame_slot_address(emitter, "x0", var.stack_offset);          // compute the local variable's frame-slot address through the ABI helper
+        abi::emit_frame_slot_address(emitter, abi::int_result_reg(emitter), var.stack_offset); // compute the local variable's frame-slot address through the ABI helper
         true
     }
 }
@@ -269,28 +268,16 @@ pub(crate) fn load_array_element_to_result(
 ) {
     match source_elem_ty.codegen_repr() {
         PhpType::Float => {
-            emitter.instruction(&format!(                                       // load float element from the spread/callback array payload
-                "ldr d0, [{}, #{}]",
-                data_base_reg, byte_offset
-            ));
+            abi::emit_load_from_address(emitter, abi::float_result_reg(emitter), data_base_reg, byte_offset); // load float element from the spread/callback array payload
         }
         PhpType::Str => {
-            emitter.instruction(&format!(                                       // load string pointer from the spread/callback array payload
-                "ldr x1, [{}, #{}]",
-                data_base_reg, byte_offset
-            ));
-            emitter.instruction(&format!(                                       // load string length from the spread/callback array payload
-                "ldr x2, [{}, #{}]",
-                data_base_reg,
-                byte_offset + 8
-            ));
+            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+            abi::emit_load_from_address(emitter, ptr_reg, data_base_reg, byte_offset); // load string pointer from the spread/callback array payload
+            abi::emit_load_from_address(emitter, len_reg, data_base_reg, byte_offset + 8); // load string length from the spread/callback array payload
         }
         PhpType::Void => {}
         _ => {
-            emitter.instruction(&format!(                                       // load scalar or boxed pointer element from the spread/callback array payload
-                "ldr x0, [{}, #{}]",
-                data_base_reg, byte_offset
-            ));
+            abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), data_base_reg, byte_offset); // load scalar or boxed pointer element from the spread/callback array payload
         }
     }
 }
@@ -336,31 +323,16 @@ fn store_current_array_element(
 ) {
     match elem_ty.codegen_repr() {
         PhpType::Float => {
-            emitter.instruction(&format!(                                       // store float element into the variadic array payload
-                "str d0, [{}, #{}]",
-                array_reg,
-                24 + elem_idx * 8
-            ));
+            abi::emit_store_to_address(emitter, abi::float_result_reg(emitter), array_reg, 24 + elem_idx * 8); // store float element into the variadic array payload
         }
         PhpType::Str => {
-            emitter.instruction(&format!(                                       // store variadic string pointer into the array payload
-                "str x1, [{}, #{}]",
-                array_reg,
-                24 + elem_idx * 16
-            ));
-            emitter.instruction(&format!(                                       // store variadic string length next to the payload pointer
-                "str x2, [{}, #{}]",
-                array_reg,
-                24 + elem_idx * 16 + 8
-            ));
+            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+            abi::emit_store_to_address(emitter, ptr_reg, array_reg, 24 + elem_idx * 16); // store variadic string pointer into the array payload
+            abi::emit_store_to_address(emitter, len_reg, array_reg, 24 + elem_idx * 16 + 8); // store variadic string length next to the payload pointer
         }
         PhpType::Void => {}
         _ => {
-            emitter.instruction(&format!(                                       // store scalar or boxed variadic payload into the array data area
-                "str x0, [{}, #{}]",
-                array_reg,
-                24 + elem_idx * 8
-            ));
+            abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), array_reg, 24 + elem_idx * 8); // store scalar or boxed variadic payload into the array data area
         }
     }
 }
@@ -386,11 +358,22 @@ pub(crate) fn emit_spread_into_named_params(
     let source_elem_ty = spread_source_elem_ty(&spread_ty);
     let elem_stride = array_element_stride(&source_elem_ty);
     let _ = super::super::emit_expr(spread_expr, emitter, ctx, data);
-    emitter.instruction("mov x20, x0");                                         // preserve the spread array pointer across boxing or incref helper calls
-    emitter.instruction("add x20, x20, #24");                                   // skip the array header to point at the first spread element
+    let array_data_reg = match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => "x20",
+        crate::codegen::platform::Arch::X86_64 => "r10",
+    };
+    emitter.instruction(&format!("mov {}, {}", array_data_reg, abi::int_result_reg(emitter))); // preserve the spread array pointer across boxing or incref helper calls
+    match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            emitter.instruction(&format!("add {}, {}, #24", array_data_reg, array_data_reg)); // skip the array header to point at the first spread element
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            emitter.instruction(&format!("add {}, 24", array_data_reg));        // skip the array header to point at the first spread element
+        }
+    }
     for idx in 0..remaining {
         let target_ty = declared_target_ty(sig, spread_at_index + idx);
-        load_array_element_to_result(emitter, &source_elem_ty, "x20", idx * elem_stride);
+        load_array_element_to_result(emitter, &source_elem_ty, array_data_reg, idx * elem_stride);
         let pushed_ty =
             push_loaded_array_element_arg(&source_elem_ty, target_ty, emitter, ctx, data);
         arg_types.push(pushed_ty);
@@ -413,9 +396,13 @@ pub(crate) fn emit_spread_variadic_array_arg(
 
 pub(crate) fn emit_empty_variadic_array_arg(context_label: &str, emitter: &mut Emitter) -> PhpType {
     emitter.comment(context_label);
-    emitter.instruction("mov x0, #4");                                          // initial capacity: 4 elements for an empty variadic array
-    emitter.instruction("mov x1, #8");                                          // element size defaults to 8 bytes for empty variadic payloads
-    emitter.instruction("bl __rt_array_new");                                   // allocate the empty variadic array container
+    let (capacity_reg, elem_size_reg) = match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => ("x0", "x1"),
+        crate::codegen::platform::Arch::X86_64 => ("rdi", "rsi"),
+    };
+    abi::emit_load_int_immediate(emitter, capacity_reg, 4);
+    abi::emit_load_int_immediate(emitter, elem_size_reg, 8);
+    abi::emit_call_label(emitter, "__rt_array_new");
     abi::emit_push_result_value(emitter, &PhpType::Array(Box::new(PhpType::Int)));
     PhpType::Array(Box::new(PhpType::Int))
 }
@@ -435,11 +422,15 @@ pub(crate) fn emit_variadic_array_arg_from_exprs(
         PhpType::Str => 16,
         _ => 8,
     };
+    let (capacity_reg, elem_size_reg, peek_reg, len_reg) = match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => ("x0", "x1", "x9", "x10"),
+        crate::codegen::platform::Arch::X86_64 => ("rdi", "rsi", "r11", "r10"),
+    };
 
     emitter.comment(&format!("{} ({} elements)", context_label, elem_count));
-    emitter.instruction(&format!("mov x0, #{}", elem_count));                   // capacity matches the exact variadic element count
-    emitter.instruction(&format!("mov x1, #{}", elem_size));                    // set the array payload stride for the first inferred element type
-    emitter.instruction("bl __rt_array_new");                                   // allocate storage for the packed variadic array payload
+    abi::emit_load_int_immediate(emitter, capacity_reg, elem_count as i64);
+    abi::emit_load_int_immediate(emitter, elem_size_reg, elem_size as i64);
+    abi::emit_call_label(emitter, "__rt_array_new");
     abi::emit_push_result_value(emitter, &PhpType::Array(Box::new(first_elem_ty.clone())));
 
     for (idx, variadic_arg) in variadic_args.iter().enumerate() {
@@ -447,13 +438,20 @@ pub(crate) fn emit_variadic_array_arg_from_exprs(
         if retain_heap_values {
             super::super::retain_borrowed_heap_arg(emitter, variadic_arg, &elem_ty);
         }
-        emitter.instruction("ldr x9, [sp]");                                    // peek the variadic array pointer without removing it from the stack
-        if stamp_value_type && idx == 0 {
-            super::super::arrays::emit_array_value_type_stamp(emitter, "x9", &elem_ty);
+        match emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => {
+                emitter.instruction(&format!("ldr {}, [sp]", peek_reg));         // peek the variadic array pointer without removing it from the stack
+            }
+            crate::codegen::platform::Arch::X86_64 => {
+                emitter.instruction(&format!("mov {}, QWORD PTR [rsp]", peek_reg)); // peek the variadic array pointer without removing it from the stack
+            }
         }
-        store_current_array_element(emitter, "x9", idx, &elem_ty);
-        emitter.instruction(&format!("mov x10, #{}", idx + 1));                 // compute the logical array length after appending this element
-        emitter.instruction("str x10, [x9]");                                   // persist the updated variadic array length in the header
+        if stamp_value_type && idx == 0 {
+            super::super::arrays::emit_array_value_type_stamp(emitter, peek_reg, &elem_ty);
+        }
+        store_current_array_element(emitter, peek_reg, idx, &elem_ty);
+        abi::emit_load_int_immediate(emitter, len_reg, (idx + 1) as i64);
+        abi::emit_store_to_address(emitter, len_reg, peek_reg, 0);
     }
 
     PhpType::Array(Box::new(first_elem_ty))

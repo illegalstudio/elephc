@@ -244,7 +244,12 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     strings::emit_ftoa(emitter);
     strings::emit_concat(emitter);
     strings::emit_str_persist(emitter);
+    arrays::emit_array_new(emitter);
     system::emit_build_argv(emitter);
+    arrays::emit_incref(emitter);
+    arrays::emit_mixed_from_value(emitter);
+    arrays::emit_mixed_unbox(emitter);
+    arrays::emit_mixed_cast_string(emitter);
 }
 
 fn emit_optional_linux_crypto_decls(emitter: &mut Emitter) {
@@ -283,6 +288,11 @@ mod tests {
         assert!(asm.contains("__rt_ftoa:\n"));
         assert!(asm.contains("__rt_concat:\n"));
         assert!(asm.contains("__rt_str_persist:\n"));
+        assert!(asm.contains("__rt_array_new:\n"));
         assert!(asm.contains("__rt_build_argv:\n"));
+        assert!(asm.contains("__rt_incref:\n"));
+        assert!(asm.contains("__rt_mixed_from_value:\n"));
+        assert!(asm.contains("__rt_mixed_unbox:\n"));
+        assert!(asm.contains("__rt_mixed_cast_string:\n"));
     }
 }

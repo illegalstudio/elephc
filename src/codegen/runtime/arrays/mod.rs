@@ -180,6 +180,7 @@ pub use heap_debug_report::emit_heap_debug_report;
 pub use heap_debug_validate_free_list::emit_heap_debug_validate_free_list;
 pub use heap_kind::emit_heap_kind;
 pub use heap_free::emit_heap_free;
+pub use incref::emit_incref;
 pub use ksort::emit_ksort;
 pub use natsort::emit_natsort;
 pub use mixed_from_value::emit_mixed_from_value;

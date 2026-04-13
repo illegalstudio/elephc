@@ -1,3 +1,4 @@
+use crate::codegen::abi;
 use crate::codegen::context::{Context, DeferredClosure};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -180,8 +181,7 @@ pub(super) fn emit_closure(
     });
 
     emitter.comment("closure: load function address");
-    emitter.adrp("x0", &format!("{}", closure_label));           // load page base of closure function
-    emitter.add_lo12("x0", "x0", &format!("{}", closure_label));     // add page offset to get exact closure address
+    abi::emit_symbol_address(emitter, abi::int_result_reg(emitter), &closure_label);
     PhpType::Callable
 }
 

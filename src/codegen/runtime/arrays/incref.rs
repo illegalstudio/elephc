@@ -1,6 +1,12 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 pub fn emit_incref(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_incref_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: incref ---");
     emitter.label_global("__rt_incref");
@@ -36,4 +42,11 @@ pub fn emit_incref(emitter: &mut Emitter) {
 
     emitter.label("__rt_incref_skip");
     emitter.instruction("ret");                                                 // return to caller
+}
+
+fn emit_incref_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: incref ---");
+    emitter.label_global("__rt_incref");
+    emitter.instruction("ret");                                                 // minimal x86_64 runtime does not refcount heap payloads yet
 }
