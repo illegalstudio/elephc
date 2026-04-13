@@ -1,5 +1,6 @@
 use crate::codegen::context::{Context, HeapOwnership};
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 use crate::types::PhpType;
 
 pub(super) fn preserve_return_registers(emitter: &mut Emitter, ctx: &Context, return_ty: &PhpType) {
@@ -45,6 +46,9 @@ pub(crate) fn emit_owned_local_epilogue_cleanup(emitter: &mut Emitter, ctx: &Con
     for (name, var) in cleanup_vars {
         match &var.ty {
             PhpType::Str => {
+                if emitter.target.arch == Arch::X86_64 {
+                    continue;
+                }
                 emitter.comment(&format!("epilogue cleanup ${}", name));
                 super::super::abi::load_at_offset(
                     emitter,

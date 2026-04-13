@@ -1,6 +1,14 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
+
+const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 pub fn emit_decref_object(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_decref_object_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: decref_object ---");
     emitter.label_global("__rt_decref_object");
@@ -53,4 +61,31 @@ pub fn emit_decref_object(emitter: &mut Emitter) {
 
     emitter.label("__rt_decref_object_skip");
     emitter.instruction("ret");                                                 // return to caller
+}
+
+fn emit_decref_object_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: decref_object ---");
+    emitter.label_global("__rt_decref_object");
+
+    emitter.instruction("test rax, rax");                                       // skip null object pointers immediately because they do not own heap storage
+    emitter.instruction("jz __rt_decref_object_skip");                          // null object values need no release work
+    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
+    emitter.instruction("mov r11, r10");                                        // preserve the full heap kind word before isolating the ownership marker and heap kind
+    emitter.instruction("shr r11, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
+    emitter.instruction(&format!("cmp r11d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // ignore foreign pointers that do not carry the elephc x86_64 heap marker
+    emitter.instruction("jne __rt_decref_object_skip");                         // only elephc-owned objects participate in x86_64 decref bookkeeping
+    emitter.instruction("and r10, 0xff");                                       // isolate the low-byte uniform heap kind tag for a final ownership sanity check
+    emitter.instruction("cmp r10, 4");                                          // is this heap-backed payload really an object instance?
+    emitter.instruction("jne __rt_decref_object_skip");                         // other heap kinds must not be released through the object decref helper
+    emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the 32-bit object refcount from the uniform heap header
+    emitter.instruction("sub r10d, 1");                                         // decrement the object refcount for the releasing x86_64 owner
+    emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // store the decremented object refcount back into the uniform heap header
+    emitter.instruction("jz __rt_decref_object_free");                          // zero refcount means the object properties and storage can be released now
+
+    emitter.label("__rt_decref_object_skip");
+    emitter.instruction("ret");                                                 // nothing else needs to happen for non-zero refcounts or foreign pointers
+
+    emitter.label("__rt_decref_object_free");
+    emitter.instruction("jmp __rt_object_free_deep");                           // tail-call to deep free the object once the last owner is gone
 }

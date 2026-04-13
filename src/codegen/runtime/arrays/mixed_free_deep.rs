@@ -57,7 +57,16 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the mixed pointer across any nested child release helper call
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the boxed runtime value tag to decide whether the child owns heap storage
     emitter.instruction("cmp r10, 1");                                          // detect string payloads that need their owned string storage released explicitly
-    emitter.instruction("jne __rt_mixed_free_deep_box");                        // scalar payloads can skip directly to freeing the mixed box storage itself
+    emitter.instruction("je __rt_mixed_free_deep_string");                      // string payloads release through heap_free_safe before the mixed box storage itself is freed
+    emitter.instruction("cmp r10, 4");                                          // does the mixed cell point at a heap-backed child such as array/hash/object/mixed?
+    emitter.instruction("jl __rt_mixed_free_deep_box");                         // scalar, bool, float, and null payloads can skip directly to freeing the mixed box storage itself
+    emitter.instruction("cmp r10, 7");                                          // do the heap-backed child tags stay within the supported runtime range?
+    emitter.instruction("jg __rt_mixed_free_deep_box");                         // unknown tags are ignored by the current x86_64 mixed deep-free helper
+    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed string pointer from the mixed payload before releasing it
+    emitter.instruction("call __rt_decref_any");                                // release the boxed heap-backed child through the uniform x86_64 dispatcher before freeing the mixed box
+    emitter.instruction("jmp __rt_mixed_free_deep_box");                        // free the mixed box storage itself after the boxed heap-backed child has been released
+
+    emitter.label("__rt_mixed_free_deep_string");
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed string pointer from the mixed payload before releasing it
     emitter.instruction("call __rt_heap_free_safe");                            // release the boxed string payload when the mixed cell owns a persisted string
 

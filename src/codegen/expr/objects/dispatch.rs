@@ -153,14 +153,22 @@ pub(super) fn emit_dispatch_instance_method(
 
     save_concat_offset_before_nested_call(emitter);
     if let Some(slot) = slot {
-        emitter.instruction("ldr x10, [x0]");                                   // load dynamic class id from object header
-        emitter.adrp("x11", "_class_vtable_ptrs");               // load vtable pointer table page
-        emitter.add_lo12("x11", "x11", "_class_vtable_ptrs");        // add vtable pointer table offset
-        emitter.instruction("ldr x11, [x11, x10, lsl #3]");                     // load class-specific vtable pointer
-        emitter.instruction(&format!("ldr x11, [x11, #{}]", slot * 8));         // load method entry from vtable slot
-        emitter.instruction("blr x11");                                         // call virtual method implementation
+        let class_id_reg = abi::temp_int_reg(emitter.target);
+        let dispatch_reg = abi::symbol_scratch_reg(emitter);
+        abi::emit_load_from_address(emitter, class_id_reg, abi::int_arg_reg_name(emitter.target, 0), 0); // load the dynamic class id from the receiver object header
+        abi::emit_symbol_address(emitter, dispatch_reg, "_class_vtable_ptrs");
+        match emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => {
+                emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", dispatch_reg, dispatch_reg, class_id_reg)); // load the class-specific instance-vtable pointer from the global table
+            }
+            crate::codegen::platform::Arch::X86_64 => {
+                emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", dispatch_reg, dispatch_reg, class_id_reg)); // load the class-specific instance-vtable pointer from the global table
+            }
+        }
+        abi::emit_load_from_address(emitter, dispatch_reg, dispatch_reg, slot * 8); // load the selected method entry from the class-specific instance vtable
+        abi::emit_call_reg(emitter, dispatch_reg);                              // call the resolved virtual method implementation
     } else if let Some(label) = direct_private_label {
-        emitter.instruction(&format!("bl {}", label));                          // call lexically-resolved private method directly
+        abi::emit_call_label(emitter, &label);                                  // call lexically-resolved private method directly
     } else {
         emitter.comment(&format!(
             "WARNING: missing vtable slot for {}::{}",
@@ -180,12 +188,10 @@ pub(super) fn emit_method_call_with_pushed_args(
     ctx: &mut Context,
 ) -> PhpType {
     let assignments = compute_register_assignments(emitter, arg_types, 1);
-    emitter.instruction("ldr x0, [sp], #16");                                   // pop $this into x0
+    abi::emit_pop_reg(emitter, abi::int_arg_reg_name(emitter.target, 0));      // pop $this into the first integer argument register for the target ABI
     let overflow_bytes = pop_args_to_registers(emitter, &assignments);
     let ret_ty = emit_dispatch_instance_method(class_name, method, emitter, ctx);
-    if overflow_bytes > 0 {
-        emitter.instruction(&format!("add sp, sp, #{}", overflow_bytes));       // drop spilled stack arguments after the method call returns
-    }
+    abi::emit_release_temporary_stack(emitter, overflow_bytes);                 // drop spilled stack arguments after the method call returns
     ret_ty
 }
 
@@ -222,7 +228,7 @@ pub(super) fn emit_method_call(
             return PhpType::Int;
         }
     };
-    emitter.instruction("str x0, [sp, #-16]!");                                 // push $this pointer
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                 // push $this pointer for the active target ABI
 
     emit_method_call_with_pushed_args(&class_name, method, &arg_types, emitter, ctx)
 }

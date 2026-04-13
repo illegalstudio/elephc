@@ -2,7 +2,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::types::PhpType;
 
-use super::calls::emit_call_label;
+use super::calls::{emit_call_label, emit_pop_reg, emit_push_reg};
 use super::frame::{load_at_offset, store_at_offset};
 use super::registers::{float_result_reg, int_result_reg, string_result_regs};
 
@@ -46,9 +46,9 @@ pub fn emit_incref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
                 emitter.instruction("ldr x0, [sp], #16");                               // restore original heap pointer after incref
             }
             Arch::X86_64 => {
-                emitter.instruction("push rax");                                        // preserve heap pointer across incref helper call
+                emit_push_reg(emitter, "rax");                                          // preserve the heap pointer in a 16-byte temporary slot to keep the SysV stack aligned across the helper call
                 emitter.instruction("call __rt_incref");                                // retain shared heap value before creating a new owner
-                emitter.instruction("pop rax");                                         // restore original heap pointer after incref
+                emit_pop_reg(emitter, "rax");                                           // restore the original heap pointer after the aligned incref helper call
             }
         }
     }

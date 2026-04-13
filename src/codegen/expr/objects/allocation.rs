@@ -78,7 +78,15 @@ pub(super) fn emit_new_object(
             let default_expr = default_expr.clone();
             let offset = 8 + i * 16;
             let prop_ty = emit_expr(&default_expr, emitter, ctx, data);
-            emitter.instruction("ldr x9, [sp]");                                // peek object pointer
+            let object_reg = abi::symbol_scratch_reg(emitter);
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction(&format!("ldr {}, [sp]", object_reg));  // peek object pointer from the temporary stack slot on AArch64
+                }
+                Arch::X86_64 => {
+                    emitter.instruction(&format!("mov {}, QWORD PTR [rsp]", object_reg)); // peek object pointer from the temporary stack slot on x86_64
+                }
+            }
             match &prop_ty {
                 PhpType::Int
                 | PhpType::Bool
@@ -86,41 +94,47 @@ pub(super) fn emit_new_object(
                 | PhpType::Pointer(_)
                 | PhpType::Buffer(_)
                 | PhpType::Packed(_) => {
-                    emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
-                    emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8)); //clear runtime property metadata slot
+                    abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), object_reg, offset);
+                    abi::emit_store_zero_to_address(emitter, object_reg, offset + 8);
                 }
                 PhpType::Mixed => {
-                    emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store boxed mixed value
-                    emitter.instruction("mov x10, #7");                         // runtime property tag 7 = mixed
-                    emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); //store runtime property metadata tag
+                    abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), object_reg, offset);
+                    let tag_reg = abi::temp_int_reg(emitter.target);
+                    abi::emit_load_int_immediate(emitter, tag_reg, 7);
+                    abi::emit_store_to_address(emitter, tag_reg, object_reg, offset + 8);
                 }
                 PhpType::Union(_) => {
-                    emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store boxed union value using mixed runtime layout
-                    emitter.instruction("mov x10, #7");                         // runtime property tag 7 = mixed/union boxed payload
-                    emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); //store runtime property metadata tag
+                    abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), object_reg, offset);
+                    let tag_reg = abi::temp_int_reg(emitter.target);
+                    abi::emit_load_int_immediate(emitter, tag_reg, 7);
+                    abi::emit_store_to_address(emitter, tag_reg, object_reg, offset + 8);
                 }
                 PhpType::Array(_) => {
-                    emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
-                    emitter.instruction("mov x10, #4");                         // runtime property tag 4 = indexed array
-                    emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); //store runtime property metadata tag
+                    abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), object_reg, offset);
+                    let tag_reg = abi::temp_int_reg(emitter.target);
+                    abi::emit_load_int_immediate(emitter, tag_reg, 4);
+                    abi::emit_store_to_address(emitter, tag_reg, object_reg, offset + 8);
                 }
                 PhpType::AssocArray { .. } => {
-                    emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
-                    emitter.instruction("mov x10, #5");                         // runtime property tag 5 = associative array
-                    emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); //store runtime property metadata tag
+                    abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), object_reg, offset);
+                    let tag_reg = abi::temp_int_reg(emitter.target);
+                    abi::emit_load_int_immediate(emitter, tag_reg, 5);
+                    abi::emit_store_to_address(emitter, tag_reg, object_reg, offset + 8);
                 }
                 PhpType::Object(_) => {
-                    emitter.instruction(&format!("str x0, [x9, #{}]", offset)); // store default value
-                    emitter.instruction("mov x10, #6");                         // runtime property tag 6 = object
-                    emitter.instruction(&format!("str x10, [x9, #{}]", offset + 8)); //store runtime property metadata tag
+                    abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), object_reg, offset);
+                    let tag_reg = abi::temp_int_reg(emitter.target);
+                    abi::emit_load_int_immediate(emitter, tag_reg, 6);
+                    abi::emit_store_to_address(emitter, tag_reg, object_reg, offset + 8);
                 }
                 PhpType::Float => {
-                    emitter.instruction(&format!("str d0, [x9, #{}]", offset)); // store float default
-                    emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8)); //clear runtime property metadata slot
+                    abi::emit_store_to_address(emitter, abi::float_result_reg(emitter), object_reg, offset);
+                    abi::emit_store_zero_to_address(emitter, object_reg, offset + 8);
                 }
                 PhpType::Str => {
-                    emitter.instruction(&format!("str x1, [x9, #{}]", offset)); // store string pointer
-                    emitter.instruction(&format!("str x2, [x9, #{}]", offset + 8)); //store string length
+                    let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+                    abi::emit_store_to_address(emitter, ptr_reg, object_reg, offset);
+                    abi::emit_store_to_address(emitter, len_reg, object_reg, offset + 8);
                 }
                 PhpType::Void => {}
             }
@@ -145,27 +159,8 @@ pub(super) fn emit_new_object(
         for arg in &normalized_args {
             let ty = emit_expr(arg, emitter, ctx, data);
             retain_borrowed_heap_arg(emitter, arg, &ty);
-            match &ty {
-                PhpType::Bool
-                | PhpType::Int
-                | PhpType::Mixed
-                | PhpType::Union(_)
-                | PhpType::Array(_)
-                | PhpType::AssocArray { .. }
-                | PhpType::Buffer(_)
-                | PhpType::Callable
-                | PhpType::Object(_)
-                | PhpType::Packed(_)
-                | PhpType::Pointer(_) => {
-                    emitter.instruction("str x0, [sp, #-16]!");                 // push int/object arg onto stack
-                }
-                PhpType::Float => {
-                    emitter.instruction("str d0, [sp, #-16]!");                 // push float arg onto stack
-                }
-                PhpType::Str => {
-                    emitter.instruction("stp x1, x2, [sp, #-16]!");             // push string ptr+len onto stack
-                }
-                PhpType::Void => {}
+            if !matches!(ty, PhpType::Void) {
+                abi::emit_push_result_value(emitter, &ty);
             }
             arg_types.push(ty);
         }
@@ -179,9 +174,23 @@ pub(super) fn emit_new_object(
             crate::codegen::abi::materialize_outgoing_args(emitter, &assignments);
 
         if overflow_bytes == 0 {
-            emitter.instruction("ldr x0, [sp]");                                // load $this directly from the top of the stack when all args stayed in registers
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("ldr x0, [sp]");                        // load $this directly from the top of the stack when all args stayed in registers on AArch64
+                }
+                Arch::X86_64 => {
+                    emitter.instruction("mov rdi, QWORD PTR [rsp]");            // load $this directly into the first SysV integer argument register when all args stayed in registers on x86_64
+                }
+            }
         } else {
-            emitter.instruction(&format!("ldr x0, [sp, #{}]", overflow_bytes)); // skip spilled stack arguments to reload the saved object pointer as $this
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction(&format!("ldr x0, [sp, #{}]", overflow_bytes)); // skip spilled stack arguments to reload the saved object pointer as $this on AArch64
+                }
+                Arch::X86_64 => {
+                    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", overflow_bytes)); // skip spilled stack arguments to reload the saved object pointer as $this in the first SysV integer argument register on x86_64
+                }
+            }
         }
         save_concat_offset_before_nested_call(emitter);
         let constructor_impl = class_info
@@ -189,11 +198,9 @@ pub(super) fn emit_new_object(
             .get("__construct")
             .map(String::as_str)
             .unwrap_or(class_name);
-        emitter.instruction(&format!("bl {}", method_symbol(constructor_impl, "__construct"))); //call constructor
+        abi::emit_call_label(emitter, &method_symbol(constructor_impl, "__construct")); // call the resolved constructor implementation for the active target ABI
         restore_concat_offset_after_nested_call(emitter, &PhpType::Void);
-        if overflow_bytes > 0 {
-            emitter.instruction(&format!("add sp, sp, #{}", overflow_bytes));   // drop spilled constructor arguments after the nested call returns
-        }
+        abi::emit_release_temporary_stack(emitter, overflow_bytes);             // drop spilled constructor arguments after the nested call returns
     }
 
     abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // restore the allocated object pointer as the expression result for the active target ABI

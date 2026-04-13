@@ -261,9 +261,12 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_array_intersect_key(emitter);
     arrays::emit_decref_hash(emitter);
     arrays::emit_hash_free_deep(emitter);
+    arrays::emit_decref_any(emitter);
+    arrays::emit_object_free_deep(emitter);
     system::emit_build_argv(emitter);
     arrays::emit_incref(emitter);
     arrays::emit_decref_mixed(emitter);
+    arrays::emit_decref_object(emitter);
     arrays::emit_mixed_from_value(emitter);
     arrays::emit_mixed_free_deep(emitter);
     arrays::emit_mixed_unbox(emitter);
@@ -327,6 +330,9 @@ mod tests {
         assert!(asm.contains("__rt_hash_get:\n"));
         assert!(asm.contains("__rt_decref_hash:\n"));
         assert!(asm.contains("__rt_hash_free_deep:\n"));
+        assert!(asm.contains("__rt_decref_any:\n"));
+        assert!(asm.contains("__rt_object_free_deep:\n"));
+        assert!(asm.contains("__rt_decref_object:\n"));
         assert!(asm.contains("__rt_build_argv:\n"));
         assert!(asm.contains("__rt_incref:\n"));
         assert!(asm.contains("__rt_decref_mixed:\n"));

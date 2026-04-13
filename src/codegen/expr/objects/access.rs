@@ -1,3 +1,4 @@
+use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -35,7 +36,7 @@ pub(super) fn emit_property_access(
                     if class_info.methods.contains_key("__get") {
                         emitter.comment(&format!("magic __get('{}')", property));
                         super::push_magic_property_name_arg(property, emitter, data);
-                        emitter.instruction("str x0, [sp, #-16]!");             // push $this pointer for __get dispatch
+                        abi::emit_push_reg(emitter, abi::int_result_reg(emitter)); // push $this pointer for __get dispatch using the active target ABI
                         return super::emit_method_call_with_pushed_args(
                             class_name,
                             "__get",
@@ -111,7 +112,7 @@ pub(super) fn emit_property_access(
     };
 
     if needs_deref {
-        emitter.instruction("bl __rt_ptr_check_nonnull");                       // abort with fatal error on null pointer dereference
+        abi::emit_call_label(emitter, "__rt_ptr_check_nonnull");               // abort with fatal error on null pointer dereference
         emitter.comment(&format!(
             "->{} via ptr<{}> (offset {})",
             property, class_name, offset
@@ -120,16 +121,21 @@ pub(super) fn emit_property_access(
         emitter.comment(&format!("->{}  (offset {})", property, offset));
     }
 
+    let object_reg = abi::int_result_reg(emitter);
+
     match &prop_ty {
         PhpType::Str => {
-            emitter.instruction(&format!("ldr x1, [x0, #{}]", offset));         // load string pointer from property
-            emitter.instruction(&format!("ldr x2, [x0, #{}]", offset + 8));     // load string length from property
+            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+            let base_reg = abi::symbol_scratch_reg(emitter);
+            emitter.instruction(&format!("mov {}, {}", base_reg, object_reg)); // preserve the object base pointer while loading the two-word string property payload
+            abi::emit_load_from_address(emitter, ptr_reg, base_reg, offset);
+            abi::emit_load_from_address(emitter, len_reg, base_reg, offset + 8);
         }
         PhpType::Float => {
-            emitter.instruction(&format!("ldr d0, [x0, #{}]", offset));         // load float from property
+            abi::emit_load_from_address(emitter, abi::float_result_reg(emitter), object_reg, offset);
         }
         PhpType::Bool | PhpType::Int | PhpType::Void => {
-            emitter.instruction(&format!("ldr x0, [x0, #{}]", offset));         // load int/bool from property
+            abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), object_reg, offset);
         }
         PhpType::Mixed
         | PhpType::Union(_)
@@ -140,7 +146,7 @@ pub(super) fn emit_property_access(
         | PhpType::Object(_)
         | PhpType::Packed(_)
         | PhpType::Pointer(_) => {
-            emitter.instruction(&format!("ldr x0, [x0, #{}]", offset));         // load heap pointer from property
+            abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), object_reg, offset);
         }
     }
 

@@ -160,6 +160,7 @@ pub use decref_any::emit_decref_any;
 pub use decref_array::emit_decref_array;
 pub use decref_hash::emit_decref_hash;
 pub use decref_mixed::emit_decref_mixed;
+pub use decref_object::emit_decref_object;
 pub use hash_count::emit_hash_count;
 pub use hash_clone_shallow::emit_hash_clone_shallow;
 pub use gc_collect_cycles::emit_gc_collect_cycles;
