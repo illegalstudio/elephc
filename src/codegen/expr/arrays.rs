@@ -99,17 +99,11 @@ fn emit_array_literal_linux_x86_64(
         _ => 8,
     };
     let capacity = elems.len().max(4);
-    let allocation_bytes = 24 + capacity * elem_size;
 
     emitter.comment("array literal");
-    abi::emit_load_int_immediate(emitter, "rdi", allocation_bytes as i64);
-    abi::emit_call_label(emitter, "malloc");
-    abi::emit_load_int_immediate(emitter, abi::temp_int_reg(emitter.target), elems.len() as i64);
-    abi::emit_store_to_address(emitter, abi::temp_int_reg(emitter.target), abi::int_result_reg(emitter), 0);
-    abi::emit_load_int_immediate(emitter, abi::temp_int_reg(emitter.target), capacity as i64);
-    abi::emit_store_to_address(emitter, abi::temp_int_reg(emitter.target), abi::int_result_reg(emitter), 8);
-    abi::emit_load_int_immediate(emitter, abi::temp_int_reg(emitter.target), elem_size as i64);
-    abi::emit_store_to_address(emitter, abi::temp_int_reg(emitter.target), abi::int_result_reg(emitter), 16);
+    abi::emit_load_int_immediate(emitter, "rdi", capacity as i64);             // choose an indexed-array capacity that matches the x86_64 literal size policy
+    abi::emit_load_int_immediate(emitter, "rsi", elem_size as i64);            // choose the runtime element slot width that matches the inferred literal element family
+    abi::emit_call_label(emitter, "__rt_array_new");                            // allocate a real elephc indexed array so heap headers and runtime metadata stay valid on x86_64
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // save array pointer on stack while filling literal elements
 
     let mut actual_elem_ty = first_ty;
@@ -118,7 +112,11 @@ fn emit_array_literal_linux_x86_64(
         if i == 0 {
             actual_elem_ty = ty.clone();
         }
+        retain_borrowed_heap_arg(emitter, elem, &ty);
         emitter.instruction("mov r11, QWORD PTR [rsp]");                        // peek array pointer from the temporary stack slot
+        if i == 0 {
+            emit_array_value_type_stamp(emitter, "r11", &ty);                   // stamp the packed x86_64 array value_type tag once the first literal element fixes the runtime family
+        }
         match &ty {
             PhpType::Int | PhpType::Bool | PhpType::Callable => {
                 abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), "r11", 24 + i * 8);
@@ -136,6 +134,8 @@ fn emit_array_literal_linux_x86_64(
             }
             _ => {}
         }
+        abi::emit_load_int_immediate(emitter, "r10", (i + 1) as i64);           // materialize the logical indexed-array length after inserting this literal element
+        abi::emit_store_to_address(emitter, "r10", "r11", 0);                   // publish the updated indexed-array length in the real array header
     }
 
     abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // return array pointer in the target integer result register
@@ -242,11 +242,11 @@ pub(super) fn emit_array_value_type_stamp(
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("mov r10, QWORD PTR [{} - 8]", array_reg)); // load the packed array kind word from the heap header
-            emitter.instruction("mov r11, 0x80ff");                             // preserve the indexed-array kind and persistent COW flag
-            emitter.instruction("and r10, r11");                                // keep only the persistent indexed-array metadata bits
-            emitter.instruction(&format!("mov rcx, {}", value_type_tag));       // materialize the runtime array value_type tag
-            emitter.instruction("shl rcx, 8");                                  // move the value_type tag into the packed kind-word byte lane
-            emitter.instruction("or r10, rcx");                                 // combine the heap kind with the array value_type tag
+            emitter.instruction("mov r12, 0xffffffff000080ff");                 // materialize the x86_64 heap-kind preservation mask without clobbering the array base register
+            emitter.instruction("and r10, r12");                                // preserve the x86_64 heap magic marker plus the indexed-array kind and persistent COW flag
+            emitter.instruction(&format!("mov r12, {}", value_type_tag));       // materialize the runtime array value_type tag in a scratch register that does not alias the array base register
+            emitter.instruction("shl r12, 8");                                  // move the value_type tag into the packed kind-word byte lane
+            emitter.instruction("or r10, r12");                                 // combine the preserved heap kind with the stamped array value_type tag
             emitter.instruction(&format!("mov QWORD PTR [{} - 8], r10", array_reg)); // persist the packed array kind word in the heap header
         }
     }

@@ -269,6 +269,12 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_mixed_unbox(emitter);
     arrays::emit_mixed_cast_string(emitter);
     arrays::emit_mixed_write_stdout(emitter);
+    system::emit_json_encode_bool(emitter);
+    system::emit_json_encode_null(emitter);
+    system::emit_json_encode_str(emitter);
+    system::emit_json_encode_mixed(emitter);
+    system::emit_json_encode_array_dynamic(emitter);
+    system::emit_json_encode_assoc(emitter);
 }
 
 fn emit_optional_linux_crypto_decls(emitter: &mut Emitter) {

@@ -1,6 +1,8 @@
+use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 use crate::names::method_symbol;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
@@ -9,6 +11,8 @@ use super::super::{
     emit_expr, restore_concat_offset_after_nested_call, retain_borrowed_heap_arg,
     save_concat_offset_before_nested_call,
 };
+
+const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 pub(super) fn emit_new_object(
     class_name: &str,
@@ -30,20 +34,42 @@ pub(super) fn emit_new_object(
     emitter.comment(&format!("new {}()", class_name));
 
     // -- allocate object on heap --
-    emitter.instruction(&format!("mov x0, #{}", obj_size));                     // object size in bytes
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate object -> x0 = pointer
-    emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
-    emitter.instruction("str x9, [x0, #-8]");                                   // store object kind in the uniform heap header
-    emitter.instruction(&format!("mov x10, #{}", class_info.class_id));         // load compile-time class id
-    emitter.instruction("str x10, [x0]");                                       // store class id at object header
-    emitter.instruction("str x0, [sp, #-16]!");                                 // save object pointer on stack
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("mov x0, #{}", obj_size));             // object size in bytes
+            emitter.instruction("bl __rt_heap_alloc");                          // allocate object -> x0 = pointer
+            emitter.instruction("mov x9, #4");                                  // heap kind 4 = object instance
+            emitter.instruction("str x9, [x0, #-8]");                           // store object kind in the uniform heap header
+            emitter.instruction(&format!("mov x10, #{}", class_info.class_id)); // load compile-time class id
+            emitter.instruction("str x10, [x0]");                               // store class id at object header
+            abi::emit_push_reg(emitter, "x0");                                  // save the allocated object pointer while property slots are initialized
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov rax, {}", obj_size));             // object size in bytes
+            abi::emit_call_label(emitter, "__rt_heap_alloc");                   // allocate object -> rax = pointer
+            emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); // materialize the x86_64 object heap kind word with the uniform heap marker
+            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the allocation as an object instance in the x86_64 uniform heap header
+            emitter.instruction(&format!("mov r10, {}", class_info.class_id));  // load the compile-time class id for the allocated object instance
+            emitter.instruction("mov QWORD PTR [rax], r10");                    // store the class id in the first field of the object payload
+            abi::emit_push_reg(emitter, "rax");                                 // save the allocated object pointer while property slots are initialized
+        }
+    }
 
     // -- zero-initialize all property slots --
     for i in 0..num_props {
         let offset = 8 + i * 16;
-        emitter.instruction("ldr x9, [sp]");                                    // peek object pointer
-        emitter.instruction(&format!("str xzr, [x9, #{}]", offset));            // zero-init property lo
-        emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8));        // zero-init property hi
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("ldr x9, [sp]");                            // peek object pointer
+                emitter.instruction(&format!("str xzr, [x9, #{}]", offset));    // zero-init property lo
+                emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8)); // zero-init property hi
+            }
+            Arch::X86_64 => {
+                emitter.instruction("mov r11, QWORD PTR [rsp]");                // peek the allocated object pointer from the temporary stack slot
+                emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", offset)); // zero-initialize the low word of the property storage slot
+                emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", offset + 8)); // zero-initialize the high word / runtime metadata slot
+            }
+        }
     }
 
     // -- set default property values --
@@ -170,6 +196,6 @@ pub(super) fn emit_new_object(
         }
     }
 
-    emitter.instruction("ldr x0, [sp], #16");                                   // pop object pointer into x0
+    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // restore the allocated object pointer as the expression result for the active target ABI
     PhpType::Object(class_name.to_string())
 }
