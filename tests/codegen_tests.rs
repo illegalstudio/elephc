@@ -8478,6 +8478,42 @@ fn test_json_decode_escaped_quote_and_backslash() {
     assert_eq!(out, "a\"b\\c");
 }
 
+#[test]
+fn test_json_decode_trimmed_string() {
+    let out = compile_and_run(r#"<?php echo json_decode("   \"hello\"   ");"#);
+    assert_eq!(out, "hello");
+}
+
+#[test]
+fn test_json_decode_true_literal() {
+    let out = compile_and_run(r#"<?php echo json_decode(" true ");"#);
+    assert_eq!(out, "true");
+}
+
+#[test]
+fn test_json_decode_null_literal() {
+    let out = compile_and_run(r#"<?php echo json_decode("\nnull\t");"#);
+    assert_eq!(out, "null");
+}
+
+#[test]
+fn test_json_decode_array_passthrough() {
+    let out = compile_and_run(r#"<?php echo json_decode(" [1, 2, 3] ");"#);
+    assert_eq!(out, "[1, 2, 3]");
+}
+
+#[test]
+fn test_json_decode_assoc_passthrough() {
+    let out = compile_and_run(r#"<?php echo json_decode(" {\"a\": 1} ");"#);
+    assert_eq!(out, r#"{"a": 1}"#);
+}
+
+#[test]
+fn test_json_decode_escaped_solidus() {
+    let out = compile_and_run(r#"<?php echo json_decode("\"https:\\/\\/example.com\"");"#);
+    assert_eq!(out, "https://example.com");
+}
+
 // --- Regex functions ---
 
 #[test]

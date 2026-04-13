@@ -39,10 +39,10 @@ sidebar:
 | Function | Signature | Description |
 |---|---|---|
 | `json_encode()` | `json_encode($value): string` | Encode as JSON. Supports int, float, string, bool, null, arrays, and mixed payloads. |
-| `json_decode()` | `json_decode($json): string` | Decode JSON string value (strips quotes, unescapes). |
+| `json_decode()` | `json_decode($json): string` | Decode to the current string representation: trims outer JSON whitespace, unescapes quoted JSON strings, and returns other JSON literals/arrays/objects as trimmed strings. |
 | `json_last_error()` | `json_last_error(): int` | Always returns 0 |
 
-> `json_decode()` returns a string representation. It does not parse objects to arrays.
+> `json_decode()` returns a string representation. It does not parse objects to arrays. Standard one-byte escapes (`\"`, `\\`, `\/`, `\b`, `\f`, `\n`, `\r`, `\t`) are decoded inside quoted JSON strings; `\uXXXX` escapes are currently preserved literally.
 
 ## Regex
 
