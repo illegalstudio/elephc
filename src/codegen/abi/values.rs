@@ -15,7 +15,7 @@ pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
             store_at_offset(emitter, float_result_reg(emitter), offset);                // store float to stack
         }
         PhpType::Str => {
-            emitter.instruction("bl __rt_str_persist");                                  // copy string to heap, x1=heap_ptr, x2=len
+            emit_call_label(emitter, "__rt_str_persist");                                // copy the current string payload into owned heap storage when needed
             let (ptr_reg, len_reg) = string_result_regs(emitter);
             store_at_offset(emitter, ptr_reg, offset);                                  // store string pointer
             store_at_offset(emitter, len_reg, offset - 8);                              // store string length
@@ -57,16 +57,16 @@ pub fn emit_incref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
 pub fn emit_decref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
         PhpType::Mixed | PhpType::Union(_) => {
-            emitter.instruction("bl __rt_decref_mixed");                                // release mixed cell reference
+            emit_call_label(emitter, "__rt_decref_mixed");                              // release mixed cell reference
         }
         PhpType::Array(_) => {
-            emitter.instruction("bl __rt_decref_array");                                // release indexed array reference
+            emit_call_label(emitter, "__rt_decref_array");                              // release indexed array reference
         }
         PhpType::AssocArray { .. } => {
-            emitter.instruction("bl __rt_decref_hash");                                 // release associative array reference
+            emit_call_label(emitter, "__rt_decref_hash");                               // release associative array reference
         }
         PhpType::Object(_) => {
-            emitter.instruction("bl __rt_decref_object");                               // release object reference
+            emit_call_label(emitter, "__rt_decref_object");                             // release object reference
         }
         _ => {}
     }

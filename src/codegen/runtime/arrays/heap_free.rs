@@ -1,4 +1,7 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
+
+const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// heap_free: return a heap block to the free list.
 /// The block header (16 bytes before user pointer) contains the block size,
@@ -13,6 +16,11 @@ use crate::codegen::emit::Emitter;
 /// Free block layout: [size:4][refcnt:4][kind:8][next_ptr:8][...unused...]
 /// Input: x0 = user pointer (as returned by heap_alloc)
 pub fn emit_heap_free(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_heap_free_linux_x86_64(emitter);
+        return;
+    }
+
     let double_free_msg = "Fatal error: heap debug detected double free\n";
 
     emitter.blank();
@@ -237,4 +245,27 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
 
     emitter.label("__rt_heap_free_safe_skip");
     emitter.instruction("ret");                                                 // return without freeing
+}
+
+fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: heap_free ---");
+    emitter.label_global("__rt_heap_free");
+
+    emitter.instruction("test rax, rax");                                       // ignore null pointers so the x86_64 heap wrapper matches the shared runtime contract
+    emitter.instruction("jz __rt_heap_free_done");                              // null payloads do not own storage and therefore need no release work
+    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
+    emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used to distinguish owned payloads from static buffers
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // verify that the payload belongs to the x86_64 heap wrapper before delegating to libc free
+    emitter.instruction("jne __rt_heap_free_done");                             // silently ignore non-owned pointers so callers can safely pass literals or concat-buffer storage
+    emitter.instruction("sub rax, 16");                                         // recover the libc allocation base address from the user payload pointer
+    emitter.instruction("mov rdi, rax");                                        // pass the original libc allocation base to free in the first SysV argument register
+    emitter.instruction("call free");                                           // release the owned x86_64 heap allocation through libc free
+    emitter.label("__rt_heap_free_done");
+    emitter.instruction("ret");                                                 // return to the caller after the optional release path
+
+    emitter.blank();
+    emitter.comment("--- runtime: heap_free_safe ---");
+    emitter.label_global("__rt_heap_free_safe");
+    emitter.instruction("jmp __rt_heap_free");                                  // reuse the same guarded x86_64 release path for the safe helper variant
 }

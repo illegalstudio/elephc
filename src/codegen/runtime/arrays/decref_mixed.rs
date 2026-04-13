@@ -1,6 +1,14 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
+
+const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 pub fn emit_decref_mixed(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_decref_mixed_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: decref_mixed ---");
     emitter.label_global("__rt_decref_mixed");
@@ -54,4 +62,26 @@ pub fn emit_decref_mixed(emitter: &mut Emitter) {
 
     emitter.label("__rt_decref_mixed_skip");
     emitter.instruction("ret");                                                 // nothing to release
+}
+
+fn emit_decref_mixed_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: decref_mixed ---");
+    emitter.label_global("__rt_decref_mixed");
+
+    emitter.instruction("test rax, rax");                                       // skip null mixed pointers immediately because they do not own heap storage
+    emitter.instruction("jz __rt_decref_mixed_skip");                           // null mixed values need no release work
+    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
+    emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // ignore foreign pointers that do not carry the elephc x86_64 heap marker
+    emitter.instruction("jne __rt_decref_mixed_skip");                          // only elephc-owned mixed boxes participate in x86_64 decref bookkeeping
+    emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the 32-bit mixed-box refcount from the uniform heap header
+    emitter.instruction("sub r10d, 1");                                         // decrement the mixed-box refcount for the releasing x86_64 owner
+    emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // store the decremented mixed-box refcount back into the uniform heap header
+    emitter.instruction("jz __rt_decref_mixed_free");                           // zero refcount means the boxed payload can be released now
+    emitter.label("__rt_decref_mixed_skip");
+    emitter.instruction("ret");                                                 // nothing else needs to happen for non-zero refcounts or foreign pointers
+
+    emitter.label("__rt_decref_mixed_free");
+    emitter.instruction("jmp __rt_mixed_free_deep");                            // tail-call to deep free the mixed box once the last owner is gone
 }

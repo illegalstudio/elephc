@@ -210,7 +210,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving hash-insert spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved table/key/value tuple
-    emitter.instruction("sub rsp, 64");                                         // reserve local storage for the hash insert/update state machine
+    emitter.instruction("sub rsp, 64");                                         // reserve local storage for the hash insert/update state machine and one scratch spill slot
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the hash-table pointer across helper calls and probe iterations
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the incoming key pointer across helper calls and probe iterations
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the incoming key length across helper calls and probe iterations
@@ -257,10 +257,14 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_hash_set_insert");
     emitter.instruction("mov QWORD PTR [r12], 1");                              // mark the selected entry slot as occupied before filling its payload fields
-    emitter.instruction("mov r13, QWORD PTR [rbp - 16]");                       // reload the inserted key pointer from the saved argument area
-    emitter.instruction("mov QWORD PTR [r12 + 8], r13");                        // store the inserted key pointer directly into the selected hash entry
-    emitter.instruction("mov r13, QWORD PTR [rbp - 24]");                       // reload the inserted key length from the saved argument area
-    emitter.instruction("mov QWORD PTR [r12 + 16], r13");                       // store the inserted key length directly into the selected hash entry
+    emitter.instruction("mov QWORD PTR [rbp - 64], r12");                       // preserve the selected entry pointer across the string-persist helper call for computed keys
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // move the inserted key pointer into the x86_64 string helper input register
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // move the inserted key length into the paired x86_64 string helper register
+    emitter.instruction("call __rt_str_persist");                               // duplicate the inserted key so hash-table storage does not alias transient concat-buffer bytes
+    emitter.instruction("mov r12, QWORD PTR [rbp - 64]");                       // restore the selected entry pointer after persisting the inserted key
+    emitter.instruction("mov QWORD PTR [r12 + 8], rax");                        // store the owned key pointer into the selected hash entry
+    emitter.instruction("mov QWORD PTR [r12 + 16], rdx");                       // store the owned key length into the selected hash entry
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after the string-persist helper clobbered caller-saved registers
     emitter.instruction("mov r13, QWORD PTR [rbp - 32]");                       // reload the low payload word that belongs to the inserted hash value
     emitter.instruction("mov QWORD PTR [r12 + 24], r13");                       // store the low payload word into the hash entry payload area
     emitter.instruction("mov r13, QWORD PTR [rbp - 40]");                       // reload the high payload word that belongs to the inserted hash value

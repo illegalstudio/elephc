@@ -240,6 +240,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
 
 fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     emit_optional_linux_crypto_decls(emitter);
+    arrays::emit_heap_alloc(emitter);
+    arrays::emit_heap_free(emitter);
     strings::emit_itoa(emitter);
     strings::emit_ftoa(emitter);
     strings::emit_concat(emitter);
@@ -252,7 +254,9 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_hash_set(emitter);
     system::emit_build_argv(emitter);
     arrays::emit_incref(emitter);
+    arrays::emit_decref_mixed(emitter);
     arrays::emit_mixed_from_value(emitter);
+    arrays::emit_mixed_free_deep(emitter);
     arrays::emit_mixed_unbox(emitter);
     arrays::emit_mixed_cast_string(emitter);
 }
@@ -289,6 +293,8 @@ mod tests {
         emit_runtime(&mut emitter);
         let asm = emitter.output();
 
+        assert!(asm.contains("__rt_heap_alloc:\n"));
+        assert!(asm.contains("__rt_heap_free:\n"));
         assert!(asm.contains("__rt_itoa:\n"));
         assert!(asm.contains("__rt_ftoa:\n"));
         assert!(asm.contains("__rt_concat:\n"));
@@ -301,7 +307,9 @@ mod tests {
         assert!(asm.contains("__rt_hash_set:\n"));
         assert!(asm.contains("__rt_build_argv:\n"));
         assert!(asm.contains("__rt_incref:\n"));
+        assert!(asm.contains("__rt_decref_mixed:\n"));
         assert!(asm.contains("__rt_mixed_from_value:\n"));
+        assert!(asm.contains("__rt_mixed_free_deep:\n"));
         assert!(asm.contains("__rt_mixed_unbox:\n"));
         assert!(asm.contains("__rt_mixed_cast_string:\n"));
     }

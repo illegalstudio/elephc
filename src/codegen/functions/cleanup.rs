@@ -1,6 +1,5 @@
 use crate::codegen::context::{Context, HeapOwnership};
 use crate::codegen::emit::Emitter;
-use crate::codegen::platform::Arch;
 use crate::types::PhpType;
 
 pub(super) fn preserve_return_registers(emitter: &mut Emitter, ctx: &Context, return_ty: &PhpType) {
@@ -46,19 +45,21 @@ pub(crate) fn emit_owned_local_epilogue_cleanup(emitter: &mut Emitter, ctx: &Con
     for (name, var) in cleanup_vars {
         match &var.ty {
             PhpType::Str => {
-                if emitter.target.arch == Arch::X86_64 {
-                    continue;
-                }
                 emitter.comment(&format!("epilogue cleanup ${}", name));
-                super::super::abi::load_at_offset(emitter, "x0", var.stack_offset); // load owned string pointer from local slot
-                emitter.instruction("bl __rt_heap_free_safe");                        // release owned string storage before returning
+                super::super::abi::load_at_offset(
+                    emitter,
+                    super::super::abi::int_result_reg(emitter),
+                    var.stack_offset,
+                ); // load owned string pointer from the local slot into the target integer result register
+                super::super::abi::emit_call_label(emitter, "__rt_heap_free_safe"); // release owned string storage before returning
             }
             ty if ty.is_refcounted() => {
-                if emitter.target.arch == Arch::X86_64 {
-                    continue;
-                }
                 emitter.comment(&format!("epilogue cleanup ${}", name));
-                super::super::abi::load_at_offset(emitter, "x0", var.stack_offset); // load owned heap pointer from local slot
+                super::super::abi::load_at_offset(
+                    emitter,
+                    super::super::abi::int_result_reg(emitter),
+                    var.stack_offset,
+                ); // load owned heap pointer from the local slot into the target integer result register
                 super::super::abi::emit_decref_if_refcounted(emitter, ty);
             }
             _ => {}

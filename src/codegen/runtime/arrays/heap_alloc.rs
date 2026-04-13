@@ -1,4 +1,7 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
+
+const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// heap_alloc: free-list allocator with 16-byte header.
 /// Each allocation has a 16-byte header [size:4][refcount:4][kind:8] before the user pointer.
@@ -7,6 +10,11 @@ use crate::codegen::emit::Emitter;
 /// Input: x0 = bytes needed
 /// Output: x0 = pointer to allocated memory (after header)
 pub fn emit_heap_alloc(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_heap_alloc_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: heap_alloc (free-list + bump) ---");
     emitter.label_global("__rt_heap_alloc");
@@ -168,4 +176,31 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.syscall(4);
     emitter.instruction("mov x0, #1");                                          // exit code 1
     emitter.syscall(1);
+}
+
+fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: heap_alloc ---");
+    emitter.label_global("__rt_heap_alloc");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving allocator spill slots
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame pointer for the requested payload size
+    emitter.instruction("sub rsp, 16");                                         // reserve local storage for the normalized payload size across libc malloc
+    emitter.instruction("cmp rax, 8");                                          // clamp tiny allocations so the shared header always has a minimally useful payload
+    emitter.instruction("jge __rt_heap_alloc_size_ready");                      // keep the original request when it already satisfies the minimum payload size
+    emitter.instruction("mov rax, 8");                                          // round sub-word allocations up to the minimal payload size accepted by the heap wrapper
+    emitter.label("__rt_heap_alloc_size_ready");
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the normalized payload size across the libc malloc call
+    emitter.instruction("mov rdi, rax");                                        // seed libc malloc with the requested payload size before adding the uniform header
+    emitter.instruction("add rdi, 16");                                         // include the 16-byte elephc heap header in the native allocation request
+    emitter.instruction("call malloc");                                         // allocate raw storage from libc and return the header pointer in rax
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the normalized payload size after libc malloc clobbered caller-saved registers
+    emitter.instruction("mov DWORD PTR [rax], r10d");                           // store the payload size in the uniform heap header
+    emitter.instruction("mov DWORD PTR [rax + 4], 1");                          // initialize the elephc refcount to one for the newly allocated heap payload
+    emitter.instruction(&format!("mov r10, 0x{:x}", X86_64_HEAP_MAGIC_HI32 << 32)); // materialize the x86_64 heap marker while leaving the low kind bits clear for the caller
+    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // stamp the allocation header with the x86_64 heap marker and an initially raw heap kind
+    emitter.instruction("add rax, 16");                                         // return the user payload pointer instead of the internal header address
+    emitter.instruction("add rsp, 16");                                         // release the temporary spill slots reserved for the normalized payload size
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
+    emitter.instruction("ret");                                                 // return the owned heap payload pointer in rax
 }

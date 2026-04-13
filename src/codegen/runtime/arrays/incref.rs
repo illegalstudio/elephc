@@ -1,6 +1,8 @@
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
+const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
+
 pub fn emit_incref(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_incref_linux_x86_64(emitter);
@@ -48,5 +50,15 @@ fn emit_incref_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: incref ---");
     emitter.label_global("__rt_incref");
-    emitter.instruction("ret");                                                 // minimal x86_64 runtime does not refcount heap payloads yet
+    emitter.instruction("test rax, rax");                                       // ignore null pointers so borrowed non-values do not participate in refcount traffic
+    emitter.instruction("jz __rt_incref_skip");                                 // null payloads do not own heap storage and therefore need no refcount update
+    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
+    emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // verify that the payload is owned by the x86_64 heap wrapper before mutating refcount state
+    emitter.instruction("jne __rt_incref_skip");                                // skip static strings or foreign pointers that do not carry elephc heap headers
+    emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the 32-bit refcount stored in the uniform heap header
+    emitter.instruction("add r10d, 1");                                         // increment the refcount for the additional x86_64 heap owner
+    emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // store the incremented refcount back into the uniform heap header
+    emitter.label("__rt_incref_skip");
+    emitter.instruction("ret");                                                 // return to the caller after the optional refcount increment
 }

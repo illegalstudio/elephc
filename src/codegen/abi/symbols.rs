@@ -1,6 +1,7 @@
 use crate::codegen::{emit::Emitter, platform::Arch};
 use crate::types::PhpType;
 
+use super::calls::emit_call_label;
 use super::frame::{
     emit_load_from_address, emit_store_to_address, load_at_offset_scratch, store_at_offset_scratch,
 };
@@ -236,7 +237,7 @@ pub fn emit_store_result_to_symbol(
                 }
             }
             emit_load_symbol_to_reg(emitter, int_result_reg(emitter), symbol, 0);
-            emitter.instruction("bl __rt_heap_free_safe");                               // release the previous string allocation before overwriting the symbol slot
+            emit_call_label(emitter, "__rt_heap_free_safe");                             // release the previous string allocation before overwriting the symbol slot
             match emitter.target.arch {
                 Arch::AArch64 => {
                     emitter.instruction("ldp x1, x2, [sp], #16");                        // restore the incoming string result after the release helper call
