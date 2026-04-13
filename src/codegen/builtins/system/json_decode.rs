@@ -1,3 +1,4 @@
+use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -19,7 +20,7 @@ pub fn emit(
     // x1=string ptr, x2=string len
 
     // -- call runtime to decode JSON string value --
-    emitter.instruction("bl __rt_json_decode");                                 // decode JSON → x1=result ptr, x2=result len
+    abi::emit_call_label(emitter, "__rt_json_decode");                         // decode the JSON string into a borrowed or concat-backed string slice for the active target ABI
 
     Some(PhpType::Str)
 }

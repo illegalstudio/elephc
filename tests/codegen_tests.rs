@@ -8472,6 +8472,12 @@ fn test_json_decode_escaped() {
     assert_eq!(out, "11"); // "hello" + newline + "world" = 11 chars
 }
 
+#[test]
+fn test_json_decode_escaped_quote_and_backslash() {
+    let out = compile_and_run(r#"<?php echo json_decode("\"a\\\"b\\\\c\"");"#);
+    assert_eq!(out, "a\"b\\c");
+}
+
 // --- Regex functions ---
 
 #[test]
