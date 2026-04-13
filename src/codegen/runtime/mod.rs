@@ -252,6 +252,13 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_hash_fnv1a(emitter);
     arrays::emit_hash_new(emitter);
     arrays::emit_hash_set(emitter);
+    arrays::emit_hash_get(emitter);
+    arrays::emit_hash_iter(emitter);
+    arrays::emit_decref_array(emitter);
+    arrays::emit_array_key_exists(emitter);
+    arrays::emit_array_search(emitter);
+    arrays::emit_decref_hash(emitter);
+    arrays::emit_hash_free_deep(emitter);
     system::emit_build_argv(emitter);
     arrays::emit_incref(emitter);
     arrays::emit_decref_mixed(emitter);
@@ -259,6 +266,7 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_mixed_free_deep(emitter);
     arrays::emit_mixed_unbox(emitter);
     arrays::emit_mixed_cast_string(emitter);
+    arrays::emit_mixed_write_stdout(emitter);
 }
 
 fn emit_optional_linux_crypto_decls(emitter: &mut Emitter) {
@@ -305,6 +313,9 @@ mod tests {
         assert!(asm.contains("__rt_hash_fnv1a:\n"));
         assert!(asm.contains("__rt_hash_new:\n"));
         assert!(asm.contains("__rt_hash_set:\n"));
+        assert!(asm.contains("__rt_hash_get:\n"));
+        assert!(asm.contains("__rt_decref_hash:\n"));
+        assert!(asm.contains("__rt_hash_free_deep:\n"));
         assert!(asm.contains("__rt_build_argv:\n"));
         assert!(asm.contains("__rt_incref:\n"));
         assert!(asm.contains("__rt_decref_mixed:\n"));

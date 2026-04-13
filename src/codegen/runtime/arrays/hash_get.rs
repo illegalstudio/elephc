@@ -1,9 +1,15 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 /// hash_get: look up a value by string key in the hash table.
 /// Input:  x0=hash_table_ptr, x1=key_ptr, x2=key_len
 /// Output: x0=found (1 or 0), x1=value_lo, x2=value_hi, x3=value_tag
 pub fn emit_hash_get(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_hash_get_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: hash_get ---");
     emitter.label_global("__rt_hash_get");
@@ -106,4 +112,82 @@ pub fn emit_hash_get(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
+}
+
+fn emit_hash_get_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: hash_get ---");
+    emitter.label_global("__rt_hash_get");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving lookup spill slots
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved hash-table pointer and key payload
+    emitter.instruction("sub rsp, 32");                                         // reserve local slots for the hash-table pointer, key pointer, key length, and probe index
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the hash-table pointer across helper calls and probe iterations
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the key pointer across helper calls and probe iterations
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the key length across helper calls and probe iterations
+    emitter.instruction("mov rdi, rsi");                                        // pass the lookup key pointer to the x86_64 FNV-1a helper in the first SysV argument register
+    emitter.instruction("mov rsi, rdx");                                        // pass the lookup key length to the x86_64 FNV-1a helper in the second SysV argument register
+    emitter.instruction("call __rt_hash_fnv1a");                                // compute the 64-bit FNV-1a hash for the lookup key
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after the hash helper returns
+    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // load the table capacity for the modulo operation and linear-probe loop
+    emitter.instruction("xor edx, edx");                                        // clear the high dividend half before dividing the 64-bit hash by the capacity
+    emitter.instruction("div r11");                                             // compute hash % capacity using the SysV integer divide remainder register
+    emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // save the initial probe index so the loop can survive helper calls
+
+    emitter.label("__rt_hash_get_probe");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer at the top of every probe iteration
+    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the current probe index before deriving the slot address
+    emitter.instruction("mov r8, r11");                                         // copy the probe index before scaling it into a byte offset
+    emitter.instruction("shl r8, 6");                                           // convert the probe index into a 64-byte entry offset
+    emitter.instruction("add r8, r10");                                         // advance from the hash-table base pointer to the selected entry block
+    emitter.instruction("add r8, 40");                                          // skip the fixed 40-byte hash header to land on the selected entry
+    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the occupied marker for the probed hash-entry slot
+    emitter.instruction("test r9, r9");                                         // detect an empty slot that terminates the failed lookup path immediately
+    emitter.instruction("jz __rt_hash_get_not_found");                          // empty slots mean the requested key does not exist in the hash table
+    emitter.instruction("cmp r9, 2");                                           // check whether the current slot is a tombstone rather than a live entry
+    emitter.instruction("je __rt_hash_get_next");                               // tombstones do not terminate the probe but also cannot satisfy the lookup
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // pass the lookup key pointer to the x86_64 string-equality helper
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass the lookup key length to the x86_64 string-equality helper
+    emitter.instruction("mov rdx, QWORD PTR [r8 + 8]");                         // pass the stored entry key pointer to the x86_64 string-equality helper
+    emitter.instruction("mov rcx, QWORD PTR [r8 + 16]");                        // pass the stored entry key length to the x86_64 string-equality helper
+    emitter.instruction("call __rt_str_eq");                                    // compare the requested key against the current live hash entry key
+    emitter.instruction("test rax, rax");                                       // check whether the string-equality helper reported a key match
+    emitter.instruction("jne __rt_hash_get_found");                             // stop probing as soon as the requested key matches the current entry
+
+    emitter.label("__rt_hash_get_next");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after the key-compare helper clobbered caller-saved registers
+    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // reload the table capacity before advancing the linear-probe cursor
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // reload the current probe index before incrementing it
+    emitter.instruction("add rdx, 1");                                          // advance to the next linear-probe slot after a tombstone or key mismatch
+    emitter.instruction("cmp rdx, r11");                                        // detect wraparound once the probe index reaches the table capacity
+    emitter.instruction("jb __rt_hash_get_store_probe");                        // keep the incremented probe index when the cursor remains in bounds
+    emitter.instruction("xor edx, edx");                                        // wrap the probe cursor back to slot zero once the end of the table is reached
+
+    emitter.label("__rt_hash_get_store_probe");
+    emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // persist the updated probe index before the next loop iteration
+    emitter.instruction("jmp __rt_hash_get_probe");                             // continue probing until a matching or empty slot is reached
+
+    emitter.label("__rt_hash_get_found");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer because the string-equality helper clobbered caller-saved registers
+    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the matching probe index before rebuilding the entry address
+    emitter.instruction("mov r8, r11");                                         // copy the matching probe index before scaling it into a byte offset
+    emitter.instruction("shl r8, 6");                                           // convert the matching probe index into a 64-byte entry offset
+    emitter.instruction("add r8, r10");                                         // advance from the hash-table base pointer to the matching entry block
+    emitter.instruction("add r8, 40");                                          // skip the fixed 40-byte hash header to land on the matching entry
+    emitter.instruction("mov rdi, QWORD PTR [r8 + 24]");                        // return the low payload word in the first borrowed-value result register
+    emitter.instruction("mov rsi, QWORD PTR [r8 + 32]");                        // return the high payload word in the second borrowed-value result register
+    emitter.instruction("mov rcx, QWORD PTR [r8 + 40]");                        // return the runtime value tag in the borrowed-value tag result register
+    emitter.instruction("mov rax, 1");                                          // return found = 1 in the standard integer result register
+    emitter.instruction("add rsp, 32");                                         // release the lookup spill slots before returning the borrowed payload
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
+    emitter.instruction("ret");                                                 // return the successful lookup result to generated code
+
+    emitter.label("__rt_hash_get_not_found");
+    emitter.instruction("xor eax, eax");                                        // return found = 0 in the standard integer result register when the key is absent
+    emitter.instruction("xor edi, edi");                                        // clear the low payload word for the failed lookup path
+    emitter.instruction("xor esi, esi");                                        // clear the high payload word for the failed lookup path
+    emitter.instruction("mov ecx, 8");                                          // return runtime value tag 8 = null for failed hash lookups
+    emitter.instruction("add rsp, 32");                                         // release the lookup spill slots before returning the failed lookup result
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
+    emitter.instruction("ret");                                                 // return the failed lookup result to generated code
 }

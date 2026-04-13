@@ -504,42 +504,66 @@ pub(super) fn emit_array_access(
 
     if let PhpType::AssocArray { value, .. } = &arr_ty {
         let val_ty = *value.clone();
-        emitter.instruction("str x0, [sp, #-16]!");                             // push hash table pointer
+        abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the hash-table pointer while evaluating the string key expression
         let _key_ty = emit_expr(index, emitter, ctx, data);
-        emitter.instruction("mov x3, x1");                                      // move key ptr to x3 (temp)
-        emitter.instruction("mov x4, x2");                                      // move key len to x4 (temp)
-        emitter.instruction("ldr x0, [sp], #16");                               // pop hash table pointer
-        emitter.instruction("mov x1, x3");                                      // key ptr
-        emitter.instruction("mov x2, x4");                                      // key len
+        let (key_ptr_reg, key_len_reg) = abi::string_result_regs(emitter);
+        abi::emit_push_reg_pair(emitter, key_ptr_reg, key_len_reg);                 // preserve the computed key pointer and length while restoring the hash-table pointer
+        match emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => {
+                abi::emit_pop_reg_pair(emitter, "x1", "x2");                        // restore the key pointer and length from the top stack slot into the hash-get helper argument registers
+                abi::emit_pop_reg(emitter, "x0");                                   // restore the saved hash-table pointer into the first hash-get helper argument register
+            }
+            crate::codegen::platform::Arch::X86_64 => {
+                abi::emit_pop_reg_pair(emitter, "rsi", "rdx");                      // restore the key pointer and length from the top stack slot into the remaining SysV hash-get helper argument registers
+                abi::emit_pop_reg(emitter, "rdi");                                  // restore the saved hash-table pointer into the first SysV hash-get helper argument register
+            }
+        }
         emitter.comment("assoc array access");
-        emitter.instruction("bl __rt_hash_get");                                // lookup key → x0=found, x1=val_lo, x2=val_hi, x3=val_tag
+        abi::emit_call_label(emitter, "__rt_hash_get");                            // lookup key and return found-flag plus borrowed payload words through the target runtime ABI
 
         let not_found = ctx.next_label("hash_miss");
         let done = ctx.next_label("hash_done");
-        emitter.instruction(&format!("cbz x0, {not_found}"));                   // if found=0, jump to not-found handler
+        abi::emit_branch_if_int_result_zero(emitter, &not_found);                  // jump to the not-found handler when the hash lookup misses
 
-        match &val_ty {
-            PhpType::Int | PhpType::Bool => {
-                emitter.instruction("mov x0, x1");                              // move value to x0
-            }
-            PhpType::Str => {}
-            PhpType::Float => {
-                emitter.instruction("fmov d0, x1");                             // move bits to float register
-            }
-            PhpType::Mixed => {
-                super::super::emit_box_runtime_payload_as_mixed(emitter, "x3", "x1", "x2"); // box the borrowed entry payload into a mixed cell
-            }
-            _ => {
-                emitter.instruction("mov x0, x1");                              // move value to x0
-            }
+        match emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => match &val_ty {
+                PhpType::Int | PhpType::Bool => {
+                    emitter.instruction("mov x0, x1");                              // move the borrowed associative-array scalar payload into the standard integer result register
+                }
+                PhpType::Str => {}
+                PhpType::Float => {
+                    emitter.instruction("fmov d0, x1");                             // move the borrowed associative-array float bits into the standard float result register
+                }
+                PhpType::Mixed => {
+                    super::super::emit_box_runtime_payload_as_mixed(emitter, "x3", "x1", "x2"); // box the borrowed associative-array payload into an owned mixed cell
+                }
+                _ => {
+                    emitter.instruction("mov x0, x1");                              // move the borrowed associative-array pointer payload into the standard integer result register
+                }
+            },
+            crate::codegen::platform::Arch::X86_64 => match &val_ty {
+                PhpType::Int | PhpType::Bool => {
+                    emitter.instruction("mov rax, rdi");                            // move the borrowed associative-array scalar payload into the standard integer result register
+                }
+                PhpType::Str => {
+                    emitter.instruction("mov rax, rdi");                            // move the borrowed associative-array string pointer into the standard x86_64 string result register
+                    emitter.instruction("mov rdx, rsi");                            // move the borrowed associative-array string length into the paired x86_64 string result register
+                }
+                PhpType::Float => {
+                    emitter.instruction("movq xmm0, rdi");                          // move the borrowed associative-array float bits into the standard float result register
+                }
+                PhpType::Mixed => {
+                    super::super::emit_box_runtime_payload_as_mixed(emitter, "rcx", "rdi", "rsi"); // box the borrowed associative-array payload into an owned mixed cell
+                }
+                _ => {
+                    emitter.instruction("mov rax, rdi");                            // move the borrowed associative-array pointer payload into the standard integer result register
+                }
+            },
         }
-        emitter.instruction(&format!("b {done}"));                              // skip not-found fallback
+        abi::emit_jump(emitter, &done);                                           // skip the not-found fallback after materializing the successful lookup result
 
         emitter.label(&not_found);
-        emitter.instruction("movz x0, #0xFFFE");                                // load lowest 16 bits of null sentinel
-        emitter.instruction("movk x0, #0xFFFF, lsl #16");                       // insert bits 16-31 of null sentinel
-        emitter.instruction("movk x0, #0xFFFF, lsl #32");                       // insert bits 32-47 of null sentinel
-        emitter.instruction("movk x0, #0x7FFF, lsl #48");                       // insert bits 48-63 of null sentinel
+        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), i64::MAX - 1); // materialize the shared null sentinel for associative-array misses
         emitter.label(&done);
         return val_ty;
     }

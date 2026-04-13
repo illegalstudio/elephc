@@ -210,7 +210,10 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving hash-insert spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved table/key/value tuple
-    emitter.instruction("sub rsp, 64");                                         // reserve local storage for the hash insert/update state machine and one scratch spill slot
+    emitter.instruction("sub rsp, 96");                                         // reserve local storage plus callee-saved register spills while keeping nested calls 16-byte aligned
+    emitter.instruction("mov QWORD PTR [rbp - 72], r12");                       // preserve r12 because SysV requires callees to restore it before returning
+    emitter.instruction("mov QWORD PTR [rbp - 80], r13");                       // preserve r13 because the hash probe logic reuses it as a long-lived scratch register
+    emitter.instruction("mov QWORD PTR [rbp - 88], r14");                       // preserve r14 because the insertion-order linker uses it as a callee-saved scratch register
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the hash-table pointer across helper calls and probe iterations
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the incoming key pointer across helper calls and probe iterations
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the incoming key length across helper calls and probe iterations
@@ -296,7 +299,10 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r11, 1");                                          // increment the live-entry count after claiming a previously empty hash slot
     emitter.instruction("mov QWORD PTR [r10], r11");                            // store the updated live-entry count back into the hash header
     emitter.instruction("mov rax, r10");                                        // return the original hash-table pointer after a successful insertion
-    emitter.instruction("add rsp, 64");                                         // release the local spill area that held the saved table/key/value tuple
+    emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14 before leaving the hash-set helper
+    emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore the caller's r13 before leaving the hash-set helper
+    emitter.instruction("mov r12, QWORD PTR [rbp - 72]");                       // restore the caller's r12 before leaving the hash-set helper
+    emitter.instruction("add rsp, 96");                                         // release the local spill area that held the saved table/key/value tuple
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to the insertion caller
     emitter.instruction("ret");                                                 // return to the caller with the hash-table pointer in rax
 
@@ -308,7 +314,10 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r13, QWORD PTR [rbp - 48]");                       // reload the replacement runtime value tag for the existing key slot
     emitter.instruction("mov QWORD PTR [r12 + 40], r13");                       // overwrite the stored runtime value tag in the existing hash entry
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the unchanged hash-table pointer after an in-place value update
-    emitter.instruction("add rsp, 64");                                         // release the local spill area before leaving the update path
+    emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14 before leaving the update path
+    emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore the caller's r13 before leaving the update path
+    emitter.instruction("mov r12, QWORD PTR [rbp - 72]");                       // restore the caller's r12 before leaving the update path
+    emitter.instruction("add rsp, 96");                                         // release the local spill area before leaving the update path
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to the insertion caller
     emitter.instruction("ret");                                                 // return to the caller with the existing hash-table pointer in rax
 }

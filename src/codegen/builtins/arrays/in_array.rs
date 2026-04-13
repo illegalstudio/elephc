@@ -1,7 +1,9 @@
+use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -20,7 +22,7 @@ pub fn emit(
     if let PhpType::AssocArray { value, .. } = &arr_ty {
         let val_ty = *value.clone();
         // -- save hash table pointer, evaluate needle --
-        emitter.instruction("str x0, [sp, #-16]!");                             // push hash table pointer
+        abi::emit_push_reg(emitter, abi::int_result_reg(emitter));              // preserve the associative-array hash-table pointer while evaluating the searched needle
 
         let needle_ty = emit_expr(&args[0], emitter, ctx, data);
 
@@ -28,27 +30,43 @@ pub fn emit(
         let end_label = ctx.next_label("in_array_assoc_end");
         let loop_label = ctx.next_label("in_array_assoc_loop");
         let skip_label = ctx.next_label("in_array_assoc_skip");
+        let mixed_mismatch_label = ctx.next_label("in_array_assoc_mixed_mismatch");
 
         match &val_ty {
             PhpType::Str => {
                 // -- needle is a string in x1/x2, save it --
-                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push needle ptr+len
+                abi::emit_push_reg_pair(emitter, abi::string_result_regs(emitter).0, abi::string_result_regs(emitter).1); // preserve the string needle across associative-array iteration
             }
             PhpType::Mixed if matches!(needle_ty, PhpType::Str) => {
-                emitter.instruction("stp x1, x2, [sp, #-16]!");                 // push string needle ptr+len for mixed-entry comparison
+                abi::emit_push_reg_pair(emitter, abi::string_result_regs(emitter).0, abi::string_result_regs(emitter).1); // preserve the string needle across mixed associative-array iteration
             }
             PhpType::Mixed if matches!(needle_ty, PhpType::Float) => {
-                emitter.instruction("fmov x0, d0");                             // move float needle bits into an integer register for mixed-entry comparison
-                emitter.instruction("str x0, [sp, #-16]!");                     // push float needle bits
+                match emitter.target.arch {
+                    Arch::AArch64 => {
+                        emitter.instruction("fmov x0, d0");                     // move the float needle bits into an integer register for mixed-entry comparison
+                    }
+                    Arch::X86_64 => {
+                        emitter.instruction("movq rax, xmm0");                  // move the float needle bits into the integer result register for mixed-entry comparison
+                    }
+                }
+                abi::emit_push_reg(emitter, abi::int_result_reg(emitter));      // preserve the float needle bits across associative-array iteration
             }
             _ => {
                 // -- needle is an integer/bool in x0, save it --
-                emitter.instruction("str x0, [sp, #-16]!");                     // push needle value
+                abi::emit_push_reg(emitter, abi::int_result_reg(emitter));      // preserve the scalar needle across associative-array iteration
             }
         }
 
         // -- push iteration index onto stack --
-        emitter.instruction("str xzr, [sp, #-16]!");                            // push iter_cursor = 0 (start from hash header head)
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("str xzr, [sp, #-16]!");                    // push iter_cursor = 0 (start from the associative-array header head slot)
+            }
+            Arch::X86_64 => {
+                emitter.instruction("sub rsp, 16");                             // reserve one temporary stack slot for the associative-array iterator cursor
+                emitter.instruction("mov QWORD PTR [rsp], 0");                  // initialize the associative-array iterator cursor to the hash-header head sentinel
+            }
+        }
 
         // Stack layout (top to bottom):
         //   sp+0:  iter_index (16 bytes)
@@ -56,70 +74,128 @@ pub fn emit(
         //   sp+32: hash_table_ptr (16 bytes)
 
         emitter.label(&loop_label);
-        emitter.instruction("ldr x0, [sp, #32]");                               // load hash table pointer
-        emitter.instruction("ldr x1, [sp]");                                    // load current iteration cursor
-        emitter.instruction("bl __rt_hash_iter_next");                          // → x0=next_cursor, x1=key_ptr, x2=key_len, x3=val_lo, x4=val_hi, x5=val_tag
-        // -- check if iteration is done --
-        emitter.instruction("cmn x0, #1");                                      // check if x0 == -1 (end of iteration)
-        emitter.instruction(&format!("b.eq {}", end_label));                    // if done, needle not found
-        emitter.instruction("str x0, [sp]");                                    // save updated iteration cursor
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("ldr x0, [sp, #32]");                       // load the associative-array hash-table pointer for the next insertion-order iteration step
+                emitter.instruction("ldr x1, [sp]");                            // load the current associative-array iterator cursor
+                emitter.instruction("bl __rt_hash_iter_next");                  // advance one associative-array insertion-order entry and return its key plus payload
+                emitter.instruction("cmn x0, #1");                              // has associative-array iteration reached the done sentinel?
+                emitter.instruction(&format!("b.eq {}", end_label));            // stop searching once the associative-array iterator is exhausted
+                emitter.instruction("str x0, [sp]");                            // save the updated associative-array iterator cursor for the next loop step
 
-        // -- compare value with needle --
-        match &val_ty {
-            PhpType::Str => {
-                // -- compare string value (x3=ptr, x4=len) with needle --
-                emitter.instruction("mov x1, x3");                              // val ptr → x1
-                emitter.instruction("mov x2, x4");                              // val len → x2
-                emitter.instruction("ldp x3, x4, [sp, #16]");                   // reload needle ptr+len from stack
-                emitter.instruction("bl __rt_str_eq");                          // x0 = 1 if equal
-                emitter.instruction(&format!("cbnz x0, {}", found_label));      // if equal, found
-            }
-            PhpType::Mixed => {
-                let mixed_mismatch_label = ctx.next_label("in_array_assoc_mixed_mismatch");
-                let expected_tag = crate::codegen::runtime_value_tag(&needle_ty);
-                emitter.instruction(&format!("mov x6, #{}", expected_tag));     // materialize the expected mixed-entry value_tag for the needle
-                emitter.instruction("cmp x5, x6");                              // does this entry's runtime value_tag match the needle type?
-                emitter.instruction(&format!("b.ne {}", mixed_mismatch_label)); // skip entries whose runtime value kind differs from the needle
-                match &needle_ty {
+                match &val_ty {
                     PhpType::Str => {
-                        emitter.instruction("mov x1, x3");                      // val ptr → x1
-                        emitter.instruction("mov x2, x4");                      // val len → x2
-                        emitter.instruction("ldp x3, x4, [sp, #16]");           // reload needle ptr+len from stack
-                        emitter.instruction("bl __rt_str_eq");                  // x0 = 1 if equal
-                        emitter.instruction(&format!("cbnz x0, {}", found_label)); //if equal, found
+                        emitter.instruction("mov x1, x3");                      // move the associative-array entry string pointer into the first string-compare register
+                        emitter.instruction("mov x2, x4");                      // move the associative-array entry string length into the paired string-compare register
+                        emitter.instruction("ldp x3, x4, [sp, #16]");          // reload the saved string needle from the associative-array search stack frame
+                        emitter.instruction("bl __rt_str_eq");                  // compare the associative-array entry string value against the searched needle
+                        emitter.instruction(&format!("cbnz x0, {}", found_label)); // stop once the associative-array string value matches the searched needle
                     }
-                    PhpType::Void => {
-                        emitter.instruction(&format!("b {}", found_label));     // null needles match any entry tagged null
+                    PhpType::Mixed => {
+                        let expected_tag = crate::codegen::runtime_value_tag(&needle_ty);
+                        emitter.instruction(&format!("mov x6, #{}", expected_tag)); // materialize the expected mixed-entry runtime tag for the searched needle
+                        emitter.instruction("cmp x5, x6");                      // does the current associative-array mixed entry match the searched needle kind?
+                        emitter.instruction(&format!("b.ne {}", mixed_mismatch_label)); // skip associative-array entries whose mixed kind differs from the needle
+                        match &needle_ty {
+                            PhpType::Str => {
+                                emitter.instruction("mov x1, x3");              // move the associative-array mixed entry string pointer into the first string-compare register
+                                emitter.instruction("mov x2, x4");              // move the associative-array mixed entry string length into the paired string-compare register
+                                emitter.instruction("ldp x3, x4, [sp, #16]");  // reload the saved string needle from the associative-array search stack frame
+                                emitter.instruction("bl __rt_str_eq");          // compare the associative-array mixed string entry against the searched needle
+                                emitter.instruction(&format!("cbnz x0, {}", found_label)); // stop once the associative-array mixed string value matches the needle
+                            }
+                            PhpType::Void => {
+                                emitter.instruction(&format!("b {}", found_label)); // null needles match associative-array entries tagged null
+                            }
+                            _ => {
+                                emitter.instruction("ldr x6, [sp, #16]");       // reload the saved scalar mixed needle payload from the associative-array search stack frame
+                                emitter.instruction("cmp x3, x6");              // compare the associative-array mixed entry payload against the searched scalar needle
+                                emitter.instruction(&format!("b.eq {}", found_label)); // stop once the associative-array mixed scalar payload matches the needle
+                            }
+                        }
+                        emitter.label(&mixed_mismatch_label);
                     }
                     _ => {
-                        emitter.instruction("ldr x6, [sp, #16]");               // reload the saved needle payload for mixed-entry comparison
-                        emitter.instruction("cmp x3, x6");                      // compare entry value_lo against the needle payload
-                        emitter.instruction(&format!("b.eq {}", found_label));  // if equal, found
+                        emitter.instruction("ldr x5, [sp, #16]");               // reload the saved scalar needle payload from the associative-array search stack frame
+                        emitter.instruction("cmp x3, x5");                      // compare the associative-array entry payload against the searched scalar needle
+                        emitter.instruction(&format!("b.eq {}", found_label));  // stop once the associative-array entry payload matches the searched scalar needle
                     }
                 }
-                emitter.label(&mixed_mismatch_label);
+                emitter.instruction(&format!("b {}", loop_label));              // continue scanning the remaining associative-array insertion-order entries
+
+                emitter.label(&found_label);
+                emitter.instruction("mov x0, #1");                              // return true once the searched needle matches an associative-array entry value
+                emitter.instruction(&format!("b {}", skip_label));              // jump to the common associative-array cleanup after a match
+
+                emitter.label(&end_label);
+                emitter.instruction("mov x0, #0");                              // return false once associative-array iteration finishes without a match
+
+                emitter.label(&skip_label);
+                emitter.instruction("add sp, sp, #48");                         // drop the associative-array iterator cursor, needle, and hash-table stack slots
             }
-            _ => {
-                // -- compare integer value (x3) with needle --
-                emitter.instruction("ldr x5, [sp, #16]");                       // reload needle value from stack
-                emitter.instruction("cmp x3, x5");                              // compare entry value with needle
-                emitter.instruction(&format!("b.eq {}", found_label));          // if equal, found
+            Arch::X86_64 => {
+                emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");           // load the associative-array hash-table pointer for the next insertion-order iteration step
+                emitter.instruction("mov rsi, QWORD PTR [rsp]");                // load the current associative-array iterator cursor
+                emitter.instruction("call __rt_hash_iter_next");                // advance one associative-array insertion-order entry and return its key plus payload
+                emitter.instruction("cmp rax, -1");                             // has associative-array iteration reached the done sentinel?
+                emitter.instruction(&format!("je {}", end_label));              // stop searching once the associative-array iterator is exhausted
+                emitter.instruction("mov QWORD PTR [rsp], rax");                // save the updated associative-array iterator cursor for the next loop step
+
+                match &val_ty {
+                    PhpType::Str => {
+                        emitter.instruction("mov rdi, rcx");                    // move the associative-array entry string pointer into the first string-compare register
+                        emitter.instruction("mov rsi, r8");                     // move the associative-array entry string length into the paired string-compare register
+                        emitter.instruction("mov rdx, QWORD PTR [rsp + 16]");   // reload the saved string needle pointer from the associative-array search stack frame
+                        emitter.instruction("mov rcx, QWORD PTR [rsp + 24]");   // reload the saved string needle length from the associative-array search stack frame
+                        emitter.instruction("call __rt_str_eq");                // compare the associative-array entry string value against the searched needle
+                        emitter.instruction("test rax, rax");                   // did the associative-array string value match the searched needle?
+                        emitter.instruction(&format!("jne {}", found_label));   // stop once the associative-array string value matches the searched needle
+                    }
+                    PhpType::Mixed => {
+                        let expected_tag = crate::codegen::runtime_value_tag(&needle_ty) as i64;
+                        abi::emit_load_int_immediate(emitter, "r10", expected_tag); // materialize the expected mixed-entry runtime tag for the searched needle
+                        emitter.instruction("cmp r9, r10");                     // does the current associative-array mixed entry match the searched needle kind?
+                        emitter.instruction(&format!("jne {}", mixed_mismatch_label)); // skip associative-array entries whose mixed kind differs from the needle
+                        match &needle_ty {
+                            PhpType::Str => {
+                                emitter.instruction("mov rdi, rcx");            // move the associative-array mixed entry string pointer into the first string-compare register
+                                emitter.instruction("mov rsi, r8");             // move the associative-array mixed entry string length into the paired string-compare register
+                                emitter.instruction("mov rdx, QWORD PTR [rsp + 16]"); // reload the saved string needle pointer from the associative-array search stack frame
+                                emitter.instruction("mov rcx, QWORD PTR [rsp + 24]"); // reload the saved string needle length from the associative-array search stack frame
+                                emitter.instruction("call __rt_str_eq");        // compare the associative-array mixed string entry against the searched needle
+                                emitter.instruction("test rax, rax");           // did the associative-array mixed string value match the searched needle?
+                                emitter.instruction(&format!("jne {}", found_label)); // stop once the associative-array mixed string value matches the needle
+                            }
+                            PhpType::Void => {
+                                emitter.instruction(&format!("jmp {}", found_label)); // null needles match associative-array entries tagged null
+                            }
+                            _ => {
+                                emitter.instruction("mov r10, QWORD PTR [rsp + 16]"); // reload the saved scalar mixed needle payload from the associative-array search stack frame
+                                emitter.instruction("cmp rcx, r10");            // compare the associative-array mixed entry payload against the searched scalar needle
+                                emitter.instruction(&format!("je {}", found_label)); // stop once the associative-array mixed scalar payload matches the needle
+                            }
+                        }
+                        emitter.label(&mixed_mismatch_label);
+                    }
+                    _ => {
+                        emitter.instruction("mov r10, QWORD PTR [rsp + 16]");   // reload the saved scalar needle payload from the associative-array search stack frame
+                        emitter.instruction("cmp rcx, r10");                    // compare the associative-array entry payload against the searched scalar needle
+                        emitter.instruction(&format!("je {}", found_label));    // stop once the associative-array entry payload matches the searched scalar needle
+                    }
+                }
+                emitter.instruction(&format!("jmp {}", loop_label));            // continue scanning the remaining associative-array insertion-order entries
+
+                emitter.label(&found_label);
+                emitter.instruction("mov rax, 1");                              // return true once the searched needle matches an associative-array entry value
+                emitter.instruction(&format!("jmp {}", skip_label));            // jump to the common associative-array cleanup after a match
+
+                emitter.label(&end_label);
+                emitter.instruction("xor eax, eax");                            // return false once associative-array iteration finishes without a match
+
+                emitter.label(&skip_label);
+                emitter.instruction("add rsp, 48");                             // drop the associative-array iterator cursor, needle, and hash-table stack slots
             }
         }
-        emitter.instruction(&format!("b {}", loop_label));                      // continue iterating
-
-        // -- needle found --
-        emitter.label(&found_label);
-        emitter.instruction("mov x0, #1");                                      // return true
-        emitter.instruction(&format!("b {}", skip_label));                      // jump to cleanup
-
-        // -- needle not found --
-        emitter.label(&end_label);
-        emitter.instruction("mov x0, #0");                                      // return false
-
-        emitter.label(&skip_label);
-        // -- clean up stack (3 pushes of 16 bytes each) --
-        emitter.instruction("add sp, sp, #48");                                 // drop iter_index + needle + hash_ptr
     } else {
         // -- indexed array: linear scan --
         let elem_ty = match &arr_ty {

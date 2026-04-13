@@ -1,6 +1,14 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
+
+const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 pub fn emit_decref_array(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_decref_array_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: decref_array ---");
     emitter.label_global("__rt_decref_array");
@@ -63,4 +71,24 @@ pub fn emit_decref_array(emitter: &mut Emitter) {
 
     emitter.label("__rt_decref_array_skip");
     emitter.instruction("ret");                                                 // return to caller
+}
+
+fn emit_decref_array_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: decref_array ---");
+    emitter.label_global("__rt_decref_array");
+
+    emitter.instruction("test rax, rax");                                       // skip null array pointers so non-values do not participate in refcount traffic
+    emitter.instruction("jz __rt_decref_array_skip");                           // null array pointers need no heap refcount update
+    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
+    emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // verify that the payload is owned by the x86_64 heap wrapper before mutating refcount state
+    emitter.instruction("jne __rt_decref_array_skip");                          // skip foreign/static pointers that do not carry elephc heap headers
+    emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the 32-bit refcount stored in the uniform heap header
+    emitter.instruction("sub r10d, 1");                                         // decrement the refcount for the array owner that is going away
+    emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // persist the decremented array refcount in the uniform heap header
+    emitter.instruction("jnz __rt_decref_array_skip");                          // only the last array owner should free the backing storage
+    emitter.instruction("call __rt_heap_free");                                 // free the array backing storage once the x86_64 refcount reaches zero
+    emitter.label("__rt_decref_array_skip");
+    emitter.instruction("ret");                                                 // return to the caller after the optional x86_64 array refcount update
 }
