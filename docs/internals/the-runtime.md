@@ -335,7 +335,7 @@ The `json_encode` implementation uses **type-aware dispatch** — the codegen ca
 | `__rt_json_encode_array_dynamic` | Encode an indexed array by inspecting its packed runtime `value_type` tag at runtime (int, string, float, bool, nested array/hash, mixed, or null fallback) | `x0` = array ptr | `x1`/`x2` = JSON string |
 | `__rt_json_encode_assoc` | Encode an associative array as a JSON object (e.g., `{"key":"val"}`) | `x0` = hash ptr | `x1`/`x2` = JSON string |
 | `__rt_json_encode_mixed` | Encode a boxed mixed payload by unboxing its runtime tag and dispatching to the concrete JSON encoder | `x0` = mixed ptr | `x1`/`x2` = JSON string |
-| `__rt_json_decode` | Decode the current string-only JSON contract — trims outer whitespace, unescapes quoted JSON strings, and otherwise returns a trimmed borrowed JSON slice | `x1`/`x2` = JSON string | `x1`/`x2` = decoded string |
+| `__rt_json_decode` | Decode the current string-only JSON contract — trims outer whitespace, unescapes quoted JSON strings including `\uXXXX` surrogate-aware UTF-8 decoding, and otherwise returns a trimmed borrowed JSON slice | `x1`/`x2` = JSON string | `x1`/`x2` = decoded string |
 
 ### Regex routines
 

@@ -42,7 +42,7 @@ sidebar:
 | `json_decode()` | `json_decode($json): string` | Decode to the current string representation: trims outer JSON whitespace, unescapes quoted JSON strings, and returns other JSON literals/arrays/objects as trimmed strings. |
 | `json_last_error()` | `json_last_error(): int` | Always returns 0 |
 
-> `json_decode()` returns a string representation. It does not parse objects to arrays. Standard one-byte escapes (`\"`, `\\`, `\/`, `\b`, `\f`, `\n`, `\r`, `\t`) are decoded inside quoted JSON strings; `\uXXXX` escapes are currently preserved literally.
+> `json_decode()` returns a string representation. It does not parse objects to arrays. Standard one-byte escapes (`\"`, `\\`, `\/`, `\b`, `\f`, `\n`, `\r`, `\t`) are decoded inside quoted JSON strings, and `\uXXXX` escapes are decoded to UTF-8, including surrogate pairs.
 
 ## Regex
 

@@ -8514,6 +8514,24 @@ fn test_json_decode_escaped_solidus() {
     assert_eq!(out, "https://example.com");
 }
 
+#[test]
+fn test_json_decode_unicode_bmp_latin1() {
+    let out = compile_and_run(r#"<?php echo json_decode("\"caf\u00e9\"");"#);
+    assert_eq!(out, "café");
+}
+
+#[test]
+fn test_json_decode_unicode_bmp_multibyte() {
+    let out = compile_and_run(r#"<?php echo json_decode("\"\u4f60\u597d\"");"#);
+    assert_eq!(out, "你好");
+}
+
+#[test]
+fn test_json_decode_unicode_surrogate_pair() {
+    let out = compile_and_run(r#"<?php $s = json_decode("\"\ud83d\ude00\""); echo strlen($s);"#);
+    assert_eq!(out, "4");
+}
+
 // --- Regex functions ---
 
 #[test]
