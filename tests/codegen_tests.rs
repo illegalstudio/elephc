@@ -8399,6 +8399,12 @@ fn test_json_encode_string_array() {
 }
 
 #[test]
+fn test_json_encode_string_array_with_escaping() {
+    let out = compile_and_run("<?php echo json_encode([\"a\\n\", \"b\\\"\", \"c\\\\\"]);");
+    assert_eq!(out, "[\"a\\n\",\"b\\\"\",\"c\\\\\"]");
+}
+
+#[test]
 fn test_json_encode_single_element_array() {
     let out = compile_and_run("<?php $arr = [42]; echo json_encode($arr);");
     assert_eq!(out, "[42]");

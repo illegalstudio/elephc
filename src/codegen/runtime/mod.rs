@@ -273,6 +273,8 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     system::emit_json_encode_null(emitter);
     system::emit_json_encode_str(emitter);
     system::emit_json_encode_mixed(emitter);
+    system::emit_json_encode_array_int(emitter);
+    system::emit_json_encode_array_str(emitter);
     system::emit_json_encode_array_dynamic(emitter);
     system::emit_json_encode_assoc(emitter);
 }
@@ -331,5 +333,7 @@ mod tests {
         assert!(asm.contains("__rt_mixed_free_deep:\n"));
         assert!(asm.contains("__rt_mixed_unbox:\n"));
         assert!(asm.contains("__rt_mixed_cast_string:\n"));
+        assert!(asm.contains("__rt_json_encode_array_int:\n"));
+        assert!(asm.contains("__rt_json_encode_array_str:\n"));
     }
 }

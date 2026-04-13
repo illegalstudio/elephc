@@ -1,9 +1,15 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 /// __rt_json_encode_array_str: encode a string array as JSON '["a","b"]'.
 /// Input:  x0 = array pointer (header: cap[8], len[8], then pairs of ptr[8]+len[8])
 /// Output: x1 = result ptr (in concat_buf), x2 = result len
 pub(crate) fn emit_json_encode_array_str(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_json_encode_array_str_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: json_encode_array_str ---");
     emitter.label_global("__rt_json_encode_array_str");
@@ -141,4 +147,72 @@ pub(crate) fn emit_json_encode_array_str(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
+}
+
+fn emit_json_encode_array_str_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: json_encode_array_str ---");
+    emitter.label_global("__rt_json_encode_array_str");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving JSON-array scratch space
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the source array and concat-buffer cursors
+    emitter.instruction("sub rsp, 40");                                         // reserve local slots for the array pointer, output pointers, array length, and loop index
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the source string array pointer across nested string-encoding helper calls
+    emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // load the current concat-buffer absolute offset before appending the JSON array
+    emitter.instruction("lea r11, [rip + _concat_buf]");                        // materialize the concat-buffer base pointer for the current JSON append
+    emitter.instruction("add r11, r10");                                        // compute the current concat-buffer write pointer from the base plus offset
+    emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // save the encoded-array start pointer for the final result slice
+    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the current concat-buffer write pointer for the element loop
+    emitter.instruction("mov BYTE PTR [r11], 91");                              // write the opening JSON bracket before any encoded string payloads
+    emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the opening bracket
+    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // persist the updated write pointer before entering the element loop
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the string-array length from the first header field
+    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save the array length across nested string-encoding helper calls
+    emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize the string-array element loop counter to zero
+
+    emitter.label("__rt_json_arr_str_loop");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current string-array element index at the top of the JSON loop
+    emitter.instruction("cmp r10, QWORD PTR [rbp - 32]");                       // have we already encoded every string-array element?
+    emitter.instruction("jae __rt_json_arr_str_close");                         // finish by writing the closing bracket once the loop index reaches the array length
+    emitter.instruction("test r10, r10");                                       // is this the first string-array element in the JSON output?
+    emitter.instruction("jz __rt_json_arr_str_elem");                           // skip the comma separator before the first encoded string element
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the current concat-buffer write pointer before appending a comma separator
+    emitter.instruction("mov BYTE PTR [r11], 44");                              // write the JSON comma separator between encoded string elements
+    emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the comma separator
+    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // persist the updated write pointer after appending the comma separator
+
+    emitter.label("__rt_json_arr_str_elem");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the current concat-buffer write pointer before a nested string encoder appends data
+    emitter.instruction("lea r10, [rip + _concat_buf]");                        // materialize the concat-buffer base pointer for the global offset update
+    emitter.instruction("mov rcx, r11");                                        // copy the current write pointer before turning it into an absolute concat offset
+    emitter.instruction("sub rcx, r10");                                        // compute the concat-buffer absolute offset for the current write position
+    emitter.instruction("mov QWORD PTR [rip + _concat_off], rcx");              // publish the concat-buffer offset so the nested string encoder appends in place
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the current string-array element index before computing the ptr/len pair slots
+    emitter.instruction("add rcx, rcx");                                        // compute index * 2 because string arrays store pointer/length pairs
+    emitter.instruction("add rcx, 3");                                          // skip the 24-byte indexed-array header to land on the first ptr/len slot pair
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source string-array pointer before loading the current ptr/len pair
+    emitter.instruction("mov rax, QWORD PTR [r10 + rcx * 8]");                  // load the string pointer from the indexed-array ptr/len storage pair
+    emitter.instruction("add rcx, 1");                                          // advance from the string pointer slot to the paired string length slot
+    emitter.instruction("mov rdx, QWORD PTR [r10 + rcx * 8]");                  // load the string length from the indexed-array ptr/len storage pair
+    emitter.instruction("call __rt_json_encode_str");                           // encode the string element with the shared JSON string helper directly into concat_buf
+    emitter.instruction("mov r11, rax");                                        // reload the encoded string start pointer returned by the nested string encoder
+    emitter.instruction("add r11, rdx");                                        // advance to the concat-buffer write position immediately after the encoded string element
+    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // persist the updated write pointer after appending the encoded string element
+    emitter.instruction("add QWORD PTR [rbp - 40], 1");                         // advance the string-array element loop counter to the next ptr/len pair
+    emitter.instruction("jmp __rt_json_arr_str_loop");                          // continue encoding the remaining string-array elements
+
+    emitter.label("__rt_json_arr_str_close");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the concat-buffer write pointer after the final encoded string element
+    emitter.instruction("mov BYTE PTR [r11], 93");                              // append the closing JSON bracket to complete the encoded string array slice
+    emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the closing bracket
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the encoded-array start pointer in the leading x86_64 string result register
+    emitter.instruction("mov rdx, r11");                                        // copy the final concat-buffer write pointer before turning it into a slice length
+    emitter.instruction("sub rdx, rax");                                        // compute the final encoded-array length from write_end - write_start
+    emitter.instruction("lea r10, [rip + _concat_buf]");                        // materialize the concat-buffer base pointer for the global offset update
+    emitter.instruction("mov rcx, r11");                                        // copy the final concat-buffer write pointer before converting it into an absolute offset
+    emitter.instruction("sub rcx, r10");                                        // compute the new absolute concat-buffer offset after the encoded JSON array
+    emitter.instruction("mov QWORD PTR [rip + _concat_off], rcx");              // publish the updated concat-buffer offset so later writers append after this JSON array
+    emitter.instruction("add rsp, 40");                                         // release the local JSON-array scratch frame before returning to generated code
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
+    emitter.instruction("ret");                                                 // return the encoded JSON string array slice in the x86_64 string result registers
 }

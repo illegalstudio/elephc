@@ -3,7 +3,6 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
-use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -40,22 +39,18 @@ pub fn emit(
             abi::emit_call_label(emitter, "__rt_json_encode_null");             // produce the JSON null literal using the active target ABI
         }
         PhpType::Array(ref elem_ty) => {
-            if emitter.target.arch == Arch::X86_64 {
-                abi::emit_call_label(emitter, "__rt_json_encode_array_dynamic"); // route every x86_64 array JSON encoding through the dynamic helper until the specialized helpers are ported
-            } else {
-                match elem_ty.as_ref() {
-                    PhpType::Int => {
-                        // x0 = array pointer
-                        abi::emit_call_label(emitter, "__rt_json_encode_array_int"); // encode an integer array to JSON using the active target ABI
-                    }
-                    PhpType::Str => {
-                        // x0 = array pointer
-                        abi::emit_call_label(emitter, "__rt_json_encode_array_str"); // encode a string array to JSON using the active target ABI
-                    }
-                    _ => {
-                        // Fallback: inspect the packed runtime value_type tag per array
-                        abi::emit_call_label(emitter, "__rt_json_encode_array_dynamic"); // encode the array to JSON by inspecting its runtime value_type tag
-                    }
+            match elem_ty.as_ref() {
+                PhpType::Int => {
+                    // x0 = array pointer
+                    abi::emit_call_label(emitter, "__rt_json_encode_array_int"); // encode an integer array to JSON using the active target ABI
+                }
+                PhpType::Str => {
+                    // x0 = array pointer
+                    abi::emit_call_label(emitter, "__rt_json_encode_array_str"); // encode a string array to JSON using the active target ABI
+                }
+                _ => {
+                    // Fallback: inspect the packed runtime value_type tag per array
+                    abi::emit_call_label(emitter, "__rt_json_encode_array_dynamic"); // encode the array to JSON by inspecting its runtime value_type tag
                 }
             }
         }
