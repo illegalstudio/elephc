@@ -1,9 +1,15 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 /// array_diff_key: return entries from hash1 whose keys are NOT in hash2.
 /// Input:  x0=hash1, x1=hash2
 /// Output: x0=new hash table with entries from hash1 not found in hash2
 pub fn emit_array_diff_key(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_array_diff_key_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: array_diff_key ---");
     emitter.label_global("__rt_array_diff_key");
@@ -94,4 +100,68 @@ pub fn emit_array_diff_key(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return with x0 = result hash table
+}
+
+fn emit_array_diff_key_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: array_diff_key ---");
+    emitter.label_global("__rt_array_diff_key");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving diff-key state slots
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved hash pointers and iterator cursor
+    emitter.instruction("sub rsp, 80");                                         // reserve local storage for hash1, hash2, result, iterator cursor, and a non-overlapping temporary entry scratch area
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the source associative-array pointer across the diff-key helper calls
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the mask associative-array pointer across the diff-key helper calls
+    emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // load the source associative-array capacity to seed the filtered result hash table
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source associative-array pointer for the packed value-type load
+    emitter.instruction("mov rsi, QWORD PTR [r10 + 16]");                       // load the source associative-array value_type for the filtered result hash table
+    emitter.instruction("call __rt_hash_new");                                  // allocate the filtered result associative-array with matching capacity and value_type
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the filtered result associative-array pointer across iteration
+    emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize the insertion-order iterator cursor to the hash-header head sentinel
+
+    emitter.label("__rt_array_diff_key_loop");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the source associative-array pointer for the next insertion-order iteration step
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // reload the current insertion-order iterator cursor
+    emitter.instruction("call __rt_hash_iter_next");                            // advance one associative-array insertion-order entry and return its key plus payload
+    emitter.instruction("cmp rax, -1");                                         // has associative-array iteration reached the done sentinel?
+    emitter.instruction("je __rt_array_diff_key_done");                         // finish once every source associative-array entry has been visited
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the updated insertion-order iterator cursor for the next loop step
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save the current associative-array entry key pointer for mask probing and possible copy
+    emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save the current associative-array entry key length for mask probing and possible copy
+    emitter.instruction("mov QWORD PTR [rbp - 56], rcx");                       // save the current associative-array entry low payload word for possible copy into the result
+    emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // save the current associative-array entry high payload word in the temporary scratch area
+    emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // save the current associative-array entry runtime tag in the temporary scratch area
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // load the mask associative-array pointer for key existence probing
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // pass the current associative-array entry key pointer to the hash-get helper
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // pass the current associative-array entry key length to the hash-get helper
+    emitter.instruction("call __rt_hash_get");                                  // probe whether the current source key already exists in the mask associative-array
+    emitter.instruction("test rax, rax");                                       // did the mask associative-array contain the current source key?
+    emitter.instruction("jnz __rt_array_diff_key_loop");                        // skip copying keys that are present in the mask associative-array
+    emitter.instruction("mov r10, QWORD PTR [rbp - 72]");                       // reload the saved runtime value tag for the source associative-array entry
+    emitter.instruction("cmp r10, 1");                                          // is the copied associative-array value a string?
+    emitter.instruction("je __rt_array_diff_key_retain");                       // strings need a retain because the filtered result becomes a new owner
+    emitter.instruction("cmp r10, 4");                                          // is the copied associative-array value heap-backed?
+    emitter.instruction("jl __rt_array_diff_key_copy");                         // scalar payloads can be copied directly into the filtered result
+    emitter.instruction("cmp r10, 7");                                          // do heap-backed associative-array value tags stay within the supported retainable range?
+    emitter.instruction("jg __rt_array_diff_key_copy");                         // unsupported tags fall back to raw copy without an extra retain
+    emitter.label("__rt_array_diff_key_retain");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // move the copied associative-array heap pointer into the incref helper input register
+    emitter.instruction("call __rt_incref");                                    // retain the copied associative-array heap payload for the filtered result hash table
+
+    emitter.label("__rt_array_diff_key_copy");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // load the filtered result associative-array pointer for insertion
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // reload the copied associative-array key pointer for filtered insertion
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // reload the copied associative-array key length for filtered insertion
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the copied associative-array low payload word for filtered insertion
+    emitter.instruction("mov r8, QWORD PTR [rbp - 64]");                        // reload the copied associative-array high payload word for filtered insertion
+    emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // reload the copied associative-array runtime tag for filtered insertion
+    emitter.instruction("call __rt_hash_set");                                  // insert the copied associative-array entry into the filtered result hash table
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the possibly-grown filtered result associative-array pointer
+    emitter.instruction("jmp __rt_array_diff_key_loop");                        // continue scanning the remaining source associative-array entries
+
+    emitter.label("__rt_array_diff_key_done");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the filtered associative-array pointer in the standard integer result register
+    emitter.instruction("add rsp, 80");                                         // release the diff-key helper local storage before returning
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning from the diff-key helper
+    emitter.instruction("ret");                                                 // return the filtered associative-array pointer to generated code
 }

@@ -257,6 +257,8 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_decref_array(emitter);
     arrays::emit_array_key_exists(emitter);
     arrays::emit_array_search(emitter);
+    arrays::emit_array_diff_key(emitter);
+    arrays::emit_array_intersect_key(emitter);
     arrays::emit_decref_hash(emitter);
     arrays::emit_hash_free_deep(emitter);
     system::emit_build_argv(emitter);

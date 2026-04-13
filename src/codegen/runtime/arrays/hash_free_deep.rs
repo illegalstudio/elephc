@@ -168,8 +168,10 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rcx, r11");                                        // advance from the hash-table base pointer back to the selected entry block
     emitter.instruction("add rcx, 40");                                         // skip the fixed 40-byte hash header to land on the selected entry again
     emitter.instruction("mov r8, QWORD PTR [rcx + 40]");                        // load the runtime value tag to decide whether the entry payload owns heap storage
-    emitter.instruction("cmp r8, 1");                                           // detect string entry payloads that own a persisted string allocation
-    emitter.instruction("je __rt_hash_free_deep_value_string");                 // release persisted string values through the safe heap-free helper
+    emitter.instruction("cmp r8, 1");                                           // detect string entry payloads that may now be shared across multiple hash owners
+    emitter.instruction("je __rt_hash_free_deep_value_string");                 // release persisted string values through refcount-aware teardown rather than raw free
+    emitter.instruction("cmp r8, 4");                                           // detect nested indexed-array payloads copied into associative-array entries
+    emitter.instruction("je __rt_hash_free_deep_value_array");                  // release nested indexed-array payloads through array decref
     emitter.instruction("cmp r8, 5");                                           // detect nested associative-array payloads in the current bootstrap subset
     emitter.instruction("je __rt_hash_free_deep_value_hash");                   // release nested associative-array payloads through hash decref
     emitter.instruction("cmp r8, 7");                                           // detect boxed mixed payloads in the current bootstrap subset
@@ -178,7 +180,22 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_hash_free_deep_value_string");
     emitter.instruction("mov rax, QWORD PTR [rcx + 24]");                       // load the persisted string pointer stored in the current hash-entry payload
-    emitter.instruction("call __rt_heap_free_safe");                            // release the persisted string payload owned by the current hash entry
+    emitter.instruction("test rax, rax");                                       // skip missing string payloads defensively even though live string entries should own one
+    emitter.instruction("jz __rt_hash_free_deep_next");                         // nothing to release when the string payload pointer is unexpectedly null
+    emitter.instruction("mov r9, QWORD PTR [rax - 8]");                         // load the string heap kind word so foreign pointers are ignored safely
+    emitter.instruction("shr r9, 32");                                          // isolate the high-word heap marker used by the x86_64 heap wrapper
+    emitter.instruction(&format!("cmp r9d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));   // only elephc-owned persisted string payloads participate in x86_64 refcount teardown
+    emitter.instruction("jne __rt_hash_free_deep_next");                        // skip foreign string pointers rather than mutating a missing heap header
+    emitter.instruction("mov r9d, DWORD PTR [rax - 12]");                       // load the persisted string refcount from the uniform heap header
+    emitter.instruction("sub r9d, 1");                                          // decrement the string refcount because this hash table is releasing its ownership
+    emitter.instruction("mov DWORD PTR [rax - 12], r9d");                       // store the decremented string refcount back into the uniform heap header
+    emitter.instruction("jnz __rt_hash_free_deep_next");                        // keep shared string payloads alive when another owner still holds a reference
+    emitter.instruction("call __rt_heap_free");                                 // free the persisted string payload once the last owner releases it
+    emitter.instruction("jmp __rt_hash_free_deep_next");                        // continue scanning entries after releasing the current string payload
+
+    emitter.label("__rt_hash_free_deep_value_array");
+    emitter.instruction("mov rax, QWORD PTR [rcx + 24]");                       // load the nested indexed-array pointer stored in the current hash-entry payload
+    emitter.instruction("call __rt_decref_array");                              // release the nested indexed-array payload through the x86_64 array decref helper
     emitter.instruction("jmp __rt_hash_free_deep_next");                        // continue scanning entries after releasing the current string payload
 
     emitter.label("__rt_hash_free_deep_value_hash");
