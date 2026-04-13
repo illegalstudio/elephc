@@ -40,4 +40,6 @@ pub use values::{
     emit_decref_if_refcounted, emit_float_result_to_int_result, emit_incref_if_refcounted,
     emit_int_result_to_float_result, emit_jump, emit_load, emit_store, emit_write_stdout,
 };
-pub(crate) use registers::{float_result_reg, int_result_reg, string_result_regs, symbol_scratch_reg};
+pub(crate) use registers::{
+    float_result_reg, int_arg_reg_name, int_result_reg, string_result_regs, symbol_scratch_reg,
+};

@@ -244,7 +244,12 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     strings::emit_ftoa(emitter);
     strings::emit_concat(emitter);
     strings::emit_str_persist(emitter);
+    strings::emit_str_eq(emitter);
     arrays::emit_array_new(emitter);
+    arrays::emit_array_map(emitter);
+    arrays::emit_hash_fnv1a(emitter);
+    arrays::emit_hash_new(emitter);
+    arrays::emit_hash_set(emitter);
     system::emit_build_argv(emitter);
     arrays::emit_incref(emitter);
     arrays::emit_mixed_from_value(emitter);
@@ -288,7 +293,12 @@ mod tests {
         assert!(asm.contains("__rt_ftoa:\n"));
         assert!(asm.contains("__rt_concat:\n"));
         assert!(asm.contains("__rt_str_persist:\n"));
+        assert!(asm.contains("__rt_str_eq:\n"));
         assert!(asm.contains("__rt_array_new:\n"));
+        assert!(asm.contains("__rt_array_map:\n"));
+        assert!(asm.contains("__rt_hash_fnv1a:\n"));
+        assert!(asm.contains("__rt_hash_new:\n"));
+        assert!(asm.contains("__rt_hash_set:\n"));
         assert!(asm.contains("__rt_build_argv:\n"));
         assert!(asm.contains("__rt_incref:\n"));
         assert!(asm.contains("__rt_mixed_from_value:\n"));

@@ -2,6 +2,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::functions;
+use crate::codegen::abi;
 use crate::names::{enum_case_symbol, method_symbol, static_method_symbol};
 use crate::parser::ast::{Expr, StaticReceiver, Visibility};
 use crate::types::{EnumCaseValue, FunctionSig, PhpType};
@@ -227,16 +228,21 @@ pub(super) fn emit_method_call(
 }
 
 pub(super) fn emit_immediate_class_id(emitter: &mut Emitter, class_id: u64) {
-    emitter.instruction(&format!("mov x0, #{}", class_id));                     // load compile-time class id for static dispatch
+    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), class_id as i64);
 }
 
 pub(super) fn emit_forwarded_called_class_id(emitter: &mut Emitter, ctx: &Context) -> bool {
     if let Some(var) = ctx.variables.get("__elephc_called_class_id") {
-        crate::codegen::abi::load_at_offset(emitter, "x0", var.stack_offset);       // forward hidden called-class id from current static method
+        abi::load_at_offset(emitter, abi::int_result_reg(emitter), var.stack_offset); // forward the hidden called-class id from the current static method frame
         true
     } else if let Some(var) = ctx.variables.get("this") {
-        crate::codegen::abi::load_at_offset(emitter, "x0", var.stack_offset);       // load implicit $this pointer
-        emitter.instruction("ldr x0, [x0]");                                    // read dynamic class id from object header
+        abi::load_at_offset(emitter, abi::int_result_reg(emitter), var.stack_offset); // load the implicit $this pointer for dynamic static dispatch
+        abi::emit_load_from_address(
+            emitter,
+            abi::int_result_reg(emitter),
+            abi::int_result_reg(emitter),
+            0,
+        );
         true
     } else {
         false
@@ -381,6 +387,10 @@ pub(super) fn emit_static_method_call(
     let first_int_reg = (if needs_called_class_id { 1 } else { 0 })
         + (if needs_this { 1 } else { 0 });
     let assignments = compute_register_assignments(emitter, &arg_types, first_int_reg);
+    let hidden_called_class_reg = abi::int_arg_reg_name(emitter.target, 0);
+    let hidden_this_reg = abi::int_arg_reg_name(emitter.target, if needs_called_class_id { 1 } else { 0 });
+    let class_id_scratch = abi::temp_int_reg(emitter.target);
+    let dispatch_scratch = abi::symbol_scratch_reg(emitter);
 
     if needs_called_class_id {
         if forwarded_call {
@@ -394,7 +404,7 @@ pub(super) fn emit_static_method_call(
             emitter.comment(&format!("WARNING: undefined class {}", class_name));
             return PhpType::Int;
         }
-        emitter.instruction("str x0, [sp, #-16]!");                             // push hidden called-class id
+        abi::emit_push_reg(emitter, abi::int_result_reg(emitter));              // push the hidden called-class id before loading the visible arguments
     }
 
     if needs_this {
@@ -405,36 +415,41 @@ pub(super) fn emit_static_method_call(
                 return PhpType::Int;
             }
         };
-        crate::codegen::abi::load_at_offset(emitter, "x0", this_var.stack_offset);  // load implicit $this for scoped instance call
-        emitter.instruction("str x0, [sp, #-16]!");                             // push implicit receiver
+        abi::load_at_offset(emitter, abi::int_result_reg(emitter), this_var.stack_offset); // load the implicit scoped-call receiver into the integer result register
+        abi::emit_push_reg(emitter, abi::int_result_reg(emitter));              // push the implicit receiver before visible argument materialization
     }
 
     if needs_called_class_id {
-        emitter.instruction("ldr x0, [sp], #16");                               // pop hidden called-class id into x0
+        abi::emit_pop_reg(emitter, hidden_called_class_reg);                    // pop the hidden called-class id into its outgoing ABI register
     }
     if needs_this {
-        let this_reg = if needs_called_class_id { 1 } else { 0 };
-        emitter.instruction(&format!("ldr x{}, [sp], #16", this_reg));          // pop implicit $this into its assigned integer register
+        abi::emit_pop_reg(emitter, hidden_this_reg);                            // pop the implicit receiver into its outgoing ABI register
     }
     let overflow_bytes = pop_args_to_registers(emitter, &assignments);
 
     save_concat_offset_before_nested_call(emitter);
     if dynamic_static_dispatch {
         let slot = static_slot.expect("codegen bug: dynamic static dispatch without slot");
-        emitter.instruction("mov x10, x0");                                     // preserve forwarded called-class id for static-vtable lookup
-        emitter.adrp("x11", "_class_static_vtable_ptrs");        // load static-vtable pointer table page
-        emitter.add_lo12("x11", "x11", "_class_static_vtable_ptrs"); // add static-vtable pointer table offset
-        emitter.instruction("ldr x11, [x11, x10, lsl #3]");                     // load class-specific static-vtable pointer
-        emitter.instruction(&format!("ldr x11, [x11, #{}]", slot * 8));         // load static method entry from static-vtable slot
-        emitter.instruction("blr x11");                                         // call late-bound static method implementation
+        emitter.instruction(&format!("mov {}, {}", class_id_scratch, hidden_called_class_reg)); // preserve the forwarded called-class id across static-vtable address materialization
+        abi::emit_symbol_address(emitter, dispatch_scratch, "_class_static_vtable_ptrs");
+        match emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => {
+                emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", dispatch_scratch, dispatch_scratch, class_id_scratch)); // load the class-specific static-vtable pointer from the global table
+            }
+            crate::codegen::platform::Arch::X86_64 => {
+                emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", dispatch_scratch, dispatch_scratch, class_id_scratch)); // load the class-specific static-vtable pointer from the global table
+            }
+        }
+        abi::emit_load_from_address(emitter, dispatch_scratch, dispatch_scratch, slot * 8); // load the selected static method entry from the class-specific vtable
+        abi::emit_call_reg(emitter, dispatch_scratch);                          // call the late-bound static method implementation
     } else if let Some(label) = direct_static_private_label {
-        emitter.instruction(&format!("bl {}", label));                          // call direct private static helper
+        abi::emit_call_label(emitter, &label);                                  // call the direct private static helper
     } else {
-        emitter.instruction(&format!("bl {}", label));                          // call resolved static or parent/self target
+        abi::emit_call_label(emitter, &label);                                  // call the resolved static or parent/self method target
     }
     restore_concat_offset_after_nested_call(emitter, &ret_ty);
     if overflow_bytes > 0 {
-        emitter.instruction(&format!("add sp, sp, #{}", overflow_bytes));       // drop spilled stack arguments after the static call returns
+        abi::emit_release_temporary_stack(emitter, overflow_bytes);             // drop spilled stack arguments after the static call returns
     }
 
     ret_ty

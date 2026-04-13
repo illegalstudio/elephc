@@ -1,9 +1,15 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 /// array_map: apply a callback to each element of an integer array, returning a new array.
 /// Input: x0 = callback function address, x1 = source array pointer
 /// Output: x0 = pointer to new array with transformed elements
 pub fn emit_array_map(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_array_map_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: array_map ---");
     emitter.label_global("__rt_array_map");
@@ -62,4 +68,46 @@ pub fn emit_array_map(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return with x0 = new mapped array
+}
+
+fn emit_array_map_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: array_map ---");
+    emitter.label_global("__rt_array_map");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving array-map spill slots
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the callback, source array, and destination array slots
+    emitter.instruction("push r12");                                            // preserve the callback scratch register because the runtime uses it across every callback invocation
+    emitter.instruction("push r13");                                            // preserve the loop-index scratch register because the runtime keeps it live across callback calls
+    emitter.instruction("sub rsp, 24");                                         // reserve local slots for the source array pointer, source length, and destination array pointer
+    emitter.instruction("mov r12, rdi");                                        // keep the callback address in a callee-saved register across the mapping loop
+    emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save the source array pointer so the loop can reload it after callback calls
+    emitter.instruction("mov r10, QWORD PTR [rsi]");                            // load the source array length from the first field of the array header
+    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save the source array length across the destination-array allocation call
+    emitter.instruction("mov rdi, r10");                                        // pass the source array length as the destination capacity to __rt_array_new
+    emitter.instruction("mov rsi, 8");                                          // request 8-byte element slots for the integer-returning array_map runtime
+    emitter.instruction("call __rt_array_new");                                 // allocate the destination array with the same logical capacity as the source array
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the destination array pointer for the loop body and final return path
+    emitter.instruction("xor r13d, r13d");                                      // start the mapping loop at logical index zero
+
+    emitter.label("__rt_array_map_loop");
+    emitter.instruction("cmp r13, QWORD PTR [rbp - 32]");                       // stop once the loop index reaches the saved source array length
+    emitter.instruction("jge __rt_array_map_done");                             // exit the mapping loop when every source element has been transformed
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the source array pointer after the previous callback invocation
+    emitter.instruction("mov rdi, QWORD PTR [r10 + r13 * 8 + 24]");             // load the current source element into the first SysV integer argument register
+    emitter.instruction("call r12");                                            // invoke the user callback with the current element and read the transformed value from rax
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the destination array pointer after the callback clobbered caller-saved registers
+    emitter.instruction("mov QWORD PTR [r10 + r13 * 8 + 24], rax");             // store the transformed value into the matching destination-array element slot
+    emitter.instruction("add r13, 1");                                          // advance the loop index after storing the transformed destination element
+    emitter.instruction("jmp __rt_array_map_loop");                             // continue mapping until the source array has been fully consumed
+
+    emitter.label("__rt_array_map_done");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the destination array pointer for final length publication and return
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the saved source length so the destination logical length matches the mapped input size
+    emitter.instruction("mov QWORD PTR [rax], r10");                            // publish the mapped destination length in the destination array header
+    emitter.instruction("add rsp, 24");                                         // release the local source/destination bookkeeping slots before restoring callee-saved registers
+    emitter.instruction("pop r13");                                             // restore the caller's loop-index callee-saved register
+    emitter.instruction("pop r12");                                             // restore the caller's callback scratch callee-saved register
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the mapped array pointer
+    emitter.instruction("ret");                                                 // return the mapped destination array pointer in rax
 }
