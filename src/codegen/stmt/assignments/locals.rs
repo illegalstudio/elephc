@@ -43,6 +43,8 @@ pub(crate) fn emit_assign_stmt(
         };
         let offset = var.stack_offset;
         let old_ty = var.ty.clone();
+        let pointer_reg = abi::symbol_scratch_reg(emitter);
+        let saved_result_reg = abi::temp_int_reg(emitter.target);
         let ref_needs_mixed_box =
             matches!(old_ty, PhpType::Mixed) && !matches!(ty, PhpType::Mixed | PhpType::Union(_));
         if ref_needs_mixed_box {
@@ -52,38 +54,47 @@ pub(crate) fn emit_assign_stmt(
             super::super::helpers::retain_borrowed_heap_result(emitter, value, &ty);
         }
         emitter.comment(&format!("write through ref ${}", name));
-        abi::load_at_offset(emitter, "x9", offset);                                  // load pointer to referenced variable
+        abi::load_at_offset(emitter, pointer_reg, offset);                            // load pointer to referenced variable
         if old_ty.is_refcounted() {
-            emitter.instruction("str x9, [sp, #-16]!");                              // preserve the referenced-slot address across decref helper calls
+            abi::emit_push_reg(emitter, pointer_reg);                                 // preserve the referenced-slot address across decref helper calls
             let needs_save_x0 = !matches!(&ty, PhpType::Str | PhpType::Float);
             if needs_save_x0 {
-                emitter.instruction("mov x8, x0");                                   // preserve incoming heap value across decref
+                emitter.instruction(&format!(
+                    "mov {}, {}",
+                    saved_result_reg,
+                    abi::int_result_reg(emitter)
+                ));                                                                  // preserve incoming heap value across decref
             }
-            emitter.instruction("ldr x0, [x9]");                                     // load previous heap pointer from ref target
+            abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), pointer_reg, 0); // load previous heap pointer from ref target
             abi::emit_decref_if_refcounted(emitter, &old_ty);
-            emitter.instruction("ldr x9, [sp], #16");                                // restore the referenced-slot address after decref helper calls
+            abi::emit_pop_reg(emitter, pointer_reg);                                  // restore the referenced-slot address after decref helper calls
             if needs_save_x0 {
-                emitter.instruction("mov x0, x8");                                   // restore incoming value after decref
+                emitter.instruction(&format!(
+                    "mov {}, {}",
+                    abi::int_result_reg(emitter),
+                    saved_result_reg
+                ));                                                                  // restore incoming value after decref
             }
         }
         match &ty {
             PhpType::Bool | PhpType::Int => {
-                emitter.instruction("str x0, [x9]");                                 // store int/bool through reference pointer
+                abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), pointer_reg, 0); // store int/bool through reference pointer
             }
             PhpType::Float => {
-                emitter.instruction("str d0, [x9]");                                 // store float through reference pointer
+                abi::emit_store_to_address(emitter, abi::float_result_reg(emitter), pointer_reg, 0); // store float through reference pointer
             }
             PhpType::Str => {
-                emitter.instruction("str x9, [sp, #-16]!");                          // save ref pointer (str_persist clobbers x9)
-                emitter.instruction("ldr x0, [x9]");                                 // load old string ptr from ref target
-                emitter.instruction("bl __rt_heap_free_safe");                       // free old string if on heap
-                emitter.instruction("bl __rt_str_persist");                          // persist new string to heap
-                emitter.instruction("ldr x9, [sp], #16");                            // restore ref pointer
-                emitter.instruction("str x1, [x9]");                                 // store heap string pointer through ref
-                emitter.instruction("str x2, [x9, #8]");                             // store string length through ref
+                abi::emit_push_reg(emitter, pointer_reg);                             // preserve the referenced-slot address across string persistence
+                abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), pointer_reg, 0); // load old string ptr from ref target
+                abi::emit_call_label(emitter, "__rt_heap_free_safe");                // free old string if on heap
+                abi::emit_call_label(emitter, "__rt_str_persist");                   // persist new string to heap
+                abi::emit_pop_reg(emitter, pointer_reg);                              // restore the referenced-slot address after string persistence
+                let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+                abi::emit_store_to_address(emitter, ptr_reg, pointer_reg, 0);         // store heap string pointer through ref
+                abi::emit_store_to_address(emitter, len_reg, pointer_reg, 8);         // store string length through ref
             }
             _ => {
-                emitter.instruction("str x0, [x9]");                                 // store value through reference pointer
+                abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), pointer_reg, 0); // store value through reference pointer
             }
         }
     } else {
