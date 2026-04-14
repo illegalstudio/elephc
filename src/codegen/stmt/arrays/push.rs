@@ -156,9 +156,9 @@ fn emit_array_push_stmt_linux_x86_64(
             abi::emit_call_label(emitter, "__rt_array_push_int");                 // append the callable pointer bits as a plain scalar slot
         }
         PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
-            emitter.instruction("mov x1, x0");                                    // leave the ARM64-only refcounted append path untouched until the dedicated runtime slice lands
-            emitter.instruction("mov x0, x9");                                    // leave the ARM64-only refcounted append path untouched until the dedicated runtime slice lands
-            emitter.instruction("bl __rt_array_push_refcounted");                 // append retained pointer and stamp array metadata
+            emitter.instruction("mov rsi, rax");                                  // place the retained refcounted payload pointer in the x86_64 runtime child register
+            emitter.instruction("mov rdi, r11");                                  // place the indexed-array pointer in the x86_64 runtime receiver register
+            abi::emit_call_label(emitter, "__rt_array_push_refcounted");          // append the retained heap payload and stamp the indexed-array value_type metadata
         }
         _ => {}
     }

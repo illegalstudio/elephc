@@ -148,6 +148,10 @@ pub(super) fn emit_array_literal_with_spread(
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> PhpType {
+    if emitter.target.arch == Arch::X86_64 {
+        return emit_array_literal_with_spread_linux_x86_64(elems, emitter, ctx, data);
+    }
+
     emitter.comment("array literal with spread");
     emitter.instruction("mov x0, #16");                                         // initial capacity: 16 elements
     emitter.instruction("mov x1, #8");                                          // element size: 8 bytes (int-sized)
@@ -210,6 +214,83 @@ pub(super) fn emit_array_literal_with_spread(
     }
 
     emitter.instruction("ldr x0, [sp], #16");                                   // pop dest array pointer from stack into x0
+    PhpType::Array(Box::new(actual_elem_ty))
+}
+
+fn emit_array_literal_with_spread_linux_x86_64(
+    elems: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    emitter.comment("array literal with spread");
+    emitter.instruction("mov rdi, 16");                                         // seed the destination indexed array with the same fixed initial capacity used by the ARM64 spread helper
+    emitter.instruction("mov rsi, 8");                                          // use 8-byte slots because this helper still constructs scalar or pointer packed indexed arrays
+    abi::emit_call_label(emitter, "__rt_array_new");                            // allocate the destination indexed array through the x86_64 runtime constructor
+    abi::emit_push_reg(emitter, "rax");                                         // preserve the destination indexed-array pointer on the stack while evaluating spread sources and explicit elements
+
+    let mut actual_elem_ty = PhpType::Int;
+
+    for (i, elem) in elems.iter().enumerate() {
+        if let ExprKind::Spread(inner) = &elem.kind {
+            emitter.comment("spread array into dest");
+            let src_ty = emit_expr(inner, emitter, ctx, data);
+            if (i == 0 || actual_elem_ty == PhpType::Int)
+                && matches!(&src_ty, PhpType::Array(_))
+            {
+                if let PhpType::Array(inner) = &src_ty {
+                    actual_elem_ty = inner.as_ref().clone();
+                }
+            }
+            emitter.instruction("mov rsi, rax");                                // place the source indexed-array pointer in the x86_64 merge helper source register
+            emitter.instruction("mov rdi, QWORD PTR [rsp]");                    // reload the destination indexed-array pointer from the stack without disturbing the literal construction state
+            if matches!(&src_ty, PhpType::Array(inner) if inner.is_refcounted()) {
+                abi::emit_call_label(emitter, "__rt_array_merge_into_refcounted"); // append retained child pointers from the source indexed array into the destination
+            } else {
+                abi::emit_call_label(emitter, "__rt_array_merge_into");         // append plain scalar payloads from the source indexed array into the destination
+            }
+            emitter.instruction("mov QWORD PTR [rsp], rax");                    // persist the possibly-grown destination indexed-array pointer after the spread merge
+        } else {
+            let ty = emit_expr(elem, emitter, ctx, data);
+            if i == 0 || actual_elem_ty == PhpType::Int {
+                actual_elem_ty = ty.clone();
+            }
+            retain_borrowed_heap_arg(emitter, elem, &ty);
+            emitter.instruction("mov r11, QWORD PTR [rsp]");                    // reload the destination indexed-array pointer from the stack without popping it
+            match &ty {
+                PhpType::Int | PhpType::Bool => {
+                    emitter.instruction("mov rsi, rax");                        // place the scalar payload in the x86_64 append helper value register
+                    emitter.instruction("mov rdi, r11");                        // place the destination indexed-array pointer in the x86_64 append helper receiver register
+                    abi::emit_call_label(emitter, "__rt_array_push_int");       // append the scalar payload into the destination indexed array
+                    emitter.instruction("mov QWORD PTR [rsp], rax");            // persist the possibly-grown destination indexed-array pointer after the append
+                }
+                PhpType::Float => {
+                    emitter.instruction("movq rsi, xmm0");                      // move the floating-point payload bits into the scalar append helper value register
+                    emitter.instruction("mov rdi, r11");                        // place the destination indexed-array pointer in the x86_64 append helper receiver register
+                    abi::emit_call_label(emitter, "__rt_array_push_int");       // append the floating-point payload bits as an 8-byte scalar slot
+                    emitter.instruction("mov QWORD PTR [rsp], rax");            // persist the possibly-grown destination indexed-array pointer after the append
+                }
+                PhpType::Str => {
+                    emitter.instruction("mov rsi, rax");                        // place the string pointer in the x86_64 string append helper payload register
+                    emitter.instruction("mov rdi, r11");                        // place the destination indexed-array pointer in the x86_64 string append helper receiver register
+                    abi::emit_call_label(emitter, "__rt_array_push_str");       // persist and append the string payload into the destination indexed array
+                    emitter.instruction("mov QWORD PTR [rsp], rax");            // persist the possibly-grown destination indexed-array pointer after the append
+                }
+                _ => {
+                    emitter.instruction("mov rsi, rax");                        // place the payload pointer or scalar bits in the shared x86_64 append helper value register
+                    emitter.instruction("mov rdi, r11");                        // place the destination indexed-array pointer in the shared x86_64 append helper receiver register
+                    if ty.is_refcounted() {
+                        abi::emit_call_label(emitter, "__rt_array_push_refcounted"); // append the retained refcounted payload and stamp the indexed-array value_type metadata
+                    } else {
+                        abi::emit_call_label(emitter, "__rt_array_push_int");   // append the payload bits through the scalar append helper
+                    }
+                    emitter.instruction("mov QWORD PTR [rsp], rax");            // persist the possibly-grown destination indexed-array pointer after the append
+                }
+            }
+        }
+    }
+
+    abi::emit_pop_reg(emitter, "rax");                                          // pop the completed destination indexed-array pointer into the standard x86_64 expression result register
     PhpType::Array(Box::new(actual_elem_ty))
 }
 
