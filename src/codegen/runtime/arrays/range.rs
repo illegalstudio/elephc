@@ -1,10 +1,16 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 /// range: create an integer array from start to end (inclusive).
 /// Input: x0 = start, x1 = end
 /// Output: x0 = pointer to new array containing values from start to end
 /// Supports both ascending (start <= end) and descending (start > end) ranges.
 pub fn emit_range(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_range_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: range ---");
     emitter.label_global("__rt_range");
@@ -66,4 +72,54 @@ pub fn emit_range(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return with x0 = array [start..end]
+}
+
+fn emit_range_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: range ---");
+    emitter.label_global("__rt_range");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving range-construction spill slots
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for start, end, count, step, and destination array bookkeeping
+    emitter.instruction("sub rsp, 40");                                         // reserve aligned spill slots for range-construction bookkeeping while keeping nested calls 16-byte aligned
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the inclusive range start value across count calculation and destination-array allocation
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the inclusive range end value across count calculation and destination-array allocation
+    emitter.instruction("cmp rdi, rsi");                                        // compare the inclusive range start and end values to choose the traversal direction
+    emitter.instruction("jg __rt_range_descending_x86");                        // switch to the descending range path when the start value is greater than the end value
+    emitter.instruction("mov rax, rsi");                                        // copy the inclusive range end value before subtracting the start value to derive the element count
+    emitter.instruction("sub rax, rdi");                                        // compute end - start for the ascending integer range
+    emitter.instruction("add rax, 1");                                          // convert the inclusive ascending difference into the final element count
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the computed ascending element count across destination-array allocation
+    emitter.instruction("mov QWORD PTR [rbp - 32], 1");                         // preserve the ascending traversal step so the fill loop can advance by +1
+    emitter.instruction("jmp __rt_range_alloc_x86");                            // jump to the shared destination-array allocation path after preparing the ascending count and step
+    emitter.label("__rt_range_descending_x86");
+    emitter.instruction("mov rax, rdi");                                        // copy the inclusive range start value before subtracting the end value to derive the element count
+    emitter.instruction("sub rax, rsi");                                        // compute start - end for the descending integer range
+    emitter.instruction("add rax, 1");                                          // convert the inclusive descending difference into the final element count
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the computed descending element count across destination-array allocation
+    emitter.instruction("mov QWORD PTR [rbp - 32], -1");                        // preserve the descending traversal step so the fill loop can advance by -1
+    emitter.label("__rt_range_alloc_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the final integer range length as the destination indexed-array capacity to the constructor
+    emitter.instruction("mov rsi, 8");                                          // use 8-byte payload slots because the range helper produces an indexed array of integers
+    emitter.instruction("call __rt_array_new");                                 // allocate the destination integer range array through the shared x86_64 indexed-array constructor
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the destination integer range array pointer while the fill loop writes payload slots
+    emitter.instruction("lea r8, [rax + 24]");                                  // compute the destination integer range payload base address once before entering the fill loop
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the current integer value from the inclusive range start before entering the fill loop
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the final integer range element count before entering the fill loop
+    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the traversal step before entering the fill loop
+    emitter.instruction("xor rcx, rcx");                                        // initialize the range fill loop index to the first destination payload slot
+    emitter.label("__rt_range_loop_x86");
+    emitter.instruction("cmp rcx, r10");                                        // compare the current range fill loop index against the final element count
+    emitter.instruction("jge __rt_range_done_x86");                             // stop once every destination integer payload slot has been initialized
+    emitter.instruction("mov QWORD PTR [r8 + rcx * 8], r9");                    // store the current integer value into the selected destination range payload slot
+    emitter.instruction("add r9, r11");                                         // advance the current integer value by the preserved traversal step for the next payload slot
+    emitter.instruction("add rcx, 1");                                          // advance the range fill loop index after initializing one destination payload slot
+    emitter.instruction("jmp __rt_range_loop_x86");                             // continue filling integer range payload slots until the inclusive interval is exhausted
+    emitter.label("__rt_range_done_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the destination integer range array pointer before publishing the final logical length
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the computed integer range element count before publishing the final logical length
+    emitter.instruction("mov QWORD PTR [rax], r10");                            // publish the final logical length in the destination integer range array header
+    emitter.instruction("add rsp, 40");                                         // release the range-construction spill slots before returning
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
+    emitter.instruction("ret");                                                 // return the constructed integer range array pointer in rax
 }
