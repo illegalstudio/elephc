@@ -320,6 +320,9 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_mixed_cast_string(emitter);
     arrays::emit_mixed_write_stdout(emitter);
     io::emit_cstr(emitter);
+    io::emit_scandir(emitter);
+    io::emit_glob(emitter);
+    io::emit_tempnam(emitter);
     io::emit_file_get_contents(emitter);
     io::emit_file_put_contents(emitter);
     io::emit_file(emitter);
@@ -443,6 +446,9 @@ mod tests {
         assert!(asm.contains("__rt_mixed_unbox:\n"));
         assert!(asm.contains("__rt_mixed_cast_string:\n"));
         assert!(asm.contains("__rt_cstr:\n"));
+        assert!(asm.contains("__rt_scandir:\n"));
+        assert!(asm.contains("__rt_glob:\n"));
+        assert!(asm.contains("__rt_tempnam:\n"));
         assert!(asm.contains("__rt_file_get_contents:\n"));
         assert!(asm.contains("__rt_file_put_contents:\n"));
         assert!(asm.contains("__rt_file:\n"));
