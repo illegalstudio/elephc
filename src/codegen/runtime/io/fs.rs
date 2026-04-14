@@ -1,8 +1,13 @@
-use crate::codegen::emit::Emitter;
+use crate::codegen::{emit::Emitter, platform::Arch};
 
 /// File system operations: unlink, mkdir, rmdir, chdir, rename, copy.
 /// All path inputs are x1/x2=string. Return x0=1 on success, 0 on failure.
 pub fn emit_fs(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_fs_linux_x86_64(emitter);
+        return;
+    }
+
     // ================================================================
     // __rt_unlink: delete a file
     // Input:  x1/x2=path
@@ -186,4 +191,67 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
+}
+
+fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: unlink ---");
+    emitter.label_global("__rt_unlink");
+    emit_single_path_libc_bool_helper(emitter, "unlink", None);
+
+    emitter.blank();
+    emitter.comment("--- runtime: mkdir ---");
+    emitter.label_global("__rt_mkdir");
+    emit_single_path_libc_bool_helper(emitter, "mkdir", Some("mov rsi, 0x1ED"));
+
+    emitter.blank();
+    emitter.comment("--- runtime: rmdir ---");
+    emitter.label_global("__rt_rmdir");
+    emit_single_path_libc_bool_helper(emitter, "rmdir", None);
+
+    emitter.blank();
+    emitter.comment("--- runtime: chdir ---");
+    emitter.label_global("__rt_chdir");
+    emit_single_path_libc_bool_helper(emitter, "chdir", None);
+
+    emitter.blank();
+    emitter.comment("--- runtime: rename ---");
+    emitter.label_global("__rt_rename");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer while rename uses temporary path slots
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the source and destination path temporaries
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned stack space for the saved destination and source C-string pointers
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the destination elephc path pointer while converting the source path
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the destination elephc path length while converting the source path
+    emitter.instruction("call __rt_cstr");                                      // convert the source elephc path in rax/rdx into a null-terminated C string
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the source C-string pointer for the later libc rename() call
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the destination elephc path pointer before converting it to a C string
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the destination elephc path length before converting it to a C string
+    emitter.instruction("call __rt_cstr2");                                     // convert the destination elephc path into the secondary null-terminated C string buffer
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the destination C-string pointer for the later libc rename() call
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the source C-string pointer as the first libc rename() argument
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // pass the destination C-string pointer as the second libc rename() argument
+    emitter.instruction("call rename");                                         // rename or move the file-system path through libc rename()
+    emitter.instruction("cmp rax, 0");                                          // a successful rename() call returns zero on Linux
+    emitter.instruction("sete al");                                             // convert the rename() success flag into a boolean byte
+    emitter.instruction("movzx rax, al");                                       // widen the boolean byte into the canonical integer result register
+    emitter.instruction("add rsp, 32");                                         // release the aligned stack locals used by rename()
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the rename() success predicate to the caller
+
+}
+
+fn emit_single_path_libc_bool_helper(emitter: &mut Emitter, symbol: &str, extra_setup: Option<&str>) {
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer while the helper makes libc calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the call-aligned helper body
+    emitter.instruction("call __rt_cstr");                                      // convert the elephc path in rax/rdx into a null-terminated C string in rax
+    emitter.instruction("mov rdi, rax");                                        // pass the C path pointer as the first libc argument
+    if let Some(setup) = extra_setup {
+        emitter.instruction(setup);                                             // populate any additional libc arguments required by this helper
+    }
+    emitter.instruction(&format!("call {}", symbol));                           // invoke the matching libc file-system helper on Linux x86_64
+    emitter.instruction("cmp rax, 0");                                          // libc path helpers return zero when the operation succeeds
+    emitter.instruction("sete al");                                             // convert the success code into a boolean byte
+    emitter.instruction("movzx rax, al");                                       // widen the boolean byte into the canonical integer result register
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the libc helper returns
+    emitter.instruction("ret");                                                 // return the file-system success predicate to the caller
 }

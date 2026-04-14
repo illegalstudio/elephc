@@ -2,6 +2,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -14,7 +15,6 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("unlink()");
     emit_expr(&args[0], emitter, ctx, data);
-    // x1=filename ptr, x2=filename len
-    emitter.instruction("bl __rt_unlink");                                      // call runtime: delete file → x0=bool
+    abi::emit_call_label(emitter, "__rt_unlink");                               // call the target-aware runtime helper that deletes a file path
     Some(PhpType::Bool)
 }
