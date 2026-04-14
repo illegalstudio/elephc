@@ -320,9 +320,12 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_mixed_cast_string(emitter);
     arrays::emit_mixed_write_stdout(emitter);
     io::emit_cstr(emitter);
+    io::emit_file_get_contents(emitter);
     io::emit_file_put_contents(emitter);
+    io::emit_file(emitter);
     io::emit_stat(emitter);
     io::emit_fs(emitter);
+    io::emit_getcwd(emitter);
     system::emit_json_encode_bool(emitter);
     system::emit_json_encode_null(emitter);
     system::emit_json_encode_str(emitter);
@@ -440,7 +443,9 @@ mod tests {
         assert!(asm.contains("__rt_mixed_unbox:\n"));
         assert!(asm.contains("__rt_mixed_cast_string:\n"));
         assert!(asm.contains("__rt_cstr:\n"));
+        assert!(asm.contains("__rt_file_get_contents:\n"));
         assert!(asm.contains("__rt_file_put_contents:\n"));
+        assert!(asm.contains("__rt_file:\n"));
         assert!(asm.contains("__rt_file_exists:\n"));
         assert!(asm.contains("__rt_is_file:\n"));
         assert!(asm.contains("__rt_is_dir:\n"));
@@ -451,6 +456,9 @@ mod tests {
         assert!(asm.contains("__rt_unlink:\n"));
         assert!(asm.contains("__rt_mkdir:\n"));
         assert!(asm.contains("__rt_rmdir:\n"));
+        assert!(asm.contains("__rt_chdir:\n"));
+        assert!(asm.contains("__rt_copy:\n"));
+        assert!(asm.contains("__rt_getcwd:\n"));
         assert!(asm.contains("__rt_json_decode:\n"));
         assert!(asm.contains("__rt_json_encode_array_int:\n"));
         assert!(asm.contains("__rt_json_encode_array_str:\n"));
