@@ -66,13 +66,19 @@ pub(super) fn emit_binop(
             let lt = emit_expr(left, emitter, ctx, data);
             coerce_to_truthiness(emitter, ctx, &lt);
             // -- short-circuit AND: skip right side if left is falsy --
-            emitter.instruction("cmp x0, #0");                                  // test if left operand is falsy
-            emitter.instruction(&format!("b.eq {}", end_label));                // short-circuit: left is false so result is 0
+            abi::emit_branch_if_int_result_zero(emitter, &end_label);           // short-circuit immediately when the left operand is falsy
             let rt = emit_expr(right, emitter, ctx, data);
             coerce_to_truthiness(emitter, ctx, &rt);
             // -- evaluate right operand truthiness --
-            emitter.instruction("cmp x0, #0");                                  // test if right operand is falsy
-            emitter.instruction("cset x0, ne");                                 // result=1 if right is truthy, 0 if falsy
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("cmp x0, #0");                          // test whether the right operand truthiness is zero
+                }
+                Arch::X86_64 => {
+                    emitter.instruction("test rax, rax");                       // test whether the right operand truthiness is zero
+                }
+            }
+            emit_set_bool_from_flags(emitter, "ne");                            // normalize the right operand truthiness to a boolean 0/1 result
             emitter.label(&end_label);
             PhpType::Bool
         }
@@ -81,14 +87,20 @@ pub(super) fn emit_binop(
             let lt = emit_expr(left, emitter, ctx, data);
             coerce_to_truthiness(emitter, ctx, &lt);
             // -- short-circuit OR: skip right side if left is truthy --
-            emitter.instruction("cmp x0, #0");                                  // test if left operand is truthy
-            emitter.instruction(&format!("b.ne {}", end_label));                // short-circuit: left is true, skip right
+            abi::emit_branch_if_int_result_nonzero(emitter, &end_label);        // short-circuit immediately when the left operand is truthy
             let rt = emit_expr(right, emitter, ctx, data);
             coerce_to_truthiness(emitter, ctx, &rt);
             emitter.label(&end_label);
             // -- normalize final value to boolean 0 or 1 --
-            emitter.instruction("cmp x0, #0");                                  // test whichever operand survived
-            emitter.instruction("cset x0, ne");                                 // normalize to 1 if truthy, 0 if falsy
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("cmp x0, #0");                          // test whether the surviving operand truthiness is zero
+                }
+                Arch::X86_64 => {
+                    emitter.instruction("test rax, rax");                       // test whether the surviving operand truthiness is zero
+                }
+            }
+            emit_set_bool_from_flags(emitter, "ne");                            // normalize whichever operand survived to a boolean 0/1 result
             PhpType::Bool
         }
         BinOp::Pow => {
