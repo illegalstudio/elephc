@@ -1,10 +1,16 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 /// array_reduce: reduce an integer array to a single value using a callback.
 /// Input: x0 = callback function address, x1 = source array pointer, x2 = initial value
 /// Output: x0 = accumulated result
 /// The callback receives (accumulator, element) and returns the new accumulator.
 pub fn emit_array_reduce(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_array_reduce_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: array_reduce ---");
     emitter.label_global("__rt_array_reduce");
@@ -56,4 +62,43 @@ pub fn emit_array_reduce(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return with x0 = accumulated value
+}
+
+fn emit_array_reduce_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: array_reduce ---");
+    emitter.label_global("__rt_array_reduce");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving reduce spill slots
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved source array and source length
+    emitter.instruction("push r12");                                            // preserve the callback address register because the reduce loop calls through it repeatedly
+    emitter.instruction("push r13");                                            // preserve the source-index register because the loop keeps it live across callback invocations
+    emitter.instruction("push r14");                                            // preserve the accumulator register because the loop keeps it live across callback invocations
+    emitter.instruction("sub rsp, 16");                                         // reserve local slots for the source array pointer and source length
+    emitter.instruction("mov r12, rdi");                                        // keep the callback address in a callee-saved register across the reduce loop
+    emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the source array pointer so the loop can reload it after callback calls
+    emitter.instruction("mov r14, rdx");                                        // keep the current accumulator in a callee-saved register across every callback invocation
+    emitter.instruction("mov r10, QWORD PTR [rsi]");                            // load the source array length from the first field of the array header
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save the source array length for loop termination checks
+    emitter.instruction("xor r13d, r13d");                                      // start the source index at zero before reducing the source array
+
+    emitter.label("__rt_array_reduce_loop");
+    emitter.instruction("cmp r13, QWORD PTR [rbp - 40]");                       // stop once the source index reaches the saved source-array length
+    emitter.instruction("jge __rt_array_reduce_done");                          // finish reduction once every source element has been folded into the accumulator
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the source array pointer after the previous callback invocation
+    emitter.instruction("mov rsi, QWORD PTR [r10 + r13 * 8 + 24]");             // load the current source element into the second SysV integer argument register
+    emitter.instruction("mov rdi, r14");                                        // move the current accumulator into the first SysV integer argument register
+    emitter.instruction("call r12");                                            // invoke the user callback with (accumulator, element) and read the new accumulator from rax
+    emitter.instruction("mov r14, rax");                                        // update the live accumulator with the callback result before the next iteration
+    emitter.instruction("add r13, 1");                                          // advance the source index after folding the current element
+    emitter.instruction("jmp __rt_array_reduce_loop");                          // continue reducing until the whole source array has been consumed
+
+    emitter.label("__rt_array_reduce_done");
+    emitter.instruction("mov rax, r14");                                        // move the final accumulator into the x86_64 integer return register
+    emitter.instruction("add rsp, 16");                                         // release the reduce local bookkeeping slots before restoring callee-saved registers
+    emitter.instruction("pop r14");                                             // restore the caller accumulator callee-saved register
+    emitter.instruction("pop r13");                                             // restore the caller source-index callee-saved register
+    emitter.instruction("pop r12");                                             // restore the caller callback callee-saved register
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the reduced accumulator
+    emitter.instruction("ret");                                                 // return the reduced accumulator in rax
 }

@@ -3,6 +3,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::platform::Arch;
 use crate::names::function_symbol;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
@@ -15,12 +16,16 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("array_walk()");
+    let call_reg = abi::nested_call_reg(emitter);
+    let result_reg = abi::int_result_reg(emitter);
+    let callback_arg_reg = abi::int_arg_reg_name(emitter.target, 0);
+    let array_arg_reg = abi::int_arg_reg_name(emitter.target, 1);
 
     // -- evaluate the array argument (first arg) --
     emit_expr(&args[0], emitter, ctx, data);
 
     // -- save array pointer --
-    emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer onto stack
+    abi::emit_push_reg(emitter, result_reg);                                    // push the source array pointer onto the temporary stack
 
     // -- resolve callback function address --
     let is_closure = matches!(
@@ -29,25 +34,33 @@ pub fn emit(
     );
     if is_closure {
         emit_expr(&args[1], emitter, ctx, data);
-        emitter.instruction("mov x19, x0");                                     // move closure address to x19
+        abi::emit_push_reg(emitter, result_reg);                                // save the synthesized callback address on the temporary stack
     } else if let ExprKind::Variable(var_name) = &args[1].kind {
         let var = ctx.variables.get(var_name).expect("undefined callback variable");
         let offset = var.stack_offset;
-        abi::load_at_offset(emitter, "x19", offset);                              // load callback address from variable
+        abi::load_at_offset(emitter, call_reg, offset);                         // load the callback address from the callable variable slot
     } else {
         let func_name = match &args[1].kind {
             ExprKind::StringLiteral(name) => name.clone(),
             _ => panic!("array_walk() callback must be a string literal, callable expression, or callable variable"),
         };
         let label = function_symbol(&func_name);
-        emitter.adrp("x19", &format!("{}", label));              // load page address of callback function
-        emitter.add_lo12("x19", "x19", &format!("{}", label));       // resolve full address of callback function
+        abi::emit_symbol_address(emitter, call_reg, &label);                         // materialize the callback function address in the nested-call scratch register
     }
 
-    // -- call runtime: x0=callback_addr, x1=array_ptr --
-    emitter.instruction("mov x0, x19");                                         // x0 = callback function address
-    emitter.instruction("ldr x1, [sp], #16");                                   // pop array pointer into x1
-    emitter.instruction("bl __rt_array_walk");                                  // call runtime: walk array calling callback on each element
+    // -- place callback and array pointer into the runtime argument registers --
+    if is_closure {
+        abi::emit_pop_reg(emitter, callback_arg_reg);                            // pop the synthesized callback address into the first runtime argument register
+        abi::emit_pop_reg(emitter, array_arg_reg);                               // pop the source array pointer into the second runtime argument register
+    } else {
+        abi::emit_pop_reg(emitter, array_arg_reg);                               // pop the source array pointer into the second runtime argument register
+        emitter.instruction(&format!("mov {}, {}", callback_arg_reg, call_reg)); // move the callback function address into the first runtime argument register
+    }
+    if emitter.target.arch == Arch::X86_64 {
+        abi::emit_call_label(emitter, "__rt_array_walk");                        // call the x86_64 callback-driven walk runtime helper
+    } else {
+        emitter.instruction("bl __rt_array_walk");                              // call the ARM64 callback-driven walk runtime helper
+    }
 
     Some(PhpType::Void)
 }
