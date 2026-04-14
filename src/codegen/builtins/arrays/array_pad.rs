@@ -1,7 +1,9 @@
+use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -16,6 +18,22 @@ pub fn emit(
     let arr_ty = emit_expr(&args[0], emitter, ctx, data);
     let uses_refcounted_runtime =
         matches!(&arr_ty, PhpType::Array(inner) if inner.is_refcounted());
+    if emitter.target.arch == Arch::X86_64 && !uses_refcounted_runtime {
+        abi::emit_push_reg(emitter, "rax");                                     // preserve the source scalar indexed-array pointer while evaluating the target size expression
+        emit_expr(&args[1], emitter, ctx, data);
+        abi::emit_push_reg(emitter, "rax");                                     // preserve the requested target size while evaluating the scalar pad value
+        emit_expr(&args[2], emitter, ctx, data);
+        emitter.instruction("mov rdx, rax");                                    // move the scalar pad value into the third x86_64 runtime argument register
+        abi::emit_pop_reg(emitter, "rsi");                                      // restore the requested target size into the second x86_64 runtime argument register
+        abi::emit_pop_reg(emitter, "rdi");                                      // restore the source scalar indexed-array pointer into the first x86_64 runtime argument register
+        abi::emit_call_label(emitter, "__rt_array_pad");                        // pad the scalar indexed array through the x86_64 runtime helper
+
+        return match arr_ty {
+            PhpType::Array(inner) => Some(PhpType::Array(inner)),
+            _ => Some(PhpType::Array(Box::new(PhpType::Int))),
+        };
+    }
+
     // -- save array pointer, evaluate target size --
     emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer onto stack
     emit_expr(&args[1], emitter, ctx, data);

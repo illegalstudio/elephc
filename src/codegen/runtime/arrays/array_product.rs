@@ -1,9 +1,15 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 /// array_product: compute the product of all integer elements in an array.
 /// Input: x0 = array pointer
 /// Output: x0 = product of all elements (1 for empty arrays)
 pub fn emit_array_product(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_array_product_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: array_product ---");
     emitter.label_global("__rt_array_product");
@@ -27,4 +33,26 @@ pub fn emit_array_product(emitter: &mut Emitter) {
     emitter.label("__rt_array_product_done");
     emitter.instruction("mov x0, x12");                                         // return product in x0
     emitter.instruction("ret");                                                 // return to caller
+}
+
+fn emit_array_product_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: array_product ---");
+    emitter.label_global("__rt_array_product");
+
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the source indexed-array logical length before starting the scalar product loop
+    emitter.instruction("lea r11, [rdi + 24]");                                 // compute the first scalar payload slot address in the source indexed array
+    emitter.instruction("xor ecx, ecx");                                        // initialize the scalar product loop cursor at the front of the source indexed array
+    emitter.instruction("mov rax, 1");                                          // seed the scalar product accumulator with the multiplicative identity
+
+    emitter.label("__rt_array_product_loop_x86");
+    emitter.instruction("cmp rcx, r10");                                        // compare the scalar product loop cursor against the source indexed-array logical length
+    emitter.instruction("jge __rt_array_product_done_x86");                     // finish once every scalar payload has contributed to the product accumulator
+    emitter.instruction("mov r8, QWORD PTR [r11 + rcx * 8]");                   // load the current scalar payload from the source indexed array
+    emitter.instruction("imul rax, r8");                                        // multiply the running scalar product accumulator by the current source payload
+    emitter.instruction("add rcx, 1");                                          // advance the scalar product loop cursor after consuming one source payload
+    emitter.instruction("jmp __rt_array_product_loop_x86");                     // continue multiplying source scalar payloads until the source array is exhausted
+
+    emitter.label("__rt_array_product_done_x86");
+    emitter.instruction("ret");                                                 // return the scalar product accumulator in rax
 }
