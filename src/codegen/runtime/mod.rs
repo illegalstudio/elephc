@@ -247,6 +247,8 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     strings::emit_concat(emitter);
     strings::emit_str_persist(emitter);
     strings::emit_str_eq(emitter);
+    strings::emit_addslashes(emitter);
+    strings::emit_stripslashes(emitter);
     arrays::emit_array_new(emitter);
     arrays::emit_array_map(emitter);
     arrays::emit_hash_fnv1a(emitter);
@@ -322,6 +324,8 @@ mod tests {
         assert!(asm.contains("__rt_concat:\n"));
         assert!(asm.contains("__rt_str_persist:\n"));
         assert!(asm.contains("__rt_str_eq:\n"));
+        assert!(asm.contains("__rt_addslashes:\n"));
+        assert!(asm.contains("__rt_stripslashes:\n"));
         assert!(asm.contains("__rt_array_new:\n"));
         assert!(asm.contains("__rt_array_map:\n"));
         assert!(asm.contains("__rt_hash_fnv1a:\n"));
