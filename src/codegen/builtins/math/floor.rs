@@ -2,6 +2,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -14,8 +15,19 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("floor()");
     let ty = emit_expr(&args[0], emitter, ctx, data);
-    // -- convert int to float if needed, then round toward minus infinity --
-    if ty != PhpType::Float { emitter.instruction("scvtf d0, x0"); }            // convert signed int to float
-    emitter.instruction("frintm d0, d0");                                       // round toward minus infinity (floor)
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            if ty != PhpType::Float {
+                emitter.instruction("scvtf d0, x0");                            // convert the floor() input to float when it is an integer
+            }
+            emitter.instruction("frintm d0, d0");                               // round toward minus infinity on AArch64
+        }
+        Arch::X86_64 => {
+            if ty != PhpType::Float {
+                emitter.instruction("cvtsi2sd xmm0, rax");                      // convert the floor() input to float when it is an integer
+            }
+            emitter.instruction("roundsd xmm0, xmm0, 1");                       // round toward minus infinity on x86_64 using SSE4.1 roundsd
+        }
+    }
     Some(PhpType::Float)
 }
