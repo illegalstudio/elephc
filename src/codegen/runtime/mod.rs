@@ -247,6 +247,10 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_array_grow(emitter);
     arrays::emit_random_u32(emitter);
     arrays::emit_random_uniform(emitter);
+    arrays::emit_sort_int(emitter, false);
+    arrays::emit_sort_int(emitter, true);
+    arrays::emit_shuffle(emitter);
+    arrays::emit_asort(emitter);
     strings::emit_itoa(emitter);
     strings::emit_ftoa(emitter);
     strings::emit_concat(emitter);
@@ -365,6 +369,11 @@ mod tests {
         assert!(asm.contains("__rt_array_grow:\n"));
         assert!(asm.contains("__rt_random_u32:\n"));
         assert!(asm.contains("__rt_random_uniform:\n"));
+        assert!(asm.contains("__rt_sort_int:\n"));
+        assert!(asm.contains("__rt_rsort_int:\n"));
+        assert!(asm.contains("__rt_shuffle:\n"));
+        assert!(asm.contains("__rt_asort:\n"));
+        assert!(asm.contains("__rt_arsort:\n"));
         assert!(asm.contains("__rt_itoa:\n"));
         assert!(asm.contains("__rt_ftoa:\n"));
         assert!(asm.contains("__rt_concat:\n"));

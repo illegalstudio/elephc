@@ -1,4 +1,5 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 /// asort / arsort: sort array by values (for indexed int arrays, same as sort/rsort).
 /// Input:  x0=array_ptr
@@ -6,6 +7,11 @@ use crate::codegen::emit::Emitter;
 /// For indexed int arrays, sorting by value is identical to sort/rsort since
 /// there are no string keys to preserve — just delegate to existing sort routines.
 pub fn emit_asort(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_asort_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: asort (sort by values ascending) ---");
     emitter.label_global("__rt_asort");
@@ -19,4 +25,16 @@ pub fn emit_asort(emitter: &mut Emitter) {
 
     // -- delegate to existing descending integer sort --
     emitter.instruction("b __rt_rsort_int");                                    // tail-call to rsort_int (descending)
+}
+
+fn emit_asort_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: asort (sort by values ascending) ---");
+    emitter.label_global("__rt_asort");
+    emitter.instruction("jmp __rt_sort_int");                                   // tail-jump to the x86_64 ascending integer sort helper because indexed arrays already preserve slot order semantics
+
+    emitter.blank();
+    emitter.comment("--- runtime: arsort (sort by values descending) ---");
+    emitter.label_global("__rt_arsort");
+    emitter.instruction("jmp __rt_rsort_int");                                  // tail-jump to the x86_64 descending integer sort helper because indexed arrays already preserve slot order semantics
 }
