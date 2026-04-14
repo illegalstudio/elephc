@@ -209,8 +209,10 @@ pub fn emit_json_decode(emitter: &mut Emitter) {
     emitter.instruction("mov x13, #57343");                                     // load the last valid low-surrogate code unit value for pair validation
     emitter.instruction("cmp x17, x13");                                        // is the decoded low surrogate above the required low-surrogate range?
     emitter.instruction("b.gt __rt_json_decode_unicode_preserve");              // malformed surrogate pairs are preserved literally instead of being decoded
-    emitter.instruction("sub x14, x14, #55296");                                // normalize the high-surrogate code unit to its 10-bit payload before combining it
-    emitter.instruction("sub x17, x17, #56320");                                // normalize the low-surrogate code unit to its 10-bit payload before combining it
+    emitter.instruction("mov x10, #55296");                                     // materialize the first high-surrogate code unit value in a scratch register for normalization
+    emitter.instruction("sub x14, x14, x10");                                   // normalize the high-surrogate code unit to its 10-bit payload before combining it
+    emitter.instruction("mov x10, #56320");                                     // materialize the first low-surrogate code unit value in a scratch register for normalization
+    emitter.instruction("sub x17, x17, x10");                                   // normalize the low-surrogate code unit to its 10-bit payload before combining it
     emitter.instruction("lsl x14, x14, #10");                                   // shift the high-surrogate payload into the upper ten bits of the final scalar value
     emitter.instruction("add x14, x14, x17");                                   // combine the high- and low-surrogate payload bits into one scalar value payload
     emitter.instruction("add x14, x14, #65536");                                // convert the surrogate payload into the real Unicode scalar value above the BMP

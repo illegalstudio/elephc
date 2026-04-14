@@ -336,31 +336,18 @@ pub fn generate(
     if gc_stats {
         emitter.comment("gc-stats: print allocation statistics to stderr");
         let (lbl_a, len_a) = data.add_string(b"GC: allocs=");
-        emitter.adrp("x1", &format!("{}", lbl_a));               // load gc stats label page
-        emitter.add_lo12("x1", "x1", &format!("{}", lbl_a));         // resolve address
-        emitter.instruction(&format!("mov x2, #{}", len_a));                    // string length
-        emitter.instruction("mov x0, #2");                                      // fd = stderr
-        emitter.syscall(4);
-        abi::emit_load_symbol_to_reg(&mut emitter, "x0", "_gc_allocs", 0);
-        emitter.instruction("bl __rt_itoa");                                    // convert to string → x1/x2
-        emitter.instruction("mov x0, #2");                                      // fd = stderr
-        emitter.syscall(4);
+        emit_write_literal_stderr(&mut emitter, &lbl_a, len_a);
+        let int_result_reg = abi::int_result_reg(&emitter);
+        abi::emit_load_symbol_to_reg(&mut emitter, int_result_reg, "_gc_allocs", 0);
+        abi::emit_call_label(&mut emitter, "__rt_itoa");                        // convert the allocation count into the active target string result registers
+        emit_write_current_string_stderr(&mut emitter);
         let (lbl_f, len_f) = data.add_string(b" frees=");
-        emitter.adrp("x1", &format!("{}", lbl_f));               // load frees label page
-        emitter.add_lo12("x1", "x1", &format!("{}", lbl_f));         // resolve address
-        emitter.instruction(&format!("mov x2, #{}", len_f));                    // string length
-        emitter.instruction("mov x0, #2");                                      // fd = stderr
-        emitter.syscall(4);
-        abi::emit_load_symbol_to_reg(&mut emitter, "x0", "_gc_frees", 0);
-        emitter.instruction("bl __rt_itoa");                                    // convert to string → x1/x2
-        emitter.instruction("mov x0, #2");                                      // fd = stderr
-        emitter.syscall(4);
+        emit_write_literal_stderr(&mut emitter, &lbl_f, len_f);
+        abi::emit_load_symbol_to_reg(&mut emitter, int_result_reg, "_gc_frees", 0);
+        abi::emit_call_label(&mut emitter, "__rt_itoa");                        // convert the free-count total into the active target string result registers
+        emit_write_current_string_stderr(&mut emitter);
         let (lbl_nl, _) = data.add_string(b"\n");
-        emitter.adrp("x1", &format!("{}", lbl_nl));              // load newline page
-        emitter.add_lo12("x1", "x1", &format!("{}", lbl_nl));        // resolve address
-        emitter.instruction("mov x2, #1");                                      // newline length
-        emitter.instruction("mov x0, #2");                                      // fd = stderr
-        emitter.syscall(4);
+        emit_write_literal_stderr(&mut emitter, &lbl_nl, 1);
     }
 
     if heap_debug {
@@ -397,6 +384,42 @@ pub fn generate(
     let runtime_asm = generate_runtime(heap_size, target);
 
     (user_asm, runtime_asm)
+}
+
+fn emit_write_literal_stderr(emitter: &mut Emitter, label: &str, len: usize) {
+    match emitter.target.arch {
+        platform::Arch::AArch64 => {
+            emitter.adrp("x1", label);                                          // load the page address of the stderr literal on AArch64
+            emitter.add_lo12("x1", "x1", label);                                // resolve the exact stderr literal address on AArch64
+            emitter.instruction(&format!("mov x2, #{}", len));                  // materialize the stderr literal byte length in the AArch64 write-length register
+            emitter.instruction("mov x0, #2");                                  // target the stderr file descriptor on AArch64
+            emitter.syscall(4);
+        }
+        platform::Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "rsi", label);
+            emitter.instruction(&format!("mov edx, {}", len));                  // materialize the stderr literal byte length in the x86_64 write-length register
+            emitter.instruction("mov edi, 2");                                  // target the stderr file descriptor on x86_64
+            emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall number 1 = write
+            emitter.instruction("syscall");                                     // write the requested literal bytes to stderr on x86_64
+        }
+    }
+}
+
+fn emit_write_current_string_stderr(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        platform::Arch::AArch64 => {
+            emitter.instruction("mov x0, #2");                                  // target the stderr file descriptor on AArch64
+            emitter.syscall(4);
+        }
+        platform::Arch::X86_64 => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+            emitter.instruction(&format!("mov rsi, {}", ptr_reg));              // move the current string pointer into the x86_64 write buffer register
+            emitter.instruction(&format!("mov rdx, {}", len_reg));              // move the current string length into the x86_64 write length register
+            emitter.instruction("mov edi, 2");                                  // target the stderr file descriptor on x86_64
+            emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall number 1 = write
+            emitter.instruction("syscall");                                     // write the current string payload to stderr on x86_64
+        }
+    }
 }
 
 /// Generate the runtime assembly string independently.
