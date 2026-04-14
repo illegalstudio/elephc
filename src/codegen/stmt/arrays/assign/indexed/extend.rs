@@ -1,5 +1,6 @@
 use crate::codegen::context::Context;
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 use crate::types::PhpType;
 
 use super::prepare::IndexedAssignState;
@@ -9,6 +10,11 @@ pub(super) fn extend_indexed_array_if_needed(
     emitter: &mut Emitter,
     ctx: &mut Context,
 ) {
+    if emitter.target.arch == Arch::X86_64 {
+        extend_indexed_array_if_needed_linux_x86_64(state, emitter, ctx);
+        return;
+    }
+
     let skip_extend = ctx.next_label("array_assign_skip_extend");
     let extend_loop = ctx.next_label("array_assign_extend_loop");
     let extend_store_len = ctx.next_label("array_assign_store_len");
@@ -36,5 +42,39 @@ pub(super) fn extend_indexed_array_if_needed(
     emitter.label(&extend_store_len);
     emitter.instruction("add x12, x9, #1");                                        // new length = highest written index + 1
     emitter.instruction("str x12, [x10]");                                         // persist the extended logical length in the array header
+    emitter.label(&skip_extend);
+}
+
+fn extend_indexed_array_if_needed_linux_x86_64(
+    state: &IndexedAssignState,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) {
+    let skip_extend = ctx.next_label("array_assign_skip_extend");
+    let extend_loop = ctx.next_label("array_assign_extend_loop");
+    let extend_store_len = ctx.next_label("array_assign_store_len");
+    emitter.instruction("cmp r9, r11");                                         // does this indexed write extend the array beyond its original logical length?
+    emitter.instruction(&format!("jb {}", skip_extend));                        // existing indexed-array slots already keep the current logical length
+    emitter.instruction("mov r12, r11");                                        // start zero-filling at the previous logical end of the indexed array
+    emitter.label(&extend_loop);
+    emitter.instruction("cmp r12, r9");                                         // have we filled every indexed-array gap slot before the target index?
+    emitter.instruction(&format!("jae {}", extend_store_len));                  // stop zero-filling once we reach the target indexed-array slot
+    match &state.effective_store_ty {
+        PhpType::Str => {
+            emitter.instruction("mov r13, r12");                                // copy the gap index before scaling it into a 16-byte string-slot offset
+            emitter.instruction("shl r13, 4");                                  // convert the gap index into the byte offset of the 16-byte string slot
+            emitter.instruction("lea r13, [r10 + r13 + 24]");                   // compute the address of the indexed-array string gap slot
+            emitter.instruction("mov QWORD PTR [r13], 0");                      // initialize the gap string pointer to null
+            emitter.instruction("mov QWORD PTR [r13 + 8], 0");                  // initialize the gap string length to zero
+        }
+        _ => {
+            emitter.instruction("mov QWORD PTR [r10 + 24 + r12 * 8], 0");       // initialize the scalar or pointer indexed-array gap slot to zero/null
+        }
+    }
+    emitter.instruction("add r12, 1");                                          // advance to the next indexed-array gap slot that still needs zero-initialization
+    emitter.instruction(&format!("jmp {}", extend_loop));                       // continue zero-filling until the target indexed-array slot is reached
+    emitter.label(&extend_store_len);
+    emitter.instruction("lea r12, [r9 + 1]");                                  // compute the new indexed-array logical length as the highest written index plus one
+    emitter.instruction("mov QWORD PTR [r10], r12");                            // persist the extended indexed-array logical length in the array header
     emitter.label(&skip_extend);
 }

@@ -242,6 +242,9 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     emit_optional_linux_crypto_decls(emitter);
     arrays::emit_heap_alloc(emitter);
     arrays::emit_heap_free(emitter);
+    arrays::emit_array_clone_shallow(emitter);
+    arrays::emit_array_ensure_unique(emitter);
+    arrays::emit_array_grow(emitter);
     strings::emit_itoa(emitter);
     strings::emit_ftoa(emitter);
     strings::emit_concat(emitter);
@@ -250,6 +253,8 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     strings::emit_addslashes(emitter);
     strings::emit_stripslashes(emitter);
     arrays::emit_array_new(emitter);
+    arrays::emit_array_push_int(emitter);
+    arrays::emit_array_push_str(emitter);
     arrays::emit_array_map(emitter);
     arrays::emit_hash_fnv1a(emitter);
     arrays::emit_hash_new(emitter);
@@ -319,6 +324,9 @@ mod tests {
 
         assert!(asm.contains("__rt_heap_alloc:\n"));
         assert!(asm.contains("__rt_heap_free:\n"));
+        assert!(asm.contains("__rt_array_clone_shallow:\n"));
+        assert!(asm.contains("__rt_array_ensure_unique:\n"));
+        assert!(asm.contains("__rt_array_grow:\n"));
         assert!(asm.contains("__rt_itoa:\n"));
         assert!(asm.contains("__rt_ftoa:\n"));
         assert!(asm.contains("__rt_concat:\n"));
@@ -327,6 +335,8 @@ mod tests {
         assert!(asm.contains("__rt_addslashes:\n"));
         assert!(asm.contains("__rt_stripslashes:\n"));
         assert!(asm.contains("__rt_array_new:\n"));
+        assert!(asm.contains("__rt_array_push_int:\n"));
+        assert!(asm.contains("__rt_array_push_str:\n"));
         assert!(asm.contains("__rt_array_map:\n"));
         assert!(asm.contains("__rt_hash_fnv1a:\n"));
         assert!(asm.contains("__rt_hash_new:\n"));

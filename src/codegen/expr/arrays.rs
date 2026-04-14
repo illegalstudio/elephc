@@ -612,6 +612,18 @@ pub(super) fn emit_array_access(
                 }
             }
         }
+        PhpType::Float => {
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip 24-byte array header to reach the contiguous float payload
+                    emitter.instruction(&format!("ldr d0, [{}, {}, lsl #3]", array_reg, result_reg,)); // load the float payload from data[index]
+                }
+                Arch::X86_64 => {
+                    emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip 24-byte array header to reach the contiguous float payload
+                    emitter.instruction(&format!("movsd xmm0, QWORD PTR [{} + {} * 8]", array_reg, result_reg)); // load the float payload from data[index]
+                }
+            }
+        }
         PhpType::Str => {
             let (ptr_reg, len_result_reg) = abi::string_result_regs(emitter);
             match emitter.target.arch {

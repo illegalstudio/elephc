@@ -1,8 +1,10 @@
 use super::store_mutating_arg::emit_store_mutating_arg;
+use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -15,6 +17,11 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("array_push()");
     let _arr_ty = emit_expr(&args[0], emitter, ctx, data);
+    if emitter.target.arch == Arch::X86_64 {
+        emit_array_push_linux_x86_64(args, emitter, ctx, data);
+        return Some(PhpType::Void);
+    }
+
     // -- save array pointer, evaluate value to push --
     emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer onto stack
     let val_ty = emit_expr(&args[1], emitter, ctx, data);
@@ -56,4 +63,45 @@ pub fn emit(
     emit_store_mutating_arg(emitter, ctx, &args[0]);
 
     Some(PhpType::Void)
+}
+
+fn emit_array_push_linux_x86_64(
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    abi::emit_push_reg(emitter, "rax");                                          // preserve the indexed-array pointer while evaluating the appended value
+    let val_ty = emit_expr(&args[1], emitter, ctx, data);
+    abi::emit_pop_reg(emitter, "r11");                                           // restore the indexed-array pointer after evaluating the appended value
+    match &val_ty {
+        PhpType::Int | PhpType::Bool => {
+            emitter.instruction("mov rsi, rax");                                 // place the appended scalar payload in the x86_64 runtime value register
+            emitter.instruction("mov rdi, r11");                                 // place the indexed-array pointer in the x86_64 runtime receiver register
+            abi::emit_call_label(emitter, "__rt_array_push_int");                // append the scalar payload and return the possibly-grown indexed-array pointer
+        }
+        PhpType::Float => {
+            emitter.instruction("movq rsi, xmm0");                               // move the floating-point payload bits into the scalar append register
+            emitter.instruction("mov rdi, r11");                                 // place the indexed-array pointer in the x86_64 runtime receiver register
+            abi::emit_call_label(emitter, "__rt_array_push_int");                // append the floating-point payload bits as an 8-byte scalar slot
+        }
+        PhpType::Str => {
+            emitter.instruction("mov rsi, rax");                                 // place the appended string pointer in the x86_64 runtime payload register
+            emitter.instruction("mov rdi, r11");                                 // place the indexed-array pointer in the x86_64 runtime receiver register
+            abi::emit_call_label(emitter, "__rt_array_push_str");                // persist and append the string payload, returning the possibly-grown indexed-array pointer
+        }
+        PhpType::Callable => {
+            emitter.instruction("mov rsi, rax");                                 // place the callable pointer bits in the x86_64 scalar append register
+            emitter.instruction("mov rdi, r11");                                 // place the indexed-array pointer in the x86_64 runtime receiver register
+            abi::emit_call_label(emitter, "__rt_array_push_int");                // append the callable pointer bits as a plain scalar slot
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            emitter.instruction("mov x1, x0");                                   // leave the ARM64-only refcounted append path untouched until the dedicated runtime slice lands
+            emitter.instruction("mov x0, x9");                                   // leave the ARM64-only refcounted append path untouched until the dedicated runtime slice lands
+            emitter.instruction("bl __rt_array_push_refcounted");                // append retained pointer and stamp array metadata
+        }
+        _ => {}
+    }
+
+    emit_store_mutating_arg(emitter, ctx, &args[0]);                             // publish the possibly-grown indexed-array pointer back through the mutating argument slot
 }
