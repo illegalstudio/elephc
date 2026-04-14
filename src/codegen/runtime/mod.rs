@@ -262,8 +262,12 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     strings::emit_rtrim(emitter);
     strings::emit_addslashes(emitter);
     strings::emit_stripslashes(emitter);
+    strings::emit_bin2hex(emitter);
+    strings::emit_hex2bin(emitter);
     strings::emit_implode(emitter);
     strings::emit_implode_int(emitter);
+    strings::emit_base64_encode(emitter);
+    strings::emit_base64_decode(emitter);
     arrays::emit_array_new(emitter);
     arrays::emit_array_fill(emitter);
     arrays::emit_array_fill_refcounted(emitter);
@@ -408,8 +412,12 @@ mod tests {
         assert!(asm.contains("__rt_rtrim:\n"));
         assert!(asm.contains("__rt_addslashes:\n"));
         assert!(asm.contains("__rt_stripslashes:\n"));
+        assert!(asm.contains("__rt_bin2hex:\n"));
+        assert!(asm.contains("__rt_hex2bin:\n"));
         assert!(asm.contains("__rt_implode:\n"));
         assert!(asm.contains("__rt_implode_int:\n"));
+        assert!(asm.contains("__rt_base64_encode:\n"));
+        assert!(asm.contains("__rt_base64_decode:\n"));
         assert!(asm.contains("__rt_array_new:\n"));
         assert!(asm.contains("__rt_array_fill:\n"));
         assert!(asm.contains("__rt_array_fill_refcounted:\n"));

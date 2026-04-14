@@ -2,6 +2,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -14,6 +15,6 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("hex2bin()");
     emit_expr(&args[0], emitter, ctx, data);
-    emitter.instruction("bl __rt_hex2bin");                                     // call runtime: convert hex string to bytes
+    abi::emit_call_label(emitter, "__rt_hex2bin");                              // convert the current hexadecimal string to bytes through the target-aware runtime helper
     Some(PhpType::Str)
 }
