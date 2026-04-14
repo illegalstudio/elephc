@@ -327,6 +327,8 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     io::emit_fgets(emitter);
     io::emit_feof(emitter);
     io::emit_fread(emitter);
+    io::emit_fgetcsv(emitter);
+    io::emit_fputcsv(emitter);
     io::emit_scandir(emitter);
     io::emit_glob(emitter);
     io::emit_tempnam(emitter);
@@ -460,6 +462,8 @@ mod tests {
         assert!(asm.contains("__rt_fgets:\n"));
         assert!(asm.contains("__rt_feof:\n"));
         assert!(asm.contains("__rt_fread:\n"));
+        assert!(asm.contains("__rt_fgetcsv:\n"));
+        assert!(asm.contains("__rt_fputcsv:\n"));
         assert!(asm.contains("__rt_scandir:\n"));
         assert!(asm.contains("__rt_glob:\n"));
         assert!(asm.contains("__rt_tempnam:\n"));
