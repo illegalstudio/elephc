@@ -1,10 +1,16 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 /// array_combine: create associative array from keys array + values array.
 /// Input:  x0=keys_array (string array), x1=values_array, x2=value_type_tag
 /// Output: x0=new hash table
 /// Both arrays must have the same length.
 pub fn emit_array_combine(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_array_combine_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: array_combine ---");
     emitter.label_global("__rt_array_combine");
@@ -76,4 +82,55 @@ pub fn emit_array_combine(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return with x0 = hash table
+}
+
+fn emit_array_combine_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: array_combine ---");
+    emitter.label_global("__rt_array_combine");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving array-combine spill slots
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for keys, values, result hash, loop index, and value-tag bookkeeping
+    emitter.instruction("sub rsp, 48");                                         // reserve aligned spill slots for the scalar array-combine bookkeeping while keeping nested calls 16-byte aligned
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the string-key indexed array across nested hash-constructor and insertion helper calls
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the scalar-value indexed array across nested hash-constructor and insertion helper calls
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // preserve the requested hash value_type tag across nested hash-constructor and insertion helper calls
+    emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // load the string-key indexed-array logical length before deriving the result hash capacity
+    emitter.instruction("shl rdi, 1");                                          // double the string-key count to give the destination hash some insertion headroom
+    emitter.instruction("cmp rdi, 16");                                         // clamp the destination hash capacity to the minimum bucket count expected by the runtime
+    emitter.instruction("jge __rt_array_combine_capacity_x86");                 // keep the doubled key-count capacity when it already meets the minimum bucket count
+    emitter.instruction("mov rdi, 16");                                         // fall back to the minimum destination hash capacity for very small key arrays
+    emitter.label("__rt_array_combine_capacity_x86");
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // pass the requested hash value_type tag to the shared x86_64 hash constructor
+    emitter.instruction("call __rt_hash_new");                                  // allocate the destination hash table through the shared x86_64 hash constructor
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the destination hash pointer across repeated insertion helper calls
+    emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize the array-combine loop index to the first key/value pair
+    emitter.label("__rt_array_combine_loop_x86");
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the array-combine loop index before reading the next key/value pair
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the string-key indexed array before reading its logical length and selected key slot
+    emitter.instruction("cmp rcx, QWORD PTR [r10]");                            // compare the loop index against the string-key indexed-array logical length
+    emitter.instruction("jge __rt_array_combine_done_x86");                     // finish once every key/value pair has been inserted into the destination hash table
+    emitter.instruction("mov r11, rcx");                                        // copy the loop index before scaling it to the 16-byte string slot size
+    emitter.instruction("shl r11, 4");                                          // scale the loop index by the 16-byte string slot size used by the key array
+    emitter.instruction("add r10, r11");                                        // advance from the key-array base pointer to the selected string key slot
+    emitter.instruction("add r10, 24");                                         // skip the indexed-array header to reach the selected string key slot payload
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the destination hash pointer before inserting the selected key/value pair
+    emitter.instruction("mov rsi, QWORD PTR [r10]");                            // load the selected key pointer from the string-key indexed array
+    emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // load the selected key length from the string-key indexed array
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the scalar-value indexed array before reading the selected scalar payload
+    emitter.instruction("lea r10, [r10 + 24]");                                 // compute the payload base address for the scalar-value indexed array
+    emitter.instruction("mov rcx, QWORD PTR [r10 + rcx * 8]");                  // load the selected scalar payload into the low-word hash insertion register
+    emitter.instruction("xor r8d, r8d");                                        // clear the high-word hash insertion register because scalar array-combine payloads use only the low word
+    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload the requested hash value_type tag into the hash insertion tag register
+    emitter.instruction("call __rt_hash_set");                                  // insert the selected key plus scalar payload into the destination hash table
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // persist the possibly-grown destination hash pointer after hash insertion
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the array-combine loop index after helper calls clobbered caller-saved registers
+    emitter.instruction("add r10, 1");                                          // advance the loop index after inserting one key/value pair
+    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // persist the updated array-combine loop index across the next insertion helper call
+    emitter.instruction("jmp __rt_array_combine_loop_x86");                     // continue combining string keys with scalar values into the destination hash table
+    emitter.label("__rt_array_combine_done_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the destination hash pointer in the standard x86_64 integer result register
+    emitter.instruction("add rsp, 48");                                         // release the array-combine spill slots before returning
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
+    emitter.instruction("ret");                                                 // return the destination hash pointer in rax
 }

@@ -263,6 +263,9 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_range(emitter);
     arrays::emit_array_diff(emitter);
     arrays::emit_array_intersect(emitter);
+    arrays::emit_array_chunk(emitter);
+    arrays::emit_array_combine(emitter);
+    arrays::emit_array_flip(emitter);
     arrays::emit_array_map(emitter);
     arrays::emit_hash_fnv1a(emitter);
     arrays::emit_hash_new(emitter);
@@ -355,6 +358,9 @@ mod tests {
         assert!(asm.contains("__rt_range:\n"));
         assert!(asm.contains("__rt_array_diff:\n"));
         assert!(asm.contains("__rt_array_intersect:\n"));
+        assert!(asm.contains("__rt_array_chunk:\n"));
+        assert!(asm.contains("__rt_array_combine:\n"));
+        assert!(asm.contains("__rt_array_flip:\n"));
         assert!(asm.contains("__rt_array_map:\n"));
         assert!(asm.contains("__rt_hash_fnv1a:\n"));
         assert!(asm.contains("__rt_hash_new:\n"));
