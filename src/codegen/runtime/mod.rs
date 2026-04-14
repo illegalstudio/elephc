@@ -254,6 +254,7 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     strings::emit_itoa(emitter);
     strings::emit_ftoa(emitter);
     strings::emit_concat(emitter);
+    strings::emit_atoi(emitter);
     strings::emit_str_persist(emitter);
     strings::emit_str_eq(emitter);
     strings::emit_trim(emitter);
@@ -399,6 +400,7 @@ mod tests {
         assert!(asm.contains("__rt_itoa:\n"));
         assert!(asm.contains("__rt_ftoa:\n"));
         assert!(asm.contains("__rt_concat:\n"));
+        assert!(asm.contains("__rt_atoi:\n"));
         assert!(asm.contains("__rt_str_persist:\n"));
         assert!(asm.contains("__rt_str_eq:\n"));
         assert!(asm.contains("__rt_trim:\n"));

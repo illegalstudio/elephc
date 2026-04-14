@@ -2,6 +2,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -16,7 +17,7 @@ pub fn emit(
     let ty = emit_expr(&args[0], emitter, ctx, data);
     if ty == PhpType::Str {
         // -- convert string to integer --
-        emitter.instruction("bl __rt_atoi");                                    // call runtime: parse string as integer into x0
+        abi::emit_call_label(emitter, "__rt_atoi");                             // parse the current string result through the target-aware atoi runtime helper
     }
     Some(PhpType::Int)
 }

@@ -39,15 +39,15 @@ fn coerce_to_int_for_loose_cmp(emitter: &mut Emitter, ty: &PhpType) {
         }
         PhpType::Str => {
             // -- coerce string to int: empty string -> 0, otherwise parse --
-            emitter.instruction("bl __rt_atoi");                                // runtime: parse string as integer -> x0
+            abi::emit_call_label(emitter, "__rt_atoi");                         // parse the current string result into the active integer result register
         }
         PhpType::Mixed | PhpType::Union(_) => {
             // -- mixed/union values coerce via the boxed runtime tag --
-            emitter.instruction("bl __rt_mixed_cast_int");                      // runtime: inspect the boxed payload and cast to int
+            abi::emit_call_label(emitter, "__rt_mixed_cast_int");               // inspect the boxed payload and cast it to the active integer result register
         }
         _ => {
             // Arrays, callables - coerce to 0 as fallback
-            emitter.instruction("mov x0, #0");                                  // unsupported type coerces to 0
+            abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0); // unsupported types still coerce to zero for loose comparison
         }
     }
 }

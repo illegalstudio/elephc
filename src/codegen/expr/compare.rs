@@ -29,13 +29,13 @@ pub(super) fn emit_cast(
                     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
                 }
                 PhpType::Str => {
-                    emitter.instruction("bl __rt_atoi");                        // runtime: ASCII string to integer conversion
+                    abi::emit_call_label(emitter, "__rt_atoi");                 // parse the current string result into the active integer result register
                 }
                 PhpType::Array(_) | PhpType::AssocArray { .. } => {
                     emitter.instruction("ldr x0, [x0]");                        // load array length from header (first field)
                 }
                 PhpType::Mixed | PhpType::Union(_) => {
-                    emitter.instruction("bl __rt_mixed_cast_int");              // cast the boxed mixed payload to int at runtime
+                    abi::emit_call_label(emitter, "__rt_mixed_cast_int");       // cast the boxed mixed payload to int through the target-aware helper
                 }
                 PhpType::Callable
                 | PhpType::Object(_)
