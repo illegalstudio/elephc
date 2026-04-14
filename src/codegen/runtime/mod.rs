@@ -338,6 +338,9 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     io::emit_stat(emitter);
     io::emit_fs(emitter);
     io::emit_getcwd(emitter);
+    pointers::emit_ptr_check_nonnull(emitter);
+    pointers::emit_str_to_cstr(emitter);
+    pointers::emit_cstr_to_str(emitter);
     system::emit_json_encode_bool(emitter);
     system::emit_json_encode_null(emitter);
     system::emit_json_encode_str(emitter);
@@ -458,6 +461,9 @@ mod tests {
         assert!(asm.contains("__rt_mixed_unbox:\n"));
         assert!(asm.contains("__rt_mixed_cast_string:\n"));
         assert!(asm.contains("__rt_cstr:\n"));
+        assert!(asm.contains("__rt_ptr_check_nonnull:\n"));
+        assert!(asm.contains("__rt_str_to_cstr:\n"));
+        assert!(asm.contains("__rt_cstr_to_str:\n"));
         assert!(asm.contains("__rt_fopen:\n"));
         assert!(asm.contains("__rt_fgets:\n"));
         assert!(asm.contains("__rt_feof:\n"));

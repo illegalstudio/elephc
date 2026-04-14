@@ -1,9 +1,14 @@
-use crate::codegen::emit::Emitter;
+use crate::codegen::{emit::Emitter, platform::Arch};
 
 /// __rt_str_to_cstr: copy an elephc string into a freshly allocated C string.
 /// Input:  x1 = pointer to string bytes, x2 = length
 /// Output: x0 = pointer to heap-allocated null-terminated string
 pub fn emit_str_to_cstr(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_str_to_cstr_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.raw("    .p2align 2"); // ensure 4-byte alignment for ARM64 instructions
     emitter.comment("--- runtime: str_to_cstr ---");
@@ -40,4 +45,43 @@ pub fn emit_str_to_cstr(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and caller return address
     emitter.instruction("add sp, sp, #32");                                     // deallocate local stack frame
     emitter.instruction("ret");                                                 // return to caller
+}
+
+fn emit_str_to_cstr_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: str_to_cstr ---");
+    emitter.label_global("__rt_str_to_cstr");
+
+    // -- preserve the elephc string payload across the heap allocation helper call --
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving spill slots
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame pointer for the saved source pointer and length
+    emitter.instruction("sub rsp, 16");                                         // reserve local slots for the elephc source pointer and length
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the elephc source pointer across the heap allocation helper call
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the elephc source byte length across the heap allocation helper call
+
+    // -- allocate len + 1 bytes for the dedicated null-terminated C string --
+    emitter.instruction("mov rax, rdx");                                        // move the elephc string length into the x86_64 heap helper input register
+    emitter.instruction("add rax, 1");                                          // request one extra byte for the trailing C null terminator
+    emitter.instruction("call __rt_heap_alloc");                                // allocate writable storage for the foreign C ABI string copy
+    emitter.instruction("mov r8, rax");                                         // preserve the destination base pointer for the return value
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the elephc source pointer after the allocator helper returns
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the elephc source byte length after the allocator helper returns
+
+    // -- copy bytes into the dedicated C string buffer --
+    emitter.label("__rt_str_to_cstr_loop");
+    emitter.instruction("test rcx, rcx");                                       // stop copying once every elephc payload byte has been duplicated
+    emitter.instruction("jz __rt_str_to_cstr_done");                            // append the trailing null terminator once the payload copy is complete
+    emitter.instruction("mov r10b, BYTE PTR [r9]");                             // load one byte from the elephc string payload
+    emitter.instruction("mov BYTE PTR [rax], r10b");                            // store the copied byte into the foreign C string buffer
+    emitter.instruction("add r9, 1");                                           // advance the elephc source cursor after copying one byte
+    emitter.instruction("add rax, 1");                                          // advance the C-string destination cursor after copying one byte
+    emitter.instruction("sub rcx, 1");                                          // decrement the remaining-byte counter
+    emitter.instruction("jmp __rt_str_to_cstr_loop");                           // continue copying until the entire payload has been duplicated
+
+    emitter.label("__rt_str_to_cstr_done");
+    emitter.instruction("mov BYTE PTR [rax], 0");                               // append the trailing C null terminator after the copied bytes
+    emitter.instruction("mov rax, r8");                                         // return the base pointer of the dedicated null-terminated C string
+    emitter.instruction("add rsp, 16");                                         // release the temporary spill slots used by the helper
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
+    emitter.instruction("ret");                                                 // return the call-scoped C string pointer in rax
 }

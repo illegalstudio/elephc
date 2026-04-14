@@ -1,6 +1,7 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -12,6 +13,13 @@ pub fn emit(
     _data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("ptr_null()");
-    emitter.instruction("mov x0, #0");                                          // null pointer (0x0)
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x0, #0");                                  // materialize the null pointer sentinel in the AArch64 integer result register
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rax, 0");                                  // materialize the null pointer sentinel in the x86_64 integer result register
+        }
+    }
     Some(PhpType::Pointer(None))
 }
