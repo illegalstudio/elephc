@@ -368,10 +368,11 @@ pub(crate) fn save_concat_offset_before_nested_call(emitter: &mut Emitter, ctx: 
             abi::emit_push_reg(emitter, scratch);                                // save caller concat offset across nested call on the temporary stack
         }
         crate::codegen::platform::Arch::X86_64 => {
-            let slot = ctx
-                .nested_concat_offset_offset
-                .expect("codegen bug: missing nested concat spill slot");
-            abi::store_at_offset(emitter, scratch, slot);                        // spill caller concat offset into the dedicated frame slot so nested x86_64 calls cannot clobber it
+            if let Some(slot) = ctx.nested_concat_offset_offset {
+                abi::store_at_offset(emitter, scratch, slot);                    // spill caller concat offset into the dedicated frame slot so nested x86_64 calls cannot clobber it
+            } else {
+                abi::emit_push_reg(emitter, scratch);                            // fall back to the temporary stack in raw emitter/unit-test contexts that do not allocate hidden frame slots
+            }
         }
     }
 }
@@ -390,10 +391,11 @@ pub(crate) fn restore_concat_offset_after_nested_call(
             abi::emit_pop_reg(emitter, scratch);                                // pop the saved caller concat offset from the temporary stack
         }
         crate::codegen::platform::Arch::X86_64 => {
-            let slot = ctx
-                .nested_concat_offset_offset
-                .expect("codegen bug: missing nested concat spill slot");
-            abi::load_at_offset(emitter, scratch, slot);                        // reload the saved caller concat offset from the dedicated x86_64 frame slot
+            if let Some(slot) = ctx.nested_concat_offset_offset {
+                abi::load_at_offset(emitter, scratch, slot);                    // reload the saved caller concat offset from the dedicated x86_64 frame slot
+            } else {
+                abi::emit_pop_reg(emitter, scratch);                            // fall back to the temporary stack in raw emitter/unit-test contexts that do not allocate hidden frame slots
+            }
         }
     }
     abi::emit_store_reg_to_symbol(emitter, scratch, "_concat_off", 0);
