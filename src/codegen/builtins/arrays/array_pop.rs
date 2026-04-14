@@ -1,7 +1,11 @@
+use super::ensure_unique_arg::emit_ensure_unique_arg;
+use super::store_mutating_arg::emit_store_mutating_arg;
+use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -21,6 +25,36 @@ pub fn emit(
 
     let empty_label = ctx.next_label("array_pop_empty");
     let end_label = ctx.next_label("array_pop_end");
+
+    if emitter.target.arch == Arch::X86_64 {
+        emit_ensure_unique_arg(emitter, &arr_ty);
+        emit_store_mutating_arg(emitter, ctx, &args[0]);
+        emitter.instruction("mov r10, QWORD PTR [rax]");                        // load the current indexed-array length before checking whether the pop operation is empty
+        emitter.instruction(&format!("test r10, r10"));                         // check whether the indexed array currently stores any elements
+        emitter.instruction(&format!("jz {}", empty_label));                    // return null when array_pop runs on an empty indexed array
+        emitter.instruction("sub r10, 1");                                      // decrement the indexed-array length to point at the removed last element
+        emitter.instruction("mov QWORD PTR [rax], r10");                        // persist the decremented indexed-array length back into the array header
+        match &elem_ty {
+            PhpType::Str => {
+                emitter.instruction("lea r11, [rax + 24]");                     // compute the first string-slot payload address in the source indexed array
+                emitter.instruction("shl r10, 4");                              // scale the removed-element index by the 16-byte string-slot size
+                emitter.instruction("add r11, r10");                            // advance to the removed string-slot payload within the indexed array
+                emitter.instruction("mov rax, QWORD PTR [r11]");                // load the removed string pointer into the primary x86_64 string result register
+                emitter.instruction("mov rdx, QWORD PTR [r11 + 8]");            // load the removed string length into the secondary x86_64 string result register
+            }
+            _ => {
+                emitter.instruction("lea r11, [rax + 24]");                     // compute the first scalar-slot payload address in the source indexed array
+                emitter.instruction("mov rax, QWORD PTR [r11 + r10 * 8]");      // load the removed scalar payload from the last live indexed-array slot
+            }
+        }
+        emitter.instruction(&format!("jmp {}", end_label));                     // skip the empty-array null sentinel path after loading the removed payload
+
+        emitter.label(&empty_label);
+        abi::emit_load_int_immediate(emitter, "rax", i64::MAX - 1);            // materialize the shared null sentinel as the empty-array result on x86_64
+        emitter.label(&end_label);
+
+        return Some(elem_ty);
+    }
 
     // -- check if array is empty --
     emitter.instruction("ldr x9, [x0]");                                        // load current array length into x9
