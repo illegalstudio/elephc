@@ -1,10 +1,15 @@
-use crate::codegen::emit::Emitter;
+use crate::codegen::{emit::Emitter, platform::Arch};
 
 /// fgets: read one line from a file descriptor.
 /// Input:  x0=fd
 /// Output: x1=string pointer (in concat_buf), x2=string length (including \n if present)
 /// Side effect: sets _eof_flags[fd] if EOF reached
 pub fn emit_fgets(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_fgets_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: fgets ---");
     emitter.label_global("__rt_fgets");
@@ -85,4 +90,61 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
+}
+
+fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: fgets ---");
+    emitter.label_global("__rt_fgets");
+
+    emitter.instruction("cmp rdi, 0");                                          // does fgets() have a valid non-negative file descriptor to read from?
+    emitter.instruction("jge __rt_fgets_fd_ok_x86");                            // continue to the normal line-read path when the file descriptor is valid
+    emitter.instruction("xor eax, eax");                                        // return an empty string pointer immediately when fopen() failed
+    emitter.instruction("xor edx, edx");                                        // return an empty string length immediately when fopen() failed
+    emitter.instruction("ret");                                                 // skip the line-read loop entirely for invalid file descriptors
+
+    emitter.label("__rt_fgets_fd_ok_x86");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer while fgets() uses local spill slots
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved file descriptor and concat-buffer start metadata
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned stack space for the stream read loop temporaries
+
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the file descriptor across the repeated libc read() calls in the fgets() loop
+    emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // load the current concat-buffer absolute offset before appending the line bytes
+    emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // preserve the starting concat-buffer offset so the final line length can be reconstructed
+    emitter.instruction("lea r11, [rip + _concat_buf]");                        // materialize the concat-buffer base address once for the x86_64 fgets() helper
+    emitter.instruction("lea r10, [r11 + r10]");                                // compute the start pointer for the borrowed line slice that fgets() will return
+    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // preserve the line start pointer for the final elephc string result
+
+    emitter.label("__rt_fgets_loop_x86");
+    emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // reload the current concat-buffer absolute offset before reading one more byte
+    emitter.instruction("lea r11, [rip + _concat_buf]");                        // rematerialize the concat-buffer base address for the current one-byte read destination
+    emitter.instruction("lea rsi, [r11 + r10]");                                // compute the address where libc read() should append the next byte
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the tracked file descriptor as the first libc read() argument
+    emitter.instruction("mov edx, 1");                                          // request exactly one byte so fgets() can stop on the first newline
+    emitter.instruction("call read");                                           // read one byte from the stream through libc read() into the concat buffer
+    emitter.instruction("cmp rax, 0");                                          // did libc read() append a byte into the concat buffer?
+    emitter.instruction("jle __rt_fgets_eof_x86");                              // treat EOF or read failure as the end of the current line and mark the stream as exhausted
+
+    emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // reload the previous concat-buffer absolute offset before publishing the appended byte
+    emitter.instruction("add r10, 1");                                          // advance the concat-buffer offset by the one byte that libc read() appended
+    emitter.instruction("mov QWORD PTR [rip + _concat_off], r10");              // publish the updated concat-buffer offset for later string appenders
+    emitter.instruction("lea r11, [rip + _concat_buf]");                        // rematerialize the concat-buffer base address so the newly appended byte can be inspected
+    emitter.instruction("movzx ecx, BYTE PTR [r11 + r10 - 1]");                 // load the byte that was just appended at the new concat-buffer tail
+    emitter.instruction("cmp cl, 0x0A");                                        // did the newly appended byte terminate the line with a newline?
+    emitter.instruction("jne __rt_fgets_loop_x86");                             // keep reading until fgets() hits newline, EOF, or read failure
+
+    emitter.label("__rt_fgets_done_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the concat-buffer start pointer for the borrowed fgets() line slice
+    emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // reload the concat-buffer absolute end offset after the line-read loop finishes
+    emitter.instruction("sub r10, QWORD PTR [rbp - 16]");                       // compute the borrowed line length from the difference between end and start offsets
+    emitter.instruction("mov rdx, r10");                                        // return the borrowed line length in the x86_64 elephc string-length result register
+    emitter.instruction("add rsp, 32");                                         // release the fgets() spill slots before returning the borrowed line slice
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the x86_64 fgets() helper completes
+    emitter.instruction("ret");                                                 // return the borrowed concat-buffer line slice to the caller
+
+    emitter.label("__rt_fgets_eof_x86");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the file descriptor so the eof-flag table can mark this stream as exhausted
+    emitter.instruction("lea r11, [rip + _eof_flags]");                         // materialize the eof-flag table base address for the current stream descriptor
+    emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // mark the current file descriptor as EOF-reached after the zero-byte or failed read
+    emitter.instruction("jmp __rt_fgets_done_x86");                             // return the possibly empty borrowed slice accumulated before EOF or read failure
 }

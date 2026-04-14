@@ -256,6 +256,9 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     strings::emit_concat(emitter);
     strings::emit_str_persist(emitter);
     strings::emit_str_eq(emitter);
+    strings::emit_trim(emitter);
+    strings::emit_ltrim(emitter);
+    strings::emit_rtrim(emitter);
     strings::emit_addslashes(emitter);
     strings::emit_stripslashes(emitter);
     strings::emit_implode(emitter);
@@ -320,6 +323,10 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_mixed_cast_string(emitter);
     arrays::emit_mixed_write_stdout(emitter);
     io::emit_cstr(emitter);
+    io::emit_fopen(emitter);
+    io::emit_fgets(emitter);
+    io::emit_feof(emitter);
+    io::emit_fread(emitter);
     io::emit_scandir(emitter);
     io::emit_glob(emitter);
     io::emit_tempnam(emitter);
@@ -389,6 +396,9 @@ mod tests {
         assert!(asm.contains("__rt_concat:\n"));
         assert!(asm.contains("__rt_str_persist:\n"));
         assert!(asm.contains("__rt_str_eq:\n"));
+        assert!(asm.contains("__rt_trim:\n"));
+        assert!(asm.contains("__rt_ltrim:\n"));
+        assert!(asm.contains("__rt_rtrim:\n"));
         assert!(asm.contains("__rt_addslashes:\n"));
         assert!(asm.contains("__rt_stripslashes:\n"));
         assert!(asm.contains("__rt_implode:\n"));
@@ -446,6 +456,10 @@ mod tests {
         assert!(asm.contains("__rt_mixed_unbox:\n"));
         assert!(asm.contains("__rt_mixed_cast_string:\n"));
         assert!(asm.contains("__rt_cstr:\n"));
+        assert!(asm.contains("__rt_fopen:\n"));
+        assert!(asm.contains("__rt_fgets:\n"));
+        assert!(asm.contains("__rt_feof:\n"));
+        assert!(asm.contains("__rt_fread:\n"));
         assert!(asm.contains("__rt_scandir:\n"));
         assert!(asm.contains("__rt_glob:\n"));
         assert!(asm.contains("__rt_tempnam:\n"));
