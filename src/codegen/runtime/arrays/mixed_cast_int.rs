@@ -72,7 +72,7 @@ fn emit_mixed_cast_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // save the caller frame pointer before this helper allocates its own frame
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame pointer for the helper body
     emitter.instruction("sub rsp, 16");                                         // reserve one aligned temporary slot so nested helper calls keep the SysV stack aligned
-    abi::emit_call_label(emitter, "__rt_mixed_unbox");                          // return the mixed runtime tag in rax and payload words in rdi/rsi for the boxed value
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");                          // return the mixed runtime tag in rax and payload words in rdi/rdx for the boxed value
     emitter.instruction("cmp rax, 0");                                          // does the mixed payload already hold an int?
     emitter.instruction("je __rt_mixed_cast_int_from_int_linux_x86_64");        // ints reuse their stored payload directly
     emitter.instruction("cmp rax, 1");                                          // does the mixed payload hold a string?
@@ -94,7 +94,6 @@ fn emit_mixed_cast_int_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_cast_int_from_string_linux_x86_64");
     emitter.instruction("mov rax, rdi");                                        // move the unboxed string pointer into the standard x86_64 string result register
-    emitter.instruction("mov rdx, rsi");                                        // move the unboxed string length into the standard x86_64 string result register
     abi::emit_call_label(emitter, "__rt_atoi");                                 // parse the unboxed string payload as an integer
     emitter.instruction("jmp __rt_mixed_cast_int_done_linux_x86_64");           // return the parsed integer result
 
