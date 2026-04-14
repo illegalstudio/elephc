@@ -254,6 +254,8 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     strings::emit_str_eq(emitter);
     strings::emit_addslashes(emitter);
     strings::emit_stripslashes(emitter);
+    strings::emit_implode(emitter);
+    strings::emit_implode_int(emitter);
     arrays::emit_array_new(emitter);
     arrays::emit_array_fill(emitter);
     arrays::emit_array_fill_refcounted(emitter);
@@ -295,6 +297,9 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_decref_array(emitter);
     arrays::emit_array_key_exists(emitter);
     arrays::emit_array_search(emitter);
+    arrays::emit_array_column(emitter);
+    arrays::emit_array_column_ref(emitter);
+    arrays::emit_array_column_str(emitter);
     arrays::emit_array_diff_key(emitter);
     arrays::emit_array_intersect_key(emitter);
     arrays::emit_decref_hash(emitter);
@@ -367,6 +372,8 @@ mod tests {
         assert!(asm.contains("__rt_str_eq:\n"));
         assert!(asm.contains("__rt_addslashes:\n"));
         assert!(asm.contains("__rt_stripslashes:\n"));
+        assert!(asm.contains("__rt_implode:\n"));
+        assert!(asm.contains("__rt_implode_int:\n"));
         assert!(asm.contains("__rt_array_new:\n"));
         assert!(asm.contains("__rt_array_fill:\n"));
         assert!(asm.contains("__rt_array_fill_refcounted:\n"));
@@ -404,6 +411,9 @@ mod tests {
         assert!(asm.contains("__rt_hash_get:\n"));
         assert!(asm.contains("__rt_array_fill_keys:\n"));
         assert!(asm.contains("__rt_array_fill_keys_refcounted:\n"));
+        assert!(asm.contains("__rt_array_column:\n"));
+        assert!(asm.contains("__rt_array_column_ref:\n"));
+        assert!(asm.contains("__rt_array_column_str:\n"));
         assert!(asm.contains("__rt_decref_hash:\n"));
         assert!(asm.contains("__rt_hash_free_deep:\n"));
         assert!(asm.contains("__rt_decref_any:\n"));
