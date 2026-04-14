@@ -193,6 +193,7 @@ pub fn emit(
         return Some(PhpType::Array(Box::new(val_ty)));
     }
 
-    // -- indexed array: array_values is a no-op, return same array type --
+    // -- indexed array: array_values is a no-op, but the call still returns a new alias --
+    abi::emit_incref_if_refcounted(emitter, &arr_ty);                          // retain the borrowed indexed array because function-call expressions are treated as owned results by callers
     Some(arr_ty)
 }
