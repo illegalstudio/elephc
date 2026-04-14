@@ -80,8 +80,8 @@ fn emit_array_push_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the owned string length returned by the string-persist helper
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the unique indexed-array pointer after string persistence
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the indexed-array logical length before checking append capacity
-    emitter.instruction("mov r12, QWORD PTR [r10 + 8]");                        // load the indexed-array capacity before deciding between the fast path and growth
-    emitter.instruction("cmp r11, r12");                                        // is the indexed array already full at the current logical length?
+    emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load the indexed-array capacity before deciding between the fast path and growth
+    emitter.instruction("cmp r11, rcx");                                        // is the indexed array already full at the current logical length?
     emitter.instruction("jae __rt_array_push_str_grow");                        // grow the indexed array when the appended owned string would exceed the current capacity
     emitter.label("__rt_array_push_str_store");
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the current indexed-array pointer before storing the owned string slot

@@ -280,6 +280,7 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_array_unshift(emitter);
     arrays::emit_array_unique(emitter);
     arrays::emit_array_map(emitter);
+    arrays::emit_array_map_str(emitter);
     arrays::emit_array_filter(emitter);
     arrays::emit_array_filter_refcounted(emitter);
     arrays::emit_array_reduce(emitter);
@@ -392,6 +393,7 @@ mod tests {
         assert!(asm.contains("__rt_array_unshift:\n"));
         assert!(asm.contains("__rt_array_unique:\n"));
         assert!(asm.contains("__rt_array_map:\n"));
+        assert!(asm.contains("__rt_array_map_str:\n"));
         assert!(asm.contains("__rt_array_filter:\n"));
         assert!(asm.contains("__rt_array_filter_refcounted:\n"));
         assert!(asm.contains("__rt_array_reduce:\n"));
