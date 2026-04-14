@@ -107,13 +107,13 @@ pub fn emit_extern_call(
     }
 
     // -- call the C function --
-    crate::codegen::expr::save_concat_offset_before_nested_call(emitter);
+    crate::codegen::expr::save_concat_offset_before_nested_call(emitter, ctx);
     let c_sym = emitter.target.extern_symbol(name);
     abi::emit_call_label(emitter, &c_sym);                                      // call the extern C function symbol through the target-aware direct-call helper
     if sig.return_type == PhpType::Int {
         emit_sign_extend_i32_result(emitter);                                   // sign-extend 32-bit C int returns before PHP comparisons use the native integer result register
     }
-    crate::codegen::expr::restore_concat_offset_after_nested_call(emitter, &sig.return_type);
+    crate::codegen::expr::restore_concat_offset_after_nested_call(emitter, ctx, &sig.return_type);
 
     // -- handle return value --
     if sig.return_type == PhpType::Str {

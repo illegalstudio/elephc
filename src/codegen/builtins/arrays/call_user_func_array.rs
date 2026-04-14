@@ -54,7 +54,7 @@ pub fn emit(
     let save_concat_before_args =
         emitter.target.arch == crate::codegen::platform::Arch::X86_64;
     if save_concat_before_args {
-        crate::codegen::expr::save_concat_offset_before_nested_call(emitter);
+        crate::codegen::expr::save_concat_offset_before_nested_call(emitter, ctx);
     }
     let call_reg = abi::nested_call_reg(emitter);
     let result_reg = abi::int_result_reg(emitter);
@@ -410,14 +410,14 @@ pub fn emit(
 
     // -- call callback via the resolved address in x19 --
     if !save_concat_before_args {
-        crate::codegen::expr::save_concat_offset_before_nested_call(emitter);
+        crate::codegen::expr::save_concat_offset_before_nested_call(emitter, ctx);
     }
     abi::emit_call_reg(emitter, call_reg);
     if save_concat_before_args {
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
-        crate::codegen::expr::restore_concat_offset_after_nested_call(emitter, &ret_ty);
+        crate::codegen::expr::restore_concat_offset_after_nested_call(emitter, ctx, &ret_ty);
     } else {
-        crate::codegen::expr::restore_concat_offset_after_nested_call(emitter, &ret_ty);
+        crate::codegen::expr::restore_concat_offset_after_nested_call(emitter, ctx, &ret_ty);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
     }
 

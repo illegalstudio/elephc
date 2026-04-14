@@ -252,6 +252,7 @@ fn emit_function_with_label_and_class(
     ctx.activation_prev_offset = Some(ctx.alloc_hidden_slot(8));
     ctx.pending_action_offset = Some(ctx.alloc_hidden_slot(8));
     ctx.pending_target_offset = Some(ctx.alloc_hidden_slot(8));
+    ctx.nested_concat_offset_offset = Some(ctx.alloc_hidden_slot(8));
     ctx.pending_return_value_offset = Some(ctx.alloc_hidden_slot(16));
 
     let vars_size = ctx.stack_offset;

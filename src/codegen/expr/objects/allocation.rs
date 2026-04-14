@@ -192,14 +192,14 @@ pub(super) fn emit_new_object(
                 }
             }
         }
-        save_concat_offset_before_nested_call(emitter);
+        save_concat_offset_before_nested_call(emitter, ctx);
         let constructor_impl = class_info
             .method_impl_classes
             .get("__construct")
             .map(String::as_str)
             .unwrap_or(class_name);
         abi::emit_call_label(emitter, &method_symbol(constructor_impl, "__construct")); // call the resolved constructor implementation for the active target ABI
-        restore_concat_offset_after_nested_call(emitter, &PhpType::Void);
+        restore_concat_offset_after_nested_call(emitter, ctx, &PhpType::Void);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);             // drop spilled constructor arguments after the nested call returns
     }
 

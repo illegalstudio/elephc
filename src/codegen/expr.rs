@@ -360,18 +360,42 @@ fn emit_function_call(
     calls::emit_function_call(name, args, emitter, ctx, data)
 }
 
-pub(crate) fn save_concat_offset_before_nested_call(emitter: &mut Emitter) {
+pub(crate) fn save_concat_offset_before_nested_call(emitter: &mut Emitter, ctx: &Context) {
     let scratch = abi::temp_int_reg(emitter.target);
     abi::emit_load_symbol_to_reg(emitter, scratch, "_concat_off", 0);
-    abi::emit_push_reg(emitter, scratch);                                        // save caller concat offset across nested call on the temporary stack
+    match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            abi::emit_push_reg(emitter, scratch);                                // save caller concat offset across nested call on the temporary stack
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            let slot = ctx
+                .nested_concat_offset_offset
+                .expect("codegen bug: missing nested concat spill slot");
+            abi::store_at_offset(emitter, scratch, slot);                        // spill caller concat offset into the dedicated frame slot so nested x86_64 calls cannot clobber it
+        }
+    }
 }
 
-pub(crate) fn restore_concat_offset_after_nested_call(emitter: &mut Emitter, return_ty: &PhpType) {
+pub(crate) fn restore_concat_offset_after_nested_call(
+    emitter: &mut Emitter,
+    ctx: &Context,
+    return_ty: &PhpType,
+) {
     if *return_ty == PhpType::Str {
         abi::emit_call_label(emitter, "__rt_str_persist");                      // persist returned string before restoring caller concat cursor
     }
     let scratch = abi::temp_int_reg(emitter.target);
-    abi::emit_pop_reg(emitter, scratch);                                        // pop the saved caller concat offset from the temporary stack
+    match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            abi::emit_pop_reg(emitter, scratch);                                // pop the saved caller concat offset from the temporary stack
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            let slot = ctx
+                .nested_concat_offset_offset
+                .expect("codegen bug: missing nested concat spill slot");
+            abi::load_at_offset(emitter, scratch, slot);                        // reload the saved caller concat offset from the dedicated x86_64 frame slot
+        }
+    }
     abi::emit_store_reg_to_symbol(emitter, scratch, "_concat_off", 0);
 }
 

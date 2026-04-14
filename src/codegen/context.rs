@@ -114,6 +114,7 @@ pub struct Context {
     /// Hidden control-flow continuation state used to route return/break/continue through finally blocks.
     pub pending_action_offset: Option<usize>,
     pub pending_target_offset: Option<usize>,
+    pub nested_concat_offset_offset: Option<usize>,
     pub pending_return_value_offset: Option<usize>,
     /// Pre-allocated exception handler slots for try/catch lowering.
     pub try_slot_offsets: Vec<usize>,
@@ -180,6 +181,7 @@ impl Context {
             activation_frame_base_offset: None,
             pending_action_offset: None,
             pending_target_offset: None,
+            nested_concat_offset_offset: None,
             pending_return_value_offset: None,
             try_slot_offsets: Vec::new(),
             next_try_slot_idx: 0,

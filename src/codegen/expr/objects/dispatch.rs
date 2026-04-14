@@ -151,7 +151,7 @@ pub(super) fn emit_dispatch_instance_method(
     let (ret_ty, slot, direct_private_label) =
         resolve_instance_method_dispatch(ctx, class_name, method);
 
-    save_concat_offset_before_nested_call(emitter);
+    save_concat_offset_before_nested_call(emitter, ctx);
     if let Some(slot) = slot {
         let class_id_reg = abi::temp_int_reg(emitter.target);
         let dispatch_reg = abi::symbol_scratch_reg(emitter);
@@ -175,7 +175,7 @@ pub(super) fn emit_dispatch_instance_method(
             class_name, method
         ));
     }
-    restore_concat_offset_after_nested_call(emitter, &ret_ty);
+    restore_concat_offset_after_nested_call(emitter, ctx, &ret_ty);
 
     ret_ty
 }
@@ -433,7 +433,7 @@ pub(super) fn emit_static_method_call(
     }
     let overflow_bytes = pop_args_to_registers(emitter, &assignments);
 
-    save_concat_offset_before_nested_call(emitter);
+    save_concat_offset_before_nested_call(emitter, ctx);
     if dynamic_static_dispatch {
         let slot = static_slot.expect("codegen bug: dynamic static dispatch without slot");
         emitter.instruction(&format!("mov {}, {}", class_id_scratch, hidden_called_class_reg)); // preserve the forwarded called-class id across static-vtable address materialization
@@ -453,7 +453,7 @@ pub(super) fn emit_static_method_call(
     } else {
         abi::emit_call_label(emitter, &label);                                  // call the resolved static or parent/self method target
     }
-    restore_concat_offset_after_nested_call(emitter, &ret_ty);
+    restore_concat_offset_after_nested_call(emitter, ctx, &ret_ty);
     if overflow_bytes > 0 {
         abi::emit_release_temporary_stack(emitter, overflow_bytes);             // drop spilled stack arguments after the static call returns
     }
