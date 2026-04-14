@@ -2,7 +2,9 @@ use super::super::context::Context;
 use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
 use super::super::abi;
-use super::{coerce_null_to_zero, coerce_result_to_type, coerce_to_string, emit_expr};
+use super::{
+    coerce_result_to_type, coerce_to_string, coerce_to_truthiness, emit_expr,
+};
 use super::{widen_codegen_type, BinOp, Expr, ExprKind, PhpType};
 
 pub(super) fn emit_cast(
@@ -77,38 +79,7 @@ pub(super) fn emit_cast(
             PhpType::Str
         }
         CastType::Bool => {
-            match &src_ty {
-                PhpType::Bool => {}
-                PhpType::Int | PhpType::Void => {
-                    coerce_null_to_zero(emitter, &src_ty);
-                    emitter.instruction("cmp x0, #0");                          // test if value is zero
-                    emitter.instruction("cset x0, ne");                         // x0=1 if nonzero (truthy), 0 if zero (falsy)
-                }
-                PhpType::Float => {
-                    emitter.instruction("fcmp d0, #0.0");                       // compare float against zero
-                    emitter.instruction("cset x0, ne");                         // x0=1 if nonzero, 0 if zero
-                }
-                PhpType::Str => {
-                    emitter.instruction("cmp x2, #0");                          // check if string length is zero
-                    emitter.instruction("cset x0, ne");                         // x0=1 if non-empty, 0 if empty
-                }
-                PhpType::Array(_) | PhpType::AssocArray { .. } => {
-                    emitter.instruction("ldr x0, [x0]");                        // load array length from header
-                    emitter.instruction("cmp x0, #0");                          // check if array is empty
-                    emitter.instruction("cset x0, ne");                         // x0=1 if non-empty, 0 if empty
-                }
-                PhpType::Mixed | PhpType::Union(_) => {
-                    emitter.instruction("bl __rt_mixed_cast_bool");             // cast the boxed mixed payload to bool at runtime
-                }
-                PhpType::Callable
-                | PhpType::Object(_)
-                | PhpType::Buffer(_)
-                | PhpType::Packed(_)
-                | PhpType::Pointer(_) => {
-                    emitter.instruction("cmp x0, #0");                          // test if callable/object address is zero
-                    emitter.instruction("cset x0, ne");                         // x0=1 if nonzero (truthy)
-                }
-            }
+            coerce_to_truthiness(emitter, ctx, &src_ty);                        // normalize any source value to PHP truthiness using the shared target-aware helper path
             PhpType::Bool
         }
         CastType::Array => {

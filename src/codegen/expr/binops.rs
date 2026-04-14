@@ -383,26 +383,73 @@ pub(super) fn emit_binop(
             let lt = emit_expr(left, emitter, ctx, data);
             coerce_null_to_zero(emitter, &lt);
             // -- save left operand on stack while evaluating right --
-            emitter.instruction("str x0, [sp, #-16]!");                         // push left integer operand onto stack
+            abi::emit_push_reg(emitter, abi::int_result_reg(emitter));          // push the left integer operand onto the target temporary stack while evaluating the right operand
             let rt = emit_expr(right, emitter, ctx, data);
             coerce_null_to_zero(emitter, &rt);
             // -- pop left operand and apply bitwise operation --
-            emitter.instruction("ldr x1, [sp], #16");                           // pop left integer operand into x1
+            let left_reg = match emitter.target.arch {
+                Arch::AArch64 => "x1",
+                Arch::X86_64 => "r10",
+            };
+            let result_reg = abi::int_result_reg(emitter);
+            abi::emit_pop_reg(emitter, left_reg);                               // pop the left integer operand into a scratch register that matches the current target ABI
             match op {
                 BinOp::BitAnd => {
-                    emitter.instruction("and x0, x1, x0");                      // bitwise AND: left & right
+                    match emitter.target.arch {
+                        Arch::AArch64 => {
+                            emitter.instruction("and x0, x1, x0");              // bitwise AND: left & right
+                        }
+                        Arch::X86_64 => {
+                            emitter.instruction(&format!("and {}, {}", left_reg, result_reg)); // bitwise AND: left & right in the x86_64 scratch register
+                            emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); // move the bitwise-AND result back into the standard integer result register
+                        }
+                    }
                 }
                 BinOp::BitOr => {
-                    emitter.instruction("orr x0, x1, x0");                      // bitwise OR: left | right
+                    match emitter.target.arch {
+                        Arch::AArch64 => {
+                            emitter.instruction("orr x0, x1, x0");              // bitwise OR: left | right
+                        }
+                        Arch::X86_64 => {
+                            emitter.instruction(&format!("or {}, {}", left_reg, result_reg)); // bitwise OR: left | right in the x86_64 scratch register
+                            emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); // move the bitwise-OR result back into the standard integer result register
+                        }
+                    }
                 }
                 BinOp::BitXor => {
-                    emitter.instruction("eor x0, x1, x0");                      // bitwise XOR: left ^ right
+                    match emitter.target.arch {
+                        Arch::AArch64 => {
+                            emitter.instruction("eor x0, x1, x0");              // bitwise XOR: left ^ right
+                        }
+                        Arch::X86_64 => {
+                            emitter.instruction(&format!("xor {}, {}", left_reg, result_reg)); // bitwise XOR: left ^ right in the x86_64 scratch register
+                            emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); // move the bitwise-XOR result back into the standard integer result register
+                        }
+                    }
                 }
                 BinOp::ShiftLeft => {
-                    emitter.instruction("lsl x0, x1, x0");                      // left shift: left << right
+                    match emitter.target.arch {
+                        Arch::AArch64 => {
+                            emitter.instruction("lsl x0, x1, x0");              // left shift: left << right
+                        }
+                        Arch::X86_64 => {
+                            emitter.instruction("mov rcx, rax");                // move the right shift amount into rcx because x86_64 variable shifts read their count from cl
+                            emitter.instruction(&format!("shl {}, cl", left_reg)); // arithmetic left shift: left << right using the x86_64 variable-count form
+                            emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); // move the shifted result back into the standard integer result register
+                        }
+                    }
                 }
                 BinOp::ShiftRight => {
-                    emitter.instruction("asr x0, x1, x0");                      // arithmetic right shift: left >> right
+                    match emitter.target.arch {
+                        Arch::AArch64 => {
+                            emitter.instruction("asr x0, x1, x0");              // arithmetic right shift: left >> right
+                        }
+                        Arch::X86_64 => {
+                            emitter.instruction("mov rcx, rax");                // move the right shift amount into rcx because x86_64 variable shifts read their count from cl
+                            emitter.instruction(&format!("sar {}, cl", left_reg)); // arithmetic right shift: left >> right using the x86_64 variable-count form
+                            emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); // move the shifted result back into the standard integer result register
+                        }
+                    }
                 }
                 _ => unreachable!(),
             }
@@ -414,9 +461,9 @@ pub(super) fn emit_binop(
             let use_float = lt == PhpType::Float;
             // -- save left operand on stack while evaluating right --
             if use_float {
-                emitter.instruction("str d0, [sp, #-16]!");                     // push left float operand onto stack
+                abi::emit_push_float_reg(emitter, abi::float_result_reg(emitter)); // push the left float operand onto the target temporary stack
             } else {
-                emitter.instruction("str x0, [sp, #-16]!");                     // push left integer operand onto stack
+                abi::emit_push_reg(emitter, abi::int_result_reg(emitter));      // push the left integer operand onto the target temporary stack
             }
             let rt = emit_expr(right, emitter, ctx, data);
             coerce_null_to_zero(emitter, &rt);
@@ -424,24 +471,61 @@ pub(super) fn emit_binop(
             if lt == PhpType::Float || rt == PhpType::Float {
                 // -- float spaceship comparison --
                 if rt != PhpType::Float {
-                    emitter.instruction("scvtf d0, x0");                        // promote right int to float
+                    emit_promote_int_to_float(
+                        emitter,
+                        abi::float_result_reg(emitter),
+                        abi::int_result_reg(emitter),
+                    );
                 }
                 if lt == PhpType::Float {
-                    emitter.instruction("ldr d1, [sp], #16");                   // pop left float
+                    emit_pop_left_float_for_comparison(emitter, &lt);            // pop the left float operand into the comparison scratch register for the current target
                 } else {
-                    emitter.instruction("ldr x9, [sp], #16");                   // pop left int
-                    emitter.instruction("scvtf d1, x9");                        // promote left int to float
+                    emit_pop_left_float_for_comparison(emitter, &lt);            // pop the left integer operand and promote it to the comparison float scratch register
                 }
-                // d1 = left, d0 = right
-                emitter.instruction("fcmp d1, d0");                             // compare left vs right floats
+                emit_float_compare(emitter);                                     // compare the left and right float operands using the target-native floating-point compare instruction
             } else {
                 // -- integer spaceship comparison --
-                emitter.instruction("ldr x1, [sp], #16");                       // pop left integer
-                emitter.instruction("cmp x1, x0");                              // compare left vs right integers
+                let left_reg = match emitter.target.arch {
+                    Arch::AArch64 => "x1",
+                    Arch::X86_64 => "r10",
+                };
+                abi::emit_pop_reg(emitter, left_reg);                           // pop the left integer operand into a target-appropriate scratch register
+                match emitter.target.arch {
+                    Arch::AArch64 => {
+                        emitter.instruction("cmp x1, x0");                      // compare left vs right integers
+                    }
+                    Arch::X86_64 => {
+                        emitter.instruction(&format!("cmp {}, {}", left_reg, abi::int_result_reg(emitter))); // compare left vs right integers in the x86_64 integer registers
+                    }
+                }
             }
             // -- produce -1, 0, or 1 based on comparison flags --
-            emitter.instruction("cset x0, gt");                                 // x0=1 if left > right
-            emitter.instruction("csinv x0, x0, xzr, ge");                       // x0=-1 if left < right (invert zero -> all-ones)
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("cset x0, gt");                         // x0=1 if left > right
+                    emitter.instruction("csinv x0, x0, xzr, ge");               // x0=-1 if left < right (invert zero -> all-ones)
+                }
+                Arch::X86_64 => {
+                    let greater_label = ctx.next_label("spaceship_gt");
+                    let less_label = ctx.next_label("spaceship_lt");
+                    let done_label = ctx.next_label("spaceship_done");
+                    if lt == PhpType::Float || rt == PhpType::Float {
+                        emitter.instruction(&format!("ja {}", greater_label));   // jump to the positive result when the left float operand is greater than the right operand
+                        emitter.instruction(&format!("jb {}", less_label));      // jump to the negative result when the left float operand is less than the right operand
+                    } else {
+                        emitter.instruction(&format!("jg {}", greater_label));   // jump to the positive result when the left integer operand is greater than the right operand
+                        emitter.instruction(&format!("jl {}", less_label));      // jump to the negative result when the left integer operand is less than the right operand
+                    }
+                    emitter.instruction("mov rax, 0");                           // equal operands yield the neutral spaceship result 0
+                    emitter.instruction(&format!("jmp {}", done_label));         // skip the positive/negative result blocks once equality has been selected
+                    emitter.label(&greater_label);
+                    emitter.instruction("mov rax, 1");                           // left > right yields the positive spaceship result 1
+                    emitter.instruction(&format!("jmp {}", done_label));         // skip the negative result block after choosing the positive spaceship result
+                    emitter.label(&less_label);
+                    emitter.instruction("mov rax, -1");                          // left < right yields the negative spaceship result -1
+                    emitter.label(&done_label);
+                }
+            }
             PhpType::Int
         }
         BinOp::NullCoalesce => {

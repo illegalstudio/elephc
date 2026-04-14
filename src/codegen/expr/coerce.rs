@@ -202,6 +202,45 @@ pub(super) fn coerce_to_truthiness(emitter: &mut Emitter, ctx: &mut Context, ty:
                 emitter.instruction("movzx rax, al");                           // widen the boolean byte into the full integer result register
             }
         }
+    } else if matches!(
+        ty,
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Void
+            | PhpType::Callable
+            | PhpType::Object(_)
+            | PhpType::Buffer(_)
+            | PhpType::Packed(_)
+            | PhpType::Pointer(_)
+    ) {
+        // -- scalars and pointer-like values are truthy when non-zero --
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("cmp x0, #0");                              // compare the normalized scalar/pointer value against zero
+                emitter.instruction("cset x0, ne");                             // produce 1 when the scalar/pointer value is non-zero, else 0
+            }
+            Arch::X86_64 => {
+                let result_reg = abi::int_result_reg(emitter);
+                emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // compare the normalized scalar/pointer value against zero
+                emitter.instruction("setne al");                                // produce a boolean byte when the scalar/pointer value is non-zero
+                emitter.instruction("movzx rax, al");                           // widen the boolean byte into the canonical integer result register
+            }
+        }
+    } else if matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        // -- arrays are truthy when their runtime length is non-zero --
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("ldr x0, [x0]");                            // load the runtime array length from the header
+                emitter.instruction("cmp x0, #0");                              // compare the array length against zero
+                emitter.instruction("cset x0, ne");                             // produce 1 for non-empty arrays, else 0
+            }
+            Arch::X86_64 => {
+                emitter.instruction("mov rax, QWORD PTR [rax]");                // load the runtime array length from the header
+                emitter.instruction("test rax, rax");                           // compare the array length against zero
+                emitter.instruction("setne al");                                // produce a boolean byte when the array is non-empty
+                emitter.instruction("movzx rax, al");                           // widen the boolean byte into the canonical integer result register
+            }
+        }
     } else if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
         // -- mixed/union truthiness dispatches on the boxed payload at runtime --
         abi::emit_call_label(emitter, "__rt_mixed_cast_bool");                  // normalize the boxed mixed payload to PHP truthiness
