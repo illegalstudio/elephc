@@ -443,13 +443,14 @@ pub(super) fn emit_match_expr(
     let subj_ty = emit_expr(subject, emitter, ctx, data);
     match &subj_ty {
         PhpType::Str => {
-            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // save string subject
+            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+            abi::emit_push_reg_pair(emitter, ptr_reg, len_reg);                 // save the string subject in one temporary stack slot using the active target ABI
         }
         PhpType::Float => {
-            emitter.instruction("str d0, [sp, #-16]!");                         // save float subject
+            abi::emit_push_float_reg(emitter, abi::float_result_reg(emitter));  // save the float subject in one temporary stack slot using the active target ABI
         }
         _ => {
-            emitter.instruction("str x0, [sp, #-16]!");                         // save int/bool subject
+            abi::emit_push_reg(emitter, abi::int_result_reg(emitter));          // save the scalar subject in one temporary stack slot using the active target ABI
         }
     }
 
@@ -464,43 +465,74 @@ pub(super) fn emit_match_expr(
             let pat_ty = emit_expr(pattern, emitter, ctx, data);
             match &subj_ty {
                 PhpType::Str => {
-                    emitter.instruction("mov x3, x1");                          // move pattern ptr to x3
-                    emitter.instruction("mov x4, x2");                          // move pattern len to x4
-                    emitter.instruction("ldp x1, x2, [sp]");                    // peek subject string
-                    emitter.instruction("bl __rt_str_eq");                      // compare strings → x0=1 if equal
+                    match emitter.target.arch {
+                        Arch::AArch64 => {
+                            emitter.instruction("mov x3, x1");                  // move the pattern string pointer into the AArch64 right-hand compare register
+                            emitter.instruction("mov x4, x2");                  // move the pattern string length into the AArch64 right-hand compare register
+                            emitter.instruction("ldp x1, x2, [sp]");            // reload the saved subject string into the AArch64 left-hand compare registers
+                            abi::emit_call_label(emitter, "__rt_str_eq");       // compare the subject and pattern strings through the shared runtime helper
+                        }
+                        Arch::X86_64 => {
+                            emitter.instruction("mov rcx, rdx");                // move the pattern string length into the SysV fourth argument register expected by __rt_str_eq
+                            emitter.instruction("mov rdx, rax");                // move the pattern string pointer into the SysV third argument register expected by __rt_str_eq
+                            emitter.instruction("mov rdi, QWORD PTR [rsp]");    // reload the saved subject string pointer into the SysV first argument register
+                            emitter.instruction("mov rsi, QWORD PTR [rsp + 8]"); // reload the saved subject string length into the SysV second argument register
+                            abi::emit_call_label(emitter, "__rt_str_eq");       // compare the subject and pattern strings through the shared runtime helper
+                        }
+                    }
                 }
                 PhpType::Float => {
-                    emitter.instruction("ldr d1, [sp]");                        // peek subject float
-                    emitter.instruction("fcmp d1, d0");                         // compare floats
-                    emitter.instruction("cset x0, eq");                         // x0=1 if equal
+                    match emitter.target.arch {
+                        Arch::AArch64 => {
+                            emitter.instruction("ldr d1, [sp]");                // reload the saved subject float into the AArch64 scratch compare register
+                            emitter.instruction("fcmp d1, d0");                 // compare the saved subject float against the current pattern float
+                            emitter.instruction("cset x0, eq");                 // materialize the float equality result in the canonical AArch64 integer result register
+                        }
+                        Arch::X86_64 => {
+                            emitter.instruction("movsd xmm1, QWORD PTR [rsp]"); // reload the saved subject float into the x86_64 scratch compare register
+                            emitter.instruction("ucomisd xmm1, xmm0");          // compare the saved subject float against the current pattern float
+                            emitter.instruction("sete al");                     // materialize the float equality result in the low x86_64 result byte
+                            emitter.instruction("movzx eax, al");               // widen the x86_64 boolean byte back into the canonical integer result register
+                        }
+                    }
                 }
                 _ => {
-                    emitter.instruction("ldr x9, [sp]");                        // peek subject int/bool
-                    emitter.instruction("cmp x9, x0");                          // compare integers
-                    emitter.instruction("cset x0, eq");                         // x0=1 if equal
+                    match emitter.target.arch {
+                        Arch::AArch64 => {
+                            emitter.instruction("ldr x9, [sp]");                // reload the saved scalar subject into an AArch64 scratch register
+                            emitter.instruction("cmp x9, x0");                  // compare the saved scalar subject against the current pattern scalar
+                            emitter.instruction("cset x0, eq");                 // materialize the scalar equality result in the canonical AArch64 integer result register
+                        }
+                        Arch::X86_64 => {
+                            emitter.instruction("mov r10, QWORD PTR [rsp]");    // reload the saved scalar subject into an x86_64 scratch register
+                            emitter.instruction("cmp r10, rax");                // compare the saved scalar subject against the current pattern scalar
+                            emitter.instruction("sete al");                     // materialize the scalar equality result in the low x86_64 result byte
+                            emitter.instruction("movzx eax, al");               // widen the x86_64 boolean byte back into the canonical integer result register
+                        }
+                    }
                 }
             }
-            emitter.instruction(&format!("cbnz x0, {}", arm_label));            // if matched, jump to arm body
+            abi::emit_branch_if_int_result_nonzero(emitter, &arm_label);        // jump to the current match arm once the subject equals the current pattern
             if i == patterns.len() - 1 {
-                emitter.instruction(&format!("b {}", next_arm));                // no pattern matched → try next arm
+                abi::emit_jump(emitter, &next_arm);                             // continue with the next match arm when this arm's patterns all miss
             }
             let _ = pat_ty;
         }
 
         emitter.label(&arm_label);
         result_ty = emit_expr(result, emitter, ctx, data);
-        emitter.instruction(&format!("b {}", end_label));                       // jump to end after evaluating arm
+        abi::emit_jump(emitter, &end_label);                                    // skip the remaining match arms after evaluating the selected arm expression
         emitter.label(&next_arm);
     }
 
     if let Some(def) = default {
         result_ty = emit_expr(def, emitter, ctx, data);
     } else {
-        emitter.instruction("bl __rt_match_unhandled");                         // fatal when no arm matched and the match has no default arm
+        abi::emit_call_label(emitter, "__rt_match_unhandled");                  // abort when no arm matched and the match expression has no default arm
     }
 
     emitter.label(&end_label);
-    emitter.instruction("add sp, sp, #16");                                     // deallocate subject save slot
+    abi::emit_release_temporary_stack(emitter, 16);                             // release the saved subject slot without clobbering the match expression result registers
     result_ty
 }
 
