@@ -83,7 +83,7 @@ pub fn generate(
 
     // Emit flattened class methods in class-id order for deterministic output.
     let emitted_class_names = if target.arch == platform::Arch::X86_64 {
-        Some(collect_declared_class_names(program))
+        Some(collect_required_class_names(program))
     } else {
         None
     };
@@ -709,7 +709,7 @@ fn collect_main_try_slots(stmts: &[Stmt], ctx: &mut Context) {
                 catches,
                 finally_body,
             } => {
-                let slot_offset = ctx.alloc_hidden_slot(208);
+                let slot_offset = ctx.alloc_hidden_slot(216);
                 ctx.try_slot_offsets.push(slot_offset);
                 collect_main_try_slots(try_body, ctx);
                 for catch_clause in catches {
@@ -762,33 +762,264 @@ fn collect_main_try_slots(stmts: &[Stmt], ctx: &mut Context) {
     }
 }
 
-fn collect_declared_class_names(program: &Program) -> HashSet<String> {
+fn collect_required_class_names(program: &Program) -> HashSet<String> {
     let mut names = HashSet::new();
-    collect_declared_class_names_in_body(program, &mut names);
+    collect_required_class_names_in_body(program, &mut names);
     names
 }
 
-fn collect_declared_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<String>) {
+fn collect_required_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<String>) {
     for stmt in stmts {
         match &stmt.kind {
-            StmtKind::ClassDecl { name, .. } => {
+            StmtKind::ClassDecl {
+                name,
+                extends,
+                implements,
+                methods,
+                ..
+            } => {
                 names.insert(name.clone());
+                if let Some(parent) = extends {
+                    names.insert(parent.as_str().to_string());
+                }
+                for interface in implements {
+                    names.insert(interface.as_str().to_string());
+                }
+                for method in methods {
+                    collect_required_class_names_in_body(&method.body, names);
+                }
+            }
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                collect_required_class_names_in_body(try_body, names);
+                for catch_clause in catches {
+                    for exception_type in &catch_clause.exception_types {
+                        names.insert(exception_type.as_str().to_string());
+                    }
+                    collect_required_class_names_in_body(&catch_clause.body, names);
+                }
+                if let Some(body) = finally_body {
+                    collect_required_class_names_in_body(body, names);
+                }
             }
             StmtKind::NamespaceBlock { body, .. } => {
-                collect_declared_class_names_in_body(body, names);
+                collect_required_class_names_in_body(body, names);
             }
             StmtKind::IfDef {
                 then_body,
                 else_body,
                 ..
             } => {
-                collect_declared_class_names_in_body(then_body, names);
+                collect_required_class_names_in_body(then_body, names);
                 if let Some(body) = else_body {
-                    collect_declared_class_names_in_body(body, names);
+                    collect_required_class_names_in_body(body, names);
                 }
+            }
+            StmtKind::Echo(expr)
+            | StmtKind::Throw(expr)
+            | StmtKind::ExprStmt(expr)
+            | StmtKind::ConstDecl { value: expr, .. }
+            | StmtKind::Assign { value: expr, .. }
+            | StmtKind::TypedAssign { value: expr, .. }
+            | StmtKind::StaticVar { init: expr, .. } => {
+                collect_required_class_names_in_expr(expr, names);
+            }
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            } => {
+                collect_required_class_names_in_expr(condition, names);
+                collect_required_class_names_in_body(then_body, names);
+                for (elseif_condition, body) in elseif_clauses {
+                    collect_required_class_names_in_expr(elseif_condition, names);
+                    collect_required_class_names_in_body(body, names);
+                }
+                if let Some(body) = else_body {
+                    collect_required_class_names_in_body(body, names);
+                }
+            }
+            StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
+                collect_required_class_names_in_expr(condition, names);
+                collect_required_class_names_in_body(body, names);
+            }
+            StmtKind::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(init) = init {
+                    collect_required_class_names_in_body(std::slice::from_ref(init.as_ref()), names);
+                }
+                if let Some(condition) = condition {
+                    collect_required_class_names_in_expr(condition, names);
+                }
+                if let Some(update) = update {
+                    collect_required_class_names_in_body(std::slice::from_ref(update.as_ref()), names);
+                }
+                collect_required_class_names_in_body(body, names);
+            }
+            StmtKind::Foreach { array, body, .. } => {
+                collect_required_class_names_in_expr(array, names);
+                collect_required_class_names_in_body(body, names);
+            }
+            StmtKind::Switch {
+                subject,
+                cases,
+                default,
+            } => {
+                collect_required_class_names_in_expr(subject, names);
+                for (patterns, body) in cases {
+                    for pattern in patterns {
+                        collect_required_class_names_in_expr(pattern, names);
+                    }
+                    collect_required_class_names_in_body(body, names);
+                }
+                if let Some(body) = default {
+                    collect_required_class_names_in_body(body, names);
+                }
+            }
+            StmtKind::ArrayAssign { index, value, .. } => {
+                collect_required_class_names_in_expr(index, names);
+                collect_required_class_names_in_expr(value, names);
+            }
+            StmtKind::ArrayPush { value, .. }
+            | StmtKind::Return(Some(value))
+            | StmtKind::ListUnpack { value, .. }
+            | StmtKind::PropertyAssign { value, .. } => {
+                collect_required_class_names_in_expr(value, names);
             }
             _ => {}
         }
+    }
+}
+
+fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>) {
+    match &expr.kind {
+        ExprKind::BinaryOp { left, right, .. } => {
+            collect_required_class_names_in_expr(left, names);
+            collect_required_class_names_in_expr(right, names);
+        }
+        ExprKind::Negate(expr)
+        | ExprKind::Not(expr)
+        | ExprKind::BitNot(expr)
+        | ExprKind::Throw(expr)
+        | ExprKind::Spread(expr)
+        | ExprKind::Cast { expr, .. }
+        | ExprKind::PtrCast { expr, .. } => collect_required_class_names_in_expr(expr, names),
+        ExprKind::NullCoalesce { value, default } => {
+            collect_required_class_names_in_expr(value, names);
+            collect_required_class_names_in_expr(default, names);
+        }
+        ExprKind::FunctionCall { args, .. }
+        | ExprKind::ClosureCall { args, .. } => {
+            for arg in args {
+                collect_required_class_names_in_expr(arg, names);
+            }
+        }
+        ExprKind::ArrayLiteral(items) => {
+            for item in items {
+                collect_required_class_names_in_expr(item, names);
+            }
+        }
+        ExprKind::ArrayLiteralAssoc(items) => {
+            for (key, value) in items {
+                collect_required_class_names_in_expr(key, names);
+                collect_required_class_names_in_expr(value, names);
+            }
+        }
+        ExprKind::Match {
+            subject,
+            arms,
+            default,
+        } => {
+            collect_required_class_names_in_expr(subject, names);
+            for (patterns, result) in arms {
+                for pattern in patterns {
+                    collect_required_class_names_in_expr(pattern, names);
+                }
+                collect_required_class_names_in_expr(result, names);
+            }
+            if let Some(default) = default {
+                collect_required_class_names_in_expr(default, names);
+            }
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            collect_required_class_names_in_expr(array, names);
+            collect_required_class_names_in_expr(index, names);
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            collect_required_class_names_in_expr(condition, names);
+            collect_required_class_names_in_expr(then_expr, names);
+            collect_required_class_names_in_expr(else_expr, names);
+        }
+        ExprKind::Closure { body, .. } => {
+            collect_required_class_names_in_body(body, names);
+        }
+        ExprKind::NamedArg { value, .. } => collect_required_class_names_in_expr(value, names),
+        ExprKind::ExprCall { callee, args } => {
+            collect_required_class_names_in_expr(callee, names);
+            for arg in args {
+                collect_required_class_names_in_expr(arg, names);
+            }
+        }
+        ExprKind::NewObject { class_name, args } => {
+            names.insert(class_name.as_str().to_string());
+            for arg in args {
+                collect_required_class_names_in_expr(arg, names);
+            }
+        }
+        ExprKind::PropertyAccess { object, .. } => {
+            collect_required_class_names_in_expr(object, names);
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            collect_required_class_names_in_expr(object, names);
+            for arg in args {
+                collect_required_class_names_in_expr(arg, names);
+            }
+        }
+        ExprKind::StaticMethodCall { receiver, args, .. } => {
+            if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
+                names.insert(name.as_str().to_string());
+            }
+            for arg in args {
+                collect_required_class_names_in_expr(arg, names);
+            }
+        }
+        ExprKind::FirstClassCallable(target) => match target {
+            crate::parser::ast::CallableTarget::StaticMethod { receiver, .. } => {
+                if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
+                    names.insert(name.as_str().to_string());
+                }
+            }
+            crate::parser::ast::CallableTarget::Method { object, .. } => {
+                collect_required_class_names_in_expr(object, names);
+            }
+            _ => {}
+        },
+        ExprKind::BufferNew { len, .. } => collect_required_class_names_in_expr(len, names),
+        ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::Variable(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::PreIncrement(_)
+        | ExprKind::PostIncrement(_)
+        | ExprKind::PreDecrement(_)
+        | ExprKind::PostDecrement(_)
+        | ExprKind::ConstRef(_)
+        | ExprKind::EnumCase { .. }
+        | ExprKind::This => {}
     }
 }
 
@@ -1021,7 +1252,7 @@ fn emit_main_activation_record_pop(emitter: &mut Emitter, ctx: &Context) {
 
 fn emit_main_cleanup_callback(emitter: &mut Emitter, cleanup_label: &str, ctx: &Context) {
     emitter.label(cleanup_label);
-    abi::emit_cleanup_callback_prologue(emitter, abi::int_result_reg(emitter));
+    abi::emit_cleanup_callback_prologue(emitter, abi::int_arg_reg_name(emitter.target, 0));
     functions::emit_owned_local_epilogue_cleanup(emitter, ctx);
     abi::emit_cleanup_callback_epilogue(emitter);
     emitter.blank();

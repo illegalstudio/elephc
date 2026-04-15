@@ -19,7 +19,7 @@ pub(super) fn emit_catch_dispatch(
     if catches.is_empty() {
         if let Some(label) = finally_label {
             finally::emit_set_pending_action(emitter, ctx, PENDING_RETHROW, None, false);
-            emitter.instruction(&format!("b {}", label));                          // defer rethrow until after finally
+            abi::emit_jump(emitter, label);                                        // defer rethrow until after finally
         } else {
             abi::emit_call_label(emitter, "__rt_rethrow_current");                 // propagate an uncaught exception to the next enclosing try
         }
@@ -38,12 +38,12 @@ pub(super) fn emit_catch_dispatch(
                 ctx.next_label("catch_type_next")
             };
 
-            abi::emit_load_symbol_to_reg(emitter, "x0", "_exc_value", 0);
-            emitter.instruction(&format!("mov x1, #{}", catch_id));                // materialize the catch target id for runtime matching
-            emitter.instruction(&format!("mov x2, #{}", catch_kind));              // tell the runtime whether this catch target is a class or interface
+            abi::emit_load_symbol_to_reg(emitter, abi::int_arg_reg_name(emitter.target, 0), "_exc_value", 0);
+            abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 1), catch_id as i64); // materialize the catch target id for runtime matching
+            abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 2), catch_kind as i64); // tell the runtime whether this catch target is a class or interface
             abi::emit_call_label(emitter, "__rt_exception_matches");               // test whether the current exception matches this catch target
-            emitter.instruction(&format!("cbz x0, {}", mismatch_label));           // move to the next type in this catch clause when it does not match
-            emitter.instruction(&format!("b {}", catch_label));                    // jump into the shared catch body once any type matches
+            abi::emit_branch_if_int_result_zero(emitter, &mismatch_label);         // move to the next type in this catch clause when it does not match
+            abi::emit_jump(emitter, &catch_label);                                 // jump into the shared catch body once any type matches
             if idx + 1 != catch_clause.exception_types.len() {
                 emitter.label(&mismatch_label);
             }
@@ -55,16 +55,16 @@ pub(super) fn emit_catch_dispatch(
             super::super::super::emit_stmt(stmt, emitter, ctx, data);
         }
         if let Some(label) = finally_label {
-            emitter.instruction(&format!("b {}", label));                          // run finally after the matching catch body completes
+            abi::emit_jump(emitter, label);                                        // run finally after the matching catch body completes
         } else {
-            emitter.instruction(&format!("b {}", catch_end_label));                // leave the try/catch after the matching catch completes
+            abi::emit_jump(emitter, catch_end_label);                              // leave the try/catch after the matching catch completes
         }
         emitter.label(&next_catch_label);
     }
 
     if let Some(label) = finally_label {
         finally::emit_set_pending_action(emitter, ctx, PENDING_RETHROW, None, false);
-        emitter.instruction(&format!("b {}", label));                              // no catch matched, so run finally before rethrowing
+        abi::emit_jump(emitter, label);                                            // no catch matched, so run finally before rethrowing
     } else {
         abi::emit_call_label(emitter, "__rt_rethrow_current");                     // no catch matched and there is no finally to run first
     }

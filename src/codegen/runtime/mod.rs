@@ -371,6 +371,10 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     pointers::emit_ptr_check_nonnull(emitter);
     pointers::emit_str_to_cstr(emitter);
     pointers::emit_cstr_to_str(emitter);
+    exceptions::emit_exception_cleanup_frames(emitter);
+    exceptions::emit_exception_matches(emitter);
+    exceptions::emit_throw_current(emitter);
+    exceptions::emit_rethrow_current(emitter);
     system::emit_json_encode_bool(emitter);
     system::emit_json_encode_null(emitter);
     system::emit_json_encode_str(emitter);
@@ -433,6 +437,10 @@ mod tests {
         assert!(asm.contains("__rt_atoi:\n"));
         assert!(asm.contains("__rt_str_persist:\n"));
         assert!(asm.contains("__rt_str_eq:\n"));
+        assert!(asm.contains("__rt_exception_cleanup_frames:\n"));
+        assert!(asm.contains("__rt_exception_matches:\n"));
+        assert!(asm.contains("__rt_throw_current:\n"));
+        assert!(asm.contains("__rt_rethrow_current:\n"));
         assert!(asm.contains("__rt_trim:\n"));
         assert!(asm.contains("__rt_ltrim:\n"));
         assert!(asm.contains("__rt_rtrim:\n"));

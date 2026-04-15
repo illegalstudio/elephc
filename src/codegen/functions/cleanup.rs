@@ -114,7 +114,7 @@ pub(super) fn emit_frame_cleanup_callback(emitter: &mut Emitter, ctx: &Context, 
     emitter.label(cleanup_label);
     super::super::abi::emit_cleanup_callback_prologue(
         emitter,
-        super::super::abi::int_result_reg(emitter),
+        super::super::abi::int_arg_reg_name(emitter.target, 0),
     );
     emit_owned_local_epilogue_cleanup(emitter, ctx);
     super::super::abi::emit_cleanup_callback_epilogue(emitter);

@@ -145,7 +145,7 @@ pub(super) fn collect_try_slots(stmts: &[crate::parser::ast::Stmt], ctx: &mut Co
                 catches,
                 finally_body,
             } => {
-                let slot_offset = ctx.alloc_hidden_slot(208);
+                let slot_offset = ctx.alloc_hidden_slot(216);
                 ctx.try_slot_offsets.push(slot_offset);
                 collect_try_slots(try_body, ctx);
                 for catch_clause in catches {

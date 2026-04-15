@@ -139,12 +139,18 @@ impl Emitter {
 
     /// Emit `bl _func` (macOS) or `bl func` (Linux) for C library calls.
     pub fn bl_c(&mut self, func: &str) {
-        self.target.ensure_aarch64_backend("AArch64 C symbol calls");
-        match self.platform {
-            Platform::MacOS => self.instruction(&format!("bl _{}", func)),
-            Platform::Linux => {
+        match (self.platform, self.target.arch) {
+            (Platform::MacOS, Arch::AArch64) => self.instruction(&format!("bl _{}", func)),
+            (Platform::Linux, Arch::AArch64) => {
                 let remapped = self.target.remap_c_symbol(func);
                 self.instruction(&format!("bl {}", remapped));
+            }
+            (Platform::Linux, Arch::X86_64) => {
+                let remapped = self.target.remap_c_symbol(func);
+                self.instruction(&format!("call {}", remapped));
+            }
+            (Platform::MacOS, Arch::X86_64) => {
+                panic!("C symbol calls are not implemented yet for target macos-x86_64");
             }
         }
     }

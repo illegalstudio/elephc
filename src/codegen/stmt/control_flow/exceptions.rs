@@ -47,9 +47,9 @@ pub(super) fn emit_try_stmt(
     emitter.blank();
     emitter.comment("try");
     handlers::emit_try_handler_push(emitter, ctx, handler_offset);
-    handlers::emit_handler_jmpbuf_address(emitter, handler_offset, "x0");
+    handlers::emit_handler_jmpbuf_address(emitter, handler_offset, abi::int_arg_reg_name(emitter.target, 0));
     emitter.bl_c("setjmp");                                                        // snapshot the current stack/register state for this try handler
-    emitter.instruction(&format!("cbnz x0, {}", handler_resume));                  // resume at catch dispatch after a longjmp into this handler
+    abi::emit_branch_if_int_result_nonzero(emitter, &handler_resume);              // resume at catch dispatch after a longjmp into this handler
 
     if let Some(label) = &finally_label {
         ctx.finally_stack.push(FinallyContext {
@@ -67,9 +67,9 @@ pub(super) fn emit_try_stmt(
 
     handlers::emit_try_handler_pop(emitter, handler_offset);
     if let Some(label) = &finally_label {
-        emitter.instruction(&format!("b {}", label));                              // run finally after the try body completes normally
+        abi::emit_jump(emitter, label);                                            // run finally after the try body completes normally
     } else {
-        emitter.instruction(&format!("b {}", end_label));                          // skip catch dispatch after a normal try-body completion
+        abi::emit_jump(emitter, &end_label);                                       // skip catch dispatch after a normal try-body completion
     }
 
     emitter.label(&handler_resume);
@@ -84,7 +84,7 @@ pub(super) fn emit_try_stmt(
     );
 
     emitter.label(&catch_end_label);
-    emitter.instruction(&format!("b {}", end_label));                              // join point after try/catch when no finally is present
+    abi::emit_jump(emitter, &end_label);                                           // join point after try/catch when no finally is present
 
     if let Some(label) = finally_label {
         let dispatch_return = ctx.next_label("finally_dispatch_return");
