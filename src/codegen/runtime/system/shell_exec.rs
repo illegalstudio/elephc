@@ -1,9 +1,14 @@
-use crate::codegen::emit::Emitter;
+use crate::codegen::{abi, emit::Emitter, platform::Arch};
 
 /// __rt_shell_exec: execute a shell command and capture its output.
 /// Input:  x1=command ptr, x2=command len
 /// Output: x1=output ptr (in concat_buf), x2=output len
 pub fn emit_shell_exec(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_shell_exec_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: shell_exec ---");
     emitter.label_global("__rt_shell_exec");
@@ -60,4 +65,57 @@ pub fn emit_shell_exec(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
+}
+
+fn emit_shell_exec_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: shell_exec ---");
+    emitter.label_global("__rt_shell_exec");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer while the shell helper performs nested libc calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the x86_64 shell helper
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned local space for FILE*, output length, output buffer ptr, and the popen mode string
+
+    abi::emit_call_label(emitter, "__rt_cstr");                                 // convert the command string result regs into a null-terminated C string in the scratch buffer
+    emitter.instruction("mov rdi, rax");                                        // pass the null-terminated command pointer in the SysV first-argument register
+    emitter.instruction("mov BYTE PTR [rbp - 32], 0x72");                       // store 'r' as the popen mode string's first byte
+    emitter.instruction("mov BYTE PTR [rbp - 31], 0");                          // store the popen mode string's trailing C null terminator
+    emitter.instruction("lea rsi, [rbp - 32]");                                 // pass the address of the local \"r\\0\" mode string in the SysV second-argument register
+    emitter.bl_c("popen");                                                      // popen(cmd, \"r\") → rax=FILE* or NULL on failure
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the FILE* so the read loop and close path can reload it later
+    emitter.instruction("test rax, rax");                                       // did popen succeed and return a readable pipe?
+    emitter.instruction("je __rt_shell_exec_empty");                            // failed pipes map to the empty PHP string result
+
+    abi::emit_symbol_address(emitter, "r8", "_concat_buf");
+    emitter.instruction("mov QWORD PTR [rbp - 24], r8");                        // save the concat scratch buffer pointer so the read loop can append output bytes
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // initialize the shell output length counter at zero bytes
+
+    emitter.label("__rt_shell_exec_loop");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the FILE* for the next fgetc() probe
+    emitter.bl_c("fgetc");                                                      // read one byte from the pipe → eax=byte or -1 (EOF)
+    emitter.instruction("cmp eax, -1");                                         // did the pipe reach EOF?
+    emitter.instruction("je __rt_shell_exec_close");                            // stop reading once the full shell output has been consumed
+
+    emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the concat scratch buffer pointer for the next output byte store
+    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the current shell output length before appending another byte
+    emitter.instruction("mov BYTE PTR [r8 + r9], al");                          // append the freshly read shell-output byte into the concat scratch buffer
+    emitter.instruction("add r9, 1");                                           // advance the shell output length after appending one more byte
+    emitter.instruction("mov QWORD PTR [rbp - 16], r9");                        // save the updated shell output length for the next read iteration
+    emitter.instruction("jmp __rt_shell_exec_loop");                            // continue reading until the pipe reports EOF
+
+    emitter.label("__rt_shell_exec_close");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the FILE* before closing the popen pipe
+    emitter.bl_c("pclose");                                                     // close the pipe after the full command output has been read
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the concat scratch buffer pointer as the PHP string pointer result
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // return the measured command output length as the PHP string length result
+    emitter.instruction("add rsp, 32");                                         // release the x86_64 shell helper's aligned local frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the captured shell output
+    emitter.instruction("ret");                                                 // return to the caller with the captured shell output ptr/len
+
+    emitter.label("__rt_shell_exec_empty");
+    emitter.instruction("mov rax, 0");                                          // return empty string ptr (null) when popen fails
+    emitter.instruction("mov rdx, 0");                                          // return empty string len = 0 when popen fails
+    emitter.instruction("add rsp, 32");                                         // release the x86_64 shell helper's aligned local frame before returning the empty result
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the empty shell result
+    emitter.instruction("ret");                                                 // return to the caller with the empty PHP string result
 }

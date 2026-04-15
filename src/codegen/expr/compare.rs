@@ -56,7 +56,10 @@ pub(super) fn emit_cast(
                     abi::emit_int_result_to_float_result(emitter);              // convert to 0.0 double
                 }
                 PhpType::Str => {
-                    emitter.instruction("bl __rt_cstr");                        // null-terminate string (x1=ptr, x2=len → x0=cstr)
+                    abi::emit_call_label(emitter, "__rt_cstr");                 // null-terminate the current string result through the target-aware C-string helper
+                    if emitter.target.arch == crate::codegen::platform::Arch::X86_64 {
+                        emitter.instruction("mov rdi, rax");                     // pass the null-terminated C string in the SysV first-argument register before atof()
+                    }
                     emitter.bl_c("atof");                            // parse C string as double → d0=result
                 }
                 PhpType::Array(_)

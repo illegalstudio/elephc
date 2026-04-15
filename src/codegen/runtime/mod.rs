@@ -337,6 +337,8 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_decref_any(emitter);
     arrays::emit_object_free_deep(emitter);
     system::emit_build_argv(emitter);
+    system::emit_getenv(emitter);
+    system::emit_shell_exec(emitter);
     arrays::emit_incref(emitter);
     arrays::emit_decref_mixed(emitter);
     arrays::emit_decref_object(emitter);
