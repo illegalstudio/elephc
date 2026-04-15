@@ -514,41 +514,76 @@ pub(super) fn emit_array_access(
     let arr_ty = emit_expr(array, emitter, ctx, data);
 
     if let PhpType::Buffer(elem_ty) = &arr_ty {
-        emitter.instruction("str x0, [sp, #-16]!");                             // push buffer pointer while evaluating the index expression
+        let buffer_reg = abi::symbol_scratch_reg(emitter);
+        let len_reg = abi::temp_int_reg(emitter.target);
+        let stride_reg = match emitter.target.arch {
+            Arch::AArch64 => "x11",
+            Arch::X86_64 => "rcx",
+        };
+        let result_reg = abi::int_result_reg(emitter);
+        abi::emit_push_reg(emitter, result_reg);                                // preserve the buffer header pointer while evaluating the index expression
         emit_expr(index, emitter, ctx, data);
-        emitter.instruction("ldr x9, [sp], #16");                               // pop buffer pointer into scratch register x9
+        abi::emit_pop_reg(emitter, buffer_reg);                                 // restore the buffer header pointer into a scratch register
         emitter.comment("buffer access");
         let uaf_ok = ctx.next_label("buf_uaf_ok");
-        emitter.instruction(&format!("cbnz x9, {}", uaf_ok));                   // skip fatal if buffer pointer is valid
-        emitter.instruction("b __rt_buffer_use_after_free");                    // abort — buffer was freed
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("cbnz {}, {}", buffer_reg, uaf_ok));      // skip the fatal helper when the buffer header pointer is still live
+                emitter.instruction("b __rt_buffer_use_after_free");                    // abort immediately when the buffer local was nulled by buffer_free()
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("test {}, {}", buffer_reg, buffer_reg));   // check whether the restored buffer header pointer is null
+                emitter.instruction(&format!("jne {}", uaf_ok));                         // continue only when the buffer header pointer is still live
+                emitter.instruction("jmp __rt_buffer_use_after_free");                   // abort immediately when the buffer local was nulled by buffer_free()
+            }
+        }
         emitter.label(&uaf_ok);
         let elem_ty = *elem_ty.clone();
         let bounds_ok = ctx.next_label("buffer_idx_ok");
         let oob_ok = ctx.next_label("buf_oob_ok");
-        emitter.instruction("cmp x0, #0");                                      // reject negative buffer indexes
-        emitter.instruction(&format!("b.ge {}", oob_ok));                       // skip fatal if index is non-negative
-        emitter.instruction("b __rt_buffer_bounds_fail");                       // abort — negative index
-        emitter.label(&oob_ok);
-        emitter.instruction("ldr x10, [x9]");                                   // load buffer length from header
-        emitter.instruction("cmp x0, x10");                                     // compare index against logical buffer length
-        emitter.instruction(&format!("b.lo {}", bounds_ok));                    // continue once the index is in range
-        emitter.instruction("mov x1, x10");                                     // pass buffer length to the bounds-failure helper
-        emitter.instruction("bl __rt_buffer_bounds_fail");                      // abort with a dedicated buffer bounds message
-        emitter.label(&bounds_ok);
-        emitter.instruction("ldr x12, [x9, #8]");                               // load element stride from the buffer header
-        emitter.instruction("add x9, x9, #16");                                 // skip the buffer header to reach the payload base
-        emitter.instruction("madd x9, x0, x12, x9");                            // compute payload base + index*stride
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("cmp {}, #0", result_reg));                 // reject negative buffer indexes before touching the payload
+                emitter.instruction(&format!("b.ge {}", oob_ok));                        // continue once the requested index is non-negative
+                emitter.instruction("b __rt_buffer_bounds_fail");                        // abort immediately on negative buffer indexes
+                emitter.label(&oob_ok);
+                abi::emit_load_from_address(emitter, len_reg, buffer_reg, 0);            // load the logical buffer length from the header
+                emitter.instruction(&format!("cmp {}, {}", result_reg, len_reg));        // compare the requested index against the logical buffer length
+                emitter.instruction(&format!("b.lo {}", bounds_ok));                     // continue once the requested index is still in bounds
+                emitter.instruction(&format!("mov x1, {}", len_reg));                    // pass the logical buffer length to the fatal helper for parity with the ARM path
+                emitter.instruction("bl __rt_buffer_bounds_fail");                       // abort with the dedicated buffer-bounds diagnostic
+                emitter.label(&bounds_ok);
+                abi::emit_load_from_address(emitter, stride_reg, buffer_reg, 8);         // load the element stride from the buffer header
+                emitter.instruction(&format!("add {}, {}, #16", buffer_reg, buffer_reg)); // skip the buffer header to reach the contiguous payload base
+                emitter.instruction(&format!("madd {}, {}, {}, {}", buffer_reg, result_reg, stride_reg, buffer_reg)); // compute payload base + index*stride for the addressed buffer element
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("cmp {}, 0", result_reg));                  // reject negative buffer indexes before touching the payload
+                emitter.instruction(&format!("jge {}", oob_ok));                         // continue once the requested index is non-negative
+                emitter.instruction("jmp __rt_buffer_bounds_fail");                      // abort immediately on negative buffer indexes
+                emitter.label(&oob_ok);
+                abi::emit_load_from_address(emitter, len_reg, buffer_reg, 0);            // load the logical buffer length from the header
+                emitter.instruction(&format!("cmp {}, {}", result_reg, len_reg));        // compare the requested index against the logical buffer length
+                emitter.instruction(&format!("jl {}", bounds_ok));                       // continue once the requested index is still in bounds
+                emitter.instruction("jmp __rt_buffer_bounds_fail");                      // abort with the dedicated buffer-bounds diagnostic
+                emitter.label(&bounds_ok);
+                abi::emit_load_from_address(emitter, stride_reg, buffer_reg, 8);         // load the element stride from the buffer header
+                emitter.instruction(&format!("add {}, 16", buffer_reg));                 // skip the buffer header to reach the contiguous payload base
+                emitter.instruction(&format!("imul {}, {}", result_reg, stride_reg));    // scale the requested index by the element stride in bytes
+                emitter.instruction(&format!("add {}, {}", buffer_reg, result_reg));     // advance the payload base to the addressed buffer element
+            }
+        }
         match &elem_ty {
             PhpType::Float => {
-                emitter.instruction("ldr d0, [x9]");                            // load scalar float element from the contiguous payload
+                abi::emit_load_from_address(emitter, abi::float_result_reg(emitter), buffer_reg, 0); // load the floating-point payload from the addressed buffer element slot
                 return PhpType::Float;
             }
             PhpType::Packed(name) => {
-                emitter.instruction("mov x0, x9");                              // expose the packed element address as a typed pointer
+                emitter.instruction(&format!("mov {}, {}", result_reg, buffer_reg));     // expose the packed element address as a typed pointer result
                 return PhpType::Pointer(Some(name.clone()));
             }
             _ => {
-                emitter.instruction("ldr x0, [x9]");                            // load scalar/pointer element from the contiguous payload
+                abi::emit_load_from_address(emitter, result_reg, buffer_reg, 0);         // load the scalar or pointer payload from the addressed buffer element slot
                 return elem_ty;
             }
         }
@@ -763,8 +798,15 @@ pub(super) fn emit_buffer_new(
     if len_ty != PhpType::Int {
         emitter.comment("WARNING: buffer_new length was not statically typed as int");
     }
-    emitter.instruction(&format!("mov x1, #{}", stride));                       // pass element stride to the buffer allocation helper
-    emitter.instruction("bl __rt_buffer_new");                                  // allocate the buffer header + contiguous payload
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("mov x1, #{}", stride));                       // pass the element stride to the ARM buffer allocation helper in the second integer argument register
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov rdi, {}", stride));                       // pass the element stride to the x86_64 buffer allocation helper without clobbering the computed length in rax
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_buffer_new");                           // allocate the buffer header plus contiguous payload through the target-aware runtime helper
     PhpType::Buffer(Box::new(elem_ty))
 }
 
