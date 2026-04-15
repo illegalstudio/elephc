@@ -133,8 +133,11 @@ fn emit_array_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, r14");                                        // pass the source indexed-array element size to the shared array allocator helper
     emitter.instruction("call __rt_array_new");                                 // allocate a fresh indexed-array backing store for the clone
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the cloned indexed-array pointer across payload copy and ownership fixups
+    emitter.instruction("mov r11, QWORD PTR [rax - 8]");                        // snapshot the freshly allocated clone header so the x86_64 heap marker survives the metadata rewrite
+    emitter.instruction("and r11, -65536");                                     // keep the high x86_64 heap-marker bits while clearing the low container-kind payload lane
     emitter.instruction("and r15, 0xffff");                                     // preserve only the stable indexed-array kind, value_type, and copy-on-write metadata bits
-    emitter.instruction("mov QWORD PTR [rax - 8], r15");                        // stamp the cloned indexed-array with the preserved packed container metadata
+    emitter.instruction("or r11, r15");                                         // combine the fresh clone header marker bits with the stable source container-kind payload bits
+    emitter.instruction("mov QWORD PTR [rax - 8], r11");                        // stamp the cloned indexed-array with the preserved container metadata without losing the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax], r12");                            // restore the source logical length on the cloned indexed-array header
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before copying its live payload region
     emitter.instruction("lea rsi, [rsi + 24]");                                 // advance to the source indexed-array payload base

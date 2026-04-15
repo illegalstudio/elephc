@@ -185,9 +185,11 @@ fn prepare_indexed_array_assign_linux_x86_64(
     emitter.instruction("mov r12, QWORD PTR [r10 + 8]");                        // load the current indexed-array capacity before checking whether the target slot fits
     emitter.instruction("cmp r9, r12");                                         // does the target index already fit within the current indexed-array capacity?
     emitter.instruction(&format!("jb {}", grow_ready));                         // skip growth once the target slot is already addressable
+    abi::emit_push_reg(emitter, "r9");                                          // preserve the target index because the growth helper makes nested calls that may clobber caller-saved registers
     emitter.instruction("mov rdi, r10");                                        // pass the current indexed-array pointer to the x86_64 growth helper
     abi::emit_call_label(emitter, "__rt_array_grow");                           // grow the indexed-array storage until the target slot fits
     emitter.instruction("mov r10, rax");                                        // keep the possibly-reallocated indexed-array pointer in the long-lived array register
+    abi::emit_pop_reg(emitter, "r9");                                           // restore the target index after the growth helper and its nested calls clobber caller-saved registers
     emitter.instruction(&format!("jmp {}", grow_check));                        // continue growing until the target indexed-array slot is addressable
     emitter.label(&grow_ready);
     if target.is_ref {

@@ -199,6 +199,21 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov DWORD PTR [rax + 4], 1");                          // initialize the elephc refcount to one for the newly allocated heap payload
     emitter.instruction(&format!("mov r10, 0x{:x}", X86_64_HEAP_MAGIC_HI32 << 32)); // materialize the x86_64 heap marker while leaving the low kind bits clear for the caller
     emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // stamp the allocation header with the x86_64 heap marker and an initially raw heap kind
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_gc_allocs");
+    emitter.instruction("mov rdx, QWORD PTR [r11]");                            // load the current x86_64 gc_allocs counter before accounting for the new heap allocation
+    emitter.instruction("add rdx, 1");                                          // count this heap allocation in the x86_64 gc_allocs counter
+    emitter.instruction("mov QWORD PTR [r11], rdx");                            // store the updated x86_64 gc_allocs counter after the allocation
+    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the normalized payload size so live-byte accounting includes the full block footprint
+    emitter.instruction("add r11, 16");                                         // include the 16-byte uniform heap header in the x86_64 live-byte footprint accounting
+    crate::codegen::abi::emit_symbol_address(emitter, "rdx", "_gc_live");
+    emitter.instruction("mov rcx, QWORD PTR [rdx]");                            // load the current x86_64 live-byte count before adding the new heap block footprint
+    emitter.instruction("add rcx, r11");                                        // add this block's payload-plus-header footprint to the x86_64 live-byte count
+    emitter.instruction("mov QWORD PTR [rdx], rcx");                            // store the updated x86_64 live-byte count after the allocation
+    crate::codegen::abi::emit_symbol_address(emitter, "rdx", "_gc_peak");
+    emitter.instruction("mov rdi, QWORD PTR [rdx]");                            // load the previous x86_64 peak live-byte watermark before comparing against the new total
+    emitter.instruction("cmp rcx, rdi");                                        // check whether the updated x86_64 live-byte count raised the peak watermark
+    emitter.instruction("cmova rdi, rcx");                                      // keep the larger of the current x86_64 live-byte total and the previous peak watermark
+    emitter.instruction("mov QWORD PTR [rdx], rdi");                            // store the updated x86_64 peak live-byte watermark after the allocation
     emitter.instruction("add rax, 16");                                         // return the user payload pointer instead of the internal header address
     emitter.instruction("add rsp, 16");                                         // release the temporary spill slots reserved for the normalized payload size
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code

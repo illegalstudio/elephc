@@ -117,8 +117,11 @@ fn emit_array_grow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // preserve the grown indexed-array pointer across the payload copy and old-storage free helper call
     emitter.instruction("mov r14, QWORD PTR [rbp - 8]");                        // reload the previous unique indexed-array pointer after the allocator returns
     emitter.instruction("mov r15, QWORD PTR [r14 - 8]");                        // load the packed heap-kind metadata from the previous indexed-array header
+    emitter.instruction("mov r11, QWORD PTR [rax - 8]");                        // snapshot the freshly allocated grown header so the x86_64 heap marker survives the metadata rewrite
+    emitter.instruction("and r11, -65536");                                     // keep the high x86_64 heap-marker bits while clearing the low container-kind payload lane
     emitter.instruction("and r15, 0xffff");                                     // preserve only the stable indexed-array kind, value_type, and copy-on-write metadata bits
-    emitter.instruction("mov QWORD PTR [rax - 8], r15");                        // stamp the grown indexed-array with the preserved packed container metadata
+    emitter.instruction("or r11, r15");                                         // combine the fresh grown header marker bits with the stable source container-kind payload bits
+    emitter.instruction("mov QWORD PTR [rax - 8], r11");                        // stamp the grown indexed-array with the preserved container metadata without losing the x86_64 heap marker
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the previous logical length after helper calls clobbered caller-saved registers
     emitter.instruction("mov QWORD PTR [rax], r10");                            // restore the previous logical length on the grown indexed-array header
     emitter.instruction("mov QWORD PTR [rax + 8], r13");                        // store the grown indexed-array capacity in the new header

@@ -87,8 +87,8 @@ fn emit_decref_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the 32-bit refcount stored in the uniform heap header
     emitter.instruction("sub r10d, 1");                                         // decrement the refcount for the array owner that is going away
     emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // persist the decremented array refcount in the uniform heap header
-    emitter.instruction("jnz __rt_decref_array_skip");                          // only the last array owner should free the backing storage
-    emitter.instruction("call __rt_heap_free");                                 // free the array backing storage once the x86_64 refcount reaches zero
+    emitter.instruction("jnz __rt_decref_array_skip");                          // only the last array owner should trigger the indexed-array deep-free path
+    emitter.instruction("jmp __rt_array_free_deep");                            // tail-call into the indexed-array deep-free helper so nested heap-backed elements are released too
     emitter.label("__rt_decref_array_skip");
     emitter.instruction("ret");                                                 // return to the caller after the optional x86_64 array refcount update
 }

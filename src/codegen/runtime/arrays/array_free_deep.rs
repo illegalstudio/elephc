@@ -1,9 +1,17 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
+
+const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// array_free_deep: free an array and release any owned heap-backed elements.
 /// Input:  x0 = array pointer
 /// Output: none
 pub fn emit_array_free_deep(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_array_free_deep_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: array_free_deep ---");
     emitter.label_global("__rt_array_free_deep");
@@ -103,4 +111,81 @@ pub fn emit_array_free_deep(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_free_deep_done");
     emitter.instruction("ret");                                                 // return
+}
+
+fn emit_array_free_deep_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: array_free_deep ---");
+    emitter.label_global("__rt_array_free_deep");
+
+    emitter.instruction("test rax, rax");                                       // skip null indexed-array pointers immediately because they do not own heap storage
+    emitter.instruction("jz __rt_array_free_deep_done");                        // null indexed arrays need no deep-free work
+    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
+    emitter.instruction("mov r11, r10");                                        // preserve the full heap kind word before isolating the ownership marker and low-byte heap kind
+    emitter.instruction("shr r11, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
+    emitter.instruction(&format!("cmp r11d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // ignore foreign pointers that do not carry the elephc x86_64 heap marker
+    emitter.instruction("jne __rt_array_free_deep_done");                       // only elephc-owned indexed arrays participate in x86_64 deep-free bookkeeping
+    emitter.instruction("and r10, 0xff");                                       // isolate the low-byte uniform heap kind tag for a final ownership sanity check
+    emitter.instruction("cmp r10, 2");                                          // is this heap-backed payload really an indexed array?
+    emitter.instruction("jne __rt_array_free_deep_done");                       // other heap kinds must not be released through the indexed-array deep-free helper
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving indexed-array deep-free spill slots
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved array pointer, length, and loop index
+    emitter.instruction("sub rsp, 24");                                         // reserve local storage for the array pointer, logical length, and loop index while keeping SysV call alignment
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the indexed-array pointer across nested decref_any and heap_free calls
+    emitter.instruction("mov rcx, QWORD PTR [rax - 8]");                        // load the full stamped heap kind word again so the packed indexed-array value_type tag can be inspected
+    emitter.instruction("shr rcx, 8");                                          // move the packed indexed-array value_type tag into the low bits
+    emitter.instruction("and ecx, 0x7f");                                       // isolate the indexed-array value_type tag without the persistent COW bit
+    emitter.instruction("jnz __rt_array_free_deep_have_tag");                   // prefer the packed runtime tag when codegen/runtime supplied one
+    emitter.instruction("cmp QWORD PTR [rax + 16], 16");                        // legacy untyped 16-byte arrays still represent persisted string slots
+    emitter.instruction("jne __rt_array_free_deep_struct");                     // untagged scalar indexed arrays need no per-element cleanup
+    emitter.instruction("mov ecx, 1");                                          // treat legacy 16-byte indexed arrays as string arrays for deep-free purposes
+
+    emitter.label("__rt_array_free_deep_have_tag");
+    emitter.instruction("cmp ecx, 1");                                          // does this indexed array store persisted string payloads?
+    emitter.instruction("je __rt_array_free_deep_loop_setup");                  // string slots release through the uniform decref_any helper
+    emitter.instruction("cmp ecx, 4");                                          // does this indexed array store nested indexed-array pointers?
+    emitter.instruction("je __rt_array_free_deep_loop_setup");                  // nested indexed arrays need decref_any cleanup
+    emitter.instruction("cmp ecx, 5");                                          // does this indexed array store associative-array pointers?
+    emitter.instruction("je __rt_array_free_deep_loop_setup");                  // nested hashes need decref_any cleanup
+    emitter.instruction("cmp ecx, 6");                                          // does this indexed array store object / callable pointers?
+    emitter.instruction("je __rt_array_free_deep_loop_setup");                  // nested objects need decref_any cleanup
+    emitter.instruction("cmp ecx, 7");                                          // does this indexed array store boxed mixed values?
+    emitter.instruction("jne __rt_array_free_deep_struct");                     // scalar indexed arrays need no per-element cleanup
+
+    emitter.label("__rt_array_free_deep_loop_setup");
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the indexed-array logical length before scanning owned child payloads
+    emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // save the indexed-array logical length for the deep-free loop
+    emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // initialize the indexed-array loop index to zero
+
+    emitter.label("__rt_array_free_deep_loop");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the current indexed-array loop index at the top of every iteration
+    emitter.instruction("cmp r10, QWORD PTR [rbp - 16]");                       // have we already scanned every logical indexed-array slot?
+    emitter.instruction("jae __rt_array_free_deep_struct");                     // finish once the loop index reaches the saved indexed-array length
+    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the indexed-array pointer after any nested helper call
+    emitter.instruction("mov rcx, QWORD PTR [r11 - 8]");                        // reload the full stamped heap kind word so the indexed-array value_type tag stays available after nested calls
+    emitter.instruction("shr rcx, 8");                                          // move the packed indexed-array value_type tag into the low bits
+    emitter.instruction("and ecx, 0x7f");                                       // isolate the indexed-array value_type tag without the persistent COW bit
+    emitter.instruction("cmp ecx, 1");                                          // does the current indexed array store persisted string payloads?
+    emitter.instruction("je __rt_array_free_deep_load_str");                    // string payloads use 16-byte slots instead of pointer-sized slots
+    emitter.instruction("mov rax, QWORD PTR [r11 + r10 * 8 + 24]");             // load the heap-backed child pointer from the current pointer-sized indexed-array slot
+    emitter.instruction("jmp __rt_array_free_deep_release");                    // release pointer-sized payloads through the uniform decref_any helper
+
+    emitter.label("__rt_array_free_deep_load_str");
+    emitter.instruction("mov rcx, r10");                                        // copy the indexed-array slot index before scaling it into a 16-byte string-slot offset
+    emitter.instruction("shl rcx, 4");                                          // convert the slot index into the byte offset of the current 16-byte string slot
+    emitter.instruction("mov rax, QWORD PTR [r11 + rcx + 24]");                 // load the persisted string pointer from the current indexed-array string slot
+
+    emitter.label("__rt_array_free_deep_release");
+    emitter.instruction("call __rt_decref_any");                                // release the heap-backed child payload if the current indexed-array slot owns one
+    emitter.instruction("add QWORD PTR [rbp - 24], 1");                         // advance the indexed-array loop index to the next logical slot
+    emitter.instruction("jmp __rt_array_free_deep_loop");                       // continue scanning indexed-array slots until every owned child payload is released
+
+    emitter.label("__rt_array_free_deep_struct");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the indexed-array pointer after finishing the optional child cleanup pass
+    emitter.instruction("call __rt_heap_free");                                 // release the indexed-array storage itself through the x86_64 heap wrapper
+    emitter.instruction("add rsp, 24");                                         // release the spill slots reserved for the indexed-array deep-free scan state
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
+
+    emitter.label("__rt_array_free_deep_done");
+    emitter.instruction("ret");                                                 // return to the caller after releasing the indexed array and any owned heap-backed elements
 }

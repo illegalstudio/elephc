@@ -63,8 +63,10 @@ fn normalize_indexed_array_layout_linux_x86_64(
             emitter.instruction("mov r12, 8");                                  // scalar indexed arrays use ordinary 8-byte slots
             emitter.instruction("mov QWORD PTR [r10 + 16], r12");               // persist the scalar slot width in the indexed-array header
             emitter.instruction("mov r12, QWORD PTR [r10 - 8]");                // load the packed indexed-array kind word from the heap header
-            emitter.instruction("mov r14, 0x80ff");                             // preserve the indexed-array kind and persistent copy-on-write flag bits
-            emitter.instruction("and r12, r14");                                // clear stale value_type bits while keeping the stable indexed-array metadata
+            emitter.instruction("mov r14, r12");                                // copy the packed indexed-array kind word so the x86_64 heap marker and low container bits can be preserved independently
+            emitter.instruction("and r12, 0x80ff");                             // keep the low indexed-array kind and persistent copy-on-write flag bits while clearing stale value_type bits
+            emitter.instruction("and r14, -65536");                             // keep the high x86_64 heap-marker bits while clearing the low container-kind payload lane
+            emitter.instruction("or r12, r14");                                 // combine the preserved x86_64 heap marker bits with the stable scalar container metadata
             emitter.instruction("mov QWORD PTR [r10 - 8], r12");                // persist the scalar-oriented packed kind word back into the heap header
         }
     }

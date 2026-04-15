@@ -259,6 +259,17 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp r10d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // verify that the payload belongs to the x86_64 heap wrapper before delegating to libc free
     emitter.instruction("jne __rt_heap_free_done");                             // silently ignore non-owned pointers so callers can safely pass literals or concat-buffer storage
     emitter.instruction("sub rax, 16");                                         // recover the libc allocation base address from the user payload pointer
+    emitter.instruction("mov r10d, DWORD PTR [rax]");                           // load the payload size from the uniform heap header before accounting for the free
+    emitter.instruction("mov r11, r10");                                        // widen the payload size into a 64-bit scratch register for x86_64 live-byte bookkeeping
+    emitter.instruction("add r11, 16");                                         // include the 16-byte uniform heap header in the freed block footprint
+    crate::codegen::abi::emit_symbol_address(emitter, "rdx", "_gc_live");
+    emitter.instruction("mov rcx, QWORD PTR [rdx]");                            // load the current x86_64 live-byte count before subtracting the freed block footprint
+    emitter.instruction("sub rcx, r11");                                        // subtract this block's payload-plus-header footprint from the x86_64 live-byte count
+    emitter.instruction("mov QWORD PTR [rdx], rcx");                            // store the updated x86_64 live-byte count after the free
+    crate::codegen::abi::emit_symbol_address(emitter, "rdx", "_gc_frees");
+    emitter.instruction("mov rcx, QWORD PTR [rdx]");                            // load the current x86_64 gc_frees counter before accounting for the free
+    emitter.instruction("add rcx, 1");                                          // count this heap free in the x86_64 gc_frees counter
+    emitter.instruction("mov QWORD PTR [rdx], rcx");                            // store the updated x86_64 gc_frees counter after the free
     emitter.instruction("mov rdi, rax");                                        // pass the original libc allocation base to free in the first SysV argument register
     emitter.instruction("call free");                                           // release the owned x86_64 heap allocation through libc free
     emitter.label("__rt_heap_free_done");

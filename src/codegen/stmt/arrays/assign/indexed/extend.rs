@@ -53,6 +53,7 @@ fn extend_indexed_array_if_needed_linux_x86_64(
     let skip_extend = ctx.next_label("array_assign_skip_extend");
     let extend_loop = ctx.next_label("array_assign_extend_loop");
     let extend_store_len = ctx.next_label("array_assign_store_len");
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // reload the current indexed-array logical length because the preceding store path may clobber the caller-saved original-length register
     emitter.instruction("cmp r9, r11");                                         // does this indexed write extend the array beyond its original logical length?
     emitter.instruction(&format!("jb {}", skip_extend));                        // existing indexed-array slots already keep the current logical length
     emitter.instruction("mov r12, r11");                                        // start zero-filling at the previous logical end of the indexed array

@@ -245,6 +245,7 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_array_clone_shallow(emitter);
     arrays::emit_array_ensure_unique(emitter);
     arrays::emit_array_grow(emitter);
+    arrays::emit_array_free_deep(emitter);
     arrays::emit_random_u32(emitter);
     arrays::emit_random_uniform(emitter);
     arrays::emit_sort_int(emitter, false);
@@ -318,6 +319,9 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_array_walk(emitter);
     arrays::emit_hash_fnv1a(emitter);
     arrays::emit_hash_new(emitter);
+    arrays::emit_hash_insert_owned(emitter);
+    arrays::emit_hash_clone_shallow(emitter);
+    arrays::emit_hash_ensure_unique(emitter);
     arrays::emit_hash_set(emitter);
     arrays::emit_hash_get(emitter);
     arrays::emit_hash_iter(emitter);

@@ -44,12 +44,16 @@ pub(super) fn stamp_indexed_array_value_type(
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("mov {}, QWORD PTR [{} - 8]", kind_reg, array_reg)); // load the packed array kind word from the heap header
-            abi::emit_load_int_immediate(emitter, mask_reg, 0x80ff);
-            emitter.instruction(&format!("and {}, {}", kind_reg, mask_reg));              // keep only the indexed-array kind and persistent COW flag bits
+            emitter.instruction(&format!("mov {}, {}", mask_reg, kind_reg));              // copy the packed array kind word so the x86_64 heap marker and low container bits can be preserved independently
+            abi::emit_load_int_immediate(emitter, tag_reg, 0x80ff);
+            emitter.instruction(&format!("and {}, {}", kind_reg, tag_reg));               // keep only the low indexed-array kind and persistent COW flag bits from the original header
+            abi::emit_load_int_immediate(emitter, tag_reg, -65536);
+            emitter.instruction(&format!("and {}, {}", mask_reg, tag_reg));               // keep the high x86_64 heap-marker bits while clearing the low container-kind payload lane
             abi::emit_load_int_immediate(emitter, tag_reg, value_type_tag);
             emitter.instruction(&format!("shl {}, 8", tag_reg));                          // move the runtime value_type tag into the packed kind-word byte lane
-            emitter.instruction(&format!("or {}, {}", kind_reg, tag_reg));                // combine the heap kind with the runtime value_type tag
-            emitter.instruction(&format!("mov QWORD PTR [{} - 8], {}", array_reg, kind_reg)); // persist the packed array kind word back into the heap header
+            emitter.instruction(&format!("or {}, {}", kind_reg, mask_reg));               // combine the preserved x86_64 heap marker bits with the stable low container-kind payload bits
+            emitter.instruction(&format!("or {}, {}", kind_reg, tag_reg));                // combine the preserved container metadata with the new runtime value_type tag
+            emitter.instruction(&format!("mov QWORD PTR [{} - 8], {}", array_reg, kind_reg)); // persist the packed array kind word back into the heap header without losing the x86_64 heap marker
         }
     }
 }

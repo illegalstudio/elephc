@@ -220,8 +220,11 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the low payload word across the probe and optional update paths
     emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // save the high payload word across the probe and optional update paths
     emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // save the runtime value tag across the probe and optional update paths
-    emitter.instruction("mov rdi, rsi");                                        // pass the key pointer to the x86_64 hash helper in the first SysV argument register
-    emitter.instruction("mov rsi, rdx");                                        // pass the key length to the x86_64 hash helper in the second SysV argument register
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the candidate hash-table pointer so the copy-on-write helper sees the current mutation target
+    emitter.instruction("call __rt_hash_ensure_unique");                        // split shared associative arrays before insert/update mutates shared storage
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the unique hash-table pointer that subsequent probe logic must mutate
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the incoming key pointer after the copy-on-write helper clobbered caller-saved argument registers
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // reload the incoming key length after the copy-on-write helper clobbered caller-saved argument registers
     emitter.instruction("call __rt_hash_fnv1a");                                // compute the 64-bit FNV-1a hash for the inserted key
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after the hash helper returns
     emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // load the table capacity for the modulo operation and linear-probe loop
