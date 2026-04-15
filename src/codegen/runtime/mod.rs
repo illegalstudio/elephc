@@ -328,6 +328,8 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_decref_mixed(emitter);
     arrays::emit_decref_object(emitter);
     arrays::emit_mixed_from_value(emitter);
+    arrays::emit_mixed_cast_bool(emitter);
+    arrays::emit_mixed_cast_int(emitter);
     arrays::emit_mixed_free_deep(emitter);
     arrays::emit_mixed_unbox(emitter);
     arrays::emit_mixed_cast_string(emitter);
@@ -483,6 +485,8 @@ mod tests {
         assert!(asm.contains("__rt_incref:\n"));
         assert!(asm.contains("__rt_decref_mixed:\n"));
         assert!(asm.contains("__rt_mixed_from_value:\n"));
+        assert!(asm.contains("__rt_mixed_cast_bool:\n"));
+        assert!(asm.contains("__rt_mixed_cast_int:\n"));
         assert!(asm.contains("__rt_mixed_free_deep:\n"));
         assert!(asm.contains("__rt_mixed_unbox:\n"));
         assert!(asm.contains("__rt_mixed_cast_string:\n"));
