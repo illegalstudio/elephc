@@ -322,6 +322,7 @@ pub(super) fn emit_array_value_type_stamp(
             emitter.instruction(&format!("str x10, [{}, #-8]", array_reg));     // persist the packed array kind word in the heap header
         }
         Arch::X86_64 => {
+            abi::emit_push_reg(emitter, "r12");                                 // preserve the x86_64 nested-call scratch register before reusing it as a temporary array-stamp helper
             emitter.instruction(&format!("mov r10, QWORD PTR [{} - 8]", array_reg)); // load the packed array kind word from the heap header
             emitter.instruction("mov r12, 0xffffffff000080ff");                 // materialize the x86_64 heap-kind preservation mask without clobbering the array base register
             emitter.instruction("and r10, r12");                                // preserve the x86_64 heap magic marker plus the indexed-array kind and persistent COW flag
@@ -329,6 +330,7 @@ pub(super) fn emit_array_value_type_stamp(
             emitter.instruction("shl r12, 8");                                  // move the value_type tag into the packed kind-word byte lane
             emitter.instruction("or r10, r12");                                 // combine the preserved heap kind with the stamped array value_type tag
             emitter.instruction(&format!("mov QWORD PTR [{} - 8], r10", array_reg)); // persist the packed array kind word in the heap header
+            abi::emit_pop_reg(emitter, "r12");                                  // restore the x86_64 nested-call scratch register after the array value-type stamp is complete
         }
     }
 }
