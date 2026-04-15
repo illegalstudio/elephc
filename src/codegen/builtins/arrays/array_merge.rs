@@ -18,12 +18,16 @@ pub fn emit(
     let arr_ty = emit_expr(&args[0], emitter, ctx, data);
     let uses_refcounted_runtime =
         matches!(&arr_ty, PhpType::Array(inner) if inner.is_refcounted());
-    if emitter.target.arch == Arch::X86_64 && !uses_refcounted_runtime {
+    if emitter.target.arch == Arch::X86_64 {
         abi::emit_push_reg(emitter, "rax");                                     // preserve the first scalar indexed-array pointer while evaluating the second merge operand
         emit_expr(&args[1], emitter, ctx, data);
         emitter.instruction("mov rsi, rax");                                    // move the second scalar indexed-array pointer into the second x86_64 runtime argument register
         abi::emit_pop_reg(emitter, "rdi");                                      // restore the first scalar indexed-array pointer into the first x86_64 runtime argument register
-        abi::emit_call_label(emitter, "__rt_array_merge");                      // merge the two scalar indexed arrays through the x86_64 runtime helper
+        if uses_refcounted_runtime {
+            abi::emit_call_label(emitter, "__rt_array_merge_refcounted");       // merge the two refcounted indexed arrays through the x86_64 runtime helper
+        } else {
+            abi::emit_call_label(emitter, "__rt_array_merge");                  // merge the two scalar indexed arrays through the x86_64 runtime helper
+        }
 
         return match arr_ty {
             PhpType::Array(inner) => Some(PhpType::Array(inner)),

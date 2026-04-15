@@ -18,9 +18,13 @@ pub fn emit(
     let arr_ty = emit_expr(&args[0], emitter, ctx, data);
     let uses_refcounted_runtime =
         matches!(&arr_ty, PhpType::Array(inner) if inner.is_refcounted());
-    if emitter.target.arch == Arch::X86_64 && !uses_refcounted_runtime {
+    if emitter.target.arch == Arch::X86_64 {
         emitter.instruction("mov rdi, rax");                                    // move the source scalar indexed-array pointer into the first x86_64 runtime argument register
-        abi::emit_call_label(emitter, "__rt_array_unique");                     // deduplicate the scalar indexed-array payloads through the x86_64 runtime helper
+        if uses_refcounted_runtime {
+            abi::emit_call_label(emitter, "__rt_array_unique_refcounted");      // deduplicate the refcounted indexed-array payloads through the x86_64 runtime helper
+        } else {
+            abi::emit_call_label(emitter, "__rt_array_unique");                 // deduplicate the scalar indexed-array payloads through the x86_64 runtime helper
+        }
 
         return match arr_ty {
             PhpType::Array(inner) => Some(PhpType::Array(inner)),

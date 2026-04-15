@@ -16,14 +16,17 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("array_chunk()");
     let arr_ty = emit_expr(&args[0], emitter, ctx, data);
-    if emitter.target.arch == Arch::X86_64
-        && !matches!(&arr_ty, PhpType::Array(inner) if inner.is_refcounted())
-    {
+    let uses_refcounted_runtime = matches!(&arr_ty, PhpType::Array(inner) if inner.is_refcounted());
+    if emitter.target.arch == Arch::X86_64 {
         abi::emit_push_reg(emitter, "rax");                                     // preserve the source indexed array while evaluating the requested chunk size expression
         emit_expr(&args[1], emitter, ctx, data);
         emitter.instruction("mov rsi, rax");                                    // place the requested chunk size in the second x86_64 runtime argument register
         abi::emit_pop_reg(emitter, "rdi");                                      // restore the source indexed array into the first x86_64 runtime argument register
-        abi::emit_call_label(emitter, "__rt_array_chunk");                      // split the scalar indexed array into chunk arrays through the x86_64 runtime helper
+        if uses_refcounted_runtime {
+            abi::emit_call_label(emitter, "__rt_array_chunk_refcounted");       // split the refcounted indexed array into chunk arrays through the x86_64 runtime helper
+        } else {
+            abi::emit_call_label(emitter, "__rt_array_chunk");                  // split the scalar indexed array into chunk arrays through the x86_64 runtime helper
+        }
 
         return match arr_ty {
             PhpType::Array(inner) => Some(PhpType::Array(Box::new(PhpType::Array(inner)))),
@@ -37,7 +40,7 @@ pub fn emit(
     // -- call runtime to split array into chunks --
     emitter.instruction("mov x1, x0");                                          // move chunk size to x1 (second arg)
     emitter.instruction("ldr x0, [sp], #16");                                   // pop array pointer into x0 (first arg)
-    if matches!(&arr_ty, PhpType::Array(inner) if inner.is_refcounted()) {
+    if uses_refcounted_runtime {
         emitter.instruction("bl __rt_array_chunk_refcounted");                  // chunk array while retaining borrowed heap elements
     } else {
         emitter.instruction("bl __rt_array_chunk");                             // call runtime: chunk array → x0=array of arrays

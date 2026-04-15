@@ -965,6 +965,8 @@ The `generate()` function orchestrates everything:
 6. **Emit data section** — string and float literals
 7. **Emit runtime data / BSS** — global buffers, globals, statics, and lookup tables
 
+On Linux x86_64, the current minimal runtime slice now also includes the refcounted indexed-array helper family used by GC-sensitive array transforms such as `array_merge()`, `array_slice()`, `array_splice()`, `array_pad()`, `array_chunk()`, `array_diff()`, `array_intersect()`, `array_combine()`, `array_reverse()`, and `array_unique()`.
+
 ---
 
 Next: [The Runtime →](the-runtime.md)

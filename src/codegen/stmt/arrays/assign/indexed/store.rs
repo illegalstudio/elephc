@@ -95,7 +95,9 @@ fn store_indexed_array_value_linux_x86_64(
         abi::emit_pop_reg(emitter, "r9");                                         // restore the target index after releasing the previous nested payload
         abi::emit_pop_reg(emitter, "rax");                                        // restore the new nested pointer after releasing the previous nested payload
         emitter.label(&skip_release);
+        abi::emit_push_reg(emitter, "rax");                                       // preserve the new nested pointer across the indexed-array value_type stamp helper, which uses caller-saved scratch registers
         helpers::stamp_indexed_array_value_type(emitter, "r10", &state.val_ty);
+        abi::emit_pop_reg(emitter, "rax");                                        // restore the new nested pointer after the indexed-array value_type stamp helper clobbers scratch registers
         emitter.instruction("mov QWORD PTR [r10 + 24 + r9 * 8], rax");           // store the new nested pointer in the indexed-array slot after any needed release
         return;
     }
@@ -135,7 +137,9 @@ fn store_string_indexed_value_linux_x86_64(
     abi::emit_pop_reg(emitter, "r9");                                            // restore the target index after releasing the previous string payload
     abi::emit_pop_reg_pair(emitter, "rax", "rdx");                               // restore the new string pointer and length after releasing the previous string payload
     emitter.label(&skip_release);
+    abi::emit_push_reg_pair(emitter, "rax", "rdx");                              // preserve the new string pointer and length across the indexed-array value_type stamp helper, which uses caller-saved scratch registers
     helpers::stamp_indexed_array_value_type(emitter, "r10", val_ty);
+    abi::emit_pop_reg_pair(emitter, "rax", "rdx");                               // restore the new string pointer and length after the indexed-array value_type stamp helper clobbers scratch registers
     emitter.instruction("mov rcx, r9");                                          // copy the target index before scaling it into a 16-byte indexed-array string-slot offset
     emitter.instruction("shl rcx, 4");                                           // convert the target index into the byte offset of the destination string slot
     emitter.instruction("lea rcx, [r10 + rcx + 24]");                            // compute the address of the destination indexed-array string slot

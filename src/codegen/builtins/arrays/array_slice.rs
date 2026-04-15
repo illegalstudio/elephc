@@ -17,7 +17,7 @@ pub fn emit(
     let arr_ty = emit_expr(&args[0], emitter, ctx, data);
     let uses_refcounted_runtime =
         matches!(&arr_ty, PhpType::Array(inner) if inner.is_refcounted());
-    if emitter.target.arch == Arch::X86_64 && !uses_refcounted_runtime {
+    if emitter.target.arch == Arch::X86_64 {
         abi::emit_push_reg(emitter, "rax");                                     // preserve the source indexed-array pointer while evaluating the slice offset
         emit_expr(&args[1], emitter, ctx, data);
         if args.len() > 2 {
@@ -31,7 +31,11 @@ pub fn emit(
             abi::emit_pop_reg(emitter, "rdi");                                  // restore the source indexed-array pointer into the first x86_64 runtime argument register
             emitter.instruction("mov rdx, -1");                                 // use -1 as the x86_64 runtime sentinel for slicing until the end of the source array
         }
-        abi::emit_call_label(emitter, "__rt_array_slice");                      // extract the scalar indexed-array slice through the x86_64 runtime helper
+        if uses_refcounted_runtime {
+            abi::emit_call_label(emitter, "__rt_array_slice_refcounted");       // extract the refcounted indexed-array slice through the x86_64 runtime helper
+        } else {
+            abi::emit_call_label(emitter, "__rt_array_slice");                  // extract the scalar indexed-array slice through the x86_64 runtime helper
+        }
 
         return match arr_ty {
             PhpType::Array(inner) => Some(PhpType::Array(inner)),
