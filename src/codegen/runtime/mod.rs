@@ -267,6 +267,9 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     strings::emit_implode(emitter);
     strings::emit_implode_int(emitter);
     strings::emit_explode(emitter);
+    strings::emit_strtoupper(emitter);
+    strings::emit_str_repeat(emitter);
+    strings::emit_chr(emitter);
     strings::emit_base64_encode(emitter);
     strings::emit_base64_decode(emitter);
     system::emit_date(emitter);
@@ -430,6 +433,9 @@ mod tests {
         assert!(asm.contains("__rt_implode:\n"));
         assert!(asm.contains("__rt_implode_int:\n"));
         assert!(asm.contains("__rt_explode:\n"));
+        assert!(asm.contains("__rt_strtoupper:\n"));
+        assert!(asm.contains("__rt_str_repeat:\n"));
+        assert!(asm.contains("__rt_chr:\n"));
         assert!(asm.contains("__rt_base64_encode:\n"));
         assert!(asm.contains("__rt_base64_decode:\n"));
         assert!(asm.contains("__rt_date:\n"));

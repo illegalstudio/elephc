@@ -2,6 +2,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -15,7 +16,7 @@ pub fn emit(
     emitter.comment("strtoupper()");
     emit_expr(&args[0], emitter, ctx, data);
     // -- convert all characters to uppercase --
-    emitter.instruction("bl __rt_strtoupper");                                  // call runtime: uppercase string in-place, result in x1/x2
+    abi::emit_call_label(emitter, "__rt_strtoupper");                           // call the target-aware runtime helper that uppercases the current string into concat storage
 
     Some(PhpType::Str)
 }
