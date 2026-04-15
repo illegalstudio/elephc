@@ -332,6 +332,7 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_mixed_unbox(emitter);
     arrays::emit_mixed_cast_string(emitter);
     arrays::emit_mixed_write_stdout(emitter);
+    arrays::emit_mixed_strict_eq(emitter);
     io::emit_cstr(emitter);
     io::emit_fopen(emitter);
     io::emit_fgets(emitter);
@@ -360,6 +361,7 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     system::emit_json_encode_array_str(emitter);
     system::emit_json_encode_array_dynamic(emitter);
     system::emit_json_encode_assoc(emitter);
+    system::emit_enum_from_fail(emitter);
 }
 
 fn emit_optional_linux_crypto_decls(emitter: &mut Emitter) {
@@ -480,6 +482,7 @@ mod tests {
         assert!(asm.contains("__rt_mixed_free_deep:\n"));
         assert!(asm.contains("__rt_mixed_unbox:\n"));
         assert!(asm.contains("__rt_mixed_cast_string:\n"));
+        assert!(asm.contains("__rt_mixed_strict_eq:\n"));
         assert!(asm.contains("__rt_cstr:\n"));
         assert!(asm.contains("__rt_ptr_check_nonnull:\n"));
         assert!(asm.contains("__rt_str_to_cstr:\n"));
@@ -512,5 +515,6 @@ mod tests {
         assert!(asm.contains("__rt_json_decode:\n"));
         assert!(asm.contains("__rt_json_encode_array_int:\n"));
         assert!(asm.contains("__rt_json_encode_array_str:\n"));
+        assert!(asm.contains("__rt_enum_from_fail:\n"));
     }
 }

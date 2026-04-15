@@ -1,9 +1,14 @@
-use crate::codegen::emit::Emitter;
+use crate::codegen::{abi, emit::Emitter, platform::Arch};
 
 /// mixed_strict_eq: compare two boxed mixed values by runtime tag and payload.
 /// Input:  x0 = left mixed pointer, x1 = right mixed pointer
 /// Output: x0 = 1 if strictly equal, else 0
 pub fn emit_mixed_strict_eq(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_mixed_strict_eq_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: mixed_strict_eq ---");
     emitter.label_global("__rt_mixed_strict_eq");
@@ -53,4 +58,50 @@ pub fn emit_mixed_strict_eq(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the helper stack frame
     emitter.instruction("ret");                                                 // return the strict-equality boolean in x0
+}
+
+fn emit_mixed_strict_eq_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: mixed_strict_eq ---");
+    emitter.label_global("__rt_mixed_strict_eq");
+
+    emitter.instruction("sub rsp, 64");                                         // allocate stack space for both operands, payloads, and the saved comparison state
+    emitter.instruction("mov QWORD PTR [rsp], rdi");                            // save the incoming left mixed pointer for the later comparison and cleanup path
+    emitter.instruction("mov QWORD PTR [rsp + 8], rsi");                        // save the incoming right mixed pointer for the later comparison and cleanup path
+
+    emitter.instruction("mov rax, rdi");                                        // move the left mixed pointer into the x86_64 mixed-unbox input register
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");                          // left mixed pointer -> rax=tag, rdi=value_lo, rdx=value_hi
+    emitter.instruction("mov QWORD PTR [rsp + 16], rax");                       // save the left runtime tag
+    emitter.instruction("mov QWORD PTR [rsp + 24], rdi");                       // save the left payload low word
+    emitter.instruction("mov QWORD PTR [rsp + 32], rdx");                       // save the left payload high word
+
+    emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                        // reload the right mixed pointer into the x86_64 mixed-unbox input register
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");                          // right mixed pointer -> rax=tag, rdi=value_lo, rdx=value_hi
+    emitter.instruction("mov r10, QWORD PTR [rsp + 16]");                       // reload the saved left runtime tag
+    emitter.instruction("cmp r10, rax");                                        // strict equality first requires matching runtime tags
+    emitter.instruction("jne __rt_mixed_strict_eq_false");                      // different payload tags are never strictly equal
+
+    emitter.instruction("cmp rax, 1");                                          // do both payloads hold strings?
+    emitter.instruction("je __rt_mixed_strict_eq_string");                      // strings need byte-by-byte comparison
+    emitter.instruction("cmp QWORD PTR [rsp + 24], rdi");                       // compare low payload words for scalar or pointer tags
+    emitter.instruction("jne __rt_mixed_strict_eq_false");                      // mismatched payload low words are not equal
+    emitter.instruction("cmp QWORD PTR [rsp + 32], rdx");                       // compare high payload words for string/null padding
+    emitter.instruction("jne __rt_mixed_strict_eq_false");                      // mismatched payload high words are not equal
+    emitter.instruction("mov rax, 1");                                          // matching tag plus payload words means strict equality
+    emitter.instruction("jmp __rt_mixed_strict_eq_done");                       // return true after the scalar or pointer comparison path
+
+    emitter.label("__rt_mixed_strict_eq_string");
+    emitter.instruction("mov rcx, rdx");                                        // move the right string length into the fourth SysV integer argument register
+    emitter.instruction("mov rdx, rdi");                                        // move the right string pointer into the third SysV integer argument register
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 24]");                       // reload the left string pointer into the first SysV integer argument register
+    emitter.instruction("mov rsi, QWORD PTR [rsp + 32]");                       // reload the left string length into the second SysV integer argument register
+    abi::emit_call_label(emitter, "__rt_str_eq");                               // compare the two string payloads byte-by-byte
+    emitter.instruction("jmp __rt_mixed_strict_eq_done");                       // return the string comparison result
+
+    emitter.label("__rt_mixed_strict_eq_false");
+    emitter.instruction("xor rax, rax");                                        // report that the mixed payloads are not strictly equal
+
+    emitter.label("__rt_mixed_strict_eq_done");
+    emitter.instruction("add rsp, 64");                                         // release the helper stack frame
+    emitter.instruction("ret");                                                 // return the strict-equality boolean in rax
 }

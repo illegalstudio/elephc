@@ -23,6 +23,8 @@ use data_section::DataSection;
 use emit::Emitter;
 use platform::Target;
 
+const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
+
 pub fn generate(
     program: &Program,
     global_env: &TypeEnv,
@@ -449,45 +451,53 @@ fn emit_enum_singleton_initializers(
         for case in &enum_info.cases {
             emitter.comment(&format!("initialize enum singleton {}::{}", enum_name, case.name));
             let obj_size = 8 + class_info.properties.len() * 16;
-            emitter.instruction(&format!("mov x0, #{}", obj_size));             // enum singleton object size in bytes
-            emitter.instruction("bl __rt_heap_alloc");                          // allocate enum singleton object storage
-            emitter.instruction("mov x9, #4");                                  // heap kind 4 = object instance
-            emitter.instruction("str x9, [x0, #-8]");                           // store object kind in the uniform heap header
-            emitter.instruction(&format!("mov x10, #{}", class_info.class_id)); // load compile-time enum class id
-            emitter.instruction("str x10, [x0]");                               // store enum class id at object header
-            emitter.instruction("str x0, [sp, #-16]!");                         // save singleton object pointer while initializing properties
+            let result_reg = abi::int_result_reg(emitter);
+            let object_reg = abi::symbol_scratch_reg(emitter);
+            let temp_reg = abi::temp_int_reg(emitter.target);
+            abi::emit_load_int_immediate(emitter, result_reg, obj_size as i64); // enum singleton object size in bytes in the heap allocator input register
+            abi::emit_call_label(emitter, "__rt_heap_alloc");                   // allocate enum singleton object storage
+            abi::emit_load_int_immediate(emitter, temp_reg, 4);                 // heap kind 4 = object instance
+            match emitter.target.arch {
+                platform::Arch::AArch64 => {
+                    emitter.instruction(&format!("str {}, [{}, #-8]", temp_reg, result_reg)); // store object kind in the uniform heap header just before the payload pointer
+                }
+                platform::Arch::X86_64 => {
+                    emitter.instruction(&format!("mov {}, 0x{:x}", temp_reg, (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); // materialize the x86_64 object heap kind word with the uniform heap marker
+                    emitter.instruction(&format!("mov QWORD PTR [{} - 8], {}", result_reg, temp_reg)); // store object kind in the x86_64 uniform heap header just before the payload pointer
+                }
+            }
+            abi::emit_load_int_immediate(emitter, temp_reg, class_info.class_id as i64); // load compile-time enum class id
+            abi::emit_store_to_address(emitter, temp_reg, result_reg, 0);       // store enum class id at object header
+            abi::emit_push_reg(emitter, result_reg);                            // save singleton object pointer while initializing properties
 
             for i in 0..class_info.properties.len() {
                 let offset = 8 + i * 16;
-                emitter.instruction("ldr x9, [sp]");                            // peek enum singleton pointer from the stack
-                emitter.instruction(&format!("str xzr, [x9, #{}]", offset));    // zero-init property lo word
-                emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8)); //zero-init property hi word
+                abi::emit_load_temporary_stack_slot(emitter, object_reg, 0);    // peek enum singleton pointer from the temporary stack slot
+                abi::emit_store_zero_to_address(emitter, object_reg, offset);   // zero-initialize the low property word
+                abi::emit_store_zero_to_address(emitter, object_reg, offset + 8); // zero-initialize the high property word
             }
 
             if let Some(case_value) = &case.value {
-                emitter.instruction("ldr x9, [sp]");                            // reload enum singleton pointer for backing-value initialization
+                abi::emit_load_temporary_stack_slot(emitter, object_reg, 0);    // reload enum singleton pointer for backing-value initialization
                 match case_value {
                     EnumCaseValue::Int(value) => {
-                        load_immediate(emitter, "x10", *value);                 // materialize the enum int backing value
-                        emitter.instruction("str x10, [x9, #8]");               // store the int backing value in the first property slot
-                        emitter.instruction("str xzr, [x9, #16]");              // clear the metadata/high word for the int property
+                        load_immediate(emitter, temp_reg, *value);              // materialize the enum int backing value
+                        abi::emit_store_to_address(emitter, temp_reg, object_reg, 8); // store the int backing value in the first property slot
+                        abi::emit_store_zero_to_address(emitter, object_reg, 16); // clear the metadata/high word for the int property
                     }
                     EnumCaseValue::Str(value) => {
                         let (label, len) = data.add_string(value.as_bytes());
-                        emitter.adrp("x10", &format!("{}", label)); //load page of the enum string backing literal
-                        emitter.add_lo12("x10", "x10", &format!("{}", label)); //resolve the enum string backing literal address
-                        emitter.instruction("str x10, [x9, #8]");               // store the string backing pointer in the first property slot
-                        emitter.instruction(&format!("mov x10, #{}", len));     // materialize the enum string backing length
-                        emitter.instruction("str x10, [x9, #16]");              // store the string backing length in the second property word
+                        abi::emit_symbol_address(emitter, temp_reg, &label);    // materialize the enum string backing literal address
+                        abi::emit_store_to_address(emitter, temp_reg, object_reg, 8); // store the string backing pointer in the first property slot
+                        abi::emit_load_int_immediate(emitter, temp_reg, len as i64); // materialize the enum string backing length
+                        abi::emit_store_to_address(emitter, temp_reg, object_reg, 16); // store the string backing length in the second property word
                     }
                 }
             }
 
-            emitter.instruction("ldr x0, [sp], #16");                           // pop initialized enum singleton pointer into x0
+            abi::emit_pop_reg(emitter, result_reg);                             // pop initialized enum singleton pointer into the active integer result register
             let slot_label = enum_case_symbol(enum_name, &case.name);
-            emitter.adrp("x9", &format!("{}", slot_label));      // load page of the enum singleton slot
-            emitter.add_lo12("x9", "x9", &format!("{}", slot_label)); //resolve the enum singleton slot address
-            emitter.instruction("str x0, [x9]");                                // publish the enum singleton pointer in its global slot
+            abi::emit_store_reg_to_symbol(emitter, result_reg, &slot_label, 0); // publish the enum singleton pointer in its global slot
         }
     }
 }
@@ -1144,20 +1154,5 @@ fn align16(n: usize) -> usize {
 }
 
 fn load_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
-    if (0..=65535).contains(&value) || (-65536..0).contains(&value) {
-        emitter.instruction(&format!("mov {}, #{}", reg, value));               // load a small signed immediate directly into the target register
-        return;
-    }
-
-    let uval = value as u64;
-    emitter.instruction(&format!("movz {}, #0x{:x}", reg, uval & 0xFFFF));      // seed the low 16 bits of the wider immediate value
-    if (uval >> 16) & 0xFFFF != 0 {
-        emitter.instruction(&format!("movk {}, #0x{:x}, lsl #16", reg, (uval >> 16) & 0xFFFF)); //patch bits 16-31 of the wider immediate value
-    }
-    if (uval >> 32) & 0xFFFF != 0 {
-        emitter.instruction(&format!("movk {}, #0x{:x}, lsl #32", reg, (uval >> 32) & 0xFFFF)); //patch bits 32-47 of the wider immediate value
-    }
-    if (uval >> 48) & 0xFFFF != 0 {
-        emitter.instruction(&format!("movk {}, #0x{:x}, lsl #48", reg, (uval >> 48) & 0xFFFF)); //patch bits 48-63 of the wider immediate value
-    }
+    abi::emit_load_int_immediate(emitter, reg, value);                          // materialize the immediate through the shared target-aware helper
 }

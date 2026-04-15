@@ -493,31 +493,34 @@ fn emit_enum_cases(
     _ctx: &mut Context,
 ) -> PhpType {
     let capacity = if enum_info.cases.is_empty() { 4 } else { enum_info.cases.len() };
-    emitter.instruction(&format!("mov x0, #{}", capacity));                     // capacity = exact enum case count (or a small empty-array default)
-    emitter.instruction("mov x1, #8");                                          // enum case arrays store one pointer per element
-    emitter.instruction("bl __rt_array_new");                                   // allocate the enum cases array
-    emitter.instruction("str x0, [sp, #-16]!");                                 // save the array pointer while filling elements
+    let result_reg = abi::int_result_reg(emitter);
+    let array_ptr_reg = abi::symbol_scratch_reg(emitter);
+    let len_reg = abi::temp_int_reg(emitter.target);
+    let cap_reg = abi::int_arg_reg_name(emitter.target, 0);
+    let elem_size_reg = abi::int_arg_reg_name(emitter.target, 1);
+    abi::emit_load_int_immediate(emitter, cap_reg, capacity as i64);            // capacity = exact enum case count (or a small empty-array default)
+    abi::emit_load_int_immediate(emitter, elem_size_reg, 8);                    // enum case arrays store one pointer per element
+    abi::emit_call_label(emitter, "__rt_array_new");                            // allocate the enum cases array
+    abi::emit_push_reg(emitter, result_reg);                                    // save the array pointer while filling elements
 
     for (i, case) in enum_info.cases.iter().enumerate() {
         let case_label = enum_case_symbol(enum_name, &case.name);
-        emitter.adrp("x9", &format!("{}", case_label));          // load page of the enum singleton slot
-        emitter.add_lo12("x9", "x9", &format!("{}", case_label));    // resolve the enum singleton slot address
-        emitter.instruction("ldr x0, [x9]");                                    // load the enum singleton pointer from its slot
+        abi::emit_load_symbol_to_reg(emitter, result_reg, &case_label, 0);      // load the enum singleton pointer from its slot through the target-aware symbol helper
         crate::codegen::abi::emit_incref_if_refcounted(emitter, &PhpType::Object(enum_name.to_string())); // array storage becomes a new owner of the singleton reference
-        emitter.instruction("ldr x9, [sp]");                                    // peek the enum cases array pointer from the stack
+        abi::emit_load_temporary_stack_slot(emitter, array_ptr_reg, 0);         // peek the enum cases array pointer from the temporary stack slot
         if i == 0 {
             super::super::arrays::emit_array_value_type_stamp(
                 emitter,
-                "x9",
+                array_ptr_reg,
                 &PhpType::Object(enum_name.to_string()),
             );
         }
-        emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8));         // store the enum singleton pointer in the array payload
-        emitter.instruction(&format!("mov x10, #{}", i + 1));                   // updated array length after appending this enum case
-        emitter.instruction("str x10, [x9]");                                   // persist the new enum cases array length
+        abi::emit_store_to_address(emitter, result_reg, array_ptr_reg, 24 + i * 8); // store the enum singleton pointer in the array payload
+        abi::emit_load_int_immediate(emitter, len_reg, (i + 1) as i64);        // materialize the updated array length after appending this enum case
+        abi::emit_store_to_address(emitter, len_reg, array_ptr_reg, 0);         // persist the new enum cases array length
     }
 
-    emitter.instruction("ldr x0, [sp], #16");                                   // pop the enum cases array pointer into x0
+    abi::emit_pop_reg(emitter, result_reg);                                     // pop the enum cases array pointer into the active integer result register
     PhpType::Array(Box::new(PhpType::Object(enum_name.to_string())))
 }
 
@@ -542,6 +545,9 @@ fn emit_enum_from_like(
     let input_ty = emit_expr(arg, emitter, ctx, data);
     let success_label = ctx.next_label("enum_from_success");
     let done_label = ctx.next_label("enum_from_done");
+    let result_reg = abi::int_result_reg(emitter);
+    let string_ptr_reg = abi::string_result_regs(emitter).0;
+    let string_len_reg = abi::string_result_regs(emitter).1;
     let string_cleanup_label = if matches!(backing_ty, PhpType::Str) {
         Some(ctx.next_label("enum_from_cleanup_input"))
     } else {
@@ -556,19 +562,25 @@ fn emit_enum_from_like(
                     continue;
                 };
                 let next_label = ctx.next_label("enum_from_next");
-                load_immediate(emitter, "x10", *value);                         // materialize the current enum backing integer for comparison
-                emitter.instruction("cmp x0, x10");                             // compare the input integer with the current enum backing value
-                emitter.instruction(&format!("b.ne {}", next_label));           // continue scanning when the current enum backing value does not match
+                let case_value_reg = abi::temp_int_reg(emitter.target);
+                load_immediate(emitter, case_value_reg, *value);                // materialize the current enum backing integer for comparison
+                emitter.instruction(&format!("cmp {}, {}", result_reg, case_value_reg)); // compare the input integer with the current enum backing value
+                match emitter.target.arch {
+                    crate::codegen::platform::Arch::AArch64 => {
+                        emitter.instruction(&format!("b.ne {}", next_label));   // continue scanning when the current enum backing value does not match
+                    }
+                    crate::codegen::platform::Arch::X86_64 => {
+                        emitter.instruction(&format!("jne {}", next_label));    // continue scanning when the current enum backing value does not match
+                    }
+                }
                 let case_label = enum_case_symbol(enum_name, &case.name);
-                emitter.adrp("x9", &format!("{}", case_label));  // load page of the matching enum singleton slot
-                emitter.add_lo12("x9", "x9", &format!("{}", case_label)); //resolve the matching enum singleton slot address
-                emitter.instruction("ldr x0, [x9]");                            // load the matching enum singleton pointer
-                emitter.instruction(&format!("b {}", success_label));           // return the matching enum singleton immediately
+                abi::emit_load_symbol_to_reg(emitter, result_reg, &case_label, 0); // load the matching enum singleton pointer
+                abi::emit_jump(emitter, &success_label);                        // return the matching enum singleton immediately
                 emitter.label(&next_label);
             }
         }
         PhpType::Str => {
-            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve the input string payload across candidate comparisons
+            abi::emit_push_reg_pair(emitter, string_ptr_reg, string_len_reg);   // preserve the input string payload across candidate comparisons
             for case in &enum_info.cases {
                 let Some(EnumCaseValue::Str(value)) = case.value.as_ref() else {
                     continue;
@@ -576,24 +588,24 @@ fn emit_enum_from_like(
                 let match_label = ctx.next_label("enum_from_case");
                 let next_label = ctx.next_label("enum_from_next");
                 let (label, len) = data.add_string(value.as_bytes());
-                emitter.instruction("ldp x1, x2, [sp]");                        // reload the input string pointer and length for this candidate
-                emitter.adrp("x3", &format!("{}", label));       // load page of the candidate enum backing string
-                emitter.add_lo12("x3", "x3", &format!("{}", label)); // resolve the candidate enum backing string address
-                emitter.instruction(&format!("mov x4, #{}", len));              // materialize the candidate enum backing string length
-                emitter.instruction("bl __rt_str_eq");                          // compare the input string against the candidate backing string
-                emitter.instruction(&format!("cbnz x0, {}", match_label));      // branch when the current enum backing string matches
-                emitter.instruction(&format!("b {}", next_label));              // continue scanning when the current enum backing string does not match
+                let candidate_ptr_reg = abi::int_arg_reg_name(emitter.target, 2);
+                let candidate_len_reg = abi::int_arg_reg_name(emitter.target, 3);
+                abi::emit_load_temporary_stack_slot(emitter, string_ptr_reg, 0); // reload the input string pointer for this candidate comparison
+                abi::emit_load_temporary_stack_slot(emitter, string_len_reg, 8); // reload the input string length for this candidate comparison
+                abi::emit_symbol_address(emitter, candidate_ptr_reg, &label);   // materialize the candidate enum backing string address
+                abi::emit_load_int_immediate(emitter, candidate_len_reg, len as i64); // materialize the candidate enum backing string length
+                abi::emit_call_label(emitter, "__rt_str_eq");                    // compare the input string against the candidate backing string
+                abi::emit_branch_if_int_result_nonzero(emitter, &match_label);   // branch when the current enum backing string matches
+                abi::emit_jump(emitter, &next_label);                            // continue scanning when the current enum backing string does not match
                 emitter.label(&match_label);
                 let case_label = enum_case_symbol(enum_name, &case.name);
-                emitter.adrp("x9", &format!("{}", case_label));  // load page of the matching enum singleton slot
-                emitter.add_lo12("x9", "x9", &format!("{}", case_label)); //resolve the matching enum singleton slot address
-                emitter.instruction("ldr x0, [x9]");                            // load the matching enum singleton pointer
+                abi::emit_load_symbol_to_reg(emitter, result_reg, &case_label, 0); // load the matching enum singleton pointer
                 if let Some(cleanup_label) = &string_cleanup_label {
-                    emitter.instruction(&format!("b {}", cleanup_label));       // drop the preserved input string before returning the match
+                    abi::emit_jump(emitter, cleanup_label);                     // drop the preserved input string before returning the match
                 }
                 emitter.label(&next_label);
             }
-            emitter.instruction("add sp, sp, #16");                             // drop the preserved input string payload after the scan
+            abi::emit_release_temporary_stack(emitter, 16);                     // drop the preserved input string payload after the scan
         }
         _ => {
             emitter.comment("WARNING: unsupported enum backing type in codegen");
@@ -603,16 +615,16 @@ fn emit_enum_from_like(
 
     if let Some(cleanup_label) = &string_cleanup_label {
         emitter.label(cleanup_label);
-        emitter.instruction("add sp, sp, #16");                                 // drop the preserved input string payload before returning the matching singleton
-        emitter.instruction(&format!("b {}", success_label));                   // continue through the shared success path with a clean stack
+        abi::emit_release_temporary_stack(emitter, 16);                         // drop the preserved input string payload before returning the matching singleton
+        abi::emit_jump(emitter, &success_label);                                // continue through the shared success path with a clean stack
     }
 
     if is_try {
         emit_null_into_x0(emitter);
         crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Void);
-        emitter.instruction(&format!("b {}", done_label));                      // return boxed null when tryFrom() does not match any case
+        abi::emit_jump(emitter, &done_label);                                   // return boxed null when tryFrom() does not match any case
     } else {
-        emitter.instruction("bl __rt_enum_from_fail");                          // abort when from() does not match any case
+        abi::emit_call_label(emitter, "__rt_enum_from_fail");                   // abort when from() does not match any case
     }
 
     emitter.label(&success_label);
@@ -631,27 +643,9 @@ fn emit_enum_from_like(
 }
 
 fn emit_null_into_x0(emitter: &mut Emitter) {
-    emitter.instruction("movz x0, #0xFFFE");                                    // load lowest 16 bits of the null sentinel
-    emitter.instruction("movk x0, #0xFFFF, lsl #16");                           // insert bits 16-31 of the null sentinel
-    emitter.instruction("movk x0, #0xFFFF, lsl #32");                           // insert bits 32-47 of the null sentinel
-    emitter.instruction("movk x0, #0x7FFF, lsl #48");                           // insert bits 48-63, completing the null sentinel
+    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0x7fff_ffff_ffff_fffe_u64 as i64); // materialize the shared null sentinel in the active integer result register
 }
 
 fn load_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
-    if (0..=65535).contains(&value) || (-65536..0).contains(&value) {
-        emitter.instruction(&format!("mov {}, #{}", reg, value));               // load a small signed immediate directly into the target register
-        return;
-    }
-
-    let uval = value as u64;
-    emitter.instruction(&format!("movz {}, #0x{:x}", reg, uval & 0xFFFF));      // seed the low 16 bits of the wider immediate value
-    if (uval >> 16) & 0xFFFF != 0 {
-        emitter.instruction(&format!("movk {}, #0x{:x}, lsl #16", reg, (uval >> 16) & 0xFFFF)); //patch bits 16-31 of the wider immediate value
-    }
-    if (uval >> 32) & 0xFFFF != 0 {
-        emitter.instruction(&format!("movk {}, #0x{:x}, lsl #32", reg, (uval >> 32) & 0xFFFF)); //patch bits 32-47 of the wider immediate value
-    }
-    if (uval >> 48) & 0xFFFF != 0 {
-        emitter.instruction(&format!("movk {}, #0x{:x}, lsl #48", reg, (uval >> 48) & 0xFFFF)); //patch bits 48-63 of the wider immediate value
-    }
+    abi::emit_load_int_immediate(emitter, reg, value);                          // materialize the immediate through the shared target-aware helper
 }

@@ -36,9 +36,12 @@ pub(super) fn emit_enum_case(
 ) -> PhpType {
     let label = crate::names::enum_case_symbol(enum_name, case_name);
     emitter.comment(&format!("load enum case {}::{}", enum_name, case_name));
-    emitter.adrp("x9", &format!("{}", label));                   // load page of the enum singleton slot
-    emitter.add_lo12("x9", "x9", &format!("{}", label));             // resolve the enum singleton slot address
-    emitter.instruction("ldr x0, [x9]");                                        // load the enum singleton pointer from its global slot
+    crate::codegen::abi::emit_load_symbol_to_reg(
+        emitter,
+        crate::codegen::abi::int_result_reg(emitter),
+        &label,
+        0,
+    ); // load the enum singleton pointer from its global slot through the target-aware symbol helper
     PhpType::Object(enum_name.to_string())
 }
 
@@ -48,10 +51,10 @@ pub(super) fn push_magic_property_name_arg(
     data: &mut DataSection,
 ) {
     let (label, len) = data.add_string(property.as_bytes());
-    emitter.adrp("x1", &format!("{}", label));                   // load page of the magic-property name string
-    emitter.add_lo12("x1", "x1", &format!("{}", label));             // resolve the magic-property name string address
-    emitter.instruction(&format!("mov x2, #{}", len));                          // pass the magic-property name length
-    emitter.instruction("stp x1, x2, [sp, #-16]!");                             // push the magic-property name argument
+    let (ptr_reg, len_reg) = crate::codegen::abi::string_result_regs(emitter);
+    crate::codegen::abi::emit_symbol_address(emitter, ptr_reg, &label); // materialize the magic-property name string address for the active target ABI
+    crate::codegen::abi::emit_load_int_immediate(emitter, len_reg, len as i64); // materialize the magic-property name length for the active target ABI
+    crate::codegen::abi::emit_push_reg_pair(emitter, ptr_reg, len_reg); // push the magic-property name argument pair onto the temporary call stack
 }
 
 pub(super) fn emit_method_call(
