@@ -111,7 +111,7 @@ fn emit_array_combine_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea r10, [r10 + 24]");                                 // compute the payload base address for the refcounted-values indexed array
     emitter.instruction("mov r11, QWORD PTR [r10 + rcx * 8]");                  // load the selected borrowed refcounted value payload from the values indexed array
     emitter.instruction("mov QWORD PTR [rbp - 64], r11");                       // preserve the selected borrowed refcounted value payload across the incref helper call
-    emitter.instruction("mov rdi, r11");                                        // pass the selected borrowed refcounted value payload to the shared x86_64 incref helper
+    emitter.instruction("mov rax, r11");                                        // pass the selected borrowed refcounted value payload in the x86_64 heap-helper input register expected by __rt_incref
     emitter.instruction("call __rt_incref");                                    // retain the borrowed refcounted value payload before the destination hash takes ownership of it
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the destination hash pointer before inserting the retained key/value pair
     emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // reload the selected key pointer into the first key-argument register for hash insertion
