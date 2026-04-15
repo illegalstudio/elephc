@@ -144,6 +144,11 @@ pub(crate) fn emit_runtime_data_user(
         .iter()
         .map(|(name, class_info)| ((*name).clone(), class_info.class_id))
         .collect();
+    let class_info_by_id: HashMap<u64, &ClassInfo> = sorted_classes
+        .iter()
+        .map(|(_, class_info)| (class_info.class_id, *class_info))
+        .collect();
+    let max_class_id = sorted_classes.iter().map(|(_, class_info)| class_info.class_id).max();
 
     out.push_str(".data\n");
     out.push_str(".p2align 3\n");
@@ -158,43 +163,79 @@ pub(crate) fn emit_runtime_data_user(
     }
 
     out.push_str(".globl _class_interface_ptrs\n_class_interface_ptrs:\n");
-    for (_, class_info) in &sorted_classes {
-        out.push_str(&format!(
-            "    .quad _class_interfaces_{}\n",
-            class_info.class_id
-        ));
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!("    .quad _class_interfaces_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_interfaces_missing\n");
+            }
+        }
     }
 
     out.push_str(".globl _class_parent_ids\n_class_parent_ids:\n");
-    for (_, class_info) in &sorted_classes {
-        let parent_id = class_info
-            .parent
-            .as_ref()
-            .and_then(|parent_name| class_id_by_name.get(parent_name))
-            .map(|id| id.to_string())
-            .unwrap_or_else(|| "-1".to_string());
-        out.push_str(&format!("    .quad {}\n", parent_id));
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let parent_id = class_info_by_id
+                .get(&class_id)
+                .and_then(|class_info| class_info.parent.as_ref())
+                .and_then(|parent_name| class_id_by_name.get(parent_name))
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "-1".to_string());
+            out.push_str(&format!("    .quad {}\n", parent_id));
+        }
     }
 
     out.push_str(".globl _class_gc_desc_count\n_class_gc_desc_count:\n");
-    out.push_str(&format!("    .quad {}\n", sorted_classes.len()));
+    out.push_str(&format!(
+        "    .quad {}\n",
+        max_class_id.map_or(0, |class_id| class_id + 1)
+    ));
     out.push_str(".globl _class_gc_desc_ptrs\n_class_gc_desc_ptrs:\n");
-    for (_, class_info) in &sorted_classes {
-        out.push_str(&format!("    .quad _class_gc_desc_{}\n", class_info.class_id));
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!("    .quad _class_gc_desc_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_gc_desc_missing\n");
+            }
+        }
     }
 
     out.push_str(".globl _class_vtable_ptrs\n_class_vtable_ptrs:\n");
-    for (_, class_info) in &sorted_classes {
-        out.push_str(&format!("    .quad _class_vtable_{}\n", class_info.class_id));
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!("    .quad _class_vtable_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_vtable_missing\n");
+            }
+        }
     }
 
     out.push_str(".globl _class_static_vtable_ptrs\n_class_static_vtable_ptrs:\n");
-    for (_, class_info) in &sorted_classes {
-        out.push_str(&format!(
-            "    .quad _class_static_vtable_{}\n",
-            class_info.class_id
-        ));
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!("    .quad _class_static_vtable_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_static_vtable_missing\n");
+            }
+        }
     }
+
+    out.push_str(".globl _class_interfaces_missing\n_class_interfaces_missing:\n");
+    out.push_str("    .quad 0\n");
+    out.push_str(".globl _class_gc_desc_missing\n_class_gc_desc_missing:\n");
+    out.push_str("    .byte 0\n");
+    out.push_str("    .p2align 3\n");
+    out.push_str(".globl _class_vtable_missing\n_class_vtable_missing:\n");
+    out.push_str("    .quad 0\n");
+    out.push_str("    .p2align 3\n");
+    out.push_str(
+        ".globl _class_static_vtable_missing\n_class_static_vtable_missing:\n",
+    );
+    out.push_str("    .quad 0\n");
 
     for (_, interface_info) in &sorted_interfaces {
         out.push_str(&format!(
@@ -382,5 +423,27 @@ mod tests {
         assert!(asm.contains("_method_Exception_run"));
         assert!(!asm.contains("_class_vtable_0"));
         assert!(!asm.contains("_method_Exception__construct"));
+    }
+
+    #[test]
+    fn test_emit_runtime_data_user_keeps_dense_class_tables_when_ids_start_at_one() {
+        let mut classes = HashMap::new();
+        classes.insert("Animal".to_string(), empty_class_info(1, "label"));
+        classes.insert("Dog".to_string(), empty_class_info(2, "label"));
+        classes.insert("Cat".to_string(), empty_class_info(3, "label"));
+
+        let asm = emit_runtime_data_user(
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &classes,
+            &HashMap::new(),
+            None,
+        );
+
+        assert!(asm.contains("_class_gc_desc_count:\n    .quad 4\n"));
+        assert!(asm.contains("_class_parent_ids:\n    .quad -1\n    .quad -1\n    .quad -1\n    .quad -1\n"));
+        assert!(asm.contains("_class_vtable_ptrs:\n    .quad _class_vtable_missing\n    .quad _class_vtable_1\n    .quad _class_vtable_2\n    .quad _class_vtable_3\n"));
+        assert!(asm.contains("_class_static_vtable_ptrs:\n    .quad _class_static_vtable_missing\n    .quad _class_static_vtable_1\n    .quad _class_static_vtable_2\n    .quad _class_static_vtable_3\n"));
     }
 }
