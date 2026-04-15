@@ -226,6 +226,30 @@ fn test_materialize_outgoing_args_for_linux_x86_64_uses_sysv_registers() {
 }
 
 #[test]
+fn test_materialize_outgoing_string_args_for_linux_x86_64_preserves_live_rcx() {
+    let mut emitter = test_emitter_x86();
+    let assignments = build_outgoing_arg_assignments_for_target(
+        Target::new(Platform::Linux, Arch::X86_64),
+        &[PhpType::Str, PhpType::Str, PhpType::Str],
+        1,
+    );
+
+    let overflow_bytes = materialize_outgoing_args(&mut emitter, &assignments);
+    let out = emitter.output();
+
+    assert_eq!(overflow_bytes, 16);
+    assert!(out.contains("    mov rsi, QWORD PTR [rsp + 48]\n"));
+    assert!(out.contains("    mov rdx, QWORD PTR [rsp + 56]\n"));
+    assert!(out.contains("    mov rcx, QWORD PTR [rsp + 32]\n"));
+    assert!(out.contains("    mov r8, QWORD PTR [rsp + 40]\n"));
+    assert!(out.contains("    mov r10, QWORD PTR [rsp + 16]\n"));
+    assert!(out.contains("    mov r11, QWORD PTR [rsp + 24]\n"));
+    assert!(out.contains("    mov QWORD PTR [rsp + 48], r10\n"));
+    assert!(out.contains("    mov QWORD PTR [rsp + 56], r11\n"));
+    assert!(!out.contains("    mov rcx, QWORD PTR [rsp + 24]\n"));
+}
+
+#[test]
 fn test_emit_symbol_address_uses_platform_relocations() {
     let mut emitter = test_emitter();
     emit_symbol_address(&mut emitter, "x9", "_demo_symbol");

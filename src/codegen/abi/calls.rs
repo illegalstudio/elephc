@@ -386,7 +386,10 @@ fn emit_store_to_sp(emitter: &mut Emitter, reg: &str, offset: usize) {
 
 fn emit_copy_stack_arg_slot(emitter: &mut Emitter, ty: &PhpType, src_offset: usize, dst_offset: usize) {
     let int_reg = secondary_scratch_reg(emitter);
-    let int_hi_reg = tertiary_scratch_reg(emitter);
+    let int_hi_reg = match emitter.target.arch {
+        Arch::AArch64 => tertiary_scratch_reg(emitter),
+        Arch::X86_64 => "r11",
+    };
     let float_reg = match emitter.target.arch {
         Arch::AArch64 => "d15",
         Arch::X86_64 => "xmm15",
