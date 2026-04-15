@@ -593,6 +593,7 @@ fn inject_main_exit_harness(asm: &str, harness: &str) -> String {
     let needle = match (target().platform, target().arch) {
         (Platform::MacOS, Arch::AArch64) => "    mov x0, #0\n    mov x16, #1\n    svc #0x80",
         (Platform::Linux, Arch::AArch64) => "    mov x0, #0\n    mov x8, #93\n    svc #0",
+        (Platform::Linux, Arch::X86_64) => "    mov edi, 0\n    mov eax, 60\n    syscall",
         (_, Arch::X86_64) => panic!(
             "main exit harness is not implemented yet for target {}",
             target()
@@ -12103,10 +12104,9 @@ echo $small[0] . "|" . count($mid) . "|" . $keep[0];
 
 #[test]
 fn test_gc_heap_alloc_walks_past_small_first_free_block() {
-    let out = compile_harness_and_run(
-        "<?php",
-        256,
-        r#"    adrp x9, _heap_off@PAGE
+    let harness = match target().arch {
+        Arch::AArch64 => {
+            r#"    adrp x9, _heap_off@PAGE
     add x9, x9, _heap_off@PAGEOFF
     str xzr, [x9]
     adrp x9, _heap_free_list@PAGE
@@ -12136,17 +12136,55 @@ fn test_gc_heap_alloc_walks_past_small_first_free_block() {
     bl __rt_itoa
     mov x0, #1
     mov x16, #4
-    svc #0x80"#,
+    svc #0x80"#
+        }
+        Arch::X86_64 => {
+            r#"    lea r9, [rip + _heap_off]
+    mov QWORD PTR [r9], 0
+    lea r9, [rip + _heap_free_list]
+    mov QWORD PTR [r9], 0
+    mov eax, 8
+    call __rt_heap_alloc
+    push rax
+    mov eax, 8
+    call __rt_heap_alloc
+    push rax
+    mov eax, 16
+    call __rt_heap_alloc
+    push rax
+    mov eax, 8
+    call __rt_heap_alloc
+    push rax
+    mov rax, QWORD PTR [rsp + 24]
+    call __rt_heap_free
+    mov rax, QWORD PTR [rsp + 8]
+    call __rt_heap_free
+    mov eax, 16
+    call __rt_heap_alloc
+    mov r9, QWORD PTR [rsp + 8]
+    cmp rax, r9
+    sete al
+    movzx eax, al
+    call __rt_itoa
+    mov rsi, rax
+    mov edi, 1
+    mov eax, 1
+    syscall"#
+        }
+    };
+    let out = compile_harness_and_run(
+        "<?php",
+        256,
+        harness,
     );
     assert_eq!(out, "1");
 }
 
 #[test]
 fn test_gc_heap_alloc_reuses_small_bin_before_bump() {
-    let out = compile_harness_and_run(
-        "<?php",
-        256,
-        r#"    adrp x9, _heap_off@PAGE
+    let harness = match target().arch {
+        Arch::AArch64 => {
+            r#"    adrp x9, _heap_off@PAGE
     add x9, x9, _heap_off@PAGEOFF
     str xzr, [x9]
     adrp x9, _heap_free_list@PAGE
@@ -12183,7 +12221,52 @@ fn test_gc_heap_alloc_reuses_small_bin_before_bump() {
     bl __rt_itoa
     mov x0, #1
     mov x16, #4
-    svc #0x80"#,
+    svc #0x80"#
+        }
+        Arch::X86_64 => {
+            r#"    lea r9, [rip + _heap_off]
+    mov QWORD PTR [r9], 0
+    lea r9, [rip + _heap_free_list]
+    mov QWORD PTR [r9], 0
+    lea r9, [rip + _heap_small_bins]
+    mov QWORD PTR [r9], 0
+    mov QWORD PTR [r9 + 8], 0
+    mov QWORD PTR [r9 + 16], 0
+    mov QWORD PTR [r9 + 24], 0
+    mov eax, 16
+    call __rt_heap_alloc
+    push rax
+    mov eax, 24
+    call __rt_heap_alloc
+    push rax
+    mov rax, QWORD PTR [rsp + 8]
+    call __rt_heap_free
+    lea r9, [rip + _heap_off]
+    mov r10, QWORD PTR [r9]
+    push r10
+    mov eax, 12
+    call __rt_heap_alloc
+    mov r9, QWORD PTR [rsp + 16]
+    cmp rax, r9
+    sete r11b
+    lea r9, [rip + _heap_off]
+    mov r9, QWORD PTR [r9]
+    mov r10, QWORD PTR [rsp]
+    cmp r9, r10
+    sete r12b
+    and r11b, r12b
+    movzx eax, r11b
+    call __rt_itoa
+    mov rsi, rax
+    mov edi, 1
+    mov eax, 1
+    syscall"#
+        }
+    };
+    let out = compile_harness_and_run(
+        "<?php",
+        256,
+        harness,
     );
     assert_eq!(out, "1");
 }
