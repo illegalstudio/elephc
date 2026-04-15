@@ -132,6 +132,8 @@ fn emit_array_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved array pointer, length, and loop index
     emitter.instruction("sub rsp, 24");                                         // reserve local storage for the array pointer, logical length, and loop index while keeping SysV call alignment
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the indexed-array pointer across nested decref_any and heap_free calls
+    crate::codegen::abi::emit_symbol_address(emitter, "r10", "_gc_release_suppressed");
+    emitter.instruction("mov QWORD PTR [r10], 1");                              // suppress nested collector runs while this indexed-array deep-free walk releases child payloads
     emitter.instruction("mov rcx, QWORD PTR [rax - 8]");                        // load the full stamped heap kind word again so the packed indexed-array value_type tag can be inspected
     emitter.instruction("shr rcx, 8");                                          // move the packed indexed-array value_type tag into the low bits
     emitter.instruction("and ecx, 0x7f");                                       // isolate the indexed-array value_type tag without the persistent COW bit
@@ -182,6 +184,8 @@ fn emit_array_free_deep_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_free_deep_struct");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the indexed-array pointer after finishing the optional child cleanup pass
+    crate::codegen::abi::emit_symbol_address(emitter, "r10", "_gc_release_suppressed");
+    emitter.instruction("mov QWORD PTR [r10], 0");                              // re-enable targeted collector runs now that the indexed-array deep-free walk is complete
     emitter.instruction("call __rt_heap_free");                                 // release the indexed-array storage itself through the x86_64 heap wrapper
     emitter.instruction("add rsp, 24");                                         // release the spill slots reserved for the indexed-array deep-free scan state
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code

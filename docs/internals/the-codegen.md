@@ -969,6 +969,8 @@ On Linux x86_64, the current minimal runtime slice now also includes the refcoun
 
 That x86_64 slice now also covers the copy-on-write and GC accounting paths for indexed and associative arrays: shallow clone / ensure-unique helpers, owned-hash insertion during clone, heap alloc/free GC counters, indexed-array deep-free, and the x86_64 header-stamping paths needed so nested array writes keep their runtime value-type tags intact.
 
+The x86_64 runtime is no longer limited to the earlier `malloc` / `free` bootstrap wrappers in those paths. `__rt_heap_alloc` and `__rt_heap_free` now mirror the real heap model closely enough to reuse small bins, split and coalesce free-list blocks, trim the bump pointer when the heap tail becomes free again, and drive `_gc_live` / `_gc_peak` / `_gc_allocs` / `_gc_frees` accounting directly from the allocator. The minimal x86_64 runtime now also emits `__rt_gc_mark_reachable` and `__rt_gc_collect_cycles`, so retained arrays, hashes, objects, and boxed mixed values can participate in cycle collection instead of relying only on acyclic decref teardown.
+
 ---
 
 Next: [The Runtime →](the-runtime.md)

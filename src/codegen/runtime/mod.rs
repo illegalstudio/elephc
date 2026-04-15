@@ -346,6 +346,8 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_incref(emitter);
     arrays::emit_decref_mixed(emitter);
     arrays::emit_decref_object(emitter);
+    arrays::emit_gc_mark_reachable(emitter);
+    arrays::emit_gc_collect_cycles(emitter);
     arrays::emit_mixed_from_value(emitter);
     arrays::emit_mixed_cast_bool(emitter);
     arrays::emit_mixed_cast_int(emitter);

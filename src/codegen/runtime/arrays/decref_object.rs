@@ -82,6 +82,16 @@ fn emit_decref_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r10d, 1");                                         // decrement the object refcount for the releasing x86_64 owner
     emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // store the decremented object refcount back into the uniform heap header
     emitter.instruction("jz __rt_decref_object_free");                          // zero refcount means the object properties and storage can be released now
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_gc_release_suppressed");
+    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the release-suppression flag before considering a targeted cycle-collector run
+    emitter.instruction("test r11, r11");                                       // is this decref happening inside an ordinary deep-free walk?
+    emitter.instruction("jnz __rt_decref_object_skip");                         // yes — nested collector runs stay suppressed during deep frees
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_gc_collecting");
+    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the collector-active flag before attempting another collection pass
+    emitter.instruction("test r11, r11");                                       // is the collector already running?
+    emitter.instruction("jnz __rt_decref_object_skip");                         // yes — nested decref calls during collection must not restart the collector
+    emitter.instruction("call __rt_gc_collect_cycles");                         // reclaim any newly unrooted object-containing graph components on x86_64
+    emitter.instruction("jmp __rt_decref_object_skip");                         // return after the optional x86_64 collector pass
 
     emitter.label("__rt_decref_object_skip");
     emitter.instruction("ret");                                                 // nothing else needs to happen for non-zero refcounts or foreign pointers

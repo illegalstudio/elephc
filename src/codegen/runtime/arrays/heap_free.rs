@@ -252,26 +252,138 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: heap_free ---");
     emitter.label_global("__rt_heap_free");
 
-    emitter.instruction("test rax, rax");                                       // ignore null pointers so the x86_64 heap wrapper matches the shared runtime contract
-    emitter.instruction("jz __rt_heap_free_done");                              // null payloads do not own storage and therefore need no release work
+    emitter.instruction("test rax, rax");                                       // ignore null pointers so the x86_64 heap runtime matches the shared heap_free contract
+    emitter.instruction("jz __rt_heap_free_done");                              // null payloads do not own heap storage and therefore need no release work
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
-    emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used to distinguish owned payloads from static buffers
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // verify that the payload belongs to the x86_64 heap wrapper before delegating to libc free
-    emitter.instruction("jne __rt_heap_free_done");                             // silently ignore non-owned pointers so callers can safely pass literals or concat-buffer storage
-    emitter.instruction("sub rax, 16");                                         // recover the libc allocation base address from the user payload pointer
-    emitter.instruction("mov r10d, DWORD PTR [rax]");                           // load the payload size from the uniform heap header before accounting for the free
-    emitter.instruction("mov r11, r10");                                        // widen the payload size into a 64-bit scratch register for x86_64 live-byte bookkeeping
-    emitter.instruction("add r11, 16");                                         // include the 16-byte uniform heap header in the freed block footprint
-    crate::codegen::abi::emit_symbol_address(emitter, "rdx", "_gc_live");
-    emitter.instruction("mov rcx, QWORD PTR [rdx]");                            // load the current x86_64 live-byte count before subtracting the freed block footprint
-    emitter.instruction("sub rcx, r11");                                        // subtract this block's payload-plus-header footprint from the x86_64 live-byte count
-    emitter.instruction("mov QWORD PTR [rdx], rcx");                            // store the updated x86_64 live-byte count after the free
-    crate::codegen::abi::emit_symbol_address(emitter, "rdx", "_gc_frees");
-    emitter.instruction("mov rcx, QWORD PTR [rdx]");                            // load the current x86_64 gc_frees counter before accounting for the free
-    emitter.instruction("add rcx, 1");                                          // count this heap free in the x86_64 gc_frees counter
-    emitter.instruction("mov QWORD PTR [rdx], rcx");                            // store the updated x86_64 gc_frees counter after the free
-    emitter.instruction("mov rdi, rax");                                        // pass the original libc allocation base to free in the first SysV argument register
-    emitter.instruction("call free");                                           // release the owned x86_64 heap allocation through libc free
+    emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used to distinguish owned heap payloads from foreign pointers
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // verify that this payload belongs to the x86_64 heap runtime before mutating allocator state
+    emitter.instruction("jne __rt_heap_free_done");                             // silently ignore foreign/static pointers so callers can safely pass literals or concat-buffer storage
+    emitter.instruction("lea r9, [rax - 16]");                                  // recover the internal block header address from the user payload pointer
+    emitter.instruction("mov r11d, DWORD PTR [r9]");                            // load the block payload size from the uniform heap header before releasing it
+    emitter.instruction("mov r10, r11");                                        // widen the payload size into a 64-bit scratch register for live-byte accounting
+    emitter.instruction("add r10, 16");                                         // include the uniform 16-byte header in the freed block footprint
+    crate::codegen::abi::emit_symbol_address(emitter, "r8", "_gc_live");
+    emitter.instruction("mov rcx, QWORD PTR [r8]");                             // load the current live-byte count before subtracting the freed block footprint
+    emitter.instruction("sub rcx, r10");                                        // subtract this block's payload-plus-header footprint from the live-byte count
+    emitter.instruction("mov QWORD PTR [r8], rcx");                             // store the updated live-byte count after freeing the block
+    emitter.instruction("mov DWORD PTR [r9 + 4], 0");                           // clear the live refcount while this block sits on the free list or in a small bin
+    emitter.instruction("mov QWORD PTR [r9 + 8], 0");                           // clear the heap kind so free blocks do not look like live typed payloads
+    crate::codegen::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    crate::codegen::abi::emit_symbol_address(emitter, "r8", "_heap_off");
+    emitter.instruction("mov rcx, QWORD PTR [r8]");                             // load the current bump offset before checking whether this is the tail block
+    emitter.instruction("lea rcx, [r10 + rcx]");                                // compute the current heap end address from the heap base plus bump offset
+    emitter.instruction("lea rdx, [rax + r11]");                                // compute the freed block end address from the user pointer plus payload size
+    emitter.instruction("cmp rdx, rcx");                                        // does the freed block reach the current heap end?
+    emitter.instruction("jne __rt_heap_free_cache_small");                      // no — cache small blocks or insert larger blocks into the general free list
+
+    // -- bump reset: block is at end of heap, just shrink the bump pointer --
+    emitter.instruction("mov rdx, r9");                                         // preserve the freed block header address while converting it back into a bump offset
+    emitter.instruction("sub rdx, r10");                                        // compute the new bump offset from the heap base to the reclaimed block header
+    emitter.instruction("mov QWORD PTR [r8], rdx");                             // shrink the bump pointer back to the start of the freed tail block
+    emitter.instruction("jmp __rt_heap_free_trim_tail");                        // trim any newly exposed free tail blocks too before returning
+
+    // -- small non-tail blocks go through segregated bins first --
+    emitter.label("__rt_heap_free_cache_small");
+    emitter.instruction("cmp r11, 64");                                         // does the freed payload fit in the segregated small-bin cache?
+    emitter.instruction("ja __rt_heap_free_insert");                            // larger payloads still use the ordered coalescing free list
+    crate::codegen::abi::emit_symbol_address(emitter, "r10", "_heap_small_bins");
+    emitter.instruction("xor rcx, rcx");                                        // default to the <=8-byte bin offset
+    emitter.instruction("cmp r11, 8");                                          // does the freed payload fit in the smallest cached class?
+    emitter.instruction("jbe __rt_heap_free_cache_small_ready");                // yes — keep the <=8-byte bin offset
+    emitter.instruction("mov rcx, 8");                                          // otherwise target the <=16-byte bin offset
+    emitter.instruction("cmp r11, 16");                                         // does the freed payload fit in the <=16-byte class?
+    emitter.instruction("jbe __rt_heap_free_cache_small_ready");                // yes — keep the <=16-byte bin offset
+    emitter.instruction("mov rcx, 16");                                         // otherwise target the <=32-byte bin offset
+    emitter.instruction("cmp r11, 32");                                         // does the freed payload fit in the <=32-byte class?
+    emitter.instruction("jbe __rt_heap_free_cache_small_ready");                // yes — keep the <=32-byte bin offset
+    emitter.instruction("mov rcx, 24");                                         // remaining cached payloads belong to the <=64-byte bin offset
+    emitter.label("__rt_heap_free_cache_small_ready");
+    emitter.instruction("add r10, rcx");                                        // r10 = address of the selected small-bin head slot
+    emitter.instruction("mov rdx, QWORD PTR [r10]");                            // load the previous cached head for this small-bin size class
+    emitter.instruction("mov QWORD PTR [r9 + 16], rdx");                        // splice the freed block onto the front of the selected small-bin chain
+    emitter.instruction("mov QWORD PTR [r10], r9");                             // publish the freed block as the new small-bin head
+    emitter.instruction("jmp __rt_heap_free_count");                            // finish through the shared free-counting path
+
+    // -- larger blocks still use the ordered free list for coalescing --
+    emitter.label("__rt_heap_free_insert");
+    crate::codegen::abi::emit_symbol_address(emitter, "r10", "_heap_free_list");
+    emitter.instruction("mov rdx, QWORD PTR [r10]");                            // load the current free-list head while scanning for the insertion point
+    emitter.label("__rt_heap_free_insert_loop");
+    emitter.instruction("test rdx, rdx");                                       // did the free-list scan reach the tail?
+    emitter.instruction("jz __rt_heap_free_insert_here");                       // yes — insert the freed block at the end of the ordered free list
+    emitter.instruction("cmp rdx, r9");                                         // does the current free block begin at or after the freed block?
+    emitter.instruction("jae __rt_heap_free_insert_here");                      // yes — this is the ordered insertion point
+    emitter.instruction("lea r10, [rdx + 16]");                                 // advance prev_next_addr to the current block's next field
+    emitter.instruction("mov rdx, QWORD PTR [rdx + 16]");                       // move on to the next block in the ordered free list
+    emitter.instruction("jmp __rt_heap_free_insert_loop");                      // continue searching for the ordered insertion point
+
+    emitter.label("__rt_heap_free_insert_here");
+    emitter.instruction("mov QWORD PTR [r9 + 16], rdx");                        // splice the freed block in front of the current successor
+    emitter.instruction("mov QWORD PTR [r10], r9");                             // publish the freed block at the chosen ordered insertion point
+
+    // -- merge with the next free block when it is immediately adjacent --
+    emitter.instruction("test rdx, rdx");                                       // was the freed block inserted at the tail of the ordered free list?
+    emitter.instruction("jz __rt_heap_free_merge_prev");                        // yes — there is no successor to merge with
+    emitter.instruction("lea rcx, [r9 + r11 + 16]");                            // compute the end address of the newly inserted free block
+    emitter.instruction("cmp rcx, rdx");                                        // does the inserted block end exactly where the successor begins?
+    emitter.instruction("jne __rt_heap_free_merge_prev");                       // no — keep the successor as a separate free block
+    emitter.instruction("mov ecx, DWORD PTR [rdx]");                            // load the successor payload size before collapsing it into the current block
+    emitter.instruction("add r11, rcx");                                        // accumulate the successor payload size into the current free block size
+    emitter.instruction("add r11, 16");                                         // include the removed successor header in the merged payload size
+    emitter.instruction("mov DWORD PTR [r9], r11d");                            // write the merged payload size back into the current block header
+    emitter.instruction("mov rdx, QWORD PTR [rdx + 16]");                       // preserve the successor's successor before unlinking the merged block
+    emitter.instruction("mov QWORD PTR [r9 + 16], rdx");                        // update the merged block next pointer after removing the adjacent successor
+
+    // -- merge with the previous free block when it is immediately adjacent --
+    emitter.label("__rt_heap_free_merge_prev");
+    crate::codegen::abi::emit_symbol_address(emitter, "rcx", "_heap_free_list");
+    emitter.instruction("cmp r10, rcx");                                        // was the block inserted at the head of the ordered free list?
+    emitter.instruction("je __rt_heap_free_trim_tail");                         // yes — there is no previous free block to merge with
+    emitter.instruction("lea rcx, [r10 - 16]");                                 // recover the previous free block header from prev_next_addr
+    emitter.instruction("mov edx, DWORD PTR [rcx]");                            // load the previous free block payload size before checking adjacency
+    emitter.instruction("lea r8, [rcx + rdx + 16]");                            // compute the end address of the previous free block
+    emitter.instruction("cmp r8, r9");                                          // does the previous free block end where the inserted block begins?
+    emitter.instruction("jne __rt_heap_free_trim_tail");                        // no — there is no previous neighbor to coalesce with
+    emitter.instruction("add rdx, r11");                                        // accumulate the inserted block payload size into the previous block
+    emitter.instruction("add rdx, 16");                                         // include the inserted block header in the merged previous block size
+    emitter.instruction("mov DWORD PTR [rcx], edx");                            // write the merged payload size back into the previous block header
+    emitter.instruction("mov r8, QWORD PTR [r9 + 16]");                         // preserve the inserted block successor before unlinking the merged header
+    emitter.instruction("mov QWORD PTR [rcx + 16], r8");                        // splice the merged previous block directly to the inserted block successor
+
+    // -- repeatedly trim any ordered free block that now touches the bump tail --
+    emitter.label("__rt_heap_free_trim_tail");
+    crate::codegen::abi::emit_symbol_address(emitter, "r8", "_heap_off");
+    emitter.instruction("mov rcx, QWORD PTR [r8]");                             // reload the current bump offset before scanning for tail-touching free blocks
+    crate::codegen::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    emitter.instruction("lea rcx, [r10 + rcx]");                                // compute the current heap end from the heap base plus bump offset
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_heap_free_list");
+    emitter.instruction("mov rdx, QWORD PTR [r11]");                            // start scanning at the ordered free-list head
+    emitter.label("__rt_heap_free_trim_tail_scan");
+    emitter.instruction("test rdx, rdx");                                       // did the scan run out of ordered free blocks?
+    emitter.instruction("jz __rt_heap_free_count");                             // yes — no more free blocks reach the current bump tail
+    emitter.instruction("mov esi, DWORD PTR [rdx]");                            // load this candidate free block payload size before checking whether it reaches the tail
+    emitter.instruction("lea rdi, [rdx + rsi + 16]");                           // compute the end address of the candidate free block
+    emitter.instruction("cmp rdi, rcx");                                        // does this ordered free block end at the current heap tail?
+    emitter.instruction("je __rt_heap_free_trim_tail_found");                   // yes — reclaim it back into the bump pointer
+    emitter.instruction("lea r11, [rdx + 16]");                                 // advance prev_next_addr to the candidate block next field
+    emitter.instruction("mov rdx, QWORD PTR [rdx + 16]");                       // move on to the next ordered free block
+    emitter.instruction("jmp __rt_heap_free_trim_tail_scan");                   // keep scanning for a free block that now touches the bump tail
+
+    emitter.label("__rt_heap_free_trim_tail_found");
+    emitter.instruction("mov rsi, QWORD PTR [rdx + 16]");                       // preserve the reclaimed block successor before unlinking it from the free list
+    emitter.instruction("mov QWORD PTR [r11], rsi");                            // unlink the reclaimed tail block from the ordered free list
+    emitter.instruction("mov rsi, rdx");                                        // preserve the reclaimed block header while converting it into a new bump offset
+    emitter.instruction("sub rsi, r10");                                        // compute the new bump offset from the heap base to the reclaimed block header
+    emitter.instruction("mov QWORD PTR [r8], rsi");                             // shrink the bump pointer back to the reclaimed free block start
+    emitter.instruction("jmp __rt_heap_free_trim_tail");                        // continue trimming while more adjacent free blocks now reach the new heap tail
+
+    // -- increment gc_frees counter --
+    emitter.label("__rt_heap_free_count");
+    crate::codegen::abi::emit_symbol_address(emitter, "r8", "_gc_frees");
+    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current free counter before recording this released heap block
+    emitter.instruction("add r9, 1");                                           // count the released heap block in the runtime free counter
+    emitter.instruction("mov QWORD PTR [r8], r9");                              // store the updated free counter back into runtime state
+
     emitter.label("__rt_heap_free_done");
     emitter.instruction("ret");                                                 // return to the caller after the optional release path
 

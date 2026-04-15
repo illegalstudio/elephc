@@ -131,6 +131,8 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved hash pointer, capacity, and loop index
     emitter.instruction("sub rsp, 32");                                         // reserve local storage for the hash pointer, capacity, loop index, and entry scratch state
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the hash-table pointer across nested helper calls while freeing entries
+    crate::codegen::abi::emit_symbol_address(emitter, "r10", "_gc_release_suppressed");
+    emitter.instruction("mov QWORD PTR [r10], 1");                              // suppress nested collector runs while this hash deep-free walk releases entry payloads
     emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // load the table capacity before entering the entry-scan loop
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // save the table capacity so the entry-scan loop can survive nested helper calls
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // initialize the entry-scan loop index to zero
@@ -174,6 +176,8 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_hash_free_deep_value_array");                  // release nested indexed-array payloads through array decref
     emitter.instruction("cmp r8, 5");                                           // detect nested associative-array payloads in the current bootstrap subset
     emitter.instruction("je __rt_hash_free_deep_value_hash");                   // release nested associative-array payloads through hash decref
+    emitter.instruction("cmp r8, 6");                                           // detect nested object payloads stored in associative-array entries
+    emitter.instruction("je __rt_hash_free_deep_value_object");                 // release nested object payloads through object decref
     emitter.instruction("cmp r8, 7");                                           // detect boxed mixed payloads in the current bootstrap subset
     emitter.instruction("je __rt_hash_free_deep_value_mixed");                  // release boxed mixed payloads through mixed decref
     emitter.instruction("jmp __rt_hash_free_deep_next");                        // plain scalar payloads do not require any additional cleanup
@@ -203,6 +207,11 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_decref_hash");                               // release the nested associative-array payload through the x86_64 hash decref helper
     emitter.instruction("jmp __rt_hash_free_deep_next");                        // continue scanning entries after releasing the nested associative-array payload
 
+    emitter.label("__rt_hash_free_deep_value_object");
+    emitter.instruction("mov rax, QWORD PTR [rcx + 24]");                       // load the nested object pointer stored in the current hash-entry payload
+    emitter.instruction("call __rt_decref_object");                             // release the nested object payload through the x86_64 object decref helper
+    emitter.instruction("jmp __rt_hash_free_deep_next");                        // continue scanning entries after releasing the nested object payload
+
     emitter.label("__rt_hash_free_deep_value_mixed");
     emitter.instruction("mov rax, QWORD PTR [rcx + 24]");                       // load the boxed mixed pointer stored in the current hash-entry payload
     emitter.instruction("call __rt_decref_mixed");                              // release the boxed mixed payload through the x86_64 mixed decref helper
@@ -213,6 +222,8 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_hash_free_deep_struct");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after finishing the deep-free scan
+    crate::codegen::abi::emit_symbol_address(emitter, "r10", "_gc_release_suppressed");
+    emitter.instruction("mov QWORD PTR [r10], 0");                              // re-enable targeted collector runs now that the hash deep-free walk is complete
     emitter.instruction("call __rt_heap_free");                                 // release the hash-table storage itself through the x86_64 heap wrapper
     emitter.instruction("add rsp, 32");                                         // release the spill slots reserved for the hash-free scan state
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code

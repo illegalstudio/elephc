@@ -130,6 +130,8 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved object pointer, descriptor pointer, count, and loop index
     emitter.instruction("sub rsp, 32");                                         // reserve local storage for the object pointer, descriptor pointer, property count, and loop index
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the object pointer across nested helper calls while releasing properties
+    crate::codegen::abi::emit_symbol_address(emitter, "r10", "_gc_release_suppressed");
+    emitter.instruction("mov QWORD PTR [r10], 1");                              // suppress nested collector runs while this object deep-free walk releases property payloads
     emitter.instruction("mov r10d, DWORD PTR [rax - 16]");                      // load the object payload size from the uniform heap header
     emitter.instruction("sub r10, 8");                                          // subtract the leading class_id field from the payload size to isolate property storage
     emitter.instruction("shr r10, 4");                                          // divide by 16 because every property slot occupies two qwords
@@ -174,6 +176,8 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_object_free_deep_struct");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the object pointer after finishing the optional property cleanup pass
+    crate::codegen::abi::emit_symbol_address(emitter, "r10", "_gc_release_suppressed");
+    emitter.instruction("mov QWORD PTR [r10], 0");                              // re-enable targeted collector runs now that the object deep-free walk is complete
     emitter.instruction("call __rt_heap_free");                                 // release the object storage itself through the x86_64 heap wrapper
     emitter.instruction("add rsp, 32");                                         // release the spill slots reserved for the object deep-free scan state
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code

@@ -79,6 +79,21 @@ fn emit_decref_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r10d, 1");                                         // decrement the mixed-box refcount for the releasing x86_64 owner
     emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // store the decremented mixed-box refcount back into the uniform heap header
     emitter.instruction("jz __rt_decref_mixed_free");                           // zero refcount means the boxed payload can be released now
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_gc_release_suppressed");
+    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the release-suppression flag before considering a targeted cycle-collector run
+    emitter.instruction("test r11, r11");                                       // is this decref happening inside an ordinary deep-free walk?
+    emitter.instruction("jnz __rt_decref_mixed_skip");                          // yes — nested collector runs stay suppressed during deep frees
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_gc_collecting");
+    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the collector-active flag before attempting another collection pass
+    emitter.instruction("test r11, r11");                                       // is the collector already running?
+    emitter.instruction("jnz __rt_decref_mixed_skip");                          // yes — nested decref calls during collection must not restart the collector
+    emitter.instruction("mov r11, QWORD PTR [rax]");                            // load the boxed mixed runtime value_tag before deciding whether it can participate in cycles
+    emitter.instruction("cmp r11, 4");                                          // does this mixed box currently hold a heap-backed child?
+    emitter.instruction("jb __rt_decref_mixed_skip");                           // scalar, string, and null boxed values cannot participate in heap cycles
+    emitter.instruction("cmp r11, 7");                                          // is the boxed runtime tag within the supported heap-backed range?
+    emitter.instruction("ja __rt_decref_mixed_skip");                           // unknown boxed runtime tags are ignored by the x86_64 collector trigger
+    emitter.instruction("call __rt_gc_collect_cycles");                         // reclaim any newly unrooted graph components reachable through boxed mixed values
+    emitter.instruction("jmp __rt_decref_mixed_skip");                          // return after the optional x86_64 collector pass
     emitter.label("__rt_decref_mixed_skip");
     emitter.instruction("ret");                                                 // nothing else needs to happen for non-zero refcounts or foreign pointers
 

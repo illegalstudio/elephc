@@ -180,42 +180,140 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
 
 fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
-    emitter.comment("--- runtime: heap_alloc ---");
+    emitter.comment("--- runtime: heap_alloc (free-list + bump) ---");
     emitter.label_global("__rt_heap_alloc");
 
-    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving allocator spill slots
-    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame pointer for the requested payload size
-    emitter.instruction("sub rsp, 16");                                         // reserve local storage for the normalized payload size across libc malloc
-    emitter.instruction("cmp rax, 8");                                          // clamp tiny allocations so the shared header always has a minimally useful payload
-    emitter.instruction("jge __rt_heap_alloc_size_ready");                      // keep the original request when it already satisfies the minimum payload size
-    emitter.instruction("mov rax, 8");                                          // round sub-word allocations up to the minimal payload size accepted by the heap wrapper
-    emitter.label("__rt_heap_alloc_size_ready");
-    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the normalized payload size across the libc malloc call
-    emitter.instruction("mov rdi, rax");                                        // seed libc malloc with the requested payload size before adding the uniform header
-    emitter.instruction("add rdi, 16");                                         // include the 16-byte elephc heap header in the native allocation request
-    emitter.instruction("call malloc");                                         // allocate raw storage from libc and return the header pointer in rax
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the normalized payload size after libc malloc clobbered caller-saved registers
-    emitter.instruction("mov DWORD PTR [rax], r10d");                           // store the payload size in the uniform heap header
-    emitter.instruction("mov DWORD PTR [rax + 4], 1");                          // initialize the elephc refcount to one for the newly allocated heap payload
-    emitter.instruction(&format!("mov r10, 0x{:x}", X86_64_HEAP_MAGIC_HI32 << 32)); // materialize the x86_64 heap marker while leaving the low kind bits clear for the caller
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // stamp the allocation header with the x86_64 heap marker and an initially raw heap kind
-    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_gc_allocs");
-    emitter.instruction("mov rdx, QWORD PTR [r11]");                            // load the current x86_64 gc_allocs counter before accounting for the new heap allocation
-    emitter.instruction("add rdx, 1");                                          // count this heap allocation in the x86_64 gc_allocs counter
-    emitter.instruction("mov QWORD PTR [r11], rdx");                            // store the updated x86_64 gc_allocs counter after the allocation
-    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the normalized payload size so live-byte accounting includes the full block footprint
-    emitter.instruction("add r11, 16");                                         // include the 16-byte uniform heap header in the x86_64 live-byte footprint accounting
-    crate::codegen::abi::emit_symbol_address(emitter, "rdx", "_gc_live");
-    emitter.instruction("mov rcx, QWORD PTR [rdx]");                            // load the current x86_64 live-byte count before adding the new heap block footprint
-    emitter.instruction("add rcx, r11");                                        // add this block's payload-plus-header footprint to the x86_64 live-byte count
-    emitter.instruction("mov QWORD PTR [rdx], rcx");                            // store the updated x86_64 live-byte count after the allocation
-    crate::codegen::abi::emit_symbol_address(emitter, "rdx", "_gc_peak");
-    emitter.instruction("mov rdi, QWORD PTR [rdx]");                            // load the previous x86_64 peak live-byte watermark before comparing against the new total
-    emitter.instruction("cmp rcx, rdi");                                        // check whether the updated x86_64 live-byte count raised the peak watermark
-    emitter.instruction("cmova rdi, rcx");                                      // keep the larger of the current x86_64 live-byte total and the previous peak watermark
-    emitter.instruction("mov QWORD PTR [rdx], rdi");                            // store the updated x86_64 peak live-byte watermark after the allocation
-    emitter.instruction("add rax, 16");                                         // return the user payload pointer instead of the internal header address
-    emitter.instruction("add rsp, 16");                                         // release the temporary spill slots reserved for the normalized payload size
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
-    emitter.instruction("ret");                                                 // return the owned heap payload pointer in rax
+    // -- enforce minimum allocation of 8 bytes (free payload needs space for next ptr) --
+    emitter.instruction("cmp rax, 8");                                          // is the requested payload smaller than the minimum reusable block size?
+    emitter.instruction("jge __rt_heap_alloc_start");                           // keep the original request when it already satisfies the minimum payload size
+    emitter.instruction("mov rax, 8");                                          // round tiny allocations up so free blocks can still carry a next pointer
+    emitter.label("__rt_heap_alloc_start");
+
+    // -- try small segregated bins before walking the general free list --
+    emitter.instruction("cmp rax, 64");                                         // does this request fit within the cached small-bin size classes?
+    emitter.instruction("ja __rt_heap_alloc_fl_start");                         // larger payloads still use the general ordered free list
+    emitter.instruction("xor r8, r8");                                          // default to the <=8-byte bin offset
+    emitter.instruction("cmp rax, 8");                                          // does the request fit in the smallest cached payload class?
+    emitter.instruction("jbe __rt_heap_alloc_small_bins");                      // yes — start searching at the <=8-byte bin
+    emitter.instruction("mov r8, 8");                                           // otherwise start at the <=16-byte bin offset
+    emitter.instruction("cmp rax, 16");                                         // does the request fit in the <=16-byte class?
+    emitter.instruction("jbe __rt_heap_alloc_small_bins");                      // yes — search from the <=16-byte bin upward
+    emitter.instruction("mov r8, 16");                                          // otherwise start at the <=32-byte bin offset
+    emitter.instruction("cmp rax, 32");                                         // does the request fit in the <=32-byte class?
+    emitter.instruction("jbe __rt_heap_alloc_small_bins");                      // yes — search from the <=32-byte bin upward
+    emitter.instruction("mov r8, 24");                                          // remaining cached requests start at the <=64-byte bin offset
+    emitter.label("__rt_heap_alloc_small_bins");
+    crate::codegen::abi::emit_symbol_address(emitter, "r9", "_heap_small_bins");
+    emitter.instruction("add r9, r8");                                          // r9 = address of the first candidate small-bin head slot
+    emitter.label("__rt_heap_alloc_small_bin_loop");
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // r10 = current cached small-bin block header or null if this bin is empty
+    emitter.instruction("test r10, r10");                                       // does this size class currently hold a cached reusable block?
+    emitter.instruction("jnz __rt_heap_alloc_small_bin_found");                 // yes — reuse the first cached block in this class or a larger one
+    emitter.instruction("cmp r8, 24");                                          // have we already checked the largest <=64-byte cache bin?
+    emitter.instruction("je __rt_heap_alloc_fl_start");                         // yes — fall back to the general free list
+    emitter.instruction("add r8, 8");                                           // advance to the next larger small-bin class offset
+    emitter.instruction("add r9, 8");                                           // move to the next small-bin head slot
+    emitter.instruction("jmp __rt_heap_alloc_small_bin_loop");                  // keep scanning the remaining small bins
+
+    emitter.label("__rt_heap_alloc_small_bin_found");
+    emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                       // load the cached block's next pointer within this size class
+    emitter.instruction("mov QWORD PTR [r9], r11");                             // pop the cached block from the selected small bin
+    emitter.instruction("mov DWORD PTR [r10 + 4], 1");                          // restore a live refcount of one in the reused heap header
+    emitter.instruction(&format!("mov r11, 0x{:x}", X86_64_HEAP_MAGIC_HI32 << 32)); // materialize the x86_64 heap marker while leaving the low kind bits clear
+    emitter.instruction("mov QWORD PTR [r10 + 8], r11");                        // stamp the reused heap header as an owned raw heap allocation
+    emitter.instruction("lea rax, [r10 + 16]");                                 // return the user payload pointer instead of the internal header address
+    emitter.instruction("jmp __rt_heap_alloc_count");                           // reuse the shared allocation-accounting path for cached blocks
+
+    // -- walk the general free list looking for a first-fit block --
+    emitter.label("__rt_heap_alloc_fl_start");
+    crate::codegen::abi::emit_symbol_address(emitter, "r9", "_heap_free_list");
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // r10 = current free-list block header or null if the list is empty
+    emitter.label("__rt_heap_alloc_fl_loop");
+    emitter.instruction("test r10, r10");                                       // did the free-list walk run out of blocks?
+    emitter.instruction("jz __rt_heap_alloc_bump");                             // yes — fall back to bump allocation from the heap buffer
+    emitter.instruction("mov r11d, DWORD PTR [r10]");                           // load this free block payload size from its header
+    emitter.instruction("cmp r11, rax");                                        // does this free block fit the requested payload size?
+    emitter.instruction("jae __rt_heap_alloc_fl_found");                        // yes — reuse this free block
+    emitter.instruction("lea r9, [r10 + 16]");                                  // advance prev_next_addr to the current block's next field
+    emitter.instruction("mov r10, QWORD PTR [r10 + 16]");                       // move on to the next free block in the ordered list
+    emitter.instruction("jmp __rt_heap_alloc_fl_loop");                         // continue searching for a large-enough free block
+
+    // -- found a suitable free block; either split it or consume it whole --
+    emitter.label("__rt_heap_alloc_fl_found");
+    emitter.instruction("mov rcx, r11");                                        // preserve the matched free block payload size for split calculations
+    emitter.instruction("sub rcx, rax");                                        // compute the payload bytes left over after satisfying this allocation
+    emitter.instruction("cmp rcx, 24");                                         // is there room for a new 16-byte header plus minimum reusable payload?
+    emitter.instruction("jb __rt_heap_alloc_fl_take_whole");                    // no — consume the entire free block instead of creating an unusable tail
+    emitter.instruction("lea r8, [r10 + rax + 16]");                            // compute the header address for the split remainder block
+    emitter.instruction("sub rcx, 16");                                         // remove the new header size so rcx becomes the remainder payload size
+    emitter.instruction("mov DWORD PTR [r8], ecx");                             // write the split remainder payload size into its free-block header
+    emitter.instruction("mov DWORD PTR [r8 + 4], 0");                           // free-list blocks keep refcount zero while they remain unowned
+    emitter.instruction("mov QWORD PTR [r8 + 8], 0");                           // free-list blocks clear the heap kind until a typed allocation reuses them
+    emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");                       // preserve the original successor before rewriting the free-list links
+    emitter.instruction("mov QWORD PTR [r8 + 16], rdx");                        // splice the split remainder to the original successor
+    emitter.instruction("mov QWORD PTR [r9], r8");                              // replace the matched free block with the split remainder in the free list
+    emitter.instruction("mov DWORD PTR [r10], eax");                            // shrink the reused block header down to the requested payload size
+    emitter.instruction("mov DWORD PTR [r10 + 4], 1");                          // restore a live refcount of one in the reused heap header
+    emitter.instruction(&format!("mov r8, 0x{:x}", X86_64_HEAP_MAGIC_HI32 << 32)); // materialize the x86_64 heap marker for the reused block header
+    emitter.instruction("mov QWORD PTR [r10 + 8], r8");                         // stamp the reused block as an owned raw heap allocation
+    emitter.instruction("lea rax, [r10 + 16]");                                 // return the user payload pointer for the reused block
+    emitter.instruction("jmp __rt_heap_alloc_count");                           // reuse the common allocation-accounting path
+
+    emitter.label("__rt_heap_alloc_fl_take_whole");
+    emitter.instruction("mov rcx, QWORD PTR [r10 + 16]");                       // load the matched free block successor before unlinking it
+    emitter.instruction("mov QWORD PTR [r9], rcx");                             // unlink the matched free block from the ordered free list
+    emitter.instruction("mov DWORD PTR [r10 + 4], 1");                          // restore a live refcount of one in the reused whole block
+    emitter.instruction(&format!("mov r8, 0x{:x}", X86_64_HEAP_MAGIC_HI32 << 32)); // materialize the x86_64 heap marker for the reused whole block
+    emitter.instruction("mov QWORD PTR [r10 + 8], r8");                         // stamp the whole reused block as an owned raw heap allocation
+    emitter.instruction("lea rax, [r10 + 16]");                                 // return the user payload pointer for the reused free block
+
+    emitter.label("__rt_heap_alloc_count");
+    crate::codegen::abi::emit_symbol_address(emitter, "r8", "_gc_allocs");
+    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current allocation counter before recording this heap allocation
+    emitter.instruction("add r9, 1");                                           // count the newly allocated or reused heap block
+    emitter.instruction("mov QWORD PTR [r8], r9");                              // store the updated allocation counter back into runtime state
+    emitter.instruction("mov r11d, DWORD PTR [r10]");                           // load the finalized payload size from the allocated block header
+    emitter.instruction("add r11, 16");                                         // include the uniform 16-byte header in the live-footprint accounting
+    crate::codegen::abi::emit_symbol_address(emitter, "r8", "_gc_live");
+    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current live-byte count before adding this block footprint
+    emitter.instruction("add r9, r11");                                         // add this block's payload-plus-header footprint to the live-byte count
+    emitter.instruction("mov QWORD PTR [r8], r9");                              // store the updated live-byte count after the allocation
+    crate::codegen::abi::emit_symbol_address(emitter, "r8", "_gc_peak");
+    emitter.instruction("mov rcx, QWORD PTR [r8]");                             // load the previous live-byte peak watermark before comparing against the new total
+    emitter.instruction("cmp r9, rcx");                                         // did this allocation raise the peak live-byte watermark?
+    emitter.instruction("cmova rcx, r9");                                       // keep the larger of the current live total and the previous peak watermark
+    emitter.instruction("mov QWORD PTR [r8], rcx");                             // store the updated peak live-byte watermark back into runtime state
+    emitter.instruction("ret");                                                 // return the owned user payload pointer in rax
+
+    // -- no reusable block found; bump allocate from the heap buffer --
+    emitter.label("__rt_heap_alloc_bump");
+    crate::codegen::abi::emit_symbol_address(emitter, "r9", "_heap_off");
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current bump offset from the heap state
+    emitter.instruction("mov rcx, r10");                                        // preserve the current bump offset while computing the tentative allocation end
+    emitter.instruction("add rcx, rax");                                        // add the requested payload size to the current bump offset
+    emitter.instruction("add rcx, 16");                                         // include the uniform 16-byte header in the tentative allocation end
+    crate::codegen::abi::emit_symbol_address(emitter, "r8", "_heap_max");
+    emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the configured heap capacity in bytes
+    emitter.instruction("cmp rcx, r8");                                         // does the bump allocation still fit inside the configured heap capacity?
+    emitter.instruction("ja __rt_heap_exhausted");                              // no — report heap exhaustion and terminate
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_heap_buf");
+    emitter.instruction("lea r10, [r11 + r10]");                                // compute the new block header address inside the heap buffer
+    emitter.instruction("mov DWORD PTR [r10], eax");                            // write the requested payload size into the new block header
+    emitter.instruction("mov DWORD PTR [r10 + 4], 1");                          // initialize the new block refcount to one
+    emitter.instruction(&format!("mov r8, 0x{:x}", X86_64_HEAP_MAGIC_HI32 << 32)); // materialize the x86_64 heap marker for the freshly bumped block
+    emitter.instruction("mov QWORD PTR [r10 + 8], r8");                         // stamp the new block as an owned raw heap allocation
+    emitter.instruction("mov QWORD PTR [r9], rcx");                             // persist the advanced bump offset after carving out this block
+    emitter.instruction("lea rax, [r10 + 16]");                                 // return the user payload pointer instead of the header address
+    emitter.instruction("jmp __rt_heap_alloc_count");                           // reuse the shared allocation-accounting path for bumped blocks
+
+    // -- fatal error: heap memory exhausted --
+    emitter.label("__rt_heap_exhausted");
+    emitter.instruction("mov edi, 2");                                          // fd = stderr for the heap exhaustion fatal error message
+    crate::codegen::abi::emit_symbol_address(emitter, "rsi", "_heap_err_msg");
+    emitter.instruction("mov edx, 35");                                         // pass the exact heap exhaustion message length to the Linux write syscall
+    emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
+    emitter.instruction("syscall");                                             // print the fatal heap exhaustion message to stderr
+    emitter.instruction("mov edi, 1");                                          // exit code 1 for heap exhaustion
+    emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
+    emitter.instruction("syscall");                                             // terminate the process after reporting heap exhaustion
 }
