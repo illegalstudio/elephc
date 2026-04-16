@@ -1,6 +1,8 @@
+use crate::codegen::abi;
 use crate::codegen::context::{Context, HeapOwnership};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -22,9 +24,13 @@ pub fn emit(
                 "int" | "integer" => {
                     // -- convert value to integer --
                     match &old_ty {
-                        PhpType::Float => { emitter.instruction("fcvtzs x0, d0"); } //convert float to signed int (truncate toward zero)
+                        PhpType::Float => {
+                            abi::emit_float_result_to_int_result(emitter);      // truncate the floating-point source value into the active integer result register for the current target ABI
+                        }
                         PhpType::Bool | PhpType::Int => {}
-                        _ => { emitter.instruction("mov x0, #0"); }             // unsupported types become 0
+                        _ => {
+                            abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0); // coerce unsupported settype(..., \"integer\") sources to zero in the active integer result register
+                        }
                     }
                     PhpType::Int
                 }
@@ -32,7 +38,9 @@ pub fn emit(
                     // -- convert value to float --
                     match &old_ty {
                         PhpType::Float => {}
-                        _ => { emitter.instruction("scvtf d0, x0"); }           // convert signed int/bool to float
+                        _ => {
+                            abi::emit_int_result_to_float_result(emitter);      // convert the scalar settype(..., \"float\") source into the active floating-point result register
+                        }
                     }
                     PhpType::Float
                 }
@@ -43,8 +51,17 @@ pub fn emit(
                 "bool" | "boolean" => {
                     // -- convert value to boolean --
                     crate::codegen::expr::coerce_null_to_zero(emitter, &old_ty);
-                    emitter.instruction("cmp x0, #0");                          // compare value against zero
-                    emitter.instruction("cset x0, ne");                         // x0 = 1 if truthy, 0 if falsy
+                    match emitter.target.arch {
+                        Arch::X86_64 => {
+                            emitter.instruction("cmp rax, 0");                  // compare the coerced scalar source against zero before normalizing it into a boolean on x86_64
+                            emitter.instruction("setne al");                    // set the low byte when the coerced scalar source is truthy on x86_64
+                            emitter.instruction("movzx eax, al");               // widen the normalized boolean result back into the full x86_64 integer result register
+                        }
+                        Arch::AArch64 => {
+                            emitter.instruction("cmp x0, #0");                  // compare the coerced scalar source against zero before normalizing it into a boolean on AArch64
+                            emitter.instruction("cset x0, ne");                 // set the integer result register to 1 when the coerced scalar source is truthy on AArch64
+                        }
+                    }
                     PhpType::Bool
                 }
                 _ => old_ty.clone(),
@@ -58,6 +75,6 @@ pub fn emit(
         }
     }
     // -- settype() always returns true --
-    emitter.instruction("mov x0, #1");                                          // return true (settype always succeeds)
+    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 1);    // return true in the active target integer result register because settype() reports success
     Some(PhpType::Bool)
 }
