@@ -1,5 +1,25 @@
 use super::*;
 
+pub(crate) fn make_cli_test_dir(prefix: &str) -> std::path::PathBuf {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("{}_{}_{:?}_{}", prefix, pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+pub(crate) fn elephc_cli_bin() -> String {
+    std::env::var("CARGO_BIN_EXE_elephc").unwrap_or_else(|_| {
+        let mut path = std::env::current_exe().expect("failed to resolve current test binary");
+        path.pop();
+        if path.ends_with("deps") {
+            path.pop();
+        }
+        path.join("elephc").to_string_lossy().into_owned()
+    })
+}
+
 pub(crate) fn compile_and_run_with_defines(source: &str, defines: &[&str]) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
@@ -24,24 +44,12 @@ pub(crate) fn compile_and_run_with_defines(source: &str, defines: &[&str]) -> St
 }
 
 pub(crate) fn compile_cli_file_and_run(source: &str, defines: &[&str]) -> String {
-    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
-    let tid = std::thread::current().id();
-    let pid = std::process::id();
-    let dir = std::env::temp_dir().join(format!("elephc_cli_test_{}_{:?}_{}", pid, tid, id));
-    fs::create_dir_all(&dir).unwrap();
+    let dir = make_cli_test_dir("elephc_cli_test");
 
     let php_path = dir.join("main.php");
     fs::write(&php_path, source).unwrap();
 
-    let elephc_bin = std::env::var("CARGO_BIN_EXE_elephc").unwrap_or_else(|_| {
-        let mut path = std::env::current_exe().expect("failed to resolve current test binary");
-        path.pop();
-        if path.ends_with("deps") {
-            path.pop();
-        }
-        path.join("elephc").to_string_lossy().into_owned()
-    });
-    let mut compile_cmd = Command::new(elephc_bin);
+    let mut compile_cmd = Command::new(elephc_cli_bin());
     for define in defines {
         compile_cmd.arg("--define").arg(define);
     }
