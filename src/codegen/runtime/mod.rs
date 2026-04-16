@@ -306,6 +306,7 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     strings::emit_hash(emitter);
     strings::emit_base64_encode(emitter);
     strings::emit_base64_decode(emitter);
+    strings::emit_sprintf(emitter);
     strings::emit_sscanf(emitter);
     strings::emit_rtrim_mask(emitter);
     strings::emit_ltrim_mask(emitter);
