@@ -1,11 +1,11 @@
 ---
 title: "elephc Documentation"
-description: "A PHP-to-native compiler. Compiles a static subset of PHP to ARM64 assembly, producing standalone macOS binaries."
+description: "A PHP-to-native compiler. Compiles a static subset of PHP to native assembly and produces standalone binaries for supported targets."
 sidebar:
   order: 0
 ---
 
-elephc compiles PHP to native ARM64 binaries — no interpreter, no VM, no runtime dependencies. This documentation covers everything from PHP syntax support to compiler-specific extensions and internal architecture.
+elephc compiles PHP to native binaries for the supported targets — currently macOS ARM64, Linux ARM64, and Linux x86_64. No interpreter, no VM, no runtime dependencies. This documentation covers everything from PHP syntax support to compiler-specific extensions and internal architecture.
 
 ## Getting Started
 
@@ -39,14 +39,14 @@ Compiler-specific extensions that go beyond standard PHP. These features have no
 
 ## Compiler Internals
 
-How elephc works under the hood — from lexing to ARM64 code generation.
+How elephc works under the hood — from lexing to code generation and runtime structure.
 
 - [What is a Compiler?](internals/what-is-a-compiler.md) — the big picture of compilation
 - [The Pipeline](internals/how-elephc-works.md) — from `<?php` to running binary
 - [The Lexer](internals/the-lexer.md) — raw text to tokens
 - [The Parser](internals/the-parser.md) — tokens to AST with Pratt parsing
 - [The Type Checker](internals/the-type-checker.md) — compile-time type inference and validation
-- [The Code Generator](internals/the-codegen.md) — AST to ARM64 assembly
+- [The Code Generator](internals/the-codegen.md) — AST to target assembly (with an AArch64-focused walkthrough)
 - [The Runtime](internals/the-runtime.md) — hand-written assembly routines
 - [Memory Model](internals/memory-model.md) — stack frames, heap, reference counting
 - [Architecture](internals/architecture.md) — module map, calling conventions

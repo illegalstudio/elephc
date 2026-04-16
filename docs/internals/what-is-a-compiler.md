@@ -26,13 +26,13 @@ The key difference: an interpreter is always present at runtime, translating as 
 
 ## What elephc does
 
-elephc is a compiler. It takes PHP source code and produces a **native ARM64 binary** for macOS. No PHP interpreter involved. The output is a standalone executable, just like a C program compiled with `gcc`.
+elephc is a compiler. It takes PHP source code and produces a native binary for the supported targets. No PHP interpreter involved. The output is a standalone executable, just like a C program compiled with `gcc`.
 
 ```
-hello.php → elephc → hello (Mach-O binary) → runs directly on CPU
+hello.php → elephc → hello (native executable) → runs directly on CPU
 ```
 
-The resulting binary has no dependency on PHP and no interpreter or VM. It includes elephc's emitted helper routines and links `libSystem` for OS and libc services.
+The resulting binary has no dependency on PHP and no interpreter or VM. It includes elephc's emitted helper routines and links the platform's native system libraries for OS and libc services.
 
 ## The phases of compilation
 
@@ -54,7 +54,7 @@ Typed AST      Same tree, but now we know $x is an Int
 Assembly       cmp x0, #0 / b.le _else_1 / ... / _else_1:
      │
      ▼
-Machine code   Binary executable (Mach-O format on macOS)
+Machine code   Binary executable (native format for the chosen platform)
 ```
 
 Each phase has a clear job:
@@ -68,7 +68,7 @@ Each phase has a clear job:
 | Assembler (`as`) | Assembly text | Object file | Convert text mnemonics to binary opcodes |
 | Linker (`ld`) | Object file | Executable | Resolve addresses, produce final binary |
 
-elephc handles the first four phases. The last two (assembler and linker) are delegated to macOS system tools.
+elephc handles the first four phases. The last two (assembler and linker) are delegated to the host toolchain.
 
 ## Why compile PHP?
 
@@ -76,7 +76,7 @@ PHP is normally interpreted, and that's fine for web servers. So why compile it?
 
 elephc isn't trying to replace PHP. It's an **educational project** — a way to understand how compilers work by building one for a language many people already know. PHP's syntax is simple enough to be tractable but rich enough to be interesting (strings, arrays, functions, control flow, type coercion).
 
-The fact that the output is *real ARM64 assembly* means you can see exactly what the CPU does for every PHP construct. `echo 1 + 2` isn't magic — it's a `mov`, an `add`, a `bl` to a conversion routine, and a `svc` system call. You can trace every step.
+The fact that the output is *real assembly* means you can see exactly what the CPU does for every PHP construct. Many of the internals documents use AArch64 examples because that was the original backend and remains the most explanatory path, but the same compiler pipeline now targets more than one platform/architecture pair. `echo 1 + 2` isn't magic — it's a few data moves, an add, a call to a conversion routine, and a system call. You can trace every step.
 
 ---
 
