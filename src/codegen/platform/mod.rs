@@ -67,6 +67,7 @@ mod tests {
         assert_eq!(map_syscall(1), 93);
         assert_eq!(map_syscall(4), 64);
         assert_eq!(map_syscall(5), 56);
+        assert_eq!(map_syscall(128), 38);
         assert_eq!(map_syscall(338), 79);
     }
 
