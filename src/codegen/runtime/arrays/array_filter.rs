@@ -1,9 +1,15 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 /// array_filter: filter elements of an integer array using a callback, returning a new array.
 /// Input: x0 = callback function address, x1 = source array pointer
 /// Output: x0 = pointer to new array with only elements where callback returned truthy
 pub fn emit_array_filter(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_array_filter_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: array_filter ---");
     emitter.label_global("__rt_array_filter");
@@ -73,4 +79,55 @@ pub fn emit_array_filter(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return with x0 = new filtered array
+}
+
+fn emit_array_filter_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: array_filter ---");
+    emitter.label_global("__rt_array_filter");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving callback-filter spill slots
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved source array, destination array, and kept element state
+    emitter.instruction("push r12");                                            // preserve the callback address register because the filter loop calls through it repeatedly
+    emitter.instruction("push r13");                                            // preserve the source-index register because the loop keeps it live across callback invocations
+    emitter.instruction("push r14");                                            // preserve the destination-length register because kept-element count survives callback invocations
+    emitter.instruction("sub rsp, 32");                                         // reserve local slots for the source array pointer, source length, destination array pointer, and candidate element
+    emitter.instruction("mov r12, rdi");                                        // keep the callback address in a callee-saved register across the filtering loop
+    emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the source array pointer so the loop can reload it after callback calls
+    emitter.instruction("mov r10, QWORD PTR [rsi]");                            // load the source array length from the first field of the array header
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save the source array length across the destination-array allocation call
+    emitter.instruction("mov rdi, r10");                                        // pass the source array length as the maximum destination capacity to __rt_array_new
+    emitter.instruction("mov rsi, 8");                                          // request 8-byte element slots for the scalar filter runtime
+    emitter.instruction("call __rt_array_new");                                 // allocate the destination array that will store the kept scalar elements
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the destination array pointer for the loop body and final return path
+    emitter.instruction("xor r13d, r13d");                                      // start the source index at zero before scanning the source array
+    emitter.instruction("xor r14d, r14d");                                      // start the destination kept-element count at zero before the first callback
+
+    emitter.label("__rt_array_filter_loop");
+    emitter.instruction("cmp r13, QWORD PTR [rbp - 40]");                       // stop once the source index reaches the saved source-array length
+    emitter.instruction("jge __rt_array_filter_done");                          // finish filtering once every source element has been tested
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the source array pointer after the previous callback invocation
+    emitter.instruction("mov rdi, QWORD PTR [r10 + r13 * 8 + 24]");             // load the current source element into the first SysV integer argument register
+    emitter.instruction("mov QWORD PTR [rbp - 56], rdi");                       // preserve the candidate source element across the callback so truthy matches can copy it
+    emitter.instruction("call r12");                                            // invoke the user callback with the current source element and read the truthy result from rax
+    emitter.instruction("test rax, rax");                                       // check whether the callback reported a truthy keep/skip decision
+    emitter.instruction("jz __rt_array_filter_skip");                           // skip copying the element when the callback returned zero / false
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the destination array pointer after the callback clobbered caller-saved registers
+    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the kept source element saved before the callback invocation
+    emitter.instruction("mov QWORD PTR [r10 + r14 * 8 + 24], r11");             // copy the kept scalar element into the next destination-array slot
+    emitter.instruction("add r14, 1");                                          // advance the destination kept-element count after storing a kept value
+
+    emitter.label("__rt_array_filter_skip");
+    emitter.instruction("add r13, 1");                                          // advance the source index after examining the current source element
+    emitter.instruction("jmp __rt_array_filter_loop");                          // continue filtering until the whole source array has been examined
+
+    emitter.label("__rt_array_filter_done");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the destination array pointer for final length publication and return
+    emitter.instruction("mov QWORD PTR [rax], r14");                            // publish the number of kept elements as the destination array logical length
+    emitter.instruction("add rsp, 32");                                         // release the filter local bookkeeping slots before restoring callee-saved registers
+    emitter.instruction("pop r14");                                             // restore the caller destination-length callee-saved register
+    emitter.instruction("pop r13");                                             // restore the caller source-index callee-saved register
+    emitter.instruction("pop r12");                                             // restore the caller callback callee-saved register
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the filtered array pointer
+    emitter.instruction("ret");                                                 // return the filtered destination array pointer in rax
 }

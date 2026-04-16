@@ -16,6 +16,6 @@ pub fn emit(
     // -- evaluate seconds argument --
     emit_expr(&args[0], emitter, ctx, data);
     // -- call libc sleep (x0 = seconds) --
-    emitter.instruction("bl _sleep");                                           // sleep for x0 seconds, returns 0 on success
+    emitter.bl_c("sleep");                                           // sleep for x0 seconds, returns 0 on success
     Some(PhpType::Int)
 }

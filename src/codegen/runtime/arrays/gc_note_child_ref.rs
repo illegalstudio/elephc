@@ -10,12 +10,10 @@ pub fn emit_gc_note_child_ref(emitter: &mut Emitter) {
 
     // -- null and heap-range checks --
     emitter.instruction("cbz x0, __rt_gc_note_child_ref_done");                 // ignore null child pointers
-    emitter.instruction("adrp x9, _heap_buf@PAGE");                             // load page of the heap buffer
-    emitter.instruction("add x9, x9, _heap_buf@PAGEOFF");                       // resolve the heap buffer base
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
     emitter.instruction("cmp x0, x9");                                          // is the child below the heap buffer?
     emitter.instruction("b.lo __rt_gc_note_child_ref_done");                    // only heap pointers participate in cycle accounting
-    emitter.instruction("adrp x10, _heap_off@PAGE");                            // load page of the heap offset
-    emitter.instruction("add x10, x10, _heap_off@PAGEOFF");                     // resolve the heap offset address
+    crate::codegen::abi::emit_symbol_address(emitter, "x10", "_heap_off");
     emitter.instruction("ldr x10, [x10]");                                      // load the current heap offset
     emitter.instruction("add x10, x9, x10");                                    // compute the current heap end
     emitter.instruction("cmp x0, x10");                                         // is the child at or beyond the current heap end?

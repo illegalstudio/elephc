@@ -2,6 +2,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -14,7 +15,6 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("filemtime()");
     emit_expr(&args[0], emitter, ctx, data);
-    // x1=filename ptr, x2=filename len
-    emitter.instruction("bl __rt_filemtime");                                   // call runtime: get file modification time → x0=unix timestamp
+    abi::emit_call_label(emitter, "__rt_filemtime");                            // call the target-aware runtime helper that returns the Unix modification timestamp
     Some(PhpType::Int)
 }

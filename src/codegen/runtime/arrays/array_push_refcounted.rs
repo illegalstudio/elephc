@@ -1,9 +1,15 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 /// array_push_refcounted: push a borrowed refcounted payload into an array.
 /// Input:  x0 = array pointer, x1 = borrowed heap pointer
 /// Output: x0 = array pointer (may differ if array was reallocated)
 pub fn emit_array_push_refcounted(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_array_push_refcounted_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: array_push_refcounted ---");
     emitter.label_global("__rt_array_push_refcounted");
@@ -62,4 +68,55 @@ pub fn emit_array_push_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return array pointer from __rt_array_push_int
+}
+
+fn emit_array_push_refcounted_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: array_push_refcounted ---");
+    emitter.label_global("__rt_array_push_refcounted");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving refcounted-append spill slots
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved destination array and child pointer
+    emitter.instruction("sub rsp, 16");                                         // reserve aligned spill slots for the destination array pointer and retained child pointer
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the destination indexed-array pointer across uniqueness and incref helper calls
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the borrowed child pointer across uniqueness and incref helper calls
+    emitter.instruction("call __rt_array_ensure_unique");                       // split shared destination arrays before retaining and storing a new child pointer
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // persist the unique destination indexed-array pointer after copy-on-write splitting
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the borrowed child pointer into the x86_64 incref input register
+    emitter.instruction("call __rt_incref");                                    // retain the borrowed child pointer so the destination indexed array becomes a real owner
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the unique destination indexed-array pointer before updating its packed value_type metadata
+    emitter.instruction("mov r11, QWORD PTR [r10 - 8]");                        // load the current packed indexed-array kind word from the destination heap header
+    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the retained child pointer before deriving its heap kind tag
+    emitter.instruction("mov r9, QWORD PTR [r8 - 8]");                          // load the child heap-kind word so the destination indexed array can record the correct value_type tag
+    emitter.instruction("and r9, 0xff");                                        // isolate the child low-byte heap kind tag from the packed uniform header
+    emitter.instruction("cmp r9, 2");                                           // is the retained child an indexed array?
+    emitter.instruction("je __rt_array_push_refcounted_kind_array");            // encode runtime value_type 4 for nested indexed arrays
+    emitter.instruction("cmp r9, 3");                                           // is the retained child an associative array / hash?
+    emitter.instruction("je __rt_array_push_refcounted_kind_hash");             // encode runtime value_type 5 for nested hashes
+    emitter.instruction("cmp r9, 4");                                           // is the retained child an object instance?
+    emitter.instruction("je __rt_array_push_refcounted_kind_object");           // encode runtime value_type 6 for nested objects
+    emitter.instruction("cmp r9, 5");                                           // is the retained child a boxed mixed cell?
+    emitter.instruction("jne __rt_array_push_refcounted_push");                 // unexpected children keep the existing indexed-array value_type metadata unchanged
+    emitter.instruction("mov r9, 7");                                           // encode runtime value_type 7 for boxed mixed payloads
+    emitter.instruction("jmp __rt_array_push_refcounted_kind_store");           // store the updated indexed-array packed value_type tag
+    emitter.label("__rt_array_push_refcounted_kind_object");
+    emitter.instruction("mov r9, 6");                                           // encode runtime value_type 6 for nested objects
+    emitter.instruction("jmp __rt_array_push_refcounted_kind_store");           // store the updated indexed-array packed value_type tag
+    emitter.label("__rt_array_push_refcounted_kind_array");
+    emitter.instruction("mov r9, 4");                                           // encode runtime value_type 4 for nested indexed arrays
+    emitter.instruction("jmp __rt_array_push_refcounted_kind_store");           // store the updated indexed-array packed value_type tag
+    emitter.label("__rt_array_push_refcounted_kind_hash");
+    emitter.instruction("mov r9, 5");                                           // encode runtime value_type 5 for nested associative arrays
+    emitter.label("__rt_array_push_refcounted_kind_store");
+    emitter.instruction("and r11, 0x80ff");                                     // preserve only the indexed-array kind and persistent copy-on-write bits before rewriting value_type
+    emitter.instruction("shl r9, 8");                                           // move the runtime value_type tag into the packed heap-kind byte lane
+    emitter.instruction("or r11, r9");                                          // combine the stable indexed-array metadata bits with the new runtime value_type tag
+    emitter.instruction("mov QWORD PTR [r10 - 8], r11");                        // persist the updated packed heap-kind word back into the destination indexed-array header
+    emitter.label("__rt_array_push_refcounted_push");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the unique destination indexed-array pointer for the ordinary scalar append helper
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the retained child pointer as the scalar payload being appended
+    emitter.instruction("call __rt_array_push_int");                            // append the retained child pointer through the ordinary indexed-array append helper
+    emitter.instruction("add rsp, 16");                                         // release the refcounted-append spill slots before returning
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the updated indexed array
+    emitter.instruction("ret");                                                 // return to the caller with rax holding the updated indexed-array pointer
 }

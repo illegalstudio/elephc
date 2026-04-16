@@ -1,9 +1,15 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 /// array_push_int: push an integer element to an array, growing if needed.
 /// Input:  x0 = array pointer, x1 = value
 /// Output: x0 = array pointer (may differ if array was reallocated)
 pub fn emit_array_push_int(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_array_push_int_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: array_push_int ---");
     emitter.label_global("__rt_array_push_int");
@@ -43,6 +49,38 @@ pub fn emit_array_push_int(emitter: &mut Emitter) {
     emitter.instruction("str x9, [x0]");                                        // update length in new array
 
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // deallocate stack frame
+    emitter.instruction("add sp, sp, #32");                                     // deallocate the stack frame
     emitter.instruction("ret");                                                 // return with x0 = new array
+}
+
+fn emit_array_push_int_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: array_push_int ---");
+    emitter.label_global("__rt_array_push_int");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving indexed-array append spill slots
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved scalar payload and array pointer
+    emitter.instruction("sub rsp, 16");                                         // reserve aligned spill slots for the appended scalar payload and the possibly-grown array pointer
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // preserve the appended scalar payload across uniqueness and growth helper calls
+    emitter.instruction("call __rt_array_ensure_unique");                       // split shared indexed arrays before appending a new scalar slot
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the unique indexed-array pointer across the optional growth helper call
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the indexed-array logical length before checking the append capacity
+    emitter.instruction("mov r11, QWORD PTR [rax + 8]");                        // load the indexed-array capacity before deciding between the fast path and growth
+    emitter.instruction("cmp r10, r11");                                        // is the indexed array already full at the current logical length?
+    emitter.instruction("jae __rt_array_push_int_grow");                        // grow the indexed array when the new element would exceed the current capacity
+    emitter.label("__rt_array_push_int_store");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the current indexed-array pointer before writing the appended scalar slot
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // reload the indexed-array logical length after helper calls clobbered caller-saved registers
+    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the appended scalar payload after helper calls clobbered caller-saved registers
+    emitter.instruction("mov QWORD PTR [rax + 24 + r10 * 8], r11");             // store the appended scalar payload into the next indexed-array slot
+    emitter.instruction("add r10, 1");                                          // advance the indexed-array logical length after materializing the appended slot
+    emitter.instruction("mov QWORD PTR [rax], r10");                            // publish the updated indexed-array logical length in the array header
+    emitter.instruction("add rsp, 16");                                         // release the indexed-array append spill slots before returning
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the updated indexed array
+    emitter.instruction("ret");                                                 // return to the caller with rax holding the updated indexed-array pointer
+    emitter.label("__rt_array_push_int_grow");
+    emitter.instruction("mov rdi, rax");                                        // pass the unique indexed-array pointer to the growth helper before appending the new scalar slot
+    emitter.instruction("call __rt_array_grow");                                // allocate a larger indexed-array backing store so the append can proceed
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the grown indexed-array pointer before writing the appended scalar slot
+    emitter.instruction("jmp __rt_array_push_int_store");                       // append the scalar payload into the grown indexed-array storage
 }

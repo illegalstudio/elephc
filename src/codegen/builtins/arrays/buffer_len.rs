@@ -1,3 +1,4 @@
+use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -16,6 +17,6 @@ pub fn emit(
     if !matches!(buf_ty, PhpType::Buffer(_)) {
         emitter.comment("WARNING: buffer_len() received a non-buffer argument");
     }
-    emitter.instruction("bl __rt_buffer_len");                                  // load the logical element count from the buffer header
+    abi::emit_call_label(emitter, "__rt_buffer_len");                           // load the logical element count from the buffer header through the target-aware runtime helper
     Some(PhpType::Int)
 }

@@ -1,6 +1,7 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
+use crate::codegen::abi;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
@@ -71,9 +72,9 @@ pub fn emit(
 
     // -- emit constant true/false based on whether function is known --
     if ctx.functions.contains_key(&func_name) || BUILTINS.contains(&func_name.as_str()) {
-        emitter.instruction("mov x0, #1");                                      // function exists → return true
+        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 1);
     } else {
-        emitter.instruction("mov x0, #0");                                      // function not found → return false
+        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
     }
 
     Some(PhpType::Bool)

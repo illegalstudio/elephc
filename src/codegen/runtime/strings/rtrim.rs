@@ -1,7 +1,12 @@
-use crate::codegen::emit::Emitter;
+use crate::codegen::{emit::Emitter, platform::Arch};
 
 /// rtrim: strip whitespace from right. Adjusts x2.
 pub fn emit_rtrim(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_rtrim_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: rtrim ---");
     emitter.label_global("__rt_rtrim");
@@ -26,4 +31,32 @@ pub fn emit_rtrim(emitter: &mut Emitter) {
 
     emitter.label("__rt_rtrim_done");
     emitter.instruction("ret");                                                 // return with adjusted x2
+}
+
+fn emit_rtrim_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: rtrim ---");
+    emitter.label_global("__rt_rtrim");
+    emitter.label("__rt_rtrim_loop_x86");
+    emitter.instruction("test rdx, rdx");                                       // is the borrowed string slice already empty before trimming any trailing whitespace?
+    emitter.instruction("je __rt_rtrim_done_x86");                              // stop immediately when there are no bytes left to inspect
+    emitter.instruction("mov rcx, rdx");                                        // copy the borrowed string length so rtrim() can inspect the current last-byte index
+    emitter.instruction("sub rcx, 1");                                          // compute the index of the last byte in the borrowed string slice
+    emitter.instruction("movzx esi, BYTE PTR [rax + rcx]");                     // load the last byte of the borrowed string slice for whitespace classification
+    emitter.instruction("cmp sil, 32");                                         // is the trailing byte a space that rtrim() should discard?
+    emitter.instruction("je __rt_rtrim_strip_x86");                             // strip the trailing space and continue trimming from the new end
+    emitter.instruction("cmp sil, 9");                                          // is the trailing byte a tab that rtrim() should discard?
+    emitter.instruction("je __rt_rtrim_strip_x86");                             // strip the trailing tab and continue trimming from the new end
+    emitter.instruction("cmp sil, 10");                                         // is the trailing byte a newline that rtrim() should discard?
+    emitter.instruction("je __rt_rtrim_strip_x86");                             // strip the trailing newline and continue trimming from the new end
+    emitter.instruction("cmp sil, 13");                                         // is the trailing byte a carriage return that rtrim() should discard?
+    emitter.instruction("je __rt_rtrim_strip_x86");                             // strip the trailing carriage return and continue trimming from the new end
+    emitter.instruction("jmp __rt_rtrim_done_x86");                             // stop once the trailing byte is no longer classified as trim-worthy whitespace
+
+    emitter.label("__rt_rtrim_strip_x86");
+    emitter.instruction("sub rdx, 1");                                          // shrink the borrowed string length to exclude the stripped trailing whitespace byte
+    emitter.instruction("jmp __rt_rtrim_loop_x86");                             // continue trimming from the new end of the borrowed string slice
+
+    emitter.label("__rt_rtrim_done_x86");
+    emitter.instruction("ret");                                                 // return the adjusted borrowed string slice in rax/rdx
 }

@@ -1,6 +1,7 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
+use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
@@ -17,24 +18,32 @@ pub fn emit(
         if let Some(info) = ctx.variables.get(var_name) {
             let offset = info.stack_offset;
             // -- compute address of variable's stack slot --
-            if offset <= 4095 {
-                emitter.instruction(&format!("sub x0, x29, #{}", offset));      // x0 = address of variable on stack
-            } else {
-                emitter.instruction(&format!("mov x9, #{}", offset));           // load large offset into scratch
-                emitter.instruction("sub x0, x29, x9");                         // x0 = address of variable on stack
-            }
+            abi::emit_frame_slot_address(emitter, abi::int_result_reg(emitter), offset);
         } else if let Some(label) = ctx.global_vars.get(var_name) {
             // Global variable — use its static storage address
             let label = label.clone();
-            emitter.instruction(&format!("adrp x0, {}@PAGE", label));           // load page of global variable
-            emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", label));     // resolve global variable address
+            abi::emit_symbol_address(emitter, abi::int_result_reg(emitter), &label); // materialize the global variable storage address for the active target ABI
         } else {
             // Variable not found — return null pointer
-            emitter.instruction("mov x0, #0");                                  // null pointer for unknown variable
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("mov x0, #0");                          // materialize a null pointer result when the requested variable storage does not exist on AArch64
+                }
+                Arch::X86_64 => {
+                    emitter.instruction("mov rax, 0");                          // materialize a null pointer result when the requested variable storage does not exist on x86_64
+                }
+            }
         }
     } else {
         // Non-variable argument — return null pointer
-        emitter.instruction("mov x0, #0");                                      // null pointer (cannot take address of expression)
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("mov x0, #0");                              // materialize a null pointer when ptr() targets a non-addressable expression on AArch64
+            }
+            Arch::X86_64 => {
+                emitter.instruction("mov rax, 0");                              // materialize a null pointer when ptr() targets a non-addressable expression on x86_64
+            }
+        }
     }
     Some(PhpType::Pointer(None))
 }

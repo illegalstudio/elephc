@@ -1,9 +1,15 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 /// hash_fnv1a: FNV-1a 64-bit hash function.
 /// Input:  x1=ptr, x2=len
 /// Output: x0=hash (64-bit)
 pub fn emit_hash_fnv1a(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_hash_fnv1a_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: hash_fnv1a ---");
     emitter.label_global("__rt_hash_fnv1a");
@@ -32,4 +38,26 @@ pub fn emit_hash_fnv1a(emitter: &mut Emitter) {
     // -- return hash in x0 --
     emitter.label("__rt_hash_fnv1a_done");
     emitter.instruction("ret");                                                 // return to caller
+}
+
+fn emit_hash_fnv1a_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: hash_fnv1a ---");
+    emitter.label_global("__rt_hash_fnv1a");
+
+    emitter.instruction("mov rax, 14695981039346656037");                       // load the 64-bit FNV-1a offset basis into the return register
+    emitter.instruction("mov r8, 1099511628211");                               // load the 64-bit FNV prime into a caller-saved scratch register
+
+    emitter.label("__rt_hash_fnv1a_loop");
+    emitter.instruction("test rsi, rsi");                                       // stop once every input byte has been folded into the hash
+    emitter.instruction("je __rt_hash_fnv1a_done");                             // return immediately when the remaining byte count reaches zero
+    emitter.instruction("movzx ecx, BYTE PTR [rdi]");                           // load the next input byte and zero-extend it for the xor step
+    emitter.instruction("xor rax, rcx");                                        // fold the next byte into the running FNV-1a hash state
+    emitter.instruction("imul rax, r8");                                        // multiply by the fixed FNV prime to advance the hash state
+    emitter.instruction("add rdi, 1");                                          // advance the source pointer to the next byte
+    emitter.instruction("sub rsi, 1");                                          // decrement the remaining byte count after consuming one input byte
+    emitter.instruction("jmp __rt_hash_fnv1a_loop");                            // continue hashing until the input buffer is exhausted
+
+    emitter.label("__rt_hash_fnv1a_done");
+    emitter.instruction("ret");                                                 // return the completed 64-bit hash in rax
 }

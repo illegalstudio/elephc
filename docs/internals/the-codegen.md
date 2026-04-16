@@ -1,13 +1,19 @@
 ---
 title: "The Code Generator"
-description: "How AST nodes become ARM64 assembly."
+description: "How typed AST nodes become native assembly for the selected target."
 sidebar:
   order: 6
 ---
 
-**Source:** `src/codegen/` — `mod.rs`, `expr.rs`, `expr/`, `stmt.rs`, `stmt/`, `functions.rs`, `ffi.rs`, `abi.rs`, `context.rs`, `data_section.rs`, `emit.rs`
+**Source:** `src/codegen/` — `mod.rs`, `expr.rs`, `expr/`, `stmt.rs`, `stmt/`, `functions/`, `ffi.rs`, `abi/`, `context.rs`, `data_section.rs`, `emit.rs`
 
-The code generator (codegen) is the heart of the compiler. It takes the typed AST and produces ARM64 assembly text — the actual instructions the CPU will execute. For an introduction to ARM64, see [Introduction to ARM64 Assembly](arm64-assembly.md).
+The code generator (codegen) is the heart of the compiler. It takes the typed AST and produces native assembly text for the selected target — the actual instructions the CPU will execute.
+
+elephc now supports more than one backend. AArch64 is still the clearest reference path in the codebase and in this document, while Linux `x86_64` is also a supported backend that goes through the same high-level lowering pipeline.
+
+Most snippets below use AArch64 because the instruction forms are compact and the surrounding docs already explain them in detail. When a section talks about target-specific ABI or runtime behavior, it calls out Linux `x86_64` explicitly.
+
+For an introduction to AArch64, see [Introduction to ARM64 Assembly](arm64-assembly.md).
 
 ## Overview
 
@@ -58,6 +64,8 @@ _float_0: .quad 0x400921FB54442D18
 ```
 
 Trait composition does not add a separate runtime dispatch layer. Traits are flattened into each concrete class during type checking, then inheritance metadata is layered on top. Codegen still emits `_method_Class_method` / `_static_Class_method` labels, but instance calls now use vtable slots keyed by `class_id` so child overrides work through inherited methods.
+
+The exact directives and symbol decoration vary by target. The example above is intentionally AArch64-flavored, but the same structural phases apply on Linux `x86_64`: user code first, runtime helpers next, then data/runtime storage.
 
 ## The Emitter
 
@@ -169,7 +177,7 @@ Floats are stored as their raw 64-bit IEEE 754 bit patterns (`.quad` directive).
 
 **Files:** `src/codegen/expr.rs`, `src/codegen/expr/`
 
-`emit_expr()` takes an expression node and emits code that leaves the result in the standard registers. The top-level `expr.rs` file now mainly dispatches into focused helpers under `expr/` such as `binops.rs`, `arrays.rs`, `compare.rs`, `calls/`, and `objects/`.
+`emit_expr()` takes an expression node and emits code that leaves the result in the standard registers. The top-level `expr.rs` file now mainly dispatches into focused helpers under `expr/` such as `scalars.rs`, `variables.rs`, `binops.rs`, `arrays.rs`, `compare.rs`, `calls/`, and `objects/`.
 
 | Type | Result location |
 |---|---|
@@ -500,7 +508,7 @@ So the behavior is slice-like, but it does not call `substr()` or a dedicated ru
 
 **Files:** `src/codegen/stmt.rs`, `src/codegen/stmt/`
 
-`emit_stmt()` is similarly split across focused helpers under `stmt/`: assignment/storage logic, array statements, and control-flow lowering (`branching`, `foreach`, `loops`) now live outside the thin top-level dispatcher.
+`emit_stmt()` is similarly split across focused helpers under `stmt/`: assignment/storage logic, array statements, and control-flow lowering (`branching`, `foreach`, `loops`) now live outside the thin top-level dispatcher. Small shared statement-side policies such as borrowed-result retention, local-slot ownership updates, static-init guards, and indexed-array metadata stamping now sit in `stmt/helpers.rs` instead of bloating `stmt.rs` itself. Storage lowering is now split too: `stmt/storage.rs` is just a boundary, with `storage/locals.rs` handling ordinary global/static symbol access and `storage/extern_globals.rs` owning extern-global load/store conventions. Assignment lowering is also split one level deeper: `stmt/assignments/locals.rs` handles plain local/global/ref writes, while `stmt/assignments/properties.rs` now orchestrates property writes across `properties/target.rs`, `magic_set.rs`, and `storage.rs`. Array-index writes follow the same pattern now: `stmt/arrays/assign.rs` is just a dispatcher, while `stmt/arrays/assign/buffer.rs` and `assoc.rs` isolate the non-indexed-container paths, and `stmt/arrays/assign/indexed.rs` now orchestrates the indexed-array write across `indexed/prepare.rs`, `normalize.rs`, `store.rs`, and `extend.rs`. Branching lowering now follows that same shape too: `stmt/control_flow/branching.rs` is just a boundary, while `branching/if_stmt.rs` and `branching/switch_stmt.rs` own the distinct lowering paths. Exception lowering follows the same structure: `stmt/control_flow/exceptions.rs` orchestrates the high-level try/catch/finally flow, while `exceptions/handlers.rs`, `catches.rs`, and `finally.rs` own the lower-level handler stack, catch matching, and pending-action/finally dispatch mechanics. Loop lowering is split too: `stmt/control_flow/loops.rs` is now just a boundary, with `loops/iterative.rs` handling `for`/`while`/`do...while` and `loops/exits.rs` owning `break`/`continue`/`return`. `foreach` lowering now follows the same pattern: `stmt/control_flow/foreach.rs` dispatches between `stmt/control_flow/foreach/indexed.rs` and `stmt/control_flow/foreach/assoc.rs`.
 
 ### Echo
 
@@ -787,7 +795,7 @@ bl _static_Point_origin              ; call static method
 
 ## The ABI module
 
-**File:** `src/codegen/abi.rs`
+**Files:** `src/codegen/abi/mod.rs`, `src/codegen/abi/`
 
 Centralizes register conventions so they're consistent everywhere:
 
@@ -798,7 +806,53 @@ ARM64's `stur`/`ldur` instructions only support 9-bit signed immediates (offsets
 - **Offsets <= 255**: single `stur`/`ldur` instruction (fast path)
 - **Offsets 256-4095**: two-instruction sequence — `sub x9, x29, #offset` to compute the address in a scratch register, then `str`/`ldr` through that register
 
-This means all codegen that accesses stack variables goes through the ABI helpers rather than emitting `stur`/`ldur` directly, so large stack frames work automatically.
+This means all codegen that accesses stack variables goes through the ABI helpers rather than emitting `stur`/`ldur` directly, so large stack frames work automatically. The same boundary now also owns indirect `[*ptr]` loads/stores used by by-reference params and mutation-heavy expression paths, so x86_64-specific memory syntax does not leak back into `expr.rs`.
+
+`emit_frame_slot_address()` complements those helpers when codegen needs the address of a local slot itself rather than the value stored there. By-reference calls, `ptr($var)`, and exception-frame bookkeeping now all reuse that helper instead of open-coding frame-slot address math.
+
+### Frame and return-value helpers
+
+The `abi/` module now centralizes the frame-management primitives used by both `_main` and ordinary functions:
+
+- `emit_frame_prologue()` / `emit_frame_restore()` — shared stack-frame setup and teardown
+- `emit_cleanup_callback_prologue()` / `emit_cleanup_callback_epilogue()` — tiny helper frames used by exception cleanup callbacks
+- `emit_preserve_return_value()` / `emit_restore_return_value()` — spill/reload of scalar, float, and string returns across epilogue side effects or `finally` dispatch
+
+That moves prologue/epilogue mechanics out of the higher-level walkers and makes the ABI layer responsible for more than just local-slot addressing.
+
+### Incoming argument lowering
+
+Incoming parameter decoding now goes through `IncomingArgCursor` plus `emit_store_incoming_param()`.
+
+The cursor tracks:
+
+- current integer argument register index
+- current floating-point argument register index
+- when argument passing has overflowed to the caller stack
+- the caller-stack byte offset for subsequent spilled parameters
+
+Those helpers now understand both the AArch64 calling convention and the Linux `x86_64` SysV AMD64 target. Function codegen delegates incoming-parameter lowering to the ABI layer instead of open-coding register names or caller-stack offsets inline.
+
+### Outgoing call argument lowering
+
+Outgoing calls now use ABI-owned helpers as well:
+
+- `build_outgoing_arg_assignments_for_target()` decides whether each argument lands in an integer register, a floating-point register, or overflows onto the caller-visible stack area for the selected target
+- `materialize_outgoing_args()` rewrites the temporary pushed-argument stack into the final ABI layout expected at the call site
+
+That logic is shared by ordinary function calls, indirect/callable dispatch, object/method calls, constructor/static dispatch, and helpers such as `call_user_func_array()`. The assignment/materialization rules now cover both AArch64 and Linux `x86_64` SysV layout, so the call ABI policy lives in one place instead of being duplicated across several dispatch paths.
+
+The same module now also owns a thin layer of call-site and temporary-stack primitives used by higher-level walkers:
+
+- `emit_call_label()` / `emit_call_reg()` emit direct and indirect calls for the current target
+- `emit_push_reg()`, `emit_pop_reg()`, `emit_push_float_reg()`, `emit_pop_float_reg()`, `emit_push_reg_pair()`, `emit_pop_reg_pair()`, and `emit_push_result_value()` manage the temporary argument stack without hardcoding ARM64 push/pop forms in each call path
+- `emit_reserve_temporary_stack()`, `emit_temporary_stack_address()`, and `emit_load_temporary_stack_slot()` now also back the FFI extern-call path, where borrowed C-string temporaries are tracked and released after the foreign call returns
+- `emit_release_temporary_stack()` and `emit_store_zero_to_local_slot()` centralize target-specific stack cleanup and zero-initialization details
+- `emit_store_process_args_to_globals()`, `emit_enable_heap_debug_flag()`, `emit_copy_frame_pointer()`, and `emit_exit()` cover the `_main` bootstrap/teardown path without hardcoding process-entry registers or exit sequences in the higher-level driver
+
+That keeps target-specific ABI work focused inside `abi/` instead of scattering `call`, `blr`, `add sp`, `rsp`, or zero-register assumptions across function, closure, callable, and method dispatch code.
+
+The same `abi/` layer now also owns symbol-slot plumbing for compiler-managed globals such as `_gvar_*`, `_static_*`, `_exc_*`, `_global_*`, and the high-frequency runtime symbols used by string builders, heap bookkeeping, and GC state such as `_concat_off`, `_heap_*`, and `_gc_*`: computing symbol addresses, moving result registers into symbol storage, loading symbol storage back into result registers, and copying local frame slots into symbol-backed storage during epilogues. Extern globals now use the same boundary too, so GOT/GOTPCREL address materialization lives in `abi/` instead of being open-coded separately in expression and statement lowering.
 
 ### `emit_store(emitter, type, offset)`
 
@@ -833,9 +887,15 @@ Emits code to print a value to stdout:
 | `Mixed` | `bl __rt_mixed_write_stdout` → inspect boxed runtime tag, then write |
 | `Void`/`Array`/`AssocArray`/`Callable`/`Object` | Prints nothing |
 
+For Linux `x86_64`, the same write path now follows the SysV ABI and a broad native runtime slice rather than AArch64-specific helper sequences. String results use the Linux syscall register layout, integer and float echo go through x86_64 `__rt_itoa` / `__rt_ftoa`, `_main` initializes `$argc` / `$argv` only when needed, and the bootstrap runtime now covers a wide set of array, string, math, filesystem, FFI, enum, exception, GC, and mixed-value helpers without leaking AArch64-only assumptions back into the higher-level walkers.
+
+That same bootstrap system slice now also includes x86_64-native `time()` / `microtime(true)` through libc `gettimeofday()`, plus constant-string lowering for `phpversion()`, `php_uname()`, and `sys_get_temp_dir()` via the shared symbol-address ABI helpers instead of ARM64-only `adrp` / `add_lo12` sequences.
+
+The x86_64 math surface is broader now too: the libc-backed float builtin family (`sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `tanh`, `exp`, `log`, `log2`, `log10`, `atan2`, `hypot`, `pow`) and the pure float helpers (`sqrt`, `pi`, `deg2rad`, `rad2deg`, `min`, `max`) all use SysV floating-point registers plus the shared temporary-stack ABI helpers instead of raw AArch64 `d0` / `scvtf` / `str d0` lowering. The same applies to the `**` operator in expression codegen, which now routes through the x86_64 `pow()` libc call path with the right floating argument order. The scalar random helpers (`rand()`, `mt_rand()`, `random_int()`) also live on that target-aware ABI path now, so their `[min, max]` range materialization no longer emits raw AArch64 stack spills on Linux x86_64. Comparator-driven indexed-array sorting is on that same path too: `usort()`, `uasort()`, and `uksort()` now resolve callback addresses through the shared symbol/stack ABI helpers and dispatch through an x86_64 `__rt_usort` bubble-sort runtime instead of hard-coded ARM64 `adrp` / `blr` sequences.
+
 ## Function codegen
 
-**File:** `src/codegen/functions.rs`
+**Files:** `src/codegen/functions/mod.rs`, `src/codegen/functions/`
 
 ### `emit_function()`
 
@@ -843,10 +903,10 @@ Compiles a user-defined function:
 
 1. **Collect local variables** — scan the function body to find all variables and their types
 2. **Calculate stack frame size** — 16-byte aligned, includes space for all locals
-3. **Emit prologue** — `sub sp`, `stp x29, x30`, `add x29`
-4. **Store parameters** — move from argument registers to stack slots, marking by-value heap params as `Owned` and by-reference params as borrowed aliases of the caller's storage
+3. **Emit prologue** — call the shared ABI frame helper
+4. **Store parameters** — lower incoming arguments through the ABI helpers into stack slots, marking by-value heap params as `Owned` and by-reference params as borrowed aliases of the caller's storage
 5. **Emit body** — all statements
-6. **Emit epilogue** — preserve return registers, save static locals back to BSS, clean up only `Owned` + `epilogue_cleanup_safe` heap locals, then `ldp x29, x30`, `add sp`, `ret`
+6. **Emit epilogue** — preserve return registers, save static locals back to BSS through the shared ABI storage helpers, clean up only `Owned` + `epilogue_cleanup_safe` heap locals, then call the shared ABI frame-restore helper and `ret`
 
 ### Pass by reference
 
@@ -876,7 +936,7 @@ sum(...$arr);  // spread
 **Variadic functions**: The last parameter can be prefixed with `...` to collect all remaining arguments into an array. At the call site, the codegen:
 
 1. Passes regular (non-variadic) arguments normally via registers
-2. Builds a new indexed array for the variadic arguments by calling `__rt_array_new` and `__rt_array_push_int`/`__rt_array_push_str` for each extra argument
+2. Uses the shared helpers in `src/codegen/expr/calls/args.rs` to prepare normalized/defaulted argument lists, lower pass-by-reference slots, handle spread-into-named parameters, and build the trailing variadic array when needed
 3. Passes the array pointer as the last argument register
 
 **Spread operator** (`...$arr`): When calling a function with `...$arr`, the array is passed directly as the variadic parameter without unpacking individual elements. In array literals, the spread operator uses `__rt_array_merge_into` to append all elements from the spread array into the target array.
@@ -895,7 +955,7 @@ When a call site omits an argument that has a default value, the codegen fills i
 
 Pre-scans the function body AST to find every variable that will be used. This is necessary because stack space must be allocated in the prologue, before any code runs.
 
-It walks the statement tree before code emission and handles the major local-binding forms recursively (`Assign`, control-flow blocks, `For`/`Foreach`, `ListUnpack`, `Global`, `StaticVar`, and related cases). The exact match is implementation-driven in `functions.rs`, so this list is illustrative rather than exhaustive.
+It walks the statement tree before code emission and handles the major local-binding forms recursively (`Assign`, control-flow blocks, `For`/`Foreach`, `ListUnpack`, `Global`, `StaticVar`, and related cases). The exact match is implementation-driven in the `functions/` module, so this list is illustrative rather than exhaustive.
 
 ## Main program codegen
 
@@ -916,6 +976,16 @@ The `generate()` function orchestrates everything:
 5. **Emit runtime routines** — all `__rt_*` helper functions
 6. **Emit data section** — string and float literals
 7. **Emit runtime data / BSS** — global buffers, globals, statics, and lookup tables
+
+On Linux x86_64, the current minimal runtime slice now also includes the refcounted indexed-array helper family used by GC-sensitive array transforms such as `array_merge()`, `array_slice()`, `array_splice()`, `array_pad()`, `array_chunk()`, `array_diff()`, `array_intersect()`, `array_combine()`, `array_reverse()`, and `array_unique()`. The simple sort family that can piggyback on those indexed-array helpers is on the same path now too: `asort()` / `arsort()`, `ksort()` / `krsort()`, and `natsort()` / `natcasesort()` all dispatch through target-aware x86_64 runtime labels instead of hard-coded ARM64 branches.
+
+That x86_64 slice now also covers the copy-on-write and GC accounting paths for indexed and associative arrays: shallow clone / ensure-unique helpers, owned-hash insertion during clone, heap alloc/free GC counters, indexed-array deep-free, and the x86_64 header-stamping paths needed so nested array writes keep their runtime value-type tags intact.
+
+The x86_64 runtime is no longer limited to the earlier `malloc` / `free` bootstrap wrappers in those paths. `__rt_heap_alloc` and `__rt_heap_free` now mirror the real heap model closely enough to reuse small bins, split and coalesce free-list blocks, trim the bump pointer when the heap tail becomes free again, and drive `_gc_live` / `_gc_peak` / `_gc_allocs` / `_gc_frees` accounting directly from the allocator. The minimal x86_64 runtime now also emits `__rt_gc_mark_reachable` and `__rt_gc_collect_cycles`, so retained arrays, hashes, objects, and boxed mixed values can participate in cycle collection instead of relying only on acyclic decref teardown. That allocator slice now includes the heap-debug/runtime-observability helpers too: `__rt_heap_debug_fail`, `__rt_heap_debug_check_live`, `__rt_heap_debug_validate_free_list`, `__rt_heap_debug_report`, `__rt_heap_kind`, and the x86_64 `__rt_hash_may_have_cyclic_values` path used to skip pointless collector runs for scalar-only hashes.
+
+The same minimal x86_64 runtime now also carries the first string-search / compare slice: `__rt_strpos`, `__rt_strrpos`, `__rt_strcmp`, `__rt_strcasecmp`, `__rt_str_starts_with`, `__rt_str_ends_with`, `__rt_strtolower`, `__rt_strrev`, `__rt_wordwrap`, `__rt_str_split`, `__rt_str_pad`, `__rt_str_replace`, `__rt_str_ireplace`, `__rt_substr_replace`, `__rt_sprintf`, `__rt_number_format`, and `__rt_sscanf`, with the matching builtin lowering for `strpos()`, `strrpos()`, `strcmp()`, `strcasecmp()`, `str_contains()`, `str_starts_with()`, `str_ends_with()`, `strstr()`, `ord()`, `substr()`, `substr_replace()`, `strtolower()`, `strrev()`, `wordwrap()`, `str_split()`, `str_pad()`, `str_replace()`, `str_ireplace()`, `sprintf()`, `printf()`, `number_format()`, and `sscanf()`. That keeps this family on the SysV ABI path instead of falling back to ARM64-only `stp`/`ldp` lowering, and the same ABI conversion helpers now also cover `settype()` when it rewrites locals across `int` / `float` / `string` / `bool` on Linux x86_64.
+
+The remaining inline array/string accessors are on that same path now too: x86_64 string indexing via `ArrayAccess` (`$str[$i]`, including negative offsets) and statement-side indexed-array list unpacking no longer emit raw AArch64 `ldr` / `stp` snippets. They now restore temporaries through the shared ABI helpers and use native SysV register pairs / stack slots instead.
 
 ---
 

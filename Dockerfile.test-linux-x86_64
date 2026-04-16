@@ -1,0 +1,7 @@
+FROM rust:1.87-alpine
+
+RUN apk add --no-cache gcc musl-dev openssl-dev gdb strace binutils file
+
+ENV PATH=/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+WORKDIR /app

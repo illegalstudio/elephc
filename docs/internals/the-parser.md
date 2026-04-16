@@ -189,7 +189,7 @@ Every AST node carries a `Span` (line + column) from the source, so error messag
 
 ## The Pratt parser
 
-**File:** `src/parser/expr.rs`
+**File:** `src/parser/expr/`
 
 Parsing expressions with operators is the hardest part. Consider:
 

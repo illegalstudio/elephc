@@ -1,19 +1,23 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 /// chr: convert int to single-character string.
 /// Input: x0 = char code
 /// Output: x1 = ptr, x2 = 1
 pub fn emit_chr(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_chr_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: chr ---");
     emitter.label_global("__rt_chr");
 
     // -- get concat_buf write position --
-    emitter.instruction("adrp x6, _concat_off@PAGE");                           // load page address of concat buffer offset
-    emitter.instruction("add x6, x6, _concat_off@PAGEOFF");                     // resolve exact address of offset variable
+    crate::codegen::abi::emit_symbol_address(emitter, "x6", "_concat_off");
     emitter.instruction("ldr x8, [x6]");                                        // load current write offset
-    emitter.instruction("adrp x7, _concat_buf@PAGE");                           // load page address of concat buffer
-    emitter.instruction("add x7, x7, _concat_buf@PAGEOFF");                     // resolve exact buffer base address
+    crate::codegen::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
 
     // -- store single character --
     emitter.instruction("add x1, x7, x8");                                      // compute write position, set as return ptr
@@ -22,4 +26,23 @@ pub fn emit_chr(emitter: &mut Emitter) {
     emitter.instruction("str x8, [x6]");                                        // store updated offset to _concat_off
     emitter.instruction("mov x2, #1");                                          // return length = 1 (single character)
     emitter.instruction("ret");                                                 // return to caller
+}
+
+fn emit_chr_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: chr ---");
+    emitter.label_global("__rt_chr");
+
+    // -- get concat_buf write position --
+    crate::codegen::abi::emit_symbol_address(emitter, "r8", "_concat_off");
+    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat-buffer write offset before materializing the chr() result byte
+    crate::codegen::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
+
+    // -- store single character --
+    emitter.instruction("lea rax, [r10 + r9]");                                 // compute the concat-buffer write address and return it as the one-byte string pointer
+    emitter.instruction("mov BYTE PTR [rax], dil");                             // store the low byte of the requested character code into concat storage
+    emitter.instruction("add r9, 1");                                           // advance the concat-buffer write offset by the single byte that chr() produced
+    emitter.instruction("mov QWORD PTR [r8], r9");                              // persist the updated concat-buffer write offset after materializing the chr() result
+    emitter.instruction("mov rdx, 1");                                          // return a one-byte string length for the concat-backed chr() result
+    emitter.instruction("ret");                                                 // return the concat-backed one-byte string in the standard x86_64 string result registers
 }

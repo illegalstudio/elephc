@@ -1,0 +1,169 @@
+use super::super::super::abi;
+use super::super::super::context::Context;
+use super::super::super::data_section::DataSection;
+use super::super::super::emit::Emitter;
+use super::super::super::expr::emit_expr;
+use super::super::PhpType;
+use crate::parser::ast::{Expr, ExprKind};
+
+pub(crate) fn emit_assign_stmt(
+    name: &str,
+    value: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    emitter.blank();
+    emitter.comment(&format!("${} = ...", name));
+    let mut ty = emit_expr(value, emitter, ctx, data);
+    let dest_needs_mixed_box = ctx.variables.get(name).is_some_and(|var| {
+        !ctx.ref_params.contains(name)
+            && matches!(var.ty, PhpType::Mixed)
+            && !matches!(ty, PhpType::Mixed | PhpType::Union(_))
+    });
+    if dest_needs_mixed_box {
+        super::super::super::emit_box_current_value_as_mixed(emitter, &ty);
+        ty = PhpType::Mixed;
+    }
+
+    if ctx.extern_globals.contains_key(name) {
+        super::super::emit_extern_global_store(emitter, name, &ty);
+    } else if ctx.global_vars.contains(name) {
+        if !dest_needs_mixed_box {
+            super::super::helpers::retain_borrowed_heap_result(emitter, value, &ty);
+        }
+        super::super::emit_global_store(emitter, ctx, name, &ty);
+    } else if ctx.ref_params.contains(name) {
+        let var = match ctx.variables.get(name) {
+            Some(v) => v,
+            None => {
+                emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                return;
+            }
+        };
+        let offset = var.stack_offset;
+        let old_ty = var.ty.clone();
+        let pointer_reg = abi::symbol_scratch_reg(emitter);
+        let ref_needs_mixed_box =
+            matches!(old_ty, PhpType::Mixed) && !matches!(ty, PhpType::Mixed | PhpType::Union(_));
+        if ref_needs_mixed_box {
+            super::super::super::emit_box_current_value_as_mixed(emitter, &ty);
+            ty = PhpType::Mixed;
+        } else {
+            super::super::helpers::retain_borrowed_heap_result(emitter, value, &ty);
+        }
+        emitter.comment(&format!("write through ref ${}", name));
+        abi::load_at_offset(emitter, pointer_reg, offset);                            // load pointer to referenced variable
+        if old_ty.is_refcounted() {
+            abi::emit_push_reg(emitter, pointer_reg);                                 // preserve the referenced-slot address across decref helper calls
+            let needs_save_x0 = !matches!(&ty, PhpType::Str | PhpType::Float);
+            if needs_save_x0 {
+                abi::emit_push_reg(emitter, abi::int_result_reg(emitter));            // preserve the incoming boxed/scalar result across decref helper calls
+            }
+            abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), pointer_reg, 0); // load previous heap pointer from ref target
+            abi::emit_decref_if_refcounted(emitter, &old_ty);
+            if needs_save_x0 {
+                abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));             // restore the incoming boxed/scalar result after decref helper calls
+            }
+            abi::emit_pop_reg(emitter, pointer_reg);                                  // restore the referenced-slot address after decref helper calls
+        }
+        match &ty {
+            PhpType::Bool | PhpType::Int => {
+                abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), pointer_reg, 0); // store int/bool through reference pointer
+            }
+            PhpType::Float => {
+                abi::emit_store_to_address(emitter, abi::float_result_reg(emitter), pointer_reg, 0); // store float through reference pointer
+            }
+            PhpType::Str => {
+                abi::emit_push_reg(emitter, pointer_reg);                             // preserve the referenced-slot address across string persistence
+                abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), pointer_reg, 0); // load old string ptr from ref target
+                abi::emit_call_label(emitter, "__rt_heap_free_safe");                // free old string if on heap
+                abi::emit_call_label(emitter, "__rt_str_persist");                   // persist new string to heap
+                abi::emit_pop_reg(emitter, pointer_reg);                              // restore the referenced-slot address after string persistence
+                let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+                abi::emit_store_to_address(emitter, ptr_reg, pointer_reg, 0);         // store heap string pointer through ref
+                abi::emit_store_to_address(emitter, len_reg, pointer_reg, 8);         // store string length through ref
+            }
+            _ => {
+                abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), pointer_reg, 0); // store value through reference pointer
+            }
+        }
+    } else {
+        let var = match ctx.variables.get(name) {
+            Some(v) => v,
+            None => {
+                emitter.comment(&format!("WARNING: undefined variable ${}", name));
+                return;
+            }
+        };
+        let offset = var.stack_offset;
+        let old_ty = var.ty.clone();
+
+        if ctx.static_vars.contains(name) {
+            if !dest_needs_mixed_box {
+                super::super::helpers::retain_borrowed_heap_result(emitter, value, &ty);
+            }
+            super::super::emit_static_store(emitter, ctx, name, &ty);
+        } else {
+            if !dest_needs_mixed_box {
+                super::super::helpers::retain_borrowed_heap_result(emitter, value, &ty);
+            }
+            let needs_save_x0 = !matches!(&ty, PhpType::Str | PhpType::Float);
+            super::super::helpers::release_owned_slot(emitter, &old_ty, offset, needs_save_x0);
+        }
+
+        abi::emit_store(emitter, &ty, offset);
+        ctx.update_var_type_and_ownership(
+            name,
+            ty.clone(),
+            super::super::helpers::local_slot_ownership_after_store(&ty),
+        );
+
+        if ctx.in_main && ctx.all_global_var_names.contains(name) {
+            if ty.is_refcounted() {
+                abi::emit_incref_if_refcounted(emitter, &ty);                        // global storage becomes a second owner alongside the local slot
+            }
+            super::super::emit_global_store(emitter, ctx, name, &ty);
+        }
+    }
+
+    match &value.kind {
+        ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => {
+            if let Some(deferred) = ctx.deferred_closures.last() {
+                ctx.closure_sigs.insert(name.to_string(), deferred.sig.clone());
+                if !deferred.captures.is_empty() {
+                    ctx.closure_captures
+                        .insert(name.to_string(), deferred.captures.clone());
+                } else {
+                    ctx.closure_captures.remove(name);
+                }
+            }
+        }
+        ExprKind::Variable(src_name) if ty == PhpType::Callable => {
+            if let Some(sig) = ctx.closure_sigs.get(src_name).cloned() {
+                ctx.closure_sigs.insert(name.to_string(), sig);
+            } else {
+                ctx.closure_sigs.remove(name);
+            }
+            if let Some(captures) = ctx.closure_captures.get(src_name).cloned() {
+                ctx.closure_captures.insert(name.to_string(), captures);
+            } else {
+                ctx.closure_captures.remove(name);
+            }
+        }
+        _ => {
+            ctx.closure_sigs.remove(name);
+            ctx.closure_captures.remove(name);
+        }
+    }
+
+    if let Some(var) = ctx.variables.get(name) {
+        if var.ty != ty {
+            ctx.update_var_type_and_ownership(
+                name,
+                ty.clone(),
+                super::super::helpers::local_slot_ownership_after_store(&ty),
+            );
+        }
+    }
+}

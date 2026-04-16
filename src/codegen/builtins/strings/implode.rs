@@ -1,7 +1,9 @@
+use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -16,24 +18,29 @@ pub fn emit(
     // implode($glue, $array)
     emit_expr(&args[0], emitter, ctx, data);
     // -- save glue, evaluate array --
-    emitter.instruction("stp x1, x2, [sp, #-16]!");                             // push glue ptr and length onto stack
+    let (glue_ptr_reg, glue_len_reg) = abi::string_result_regs(emitter);
+    abi::emit_push_reg_pair(emitter, glue_ptr_reg, glue_len_reg);               // preserve the glue string while evaluating the indexed array argument
     let arr_ty = emit_expr(&args[1], emitter, ctx, data);
     // -- save array pointer, restore glue --
-    emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer onto stack
-    emitter.instruction("ldp x1, x2, [sp, #16]");                               // load glue ptr and length (still on stack)
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the indexed array pointer while restoring the glue string for the runtime call
 
     let is_int_array = matches!(&arr_ty, PhpType::Array(inner) if matches!(inner.as_ref(), PhpType::Int | PhpType::Bool));
 
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_pop_reg(emitter, "x3");                                   // restore the indexed array pointer into the runtime array-argument register
+            abi::emit_pop_reg_pair(emitter, "x1", "x2");                        // restore the glue string into the runtime string-argument registers
+        }
+        Arch::X86_64 => {
+            abi::emit_pop_reg(emitter, "rdx");                                  // restore the indexed array pointer into the third SysV integer argument register
+            abi::emit_pop_reg_pair(emitter, "rdi", "rsi");                      // restore the glue string into the first two SysV integer argument registers
+        }
+    }
+
     if is_int_array {
-        // -- integer array: call int-specific implode runtime --
-        emitter.instruction("ldr x3, [sp]");                                    // load array pointer from top of stack
-        emitter.instruction("add sp, sp, #32");                                 // pop array pointer and glue from stack
-        emitter.instruction("bl __rt_implode_int");                             // call runtime: join int elements with glue string
+        abi::emit_call_label(emitter, "__rt_implode_int");                      // join integer array elements with the glue string through the integer-specialized runtime
     } else {
-        // -- string array: call standard implode runtime --
-        emitter.instruction("ldr x3, [sp]");                                    // load array pointer from top of stack
-        emitter.instruction("add sp, sp, #32");                                 // pop array pointer and glue from stack
-        emitter.instruction("bl __rt_implode");                                 // call runtime: join string elements with glue string
+        abi::emit_call_label(emitter, "__rt_implode");                          // join string array elements with the glue string through the standard runtime
     }
 
     Some(PhpType::Str)

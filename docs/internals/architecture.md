@@ -20,7 +20,7 @@ PHP source (.php)
      ▼
 ┌─────────┐
 │  Parser  │  src/parser/
-│          │  expr.rs (Pratt parser), stmt.rs, control.rs, ast.rs
+│          │  expr/, stmt.rs, control.rs, ast.rs
 │          │  Tokens → Program (Vec<Stmt>)
 └────┬─────┘
      │
@@ -40,7 +40,7 @@ PHP source (.php)
      │
      ▼
 ┌──────────────┐
-│ NameResolver │  src/name_resolver.rs
+│ NameResolver │  src/name_resolver/
 │              │  Flattens namespace/use scopes and rewrites names to
 │              │  canonical fully-qualified names before semantic passes.
 └─────┬────────┘
@@ -48,23 +48,33 @@ PHP source (.php)
       ▼
 ┌─────────┐
 │  Type    │  src/types/
-│  Checker │  traits.rs, checker/mod.rs, checker/builtins.rs, checker/functions.rs
+│  Checker │  traits.rs, checker/mod.rs, checker/builtins/, checker/functions/, warnings/
 │          │  Validates types, computes packed layouts, collects warnings, returns CheckResult
 └────┬─────┘
      │
      ▼
 ┌─────────┐
 │ Codegen  │  src/codegen/
-│          │  mod.rs, expr.rs + expr/, stmt.rs + stmt/, functions.rs, abi.rs
-│          │  AST → ARM64 assembly string (.s file)
+│          │  mod.rs, expr.rs + expr/, stmt.rs + stmt/, functions/, abi/, platform/
+│          │  AST → target assembly string (.s file)
 └────┬─────┘
      │
      ▼
 ┌─────────┐
 │ as + ld  │  System assembler and linker
-│          │  .s → .o → Mach-O binary
+│          │  .s → .o → target-native binary
 └─────────┘
 ```
+
+## Target Model
+
+The compiler now distinguishes the operating-system side of a target from the instruction set:
+
+- `Platform` describes OS / binary format / libc concerns such as macOS vs Linux.
+- `Arch` describes the instruction set and calling convention such as `AArch64` vs `X86_64`.
+- `Target` combines both and is threaded from the CLI into codegen and the test harness.
+
+AArch64 remains the most established and best-documented backend (macOS and Linux), and the explicit `Target` model now also covers Linux `x86_64` with its own ABI/runtime slices. The `Target` split lets each ISA live alongside the others without reintroducing the old assumption that `Linux` automatically means ARM64.
 
 ## Module map
 
@@ -76,7 +86,7 @@ src/
 ├── conditional.rs             Build-time `ifdef` pass
 ├── resolver.rs                Include/require file resolution
 ├── names.rs                   Qualified/FQN name model + assembly symbol mangling
-├── name_resolver.rs           Namespace/use resolution to canonical names
+├── name_resolver/             Namespace/use resolution to canonical names
 │
 ├── lexer/
 │   ├── mod.rs                 tokenize() → Vec<(Token, Span)>
@@ -88,44 +98,72 @@ src/
 ├── parser/
 │   ├── mod.rs                 parse() → Program
 │   ├── ast.rs                 ExprKind, StmtKind, BinOp, CastType
-│   ├── expr.rs                Pratt parser for expressions
+│   ├── expr/                  Pratt parser passes and expression helpers
 │   ├── stmt.rs                Statement parsing, assignment, functions, throw
 │   └── control.rs             if, while, for, do-while, foreach, try/catch/finally
 │
 ├── types/
 │   ├── mod.rs                 PhpType enum, TypeEnv, packed layout metadata, CheckResult
 │   ├── traits.rs              Trait flattening and conflict-resolution helpers
-│   ├── warnings.rs            Non-fatal diagnostics (unused vars, unreachable code)
+│   ├── warnings/              Non-fatal diagnostics (unused vars, unreachable code)
 │   └── checker/
-│       ├── mod.rs             check_stmt(), infer_type()
-│       ├── builtins.rs        Built-in function type signatures
-│       └── functions.rs       User function type inference
+│       ├── mod.rs             Type-checker orchestration
+│       ├── builtins/          Built-in function type signatures
+│       ├── functions/         User function type inference
+│       └── inference/         Focused inference helpers
 │
 ├── codegen/
 │   ├── mod.rs                 generate() orchestration
-│   ├── expr.rs                Expression codegen
+│   ├── driver_support.rs      Pipeline glue and orchestration helpers
+│   ├── prescan.rs             Pre-pass that collects program-wide codegen metadata
+│   ├── program_usage.rs       Program-usage analysis feeding metadata emission
+│   ├── expr.rs                Expression codegen dispatcher
 │   ├── expr/                  Expression submodules
-│   │   ├── arrays.rs          Indexed/assoc arrays, match, array access
-│   │   ├── binops.rs          Arithmetic, comparison, bitwise, null-coalesce helpers
-│   │   ├── calls.rs           Function / closure / first-class callable / indirect call dispatch
-│   │   ├── calls/             Call-specific helpers
+│   │   ├── arrays.rs          Array-expression dispatch
+│   │   ├── arrays/            `access.rs`, `indexed.rs`, `assoc.rs`
+│   │   ├── binops/            `arithmetic.rs`, `comparison.rs`, `target.rs`, `mod.rs`
+│   │   ├── calls.rs           Call-expression dispatch
+│   │   ├── calls/             `function.rs`, `closure.rs`, `first_class.rs`, `indirect.rs`, `args.rs`
 │   │   ├── coerce.rs          Truthiness / string / null coercions
 │   │   ├── compare.rs         Comparison and widening helpers
 │   │   ├── helpers.rs         Shared expression-codegen utilities
 │   │   ├── objects.rs         Object-expression dispatch
-│   │   ├── objects/           `allocation.rs`, `access.rs`, `dispatch.rs`
-│   │   └── ownership.rs       Result ownership classification
-│   ├── stmt.rs                Statement codegen
+│   │   ├── objects/           `allocation.rs`, `access.rs`, `dispatch.rs`, `dispatch/`
+│   │   ├── ownership.rs       Result ownership classification
+│   │   ├── scalars.rs         Literal / negate / bit-not / logical-not lowering
+│   │   └── variables.rs       Variable load / increment / decrement helpers
+│   ├── stmt.rs                Statement codegen dispatcher
 │   ├── stmt/                  Statement submodules
-│   │   ├── assignments.rs     Variable / property assignment helpers
 │   │   ├── arrays.rs          Array statement dispatch
-│   │   ├── arrays/            Array assign / push / list-unpack helpers
-│   │   ├── control_flow.rs    Loop / branch / exception dispatch
-│   │   ├── control_flow/      Branching / foreach / loop / exception helpers
+│   │   ├── arrays/            `assign/`, `push.rs`, `unpack.rs`
+│   │   ├── assignments.rs     Variable / property assignment dispatch
+│   │   ├── assignments/       `locals.rs`, `properties.rs`, `properties/`
+│   │   ├── control_flow.rs    Control-flow dispatch
+│   │   ├── control_flow/      `branching/`, `foreach/`, `loops/`, `exceptions/`
+│   │   ├── helpers.rs         Shared statement-codegen helpers
 │   │   ├── io.rs              Echo / print helpers
-│   │   └── storage.rs         Global / static / extern-global helpers
-│   ├── functions.rs           User function emission
-│   ├── abi.rs                 ARM64 register conventions
+│   │   ├── storage.rs         Global / static / extern-global dispatch
+│   │   └── storage/           `locals.rs`, `extern_globals.rs`
+│   ├── functions/             User function emission
+│   │   ├── mod.rs             Function lowering entry point
+│   │   ├── cleanup.rs         Epilogue / ownership cleanup helpers
+│   │   ├── control_flow.rs    Return / early-exit lowering
+│   │   ├── locals.rs          Local slot layout
+│   │   └── types.rs           Function-specific type helpers
+│   ├── abi/                   Target-aware calling convention helpers
+│   │   ├── mod.rs             Public ABI helpers
+│   │   ├── bootstrap.rs       Program entry / bootstrap helpers
+│   │   ├── calls.rs           Call-site argument / result wiring
+│   │   ├── frame.rs           Stack frame prologue / epilogue
+│   │   ├── registers.rs       Register names per architecture
+│   │   ├── symbols.rs         Symbol / literal address loading
+│   │   ├── tests.rs           ABI unit tests
+│   │   └── values.rs          Push/pop/load/store by PhpType
+│   ├── platform/              Target selection and Linux transforms
+│   │   ├── mod.rs             Platform / Arch / Target definitions
+│   │   ├── target.rs          Syscall tables and C-symbol remapping
+│   │   ├── linux_transform.rs Linux-specific post-emit transforms
+│   │   └── toolchain.rs       Assembler / linker invocation
 │   ├── ffi.rs                 Extern function/global/class codegen
 │   ├── context.rs             Variables, labels, loop/finally stacks, ownership lattice
 │   ├── data_section.rs        String/float literal .data section
@@ -141,11 +179,13 @@ src/
 │   │   ├── pointers/          ptr, ptr_get, ptr_set, ptr_read8, ptr_write8, ptr_offset, ... (12 files)
 │   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, ... (25 files)
 │   │
-│   └── runtime/               ARM64 runtime routines (one file per language/runtime helper)
+│   └── runtime/               Runtime routines and target-specific emission helpers
 │       ├── mod.rs             Emits all runtime functions into assembly
 │       ├── data.rs            Emits runtime .data / .bss symbols and metadata tables
+│       ├── emitters.rs        Shared emit helpers used across runtime categories
+│       ├── x86_minimal.rs     Minimal x86_64 runtime slice for the Linux x86_64 target
 │       ├── strings/           itoa, concat, ftoa, sprintf, md5, sha1, str_persist, ... (53 files)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, sort, usort, refcount, gc/decref dispatch, ... (100 files)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, sort, usort, refcount, gc/decref dispatch, ... (103 files)
 │       ├── io/                fopen, fgets, fread, stat, scandir, ... (17 files)
 │       ├── buffers/           buffer_new, buffer_len, bounds_fail, use_after_free helpers (5 files incl. mod.rs)
 │       ├── exceptions.rs      Exception runtime module root / re-exports
@@ -202,7 +242,7 @@ Extern calls differ from ordinary elephc function calls in four important ways:
 
 ## Namespace resolution and symbol mangling
 
-Namespace syntax is preserved through parsing and include resolution, then normalized by `src/name_resolver.rs` before type checking or codegen sees the program. That pass:
+Namespace syntax is preserved through parsing and include resolution, then normalized by `src/name_resolver/` before type checking or codegen sees the program. That pass:
 
 - tracks the current `namespace` scope
 - applies `use`, `use function`, and `use const` aliases, including group-use forms

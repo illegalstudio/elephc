@@ -1,10 +1,16 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 /// array_unique: create a new array with duplicate integer values removed.
 /// Input: x0 = array pointer
 /// Output: x0 = pointer to new deduplicated array
 /// Uses O(n^2) comparison — simple but correct for small arrays.
 pub fn emit_array_unique(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_array_unique_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: array_unique ---");
     emitter.label_global("__rt_array_unique");
@@ -67,4 +73,56 @@ pub fn emit_array_unique(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return with x0 = deduplicated array
+}
+
+fn emit_array_unique_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: array_unique ---");
+    emitter.label_global("__rt_array_unique");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving scalar unique spill slots
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the source indexed-array pointer, source length, and deduplicated result pointer
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for the scalar unique bookkeeping while keeping constructor calls 16-byte aligned
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the source indexed-array pointer across the deduplicated-array constructor call
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the source indexed-array logical length before constructing the deduplicated result array
+    emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // preserve the source indexed-array logical length across the constructor call and uniqueness scan loops
+    emitter.instruction("mov rdi, r10");                                        // pass the source indexed-array logical length as the worst-case deduplicated-array capacity to the shared constructor
+    emitter.instruction("mov rsi, 8");                                          // request 8-byte scalar payload slots for the deduplicated indexed array
+    emitter.instruction("call __rt_array_new");                                 // allocate the deduplicated indexed array through the shared x86_64 constructor
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the deduplicated indexed-array pointer across the nested uniqueness scan loops
+    emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the source indexed-array pointer after the constructor clobbered caller-saved registers
+    emitter.instruction("lea r8, [r8 + 24]");                                   // compute the first scalar payload slot address in the source indexed array
+    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the deduplicated indexed-array pointer before seeding the uniqueness scan loops
+    emitter.instruction("lea r9, [r9 + 24]");                                   // compute the first scalar payload slot address in the deduplicated indexed array
+    emitter.instruction("xor ecx, ecx");                                        // initialize the source uniqueness cursor at the front of the source indexed array
+    emitter.instruction("xor r10d, r10d");                                      // initialize the deduplicated indexed-array logical length to zero before scanning any source payloads
+
+    emitter.label("__rt_array_unique_outer_x86");
+    emitter.instruction("cmp rcx, QWORD PTR [rbp - 16]");                       // compare the source uniqueness cursor against the source indexed-array logical length
+    emitter.instruction("jge __rt_array_unique_done_x86");                      // finish once every source scalar payload has been checked for prior duplicates
+    emitter.instruction("mov rax, QWORD PTR [r8 + rcx * 8]");                   // load the current source scalar payload that might need to be appended to the deduplicated indexed array
+    emitter.instruction("xor edx, edx");                                        // initialize the deduplicated-array scan cursor at the front of the current unique-prefix result
+
+    emitter.label("__rt_array_unique_inner_x86");
+    emitter.instruction("cmp rdx, r10");                                        // compare the deduplicated-array scan cursor against the number of scalar payloads already accepted as unique
+    emitter.instruction("jge __rt_array_unique_add_x86");                       // append the current source scalar payload when no prior unique slot matches it
+    emitter.instruction("cmp QWORD PTR [r9 + rdx * 8], rax");                   // compare the current source scalar payload against one previously accepted unique scalar value
+    emitter.instruction("je __rt_array_unique_skip_x86");                       // skip the append path when the current source scalar payload is a duplicate of an earlier accepted value
+    emitter.instruction("add rdx, 1");                                          // advance the deduplicated-array scan cursor after ruling out one prior unique scalar value
+    emitter.instruction("jmp __rt_array_unique_inner_x86");                     // continue scanning earlier accepted unique scalar payloads for duplicates
+
+    emitter.label("__rt_array_unique_add_x86");
+    emitter.instruction("mov QWORD PTR [r9 + r10 * 8], rax");                   // append the current source scalar payload at the end of the deduplicated indexed array
+    emitter.instruction("add r10, 1");                                          // advance the deduplicated indexed-array logical length after accepting one new unique scalar payload
+
+    emitter.label("__rt_array_unique_skip_x86");
+    emitter.instruction("add rcx, 1");                                          // advance the source uniqueness cursor after deciding whether to append the current source payload
+    emitter.instruction("jmp __rt_array_unique_outer_x86");                     // continue scanning source scalar payloads until the source indexed array is exhausted
+
+    emitter.label("__rt_array_unique_done_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the deduplicated indexed-array pointer before publishing its final logical length
+    emitter.instruction("mov QWORD PTR [rax], r10");                            // store the number of accepted unique scalar payloads as the deduplicated array length
+    emitter.instruction("add rsp, 32");                                         // release the scalar unique spill slots before returning to the caller
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the scalar unique helper completes
+    emitter.instruction("ret");                                                 // return the deduplicated indexed-array pointer in rax
 }

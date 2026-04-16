@@ -2,6 +2,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -15,8 +16,15 @@ pub fn emit(
     emitter.comment("log10()");
     let ty = emit_expr(&args[0], emitter, ctx, data);
     if ty != PhpType::Float {
-        emitter.instruction("scvtf d0, x0");                                    // convert int to float
+        abi::emit_int_result_to_float_result(emitter);                          // normalize integer log10() inputs into the active floating-point result register before the libc call
     }
-    emitter.instruction("bl _log10");                                           // call libc log10(d0) → d0
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.bl_c("log10");                                              // call libc log10() with the scalar argument in the native AArch64 floating-point argument register
+        }
+        Arch::X86_64 => {
+            emitter.instruction("call log10");                                  // call libc log10() with the scalar argument in the native SysV floating-point argument register
+        }
+    }
     Some(PhpType::Float)
 }

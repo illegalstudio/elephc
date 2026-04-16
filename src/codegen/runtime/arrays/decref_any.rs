@@ -1,21 +1,27 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
+
+const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// decref_any: release a mixed heap-backed value using the uniform heap kind tag.
 /// Input: x0 = heap-backed value pointer
 /// Output: none
 pub fn emit_decref_any(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_decref_any_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: decref_any ---");
     emitter.label_global("__rt_decref_any");
 
     // -- null and heap-range checks --
     emitter.instruction("cbz x0, __rt_decref_any_done");                        // skip null values immediately
-    emitter.instruction("adrp x9, _heap_buf@PAGE");                             // load page of the heap buffer
-    emitter.instruction("add x9, x9, _heap_buf@PAGEOFF");                       // resolve the heap buffer base
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
     emitter.instruction("cmp x0, x9");                                          // is the pointer below the heap buffer?
     emitter.instruction("b.lo __rt_decref_any_done");                           // non-heap values need no release
-    emitter.instruction("adrp x10, _heap_off@PAGE");                            // load page of the heap offset
-    emitter.instruction("add x10, x10, _heap_off@PAGEOFF");                     // resolve the heap offset address
+    crate::codegen::abi::emit_symbol_address(emitter, "x10", "_heap_off");
     emitter.instruction("ldr x10, [x10]");                                      // load the current heap offset
     emitter.instruction("add x10, x9, x10");                                    // compute the current heap end
     emitter.instruction("cmp x0, x10");                                         // is the pointer at or beyond the heap end?
@@ -25,8 +31,7 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [x0, #-8]");                                  // load the full 64-bit kind word from the heap header
 
     // -- during cycle collection, skip unreachable refcounted children because they will be freed directly --
-    emitter.instruction("adrp x12, _gc_collecting@PAGE");                       // load page of the collector-active flag
-    emitter.instruction("add x12, x12, _gc_collecting@PAGEOFF");                // resolve the collector-active flag address
+    crate::codegen::abi::emit_symbol_address(emitter, "x12", "_gc_collecting");
     emitter.instruction("ldr x12, [x12]");                                      // load the collector-active flag
     emitter.instruction("cbz x12, __rt_decref_any_dispatch");                   // ordinary release path when no collection is running
     emitter.instruction("and x13, x11, #0xff");                                 // isolate the low-byte heap kind tag
@@ -71,4 +76,48 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
 
     emitter.label("__rt_decref_any_done");
     emitter.instruction("ret");                                                 // nothing to release
+}
+
+fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: decref_any ---");
+    emitter.label_global("__rt_decref_any");
+
+    emitter.instruction("test rax, rax");                                       // skip null heap-backed payload pointers so non-values do not participate in x86_64 release traffic
+    emitter.instruction("jz __rt_decref_any_done");                             // null payloads own no heap storage and therefore need no release work
+    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
+    emitter.instruction("mov r11, r10");                                        // preserve the full heap kind word before isolating the ownership marker
+    emitter.instruction("shr r11, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
+    emitter.instruction(&format!("cmp r11d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // verify that the payload belongs to the x86_64 heap wrapper before dispatching a release helper
+    emitter.instruction("jne __rt_decref_any_done");                            // foreign/static pointers must be ignored by the uniform x86_64 release dispatcher
+    emitter.instruction("and r10, 0xff");                                       // isolate the low-byte uniform heap kind tag for the concrete release dispatch
+    emitter.instruction("cmp r10, 1");                                          // does this heap-backed payload own a persisted string buffer?
+    emitter.instruction("je __rt_decref_any_string");                           // strings release through heap_free_safe on x86_64
+    emitter.instruction("cmp r10, 2");                                          // does this heap-backed payload point at an indexed array?
+    emitter.instruction("je __rt_decref_any_array");                            // indexed arrays release through the x86_64 array decref helper
+    emitter.instruction("cmp r10, 3");                                          // does this heap-backed payload point at an associative array?
+    emitter.instruction("je __rt_decref_any_hash");                             // hashes release through the x86_64 hash decref helper
+    emitter.instruction("cmp r10, 4");                                          // does this heap-backed payload point at an object instance?
+    emitter.instruction("je __rt_decref_any_object");                           // objects release through the x86_64 object decref helper
+    emitter.instruction("cmp r10, 5");                                          // does this heap-backed payload point at a boxed mixed cell?
+    emitter.instruction("je __rt_decref_any_mixed");                            // mixed cells release through the x86_64 mixed decref helper
+    emitter.instruction("jmp __rt_decref_any_done");                            // unknown/raw heap kinds need no release work in the current x86_64 bootstrap runtime
+
+    emitter.label("__rt_decref_any_string");
+    emitter.instruction("jmp __rt_heap_free_safe");                             // tail-call to the persisted-string safe-free helper on x86_64
+
+    emitter.label("__rt_decref_any_array");
+    emitter.instruction("jmp __rt_decref_array");                               // tail-call to the indexed-array decref helper on x86_64
+
+    emitter.label("__rt_decref_any_hash");
+    emitter.instruction("jmp __rt_decref_hash");                                // tail-call to the associative-array decref helper on x86_64
+
+    emitter.label("__rt_decref_any_object");
+    emitter.instruction("jmp __rt_decref_object");                              // tail-call to the object decref helper on x86_64
+
+    emitter.label("__rt_decref_any_mixed");
+    emitter.instruction("jmp __rt_decref_mixed");                               // tail-call to the mixed-box decref helper on x86_64
+
+    emitter.label("__rt_decref_any_done");
+    emitter.instruction("ret");                                                 // nothing to release for null, foreign, or unsupported heap kinds
 }

@@ -92,7 +92,7 @@ If the program had `include` or `require` statements, the resolver would parse t
 
 ## Phase 5: Name resolution
 
-**File:** `src/name_resolver.rs`
+**File:** `src/name_resolver/`
 
 After includes are flattened, elephc resolves namespace-aware names. This pass applies the current `namespace`, any `use` / `use function` / `use const` imports, and rewrites references to their canonical fully-qualified names before semantic analysis.
 
@@ -124,7 +124,7 @@ On successful type checking, elephc also runs a warning pass that reports issues
 
 **File:** `src/codegen/` — See [The Code Generator](the-codegen.md) for details.
 
-The code generator walks the typed AST and emits ARM64 assembly. For ordinary control flow this is mostly straight-line branches and labels; for `try` / `catch` / `finally`, the compiler additionally emits handler records and resume labels around `_setjmp` / `_longjmp`-based exception unwinding. Here's what our simple example produces (simplified, with comments):
+The code generator walks the typed AST and emits assembly for the selected target. For ordinary control flow this is mostly straight-line branches and labels; for `try` / `catch` / `finally`, the compiler additionally emits handler records and resume labels around `_setjmp` / `_longjmp`-based exception unwinding. The walkthrough below shows the AArch64 form of our simple example (simplified, with comments):
 
 ```asm
 .global _main
@@ -172,17 +172,21 @@ Key observations:
 
 ## Phase 8: Assembly and linking
 
-**Tools:** macOS `as` and `ld`
+**Tools:** native `as` and `ld` (or the equivalent system toolchain)
 
 elephc writes the assembly to a `.s` file, then invokes the system tools:
 
+On macOS, elephc drives the Apple toolchain directly:
+
 ```bash
-as -arch arm64 -o file.o file.s     # text assembly → object file (binary)
+as -arch arm64 -o file.o file.s
 ld -arch arm64 -e _main -o file file.o -lSystem -syslibroot /path/to/sdk
 ```
 
+On Linux, elephc invokes the native assembler/linker for the requested target.
+
 - **`as`** (assembler) converts text mnemonics into binary machine code, producing an object file (`.o`)
-- **`ld`** (linker) resolves label addresses, links with system libraries (for `svc`), and produces the final **Mach-O binary**
+- **`ld`** (linker) resolves label addresses, links with system libraries, and produces the final native executable (Mach-O on macOS, ELF on Linux)
 
 The `.o` file is deleted after linking. The result is a standalone executable.
 
@@ -193,7 +197,7 @@ The `.o` file is deleted after linking. The result is a standalone executable.
 big
 ```
 
-The binary runs directly on the CPU. There is no PHP interpreter or VM at runtime. The kernel loads the Mach-O file into memory, jumps to `_main`, and the CPU executes the instructions we generated. The binary still contains elephc's emitted helper routines and links `libSystem` for OS/libc services.
+The binary runs directly on the CPU. There is no PHP interpreter or VM at runtime. The kernel loads the executable for the target platform into memory, jumps to the entry point, and the CPU executes the instructions we generated. The binary still contains elephc's emitted helper routines and links the platform's system libraries for OS/libc services.
 
 ## The complete flow
 
@@ -222,7 +226,7 @@ The binary runs directly on the CPU. There is no PHP interpreter or VM at runtim
     file.o (machine code bytes)
                     │
                     ▼ ld (linker)
-    file (Mach-O executable)
+    file (native executable)
                     │
                     ▼ CPU
     "big\n"

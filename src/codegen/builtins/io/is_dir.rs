@@ -2,6 +2,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -14,7 +15,6 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("is_dir()");
     emit_expr(&args[0], emitter, ctx, data);
-    // x1=path ptr, x2=path len
-    emitter.instruction("bl __rt_is_dir");                                      // call runtime: check if path is directory → x0=bool
+    abi::emit_call_label(emitter, "__rt_is_dir");                               // call the target-aware runtime helper that checks whether the path is a directory
     Some(PhpType::Bool)
 }

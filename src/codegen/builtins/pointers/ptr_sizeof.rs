@@ -1,6 +1,7 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
@@ -32,10 +33,24 @@ pub fn emit(
                 }
             }
         };
-        emitter.instruction(&format!("mov x0, #{}", size));                     // load computed size
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("mov x0, #{}", size));             // materialize the computed pointee size in the AArch64 integer result register
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("mov rax, {}", size));             // materialize the computed pointee size in the x86_64 integer result register
+            }
+        }
     } else {
         // Non-literal argument — return 0
-        emitter.instruction("mov x0, #0");                                      // unknown type size
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("mov x0, #0");                              // return zero when ptr_sizeof() cannot resolve a literal type name on AArch64
+            }
+            Arch::X86_64 => {
+                emitter.instruction("mov rax, 0");                              // return zero when ptr_sizeof() cannot resolve a literal type name on x86_64
+            }
+        }
     }
     Some(PhpType::Int)
 }

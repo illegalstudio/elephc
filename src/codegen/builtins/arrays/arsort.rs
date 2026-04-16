@@ -1,3 +1,4 @@
+use crate::codegen::abi;
 use super::ensure_unique_arg::emit_ensure_unique_arg;
 use super::store_mutating_arg::emit_store_mutating_arg;
 use crate::codegen::context::Context;
@@ -19,7 +20,7 @@ pub fn emit(
     emit_ensure_unique_arg(emitter, &arr_ty);
     emit_store_mutating_arg(emitter, ctx, &args[0]);
     // -- sort associative array by values descending, maintaining key association --
-    emitter.instruction("bl __rt_arsort");                                      // call runtime: sort assoc array by values descending
+    abi::emit_call_label(emitter, "__rt_arsort");                               // call the target-aware runtime helper that sorts array values descending while preserving key association
 
     Some(PhpType::Void)
 }

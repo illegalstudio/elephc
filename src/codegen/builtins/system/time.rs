@@ -1,3 +1,4 @@
+use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -12,6 +13,6 @@ pub fn emit(
     _data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("time()");
-    emitter.instruction("bl __rt_time");                                        // call runtime: get current Unix timestamp → x0
+    abi::emit_call_label(emitter, "__rt_time");                                 // call the target-aware runtime helper that returns the current Unix timestamp in the native integer result register
     Some(PhpType::Int)
 }

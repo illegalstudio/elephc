@@ -1,9 +1,15 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 /// array_reverse: create a reversed copy of an integer array.
 /// Input: x0 = array pointer
 /// Output: x0 = pointer to new reversed array
 pub fn emit_array_reverse(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_array_reverse_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: array_reverse ---");
     emitter.label_global("__rt_array_reverse");
@@ -50,4 +56,46 @@ pub fn emit_array_reverse(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return with x0 = new reversed array
+}
+
+fn emit_array_reverse_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: array_reverse ---");
+    emitter.label_global("__rt_array_reverse");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving scalar reverse spill slots
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the source indexed-array pointer, source length, and reversed result pointer
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for the scalar reverse bookkeeping while keeping constructor calls 16-byte aligned
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the source indexed-array pointer across the reversed-array constructor call
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the source indexed-array logical length before constructing the reversed result array
+    emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // preserve the source indexed-array logical length across the constructor call and reverse-copy loop
+    emitter.instruction("mov rdi, r10");                                        // pass the source indexed-array logical length as the reversed-array capacity to the shared constructor
+    emitter.instruction("mov rsi, 8");                                          // request 8-byte scalar payload slots for the reversed indexed array
+    emitter.instruction("call __rt_array_new");                                 // allocate the reversed indexed array through the shared x86_64 constructor
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the reversed indexed-array pointer across the scalar reverse-copy loop
+    emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the source indexed-array pointer after the constructor clobbered caller-saved registers
+    emitter.instruction("lea r8, [r8 + 24]");                                   // compute the first scalar payload slot address in the source indexed array
+    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the reversed indexed-array pointer before seeding the reverse-copy loop
+    emitter.instruction("lea r9, [r9 + 24]");                                   // compute the first scalar payload slot address in the reversed indexed array
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the source indexed-array logical length after the constructor clobbered caller-saved registers
+    emitter.instruction("xor ecx, ecx");                                        // initialize the reversed destination cursor at the front of the reversed indexed array
+
+    emitter.label("__rt_array_reverse_loop_x86");
+    emitter.instruction("cmp rcx, r10");                                        // compare the reversed destination cursor against the source indexed-array logical length
+    emitter.instruction("jge __rt_array_reverse_done_x86");                     // finish once every source scalar payload has been copied into the reversed indexed array
+    emitter.instruction("mov r11, r10");                                        // seed the source reverse index from the source indexed-array logical length
+    emitter.instruction("sub r11, rcx");                                        // back up the source reverse index by the number of already-copied scalar payloads
+    emitter.instruction("sub r11, 1");                                          // land on the current source scalar payload that must appear next in reverse order
+    emitter.instruction("mov rax, QWORD PTR [r8 + r11 * 8]");                   // load the current reverse-ordered scalar payload from the source indexed array
+    emitter.instruction("mov QWORD PTR [r9 + rcx * 8], rax");                   // store that scalar payload into the next front slot of the reversed indexed array
+    emitter.instruction("add rcx, 1");                                          // advance the reversed destination cursor after copying one reverse-ordered scalar payload
+    emitter.instruction("jmp __rt_array_reverse_loop_x86");                     // continue copying reverse-ordered scalar payloads until the source array is exhausted
+
+    emitter.label("__rt_array_reverse_done_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the reversed indexed-array pointer before publishing its logical length
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the source indexed-array logical length before storing it into the reversed array header
+    emitter.instruction("mov QWORD PTR [rax], r10");                            // store the full source indexed-array logical length as the reversed array length
+    emitter.instruction("add rsp, 32");                                         // release the scalar reverse spill slots before returning to the caller
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the scalar reverse helper completes
+    emitter.instruction("ret");                                                 // return the reversed indexed-array pointer in rax
 }

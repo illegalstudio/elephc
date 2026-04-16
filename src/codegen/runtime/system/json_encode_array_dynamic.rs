@@ -1,9 +1,15 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 /// __rt_json_encode_array_dynamic: encode an indexed array by inspecting its packed value_type tag.
 /// Input:  x0 = array pointer
 /// Output: x1 = result ptr, x2 = result len
 pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_json_encode_array_dynamic_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: json_encode_array_dynamic ---");
     emitter.label_global("__rt_json_encode_array_dynamic");
@@ -14,11 +20,9 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save the source array pointer
 
     // -- initialize concat buffer write pointers --
-    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of concat offset
-    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve concat offset address
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [x9]");                                       // load the current concat offset
-    emitter.instruction("adrp x11, _concat_buf@PAGE");                          // load page of concat buffer
-    emitter.instruction("add x11, x11, _concat_buf@PAGEOFF");                   // resolve concat buffer base
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
     emitter.instruction("add x11, x11, x10");                                   // compute the current write pointer
     emitter.instruction("str x11, [sp, #8]");                                   // save the output start pointer
     emitter.instruction("str x11, [sp, #16]");                                  // save the current write pointer
@@ -56,11 +60,9 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     // -- update concat_off so nested encoders append from the current write position --
     emitter.label("__rt_json_arr_dyn_elem");
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload the current write pointer
-    emitter.instruction("adrp x10, _concat_buf@PAGE");                          // load page of concat buffer
-    emitter.instruction("add x10, x10, _concat_buf@PAGEOFF");                   // resolve concat buffer base address
+    crate::codegen::abi::emit_symbol_address(emitter, "x10", "_concat_buf");
     emitter.instruction("sub x12, x11, x10");                                   // compute the absolute concat offset for the current write position
-    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of concat offset
-    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve concat offset address
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("str x12, [x9]");                                       // nested encoders must append after the existing JSON prefix
 
     // -- dispatch on the array value_type tag --
@@ -170,13 +172,167 @@ pub(crate) fn emit_json_encode_array_dynamic(emitter: &mut Emitter) {
     emitter.instruction("add x11, x11, #1");                                    // advance past the closing bracket
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the output start pointer
     emitter.instruction("sub x2, x11, x1");                                     // compute the total encoded array length
-    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of concat offset
-    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve concat offset address
-    emitter.instruction("adrp x10, _concat_buf@PAGE");                          // load page of concat buffer
-    emitter.instruction("add x10, x10, _concat_buf@PAGEOFF");                   // resolve concat buffer base address
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    crate::codegen::abi::emit_symbol_address(emitter, "x10", "_concat_buf");
     emitter.instruction("sub x10, x11, x10");                                   // compute the absolute concat offset after the closing bracket
     emitter.instruction("str x10, [x9]");                                       // persist the updated concat offset
     emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #112");                                    // release the helper stack frame
     emitter.instruction("ret");                                                 // return the encoded JSON slice in x1/x2
+}
+
+fn emit_json_encode_array_dynamic_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: json_encode_array_dynamic ---");
+    emitter.label_global("__rt_json_encode_array_dynamic");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving JSON-array scratch space
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for array metadata and concat-buffer cursors
+    emitter.instruction("sub rsp, 48");                                         // reserve local slots for the array pointer, output pointers, length, value_type, and loop index
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the source array pointer across nested JSON helper calls
+    emitter.instruction("mov r10, QWORD PTR [rip + _concat_off]");              // load the current concat-buffer offset before appending the JSON array
+    emitter.instruction("lea r11, [rip + _concat_buf]");                        // materialize the concat-buffer base pointer for the current JSON append
+    emitter.instruction("add r11, r10");                                        // compute the current concat-buffer write pointer from the base plus offset
+    emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // save the encoded-array start pointer for the final result slice
+    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the current concat-buffer write pointer for the element loop
+    emitter.instruction("mov BYTE PTR [r11], 91");                              // write the opening JSON bracket before any encoded element payload
+    emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the opening bracket
+    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // persist the updated write pointer before entering the element loop
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the indexed-array length from the first field of the array header
+    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save the array length across nested JSON helper calls
+    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the packed array kind word so the value_type tag can drive JSON dispatch
+    emitter.instruction("shr r10, 8");                                          // move the packed array value_type tag into the low bits for x86_64 dispatch
+    emitter.instruction("and r10, 0x7f");                                       // isolate the packed array value_type tag without the persistent COW flag
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save the packed array value_type tag across nested JSON helper calls
+    emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // initialize the indexed-array element loop counter to zero
+
+    emitter.label("__rt_json_arr_dyn_loop");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current indexed-array element index at the top of the JSON loop
+    emitter.instruction("cmp r10, QWORD PTR [rbp - 32]");                       // have we already encoded every indexed-array element?
+    emitter.instruction("jae __rt_json_arr_dyn_close");                         // finish by writing the closing bracket once the loop index reaches the array length
+    emitter.instruction("test r10, r10");                                       // is this the first indexed-array element in the JSON output?
+    emitter.instruction("jz __rt_json_arr_dyn_elem");                           // skip the comma separator before the first encoded element
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the current concat-buffer write pointer before appending a comma separator
+    emitter.instruction("mov BYTE PTR [r11], 44");                              // write the JSON comma separator between encoded array elements
+    emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the comma separator
+    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // persist the updated write pointer after appending the comma separator
+
+    emitter.label("__rt_json_arr_dyn_elem");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the current concat-buffer write pointer before a nested JSON helper appends data
+    emitter.instruction("lea r10, [rip + _concat_buf]");                        // materialize the concat-buffer base pointer for the global offset update
+    emitter.instruction("mov rcx, r11");                                        // copy the current write pointer before turning it into an absolute concat offset
+    emitter.instruction("sub rcx, r10");                                        // compute the concat-buffer absolute offset for the current write position
+    emitter.instruction("mov QWORD PTR [rip + _concat_off], rcx");              // publish the concat-buffer offset so nested JSON helpers append after the existing prefix
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the packed indexed-array value_type tag for runtime JSON dispatch
+    emitter.instruction("cmp r10, 0");                                          // does this indexed array store integers?
+    emitter.instruction("je __rt_json_arr_dyn_value_int");                      // encode integer elements through the decimal integer helper
+    emitter.instruction("cmp r10, 1");                                          // does this indexed array store strings?
+    emitter.instruction("je __rt_json_arr_dyn_value_str");                      // encode string elements through the JSON string helper
+    emitter.instruction("cmp r10, 2");                                          // does this indexed array store floats?
+    emitter.instruction("je __rt_json_arr_dyn_value_float");                    // encode float elements through the decimal float helper
+    emitter.instruction("cmp r10, 3");                                          // does this indexed array store bools?
+    emitter.instruction("je __rt_json_arr_dyn_value_bool");                     // encode bool elements through the JSON bool helper
+    emitter.instruction("cmp r10, 4");                                          // does this indexed array store nested indexed arrays?
+    emitter.instruction("je __rt_json_arr_dyn_value_array");                    // encode nested indexed arrays recursively
+    emitter.instruction("cmp r10, 5");                                          // does this indexed array store nested associative arrays?
+    emitter.instruction("je __rt_json_arr_dyn_value_assoc");                    // encode nested associative arrays recursively
+    emitter.instruction("cmp r10, 7");                                          // does this indexed array store boxed mixed payloads?
+    emitter.instruction("je __rt_json_arr_dyn_value_mixed");                    // encode boxed mixed payloads through the mixed JSON helper
+    emitter.instruction("jmp __rt_json_arr_dyn_value_null");                    // unsupported object-like payloads currently degrade to JSON null
+
+    emitter.label("__rt_json_arr_dyn_value_int");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before loading the integer element payload
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current indexed-array element index before computing the payload slot address
+    emitter.instruction("add r10, 3");                                          // skip the 24-byte indexed-array header to land on the first payload slot
+    emitter.instruction("mov rax, QWORD PTR [rax + r10 * 8]");                  // load the integer element payload from the indexed-array storage slot
+    emitter.instruction("call __rt_itoa");                                      // encode the integer element as a decimal JSON slice
+    emitter.instruction("jmp __rt_json_arr_dyn_copy");                          // copy the encoded JSON element into concat_buf
+
+    emitter.label("__rt_json_arr_dyn_value_str");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current indexed-array element index before computing the ptr/len pair slots
+    emitter.instruction("mov rcx, r10");                                        // copy the current indexed-array element index before scaling it into a ptr/len slot pair
+    emitter.instruction("add rcx, rcx");                                        // compute index * 2 because string arrays store pointer/length pairs
+    emitter.instruction("add rcx, 3");                                          // skip the 24-byte indexed-array header to land on the first ptr/len slot pair
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before loading the string ptr/len pair
+    emitter.instruction("mov rax, QWORD PTR [r10 + rcx * 8]");                  // load the string pointer from the indexed-array ptr/len storage pair
+    emitter.instruction("add rcx, 1");                                          // advance from the string pointer slot to the paired string length slot
+    emitter.instruction("mov rdx, QWORD PTR [r10 + rcx * 8]");                  // load the string length from the indexed-array ptr/len storage pair
+    emitter.instruction("call __rt_json_encode_str");                           // encode the string element with JSON escaping and quotes
+    emitter.instruction("jmp __rt_json_arr_dyn_copy");                          // copy the encoded JSON element into concat_buf
+
+    emitter.label("__rt_json_arr_dyn_value_float");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before loading the float payload bits
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current indexed-array element index before computing the float slot address
+    emitter.instruction("add r10, 3");                                          // skip the 24-byte indexed-array header to land on the first payload slot
+    emitter.instruction("mov r10, QWORD PTR [rax + r10 * 8]");                  // load the raw float bit-pattern from the indexed-array storage slot
+    emitter.instruction("movq xmm0, r10");                                      // move the raw float bit-pattern into the x86_64 floating-point argument register
+    emitter.instruction("call __rt_ftoa");                                      // encode the float element as a decimal JSON slice
+    emitter.instruction("jmp __rt_json_arr_dyn_copy");                          // copy the encoded JSON element into concat_buf
+
+    emitter.label("__rt_json_arr_dyn_value_bool");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before loading the bool payload
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current indexed-array element index before computing the bool slot address
+    emitter.instruction("add r10, 3");                                          // skip the 24-byte indexed-array header to land on the first payload slot
+    emitter.instruction("mov rax, QWORD PTR [rax + r10 * 8]");                  // load the bool payload from the indexed-array storage slot
+    emitter.instruction("call __rt_json_encode_bool");                          // encode the bool element as the JSON literals true/false
+    emitter.instruction("jmp __rt_json_arr_dyn_copy");                          // copy the encoded JSON element into concat_buf
+
+    emitter.label("__rt_json_arr_dyn_value_array");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before loading the nested indexed-array payload
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current indexed-array element index before computing the nested-array slot address
+    emitter.instruction("add r10, 3");                                          // skip the 24-byte indexed-array header to land on the first payload slot
+    emitter.instruction("mov rax, QWORD PTR [rax + r10 * 8]");                  // load the nested indexed-array pointer from the indexed-array storage slot
+    emitter.instruction("call __rt_json_encode_array_dynamic");                 // encode the nested indexed-array recursively into a JSON slice
+    emitter.instruction("jmp __rt_json_arr_dyn_copy");                          // copy the encoded nested JSON element into concat_buf
+
+    emitter.label("__rt_json_arr_dyn_value_assoc");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before loading the nested associative-array payload
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current indexed-array element index before computing the nested-hash slot address
+    emitter.instruction("add r10, 3");                                          // skip the 24-byte indexed-array header to land on the first payload slot
+    emitter.instruction("mov rax, QWORD PTR [rax + r10 * 8]");                  // load the nested associative-array pointer from the indexed-array storage slot
+    emitter.instruction("call __rt_json_encode_assoc");                         // encode the nested associative array recursively into a JSON slice
+    emitter.instruction("jmp __rt_json_arr_dyn_copy");                          // copy the encoded nested JSON element into concat_buf
+
+    emitter.label("__rt_json_arr_dyn_value_mixed");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before loading the boxed mixed payload
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current indexed-array element index before computing the mixed payload slot address
+    emitter.instruction("add r10, 3");                                          // skip the 24-byte indexed-array header to land on the first payload slot
+    emitter.instruction("mov rax, QWORD PTR [rax + r10 * 8]");                  // load the boxed mixed pointer from the indexed-array storage slot
+    emitter.instruction("call __rt_json_encode_mixed");                         // encode the boxed mixed payload recursively into a JSON slice
+    emitter.instruction("jmp __rt_json_arr_dyn_copy");                          // copy the encoded nested JSON element into concat_buf
+
+    emitter.label("__rt_json_arr_dyn_value_null");
+    emitter.instruction("call __rt_json_encode_null");                          // encode null or unsupported payload families as the JSON null literal
+
+    emitter.label("__rt_json_arr_dyn_copy");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the current concat-buffer write pointer before copying the encoded element bytes
+    emitter.instruction("xor rcx, rcx");                                        // initialize the encoded-element copy index to the beginning of the returned JSON slice
+    emitter.label("__rt_json_arr_dyn_copy_loop");
+    emitter.instruction("cmp rcx, rdx");                                        // have we copied every byte of the returned encoded JSON slice?
+    emitter.instruction("jae __rt_json_arr_dyn_next");                          // finish copying once the slice length has been exhausted
+    emitter.instruction("mov r10b, BYTE PTR [rax + rcx]");                      // load the next encoded JSON byte from the returned slice
+    emitter.instruction("mov BYTE PTR [r11 + rcx], r10b");                      // copy the encoded JSON byte into concat_buf at the current write position
+    emitter.instruction("add rcx, 1");                                          // advance the encoded-element copy index to the next byte
+    emitter.instruction("jmp __rt_json_arr_dyn_copy_loop");                     // continue copying until the whole returned JSON slice has been appended
+
+    emitter.label("__rt_json_arr_dyn_next");
+    emitter.instruction("add r11, rdx");                                        // advance the concat-buffer write pointer by the copied encoded-element length
+    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // persist the updated write pointer after appending the encoded element
+    emitter.instruction("add QWORD PTR [rbp - 48], 1");                         // advance the indexed-array element loop counter to the next payload slot
+    emitter.instruction("jmp __rt_json_arr_dyn_loop");                          // continue encoding the remaining indexed-array elements
+
+    emitter.label("__rt_json_arr_dyn_close");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the concat-buffer write pointer after the final encoded JSON element
+    emitter.instruction("mov BYTE PTR [r11], 93");                              // append the closing JSON bracket to complete the encoded array slice
+    emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the closing bracket
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the encoded-array start pointer in the leading x86_64 string result register
+    emitter.instruction("mov rdx, r11");                                        // copy the final concat-buffer write pointer before turning it into a slice length
+    emitter.instruction("sub rdx, rax");                                        // compute the final encoded-array length from write_end - write_start
+    emitter.instruction("lea r10, [rip + _concat_buf]");                        // materialize the concat-buffer base pointer for the global offset update
+    emitter.instruction("mov rcx, r11");                                        // copy the final concat-buffer write pointer before converting it into an absolute offset
+    emitter.instruction("sub rcx, r10");                                        // compute the new absolute concat-buffer offset after the encoded JSON array
+    emitter.instruction("mov QWORD PTR [rip + _concat_off], rcx");              // publish the updated concat-buffer offset so later writers append after this JSON array
+    emitter.instruction("add rsp, 48");                                         // release the local JSON-array scratch frame before returning to generated code
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
+    emitter.instruction("ret");                                                 // return the encoded JSON array slice in the x86_64 string result registers
 }

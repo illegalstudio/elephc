@@ -1,3 +1,4 @@
+use crate::codegen::abi;
 use crate::codegen::context::{Context, DeferredClosure};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -128,7 +129,7 @@ pub(super) fn emit_first_class_callable(
 ) -> PhpType {
     let Some(sig) = first_class_callable_sig(target, ctx) else {
         emitter.comment("WARNING: unsupported first-class callable target");
-        emitter.instruction("mov x0, #0");                                      // unsupported callable lowers to null pointer sentinel
+        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
         return PhpType::Callable;
     };
 
@@ -136,7 +137,7 @@ pub(super) fn emit_first_class_callable(
         CallableTarget::StaticMethod { receiver, method } => {
             let Some(receiver) = resolved_static_callable_target(receiver, ctx) else {
                 emitter.comment("WARNING: unsupported first-class static:: callable target");
-                emitter.instruction("mov x0, #0");                              // unsupported callable lowers to null pointer sentinel
+                abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
                 return PhpType::Callable;
             };
             CallableTarget::StaticMethod {
@@ -160,7 +161,6 @@ pub(super) fn emit_first_class_callable(
     });
 
     emitter.comment("first-class callable: load wrapper address");
-    emitter.instruction(&format!("adrp x0, {}@PAGE", wrapper_label));           // load page base of synthesized callable wrapper
-    emitter.instruction(&format!("add x0, x0, {}@PAGEOFF", wrapper_label));     // resolve callable wrapper address
+    abi::emit_symbol_address(emitter, abi::int_result_reg(emitter), &wrapper_label);
     PhpType::Callable
 }

@@ -1,4 +1,5 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 /// array_push_str: push a string element (ptr+len) to an array, growing if needed.
 /// Always persists the string to heap first (ensures safety even when the
@@ -6,6 +7,11 @@ use crate::codegen::emit::Emitter;
 /// Input:  x0 = array pointer, x1 = str ptr, x2 = str len
 /// Output: x0 = array pointer (may differ if array was reallocated)
 pub fn emit_array_push_str(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_array_push_str_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: array_push_str ---");
     emitter.label_global("__rt_array_push_str");
@@ -53,4 +59,49 @@ pub fn emit_array_push_str(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_array_grow");                                  // double array capacity → x0 = new array
     emitter.instruction("str x0, [sp, #0]");                                    // update saved array pointer
     emitter.instruction("b __rt_array_push_str_push");                          // go push into the grown array
+}
+
+fn emit_array_push_str_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: array_push_str ---");
+    emitter.label_global("__rt_array_push_str");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving string-append spill slots
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved array pointer and string payload
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for the array pointer plus the incoming string ptr/len pair
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // preserve the incoming string pointer across uniqueness and persistence helper calls
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the incoming string length across uniqueness and persistence helper calls
+    emitter.instruction("call __rt_array_ensure_unique");                       // split shared indexed arrays before appending a new owned string slot
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the unique indexed-array pointer across string persistence and optional growth
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // move the incoming string pointer into the x86_64 string-persist input register
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // move the incoming string length into the x86_64 string-persist length register
+    emitter.instruction("call __rt_str_persist");                               // duplicate the appended string into owned heap storage before storing it in the indexed array
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the owned string pointer returned by the string-persist helper
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the owned string length returned by the string-persist helper
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the unique indexed-array pointer after string persistence
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the indexed-array logical length before checking append capacity
+    emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load the indexed-array capacity before deciding between the fast path and growth
+    emitter.instruction("cmp r11, rcx");                                        // is the indexed array already full at the current logical length?
+    emitter.instruction("jae __rt_array_push_str_grow");                        // grow the indexed array when the appended owned string would exceed the current capacity
+    emitter.label("__rt_array_push_str_store");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the current indexed-array pointer before storing the owned string slot
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // reload the indexed-array logical length after helper calls clobbered caller-saved registers
+    emitter.instruction("mov rcx, r11");                                        // copy the logical length before scaling it into a 16-byte string-slot offset
+    emitter.instruction("shl rcx, 4");                                          // convert the logical length into the byte offset of the next 16-byte string slot
+    emitter.instruction("lea rcx, [r10 + rcx + 24]");                           // compute the destination address of the next indexed-array string slot
+    emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the owned string pointer that should be stored in the appended slot
+    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the owned string length that should be stored in the appended slot
+    emitter.instruction("mov QWORD PTR [rcx], r8");                             // store the owned string pointer in the appended indexed-array string slot
+    emitter.instruction("mov QWORD PTR [rcx + 8], r9");                         // store the owned string length in the appended indexed-array string slot
+    emitter.instruction("add r11, 1");                                          // advance the indexed-array logical length after materializing the appended string slot
+    emitter.instruction("mov QWORD PTR [r10], r11");                            // publish the updated indexed-array logical length in the array header
+    emitter.instruction("mov rax, r10");                                        // return the updated indexed-array pointer in the x86_64 integer result register
+    emitter.instruction("add rsp, 32");                                         // release the string-append spill slots before returning
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the updated indexed array
+    emitter.instruction("ret");                                                 // return to the caller with rax holding the updated indexed-array pointer
+    emitter.label("__rt_array_push_str_grow");
+    emitter.instruction("mov rdi, r10");                                        // pass the unique indexed-array pointer to the growth helper before storing the owned string slot
+    emitter.instruction("call __rt_array_grow");                                // allocate a larger indexed-array backing store so the string append can proceed
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the grown indexed-array pointer before storing the owned string slot
+    emitter.instruction("jmp __rt_array_push_str_store");                       // append the owned string payload into the grown indexed-array storage
 }

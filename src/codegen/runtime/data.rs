@@ -94,6 +94,7 @@ pub(crate) fn emit_runtime_data_user(
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: &HashMap<String, ClassInfo>,
     enums: &HashMap<String, EnumInfo>,
+    allowed_class_names: Option<&HashSet<String>>,
 ) -> String {
     let mut out = String::new();
 
@@ -135,11 +136,19 @@ pub(crate) fn emit_runtime_data_user(
     let mut sorted_interfaces: Vec<(&String, &InterfaceInfo)> = interfaces.iter().collect();
     sorted_interfaces.sort_by_key(|(_, interface_info)| interface_info.interface_id);
     let mut sorted_classes: Vec<(&String, &ClassInfo)> = classes.iter().collect();
+    if let Some(allowed_class_names) = allowed_class_names {
+        sorted_classes.retain(|(class_name, _)| allowed_class_names.contains(*class_name));
+    }
     sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
     let class_id_by_name: HashMap<String, u64> = sorted_classes
         .iter()
         .map(|(name, class_info)| ((*name).clone(), class_info.class_id))
         .collect();
+    let class_info_by_id: HashMap<u64, &ClassInfo> = sorted_classes
+        .iter()
+        .map(|(_, class_info)| (class_info.class_id, *class_info))
+        .collect();
+    let max_class_id = sorted_classes.iter().map(|(_, class_info)| class_info.class_id).max();
 
     out.push_str(".data\n");
     out.push_str(".p2align 3\n");
@@ -154,43 +163,79 @@ pub(crate) fn emit_runtime_data_user(
     }
 
     out.push_str(".globl _class_interface_ptrs\n_class_interface_ptrs:\n");
-    for (_, class_info) in &sorted_classes {
-        out.push_str(&format!(
-            "    .quad _class_interfaces_{}\n",
-            class_info.class_id
-        ));
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!("    .quad _class_interfaces_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_interfaces_missing\n");
+            }
+        }
     }
 
     out.push_str(".globl _class_parent_ids\n_class_parent_ids:\n");
-    for (_, class_info) in &sorted_classes {
-        let parent_id = class_info
-            .parent
-            .as_ref()
-            .and_then(|parent_name| class_id_by_name.get(parent_name))
-            .map(|id| id.to_string())
-            .unwrap_or_else(|| "-1".to_string());
-        out.push_str(&format!("    .quad {}\n", parent_id));
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let parent_id = class_info_by_id
+                .get(&class_id)
+                .and_then(|class_info| class_info.parent.as_ref())
+                .and_then(|parent_name| class_id_by_name.get(parent_name))
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "-1".to_string());
+            out.push_str(&format!("    .quad {}\n", parent_id));
+        }
     }
 
     out.push_str(".globl _class_gc_desc_count\n_class_gc_desc_count:\n");
-    out.push_str(&format!("    .quad {}\n", sorted_classes.len()));
+    out.push_str(&format!(
+        "    .quad {}\n",
+        max_class_id.map_or(0, |class_id| class_id + 1)
+    ));
     out.push_str(".globl _class_gc_desc_ptrs\n_class_gc_desc_ptrs:\n");
-    for (_, class_info) in &sorted_classes {
-        out.push_str(&format!("    .quad _class_gc_desc_{}\n", class_info.class_id));
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!("    .quad _class_gc_desc_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_gc_desc_missing\n");
+            }
+        }
     }
 
     out.push_str(".globl _class_vtable_ptrs\n_class_vtable_ptrs:\n");
-    for (_, class_info) in &sorted_classes {
-        out.push_str(&format!("    .quad _class_vtable_{}\n", class_info.class_id));
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!("    .quad _class_vtable_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_vtable_missing\n");
+            }
+        }
     }
 
     out.push_str(".globl _class_static_vtable_ptrs\n_class_static_vtable_ptrs:\n");
-    for (_, class_info) in &sorted_classes {
-        out.push_str(&format!(
-            "    .quad _class_static_vtable_{}\n",
-            class_info.class_id
-        ));
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!("    .quad _class_static_vtable_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_static_vtable_missing\n");
+            }
+        }
     }
+
+    out.push_str(".globl _class_interfaces_missing\n_class_interfaces_missing:\n");
+    out.push_str("    .quad 0\n");
+    out.push_str(".globl _class_gc_desc_missing\n_class_gc_desc_missing:\n");
+    out.push_str("    .byte 0\n");
+    out.push_str("    .p2align 3\n");
+    out.push_str(".globl _class_vtable_missing\n_class_vtable_missing:\n");
+    out.push_str("    .quad 0\n");
+    out.push_str("    .p2align 3\n");
+    out.push_str(
+        ".globl _class_static_vtable_missing\n_class_static_vtable_missing:\n",
+    );
+    out.push_str("    .quad 0\n");
 
     for (_, interface_info) in &sorted_interfaces {
         out.push_str(&format!(
@@ -303,4 +348,102 @@ pub(crate) fn emit_runtime_data_user(
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{HashMap, HashSet};
+
+    use crate::parser::ast::Visibility;
+    use crate::types::ClassInfo;
+
+    use super::emit_runtime_data_user;
+
+    fn empty_class_info(class_id: u64, method_name: &str) -> ClassInfo {
+        let mut method_impl_classes = HashMap::new();
+        method_impl_classes.insert(method_name.to_string(), "Exception".to_string());
+
+        let mut vtable_slots = HashMap::new();
+        vtable_slots.insert(method_name.to_string(), 0);
+
+        ClassInfo {
+            class_id,
+            parent: None,
+            is_abstract: false,
+            is_readonly_class: false,
+            properties: Vec::new(),
+            property_offsets: HashMap::new(),
+            property_declaring_classes: HashMap::new(),
+            defaults: Vec::new(),
+            property_visibilities: HashMap::new(),
+            readonly_properties: HashSet::new(),
+            method_decls: Vec::new(),
+            methods: HashMap::new(),
+            static_methods: HashMap::new(),
+            method_visibilities: HashMap::<String, Visibility>::new(),
+            method_declaring_classes: HashMap::new(),
+            method_impl_classes,
+            vtable_methods: vec![method_name.to_string()],
+            vtable_slots,
+            static_method_visibilities: HashMap::new(),
+            static_method_declaring_classes: HashMap::new(),
+            static_method_impl_classes: HashMap::new(),
+            static_vtable_methods: Vec::new(),
+            static_vtable_slots: HashMap::new(),
+            interfaces: Vec::new(),
+            constructor_param_to_prop: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_emit_runtime_data_user_can_filter_built_in_classes() {
+        let mut classes = HashMap::new();
+        classes.insert(
+            "Exception".to_string(),
+            empty_class_info(0, "__construct"),
+        );
+        classes.insert(
+            "UserVisible".to_string(),
+            empty_class_info(1, "run"),
+        );
+
+        let mut allowed_class_names = HashSet::new();
+        allowed_class_names.insert("UserVisible".to_string());
+
+        let asm = emit_runtime_data_user(
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &classes,
+            &HashMap::new(),
+            Some(&allowed_class_names),
+        );
+
+        assert!(asm.contains("_class_vtable_1"));
+        assert!(asm.contains("_method_Exception_run"));
+        assert!(!asm.contains("_class_vtable_0"));
+        assert!(!asm.contains("_method_Exception__construct"));
+    }
+
+    #[test]
+    fn test_emit_runtime_data_user_keeps_dense_class_tables_when_ids_start_at_one() {
+        let mut classes = HashMap::new();
+        classes.insert("Animal".to_string(), empty_class_info(1, "label"));
+        classes.insert("Dog".to_string(), empty_class_info(2, "label"));
+        classes.insert("Cat".to_string(), empty_class_info(3, "label"));
+
+        let asm = emit_runtime_data_user(
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &classes,
+            &HashMap::new(),
+            None,
+        );
+
+        assert!(asm.contains("_class_gc_desc_count:\n    .quad 4\n"));
+        assert!(asm.contains("_class_parent_ids:\n    .quad -1\n    .quad -1\n    .quad -1\n    .quad -1\n"));
+        assert!(asm.contains("_class_vtable_ptrs:\n    .quad _class_vtable_missing\n    .quad _class_vtable_1\n    .quad _class_vtable_2\n    .quad _class_vtable_3\n"));
+        assert!(asm.contains("_class_static_vtable_ptrs:\n    .quad _class_static_vtable_missing\n    .quad _class_static_vtable_1\n    .quad _class_static_vtable_2\n    .quad _class_static_vtable_3\n"));
+    }
 }

@@ -2,6 +2,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -15,12 +16,20 @@ pub fn emit(
     emitter.comment("rad2deg()");
     let ty = emit_expr(&args[0], emitter, ctx, data);
     if ty != PhpType::Float {
-        emitter.instruction("scvtf d0, x0");                                    // convert int to float
+        abi::emit_int_result_to_float_result(emitter);                          // normalize the radian input into the active floating-point result register before applying the conversion factor
     }
     // -- multiply by 180.0 / M_PI to convert radians to degrees --
     let label = data.add_float(180.0 / std::f64::consts::PI);
-    emitter.instruction(&format!("adrp x9, {}@PAGE", label));                   // load page address of conversion factor
-    emitter.instruction(&format!("ldr d1, [x9, {}@PAGEOFF]", label));           // load 180/M_PI into d1
-    emitter.instruction("fmul d0, d0, d1");                                     // multiply radians by conversion factor
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.adrp("x9", &format!("{}", label));                           // load the page address that contains the radian-to-degree conversion constant
+            emitter.ldr_lo12("d1", "x9", &format!("{}", label));                // load the radian-to-degree conversion constant into the secondary AArch64 floating-point register
+            emitter.instruction("fmul d0, d0, d1");                             // multiply the radian input by the conversion constant in the standard AArch64 floating-point result register
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("movsd xmm1, QWORD PTR [rip + {}]", label)); // load the radian-to-degree conversion constant into the secondary x86_64 floating-point register
+            emitter.instruction("mulsd xmm0, xmm1");                            // multiply the radian input by the conversion constant in the standard x86_64 floating-point result register
+        }
+    }
     Some(PhpType::Float)
 }

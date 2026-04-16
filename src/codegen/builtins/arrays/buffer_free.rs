@@ -1,3 +1,4 @@
+use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -14,7 +15,7 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("buffer_free()");
     emit_expr(&args[0], emitter, ctx, data);
-    emitter.instruction("bl __rt_heap_free");                                   // release the buffer header and contiguous payload
+    abi::emit_call_label(emitter, "__rt_heap_free");                            // release the buffer header and contiguous payload through the target-aware heap helper
 
     // -- nullify the local stack slot so use-after-free hits a null check --
     // The type checker restricts buffer_free() to plain local variables only
@@ -26,8 +27,7 @@ pub fn emit(
                 && !ctx.global_vars.contains(var_name)
                 && !ctx.static_vars.contains(var_name)
             {
-                let offset = var.stack_offset;
-                crate::codegen::abi::store_at_offset(emitter, "xzr", offset);   // zero the local stack slot to prevent use-after-free
+                abi::emit_store_zero_to_local_slot(emitter, var.stack_offset);   // zero the local stack slot so subsequent buffer accesses trip the null-buffer fatal helper
             }
         }
     }

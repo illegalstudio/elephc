@@ -1,10 +1,18 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
+
+const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// array_new: create a new array on the heap.
 /// Input: x0 = capacity, x1 = element size (8 or 16)
 /// Output: x0 = pointer to array header
 /// Layout: [length:8][capacity:8][elem_size:8][elements...]
 pub fn emit_array_new(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_array_new_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: array_new ---");
     emitter.label_global("__rt_array_new");
@@ -41,4 +49,38 @@ pub fn emit_array_new(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return with x0 = array pointer
+}
+
+fn emit_array_new_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: array_new ---");
+    emitter.label_global("__rt_array_new");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving local scratch space
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for capacity and element-size bookkeeping
+    emitter.instruction("sub rsp, 16");                                         // reserve local slots for capacity and element size across the heap allocation helper call
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save capacity across the heap allocation helper call
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save element size across the heap allocation helper call
+    emitter.instruction("imul rdi, rsi");                                       // compute the data region size as capacity * elem_size before handing it to the heap wrapper
+    emitter.instruction("add rdi, 24");                                         // include the fixed 24-byte array header in the owned heap allocation size
+    emitter.instruction("mov rax, rdi");                                        // move the total array allocation size into the x86_64 heap helper input register
+    emitter.instruction("call __rt_heap_alloc");                                // allocate the array backing storage through the shared x86_64 heap wrapper
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the element size so the array kind word can encode the string-value layout hint
+    emitter.instruction("cmp r10, 16");                                         // detect string arrays that use 16-byte payload slots
+    emitter.instruction("sete r11b");                                           // materialize the runtime value-type tag for the string-array layout choice
+    emitter.instruction("movzx r11, r11b");                                     // widen the one-byte string-array flag into a full integer register
+    emitter.instruction("shl r11, 8");                                          // move the runtime value-type tag into the packed heap-kind byte lane
+    emitter.instruction("or r11, 0x8000");                                      // mark the array allocation as a copy-on-write heap container
+    emitter.instruction("add r11, 2");                                          // low byte 2 identifies the payload as an indexed array heap object
+    emitter.instruction(&format!("mov r10, 0x{:x}", X86_64_HEAP_MAGIC_HI32 << 32)); // materialize the x86_64 heap marker in a scratch register before combining it with the packed array kind bits
+    emitter.instruction("or r11, r10");                                         // add the x86_64 heap marker while preserving the packed array kind bits
+    emitter.instruction("mov QWORD PTR [rax - 8], r11");                        // stamp the allocated payload as an indexed array in the uniform heap header
+    emitter.instruction("mov QWORD PTR [rax], 0");                              // header[0]: length = 0 (array starts empty)
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload capacity after heap_alloc clobbered caller-saved registers
+    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // header[8]: capacity = original capacity argument
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload elem_size after heap_alloc clobbered caller-saved registers
+    emitter.instruction("mov QWORD PTR [rax + 16], r10");                       // header[16]: elem_size = original element-size argument
+    emitter.instruction("add rsp, 16");                                         // release the temporary capacity and element-size spill slots
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
+    emitter.instruction("ret");                                                 // return the array pointer in rax
 }

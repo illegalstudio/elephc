@@ -30,7 +30,7 @@ This produces a native binary called `hello` in the same directory. Run it:
 Hello, World!
 ```
 
-That's it — a standalone macOS binary, no PHP interpreter needed.
+That's it — a standalone native binary, no PHP interpreter needed.
 
 ## A slightly bigger example
 
@@ -92,9 +92,9 @@ When you run `elephc hello.php`, the compiler:
 2. **Parses** tokens into an AST (Abstract Syntax Tree)
 3. **Resolves** includes and namespaces
 4. **Type-checks** the program
-5. **Generates** ARM64 assembly
+5. **Generates** assembly for the selected target
 6. **Assembles** the `.s` file with `as`
-7. **Links** the `.o` file with `ld` into a native Mach-O binary
+7. **Links** the `.o` file with `ld` into a native executable
 
 The intermediate `.s` and `.o` files are cleaned up automatically. You're left with a single executable.
 

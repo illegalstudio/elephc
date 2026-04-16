@@ -20,25 +20,22 @@ pub fn emit(
 
         // -- free old heap value before unsetting --
         if matches!(&old_ty, PhpType::Str) {
-            abi::load_at_offset(emitter, "x0", offset);                          // load heap pointer from variable
-            emitter.instruction("bl __rt_heap_free_safe");                      // free old string if on heap
+            abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset); // load the previous heap pointer from the variable slot
+            abi::emit_call_label(emitter, "__rt_heap_free_safe");               // free old string storage when the previous value is heap-backed
         } else if matches!(&old_ty, PhpType::Array(_)) {
-            abi::load_at_offset(emitter, "x0", offset);                          // load heap pointer from variable
-            emitter.instruction("bl __rt_decref_array");                        // decrement refcount, deep-free if zero
+            abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset); // load the previous heap pointer from the variable slot
+            abi::emit_call_label(emitter, "__rt_decref_array");                 // decrement the array refcount and deep-free when it reaches zero
         } else if matches!(&old_ty, PhpType::AssocArray { .. }) {
-            abi::load_at_offset(emitter, "x0", offset);                          // load heap pointer from variable
-            emitter.instruction("bl __rt_decref_hash");                         // decrement refcount, free hash if zero
+            abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset); // load the previous heap pointer from the variable slot
+            abi::emit_call_label(emitter, "__rt_decref_hash");                  // decrement the hash refcount and deep-free when it reaches zero
         } else if matches!(&old_ty, PhpType::Object(_)) {
-            abi::load_at_offset(emitter, "x0", offset);                          // load heap pointer from variable
-            emitter.instruction("bl __rt_decref_object");                       // decrement refcount, free object if zero
+            abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset); // load the previous heap pointer from the variable slot
+            abi::emit_call_label(emitter, "__rt_decref_object");                // decrement the object refcount and deep-free when it reaches zero
         }
 
         // -- set variable to null sentinel value (0x7FFFFFFFFFFFFFFFE) --
-        emitter.instruction("movz x0, #0xFFFE");                                // load null sentinel bits [15:0]
-        emitter.instruction("movk x0, #0xFFFF, lsl #16");                       // load null sentinel bits [31:16]
-        emitter.instruction("movk x0, #0xFFFF, lsl #32");                       // load null sentinel bits [47:32]
-        emitter.instruction("movk x0, #0x7FFF, lsl #48");                       // load null sentinel bits [63:48]
-        abi::store_at_offset(emitter, "x0", offset);                              // store null sentinel to variable's stack slot
+        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), i64::MAX - 1); // materialize the shared null sentinel in the target integer result register
+        abi::store_at_offset(emitter, abi::int_result_reg(emitter), offset);     // store the null sentinel back into the variable slot
         ctx.update_var_type_and_ownership(name, PhpType::Void, HeapOwnership::NonHeap);
     }
     Some(PhpType::Void)

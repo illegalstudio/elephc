@@ -2,6 +2,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -16,6 +17,6 @@ pub fn emit(
     // -- evaluate the environment variable name string --
     emit_expr(&args[0], emitter, ctx, data);
     // -- convert to C string and call getenv --
-    emitter.instruction("bl __rt_getenv");                                      // get env var: x1/x2=name → x1=ptr, x2=len
+    abi::emit_call_label(emitter, "__rt_getenv");                               // get env var through the target-aware runtime helper → ptr/len result regs
     Some(PhpType::Str)
 }

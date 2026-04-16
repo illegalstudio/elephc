@@ -2,6 +2,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -26,11 +27,11 @@ pub fn emit(
         // -- push current minimum onto stack --
         if any_float {
             if i == 1 && t0 != PhpType::Float {
-                emitter.instruction("scvtf d0, x0");                            // convert first arg int to float
+                abi::emit_int_result_to_float_result(emitter);                  // normalize the first min() operand into the active floating-point result register before it becomes the running floating minimum
             }
-            emitter.instruction("str d0, [sp, #-16]!");                         // push current min as float
+            abi::emit_push_float_reg(emitter, abi::float_result_reg(emitter));  // preserve the current floating minimum while the next candidate expression is evaluated
         } else {
-            emitter.instruction("str x0, [sp, #-16]!");                         // push current min as int
+            abi::emit_push_reg(emitter, abi::int_result_reg(emitter));          // preserve the current integer minimum while the next candidate expression is evaluated
         }
 
         let ti = emit_expr(arg, emitter, ctx, data);
@@ -38,22 +39,53 @@ pub fn emit(
         if any_float || ti == PhpType::Float {
             // -- float comparison path --
             if ti != PhpType::Float {
-                emitter.instruction("scvtf d0, x0");                            // convert new arg to float
+                abi::emit_int_result_to_float_result(emitter);                  // normalize the new min() candidate into the active floating-point result register before the floating comparison
             }
             if !any_float {
-                // Previous was int on stack, need to convert
-                emitter.instruction("ldr x9, [sp], #16");                       // pop previous min as int
-                emitter.instruction("scvtf d1, x9");                            // convert previous min to float
+                match emitter.target.arch {
+                    Arch::AArch64 => {
+                        abi::emit_pop_reg(emitter, "x9");                       // restore the previous integer minimum before promoting it into the floating comparison path
+                        emitter.instruction("scvtf d1, x9");                    // convert the previous integer minimum into the secondary AArch64 floating-point scratch register
+                    }
+                    Arch::X86_64 => {
+                        abi::emit_pop_reg(emitter, "r9");                       // restore the previous integer minimum before promoting it into the floating comparison path
+                        emitter.instruction("cvtsi2sd xmm1, r9");               // convert the previous integer minimum into the secondary x86_64 floating-point scratch register
+                    }
+                }
             } else {
-                emitter.instruction("ldr d1, [sp], #16");                       // pop previous min as float
+                match emitter.target.arch {
+                    Arch::AArch64 => {
+                        abi::emit_pop_float_reg(emitter, "d1");                 // restore the previous floating minimum into the secondary AArch64 floating-point scratch register
+                    }
+                    Arch::X86_64 => {
+                        abi::emit_pop_float_reg(emitter, "xmm1");               // restore the previous floating minimum into the secondary x86_64 floating-point scratch register
+                    }
+                }
             }
-            emitter.instruction("fmin d0, d1, d0");                             // d0 = minimum of d1 and d0
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("fmin d0, d1, d0");                     // compute the smaller of the previous and new floating candidates in the standard AArch64 floating-point result register
+                }
+                Arch::X86_64 => {
+                    emitter.instruction("minsd xmm1, xmm0");                    // compute the smaller of the previous and new floating candidates in the secondary x86_64 floating-point scratch register
+                    emitter.instruction("movsd xmm0, xmm1");                    // move the updated floating minimum back into the standard x86_64 floating-point result register
+                }
+            }
             any_float = true;
         } else {
             // -- integer comparison path --
-            emitter.instruction("ldr x1, [sp], #16");                           // pop previous min into x1
-            emitter.instruction("cmp x1, x0");                                  // compare previous min with new arg
-            emitter.instruction("csel x0, x1, x0, lt");                         // select smaller value
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("ldr x1, [sp], #16");                   // restore the previous integer minimum into the AArch64 scratch register before the scalar comparison
+                    emitter.instruction("cmp x1, x0");                          // compare the previous integer minimum against the new integer candidate
+                    emitter.instruction("csel x0, x1, x0, lt");                 // select the smaller integer value into the standard AArch64 integer result register
+                }
+                Arch::X86_64 => {
+                    abi::emit_pop_reg(emitter, "r9");                           // restore the previous integer minimum into a scratch register before the scalar comparison
+                    emitter.instruction("cmp r9, rax");                         // compare the previous integer minimum against the new integer candidate
+                    emitter.instruction("cmovl rax, r9");                       // keep the smaller integer value in the standard x86_64 integer result register
+                }
+            }
         }
     }
 

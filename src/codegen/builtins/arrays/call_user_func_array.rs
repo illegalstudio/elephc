@@ -21,13 +21,26 @@ fn emit_array_value_type_stamp(emitter: &mut Emitter, array_reg: &str, elem_ty: 
         PhpType::Void => 8,
         _ => return,
     };
-    emitter.instruction(&format!("ldr x10, [{}, #-8]", array_reg));             // load the packed array kind word from the heap header
-    emitter.instruction("mov x12, #0x80ff");                                    // preserve the indexed-array kind and persistent COW flag
-    emitter.instruction("and x10, x10, x12");                                   // keep only the persistent indexed-array metadata bits
-    emitter.instruction(&format!("mov x11, #{}", value_type_tag));              // materialize the runtime array value_type tag
-    emitter.instruction("lsl x11, x11, #8");                                    // move the value_type tag into the packed kind-word byte lane
-    emitter.instruction("orr x10, x10, x11");                                   // combine the heap kind with the array value_type tag
-    emitter.instruction(&format!("str x10, [{}, #-8]", array_reg));             // persist the packed array kind word in the heap header
+    match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x10, [{}, #-8]", array_reg));     // load the packed array kind word from the heap header
+            emitter.instruction("mov x12, #0x80ff");                            // preserve the indexed-array kind and persistent COW flag
+            emitter.instruction("and x10, x10, x12");                           // keep only the persistent indexed-array metadata bits
+            emitter.instruction(&format!("mov x11, #{}", value_type_tag));      // materialize the runtime array value_type tag
+            emitter.instruction("lsl x11, x11, #8");                            // move the value_type tag into the packed kind-word byte lane
+            emitter.instruction("orr x10, x10, x11");                           // combine the heap kind with the array value_type tag
+            emitter.instruction(&format!("str x10, [{}, #-8]", array_reg));     // persist the packed array kind word in the heap header
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            emitter.instruction(&format!("mov r10, QWORD PTR [{} - 8]", array_reg)); // load the packed array kind word from the heap header
+            emitter.instruction("mov r11, 0x80ff");                             // preserve the indexed-array kind and persistent COW flag
+            emitter.instruction("and r10, r11");                                // keep only the persistent indexed-array metadata bits
+            emitter.instruction(&format!("mov rcx, {}", value_type_tag));       // materialize the runtime array value_type tag
+            emitter.instruction("shl rcx, 8");                                  // move the value_type tag into the packed kind-word byte lane
+            emitter.instruction("or r10, rcx");                                 // combine the heap kind with the array value_type tag
+            emitter.instruction(&format!("mov QWORD PTR [{} - 8], r10", array_reg)); // persist the packed array kind word in the heap header
+        }
+    }
 }
 
 pub fn emit(
@@ -38,6 +51,22 @@ pub fn emit(
     data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("call_user_func_array()");
+    let save_concat_before_args =
+        emitter.target.arch == crate::codegen::platform::Arch::X86_64;
+    if save_concat_before_args {
+        crate::codegen::expr::save_concat_offset_before_nested_call(emitter, ctx);
+    }
+    let call_reg = abi::nested_call_reg(emitter);
+    let result_reg = abi::int_result_reg(emitter);
+    let (array_reg, len_reg, tail_count_reg, tail_index_reg, index_reg, offset_reg, data_reg, peek_reg, array_new_capacity_reg, array_new_elem_size_reg, len_store_reg) =
+        match emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => (
+                "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x9", "x0", "x1", "x10"
+            ),
+            crate::codegen::platform::Arch::X86_64 => (
+                "r13", "r14", "r15", "rbx", "rcx", "r8", "r9", "r11", "rdi", "rsi", "r10"
+            ),
+        };
 
     // -- resolve callback function address and signature --
     let is_callable_expr = matches!(
@@ -46,7 +75,7 @@ pub fn emit(
     );
     let sig = if is_callable_expr {
         emit_expr(&args[0], emitter, ctx, data);
-        emitter.instruction("mov x19, x0");                                     // move synthesized callback address to x19
+        emitter.instruction(&format!("mov {}, {}", call_reg, result_reg));      // move the synthesized callback address into the nested-call scratch register
         ctx.deferred_closures
             .last()
             .expect("call_user_func_array: missing synthesized callable signature")
@@ -55,7 +84,7 @@ pub fn emit(
     } else if let ExprKind::Variable(var_name) = &args[0].kind {
         let var = ctx.variables.get(var_name).expect("undefined callback variable");
         let offset = var.stack_offset;
-        abi::load_at_offset(emitter, "x19", offset);                                // load callback address from callable variable
+        abi::load_at_offset(emitter, call_reg, offset);                          // load the callback address from the callable variable slot
         ctx.closure_sigs
             .get(var_name)
             .expect("call_user_func_array: callable variable signature not found")
@@ -66,8 +95,7 @@ pub fn emit(
             _ => panic!("call_user_func_array() callback must be a string literal, callable expression, or callable variable"),
         };
         let label = function_symbol(&func_name);
-        emitter.instruction(&format!("adrp x19, {}@PAGE", label));              // load page address of callback function
-        emitter.instruction(&format!("add x19, x19, {}@PAGEOFF", label));       // resolve full address of callback
+        abi::emit_symbol_address(emitter, call_reg, &label);
         ctx.functions
             .get(&func_name)
             .expect("call_user_func_array: function not found")
@@ -85,8 +113,8 @@ pub fn emit(
     };
     let elem_size = args::array_element_stride(&elem_ty);
 
-    emitter.instruction("mov x20, x0");                                         // preserve the callback-argument array pointer across element boxing
-    emitter.instruction("ldr x21, [x20]");                                      // load callback-argument array length
+    emitter.instruction(&format!("mov {}, {}", array_reg, abi::int_result_reg(emitter))); // preserve the callback-argument array pointer across element boxing
+    abi::emit_load_from_address(emitter, len_reg, array_reg, 0);                // load callback-argument array length
 
     // -- extract elements from array and push them as regular call arguments --
     let mut arg_types = Vec::new();
@@ -109,19 +137,31 @@ pub fn emit(
         if let Some(default_expr) = sig.defaults.get(i).and_then(|d| d.as_ref()) {
             let load_label = ctx.next_label("cufa_load_arg");
             let done_label = ctx.next_label("cufa_arg_done");
-            emitter.instruction(&format!("cmp x21, #{}", i + 1));               // compare provided array length against required positional index
-            emitter.instruction(&format!("b.ge {}", load_label));               // load an explicit array element when present
+            match emitter.target.arch {
+                crate::codegen::platform::Arch::AArch64 => {
+                    emitter.instruction(&format!("cmp {}, #{}", len_reg, i + 1)); // compare provided array length against required positional index
+                }
+                crate::codegen::platform::Arch::X86_64 => {
+                    emitter.instruction(&format!("cmp {}, {}", len_reg, i + 1)); // compare provided array length against required positional index
+                }
+            }
+            match emitter.target.arch {
+                crate::codegen::platform::Arch::AArch64 => {
+                    emitter.instruction(&format!("b.ge {}", load_label));       // load an explicit array element when present
+                }
+                crate::codegen::platform::Arch::X86_64 => {
+                    emitter.instruction(&format!("jge {}", load_label));        // load an explicit array element when present
+                }
+            }
             let _ = args::push_expr_arg(default_expr, target_ty, emitter, ctx, data);
-            emitter.instruction(&format!("b {}", done_label));                  // skip the explicit-element path after pushing the default
+            abi::emit_jump(emitter, &done_label);
             emitter.label(&load_label);
-            emitter.instruction("add x9, x20, #24");                            // point x9 at the callback-argument array payload
-            args::load_array_element_to_result(emitter, &elem_ty, "x9", i * elem_size);
+            args::load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + i * elem_size);
             let _ =
                 args::push_loaded_array_element_arg(&elem_ty, target_ty, emitter, ctx, data);
             emitter.label(&done_label);
         } else {
-            emitter.instruction("add x9, x20, #24");                            // point x9 at the callback-argument array payload
-            args::load_array_element_to_result(emitter, &elem_ty, "x9", i * elem_size);
+            args::load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + i * elem_size);
             let _ =
                 args::push_loaded_array_element_arg(&elem_ty, target_ty, emitter, ctx, data);
         }
@@ -139,50 +179,126 @@ pub fn emit(
             .unwrap_or_else(|| elem_ty.clone());
         let build_label = ctx.next_label("cufa_build_variadic");
         let done_label = ctx.next_label("cufa_variadic_done");
-        emitter.instruction(&format!("cmp x21, #{}", regular_param_count));     // compare provided array length against the fixed arity prefix
-        emitter.instruction(&format!("b.gt {}", build_label));                  // build a tail array only when extra positional elements exist
+        match emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => {
+                emitter.instruction(&format!("cmp {}, #{}", len_reg, regular_param_count)); // compare provided array length against the fixed arity prefix
+            }
+            crate::codegen::platform::Arch::X86_64 => {
+                emitter.instruction(&format!("cmp {}, {}", len_reg, regular_param_count)); // compare provided array length against the fixed arity prefix
+            }
+        }
+        match emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => {
+                emitter.instruction(&format!("b.gt {}", build_label));          // build a tail array only when extra positional elements exist
+            }
+            crate::codegen::platform::Arch::X86_64 => {
+                emitter.instruction(&format!("jg {}", build_label));            // build a tail array only when extra positional elements exist
+            }
+        }
         emitter.comment("empty variadic array for call_user_func_array()");
-        emitter.instruction("mov x0, #4");                                      // initial capacity: 4 (grows dynamically)
-        emitter.instruction(&format!("mov x1, #{}", variadic_elem_ty.stack_size())); //element size in bytes for the variadic array
-        emitter.instruction("bl __rt_array_new");                               // allocate an empty variadic array
-        emitter.instruction("str x0, [sp, #-16]!");                             // push the empty variadic array onto the stack
-        emitter.instruction(&format!("b {}", done_label));                      // skip the non-empty variadic array builder
+        abi::emit_load_int_immediate(emitter, array_new_capacity_reg, 4);
+        abi::emit_load_int_immediate(emitter, array_new_elem_size_reg, variadic_elem_ty.stack_size() as i64);
+        abi::emit_call_label(emitter, "__rt_array_new");
+        abi::emit_push_reg(emitter, abi::int_result_reg(emitter));              // push the empty variadic array onto the temporary arg stack
+        abi::emit_jump(emitter, &done_label);
 
         emitter.label(&build_label);
-        emitter.instruction(&format!("sub x22, x21, #{}", regular_param_count)); //compute the count of variadic tail arguments
-        emitter.instruction("mov x0, x22");                                     // pass the exact tail argument count as the initial capacity
-        emitter.instruction(&format!("mov x1, #{}", variadic_elem_ty.stack_size())); //pass the variadic element size in bytes
-        emitter.instruction("bl __rt_array_new");                               // allocate the variadic array storage
-        emitter.instruction("str x0, [sp, #-16]!");                             // keep the variadic array pointer on the stack while filling it
-        emitter.instruction("mov x9, x0");                                      // copy the variadic array pointer into a scratch register for metadata stamping
-        emit_array_value_type_stamp(emitter, "x9", &variadic_elem_ty);           // stamp the array header with the variadic element runtime tag
-        emitter.instruction("mov x23, #0");                                     // start the variadic tail index at zero
+        match emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => {
+                emitter.instruction(&format!("sub {}, {}, #{}", tail_count_reg, len_reg, regular_param_count)); // compute the count of variadic tail arguments
+            }
+            crate::codegen::platform::Arch::X86_64 => {
+                emitter.instruction(&format!("mov {}, {}", tail_count_reg, len_reg)); // seed the tail count from the provided array length
+                emitter.instruction(&format!("sub {}, {}", tail_count_reg, regular_param_count)); // compute the count of variadic tail arguments
+            }
+        }
+        emitter.instruction(&format!("mov {}, {}", array_new_capacity_reg, tail_count_reg)); // pass the exact tail argument count as the initial capacity
+        abi::emit_load_int_immediate(emitter, array_new_elem_size_reg, variadic_elem_ty.stack_size() as i64);
+        abi::emit_call_label(emitter, "__rt_array_new");
+        abi::emit_push_reg(emitter, abi::int_result_reg(emitter));              // keep the variadic array pointer on the stack while filling it
+        emitter.instruction(&format!("mov {}, {}", peek_reg, abi::int_result_reg(emitter))); // copy the variadic array pointer into a scratch register for metadata stamping
+        emit_array_value_type_stamp(emitter, peek_reg, &variadic_elem_ty);      // stamp the array header with the variadic element runtime tag
+        abi::emit_load_int_immediate(emitter, tail_index_reg, 0);
         let loop_label = ctx.next_label("cufa_variadic_loop");
         let loop_done_label = ctx.next_label("cufa_variadic_loop_done");
         emitter.label(&loop_label);
-        emitter.instruction("cmp x23, x22");                                    // stop once every tail element has been copied
-        emitter.instruction(&format!("b.ge {}", loop_done_label));              // exit the fill loop when the tail array is complete
-        emitter.instruction("add x24, x23, #0");                                // copy the tail index into a scratch register
-        if regular_param_count > 0 {
-            emitter.instruction(&format!("add x24, x24, #{}", regular_param_count)); //offset the tail index by the fixed-arity prefix length
+        emitter.instruction(&format!("cmp {}, {}", tail_index_reg, tail_count_reg)); // stop once every tail element has been copied
+        match emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => {
+                emitter.instruction(&format!("b.ge {}", loop_done_label));      // exit the fill loop when the tail array is complete
+            }
+            crate::codegen::platform::Arch::X86_64 => {
+                emitter.instruction(&format!("jge {}", loop_done_label));       // exit the fill loop when the tail array is complete
+            }
         }
-        emitter.instruction("add x26, x20, #24");                               // point x26 at the callback-argument array payload
+        emitter.instruction(&format!("mov {}, {}", index_reg, tail_index_reg)); // copy the tail index into a scratch register
+        if regular_param_count > 0 {
+            match emitter.target.arch {
+                crate::codegen::platform::Arch::AArch64 => {
+                    emitter.instruction(&format!("add {}, {}, #{}", index_reg, index_reg, regular_param_count)); // offset the tail index by the fixed-arity prefix length
+                }
+                crate::codegen::platform::Arch::X86_64 => {
+                    emitter.instruction(&format!("add {}, {}", index_reg, regular_param_count)); // offset the tail index by the fixed-arity prefix length
+                }
+            }
+        }
+        emitter.instruction(&format!("mov {}, {}", data_reg, array_reg));       // start from the callback-argument array pointer before indexing into payload data
+        match emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => {
+                emitter.instruction(&format!("add {}, {}, #24", data_reg, data_reg)); // skip the fixed array header before indexing variadic source elements
+            }
+            crate::codegen::platform::Arch::X86_64 => {
+                emitter.instruction(&format!("add {}, 24", data_reg));          // skip the fixed array header before indexing variadic source elements
+            }
+        }
         match elem_ty.codegen_repr() {
             PhpType::Str => {
-                emitter.instruction("lsl x25, x24, #4");                        // compute the 16-byte source slot offset for a string element
-                emitter.instruction("add x26, x26, x25");                       // advance x26 to the selected source string element
-                emitter.instruction("ldp x1, x2, [x26]");                       // load the source string pointer and length pair
+                match emitter.target.arch {
+                    crate::codegen::platform::Arch::AArch64 => {
+                        emitter.instruction(&format!("lsl {}, {}, #4", offset_reg, index_reg)); // compute the 16-byte source slot offset for a string element
+                        emitter.instruction(&format!("add {}, {}, {}", data_reg, data_reg, offset_reg)); // advance to the selected source string element
+                        let (ptr_reg, len_reg_out) = abi::string_result_regs(emitter);
+                        abi::emit_load_from_address(emitter, ptr_reg, data_reg, 0);
+                        abi::emit_load_from_address(emitter, len_reg_out, data_reg, 8);
+                    }
+                    crate::codegen::platform::Arch::X86_64 => {
+                        emitter.instruction(&format!("mov {}, {}", offset_reg, index_reg)); // copy the element index before scaling to bytes
+                        emitter.instruction(&format!("shl {}, 4", offset_reg)); // compute the 16-byte source slot offset for a string element
+                        emitter.instruction(&format!("add {}, {}", data_reg, offset_reg)); // advance to the selected source string element
+                        let (ptr_reg, len_reg_out) = abi::string_result_regs(emitter);
+                        abi::emit_load_from_address(emitter, ptr_reg, data_reg, 0);
+                        abi::emit_load_from_address(emitter, len_reg_out, data_reg, 8);
+                    }
+                }
             }
             PhpType::Float => {
-                emitter.instruction("lsl x25, x24, #3");                        // compute the 8-byte source slot offset for a float element
-                emitter.instruction("add x26, x26, x25");                       // advance x26 to the selected source float element
-                emitter.instruction("ldr d0, [x26]");                           // load the source float element
+                match emitter.target.arch {
+                    crate::codegen::platform::Arch::AArch64 => {
+                        emitter.instruction(&format!("lsl {}, {}, #3", offset_reg, index_reg)); // compute the 8-byte source slot offset for a float element
+                        emitter.instruction(&format!("add {}, {}, {}", data_reg, data_reg, offset_reg)); // advance to the selected source float element
+                    }
+                    crate::codegen::platform::Arch::X86_64 => {
+                        emitter.instruction(&format!("mov {}, {}", offset_reg, index_reg)); // copy the element index before scaling to bytes
+                        emitter.instruction(&format!("shl {}, 3", offset_reg)); // compute the 8-byte source slot offset for a float element
+                        emitter.instruction(&format!("add {}, {}", data_reg, offset_reg)); // advance to the selected source float element
+                    }
+                }
+                abi::emit_load_from_address(emitter, abi::float_result_reg(emitter), data_reg, 0);
             }
             PhpType::Void => {}
             _ => {
-                emitter.instruction("lsl x25, x24, #3");                        // compute the 8-byte source slot offset for a scalar or boxed element
-                emitter.instruction("add x26, x26, x25");                       // advance x26 to the selected source scalar element
-                emitter.instruction("ldr x0, [x26]");                           // load the source scalar or boxed element
+                match emitter.target.arch {
+                    crate::codegen::platform::Arch::AArch64 => {
+                        emitter.instruction(&format!("lsl {}, {}, #3", offset_reg, index_reg)); // compute the 8-byte source slot offset for a scalar or boxed element
+                        emitter.instruction(&format!("add {}, {}, {}", data_reg, data_reg, offset_reg)); // advance to the selected source scalar element
+                    }
+                    crate::codegen::platform::Arch::X86_64 => {
+                        emitter.instruction(&format!("mov {}, {}", offset_reg, index_reg)); // copy the element index before scaling to bytes
+                        emitter.instruction(&format!("shl {}, 3", offset_reg)); // compute the 8-byte source slot offset for a scalar or boxed element
+                        emitter.instruction(&format!("add {}, {}", data_reg, offset_reg)); // advance to the selected source scalar element
+                    }
+                }
+                abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), data_reg, 0);
             }
         }
         let (stored_ty, boxed_to_mixed) = args::coerce_current_value_to_target(
@@ -195,7 +311,14 @@ pub fn emit(
         if !boxed_to_mixed {
             abi::emit_incref_if_refcounted(emitter, &elem_ty.codegen_repr());   // retain refcounted tail elements copied into the new variadic array
         }
-        emitter.instruction("ldr x9, [sp]");                                    // reload the variadic array pointer from the stack
+        match emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => {
+                emitter.instruction(&format!("ldr {}, [sp]", peek_reg));        // reload the variadic array pointer from the stack
+            }
+            crate::codegen::platform::Arch::X86_64 => {
+                emitter.instruction(&format!("mov {}, QWORD PTR [rsp]", peek_reg)); // reload the variadic array pointer from the stack
+            }
+        }
         match stored_ty {
             PhpType::Int
             | PhpType::Bool
@@ -208,44 +331,94 @@ pub fn emit(
             | PhpType::Packed(_)
             | PhpType::Pointer(_)
             | PhpType::Union(_) => {
-                emitter.instruction("add x10, x9, #24");                        // point x10 at the variadic array payload
-                emitter.instruction("lsl x11, x23, #3");                        // compute the 8-byte destination slot offset
-                emitter.instruction("add x10, x10, x11");                       // advance to the selected variadic destination slot
-                emitter.instruction("str x0, [x10]");                           // store the scalar or boxed tail element
+                let dest_reg = len_store_reg;
+                emitter.instruction(&format!("mov {}, {}", dest_reg, peek_reg)); // point at the variadic array before skipping the header
+                match emitter.target.arch {
+                    crate::codegen::platform::Arch::AArch64 => {
+                        emitter.instruction(&format!("add {}, {}, #24", dest_reg, dest_reg)); // point at the variadic array payload
+                        emitter.instruction(&format!("lsl {}, {}, #3", offset_reg, tail_index_reg)); // compute the 8-byte destination slot offset
+                        emitter.instruction(&format!("add {}, {}, {}", dest_reg, dest_reg, offset_reg)); // advance to the selected variadic destination slot
+                    }
+                    crate::codegen::platform::Arch::X86_64 => {
+                        emitter.instruction(&format!("add {}, 24", dest_reg));  // point at the variadic array payload
+                        emitter.instruction(&format!("mov {}, {}", offset_reg, tail_index_reg)); // copy the destination index before scaling
+                        emitter.instruction(&format!("shl {}, 3", offset_reg)); // compute the 8-byte destination slot offset
+                        emitter.instruction(&format!("add {}, {}", dest_reg, offset_reg)); // advance to the selected variadic destination slot
+                    }
+                }
+                abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), dest_reg, 0);
             }
             PhpType::Float => {
-                emitter.instruction("add x10, x9, #24");                        // point x10 at the variadic array payload
-                emitter.instruction("lsl x11, x23, #3");                        // compute the 8-byte destination slot offset
-                emitter.instruction("add x10, x10, x11");                       // advance to the selected variadic destination slot
-                emitter.instruction("str d0, [x10]");                           // store the float tail element
+                let dest_reg = len_store_reg;
+                emitter.instruction(&format!("mov {}, {}", dest_reg, peek_reg)); // point at the variadic array before skipping the header
+                match emitter.target.arch {
+                    crate::codegen::platform::Arch::AArch64 => {
+                        emitter.instruction(&format!("add {}, {}, #24", dest_reg, dest_reg)); // point at the variadic array payload
+                        emitter.instruction(&format!("lsl {}, {}, #3", offset_reg, tail_index_reg)); // compute the 8-byte destination slot offset
+                        emitter.instruction(&format!("add {}, {}, {}", dest_reg, dest_reg, offset_reg)); // advance to the selected variadic destination slot
+                    }
+                    crate::codegen::platform::Arch::X86_64 => {
+                        emitter.instruction(&format!("add {}, 24", dest_reg));  // point at the variadic array payload
+                        emitter.instruction(&format!("mov {}, {}", offset_reg, tail_index_reg)); // copy the destination index before scaling
+                        emitter.instruction(&format!("shl {}, 3", offset_reg)); // compute the 8-byte destination slot offset
+                        emitter.instruction(&format!("add {}, {}", dest_reg, offset_reg)); // advance to the selected variadic destination slot
+                    }
+                }
+                abi::emit_store_to_address(emitter, abi::float_result_reg(emitter), dest_reg, 0);
             }
             PhpType::Str => {
-                emitter.instruction("add x10, x9, #24");                        // point x10 at the variadic array payload
-                emitter.instruction("lsl x11, x23, #4");                        // compute the 16-byte destination slot offset
-                emitter.instruction("add x10, x10, x11");                       // advance to the selected variadic destination slot
-                emitter.instruction("stp x1, x2, [x10]");                       // store the string pointer and length pair
+                let dest_reg = len_store_reg;
+                let (ptr_reg, len_reg_out) = abi::string_result_regs(emitter);
+                emitter.instruction(&format!("mov {}, {}", dest_reg, peek_reg)); // point at the variadic array before skipping the header
+                match emitter.target.arch {
+                    crate::codegen::platform::Arch::AArch64 => {
+                        emitter.instruction(&format!("add {}, {}, #24", dest_reg, dest_reg)); // point at the variadic array payload
+                        emitter.instruction(&format!("lsl {}, {}, #4", offset_reg, tail_index_reg)); // compute the 16-byte destination slot offset
+                        emitter.instruction(&format!("add {}, {}, {}", dest_reg, dest_reg, offset_reg)); // advance to the selected variadic destination slot
+                    }
+                    crate::codegen::platform::Arch::X86_64 => {
+                        emitter.instruction(&format!("add {}, 24", dest_reg));  // point at the variadic array payload
+                        emitter.instruction(&format!("mov {}, {}", offset_reg, tail_index_reg)); // copy the destination index before scaling
+                        emitter.instruction(&format!("shl {}, 4", offset_reg)); // compute the 16-byte destination slot offset
+                        emitter.instruction(&format!("add {}, {}", dest_reg, offset_reg)); // advance to the selected variadic destination slot
+                    }
+                }
+                abi::emit_store_to_address(emitter, ptr_reg, dest_reg, 0);
+                abi::emit_store_to_address(emitter, len_reg_out, dest_reg, 8);
             }
             PhpType::Void => {}
         }
-        emitter.instruction("add x23, x23, #1");                                // advance to the next tail element
-        emitter.instruction("str x23, [x9]");                                   // persist the updated variadic array length
-        emitter.instruction(&format!("b {}", loop_label));                      // continue filling the variadic array
+        match emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => {
+                emitter.instruction(&format!("add {}, {}, #1", tail_index_reg, tail_index_reg)); // advance to the next tail element
+            }
+            crate::codegen::platform::Arch::X86_64 => {
+                emitter.instruction(&format!("add {}, 1", tail_index_reg));     // advance to the next tail element
+            }
+        }
+        abi::emit_store_to_address(emitter, tail_index_reg, peek_reg, 0);       // persist the updated variadic array length
+        abi::emit_jump(emitter, &loop_label);
         emitter.label(&loop_done_label);
         emitter.label(&done_label);
         arg_types.push(PhpType::Array(Box::new(variadic_elem_ty)));
     }
 
-    let assignments = args::build_arg_assignments(&arg_types, 0);
-    let overflow_bytes = args::materialize_call_args(emitter, &assignments, arg_types.len());
+    let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, &arg_types, 0);
+    let overflow_bytes = abi::materialize_outgoing_args(emitter, &assignments);
 
     let ret_ty = sig.return_type.clone();
 
     // -- call callback via the resolved address in x19 --
-    crate::codegen::expr::save_concat_offset_before_nested_call(emitter);
-    emitter.instruction("blr x19");                                             // call callback via indirect branch
-    crate::codegen::expr::restore_concat_offset_after_nested_call(emitter, &ret_ty);
-    if overflow_bytes > 0 {
-        emitter.instruction(&format!("add sp, sp, #{}", overflow_bytes));       // drop spilled stack callback arguments after the indirect call returns
+    if !save_concat_before_args {
+        crate::codegen::expr::save_concat_offset_before_nested_call(emitter, ctx);
+    }
+    abi::emit_call_reg(emitter, call_reg);
+    if save_concat_before_args {
+        abi::emit_release_temporary_stack(emitter, overflow_bytes);
+        crate::codegen::expr::restore_concat_offset_after_nested_call(emitter, ctx, &ret_ty);
+    } else {
+        crate::codegen::expr::restore_concat_offset_after_nested_call(emitter, ctx, &ret_ty);
+        abi::emit_release_temporary_stack(emitter, overflow_bytes);
     }
 
     Some(ret_ty)

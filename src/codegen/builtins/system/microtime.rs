@@ -1,3 +1,4 @@
+use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -12,6 +13,6 @@ pub fn emit(
     _data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("microtime(true)");
-    emitter.instruction("bl __rt_microtime");                                   // call runtime: get current time as float seconds → d0
+    abi::emit_call_label(emitter, "__rt_microtime");                            // call the target-aware runtime helper that returns the current Unix timestamp with microsecond precision in the native float result register
     Some(PhpType::Float)
 }

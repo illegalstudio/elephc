@@ -1,3 +1,4 @@
+use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -13,9 +14,8 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("sys_get_temp_dir()");
     let (lbl, len) = data.add_string(b"/tmp");
-    // -- load "/tmp" string literal --
-    emitter.instruction(&format!("adrp x1, {}@PAGE", lbl));                     // load "/tmp" string page address
-    emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", lbl));               // resolve "/tmp" string offset
-    emitter.instruction(&format!("mov x2, #{}", len));                          // string length = 4
+    let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+    abi::emit_symbol_address(emitter, ptr_reg, &lbl);                           // materialize the hardcoded temp-directory string in the active string-pointer result register
+    abi::emit_load_int_immediate(emitter, len_reg, len as i64);                 // publish the hardcoded temp-directory string length in the paired string-length result register
     Some(PhpType::Str)
 }

@@ -1,9 +1,16 @@
+use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 /// mixed_cast_bool: cast a boxed mixed payload to bool using the current scalar rules.
 /// Input:  x0 = boxed mixed pointer
 /// Output: x0 = boolean result
 pub fn emit_mixed_cast_bool(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_mixed_cast_bool_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: mixed_cast_bool ---");
     emitter.label_global("__rt_mixed_cast_bool");
@@ -64,4 +71,75 @@ pub fn emit_mixed_cast_bool(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the helper stack frame
     emitter.instruction("ret");                                                 // return the boolean cast result in x0
+}
+
+fn emit_mixed_cast_bool_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: mixed_cast_bool ---");
+    emitter.label_global("__rt_mixed_cast_bool");
+
+    emitter.instruction("push rbp");                                            // save the caller frame pointer before this helper allocates its own frame
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame pointer for the helper body
+    emitter.instruction("sub rsp, 16");                                         // reserve one aligned temporary slot so nested helper calls keep the SysV stack aligned
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");                          // return the mixed runtime tag in rax and payload words in rdi/rdx for the boxed value
+    emitter.instruction("cmp rax, 0");                                          // does the mixed payload hold an int?
+    emitter.instruction("je __rt_mixed_cast_bool_from_int_linux_x86_64");       // ints use zero/nonzero truthiness
+    emitter.instruction("cmp rax, 1");                                          // does the mixed payload hold a string?
+    emitter.instruction("je __rt_mixed_cast_bool_from_string_linux_x86_64");    // strings use PHP's empty/non-empty truthiness rule
+    emitter.instruction("cmp rax, 2");                                          // does the mixed payload hold a float?
+    emitter.instruction("je __rt_mixed_cast_bool_from_float_linux_x86_64");     // floats are truthy when non-zero
+    emitter.instruction("cmp rax, 3");                                          // does the mixed payload hold a bool?
+    emitter.instruction("je __rt_mixed_cast_bool_from_bool_linux_x86_64");      // bools reuse their stored payload directly
+    emitter.instruction("cmp rax, 4");                                          // does the mixed payload hold an indexed array?
+    emitter.instruction("je __rt_mixed_cast_bool_from_array_linux_x86_64");     // arrays are truthy when non-empty
+    emitter.instruction("cmp rax, 5");                                          // does the mixed payload hold an associative array?
+    emitter.instruction("je __rt_mixed_cast_bool_from_array_linux_x86_64");     // hashes are truthy when non-empty
+    emitter.instruction("mov rax, 0");                                          // null and unsupported payloads are falsy for now
+    emitter.instruction("jmp __rt_mixed_cast_bool_done_linux_x86_64");          // return the normalized boolean result
+
+    emitter.label("__rt_mixed_cast_bool_from_int_linux_x86_64");
+    emitter.instruction("test rdi, rdi");                                       // check whether the unboxed integer payload is zero
+    emitter.instruction("setne al");                                            // integers are truthy when non-zero
+    emitter.instruction("movzx rax, al");                                       // normalize the boolean result back to a full integer register
+    emitter.instruction("jmp __rt_mixed_cast_bool_done_linux_x86_64");          // return the integer truthiness result
+
+    emitter.label("__rt_mixed_cast_bool_from_string_linux_x86_64");
+    emitter.instruction("test rdx, rdx");                                       // empty strings are falsy
+    emitter.instruction("je __rt_mixed_cast_bool_done_linux_x86_64");           // return the default false result when the string length is zero
+    emitter.instruction("cmp rdx, 1");                                          // check whether the string length is exactly one byte
+    emitter.instruction("jne __rt_mixed_cast_bool_string_truthy_linux_x86_64"); // strings longer than one byte are always truthy
+    emitter.instruction("movzx r8d, BYTE PTR [rdi]");                           // load the first byte of the string payload
+    emitter.instruction("cmp r8d, 48");                                         // compare the single byte against ASCII '0'
+    emitter.instruction("setne al");                                            // the one-byte string \"0\" is falsy, everything else is truthy
+    emitter.instruction("movzx rax, al");                                       // normalize the boolean result back to a full integer register
+    emitter.instruction("jmp __rt_mixed_cast_bool_done_linux_x86_64");          // return the string truthiness result
+
+    emitter.label("__rt_mixed_cast_bool_string_truthy_linux_x86_64");
+    emitter.instruction("mov rax, 1");                                          // non-empty strings other than \"0\" are truthy
+    emitter.instruction("jmp __rt_mixed_cast_bool_done_linux_x86_64");          // return the string truthiness result
+
+    emitter.label("__rt_mixed_cast_bool_from_float_linux_x86_64");
+    emitter.instruction("movq xmm0, rdi");                                      // move the unboxed float bits into the floating-point result register
+    emitter.instruction("xorpd xmm1, xmm1");                                    // materialize a zero floating-point register for the truthiness comparison
+    emitter.instruction("ucomisd xmm0, xmm1");                                  // compare the float payload against zero
+    emitter.instruction("setne al");                                            // floats are truthy when they compare non-equal to zero
+    emitter.instruction("movzx rax, al");                                       // normalize the boolean result back to a full integer register
+    emitter.instruction("jmp __rt_mixed_cast_bool_done_linux_x86_64");          // return the float truthiness result
+
+    emitter.label("__rt_mixed_cast_bool_from_bool_linux_x86_64");
+    emitter.instruction("mov rax, rdi");                                        // bool payloads are already normalized to 0 or 1
+    emitter.instruction("jmp __rt_mixed_cast_bool_done_linux_x86_64");          // return the bool payload directly
+
+    emitter.label("__rt_mixed_cast_bool_from_array_linux_x86_64");
+    emitter.instruction("test rdi, rdi");                                       // null container pointers stay falsy
+    emitter.instruction("je __rt_mixed_cast_bool_done_linux_x86_64");           // return the default false result when the container pointer is null
+    emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the current container element count from the header
+    emitter.instruction("test rax, rax");                                       // compare the container element count against zero
+    emitter.instruction("setne al");                                            // containers are truthy when non-empty
+    emitter.instruction("movzx rax, al");                                       // normalize the boolean result back to a full integer register
+
+    emitter.label("__rt_mixed_cast_bool_done_linux_x86_64");
+    emitter.instruction("add rsp, 16");                                         // release the aligned temporary slot reserved for nested helper calls
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
+    emitter.instruction("ret");                                                 // return the boolean cast result in rax
 }

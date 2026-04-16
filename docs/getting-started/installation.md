@@ -1,16 +1,16 @@
 ---
 title: "Installation"
-description: "How to install elephc on macOS with Homebrew or from source."
+description: "How to install elephc on supported platforms."
 sidebar:
   order: 1
 ---
 
 ## Requirements
 
-- macOS on Apple Silicon (ARM64)
-- Xcode Command Line Tools
+- Rust toolchain (`cargo`) if building from source
+- A native assembler and linker for your host platform
 
-If you don't have Xcode Command Line Tools installed:
+On macOS, install Xcode Command Line Tools if you don't have them already:
 
 ```bash
 xcode-select --install
@@ -18,7 +18,9 @@ xcode-select --install
 
 This provides the assembler (`as`) and linker (`ld`) that elephc uses to produce native binaries.
 
-## Homebrew (recommended)
+On Linux, install your distro's standard native toolchain so `as`, `ld`, and the libc development files are available.
+
+## Homebrew (macOS)
 
 ```bash
 brew install illegalstudio/tap/elephc
@@ -48,7 +50,7 @@ cp target/release/elephc /usr/local/bin/
 
 ## From GitHub releases
 
-Pre-built binaries are available on the [releases page](https://github.com/illegalstudio/elephc/releases). Download the latest `elephc` binary for macOS ARM64, make it executable, and move it to your `PATH`:
+Pre-built binaries may be available on the [releases page](https://github.com/illegalstudio/elephc/releases). Download the artifact for your platform, make it executable if needed, and move it to your `PATH`:
 
 ```bash
 chmod +x elephc

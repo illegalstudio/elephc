@@ -1,7 +1,7 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
+use crate::codegen::expr::{coerce_to_truthiness, emit_expr};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -14,8 +14,7 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("boolval()");
     // -- convert any value to boolean (truthy/falsy) --
-    emit_expr(&args[0], emitter, ctx, data);
-    emitter.instruction("cmp x0, #0");                                          // compare value against zero
-    emitter.instruction("cset x0, ne");                                         // x0 = 1 if nonzero (truthy), 0 if zero
+    let src_ty = emit_expr(&args[0], emitter, ctx, data);
+    coerce_to_truthiness(emitter, ctx, &src_ty);                                // normalize the value to PHP truthiness through the shared target-aware coercion helper
     Some(PhpType::Bool)
 }

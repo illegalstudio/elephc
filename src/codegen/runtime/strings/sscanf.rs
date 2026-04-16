@@ -1,4 +1,5 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 /// sscanf: parse a string according to a format, returning matched values as string array.
 /// Input: x1/x2=input string, x3/x4=format string
@@ -6,6 +7,11 @@ use crate::codegen::emit::Emitter;
 /// Supports: %d (digits), %s (non-whitespace word), %% (literal %)
 /// Literal chars in format must match input exactly.
 pub fn emit_sscanf(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_sscanf_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: sscanf ---");
     emitter.label_global("__rt_sscanf");
@@ -132,4 +138,142 @@ pub fn emit_sscanf(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame
     emitter.instruction("add sp, sp, #80");                                     // deallocate
     emitter.instruction("ret");                                                 // return
+}
+
+fn emit_sscanf_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: sscanf ---");
+    emitter.label_global("__rt_sscanf");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving sscanf() spill slots
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the input, format, and result-array state
+    emitter.instruction("sub rsp, 48");                                         // reserve aligned spill slots for the input string, format string, and result array pointer
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the current input-string pointer across array-allocation and append helper calls
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the current input-string length across array-allocation and append helper calls
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // preserve the current format-string pointer across array-allocation and append helper calls
+    emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // preserve the current format-string length across array-allocation and append helper calls
+    emitter.instruction("mov rdi, 8");                                          // request the default sscanf() result-array capacity from the shared x86_64 array constructor
+    emitter.instruction("mov rsi, 16");                                         // request 16-byte string slots so the result array can hold ptr+len pairs
+    emitter.instruction("call __rt_array_new");                                 // allocate the result indexed array that will collect matched string slices
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the result indexed-array pointer across the main scanf loop
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the input-string pointer into the active x86_64 string register
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the input-string length into the active x86_64 string register
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the format-string pointer into the active x86_64 string register
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // reload the format-string length into the active x86_64 string register
+
+    emitter.label("__rt_sscanf_loop_linux_x86_64");
+    emitter.instruction("test rsi, rsi");                                       // has the format string been fully consumed already?
+    emitter.instruction("jz __rt_sscanf_done_linux_x86_64");                    // stop parsing once the format string is exhausted
+    emitter.instruction("movzx r8d, BYTE PTR [rdi]");                           // load the next format character before deciding between literal and specifier parsing
+    emitter.instruction("add rdi, 1");                                          // advance the format pointer after consuming one format character
+    emitter.instruction("sub rsi, 1");                                          // decrement the remaining format length after consuming one format character
+    emitter.instruction("cmp r8b, 37");                                         // does the current format character start a '%' specifier?
+    emitter.instruction("je __rt_sscanf_spec_linux_x86_64");                    // dispatch to the specifier parser when the current format character is '%'
+    emitter.instruction("test rdx, rdx");                                       // is the input already exhausted while a literal format character remains?
+    emitter.instruction("jz __rt_sscanf_done_linux_x86_64");                    // stop parsing when a literal format character cannot be matched against empty input
+    emitter.instruction("movzx r9d, BYTE PTR [rax]");                           // load the next input character for literal matching
+    emitter.instruction("add rax, 1");                                          // advance the input pointer after consuming one literal candidate character
+    emitter.instruction("sub rdx, 1");                                          // decrement the remaining input length after consuming one literal candidate character
+    emitter.instruction("cmp r8b, r9b");                                        // does the literal format character match the consumed input character?
+    emitter.instruction("je __rt_sscanf_loop_linux_x86_64");                    // continue scanning when the literal format character matched successfully
+    emitter.instruction("jmp __rt_sscanf_done_linux_x86_64");                   // stop parsing on the first literal mismatch
+
+    emitter.label("__rt_sscanf_spec_linux_x86_64");
+    emitter.instruction("test rsi, rsi");                                       // is the format string exhausted immediately after the '%' introducer?
+    emitter.instruction("jz __rt_sscanf_done_linux_x86_64");                    // stop parsing when a trailing '%' lacks a following specifier
+    emitter.instruction("movzx r8d, BYTE PTR [rdi]");                           // load the actual format specifier character after '%'
+    emitter.instruction("add rdi, 1");                                          // advance the format pointer after consuming the specifier character
+    emitter.instruction("sub rsi, 1");                                          // decrement the remaining format length after consuming the specifier character
+    emitter.instruction("cmp r8b, 37");                                         // is the format specifier '%%' for a literal percent sign?
+    emitter.instruction("jne __rt_sscanf_check_d_linux_x86_64");                // fall through to typed scanning when the format specifier is not a literal percent sign
+    emitter.instruction("test rdx, rdx");                                       // is the input already exhausted while the format requests a literal percent sign?
+    emitter.instruction("jz __rt_sscanf_done_linux_x86_64");                    // stop parsing when the literal percent cannot be matched against empty input
+    emitter.instruction("add rax, 1");                                          // consume one input character for the literal percent branch
+    emitter.instruction("sub rdx, 1");                                          // decrement the remaining input length after consuming the literal percent
+    emitter.instruction("jmp __rt_sscanf_loop_linux_x86_64");                   // continue scanning after the literal percent branch
+
+    emitter.label("__rt_sscanf_check_d_linux_x86_64");
+    emitter.instruction("cmp r8b, 100");                                        // is the current format specifier '%d'?
+    emitter.instruction("jne __rt_sscanf_check_s_linux_x86_64");                // fall through to '%s' handling when the current specifier is not '%d'
+    emitter.instruction("mov r10, rax");                                        // mark the start of the matched integer slice before scanning optional sign and digits
+    emitter.instruction("xor r11d, r11d");                                      // start the matched integer-slice length at zero bytes
+    emitter.instruction("test rdx, rdx");                                       // is there at least one input byte available for an optional leading minus sign?
+    emitter.instruction("jz __rt_sscanf_push_d_linux_x86_64");                  // push the current empty integer match immediately when the input is already exhausted
+    emitter.instruction("movzx r9d, BYTE PTR [rax]");                           // peek at the next input character before deciding whether it is a leading minus sign
+    emitter.instruction("cmp r9b, 45");                                         // is the next input character a leading minus sign?
+    emitter.instruction("jne __rt_sscanf_d_loop_linux_x86_64");                 // begin scanning digits immediately when there is no leading minus sign
+    emitter.instruction("add rax, 1");                                          // consume the leading minus sign as part of the matched integer slice
+    emitter.instruction("sub rdx, 1");                                          // decrement the remaining input length after consuming the leading minus sign
+    emitter.instruction("add r11, 1");                                          // count the leading minus sign as part of the matched integer-slice length
+
+    emitter.label("__rt_sscanf_d_loop_linux_x86_64");
+    emitter.instruction("test rdx, rdx");                                       // is the input exhausted before another integer digit can be scanned?
+    emitter.instruction("jz __rt_sscanf_push_d_linux_x86_64");                  // push the current integer slice once the input is exhausted
+    emitter.instruction("movzx r9d, BYTE PTR [rax]");                           // peek at the next input character before deciding whether it is another digit
+    emitter.instruction("cmp r9b, 48");                                         // is the next input character below ASCII '0'?
+    emitter.instruction("jl __rt_sscanf_push_d_linux_x86_64");                  // stop the integer scan on the first non-digit input character below '0'
+    emitter.instruction("cmp r9b, 57");                                         // is the next input character above ASCII '9'?
+    emitter.instruction("jg __rt_sscanf_push_d_linux_x86_64");                  // stop the integer scan on the first non-digit input character above '9'
+    emitter.instruction("add rax, 1");                                          // consume the matched integer digit from the input string
+    emitter.instruction("sub rdx, 1");                                          // decrement the remaining input length after consuming one integer digit
+    emitter.instruction("add r11, 1");                                          // count the consumed integer digit as part of the matched integer-slice length
+    emitter.instruction("jmp __rt_sscanf_d_loop_linux_x86_64");                 // continue scanning digits until the integer slice ends
+
+    emitter.label("__rt_sscanf_push_d_linux_x86_64");
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the current input-string pointer before appending the matched integer slice
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the current input-string length before appending the matched integer slice
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // preserve the current format-string pointer before appending the matched integer slice
+    emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // preserve the current format-string length before appending the matched integer slice
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the result indexed-array pointer into the x86_64 array-append receiver register
+    emitter.instruction("mov rsi, r10");                                        // pass the matched integer-slice pointer to the shared string-array append helper
+    emitter.instruction("mov rdx, r11");                                        // pass the matched integer-slice length to the shared string-array append helper
+    emitter.instruction("call __rt_array_push_str");                            // persist and append the matched integer slice into the result indexed array
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the possibly-grown result indexed-array pointer returned by the append helper
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the current input-string pointer after appending the matched integer slice
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore the current input-string length after appending the matched integer slice
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // restore the current format-string pointer after appending the matched integer slice
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // restore the current format-string length after appending the matched integer slice
+    emitter.instruction("jmp __rt_sscanf_loop_linux_x86_64");                   // continue scanning the remaining format string after pushing the integer slice
+
+    emitter.label("__rt_sscanf_check_s_linux_x86_64");
+    emitter.instruction("cmp r8b, 115");                                        // is the current format specifier '%s'?
+    emitter.instruction("jne __rt_sscanf_loop_linux_x86_64");                   // skip unknown format specifiers instead of aborting the whole scan
+    emitter.instruction("mov r10, rax");                                        // mark the start of the matched word slice before scanning non-whitespace bytes
+    emitter.instruction("xor r11d, r11d");                                      // start the matched word-slice length at zero bytes
+
+    emitter.label("__rt_sscanf_s_loop_linux_x86_64");
+    emitter.instruction("test rdx, rdx");                                       // is the input exhausted before another non-whitespace byte can be scanned?
+    emitter.instruction("jz __rt_sscanf_push_s_linux_x86_64");                  // push the current word slice once the input is exhausted
+    emitter.instruction("movzx r9d, BYTE PTR [rax]");                           // peek at the next input character before deciding whether it terminates the word slice
+    emitter.instruction("cmp r9b, 32");                                         // is the next input character a space terminator?
+    emitter.instruction("je __rt_sscanf_push_s_linux_x86_64");                  // stop the word scan when a space terminator is reached
+    emitter.instruction("cmp r9b, 9");                                          // is the next input character a tab terminator?
+    emitter.instruction("je __rt_sscanf_push_s_linux_x86_64");                  // stop the word scan when a tab terminator is reached
+    emitter.instruction("cmp r9b, 10");                                         // is the next input character a newline terminator?
+    emitter.instruction("je __rt_sscanf_push_s_linux_x86_64");                  // stop the word scan when a newline terminator is reached
+    emitter.instruction("add rax, 1");                                          // consume the matched non-whitespace input byte
+    emitter.instruction("sub rdx, 1");                                          // decrement the remaining input length after consuming one non-whitespace byte
+    emitter.instruction("add r11, 1");                                          // count the consumed non-whitespace byte as part of the matched word-slice length
+    emitter.instruction("jmp __rt_sscanf_s_loop_linux_x86_64");                 // continue scanning non-whitespace input bytes until the word slice ends
+
+    emitter.label("__rt_sscanf_push_s_linux_x86_64");
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the current input-string pointer before appending the matched word slice
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the current input-string length before appending the matched word slice
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // preserve the current format-string pointer before appending the matched word slice
+    emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // preserve the current format-string length before appending the matched word slice
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the result indexed-array pointer into the x86_64 array-append receiver register
+    emitter.instruction("mov rsi, r10");                                        // pass the matched word-slice pointer to the shared string-array append helper
+    emitter.instruction("mov rdx, r11");                                        // pass the matched word-slice length to the shared string-array append helper
+    emitter.instruction("call __rt_array_push_str");                            // persist and append the matched word slice into the result indexed array
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the possibly-grown result indexed-array pointer returned by the append helper
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the current input-string pointer after appending the matched word slice
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore the current input-string length after appending the matched word slice
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // restore the current format-string pointer after appending the matched word slice
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // restore the current format-string length after appending the matched word slice
+    emitter.instruction("jmp __rt_sscanf_loop_linux_x86_64");                   // continue scanning the remaining format string after pushing the word slice
+
+    emitter.label("__rt_sscanf_done_linux_x86_64");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return the result indexed-array pointer in the primary x86_64 integer result register
+    emitter.instruction("add rsp, 48");                                         // release the sscanf() spill slots before returning
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to the caller
+    emitter.instruction("ret");                                                 // return the result indexed array in rax
 }

@@ -6,6 +6,8 @@ mod compare;
 mod helpers;
 mod objects;
 mod ownership;
+mod scalars;
+mod variables;
 
 use super::abi;
 use super::context::{Context, HeapOwnership};
@@ -27,147 +29,25 @@ pub fn emit_expr(
 ) -> PhpType {
     match &expr.kind {
         ExprKind::BoolLiteral(b) => {
-            emitter.comment(&format!("bool {}", b));
-            // -- load boolean as integer 0 or 1 --
-            emitter.instruction(&format!(                                       // store boolean: true=1, false=0
-                "mov x0, #{}",
-                if *b { 1 } else { 0 }
-            ));
-            PhpType::Bool
+            scalars::emit_bool_literal(*b, emitter)
         }
         ExprKind::Null => {
-            emitter.comment("null");
-            // -- load null sentinel value (0x7FFF_FFFF_FFFF_FFFE) into x0 --
-            emitter.instruction("movz x0, #0xFFFE");                            // load lowest 16 bits of null sentinel
-            emitter.instruction("movk x0, #0xFFFF, lsl #16");                   // insert bits 16-31 of null sentinel
-            emitter.instruction("movk x0, #0xFFFF, lsl #32");                   // insert bits 32-47 of null sentinel
-            emitter.instruction("movk x0, #0x7FFF, lsl #48");                   // insert bits 48-63, completing 0x7FFFFFFFFFFFFFFE
-            PhpType::Void
+            scalars::emit_null_literal(emitter)
         }
         ExprKind::StringLiteral(s) => {
-            let bytes = s.as_bytes();
-            let (label, len) = data.add_string(bytes);
-            emitter.comment(&format!("load string \"{}\"", s.escape_default()));
-            // -- load string pointer into x1 and length into x2 --
-            emitter.instruction(&format!("adrp x1, {}@PAGE", label));           // load page base address of string data
-            emitter.instruction(&format!("add x1, x1, {}@PAGEOFF", label));     // add page offset to get exact string pointer
-            emitter.instruction(&format!("mov x2, #{}", len));                  // load string byte length into x2
-            PhpType::Str
+            scalars::emit_string_literal(s, emitter, data)
         }
         ExprKind::IntLiteral(n) => {
-            emitter.comment(&format!("load int {}", n));
-            load_immediate(emitter, "x0", *n);
-            PhpType::Int
+            scalars::emit_int_literal(*n, emitter)
         }
         ExprKind::FloatLiteral(f) => {
-            emitter.comment(&format!("load float {}", f));
-            let label = data.add_float(*f);
-            // -- load float constant from data section into d0 --
-            emitter.instruction(&format!("adrp x9, {}@PAGE", label));           // load page base of float constant
-            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label));     // add offset to get exact float address
-            emitter.instruction("ldr d0, [x9]");                                // load 64-bit double from memory into float reg
-            PhpType::Float
+            scalars::emit_float_literal(*f, emitter, data)
         }
         ExprKind::Variable(name) => {
-            if let Some(ty) = ctx.extern_globals.get(name).cloned() {
-                emitter.comment(&format!("load extern global ${}", name));
-                match &ty {
-                    PhpType::Bool
-                    | PhpType::Int
-                    | PhpType::Pointer(_)
-                    | PhpType::Buffer(_)
-                    | PhpType::Packed(_)
-                    | PhpType::Callable => {
-                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); //load page of extern global GOT entry
-                        emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); //resolve extern global address
-                        emitter.instruction("ldr x0, [x9]");                    // load extern integer/pointer value
-                    }
-                    PhpType::Float => {
-                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); //load page of extern global GOT entry
-                        emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); //resolve extern global address
-                        emitter.instruction("ldr d0, [x9]");                    // load extern float value
-                    }
-                    PhpType::Str => {
-                        emitter.instruction(&format!("adrp x9, _{}@GOTPAGE", name)); //load page of extern global GOT entry
-                        emitter.instruction(&format!("ldr x9, [x9, _{}@GOTPAGEOFF]", name)); //resolve extern global address
-                        emitter.instruction("ldr x0, [x9]");                    // load char* from extern global
-                        emitter.instruction("bl __rt_cstr_to_str");             // convert C string to elephc string
-                    }
-                    PhpType::Void
-                    | PhpType::Mixed
-                    | PhpType::Union(_)
-                    | PhpType::Array(_)
-                    | PhpType::AssocArray { .. }
-                    | PhpType::Object(_) => {
-                        emitter.comment(&format!(
-                            "WARNING: unsupported extern global type for ${}",
-                            name
-                        ));
-                        return PhpType::Int;
-                    }
-                }
-                ty
-            } else if ctx.global_vars.contains(name)
-                || (ctx.in_main && ctx.all_global_var_names.contains(name))
-            {
-                // Load from global storage
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let ty = var.ty.clone();
-                super::stmt::emit_global_load(emitter, ctx, name, &ty);
-                ty
-            } else if ctx.ref_params.contains(name) {
-                // Load through reference pointer
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let offset = var.stack_offset;
-                let ty = var.ty.clone();
-                emitter.comment(&format!("load ref ${}", name));
-                abi::load_at_offset(emitter, "x9", offset); // load pointer to referenced variable
-                match &ty {
-                    PhpType::Bool | PhpType::Int => {
-                        emitter.instruction("ldr x0, [x9]");                    // dereference to get int/bool value
-                    }
-                    PhpType::Float => {
-                        emitter.instruction("ldr d0, [x9]");                    // dereference to get float value
-                    }
-                    PhpType::Str => {
-                        emitter.instruction("ldr x1, [x9]");                    // dereference to get string pointer
-                        emitter.instruction("ldr x2, [x9, #8]");                // dereference to get string length
-                    }
-                    _ => {
-                        emitter.instruction("ldr x0, [x9]");                    // dereference to get value
-                    }
-                }
-                ty
-            } else {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let offset = var.stack_offset;
-                let ty = var.ty.clone();
-                emitter.comment(&format!("load ${}", name));
-                abi::emit_load(emitter, &ty, offset);
-                ty
-            }
+            variables::emit_variable(name, emitter, ctx)
         }
         ExprKind::Negate(inner) => {
-            let ty = emit_expr(inner, emitter, ctx, data);
-            emitter.comment("negate");
-            if ty == PhpType::Float {
-                // -- negate floating-point value --
-                emitter.instruction("fneg d0, d0");                             // flip the sign bit of double-precision float
-                PhpType::Float
-            } else {
-                // -- negate integer value --
-                emitter.instruction("neg x0, x0");                              // two's complement negation of 64-bit integer
-                PhpType::Int
-            }
+            scalars::emit_negate(inner, emitter, ctx, data)
         }
         ExprKind::ArrayLiteral(elems) => emit_array_literal(elems, emitter, ctx, data),
         ExprKind::ArrayLiteralAssoc(pairs) => emit_assoc_array_literal(pairs, emitter, ctx, data),
@@ -183,190 +63,28 @@ pub fn emit_expr(
             arrays::emit_buffer_new(element_type, len, emitter, ctx, data)
         }
         ExprKind::Not(inner) => {
-            let ty = emit_expr(inner, emitter, ctx, data);
-            emitter.comment("logical not");
-            coerce_to_truthiness(emitter, ctx, &ty);
-            // -- PHP !$x: invert truthiness --
-            emitter.instruction("cmp x0, #0");                                  // test if value is falsy (zero)
-            emitter.instruction("cset x0, eq");                                 // x0=1 if was falsy, x0=0 if was truthy
-            PhpType::Bool
+            scalars::emit_not(inner, emitter, ctx, data)
         }
         ExprKind::BitNot(inner) => {
-            let ty = emit_expr(inner, emitter, ctx, data);
-            coerce_null_to_zero(emitter, &ty);
-            emitter.comment("bitwise not");
-            // -- PHP ~$x: invert all bits --
-            emitter.instruction("mvn x0, x0");                                  // bitwise complement of all 64 bits
-            PhpType::Int
+            scalars::emit_bit_not(inner, emitter, ctx, data)
         }
         ExprKind::Throw(inner) => {
-            let thrown_ty = emit_expr(inner, emitter, ctx, data);
-            if thrown_ty.is_refcounted() && expr_result_heap_ownership(inner) != HeapOwnership::Owned {
-                abi::emit_incref_if_refcounted(emitter, &thrown_ty);            // retain borrowed heap values before publishing them as the active exception
-            }
-            emitter.instruction("adrp x9, _exc_value@PAGE");                    // load page of the current exception slot
-            emitter.instruction("add x9, x9, _exc_value@PAGEOFF");              // resolve the current exception slot address
-            emitter.instruction("str x0, [x9]");                                // publish the thrown object pointer as the active exception
-            emitter.instruction("bl __rt_throw_current");                       // unwind to the nearest active exception handler
-            PhpType::Void
+            variables::emit_throw(inner, emitter, ctx, data)
         }
         ExprKind::NullCoalesce { value, default } => {
             emit_null_coalesce(value, default, emitter, ctx, data)
         }
         ExprKind::PreIncrement(name) => {
-            if ctx.global_vars.contains(name) {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let ty = var.ty.clone();
-                emitter.comment(&format!("++${} (global)", name));
-                super::stmt::emit_global_load(emitter, ctx, name, &ty);
-                emitter.instruction("add x0, x0, #1");                          // increment the value by 1
-                emit_global_store_inline(emitter, name);
-                PhpType::Int
-            } else if ctx.ref_params.contains(name) {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let offset = var.stack_offset;
-                emitter.comment(&format!("++${} (ref)", name));
-                abi::load_at_offset(emitter, "x9", offset); // load ref pointer
-                emitter.instruction("ldr x0, [x9]");                            // dereference
-                emitter.instruction("add x0, x0, #1");                          // increment
-                emitter.instruction("str x0, [x9]");                            // store back through pointer
-                PhpType::Int
-            } else {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let offset = var.stack_offset;
-                emitter.comment(&format!("++${}", name));
-                // -- pre-increment: add 1 then return new value --
-                abi::load_at_offset(emitter, "x0", offset); // load current variable value from stack frame
-                emitter.instruction("add x0, x0, #1");                          // increment the value by 1
-                abi::store_at_offset(emitter, "x0", offset); // store incremented value back to stack frame
-                if ctx.in_main && ctx.all_global_var_names.contains(name) {
-                    emit_global_store_inline(emitter, name);
-                }
-                PhpType::Int
-            }
+            variables::emit_pre_increment(name, emitter, ctx)
         }
         ExprKind::PostIncrement(name) => {
-            if ctx.global_vars.contains(name) {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let ty = var.ty.clone();
-                emitter.comment(&format!("${}++ (global)", name));
-                super::stmt::emit_global_load(emitter, ctx, name, &ty);
-                emitter.instruction("add x1, x0, #1");                          // compute incremented value
-                                                       // Store new value to global
-                let label = format!("_gvar_{}", name);
-                emitter.instruction(&format!("adrp x9, {}@PAGE", label));       // load page of global var storage
-                emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label)); // add page offset
-                emitter.instruction("str x1, [x9]");                            // store incremented value to global
-                PhpType::Int
-            } else if ctx.ref_params.contains(name) {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let offset = var.stack_offset;
-                emitter.comment(&format!("${}++ (ref)", name));
-                abi::load_at_offset(emitter, "x9", offset); // load ref pointer
-                emitter.instruction("ldr x0, [x9]");                            // dereference
-                emitter.instruction("add x1, x0, #1");                          // compute incremented value
-                emitter.instruction("str x1, [x9]");                            // store back through pointer
-                PhpType::Int
-            } else {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let offset = var.stack_offset;
-                emitter.comment(&format!("${}++", name));
-                // -- post-increment: return old value, then add 1 --
-                abi::load_at_offset(emitter, "x0", offset); // load current value into x0 (returned to caller)
-                emitter.instruction("add x1, x0, #1");                          // compute incremented value in scratch register
-                abi::store_at_offset(emitter, "x1", offset); // write new value back; x0 still has old value
-                if ctx.in_main && ctx.all_global_var_names.contains(name) {
-                    // Save new value (in x1) to global
-                    let label = format!("_gvar_{}", name);
-                    emitter.instruction(&format!("adrp x9, {}@PAGE", label));   // load page of global var storage
-                    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label)); //add page offset
-                    emitter.instruction("str x1, [x9]");                        // store incremented value to global
-                }
-                PhpType::Int
-            }
+            variables::emit_post_increment(name, emitter, ctx)
         }
         ExprKind::PreDecrement(name) => {
-            if ctx.global_vars.contains(name) {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let ty = var.ty.clone();
-                emitter.comment(&format!("--${} (global)", name));
-                super::stmt::emit_global_load(emitter, ctx, name, &ty);
-                emitter.instruction("sub x0, x0, #1");                          // decrement the value by 1
-                emit_global_store_inline(emitter, name);
-                PhpType::Int
-            } else if ctx.ref_params.contains(name) {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let offset = var.stack_offset;
-                emitter.comment(&format!("--${} (ref)", name));
-                abi::load_at_offset(emitter, "x9", offset); // load ref pointer
-                emitter.instruction("ldr x0, [x9]");                            // dereference
-                emitter.instruction("sub x0, x0, #1");                          // decrement
-                emitter.instruction("str x0, [x9]");                            // store back through pointer
-                PhpType::Int
-            } else {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let offset = var.stack_offset;
-                emitter.comment(&format!("--${}", name));
-                // -- pre-decrement: subtract 1 then return new value --
-                abi::load_at_offset(emitter, "x0", offset); // load current variable value from stack frame
-                emitter.instruction("sub x0, x0, #1");                          // decrement the value by 1
-                abi::store_at_offset(emitter, "x0", offset); // store decremented value back to stack frame
-                PhpType::Int
-            }
+            variables::emit_pre_decrement(name, emitter, ctx)
         }
         ExprKind::PostDecrement(name) => {
-            if ctx.ref_params.contains(name) {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let offset = var.stack_offset;
-                emitter.comment(&format!("${}-- (ref)", name));
-                abi::load_at_offset(emitter, "x9", offset); // load ref pointer
-                emitter.instruction("ldr x0, [x9]");                            // dereference
-                emitter.instruction("sub x1, x0, #1");                          // compute decremented value
-                emitter.instruction("str x1, [x9]");                            // store back through pointer
-                PhpType::Int
-            } else {
-                let Some(var) = ctx.variables.get(name) else {
-                    emitter.comment(&format!("WARNING: undefined variable ${}", name));
-                    return PhpType::Int;
-                };
-                let offset = var.stack_offset;
-                emitter.comment(&format!("${}--", name));
-                // -- post-decrement: return old value, then subtract 1 --
-                abi::load_at_offset(emitter, "x0", offset); // load current value into x0 (returned to caller)
-                emitter.instruction("sub x1, x0, #1");                          // compute decremented value in scratch register
-                abi::store_at_offset(emitter, "x1", offset); // write new value back; x0 still has old value
-                PhpType::Int
-            }
+            variables::emit_post_decrement(name, emitter, ctx)
         }
         ExprKind::Ternary {
             condition,
@@ -379,8 +97,7 @@ pub fn emit_expr(
             let cond_ty = emit_expr(condition, emitter, ctx, data);
             coerce_to_truthiness(emitter, ctx, &cond_ty);
             // -- branch based on ternary condition --
-            emitter.instruction("cmp x0, #0");                                  // test if condition is falsy
-            emitter.instruction(&format!("b.eq {}", else_label));               // jump to else branch if condition was false
+            abi::emit_branch_if_int_result_zero(emitter, &else_label);
                                                                   // -- determine result type: widen to the broader type --
             let dummy_sig = FunctionSig {
                 params: vec![],
@@ -407,10 +124,10 @@ pub fn emit_expr(
                 if result_ty == PhpType::Str {
                     coerce_to_string(emitter, ctx, data, &then_ty);
                 } else if result_ty == PhpType::Float && then_ty == PhpType::Int {
-                    emitter.instruction("scvtf d0, x0");                        // convert int to float for unified result type
+                    abi::emit_int_result_to_float_result(emitter);              // convert int to float for unified result type
                 }
             }
-            emitter.instruction(&format!("b {}", end_label));                   // skip else branch after evaluating then-expr
+            abi::emit_jump(emitter, &end_label);                                // skip else branch after evaluating then-expr
             emitter.label(&else_label);
             let else_ty = emit_expr(else_expr, emitter, ctx, data);
             // -- coerce else-branch to result type if needed --
@@ -418,7 +135,7 @@ pub fn emit_expr(
                 if result_ty == PhpType::Str {
                     coerce_to_string(emitter, ctx, data, &else_ty);
                 } else if result_ty == PhpType::Float && else_ty == PhpType::Int {
-                    emitter.instruction("scvtf d0, x0");                        // convert int to float for unified result type
+                    abi::emit_int_result_to_float_result(emitter);              // convert int to float for unified result type
                 }
             }
             emitter.label(&end_label);
@@ -486,18 +203,7 @@ pub fn emit_expr(
             args,
         } => emit_static_method_call(receiver, method, args, emitter, ctx, data),
         ExprKind::This => {
-            emitter.comment("$this");
-            let var = match ctx.variables.get("this") {
-                Some(v) => v,
-                None => {
-                    emitter.comment("WARNING: $this used outside class scope");
-                    return PhpType::Int;
-                }
-            };
-            let offset = var.stack_offset;
-            abi::load_at_offset(emitter, "x0", offset);          // load $this object pointer
-            let class_name = ctx.current_class.clone().unwrap_or_default();
-            PhpType::Object(class_name)
+            variables::emit_this(emitter, ctx)
         }
         ExprKind::PtrCast { target_type, expr } => {
             emitter.comment(&format!("ptr_cast<{}>()", target_type));
@@ -654,21 +360,45 @@ fn emit_function_call(
     calls::emit_function_call(name, args, emitter, ctx, data)
 }
 
-pub(crate) fn save_concat_offset_before_nested_call(emitter: &mut Emitter) {
-    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of caller concat offset
-    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve caller concat offset address
-    emitter.instruction("ldr x10, [x9]");                                       // read caller concat offset before nested call
-    emitter.instruction("str x10, [sp, #-16]!");                                // save caller concat offset across nested call
+pub(crate) fn save_concat_offset_before_nested_call(emitter: &mut Emitter, ctx: &Context) {
+    let scratch = abi::temp_int_reg(emitter.target);
+    abi::emit_load_symbol_to_reg(emitter, scratch, "_concat_off", 0);
+    match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            abi::emit_push_reg(emitter, scratch);                                // save caller concat offset across nested call on the temporary stack
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            if let Some(slot) = ctx.nested_concat_offset_offset {
+                abi::store_at_offset(emitter, scratch, slot);                    // spill caller concat offset into the dedicated frame slot so nested x86_64 calls cannot clobber it
+            } else {
+                abi::emit_push_reg(emitter, scratch);                            // fall back to the temporary stack in raw emitter/unit-test contexts that do not allocate hidden frame slots
+            }
+        }
+    }
 }
 
-pub(crate) fn restore_concat_offset_after_nested_call(emitter: &mut Emitter, return_ty: &PhpType) {
+pub(crate) fn restore_concat_offset_after_nested_call(
+    emitter: &mut Emitter,
+    ctx: &Context,
+    return_ty: &PhpType,
+) {
     if *return_ty == PhpType::Str {
-        emitter.instruction("bl __rt_str_persist");                             // persist returned string before restoring caller concat cursor
+        abi::emit_call_label(emitter, "__rt_str_persist");                      // persist returned string before restoring caller concat cursor
     }
-    emitter.instruction("ldr x10, [sp], #16");                                  // pop saved caller concat offset from stack
-    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of caller concat offset
-    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve caller concat offset address
-    emitter.instruction("str x10, [x9]");                                       // restore caller concat offset after nested call
+    let scratch = abi::temp_int_reg(emitter.target);
+    match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            abi::emit_pop_reg(emitter, scratch);                                // pop the saved caller concat offset from the temporary stack
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            if let Some(slot) = ctx.nested_concat_offset_offset {
+                abi::load_at_offset(emitter, scratch, slot);                    // reload the saved caller concat offset from the dedicated x86_64 frame slot
+            } else {
+                abi::emit_pop_reg(emitter, scratch);                            // fall back to the temporary stack in raw emitter/unit-test contexts that do not allocate hidden frame slots
+            }
+        }
+    }
+    abi::emit_store_reg_to_symbol(emitter, scratch, "_concat_off", 0);
 }
 
 pub(crate) fn expr_result_heap_ownership(expr: &Expr) -> HeapOwnership {
@@ -763,51 +493,4 @@ fn emit_null_coalesce(
     data: &mut DataSection,
 ) -> PhpType {
     compare::emit_null_coalesce(value, default, emitter, ctx, data)
-}
-
-/// Quick helper: store x0 to _gvar_NAME (for pre-increment etc. where value is in x0)
-fn emit_global_store_inline(emitter: &mut Emitter, name: &str) {
-    let label = format!("_gvar_{}", name);
-    emitter.instruction(&format!("adrp x9, {}@PAGE", label));                   // load page of global var storage
-    emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", label));             // add page offset
-    emitter.instruction("str x0, [x9]");                                        // store value to global storage
-}
-
-fn load_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
-    if (0..=65535).contains(&value) {
-        // -- small non-negative immediate fits in single MOV --
-        emitter.instruction(&format!("mov {}, #{}", reg, value));               // load small immediate value directly
-    } else if (-65536..0).contains(&value) {
-        // -- small negative immediate fits in single MOV --
-        emitter.instruction(&format!("mov {}, #{}", reg, value));               // load small negative immediate directly
-    } else {
-        // -- large immediate: build 64-bit value in 16-bit chunks --
-        let uval = value as u64;
-        emitter.instruction(&format!(                                           // load bits 0-15 and zero upper bits
-            "movz {}, #0x{:x}",
-            reg,
-            uval & 0xFFFF
-        ));
-        if (uval >> 16) & 0xFFFF != 0 {
-            emitter.instruction(&format!(                                       // insert bits 16-31 keeping other bits
-                "movk {}, #0x{:x}, lsl #16",
-                reg,
-                (uval >> 16) & 0xFFFF
-            ));
-        }
-        if (uval >> 32) & 0xFFFF != 0 {
-            emitter.instruction(&format!(                                       // insert bits 32-47 keeping other bits
-                "movk {}, #0x{:x}, lsl #32",
-                reg,
-                (uval >> 32) & 0xFFFF
-            ));
-        }
-        if (uval >> 48) & 0xFFFF != 0 {
-            emitter.instruction(&format!(                                       // insert bits 48-63 keeping other bits
-                "movk {}, #0x{:x}, lsl #48",
-                reg,
-                (uval >> 48) & 0xFFFF
-            ));
-        }
-    }
 }

@@ -1,6 +1,7 @@
 mod assignments;
 mod arrays;
 mod control_flow;
+mod helpers;
 mod io;
 mod storage;
 
@@ -8,64 +9,9 @@ use super::abi;
 use super::context::{Context, HeapOwnership};
 use super::data_section::DataSection;
 use super::emit::Emitter;
-use super::expr::{emit_expr, expr_result_heap_ownership};
+use super::expr::emit_expr;
 use crate::parser::ast::{Stmt, StmtKind};
 use crate::types::PhpType;
-
-fn retain_borrowed_heap_result(
-    emitter: &mut Emitter,
-    expr: &crate::parser::ast::Expr,
-    ty: &PhpType,
-) {
-    if ty.is_refcounted() && expr_result_heap_ownership(expr) != HeapOwnership::Owned {
-        abi::emit_incref_if_refcounted(emitter, ty);
-    }
-}
-
-fn local_slot_ownership_after_store(ty: &PhpType) -> HeapOwnership {
-    HeapOwnership::local_owner_for_type(ty)
-}
-
-fn stamp_indexed_array_value_type(emitter: &mut Emitter, array_reg: &str, elem_ty: &PhpType) {
-    let value_type_tag = match elem_ty {
-        PhpType::Str => 1,
-        PhpType::Array(_) => 4,
-        PhpType::AssocArray { .. } => 5,
-        PhpType::Object(_) => 6,
-        PhpType::Mixed => 7,
-        PhpType::Union(_) => 7,
-        _ => return,
-    };
-    emitter.instruction(&format!("ldr x12, [{}, #-8]", array_reg));             // load the packed array kind word from the heap header
-    emitter.instruction("mov x14, #0x80ff");                                    // preserve the indexed-array kind and persistent COW flag
-    emitter.instruction("and x12, x12, x14");                                   // keep only the persistent indexed-array metadata bits
-    emitter.instruction(&format!("mov x13, #{}", value_type_tag));              // materialize the runtime array value_type tag
-    emitter.instruction("lsl x13, x13, #8");                                    // move the value_type tag into the packed kind-word byte lane
-    emitter.instruction("orr x12, x12, x13");                                   // combine the heap kind with the array value_type tag
-    emitter.instruction(&format!("str x12, [{}, #-8]", array_reg));             // persist the packed array kind word in the heap header
-}
-
-fn release_owned_slot(emitter: &mut Emitter, ty: &PhpType, offset: usize, preserve_x0: bool) {
-    if matches!(ty, PhpType::Str) {
-        if preserve_x0 {
-            emitter.instruction("mov x8, x0");                                  // preserve incoming value while old string is released
-        }
-        abi::load_at_offset(emitter, "x0", offset); // load previous string pointer from stack slot
-        emitter.instruction("bl __rt_heap_free_safe");                          // release previous string storage if it lives on the heap
-        if preserve_x0 {
-            emitter.instruction("mov x0, x8");                                  // restore incoming value after string release
-        }
-    } else if ty.is_refcounted() {
-        if preserve_x0 {
-            emitter.instruction("mov x8, x0");                                  // preserve incoming value while old heap slot is decreffed
-        }
-        abi::load_at_offset(emitter, "x0", offset); // load previous heap pointer from stack slot
-        abi::emit_decref_if_refcounted(emitter, ty);
-        if preserve_x0 {
-            emitter.instruction("mov x0, x8");                                  // restore incoming value after decref
-        }
-    }
-}
 
 fn current_function_name(ctx: &Context) -> String {
     ctx.return_label
@@ -88,9 +34,7 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
     // -- reset concat buffer at the start of each statement --
     // This is safe because any string that needs to persist beyond the current
     // statement is copied to heap via __rt_str_persist (in emit_store).
-    emitter.instruction("adrp x9, _concat_off@PAGE");                           // load page of concat offset
-    emitter.instruction("add x9, x9, _concat_off@PAGEOFF");                     // resolve concat offset address
-    emitter.instruction("str xzr, [x9]");                                       // reset concat buffer offset to 0
+    crate::codegen::abi::emit_store_zero_to_symbol(emitter, "_concat_off", 0);
 
     match &stmt.kind {
         StmtKind::IfDef { .. } => {
@@ -251,39 +195,16 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
             let skip_label = ctx.next_label("static_skip");
 
             // -- check if already initialized --
-            emitter.instruction(&format!("adrp x9, {}@PAGE", init_label));      // load page of init flag
-            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", init_label)); //add page offset
-            emitter.instruction("ldr x10, [x9]");                               // load init flag value
-            emitter.instruction(&format!("cbnz x10, {}", skip_label));          // skip init if already done
+            helpers::emit_static_init_guard(emitter, &init_label, &skip_label);
 
             // -- first call: evaluate init expression and store --
-            emitter.instruction("mov x10, #1");                                 // set init flag to 1
-            emitter.instruction("str x10, [x9]");                               // write init flag
             let ty = emit_expr(init, emitter, ctx, data);
-            retain_borrowed_heap_result(emitter, init, &ty);
+            helpers::retain_borrowed_heap_result(emitter, init, &ty);
             // Store init value to static storage
-            emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));      // load page of static var storage
-            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); //add page offset
-            match &ty {
-                PhpType::Bool | PhpType::Int => {
-                    emitter.instruction("str x0, [x9]");                        // store initial int/bool value
-                }
-                PhpType::Float => {
-                    emitter.instruction("str d0, [x9]");                        // store initial float value
-                }
-                PhpType::Str => {
-                    emitter.instruction("str x1, [x9]");                        // store initial string pointer
-                    emitter.instruction("str x2, [x9, #8]");                    // store initial string length
-                }
-                _ => {
-                    emitter.instruction("str x0, [x9]");                        // store initial value
-                }
-            }
+            abi::emit_store_result_to_symbol(emitter, &data_label, &ty, false);
             emitter.label(&skip_label);
 
             // -- load current value from static storage into local variable --
-            emitter.instruction(&format!("adrp x9, {}@PAGE", data_label));      // load page of static var storage
-            emitter.instruction(&format!("add x9, x9, {}@PAGEOFF", data_label)); //add page offset
             let var_info = match ctx.variables.get(name) {
                 Some(v) => v,
                 None => {
@@ -296,28 +217,7 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
             };
             let offset = var_info.stack_offset;
             let var_ty = var_info.ty.clone();
-            // Note: x9 holds the static storage address, so use x10 as scratch for large offsets
-            match &var_ty {
-                PhpType::Bool | PhpType::Int => {
-                    emitter.instruction("ldr x0, [x9]");                        // load static int/bool value
-                    abi::store_at_offset_scratch(emitter, "x0", offset, "x10"); // store to local stack slot
-                }
-                PhpType::Float => {
-                    emitter.instruction("ldr d0, [x9]");                        // load static float value
-                    abi::store_at_offset_scratch(emitter, "d0", offset, "x10"); // store to local stack slot
-                }
-                PhpType::Str => {
-                    emitter.instruction("ldr x1, [x9]");                        // load static string pointer
-                    emitter.instruction("ldr x2, [x9, #8]");                    // load static string length
-                    abi::store_at_offset_scratch(emitter, "x1", offset, "x10"); // store string ptr to stack
-                    abi::store_at_offset_scratch(emitter, "x2", offset - 8, "x10");
-                    // store string len to stack
-                }
-                _ => {
-                    emitter.instruction("ldr x0, [x9]");                        // load static value
-                    abi::store_at_offset_scratch(emitter, "x0", offset, "x10"); // store to local stack slot
-                }
-            }
+            abi::emit_load_symbol_to_local_slot(emitter, &data_label, &var_ty, offset);
             ctx.update_var_type_and_ownership(
                 name,
                 var_ty.clone(),

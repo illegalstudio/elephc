@@ -1,6 +1,7 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
+use crate::codegen::abi;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -12,6 +13,6 @@ pub fn emit(
     _data: &mut DataSection,
 ) -> Option<PhpType> {
     emitter.comment("getcwd()");
-    emitter.instruction("bl __rt_getcwd");                                      // call runtime: get current working directory → x1/x2=string
+    abi::emit_call_label(emitter, "__rt_getcwd");                               // call the target-aware runtime helper that returns the current working directory as an owned string
     Some(PhpType::Str)
 }
