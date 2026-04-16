@@ -3,6 +3,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -19,8 +20,16 @@ pub fn emit(
         PhpType::Bool => {
             // print_r(true) prints "1", print_r(false) prints nothing
             let skip = ctx.next_label("pr_skip");
-            emitter.instruction("cmp x0, #0");                                  // test boolean value
-            emitter.instruction(&format!("cbz x0, {}", skip));                  // skip if false
+            match emitter.target.arch {
+                Arch::X86_64 => {
+                    emitter.instruction("cmp rax, 0");                          // test the boolean payload in the x86_64 integer result register before deciding whether print_r() should print anything
+                    emitter.instruction(&format!("je {}", skip));               // skip the print_r() write path entirely when the boolean payload is false on x86_64
+                }
+                Arch::AArch64 => {
+                    emitter.instruction("cmp x0, #0");                          // test the boolean payload in the AArch64 integer result register before deciding whether print_r() should print anything
+                    emitter.instruction(&format!("cbz x0, {}", skip));          // skip the print_r() write path entirely when the boolean payload is false on AArch64
+                }
+            }
             abi::emit_write_stdout(emitter, &ty);
             emitter.label(&skip);
         }
@@ -30,11 +39,9 @@ pub fn emit(
         PhpType::Array(elem_ty) => {
             // -- print "Array\n" --
             let (lbl, len) = data.add_string(b"Array\n");
-            emitter.adrp("x1", &format!("{}", lbl));             // load "Array\n" page
-            emitter.add_lo12("x1", "x1", &format!("{}", lbl));       // resolve address
-            emitter.instruction(&format!("mov x2, #{}", len));                  // string length
-            emitter.instruction("mov x0, #1");                                  // fd = stdout
-            emitter.syscall(4);
+            abi::emit_symbol_address(emitter, abi::string_result_regs(emitter).0, &lbl); // materialize the borrowed \"Array\\n\" string pointer in the active target string-result pointer register
+            abi::emit_load_int_immediate(emitter, abi::string_result_regs(emitter).1, len as i64); // materialize the borrowed \"Array\\n\" string length in the paired target string-result length register
+            abi::emit_write_stdout(emitter, &PhpType::Str);                     // print the synthetic array label through the shared target-aware string stdout helper
             let _ = elem_ty;
         }
         _ => {
