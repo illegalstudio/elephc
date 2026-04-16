@@ -299,10 +299,10 @@ Proper type system for PHP compatibility.
 
 ## v0.18.x — Multi-platform and optimizations
 
-- [ ] Linux x86_64 target
-- [ ] Linux ARM64 target
-- [ ] Split `src/codegen/expr.rs` into a slim dispatcher plus smaller focused helpers
-- [ ] Split `src/codegen/stmt.rs` into a slim dispatcher plus smaller focused helpers
+- [x] Linux x86_64 target
+- [x] Linux ARM64 target
+- [x] Split `src/codegen/expr.rs` into a slim dispatcher plus smaller focused helpers
+- [x] Split `src/codegen/stmt.rs` into a slim dispatcher plus smaller focused helpers
 - [ ] Cross-compilation support
 - [ ] Constant folding (`2 + 3` → `5` at compile time)
 - [ ] Dead code elimination
