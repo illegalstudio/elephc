@@ -1,6 +1,6 @@
 [package]
 name = "elephc"
-version = "0.17.9"
+version = "0.18.0"
 edition = "2021"
 description = "A PHP-to-native compiler targeting macOS ARM64"
 license = "MIT"
