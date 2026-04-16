@@ -1,9 +1,15 @@
 use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
 
 /// strtolower: copy string to concat_buf, lowercasing A-Z.
 /// Input:  x1=ptr, x2=len
 /// Output: x1=new_ptr, x2=len
 pub fn emit_strtolower(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_strtolower_linux_x86_64(emitter);
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: strtolower ---");
     emitter.label_global("__rt_strtolower");
@@ -45,4 +51,34 @@ pub fn emit_strtolower(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
+}
+
+fn emit_strtolower_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: strtolower ---");
+    emitter.label_global("__rt_strtolower");
+    emitter.instruction("call __rt_strcopy");                                   // copy the input string into concat-backed owned storage before lowercasing bytes in place
+    emitter.instruction("test rdx, rdx");                                       // skip the bytewise lowercase loop when strtolower() receives an empty string
+    emitter.instruction("jz __rt_strtolower_done_linux_x86_64");                // return immediately when there are no bytes to lowercase
+    emitter.instruction("mov r8, rax");                                         // seed the mutable string cursor with the concat-backed copy returned by strcopy()
+    emitter.instruction("mov rcx, rdx");                                        // seed the remaining-length counter from the copied string length
+
+    emitter.label("__rt_strtolower_loop_linux_x86_64");
+    emitter.instruction("test rcx, rcx");                                       // have all bytes in the copied string been processed?
+    emitter.instruction("jz __rt_strtolower_done_linux_x86_64");                // finish once the full copied string has been classified
+    emitter.instruction("movzx r9d, BYTE PTR [r8]");                            // load the current byte from the mutable concat-backed copy before applying ASCII lowercase rules
+    emitter.instruction("cmp r9b, 65");                                         // is the current byte below uppercase ASCII 'A'?
+    emitter.instruction("jb __rt_strtolower_next_linux_x86_64");                // leave bytes below 'A' unchanged
+    emitter.instruction("cmp r9b, 90");                                         // is the current byte above uppercase ASCII 'Z'?
+    emitter.instruction("ja __rt_strtolower_next_linux_x86_64");                // leave bytes above 'Z' unchanged
+    emitter.instruction("add r9b, 32");                                         // lowercase uppercase ASCII bytes by adding the standard case delta
+    emitter.instruction("mov BYTE PTR [r8], r9b");                              // store the lowercased ASCII byte back into the mutable concat-backed copy
+
+    emitter.label("__rt_strtolower_next_linux_x86_64");
+    emitter.instruction("add r8, 1");                                           // advance the mutable string cursor after classifying one byte
+    emitter.instruction("sub rcx, 1");                                          // decrement the remaining byte count after processing one byte
+    emitter.instruction("jmp __rt_strtolower_loop_linux_x86_64");               // continue lowercasing bytes until the full copied string has been processed
+
+    emitter.label("__rt_strtolower_done_linux_x86_64");
+    emitter.instruction("ret");                                                 // return the lowercased concat-backed string in the standard x86_64 string result registers
 }
