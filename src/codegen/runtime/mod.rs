@@ -313,6 +313,8 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     strings::emit_rtrim_mask(emitter);
     strings::emit_ltrim_mask(emitter);
     strings::emit_trim_mask(emitter);
+    system::emit_time(emitter);
+    system::emit_microtime(emitter);
     system::emit_date(emitter);
     system::emit_mktime(emitter);
     system::emit_strtotime(emitter);

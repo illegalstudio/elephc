@@ -1,3 +1,4 @@
+use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -14,8 +15,8 @@ pub fn emit(
     emitter.comment("phpversion()");
     // -- return hardcoded version string from Cargo.toml --
     let (label, len) = data.add_string(b"0.7.1");
-    emitter.adrp("x1", &format!("{}", label));                   // load page address of version string
-    emitter.add_lo12("x1", "x1", &format!("{}", label));             // resolve exact address of version string
-    emitter.instruction(&format!("mov x2, #{}", len));                          // string length = 5
+    let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+    abi::emit_symbol_address(emitter, ptr_reg, &label);                         // materialize the hardcoded compiler version string in the active string-pointer result register
+    abi::emit_load_int_immediate(emitter, len_reg, len as i64);                 // publish the hardcoded compiler version string length in the paired string-length result register
     Some(PhpType::Str)
 }
