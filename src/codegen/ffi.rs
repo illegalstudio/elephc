@@ -113,7 +113,12 @@ pub fn emit_extern_call(
     if sig.return_type == PhpType::Int {
         emit_sign_extend_i32_result(emitter);                                   // sign-extend 32-bit C int returns before PHP comparisons use the native integer result register
     }
-    crate::codegen::expr::restore_concat_offset_after_nested_call(emitter, ctx, &sig.return_type);
+    let nested_return_ty = if sig.return_type == PhpType::Str {
+        PhpType::Pointer(None)
+    } else {
+        sig.return_type.clone()
+    };
+    crate::codegen::expr::restore_concat_offset_after_nested_call(emitter, ctx, &nested_return_ty);
 
     // -- handle return value --
     if sig.return_type == PhpType::Str {
