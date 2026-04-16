@@ -260,6 +260,8 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_sort_int(emitter, true);
     arrays::emit_shuffle(emitter);
     arrays::emit_asort(emitter);
+    arrays::emit_ksort(emitter);
+    arrays::emit_natsort(emitter);
     strings::emit_itoa(emitter);
     strings::emit_ftoa(emitter);
     strings::emit_concat(emitter);

@@ -965,7 +965,7 @@ The `generate()` function orchestrates everything:
 6. **Emit data section** — string and float literals
 7. **Emit runtime data / BSS** — global buffers, globals, statics, and lookup tables
 
-On Linux x86_64, the current minimal runtime slice now also includes the refcounted indexed-array helper family used by GC-sensitive array transforms such as `array_merge()`, `array_slice()`, `array_splice()`, `array_pad()`, `array_chunk()`, `array_diff()`, `array_intersect()`, `array_combine()`, `array_reverse()`, and `array_unique()`.
+On Linux x86_64, the current minimal runtime slice now also includes the refcounted indexed-array helper family used by GC-sensitive array transforms such as `array_merge()`, `array_slice()`, `array_splice()`, `array_pad()`, `array_chunk()`, `array_diff()`, `array_intersect()`, `array_combine()`, `array_reverse()`, and `array_unique()`. The simple sort family that can piggyback on those indexed-array helpers is on the same path now too: `asort()` / `arsort()`, `ksort()` / `krsort()`, and `natsort()` / `natcasesort()` all dispatch through target-aware x86_64 runtime labels instead of hard-coded ARM64 branches.
 
 That x86_64 slice now also covers the copy-on-write and GC accounting paths for indexed and associative arrays: shallow clone / ensure-unique helpers, owned-hash insertion during clone, heap alloc/free GC counters, indexed-array deep-free, and the x86_64 header-stamping paths needed so nested array writes keep their runtime value-type tags intact.
 

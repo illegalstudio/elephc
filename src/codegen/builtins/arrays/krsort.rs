@@ -1,3 +1,4 @@
+use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -15,7 +16,7 @@ pub fn emit(
     emitter.comment("krsort()");
     emit_expr(&args[0], emitter, ctx, data);
     // -- sort associative array by keys descending --
-    emitter.instruction("bl __rt_krsort");                                      // call runtime: sort assoc array by keys descending
+    abi::emit_call_label(emitter, "__rt_krsort");                               // call the target-aware runtime helper that sorts associative-array keys descending in place
 
     Some(PhpType::Void)
 }
