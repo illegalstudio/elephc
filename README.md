@@ -5,7 +5,7 @@
 [![Unique Cloners](.github/traffic/clones-badge.svg)](https://github.com/illegalstudio/elephc)
 [![License: MIT](https://img.shields.io/github/license/illegalstudio/elephc?style=flat-square)](LICENSE)
 
-A PHP-to-native compiler. Takes a subset of PHP and compiles it directly to **ARM64 assembly**, producing **standalone macOS binaries**. No interpreter, no VM, no runtime dependencies.
+A PHP-to-native compiler. Takes a subset of PHP and compiles it directly to native assembly, producing standalone binaries for the currently supported targets: **macOS ARM64**, **Linux ARM64**, and **Linux x86_64**. No interpreter, no VM, no runtime dependencies.
 
 > **If you like the idea or find it useful, please star the repo** — it helps others discover it and keeps the project going.
 
@@ -13,7 +13,7 @@ A PHP-to-native compiler. Takes a subset of PHP and compiles it directly to **AR
 
 ## DOOM rendered in PHP
 
-The flagship showcase: a real-time 3D renderer that loads original DOOM WAD files and renders E1M1 — BSP traversal, perspective projection, per-column fog, sector lighting, collision detection, step climbing — entirely in PHP compiled to a native ARM64 binary.
+The flagship showcase: a real-time 3D renderer that loads original DOOM WAD files and renders E1M1 — BSP traversal, perspective projection, per-column fog, sector lighting, collision detection, step climbing — entirely in PHP compiled to a native binary.
 
 ![DOOM E1M1 rendered in PHP](showcases/doom/demo.gif)
 
@@ -37,7 +37,7 @@ I made the project as modular as possible. Every function has its own codegen fi
 
 You can write PHP using the constructs documented in the [docs](docs/). Classes with single inheritance, interfaces, abstract classes, traits, constructors, instance/static methods, `self::` / `parent::` / `static::` with late static binding, `readonly` properties and classes, enums, named arguments, first-class callables, typed parameters and returns, `try` / `catch` / `finally` / `throw`, visibility modifiers, union and nullable types, copy-on-write arrays, associative arrays with PHP insertion order, closures, namespaces, and includes.
 
-For performance-oriented code, For performance-oriented code, elephc exposes compiler extensions beyond standard PHP — see the Why section above.
+For performance-oriented code, elephc exposes compiler extensions beyond standard PHP — see the Why section above.
 
 Then compile and run:
 
@@ -52,13 +52,14 @@ If you want to contribute, you're welcome. Mi casa es tu casa.
 
 ## Learn how a compiler works
 
-elephc is designed to be read. **Every line of Rust that emits ARM64 assembly** is annotated with an inline comment explaining what it does and why — from stack frame setup to syscall invocation, from integer-to-string conversion to array memory layout. If you've ever wondered what happens between `echo "hello"` and the CPU executing it, follow the code from `src/codegen/` and read the comments. **No prior assembly knowledge required.**
+elephc is designed to be read. The code generation and runtime layers are heavily annotated, so you can see what each lowering step and emitted instruction is doing — from stack frame setup to syscall invocation, from integer-to-string conversion to array memory layout. If you've ever wondered what happens between `echo "hello"` and the CPU executing it, follow the code from `src/codegen/` and read the comments. **No prior assembly knowledge required.**
 
 ## Requirements
 
 - Rust toolchain (`cargo`)
-- Xcode Command Line Tools (`xcode-select --install`)
-- macOS on Apple Silicon (ARM64)
+- A native assembler and linker for your host/target
+- On macOS: Xcode Command Line Tools (`xcode-select --install`)
+- On Linux: a standard native toolchain (`as`, `ld`, libc development files)
 
 ## Install
 
@@ -108,10 +109,10 @@ elephc --define DEBUG app.php
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 
-# Experimental target selection plumbing
-# AArch64 emission works today; linux-x86_64 is in progress and already supports
-# a small end-to-end slice used by the Docker x86_64 test harness
+# Explicit target selection
+# Supported targets today: macos-aarch64, linux-aarch64, linux-x86_64
 elephc --target linux-aarch64 hello.php
+elephc --target linux-x86_64 hello.php
 ```
 
 Or via cargo:
@@ -238,10 +239,10 @@ User-defined constants are also supported via `const NAME = value;` and `define(
 ## How it works
 
 ```
-PHP source → Lexer → Parser (AST) → Conditional (ifdef/--define) → Resolver (include) → NameResolver (namespaces/use/FQNs) → Type Checker → Codegen → as + ld → Mach-O binary
+PHP source → Lexer → Parser (AST) → Conditional (ifdef/--define) → Resolver (include) → NameResolver (namespaces/use/FQNs) → Type Checker → Codegen → as + ld → native executable
 ```
 
-The compiler emits human-readable ARM64 assembly. You can inspect the `.s` file to see exactly what your PHP becomes:
+The compiler emits human-readable assembly for the selected target. You can inspect the `.s` file to see exactly what your PHP becomes:
 
 ```bash
 elephc hello.php
@@ -290,7 +291,7 @@ src/
 ├── conditional.rs       # Build-time `ifdef` pass driven by --define
 ├── resolver.rs          # Include/require file resolution
 ├── names.rs             # Qualified/FQN name model + symbol mangling helpers
-├── name_resolver.rs     # Namespace/use resolution to canonical names
+├── name_resolver/       # Namespace/use resolution to canonical names
 │
 ├── lexer/               # Source text → token stream
 │   ├── token.rs         # Token enum
@@ -300,31 +301,34 @@ src/
 │
 ├── parser/              # Tokens → AST (Pratt parser)
 │   ├── ast.rs           # ExprKind, StmtKind, BinOp, CastType
-│   ├── expr.rs          # Expression parsing with binding powers
+│   ├── expr/            # Expression parsing helpers and Pratt parser passes
 │   ├── stmt.rs          # Statement parsing
 │   └── control.rs       # if, while, for, foreach, do-while
 │
 ├── types/               # Static type checking
 │   ├── mod.rs           # PhpType, TypeEnv, check(), CheckResult
 │   ├── traits.rs        # Trait flattening and conflict resolution
-│   ├── warnings.rs      # Non-fatal diagnostics (unused vars, unreachable code)
+│   ├── warnings/        # Non-fatal diagnostics (unused vars, unreachable code)
 │   └── checker/
-│       ├── mod.rs       # check_stmt(), infer_type()
-│       ├── builtins.rs  # Built-in function type signatures
-│       └── functions.rs # User function type inference
+│       ├── mod.rs       # Type-checker orchestration
+│       ├── builtins/    # Built-in function type signatures
+│       ├── functions/   # User function type inference
+│       └── inference/   # Focused inference helpers
 │
-├── codegen/             # AST → ARM64 assembly
+├── codegen/             # AST → target assembly
 │   ├── mod.rs           # Pipeline entry, main/global codegen orchestration
 │   ├── expr.rs          # Expression codegen dispatcher
 │   ├── expr/            # Focused expression helpers (arrays, calls, objects, binops, ...)
 │   ├── stmt.rs          # Statement codegen dispatcher
 │   ├── stmt/            # Focused statement helpers (arrays, control_flow, io, storage, ...)
-│   ├── abi.rs           # Register conventions (load, store, write)
+│   ├── abi.rs           # Target-aware load/store/write helpers
+│   ├── abi/             # Calling-convention and spill helpers
 │   ├── functions.rs     # User function emission
 │   ├── ffi.rs           # Extern function/global/class codegen
 │   ├── context.rs       # Variables, labels, loop stack
 │   ├── data_section.rs  # String/float literal .data section
 │   ├── emit.rs          # Assembly text buffer
+│   ├── platform/        # Target parsing, syscall remapping, Linux transforms
 │   │
 │   ├── builtins/        # Built-in function codegen (one file per language function)
 │   │   ├── strings/     # strlen, substr, strpos, explode, implode, ...
@@ -335,7 +339,7 @@ src/
 │   │   ├── pointers/    # ptr, ptr_get, ptr_set, ptr_read8, ptr_write8, ptr_offset, ...
 │   │   └── system/      # exit, die, time, sleep, getenv, exec, ...
 │   │
-│   └── runtime/         # ARM64 runtime routines (one file per language/runtime helper)
+│   └── runtime/         # Runtime routines and target-specific emission helpers
 │       ├── strings/     # itoa, concat, ftoa, strpos, str_replace, ...
 │       ├── arrays/      # heap_alloc, array_new, array_push, sort, ...
 │       ├── exceptions.rs # exception runtime orchestration / re-exports
@@ -349,7 +353,7 @@ src/
 
 ## Tests
 
-1900+ tests across lexer, parser, codegen, and error reporting. Each codegen test compiles inline PHP source to a native binary, runs it, and asserts stdout.
+1800+ tests across lexer, parser, codegen, and error reporting. Each codegen test compiles inline PHP source to a native binary, runs it, and asserts stdout.
 
 ```bash
 cargo test                      # all tests
@@ -366,8 +370,8 @@ The **[docs/](docs/)** directory is a complete wiki covering every aspect of the
 
 - **PHP syntax reference** — types, operators, control structures, functions, classes, namespaces, and all 200+ built-in functions with signatures and examples
 - **Compiler extensions** — pointers, `buffer<T>`, `packed class`, FFI with `extern`, and conditional compilation with `ifdef` — the features that take PHP beyond the web
-- **Compiler internals** — a step-by-step walkthrough of the full pipeline, from lexing to Pratt parsing to type checking to ARM64 code generation, with every assembly line commented
-- **ARM64 primer** — an introduction to ARM64 assembly for people who've never seen it, plus a quick reference of every instruction elephc uses
+- **Compiler internals** — a step-by-step walkthrough of the full pipeline, from lexing to Pratt parsing to type checking to code generation and runtime structure
+- **ARM64 primer** — an introduction to ARM64 assembly for people who've never seen it, plus a quick reference of the ARM64 instruction set used by elephc's AArch64 backend
 - **Memory model** — how the stack, heap, concat buffer, and hash tables work under the hood
 
 If you're new to compilers or assembly, start from the top and work your way down. No prior low-level knowledge required.
