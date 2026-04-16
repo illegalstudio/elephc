@@ -303,7 +303,7 @@ Proper type system for PHP compatibility.
 - [x] Linux ARM64 target
 - [x] Split `src/codegen/expr.rs` into a slim dispatcher plus smaller focused helpers
 - [x] Split `src/codegen/stmt.rs` into a slim dispatcher plus smaller focused helpers
-- [ ] Cross-compilation support
+- [x] Target support matrix: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
 - [ ] Constant folding (`2 + 3` → `5` at compile time)
 - [ ] Dead code elimination
 - [ ] Register allocation (reduce stack spills)
