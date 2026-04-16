@@ -2,6 +2,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -17,19 +18,29 @@ pub fn emit(
     if args.len() == 1 {
         emit_expr(&args[0], emitter, ctx, data);
         // -- strip whitespace from the left --
-        emitter.instruction("bl __rt_ltrim");                                   // call runtime: trim whitespace from start of string
+        abi::emit_call_label(emitter, "__rt_ltrim");                            // call the target-aware runtime helper that trims ASCII whitespace from the start of the current string slice
     } else {
         // -- ltrim with character mask --
         emit_expr(&args[0], emitter, ctx, data);
-        emitter.instruction("str x1, [sp, #-16]!");                             // push string pointer onto stack
-        emitter.instruction("str x2, [sp, #-16]!");                             // push string length onto stack
-        emit_expr(&args[1], emitter, ctx, data);
-        // -- mask string is in x1/x2, recover source string --
-        emitter.instruction("mov x3, x1");                                      // move mask pointer to x3
-        emitter.instruction("mov x4, x2");                                      // move mask length to x4
-        emitter.instruction("ldr x2, [sp], #16");                               // pop source string length into x2
-        emitter.instruction("ldr x1, [sp], #16");                               // pop source string pointer into x1
-        emitter.instruction("bl __rt_ltrim_mask");                              // call runtime: trim mask chars from start
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("str x1, [sp, #-16]!");                     // preserve the source string pointer while the trim-mask expression is evaluated
+                emitter.instruction("str x2, [sp, #-16]!");                     // preserve the source string length while the trim-mask expression is evaluated
+                emit_expr(&args[1], emitter, ctx, data);
+                emitter.instruction("mov x3, x1");                              // move the trim-mask pointer into the secondary AArch64 trim-mask argument register pair
+                emitter.instruction("mov x4, x2");                              // move the trim-mask length into the secondary AArch64 trim-mask argument register pair
+                emitter.instruction("ldr x2, [sp], #16");                       // restore the source string length after evaluating the trim-mask expression
+                emitter.instruction("ldr x1, [sp], #16");                       // restore the source string pointer after evaluating the trim-mask expression
+            }
+            Arch::X86_64 => {
+                abi::emit_push_reg_pair(emitter, "rax", "rdx");                 // preserve the source string ptr/len while the trim-mask expression is evaluated on x86_64
+                emit_expr(&args[1], emitter, ctx, data);
+                emitter.instruction("mov rdi, rax");                            // move the trim-mask pointer into the secondary x86_64 trim-mask argument register
+                emitter.instruction("mov rsi, rdx");                            // move the trim-mask length into the secondary x86_64 trim-mask argument register
+                abi::emit_pop_reg_pair(emitter, "rax", "rdx");                  // restore the source string ptr/len after evaluating the trim-mask expression
+            }
+        }
+        abi::emit_call_label(emitter, "__rt_ltrim_mask");                       // call the target-aware runtime helper that trims mask bytes from the start of the current string slice
     }
 
     Some(PhpType::Str)
