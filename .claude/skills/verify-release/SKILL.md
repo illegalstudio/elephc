@@ -20,13 +20,14 @@ Read `README.md`. Cross-check against the actual codebase:
 - **Type system section**: verify the type count and descriptions match reality.
 - **Project structure**: verify directory tree matches actual `src/` layout.
 
-### 2. Language Reference (docs/language-reference.md)
+### 2. Documentation (docs/)
 
-Read the entire file. For each category:
+Docs are split across three sections: `docs/php/` (standard PHP), `docs/beyond-php/` (compiler extensions), and `docs/internals/` (compiler internals). Read the relevant pages for each category:
 
-- **Data types table**: verify each type's "Supported" status is accurate.
-- **Operators**: verify all `BinOp` variants in `src/parser/ast.rs` are documented.
-- **Built-in functions tables**: for EVERY function listed in the builtins codegen (`src/codegen/builtins/*/mod.rs` match arms), verify it appears in the language reference with correct signature. List any missing.
+- **Data types** (`docs/php/types.md`): verify each type's "Supported" status is accurate.
+- **Operators** (`docs/php/operators.md`): verify all `BinOp` variants in `src/parser/ast.rs` are documented.
+- **Built-in functions** (`docs/php/strings.md`, `arrays.md`, `math.md`, `system-and-io.md`, `functions.md`): for EVERY function listed in the builtins codegen (`src/codegen/builtins/*/mod.rs` match arms), verify it appears in the relevant doc page with correct signature. List any missing.
+- **Compiler extensions** (`docs/beyond-php/*.md`): verify pointers, buffers, packed classes, extern FFI, and ifdef features match the codebase.
 - **"Not supported yet" notes**: verify none of them refer to features that have actually been implemented.
 - **Known incompatibilities**: verify they are still accurate.
 
