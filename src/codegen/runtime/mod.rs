@@ -423,6 +423,7 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     io::emit_stat(emitter);
     io::emit_fs(emitter);
     io::emit_getcwd(emitter);
+    pointers::emit_ptoa(emitter);
     pointers::emit_ptr_check_nonnull(emitter);
     pointers::emit_str_to_cstr(emitter);
     pointers::emit_cstr_to_str(emitter);
