@@ -285,6 +285,8 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     strings::emit_explode(emitter);
     strings::emit_str_split(emitter);
     strings::emit_str_pad(emitter);
+    strings::emit_str_replace(emitter);
+    strings::emit_str_ireplace(emitter);
     strings::emit_ucwords(emitter);
     strings::emit_strtoupper(emitter);
     strings::emit_str_repeat(emitter);
