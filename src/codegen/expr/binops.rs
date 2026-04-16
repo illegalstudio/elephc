@@ -108,18 +108,37 @@ pub(super) fn emit_binop(
             coerce_null_to_zero(emitter, &lt);
             // -- exponentiation: convert to floats and call libm pow() --
             if lt != PhpType::Float {
-                emitter.instruction("scvtf d0, x0");                            // convert integer base to double-precision float
+                emit_promote_int_to_float(
+                    emitter,
+                    abi::float_result_reg(emitter),
+                    abi::int_result_reg(emitter),
+                );                                                              // normalize the exponentiation base into the active floating-point result register before it is preserved
             }
-            emitter.instruction("str d0, [sp, #-16]!");                         // save base on stack while evaluating exponent
+            abi::emit_push_float_reg(emitter, abi::float_result_reg(emitter));  // preserve the floating exponentiation base while the exponent expression is evaluated
             let rt = emit_expr(right, emitter, ctx, data);
             coerce_null_to_zero(emitter, &rt);
             if rt != PhpType::Float {
-                emitter.instruction("scvtf d0, x0");                            // convert integer exponent to double float
+                emit_promote_int_to_float(
+                    emitter,
+                    abi::float_result_reg(emitter),
+                    abi::int_result_reg(emitter),
+                );                                                              // normalize the exponentiation exponent into the active floating-point result register before ordering the libc arguments
             }
             // -- arrange arguments for pow(base, exp) --
-            emitter.instruction("fmov d1, d0");                                 // move exponent to d1 (second argument)
-            emitter.instruction("ldr d0, [sp], #16");                           // pop base from stack into d0 (first argument)
-            emitter.bl_c("pow");                                     // call C library pow(base, exponent)
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("fmov d1, d0");                         // move the floating exponent into the second AArch64 libc pow() argument register
+                    abi::emit_pop_float_reg(emitter, "d0");                     // restore the floating base into the first AArch64 libc pow() argument register
+                    emitter.bl_c("pow");                                        // delegate exponentiation to libc pow() on AArch64
+                }
+                Arch::X86_64 => {
+                    abi::emit_pop_float_reg(emitter, "xmm1");                   // restore the floating base into a scratch x86_64 floating-point register before ordering the SysV libc arguments
+                    emitter.instruction("movapd xmm2, xmm0");                   // preserve the floating exponent while the floating base is moved into the first SysV libc pow() argument register
+                    emitter.instruction("movapd xmm0, xmm1");                   // move the floating base into the first SysV libc pow() argument register
+                    emitter.instruction("movapd xmm1, xmm2");                   // move the floating exponent into the second SysV libc pow() argument register
+                    emitter.instruction("call pow");                            // delegate exponentiation to libc pow() on linux-x86_64
+                }
+            }
             PhpType::Float
         }
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {

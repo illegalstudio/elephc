@@ -2,6 +2,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -15,8 +16,11 @@ pub fn emit(
     emitter.comment("cos()");
     let ty = emit_expr(&args[0], emitter, ctx, data);
     if ty != PhpType::Float {
-        emitter.instruction("scvtf d0, x0");                                    // convert int to float
+        abi::emit_int_result_to_float_result(emitter);                          // normalize integer cos() inputs into the active floating-point result register before the libc call
     }
-    emitter.bl_c("cos");                                             // call libc cos(d0) → d0
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.bl_c("cos"),                                   // call libc cos() with the scalar argument in the native AArch64 floating-point argument register
+        Arch::X86_64 => emitter.instruction("call cos"),                        // call libc cos() with the scalar argument in the native SysV floating-point argument register
+    }
     Some(PhpType::Float)
 }

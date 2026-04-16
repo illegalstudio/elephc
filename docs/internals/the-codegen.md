@@ -883,6 +883,8 @@ For the in-progress `linux-x86_64` backend, this write path is now the first rea
 
 That same bootstrap system slice now also includes x86_64-native `time()` / `microtime(true)` through libc `gettimeofday()`, plus constant-string lowering for `phpversion()`, `php_uname()`, and `sys_get_temp_dir()` via the shared symbol-address ABI helpers instead of ARM64-only `adrp` / `add_lo12` sequences.
 
+The x86_64 math surface is broader now too: the libc-backed float builtin family (`sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `tanh`, `exp`, `log`, `log2`, `log10`, `atan2`, `hypot`, `pow`) and the pure float helpers (`sqrt`, `pi`, `deg2rad`, `rad2deg`, `min`, `max`) all use SysV floating-point registers plus the shared temporary-stack ABI helpers instead of raw AArch64 `d0` / `scvtf` / `str d0` lowering. The same applies to the `**` operator in expression codegen, which now routes through the x86_64 `pow()` libc call path with the right floating argument order.
+
 ## Function codegen
 
 **Files:** `src/codegen/functions/mod.rs`, `src/codegen/functions/`

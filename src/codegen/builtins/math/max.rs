@@ -2,6 +2,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -22,11 +23,11 @@ pub fn emit(
         // -- push current maximum onto stack --
         if any_float {
             if i == 1 && t0 != PhpType::Float {
-                emitter.instruction("scvtf d0, x0");                            // convert first arg int to float
+                abi::emit_int_result_to_float_result(emitter);                  // normalize the first max() operand into the active floating-point result register before it becomes the running floating maximum
             }
-            emitter.instruction("str d0, [sp, #-16]!");                         // push current max as float
+            abi::emit_push_float_reg(emitter, abi::float_result_reg(emitter));  // preserve the current floating maximum while the next candidate expression is evaluated
         } else {
-            emitter.instruction("str x0, [sp, #-16]!");                         // push current max as int
+            abi::emit_push_reg(emitter, abi::int_result_reg(emitter));          // preserve the current integer maximum while the next candidate expression is evaluated
         }
 
         let ti = emit_expr(arg, emitter, ctx, data);
@@ -34,22 +35,53 @@ pub fn emit(
         if any_float || ti == PhpType::Float {
             // -- float comparison path --
             if ti != PhpType::Float {
-                emitter.instruction("scvtf d0, x0");                            // convert new arg to float
+                abi::emit_int_result_to_float_result(emitter);                  // normalize the new max() candidate into the active floating-point result register before the floating comparison
             }
             if !any_float {
-                // Previous was int on stack, need to convert
-                emitter.instruction("ldr x9, [sp], #16");                       // pop previous max as int
-                emitter.instruction("scvtf d1, x9");                            // convert previous max to float
+                match emitter.target.arch {
+                    Arch::AArch64 => {
+                        abi::emit_pop_reg(emitter, "x9");                       // restore the previous integer maximum before promoting it into the floating comparison path
+                        emitter.instruction("scvtf d1, x9");                    // convert the previous integer maximum into the secondary AArch64 floating-point scratch register
+                    }
+                    Arch::X86_64 => {
+                        abi::emit_pop_reg(emitter, "r9");                       // restore the previous integer maximum before promoting it into the floating comparison path
+                        emitter.instruction("cvtsi2sd xmm1, r9");               // convert the previous integer maximum into the secondary x86_64 floating-point scratch register
+                    }
+                }
             } else {
-                emitter.instruction("ldr d1, [sp], #16");                       // pop previous max as float
+                match emitter.target.arch {
+                    Arch::AArch64 => {
+                        abi::emit_pop_float_reg(emitter, "d1");                 // restore the previous floating maximum into the secondary AArch64 floating-point scratch register
+                    }
+                    Arch::X86_64 => {
+                        abi::emit_pop_float_reg(emitter, "xmm1");               // restore the previous floating maximum into the secondary x86_64 floating-point scratch register
+                    }
+                }
             }
-            emitter.instruction("fmax d0, d1, d0");                             // d0 = maximum of d1 and d0
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("fmax d0, d1, d0");                     // compute the larger of the previous and new floating candidates in the standard AArch64 floating-point result register
+                }
+                Arch::X86_64 => {
+                    emitter.instruction("maxsd xmm1, xmm0");                    // compute the larger of the previous and new floating candidates in the secondary x86_64 floating-point scratch register
+                    emitter.instruction("movsd xmm0, xmm1");                    // move the updated floating maximum back into the standard x86_64 floating-point result register
+                }
+            }
             any_float = true;
         } else {
             // -- integer comparison path --
-            emitter.instruction("ldr x1, [sp], #16");                           // pop previous max into x1
-            emitter.instruction("cmp x1, x0");                                  // compare previous max with new arg
-            emitter.instruction("csel x0, x1, x0, gt");                         // select larger value
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    emitter.instruction("ldr x1, [sp], #16");                   // restore the previous integer maximum into the AArch64 scratch register before the scalar comparison
+                    emitter.instruction("cmp x1, x0");                          // compare the previous integer maximum against the new integer candidate
+                    emitter.instruction("csel x0, x1, x0, gt");                 // select the larger integer value into the standard AArch64 integer result register
+                }
+                Arch::X86_64 => {
+                    abi::emit_pop_reg(emitter, "r9");                           // restore the previous integer maximum into a scratch register before the scalar comparison
+                    emitter.instruction("cmp r9, rax");                         // compare the previous integer maximum against the new integer candidate
+                    emitter.instruction("cmovg rax, r9");                       // keep the larger integer value in the standard x86_64 integer result register
+                }
+            }
         }
     }
 
