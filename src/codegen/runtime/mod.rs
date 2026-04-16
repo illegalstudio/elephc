@@ -63,6 +63,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     strings::emit_urlencode(emitter);
     strings::emit_urldecode(emitter);
     strings::emit_rawurlencode(emitter);
+    strings::emit_md5(emitter);
+    strings::emit_sha1(emitter);
+    strings::emit_hash(emitter);
     strings::emit_base64_encode(emitter);
     strings::emit_base64_decode(emitter);
     strings::emit_sprintf(emitter);
@@ -279,6 +282,9 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     strings::emit_urlencode(emitter);
     strings::emit_urldecode(emitter);
     strings::emit_rawurlencode(emitter);
+    strings::emit_md5(emitter);
+    strings::emit_sha1(emitter);
+    strings::emit_hash(emitter);
     strings::emit_base64_encode(emitter);
     strings::emit_base64_decode(emitter);
     strings::emit_rtrim_mask(emitter);
