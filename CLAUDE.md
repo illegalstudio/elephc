@@ -126,6 +126,36 @@ PHP source → Lexer (tokens) → Parser (AST) → Resolver (include/require) �
 
 Leaf builtin/runtime files contain exactly **one emitter function**. Keep dispatcher/re-export files (`mod.rs`) as orchestration-only files, and keep runtime data emission in `src/codegen/runtime/data.rs`.
 
+### File size policy
+
+As a general rule, aim to keep source files under **500 lines of code**. This is a maintainability guideline, not a blind numeric rule.
+
+The real goal is to avoid files that become hard to reason about because they mix multiple responsibilities. In practice:
+
+- **Dispatcher/orchestration files** (`mod.rs`, top-level drivers, large checker/codegen coordinators) should stay slim. If they grow large, split them aggressively.
+- **Multi-responsibility files** should be split once they start accumulating unrelated concerns, even if the line count is not yet extreme.
+- **Leaf files that implement one cohesive feature** are allowed to exceed 500 lines when splitting them would create artificial fragmentation.
+
+Examples of files that may reasonably stay above the soft limit:
+
+- a single runtime emitter implementing one substantial builtin or runtime routine
+- a single compiler pass file that is still clearly about one feature and one code path
+- a self-contained parser/lowering/runtime leaf where splitting would only spread one mental model across several tiny files
+
+Examples of files that should usually be split:
+
+- a file that mixes dispatch, validation, data collection, and post-processing
+- a file that contains several unrelated builtins or runtime helpers
+- a file that acts as a “miscellaneous bucket” for code that did not get a home
+
+So the policy is:
+
+- treat **500 LOC as a warning sign**
+- treat **mixed responsibilities** as the real trigger for refactoring
+- do **not** split a file that owns one coherent feature just to satisfy the number
+
+In short: prefer **cohesion over mechanical line-count compliance**. A 650-line mono-feature leaf is acceptable; a 350-line multi-purpose orchestrator is already a refactor candidate.
+
 ### Codegen conventions (ARM64)
 
 - **Integers**: result in `x0`
