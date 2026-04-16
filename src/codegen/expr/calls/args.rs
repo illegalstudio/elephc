@@ -193,6 +193,13 @@ pub(crate) fn coerce_current_value_to_target(
     let source_repr = source_ty.codegen_repr();
     let pushed_ty = target_ty
         .map(PhpType::codegen_repr)
+        .or_else(|| {
+            if matches!(source_repr, PhpType::Void) {
+                Some(PhpType::Int)
+            } else {
+                None
+            }
+        })
         .unwrap_or_else(|| source_repr.clone());
     let boxed_to_mixed = matches!(pushed_ty, PhpType::Mixed) && !matches!(source_repr, PhpType::Mixed);
 

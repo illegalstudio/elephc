@@ -53,6 +53,6 @@ pub(super) fn coerce_result_to_type(
         if *source_ty == PhpType::Void {
             emitter.instruction("mov x0, #0");                                  // null widens to numeric zero before float coercion
         }
-        emitter.instruction("scvtf d0, x0");                                    // convert integer-like value to float for unified result type
+        crate::codegen::abi::emit_int_result_to_float_result(emitter);          // convert the integer-like result into the active target float-result register
     }
 }

@@ -62,10 +62,11 @@ pub(super) fn emit_cast(
                     }
                     emitter.bl_c("atof");                            // parse C string as double → d0=result
                 }
+                PhpType::Mixed | PhpType::Union(_) => {
+                    abi::emit_call_label(emitter, "__rt_mixed_cast_float");     // cast the boxed mixed payload to float through the target-aware helper
+                }
                 PhpType::Array(_)
                 | PhpType::AssocArray { .. }
-                | PhpType::Mixed
-                | PhpType::Union(_)
                 | PhpType::Callable
                 | PhpType::Object(_)
                 | PhpType::Buffer(_)

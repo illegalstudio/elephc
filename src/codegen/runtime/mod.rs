@@ -200,6 +200,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     arrays::emit_gc_collect_cycles(emitter);
     arrays::emit_mixed_from_value(emitter);
     arrays::emit_mixed_cast_bool(emitter);
+    arrays::emit_mixed_cast_float(emitter);
     arrays::emit_mixed_cast_int(emitter);
     arrays::emit_mixed_cast_string(emitter);
     arrays::emit_mixed_free_deep(emitter);
@@ -395,6 +396,7 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_gc_collect_cycles(emitter);
     arrays::emit_mixed_from_value(emitter);
     arrays::emit_mixed_cast_bool(emitter);
+    arrays::emit_mixed_cast_float(emitter);
     arrays::emit_mixed_cast_int(emitter);
     arrays::emit_mixed_free_deep(emitter);
     arrays::emit_mixed_unbox(emitter);

@@ -19,13 +19,17 @@ pub fn emit(
         let ty = emit_expr(&args[0], emitter, ctx, data);
         match emitter.target.arch {
             Arch::AArch64 => {
-                if ty != PhpType::Float {
+                if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+                    abi::emit_call_label(emitter, "__rt_mixed_cast_float");     // normalize boxed numeric/null payloads to a floating-point round() input
+                } else if ty != PhpType::Float {
                     emitter.instruction("scvtf d0, x0");                        // convert the round() input to float when it is an integer
                 }
                 emitter.instruction("frinta d0, d0");                           // round to nearest with ties away from zero on AArch64
             }
             Arch::X86_64 => {
-                if ty != PhpType::Float {
+                if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+                    abi::emit_call_label(emitter, "__rt_mixed_cast_float");     // normalize boxed numeric/null payloads to a floating-point round() input
+                } else if ty != PhpType::Float {
                     emitter.instruction("cvtsi2sd xmm0, rax");                  // convert the round() input to float when it is an integer
                 }
                 emitter.instruction("call round");                              // delegate PHP-compatible nearest-integer rounding to libc round() on linux-x86_64
@@ -35,7 +39,9 @@ pub fn emit(
         let ty = emit_expr(&args[0], emitter, ctx, data);
         match emitter.target.arch {
             Arch::AArch64 => {
-                if ty != PhpType::Float {
+                if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+                    abi::emit_call_label(emitter, "__rt_mixed_cast_float");     // normalize boxed numeric/null payloads to a floating-point round() input
+                } else if ty != PhpType::Float {
                     emitter.instruction("scvtf d0, x0");                        // convert the round() value to float when it is an integer
                 }
                 emitter.instruction("str d0, [sp, #-16]!");                     // preserve the original value while computing the precision multiplier
@@ -59,7 +65,9 @@ pub fn emit(
                 emitter.instruction("fdiv d0, d0, d1");                         // divide the rounded scaled value back down by the precision multiplier
             }
             Arch::X86_64 => {
-                if ty != PhpType::Float {
+                if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+                    abi::emit_call_label(emitter, "__rt_mixed_cast_float");     // normalize boxed numeric/null payloads to a floating-point round() input
+                } else if ty != PhpType::Float {
                     emitter.instruction("cvtsi2sd xmm0, rax");                  // convert the round() value to float when it is an integer
                 }
                 abi::emit_push_float_reg(emitter, "xmm0");                      // preserve the original value while computing the precision multiplier
