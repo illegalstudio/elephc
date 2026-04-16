@@ -360,6 +360,7 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_array_filter_refcounted(emitter);
     arrays::emit_array_reduce(emitter);
     arrays::emit_array_walk(emitter);
+    arrays::emit_usort(emitter);
     arrays::emit_hash_fnv1a(emitter);
     arrays::emit_hash_new(emitter);
     arrays::emit_hash_insert_owned(emitter);
