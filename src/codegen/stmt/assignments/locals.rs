@@ -44,7 +44,6 @@ pub(crate) fn emit_assign_stmt(
         let offset = var.stack_offset;
         let old_ty = var.ty.clone();
         let pointer_reg = abi::symbol_scratch_reg(emitter);
-        let saved_result_reg = abi::temp_int_reg(emitter.target);
         let ref_needs_mixed_box =
             matches!(old_ty, PhpType::Mixed) && !matches!(ty, PhpType::Mixed | PhpType::Union(_));
         if ref_needs_mixed_box {
@@ -59,22 +58,14 @@ pub(crate) fn emit_assign_stmt(
             abi::emit_push_reg(emitter, pointer_reg);                                 // preserve the referenced-slot address across decref helper calls
             let needs_save_x0 = !matches!(&ty, PhpType::Str | PhpType::Float);
             if needs_save_x0 {
-                emitter.instruction(&format!(
-                    "mov {}, {}",
-                    saved_result_reg,
-                    abi::int_result_reg(emitter)
-                ));                                                                  // preserve incoming heap value across decref
+                abi::emit_push_reg(emitter, abi::int_result_reg(emitter));            // preserve the incoming boxed/scalar result across decref helper calls
             }
             abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), pointer_reg, 0); // load previous heap pointer from ref target
             abi::emit_decref_if_refcounted(emitter, &old_ty);
-            abi::emit_pop_reg(emitter, pointer_reg);                                  // restore the referenced-slot address after decref helper calls
             if needs_save_x0 {
-                emitter.instruction(&format!(
-                    "mov {}, {}",
-                    abi::int_result_reg(emitter),
-                    saved_result_reg
-                ));                                                                  // restore incoming value after decref
+                abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));             // restore the incoming boxed/scalar result after decref helper calls
             }
+            abi::emit_pop_reg(emitter, pointer_reg);                                  // restore the referenced-slot address after decref helper calls
         }
         match &ty {
             PhpType::Bool | PhpType::Int => {
