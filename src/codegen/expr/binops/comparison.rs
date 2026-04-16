@@ -13,14 +13,14 @@ use super::super::{coerce_null_to_zero, emit_expr, BinOp, Expr, PhpType};
 fn coerce_to_int_for_loose_cmp(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
         PhpType::Void => {
-            emitter.instruction("mov x0, #0");
+            emitter.instruction("mov x0, #0");                                  // coerce null into integer 0 for loose comparison
         }
         PhpType::Bool => {}
         PhpType::Int => {
             super::super::coerce_null_to_zero(emitter, ty);
         }
         PhpType::Float => {
-            emitter.instruction("fcvtzs x0, d0");
+            emitter.instruction("fcvtzs x0, d0");                               // truncate the float in d0 to signed int for loose comparison
         }
         PhpType::Str => {
             abi::emit_call_label(emitter, "__rt_atoi");
@@ -83,7 +83,7 @@ pub(super) fn emit_loose_equality_binop(
             Arch::X86_64 => "r10",
         };
         abi::emit_pop_reg(emitter, left_reg);
-        emitter.instruction(&format!("cmp {}, {}", left_reg, abi::int_result_reg(emitter)));
+        emitter.instruction(&format!("cmp {}, {}", left_reg, abi::int_result_reg(emitter))); // compare left against right in integer registers
     }
     let cond = match op {
         BinOp::Eq => "eq",
@@ -133,7 +133,7 @@ pub(super) fn emit_order_compare_binop(
             Arch::X86_64 => "r10",
         };
         abi::emit_pop_reg(emitter, left_reg);
-        emitter.instruction(&format!("cmp {}, {}", left_reg, abi::int_result_reg(emitter)));
+        emitter.instruction(&format!("cmp {}, {}", left_reg, abi::int_result_reg(emitter))); // compare left against right in integer registers
     }
     let cond = match op {
         BinOp::Lt => "lt",
@@ -185,38 +185,38 @@ pub(super) fn emit_spaceship_binop(
         };
         abi::emit_pop_reg(emitter, left_reg);
         match emitter.target.arch {
-            Arch::AArch64 => emitter.instruction("cmp x1, x0"),
+            Arch::AArch64 => emitter.instruction("cmp x1, x0"),                 // compare left (x1) against right (x0) before computing the spaceship result
             Arch::X86_64 => emitter.instruction(&format!(
                 "cmp {}, {}",
                 left_reg,
                 abi::int_result_reg(emitter)
-            )),
+            )),                                                                 // compare left against right in integer registers
         }
     }
 
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("cset x0, gt");
-            emitter.instruction("csinv x0, x0, xzr, ge");
+            emitter.instruction("cset x0, gt");                                 // set x0 to 1 when left > right, else 0
+            emitter.instruction("csinv x0, x0, xzr, ge");                       // keep 1 when left >= right, invert to -1 when left < right
         }
         Arch::X86_64 => {
             let greater_label = ctx.next_label("spaceship_gt");
             let less_label = ctx.next_label("spaceship_lt");
             let done_label = ctx.next_label("spaceship_done");
             if left_ty == PhpType::Float || right_ty == PhpType::Float {
-                emitter.instruction(&format!("ja {}", greater_label));
-                emitter.instruction(&format!("jb {}", less_label));
+                emitter.instruction(&format!("ja {}", greater_label));          // floats: jump to greater branch when unordered-above
+                emitter.instruction(&format!("jb {}", less_label));             // floats: jump to less branch when unordered-below
             } else {
-                emitter.instruction(&format!("jg {}", greater_label));
-                emitter.instruction(&format!("jl {}", less_label));
+                emitter.instruction(&format!("jg {}", greater_label));          // ints: jump to greater branch when signed greater
+                emitter.instruction(&format!("jl {}", less_label));             // ints: jump to less branch when signed less
             }
-            emitter.instruction("mov rax, 0");
-            emitter.instruction(&format!("jmp {}", done_label));
+            emitter.instruction("mov rax, 0");                                  // equal case: spaceship result is 0
+            emitter.instruction(&format!("jmp {}", done_label));                // skip the greater/less branches
             emitter.label(&greater_label);
-            emitter.instruction("mov rax, 1");
-            emitter.instruction(&format!("jmp {}", done_label));
+            emitter.instruction("mov rax, 1");                                  // greater branch: spaceship result is 1
+            emitter.instruction(&format!("jmp {}", done_label));                // skip the less branch
             emitter.label(&less_label);
-            emitter.instruction("mov rax, -1");
+            emitter.instruction("mov rax, -1");                                 // less branch: spaceship result is -1
             emitter.label(&done_label);
         }
     }

@@ -27,8 +27,8 @@ pub(super) fn emit_logical_binop(
             let right_ty = emit_expr(right, emitter, ctx, data);
             coerce_to_truthiness(emitter, ctx, &right_ty);
             match emitter.target.arch {
-                Arch::AArch64 => emitter.instruction("cmp x0, #0"),
-                Arch::X86_64 => emitter.instruction("test rax, rax"),
+                Arch::AArch64 => emitter.instruction("cmp x0, #0"),             // test whether right-operand truthiness is zero (false)
+                Arch::X86_64 => emitter.instruction("test rax, rax"),           // test whether right-operand truthiness is zero (false)
             }
             emit_set_bool_from_flags(emitter, "ne");
             emitter.label(&end_label);
@@ -43,8 +43,8 @@ pub(super) fn emit_logical_binop(
             coerce_to_truthiness(emitter, ctx, &right_ty);
             emitter.label(&end_label);
             match emitter.target.arch {
-                Arch::AArch64 => emitter.instruction("cmp x0, #0"),
-                Arch::X86_64 => emitter.instruction("test rax, rax"),
+                Arch::AArch64 => emitter.instruction("cmp x0, #0"),             // test whether right-operand truthiness is zero (false)
+                Arch::X86_64 => emitter.instruction("test rax, rax"),           // test whether right-operand truthiness is zero (false)
             }
             emit_set_bool_from_flags(emitter, "ne");
             PhpType::Bool
@@ -81,16 +81,16 @@ pub(super) fn emit_pow_binop(
     }
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("fmov d1, d0");
+            emitter.instruction("fmov d1, d0");                                 // move right-operand float into d1 (second pow argument)
             abi::emit_pop_float_reg(emitter, "d0");
             emitter.bl_c("pow");
         }
         Arch::X86_64 => {
             abi::emit_pop_float_reg(emitter, "xmm1");
-            emitter.instruction("movapd xmm2, xmm0");
-            emitter.instruction("movapd xmm0, xmm1");
-            emitter.instruction("movapd xmm1, xmm2");
-            emitter.instruction("call pow");
+            emitter.instruction("movapd xmm2, xmm0");                           // stash right-operand float before shuffling pow argument registers
+            emitter.instruction("movapd xmm0, xmm1");                           // place left-operand float into xmm0 (first pow argument)
+            emitter.instruction("movapd xmm1, xmm2");                           // place right-operand float into xmm1 (second pow argument)
+            emitter.instruction("call pow");                                    // invoke libc pow(xmm0, xmm1); result returned in xmm0
         }
     }
     PhpType::Float
@@ -152,28 +152,28 @@ pub(super) fn emit_numeric_binop(
         abi::emit_pop_reg(emitter, left_reg);
         match op {
             BinOp::Add => match emitter.target.arch {
-                Arch::AArch64 => emitter.instruction("add x0, x1, x0"),
+                Arch::AArch64 => emitter.instruction("add x0, x1, x0"),         // x0 = left (x1) + right (x0)
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("add {}, {}", left_reg, result_reg));
-                    emitter.instruction(&format!("mov {}, {}", result_reg, left_reg));
+                    emitter.instruction(&format!("add {}, {}", left_reg, result_reg)); // left_reg += result_reg (right operand)
+                    emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); // move the sum back into the result register
                 }
             },
             BinOp::Sub => match emitter.target.arch {
-                Arch::AArch64 => emitter.instruction("sub x0, x1, x0"),
+                Arch::AArch64 => emitter.instruction("sub x0, x1, x0"),         // x0 = left (x1) - right (x0)
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("sub {}, {}", left_reg, result_reg));
-                    emitter.instruction(&format!("mov {}, {}", result_reg, left_reg));
+                    emitter.instruction(&format!("sub {}, {}", left_reg, result_reg)); // left_reg -= result_reg (right operand)
+                    emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); // move the difference back into the result register
                 }
             },
             BinOp::Mul => match emitter.target.arch {
-                Arch::AArch64 => emitter.instruction("mul x0, x1, x0"),
+                Arch::AArch64 => emitter.instruction("mul x0, x1, x0"),         // x0 = left (x1) * right (x0)
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("imul {}, {}", left_reg, result_reg));
-                    emitter.instruction(&format!("mov {}, {}", result_reg, left_reg));
+                    emitter.instruction(&format!("imul {}, {}", left_reg, result_reg)); // left_reg *= result_reg (right operand)
+                    emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); // move the product back into the result register
                 }
             },
             BinOp::Div => {
-                emitter.instruction("sdiv x0, x1, x0");
+                emitter.instruction("sdiv x0, x1, x0");                         // x0 = left (x1) / right (x0) (signed division)
             }
             BinOp::Mod => emit_int_mod(emitter, ctx, left_reg, result_reg),
             _ => unreachable!(),
@@ -200,13 +200,13 @@ pub(super) fn emit_concat_binop(
     coerce_to_string(emitter, ctx, data, &right_ty);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("mov x3, x1");
-            emitter.instruction("mov x4, x2");
+            emitter.instruction("mov x3, x1");                                  // save right-operand string pointer into x3
+            emitter.instruction("mov x4, x2");                                  // save right-operand string length into x4
             abi::emit_pop_reg_pair(emitter, "x1", "x2");
         }
         Arch::X86_64 => {
-            emitter.instruction("mov rdi, rax");
-            emitter.instruction("mov rsi, rdx");
+            emitter.instruction("mov rdi, rax");                                // save right-operand string pointer into rdi
+            emitter.instruction("mov rsi, rdx");                                // save right-operand string length into rsi
             abi::emit_pop_reg_pair(emitter, "rax", "rdx");
         }
     }
@@ -235,40 +235,40 @@ pub(super) fn emit_bitwise_binop(
     abi::emit_pop_reg(emitter, left_reg);
     match op {
         BinOp::BitAnd => match emitter.target.arch {
-            Arch::AArch64 => emitter.instruction("and x0, x1, x0"),
+            Arch::AArch64 => emitter.instruction("and x0, x1, x0"),             // x0 = left (x1) & right (x0)
             Arch::X86_64 => {
-                emitter.instruction(&format!("and {}, {}", left_reg, result_reg));
-                emitter.instruction(&format!("mov {}, {}", result_reg, left_reg));
+                emitter.instruction(&format!("and {}, {}", left_reg, result_reg)); // left_reg &= result_reg (right operand)
+                emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); // move the AND result back into the result register
             }
         },
         BinOp::BitOr => match emitter.target.arch {
-            Arch::AArch64 => emitter.instruction("orr x0, x1, x0"),
+            Arch::AArch64 => emitter.instruction("orr x0, x1, x0"),             // x0 = left (x1) | right (x0)
             Arch::X86_64 => {
-                emitter.instruction(&format!("or {}, {}", left_reg, result_reg));
-                emitter.instruction(&format!("mov {}, {}", result_reg, left_reg));
+                emitter.instruction(&format!("or {}, {}", left_reg, result_reg)); // left_reg |= result_reg (right operand)
+                emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); // move the OR result back into the result register
             }
         },
         BinOp::BitXor => match emitter.target.arch {
-            Arch::AArch64 => emitter.instruction("eor x0, x1, x0"),
+            Arch::AArch64 => emitter.instruction("eor x0, x1, x0"),             // x0 = left (x1) ^ right (x0)
             Arch::X86_64 => {
-                emitter.instruction(&format!("xor {}, {}", left_reg, result_reg));
-                emitter.instruction(&format!("mov {}, {}", result_reg, left_reg));
+                emitter.instruction(&format!("xor {}, {}", left_reg, result_reg)); // left_reg ^= result_reg (right operand)
+                emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); // move the XOR result back into the result register
             }
         },
         BinOp::ShiftLeft => match emitter.target.arch {
-            Arch::AArch64 => emitter.instruction("lsl x0, x1, x0"),
+            Arch::AArch64 => emitter.instruction("lsl x0, x1, x0"),             // x0 = left (x1) << right (x0)
             Arch::X86_64 => {
-                emitter.instruction("mov rcx, rax");
-                emitter.instruction(&format!("shl {}, cl", left_reg));
-                emitter.instruction(&format!("mov {}, {}", result_reg, left_reg));
+                emitter.instruction("mov rcx, rax");                            // x86 shifts require count in cl -- move right operand into rcx
+                emitter.instruction(&format!("shl {}, cl", left_reg));          // left_reg <<= cl (logical shift left)
+                emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); // move the shifted value back into the result register
             }
         },
         BinOp::ShiftRight => match emitter.target.arch {
-            Arch::AArch64 => emitter.instruction("asr x0, x1, x0"),
+            Arch::AArch64 => emitter.instruction("asr x0, x1, x0"),             // x0 = left (x1) >> right (x0) (arithmetic shift right)
             Arch::X86_64 => {
-                emitter.instruction("mov rcx, rax");
-                emitter.instruction(&format!("sar {}, cl", left_reg));
-                emitter.instruction(&format!("mov {}, {}", result_reg, left_reg));
+                emitter.instruction("mov rcx, rax");                            // x86 shifts require count in cl -- move right operand into rcx
+                emitter.instruction(&format!("sar {}, cl", left_reg));          // left_reg >>= cl (arithmetic shift right)
+                emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); // move the shifted value back into the result register
             }
         },
         _ => unreachable!(),
@@ -281,25 +281,25 @@ fn emit_int_mod(emitter: &mut Emitter, ctx: &mut Context, left_reg: &str, result
     let zero = ctx.next_label("mod_zero");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cbz x0, {zero}"));
-            emitter.instruction("sdiv x2, x1, x0");
-            emitter.instruction("msub x0, x2, x0, x1");
-            emitter.instruction(&format!("b {skip}"));
+            emitter.instruction(&format!("cbz x0, {zero}"));                    // branch to zero-divisor guard when right operand is zero
+            emitter.instruction("sdiv x2, x1, x0");                             // x2 = left / right (quotient for modulo)
+            emitter.instruction("msub x0, x2, x0, x1");                         // x0 = left - quotient*right (the remainder)
+            emitter.instruction(&format!("b {skip}"));                          // skip the divisor-zero case
             emitter.label(&zero);
-            emitter.instruction("mov x0, #0");
+            emitter.instruction("mov x0, #0");                                  // return 0 when the divisor was zero (PHP semantics)
             emitter.label(&skip);
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("test {}, {}", result_reg, result_reg));
-            emitter.instruction(&format!("je {}", zero));
-            emitter.instruction(&format!("mov r11, {}", result_reg));
-            emitter.instruction(&format!("mov {}, {}", result_reg, left_reg));
-            emitter.instruction("cqo");
-            emitter.instruction("idiv r11");
-            emitter.instruction(&format!("mov {}, rdx", result_reg));
-            emitter.instruction(&format!("jmp {}", skip));
+            emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // test whether divisor is zero
+            emitter.instruction(&format!("je {}", zero));                       // jump to divisor-zero case when flag set
+            emitter.instruction(&format!("mov r11, {}", result_reg));           // stash divisor in r11 before overwriting rax with the dividend
+            emitter.instruction(&format!("mov {}, {}", result_reg, left_reg));  // move the dividend (left operand) into rax for idiv
+            emitter.instruction("cqo");                                         // sign-extend rax into rdx:rax (required by idiv)
+            emitter.instruction("idiv r11");                                    // signed divide -- quotient in rax, remainder in rdx
+            emitter.instruction(&format!("mov {}, rdx", result_reg));           // return the remainder in the result register
+            emitter.instruction(&format!("jmp {}", skip));                      // skip the divisor-zero case
             emitter.label(&zero);
-            emitter.instruction(&format!("mov {}, 0", result_reg));
+            emitter.instruction(&format!("mov {}, 0", result_reg));             // return 0 when the divisor was zero (PHP semantics)
             emitter.label(&skip);
         }
     }

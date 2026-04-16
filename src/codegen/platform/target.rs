@@ -257,50 +257,50 @@ impl Target {
         if needs_at_fdcwd(macos_num) {
             match macos_num {
                 128 => {
-                    emitter.instruction("mov x3, x1"); // shift new path to x3
-                    emitter.instruction("mov x1, x0"); // shift old path to x1
-                    emitter.instruction("mov x2, #-100"); // AT_FDCWD for new path dir
-                    emitter.instruction("mov x0, #-100"); // AT_FDCWD for old path dir
+                    emitter.instruction("mov x3, x1");                          // shift new path to x3
+                    emitter.instruction("mov x1, x0");                          // shift old path to x1
+                    emitter.instruction("mov x2, #-100");                       // AT_FDCWD for new path dir
+                    emitter.instruction("mov x0, #-100");                       // AT_FDCWD for old path dir
                 }
                 338 => {
-                    emitter.instruction("mov x2, x1"); // shift buf to x2
-                    emitter.instruction("mov x1, x0"); // shift path to x1
-                    emitter.instruction("mov x0, #-100"); // AT_FDCWD
-                    emitter.instruction("mov x3, #0"); // flags = 0
+                    emitter.instruction("mov x2, x1");                          // shift buf to x2
+                    emitter.instruction("mov x1, x0");                          // shift path to x1
+                    emitter.instruction("mov x0, #-100");                       // AT_FDCWD
+                    emitter.instruction("mov x3, #0");                          // flags = 0
                 }
                 5 => {
-                    emitter.instruction("mov x3, x2"); // shift mode to x3
-                    emitter.instruction("mov x2, x1"); // shift flags to x2
-                    emitter.instruction("mov x1, x0"); // shift path to x1
-                    emitter.instruction("mov x0, #-100"); // AT_FDCWD
+                    emitter.instruction("mov x3, x2");                          // shift mode to x3
+                    emitter.instruction("mov x2, x1");                          // shift flags to x2
+                    emitter.instruction("mov x1, x0");                          // shift path to x1
+                    emitter.instruction("mov x0, #-100");                       // AT_FDCWD
                 }
                 136 => {
-                    emitter.instruction("mov x2, x1"); // shift mode to x2
-                    emitter.instruction("mov x1, x0"); // shift path to x1
-                    emitter.instruction("mov x0, #-100"); // AT_FDCWD
+                    emitter.instruction("mov x2, x1");                          // shift mode to x2
+                    emitter.instruction("mov x1, x0");                          // shift path to x1
+                    emitter.instruction("mov x0, #-100");                       // AT_FDCWD
                 }
                 10 => {
-                    emitter.instruction("mov x1, x0"); // shift path to x1
-                    emitter.instruction("mov x0, #-100"); // AT_FDCWD
-                    emitter.instruction("mov x2, #0"); // flags = 0
+                    emitter.instruction("mov x1, x0");                          // shift path to x1
+                    emitter.instruction("mov x0, #-100");                       // AT_FDCWD
+                    emitter.instruction("mov x2, #0");                          // flags = 0
                 }
                 137 => {
-                    emitter.instruction("mov x1, x0"); // shift path to x1
-                    emitter.instruction("mov x0, #-100"); // AT_FDCWD
-                    emitter.instruction("mov x2, #0x200"); // AT_REMOVEDIR
+                    emitter.instruction("mov x1, x0");                          // shift path to x1
+                    emitter.instruction("mov x0, #-100");                       // AT_FDCWD
+                    emitter.instruction("mov x2, #0x200");                      // AT_REMOVEDIR
                 }
                 33 => {
-                    emitter.instruction("mov x2, x1"); // shift mode to x2
-                    emitter.instruction("mov x1, x0"); // shift path to x1
-                    emitter.instruction("mov x0, #-100"); // AT_FDCWD
-                    emitter.instruction("mov x3, #0"); // flags = 0
+                    emitter.instruction("mov x2, x1");                          // shift mode to x2
+                    emitter.instruction("mov x1, x0");                          // shift path to x1
+                    emitter.instruction("mov x0, #-100");                       // AT_FDCWD
+                    emitter.instruction("mov x3, #0");                          // flags = 0
                 }
                 _ => unreachable!(),
             }
         }
 
-        emitter.instruction(&format!("mov x8, #{}", linux_num));
-        emitter.instruction("svc #0");
+        emitter.instruction(&format!("mov x8, #{}", linux_num));                // load the Linux syscall number into x8
+        emitter.instruction("svc #0");                                          // invoke the Linux kernel supervisor call
     }
 
     pub fn remap_c_symbol<'a>(&self, name: &'a str) -> &'a str {
