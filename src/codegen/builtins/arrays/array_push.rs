@@ -76,28 +76,28 @@ fn emit_array_push_linux_x86_64(
     abi::emit_pop_reg(emitter, "r11");                                           // restore the indexed-array pointer after evaluating the appended value
     match &val_ty {
         PhpType::Int | PhpType::Bool => {
-            emitter.instruction("mov rsi, rax");                                 // place the appended scalar payload in the x86_64 runtime value register
-            emitter.instruction("mov rdi, r11");                                 // place the indexed-array pointer in the x86_64 runtime receiver register
+            emitter.instruction("mov rsi, rax");                                // place the appended scalar payload in the x86_64 runtime value register
+            emitter.instruction("mov rdi, r11");                                // place the indexed-array pointer in the x86_64 runtime receiver register
             abi::emit_call_label(emitter, "__rt_array_push_int");                // append the scalar payload and return the possibly-grown indexed-array pointer
         }
         PhpType::Float => {
-            emitter.instruction("movq rsi, xmm0");                               // move the floating-point payload bits into the scalar append register
-            emitter.instruction("mov rdi, r11");                                 // place the indexed-array pointer in the x86_64 runtime receiver register
+            emitter.instruction("movq rsi, xmm0");                              // move the floating-point payload bits into the scalar append register
+            emitter.instruction("mov rdi, r11");                                // place the indexed-array pointer in the x86_64 runtime receiver register
             abi::emit_call_label(emitter, "__rt_array_push_int");                // append the floating-point payload bits as an 8-byte scalar slot
         }
         PhpType::Str => {
-            emitter.instruction("mov rsi, rax");                                 // place the appended string pointer in the x86_64 runtime payload register
-            emitter.instruction("mov rdi, r11");                                 // place the indexed-array pointer in the x86_64 runtime receiver register
+            emitter.instruction("mov rsi, rax");                                // place the appended string pointer in the x86_64 runtime payload register
+            emitter.instruction("mov rdi, r11");                                // place the indexed-array pointer in the x86_64 runtime receiver register
             abi::emit_call_label(emitter, "__rt_array_push_str");                // persist and append the string payload, returning the possibly-grown indexed-array pointer
         }
         PhpType::Callable => {
-            emitter.instruction("mov rsi, rax");                                 // place the callable pointer bits in the x86_64 scalar append register
-            emitter.instruction("mov rdi, r11");                                 // place the indexed-array pointer in the x86_64 runtime receiver register
+            emitter.instruction("mov rsi, rax");                                // place the callable pointer bits in the x86_64 scalar append register
+            emitter.instruction("mov rdi, r11");                                // place the indexed-array pointer in the x86_64 runtime receiver register
             abi::emit_call_label(emitter, "__rt_array_push_int");                // append the callable pointer bits as a plain scalar slot
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
-            emitter.instruction("mov rsi, rax");                                 // place the retained refcounted payload pointer in the x86_64 runtime child register
-            emitter.instruction("mov rdi, r11");                                 // place the indexed-array pointer in the x86_64 runtime receiver register
+            emitter.instruction("mov rsi, rax");                                // place the retained refcounted payload pointer in the x86_64 runtime child register
+            emitter.instruction("mov rdi, r11");                                // place the indexed-array pointer in the x86_64 runtime receiver register
             abi::emit_call_label(emitter, "__rt_array_push_refcounted");         // append the retained heap payload and stamp the indexed-array value_type metadata
         }
         _ => {}

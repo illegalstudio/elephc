@@ -85,20 +85,20 @@ pub(super) fn emit_finally_dispatch(
         return;
     }
 
-    emitter.instruction(&format!("cmp {}, 1", result_reg));                        // is the pending action a return?
+    emitter.instruction(&format!("cmp {}, 1", result_reg));                     // is the pending action a return?
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction(&format!("b.eq {}", dispatch_return)), // restore the return value then continue to the return target
-        Arch::X86_64 => emitter.instruction(&format!("je {}", dispatch_return)),   // restore the return value then continue to the return target
+        Arch::X86_64 => emitter.instruction(&format!("je {}", dispatch_return)), // restore the return value then continue to the return target
     }
-    emitter.instruction(&format!("cmp {}, 2", result_reg));                        // is the pending action a branch (break/continue)?
+    emitter.instruction(&format!("cmp {}, 2", result_reg));                     // is the pending action a branch (break/continue)?
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction(&format!("b.eq {}", dispatch_branch)), // jump to the recorded target after finally
-        Arch::X86_64 => emitter.instruction(&format!("je {}", dispatch_branch)),   // jump to the recorded target after finally
+        Arch::X86_64 => emitter.instruction(&format!("je {}", dispatch_branch)), // jump to the recorded target after finally
     }
-    emitter.instruction(&format!("cmp {}, 3", result_reg));                        // is the pending action an exception rethrow?
+    emitter.instruction(&format!("cmp {}, 3", result_reg));                     // is the pending action an exception rethrow?
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction(&format!("b.eq {}", dispatch_rethrow)), // resume propagating the current exception after finally
-        Arch::X86_64 => emitter.instruction(&format!("je {}", dispatch_rethrow)),   // resume propagating the current exception after finally
+        Arch::X86_64 => emitter.instruction(&format!("je {}", dispatch_rethrow)), // resume propagating the current exception after finally
     }
     abi::emit_jump(emitter, normal_resume_label);                                  // unknown action kinds fall back to ordinary completion
 
@@ -131,7 +131,7 @@ fn emit_label_address(emitter: &mut Emitter, label: &str, dest_reg: &str) {
 
 fn emit_indirect_jump(emitter: &mut Emitter, reg: &str) {
     match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction(&format!("br {}", reg)),              // branch indirectly through the restored finally target register
-        Arch::X86_64 => emitter.instruction(&format!("jmp {}", reg)),              // branch indirectly through the restored finally target register
+        Arch::AArch64 => emitter.instruction(&format!("br {}", reg)),           // branch indirectly through the restored finally target register
+        Arch::X86_64 => emitter.instruction(&format!("jmp {}", reg)),           // branch indirectly through the restored finally target register
     }
 }

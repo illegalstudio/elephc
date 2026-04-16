@@ -74,7 +74,7 @@ pub fn emit_symbol_address(emitter: &mut Emitter, dest: &str, symbol: &str) {
             emitter.add_lo12(dest, dest, &format!("{}", symbol));                       // resolve the exact address of the requested symbol storage
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("lea {}, [rip + {}]", dest, symbol));          // materialize the symbol address through a RIP-relative LEA
+            emitter.instruction(&format!("lea {}, [rip + {}]", dest, symbol));  // materialize the symbol address through a RIP-relative LEA
         }
     }
 }
@@ -123,9 +123,9 @@ pub fn emit_load_symbol_to_reg(
         Arch::AArch64 => {
             emit_symbol_address(emitter, "x9", symbol);
             if byte_offset == 0 {
-                emitter.instruction(&format!("ldr {}, [x9]", reg));                     // load the symbol payload directly from its base address
+                emitter.instruction(&format!("ldr {}, [x9]", reg));             // load the symbol payload directly from its base address
             } else {
-                emitter.instruction(&format!("ldr {}, [x9, #{}]", reg, byte_offset));   // load the symbol payload from the requested byte offset
+                emitter.instruction(&format!("ldr {}, [x9, #{}]", reg, byte_offset)); // load the symbol payload from the requested byte offset
             }
         }
         Arch::X86_64 => {
@@ -134,14 +134,14 @@ pub fn emit_load_symbol_to_reg(
                 if is_float_register(reg) {
                     emitter.instruction(&format!("movsd {}, QWORD PTR [rip + {}]", reg, symbol)); // load the floating-point symbol payload through RIP-relative addressing
                 } else {
-                    emitter.instruction(&format!("mov {}, QWORD PTR [rip + {}]", reg, symbol));   // load the integer or pointer symbol payload through RIP-relative addressing
+                    emitter.instruction(&format!("mov {}, QWORD PTR [rip + {}]", reg, symbol)); // load the integer or pointer symbol payload through RIP-relative addressing
                 }
             } else {
                 emit_symbol_address(emitter, scratch, symbol);
                 if is_float_register(reg) {
                     emitter.instruction(&format!("movsd {}, QWORD PTR [{} + {}]", reg, scratch, byte_offset)); // load the floating-point symbol payload from a non-zero byte offset
                 } else {
-                    emitter.instruction(&format!("mov {}, QWORD PTR [{} + {}]", reg, scratch, byte_offset));   // load the integer or pointer symbol payload from a non-zero byte offset
+                    emitter.instruction(&format!("mov {}, QWORD PTR [{} + {}]", reg, scratch, byte_offset)); // load the integer or pointer symbol payload from a non-zero byte offset
                 }
             }
         }
@@ -158,9 +158,9 @@ pub fn emit_store_reg_to_symbol(
         Arch::AArch64 => {
             emit_symbol_address(emitter, "x9", symbol);
             if byte_offset == 0 {
-                emitter.instruction(&format!("str {}, [x9]", reg));                     // store the register payload directly into the symbol base slot
+                emitter.instruction(&format!("str {}, [x9]", reg));             // store the register payload directly into the symbol base slot
             } else {
-                emitter.instruction(&format!("str {}, [x9, #{}]", reg, byte_offset));   // store the register payload into the requested symbol byte offset
+                emitter.instruction(&format!("str {}, [x9, #{}]", reg, byte_offset)); // store the register payload into the requested symbol byte offset
             }
         }
         Arch::X86_64 => {
@@ -169,14 +169,14 @@ pub fn emit_store_reg_to_symbol(
                 if is_float_register(reg) {
                     emitter.instruction(&format!("movsd QWORD PTR [rip + {}], {}", symbol, reg)); // store the floating-point payload directly into RIP-relative symbol storage
                 } else {
-                    emitter.instruction(&format!("mov QWORD PTR [rip + {}], {}", symbol, reg));   // store the integer or pointer payload directly into RIP-relative symbol storage
+                    emitter.instruction(&format!("mov QWORD PTR [rip + {}], {}", symbol, reg)); // store the integer or pointer payload directly into RIP-relative symbol storage
                 }
             } else {
                 emit_symbol_address(emitter, scratch, symbol);
                 if is_float_register(reg) {
                     emitter.instruction(&format!("movsd QWORD PTR [{} + {}], {}", scratch, byte_offset, reg)); // store the floating-point payload into a non-zero symbol byte offset
                 } else {
-                    emitter.instruction(&format!("mov QWORD PTR [{} + {}], {}", scratch, byte_offset, reg));   // store the integer or pointer payload into a non-zero symbol byte offset
+                    emitter.instruction(&format!("mov QWORD PTR [{} + {}], {}", scratch, byte_offset, reg)); // store the integer or pointer payload into a non-zero symbol byte offset
                 }
             }
         }
@@ -191,7 +191,7 @@ pub fn emit_store_zero_to_symbol(emitter: &mut Emitter, symbol: &str, byte_offse
         Arch::X86_64 => {
             let scratch = symbol_scratch_reg(emitter);
             if byte_offset == 0 {
-                emitter.instruction(&format!("mov QWORD PTR [rip + {}], 0", symbol));   // zero the symbol base slot through RIP-relative addressing
+                emitter.instruction(&format!("mov QWORD PTR [rip + {}], 0", symbol)); // zero the symbol base slot through RIP-relative addressing
             } else {
                 emit_symbol_address(emitter, scratch, symbol);
                 emitter.instruction(&format!("mov QWORD PTR [{} + {}], 0", scratch, byte_offset)); // zero the requested symbol byte offset through the computed address
@@ -229,41 +229,41 @@ pub fn emit_store_result_to_symbol(
             let (ptr_reg, len_reg) = string_result_regs(emitter);
             match emitter.target.arch {
                 Arch::AArch64 => {
-                    emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve the incoming string result while releasing the previous symbol payload
+                    emitter.instruction("stp x1, x2, [sp, #-16]!");             // preserve the incoming string result while releasing the previous symbol payload
                 }
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("push {}", ptr_reg));                   // preserve the incoming string pointer result while releasing the previous symbol payload
-                    emitter.instruction(&format!("push {}", len_reg));                   // preserve the incoming string length result while releasing the previous symbol payload
+                    emitter.instruction(&format!("push {}", ptr_reg));          // preserve the incoming string pointer result while releasing the previous symbol payload
+                    emitter.instruction(&format!("push {}", len_reg));          // preserve the incoming string length result while releasing the previous symbol payload
                 }
             }
             emit_load_symbol_to_reg(emitter, int_result_reg(emitter), symbol, 0);
             emit_call_label(emitter, "__rt_heap_free_safe");                             // release the previous string allocation before overwriting the symbol slot
             match emitter.target.arch {
                 Arch::AArch64 => {
-                    emitter.instruction("ldp x1, x2, [sp], #16");                        // restore the incoming string result after the release helper call
+                    emitter.instruction("ldp x1, x2, [sp], #16");               // restore the incoming string result after the release helper call
                 }
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("pop {}", len_reg));                    // restore the incoming string length result after the release helper call
-                    emitter.instruction(&format!("pop {}", ptr_reg));                    // restore the incoming string pointer result after the release helper call
+                    emitter.instruction(&format!("pop {}", len_reg));           // restore the incoming string length result after the release helper call
+                    emitter.instruction(&format!("pop {}", ptr_reg));           // restore the incoming string pointer result after the release helper call
                 }
             }
         } else if ty.is_refcounted() {
             match emitter.target.arch {
                 Arch::AArch64 => {
-                    emitter.instruction("str x0, [sp, #-16]!");                         // preserve the incoming heap pointer while decreffing the previous symbol payload
+                    emitter.instruction("str x0, [sp, #-16]!");                 // preserve the incoming heap pointer while decreffing the previous symbol payload
                 }
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("push {}", int_result_reg(emitter)));   // preserve the incoming heap pointer while decreffing the previous symbol payload
+                    emitter.instruction(&format!("push {}", int_result_reg(emitter))); // preserve the incoming heap pointer while decreffing the previous symbol payload
                 }
             }
             emit_load_symbol_to_reg(emitter, int_result_reg(emitter), symbol, 0);
             emit_decref_if_refcounted(emitter, &ty);
             match emitter.target.arch {
                 Arch::AArch64 => {
-                    emitter.instruction("ldr x0, [sp], #16");                           // restore the incoming heap pointer after decreffing the previous payload
+                    emitter.instruction("ldr x0, [sp], #16");                   // restore the incoming heap pointer after decreffing the previous payload
                 }
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("pop {}", int_result_reg(emitter)));    // restore the incoming heap pointer after decreffing the previous payload
+                    emitter.instruction(&format!("pop {}", int_result_reg(emitter))); // restore the incoming heap pointer after decreffing the previous payload
                 }
             }
         }

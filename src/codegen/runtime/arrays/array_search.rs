@@ -45,23 +45,23 @@ fn emit_array_search_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: array_search ---");
     emitter.label_global("__rt_array_search");
 
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                             // load the indexed-array length from the header before starting the linear scan
-    emitter.instruction("lea r11, [rdi + 24]");                                  // point at the indexed-array payload region just after the fixed header
-    emitter.instruction("xor eax, eax");                                         // start scanning from element index 0
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the indexed-array length from the header before starting the linear scan
+    emitter.instruction("lea r11, [rdi + 24]");                                 // point at the indexed-array payload region just after the fixed header
+    emitter.instruction("xor eax, eax");                                        // start scanning from element index 0
 
     emitter.label("__rt_array_search_loop");
-    emitter.instruction("cmp rax, r10");                                         // have we visited every element in the indexed array?
-    emitter.instruction("jge __rt_array_search_notfound");                       // stop once the scan reaches the logical array length
-    emitter.instruction("mov rdx, QWORD PTR [r11 + rax * 8]");                   // load the current indexed-array element from the 8-byte payload region
-    emitter.instruction("cmp rdx, rsi");                                         // compare the current indexed-array element against the searched needle
-    emitter.instruction("je __rt_array_search_found");                           // return the first matching index immediately
-    emitter.instruction("add rax, 1");                                           // advance to the next indexed-array element after a mismatch
-    emitter.instruction("jmp __rt_array_search_loop");                           // continue the linear scan until match or exhaustion
+    emitter.instruction("cmp rax, r10");                                        // have we visited every element in the indexed array?
+    emitter.instruction("jge __rt_array_search_notfound");                      // stop once the scan reaches the logical array length
+    emitter.instruction("mov rdx, QWORD PTR [r11 + rax * 8]");                  // load the current indexed-array element from the 8-byte payload region
+    emitter.instruction("cmp rdx, rsi");                                        // compare the current indexed-array element against the searched needle
+    emitter.instruction("je __rt_array_search_found");                          // return the first matching index immediately
+    emitter.instruction("add rax, 1");                                          // advance to the next indexed-array element after a mismatch
+    emitter.instruction("jmp __rt_array_search_loop");                          // continue the linear scan until match or exhaustion
 
     emitter.label("__rt_array_search_found");
-    emitter.instruction("ret");                                                  // return the first matching index in the standard integer result register
+    emitter.instruction("ret");                                                 // return the first matching index in the standard integer result register
 
     emitter.label("__rt_array_search_notfound");
-    emitter.instruction("mov rax, -1");                                          // return -1 when the indexed-array scan does not find any matching element
-    emitter.instruction("ret");                                                  // return the not-found sentinel to the caller
+    emitter.instruction("mov rax, -1");                                         // return -1 when the indexed-array scan does not find any matching element
+    emitter.instruction("ret");                                                 // return the not-found sentinel to the caller
 }

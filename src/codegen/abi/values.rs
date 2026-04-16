@@ -41,13 +41,13 @@ pub fn emit_incref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
     if ty.is_refcounted() {
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction("str x0, [sp, #-16]!");                             // preserve heap pointer across incref helper call
-                emitter.instruction("bl __rt_incref");                                  // retain shared heap value before creating a new owner
-                emitter.instruction("ldr x0, [sp], #16");                               // restore original heap pointer after incref
+                emitter.instruction("str x0, [sp, #-16]!");                     // preserve heap pointer across incref helper call
+                emitter.instruction("bl __rt_incref");                          // retain shared heap value before creating a new owner
+                emitter.instruction("ldr x0, [sp], #16");                       // restore original heap pointer after incref
             }
             Arch::X86_64 => {
                 emit_push_reg(emitter, "rax");                                          // preserve the heap pointer in a 16-byte temporary slot to keep the SysV stack aligned across the helper call
-                emitter.instruction("call __rt_incref");                                // retain shared heap value before creating a new owner
+                emitter.instruction("call __rt_incref");                        // retain shared heap value before creating a new owner
                 emit_pop_reg(emitter, "rax");                                           // restore the original heap pointer after the aligned incref helper call
             }
         }
@@ -109,7 +109,7 @@ pub fn emit_branch_if_int_result_zero(emitter: &mut Emitter, label: &str) {
         }
         crate::codegen::platform::Arch::X86_64 => {
             emitter.instruction(&format!("test {}, {}", int_result_reg(emitter), int_result_reg(emitter))); // test whether the coerced integer truthiness result is zero
-            emitter.instruction(&format!("je {}", label));                            // branch when the coerced integer truthiness result is zero
+            emitter.instruction(&format!("je {}", label));                      // branch when the coerced integer truthiness result is zero
         }
     }
 }
@@ -121,7 +121,7 @@ pub fn emit_branch_if_int_result_nonzero(emitter: &mut Emitter, label: &str) {
         }
         crate::codegen::platform::Arch::X86_64 => {
             emitter.instruction(&format!("test {}, {}", int_result_reg(emitter), int_result_reg(emitter))); // test whether the coerced integer truthiness result is non-zero
-            emitter.instruction(&format!("jne {}", label));                            // branch when the coerced integer truthiness result is non-zero
+            emitter.instruction(&format!("jne {}", label));                     // branch when the coerced integer truthiness result is non-zero
         }
     }
 }
@@ -167,9 +167,9 @@ pub fn emit_load_int_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
     match emitter.target.arch {
         Arch::AArch64 => {
             if (0..=65535).contains(&value) {
-                emitter.instruction(&format!("mov {}, #{}", reg, value));               // load a small non-negative immediate directly into the target register
+                emitter.instruction(&format!("mov {}, #{}", reg, value));       // load a small non-negative immediate directly into the target register
             } else if (-65536..0).contains(&value) {
-                emitter.instruction(&format!("mov {}, #{}", reg, value));               // load a small negative immediate directly into the target register
+                emitter.instruction(&format!("mov {}, #{}", reg, value));       // load a small negative immediate directly into the target register
             } else {
                 let uval = value as u64;
                 emitter.instruction(&format!("movz {}, #0x{:x}", reg, uval & 0xFFFF)); // seed the low 16 bits of the wider immediate value
@@ -178,26 +178,26 @@ pub fn emit_load_int_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
                         "movk {}, #0x{:x}, lsl #16",
                         reg,
                         (uval >> 16) & 0xFFFF
-                    )); // patch bits 16-31 of the wider immediate value
+                    ));                                                         // patch bits 16-31 of the wider immediate value
                 }
                 if (uval >> 32) & 0xFFFF != 0 {
                     emitter.instruction(&format!(
                         "movk {}, #0x{:x}, lsl #32",
                         reg,
                         (uval >> 32) & 0xFFFF
-                    )); // patch bits 32-47 of the wider immediate value
+                    ));                                                         // patch bits 32-47 of the wider immediate value
                 }
                 if (uval >> 48) & 0xFFFF != 0 {
                     emitter.instruction(&format!(
                         "movk {}, #0x{:x}, lsl #48",
                         reg,
                         (uval >> 48) & 0xFFFF
-                    )); // patch bits 48-63 of the wider immediate value
+                    ));                                                         // patch bits 48-63 of the wider immediate value
                 }
             }
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov {}, {}", reg, value));                    // load the immediate directly into the native x86_64 register
+            emitter.instruction(&format!("mov {}, {}", reg, value));            // load the immediate directly into the native x86_64 register
         }
     }
 }
@@ -233,16 +233,16 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
 fn emit_write_current_string_stdout(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("mov x0, #1");                                          // fd = stdout
+            emitter.instruction("mov x0, #1");                                  // fd = stdout
             emitter.syscall(4);
         }
         Arch::X86_64 => {
             let (ptr_reg, len_reg) = string_result_regs(emitter);
-            emitter.instruction(&format!("mov rsi, {}", ptr_reg));                      // move the current string pointer into the Linux write buffer register
-            emitter.instruction(&format!("mov rdx, {}", len_reg));                      // move the current string length into the Linux write length register
-            emitter.instruction("mov edi, 1");                                          // fd = stdout
-            emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
-            emitter.instruction("syscall");                                             // write the current string payload to stdout
+            emitter.instruction(&format!("mov rsi, {}", ptr_reg));              // move the current string pointer into the Linux write buffer register
+            emitter.instruction(&format!("mov rdx, {}", len_reg));              // move the current string length into the Linux write length register
+            emitter.instruction("mov edi, 1");                                  // fd = stdout
+            emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall 1 = write
+            emitter.instruction("syscall");                                     // write the current string payload to stdout
         }
     }
 }

@@ -58,7 +58,7 @@ pub(super) fn emit_cast(
                 PhpType::Str => {
                     abi::emit_call_label(emitter, "__rt_cstr");                 // null-terminate the current string result through the target-aware C-string helper
                     if emitter.target.arch == crate::codegen::platform::Arch::X86_64 {
-                        emitter.instruction("mov rdi, rax");                     // pass the null-terminated C string in the SysV first-argument register before atof()
+                        emitter.instruction("mov rdi, rax");                    // pass the null-terminated C string in the SysV first-argument register before atof()
                     }
                     emitter.bl_c("atof");                            // parse C string as double → d0=result
                 }

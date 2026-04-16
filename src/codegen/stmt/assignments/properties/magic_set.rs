@@ -36,16 +36,16 @@ pub(super) fn emit_magic_set_call(
     if *val_ty == PhpType::Void {
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction("mov x0, #8");                                   // runtime tag 8 = null payload for Mixed boxing
-                emitter.instruction("mov x1, xzr");                                  // null mixed payloads have no low word
-                emitter.instruction("mov x2, xzr");                                  // null mixed payloads have no high word
-                emitter.instruction("bl __rt_mixed_from_value");                     // box null into an owned Mixed cell for __set
+                emitter.instruction("mov x0, #8");                              // runtime tag 8 = null payload for Mixed boxing
+                emitter.instruction("mov x1, xzr");                             // null mixed payloads have no low word
+                emitter.instruction("mov x2, xzr");                             // null mixed payloads have no high word
+                emitter.instruction("bl __rt_mixed_from_value");                // box null into an owned Mixed cell for __set
             }
             Arch::X86_64 => {
-                emitter.instruction("mov rdi, 9223372036854775806");                 // use the runtime null sentinel as the boxed null payload low word
-                emitter.instruction("xor rsi, rsi");                                 // null mixed payloads have no high word
-                emitter.instruction("mov rax, 8");                                   // runtime tag 8 = null payload for Mixed boxing
-                emitter.instruction("call __rt_mixed_from_value");                   // box null into an owned Mixed cell for __set
+                emitter.instruction("mov rdi, 9223372036854775806");            // use the runtime null sentinel as the boxed null payload low word
+                emitter.instruction("xor rsi, rsi");                            // null mixed payloads have no high word
+                emitter.instruction("mov rax, 8");                              // runtime tag 8 = null payload for Mixed boxing
+                emitter.instruction("call __rt_mixed_from_value");              // box null into an owned Mixed cell for __set
             }
         }
         abi::emit_pop_reg(emitter, object_reg);                                      // reload $this after the boxing helper may clobber caller-saved registers
@@ -54,10 +54,10 @@ pub(super) fn emit_magic_set_call(
             PhpType::Float => {
                 match emitter.target.arch {
                     Arch::AArch64 => {
-                        emitter.instruction("ldr d0, [sp, #16]");                    // reload the saved float value for Mixed boxing
+                        emitter.instruction("ldr d0, [sp, #16]");               // reload the saved float value for Mixed boxing
                     }
                     Arch::X86_64 => {
-                        emitter.instruction("movsd xmm0, QWORD PTR [rsp + 16]");     // reload the saved float value for Mixed boxing
+                        emitter.instruction("movsd xmm0, QWORD PTR [rsp + 16]"); // reload the saved float value for Mixed boxing
                     }
                 }
                 crate::codegen::emit_box_current_value_as_mixed(emitter, val_ty);
@@ -65,11 +65,11 @@ pub(super) fn emit_magic_set_call(
             PhpType::Str => {
                 match emitter.target.arch {
                     Arch::AArch64 => {
-                        emitter.instruction("ldp x1, x2, [sp, #16]");                // reload the saved string payload for Mixed boxing
+                        emitter.instruction("ldp x1, x2, [sp, #16]");           // reload the saved string payload for Mixed boxing
                     }
                     Arch::X86_64 => {
-                        emitter.instruction("mov rax, QWORD PTR [rsp + 16]");        // reload the saved string pointer for Mixed boxing
-                        emitter.instruction("mov rdx, QWORD PTR [rsp + 24]");        // reload the saved string length for Mixed boxing
+                        emitter.instruction("mov rax, QWORD PTR [rsp + 16]");   // reload the saved string pointer for Mixed boxing
+                        emitter.instruction("mov rdx, QWORD PTR [rsp + 24]");   // reload the saved string length for Mixed boxing
                     }
                 }
                 crate::codegen::emit_box_current_value_as_mixed(emitter, val_ty);

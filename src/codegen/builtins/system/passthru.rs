@@ -20,7 +20,7 @@ pub fn emit(
     // -- null-terminate and call libc system() which outputs directly to stdout --
     abi::emit_call_label(emitter, "__rt_cstr");                                 // null-terminate the command string through the target-aware C-string helper
     if emitter.target.arch == Arch::X86_64 {
-        emitter.instruction("mov rdi, rax");                                     // pass the null-terminated command pointer in the SysV first-argument register
+        emitter.instruction("mov rdi, rax");                                    // pass the null-terminated command pointer in the SysV first-argument register
     }
     emitter.bl_c("system");                                          // execute command, output goes directly to stdout
     Some(PhpType::Void)

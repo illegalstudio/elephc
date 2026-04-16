@@ -15,7 +15,7 @@ pub(crate) fn emit_store_mutating_arg(emitter: &mut Emitter, ctx: &Context, arg:
             Arch::AArch64 => {
                 emitter.adrp("x9", &format!("{}", label));               // load page of global variable storage for the mutated array/hash
                 emitter.add_lo12("x9", "x9", &format!("{}", label));     // resolve the global variable storage address
-                emitter.instruction("str x0, [x9]");                     // overwrite the global slot with the updated container pointer
+                emitter.instruction("str x0, [x9]");                            // overwrite the global slot with the updated container pointer
             }
             Arch::X86_64 => {
                 abi::emit_store_reg_to_symbol(emitter, "rax", &label, 0);        // overwrite the global slot with the updated container pointer through the x86_64 symbol helper
@@ -30,7 +30,7 @@ pub(crate) fn emit_store_mutating_arg(emitter: &mut Emitter, ctx: &Context, arg:
         match emitter.target.arch {
             Arch::AArch64 => {
                 abi::load_at_offset(emitter, "x9", offset);                      // load the by-reference slot that points at the mutating argument storage
-                emitter.instruction("str x0, [x9]");                             // overwrite the referenced slot with the updated container pointer
+                emitter.instruction("str x0, [x9]");                            // overwrite the referenced slot with the updated container pointer
             }
             Arch::X86_64 => {
                 abi::load_at_offset(emitter, "r11", offset);                     // load the by-reference slot that points at the mutating argument storage

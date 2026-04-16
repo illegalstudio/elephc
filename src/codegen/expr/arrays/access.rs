@@ -41,43 +41,43 @@ pub(crate) fn emit_match_expr(
             match &subj_ty {
                 PhpType::Str => match emitter.target.arch {
                     Arch::AArch64 => {
-                        emitter.instruction("mov x3, x1");                  // move the pattern string pointer into the AArch64 right-hand compare register
-                        emitter.instruction("mov x4, x2");                  // move the pattern string length into the AArch64 right-hand compare register
-                        emitter.instruction("ldp x1, x2, [sp]");            // reload the saved subject string into the AArch64 left-hand compare registers
+                        emitter.instruction("mov x3, x1");                      // move the pattern string pointer into the AArch64 right-hand compare register
+                        emitter.instruction("mov x4, x2");                      // move the pattern string length into the AArch64 right-hand compare register
+                        emitter.instruction("ldp x1, x2, [sp]");                // reload the saved subject string into the AArch64 left-hand compare registers
                         abi::emit_call_label(emitter, "__rt_str_eq");       // compare the subject and pattern strings through the shared runtime helper
                     }
                     Arch::X86_64 => {
-                        emitter.instruction("mov rcx, rdx");                // move the pattern string length into the SysV fourth argument register expected by __rt_str_eq
-                        emitter.instruction("mov rdx, rax");                // move the pattern string pointer into the SysV third argument register expected by __rt_str_eq
-                        emitter.instruction("mov rdi, QWORD PTR [rsp]");    // reload the saved subject string pointer into the SysV first argument register
-                        emitter.instruction("mov rsi, QWORD PTR [rsp + 8]"); // reload the saved subject string length into the SysV second argument register
+                        emitter.instruction("mov rcx, rdx");                    // move the pattern string length into the SysV fourth argument register expected by __rt_str_eq
+                        emitter.instruction("mov rdx, rax");                    // move the pattern string pointer into the SysV third argument register expected by __rt_str_eq
+                        emitter.instruction("mov rdi, QWORD PTR [rsp]");        // reload the saved subject string pointer into the SysV first argument register
+                        emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");    // reload the saved subject string length into the SysV second argument register
                         abi::emit_call_label(emitter, "__rt_str_eq");       // compare the subject and pattern strings through the shared runtime helper
                     }
                 },
                 PhpType::Float => match emitter.target.arch {
                     Arch::AArch64 => {
-                        emitter.instruction("ldr d1, [sp]");                // reload the saved subject float into the AArch64 scratch compare register
-                        emitter.instruction("fcmp d1, d0");                 // compare the saved subject float against the current pattern float
-                        emitter.instruction("cset x0, eq");                 // materialize the float equality result in the canonical AArch64 integer result register
+                        emitter.instruction("ldr d1, [sp]");                    // reload the saved subject float into the AArch64 scratch compare register
+                        emitter.instruction("fcmp d1, d0");                     // compare the saved subject float against the current pattern float
+                        emitter.instruction("cset x0, eq");                     // materialize the float equality result in the canonical AArch64 integer result register
                     }
                     Arch::X86_64 => {
-                        emitter.instruction("movsd xmm1, QWORD PTR [rsp]"); // reload the saved subject float into the x86_64 scratch compare register
-                        emitter.instruction("ucomisd xmm1, xmm0");          // compare the saved subject float against the current pattern float
-                        emitter.instruction("sete al");                     // materialize the float equality result in the low x86_64 result byte
-                        emitter.instruction("movzx eax, al");               // widen the x86_64 boolean byte back into the canonical integer result register
+                        emitter.instruction("movsd xmm1, QWORD PTR [rsp]");     // reload the saved subject float into the x86_64 scratch compare register
+                        emitter.instruction("ucomisd xmm1, xmm0");              // compare the saved subject float against the current pattern float
+                        emitter.instruction("sete al");                         // materialize the float equality result in the low x86_64 result byte
+                        emitter.instruction("movzx eax, al");                   // widen the x86_64 boolean byte back into the canonical integer result register
                     }
                 },
                 _ => match emitter.target.arch {
                     Arch::AArch64 => {
-                        emitter.instruction("ldr x9, [sp]");                // reload the saved scalar subject into an AArch64 scratch register
-                        emitter.instruction("cmp x9, x0");                  // compare the saved scalar subject against the current pattern scalar
-                        emitter.instruction("cset x0, eq");                 // materialize the scalar equality result in the canonical AArch64 integer result register
+                        emitter.instruction("ldr x9, [sp]");                    // reload the saved scalar subject into an AArch64 scratch register
+                        emitter.instruction("cmp x9, x0");                      // compare the saved scalar subject against the current pattern scalar
+                        emitter.instruction("cset x0, eq");                     // materialize the scalar equality result in the canonical AArch64 integer result register
                     }
                     Arch::X86_64 => {
-                        emitter.instruction("mov r10, QWORD PTR [rsp]");    // reload the saved scalar subject into an x86_64 scratch register
-                        emitter.instruction("cmp r10, rax");                // compare the saved scalar subject against the current pattern scalar
-                        emitter.instruction("sete al");                     // materialize the scalar equality result in the low x86_64 result byte
-                        emitter.instruction("movzx eax, al");               // widen the x86_64 boolean byte back into the canonical integer result register
+                        emitter.instruction("mov r10, QWORD PTR [rsp]");        // reload the saved scalar subject into an x86_64 scratch register
+                        emitter.instruction("cmp r10, rax");                    // compare the saved scalar subject against the current pattern scalar
+                        emitter.instruction("sete al");                         // materialize the scalar equality result in the low x86_64 result byte
+                        emitter.instruction("movzx eax, al");                   // widen the x86_64 boolean byte back into the canonical integer result register
                     }
                 },
             }
@@ -129,13 +129,13 @@ pub(crate) fn emit_array_access(
         let uaf_ok = ctx.next_label("buf_uaf_ok");
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("cbnz {}, {}", buffer_reg, uaf_ok));      // skip the fatal helper when the buffer header pointer is still live
-                emitter.instruction("b __rt_buffer_use_after_free");                    // abort immediately when the buffer local was nulled by buffer_free()
+                emitter.instruction(&format!("cbnz {}, {}", buffer_reg, uaf_ok)); // skip the fatal helper when the buffer header pointer is still live
+                emitter.instruction("b __rt_buffer_use_after_free");            // abort immediately when the buffer local was nulled by buffer_free()
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("test {}, {}", buffer_reg, buffer_reg));   // check whether the restored buffer header pointer is null
-                emitter.instruction(&format!("jne {}", uaf_ok));                         // continue only when the buffer header pointer is still live
-                emitter.instruction("jmp __rt_buffer_use_after_free");                   // abort immediately when the buffer local was nulled by buffer_free()
+                emitter.instruction(&format!("test {}, {}", buffer_reg, buffer_reg)); // check whether the restored buffer header pointer is null
+                emitter.instruction(&format!("jne {}", uaf_ok));                // continue only when the buffer header pointer is still live
+                emitter.instruction("jmp __rt_buffer_use_after_free");          // abort immediately when the buffer local was nulled by buffer_free()
             }
         }
         emitter.label(&uaf_ok);
@@ -144,34 +144,34 @@ pub(crate) fn emit_array_access(
         let oob_ok = ctx.next_label("buf_oob_ok");
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("cmp {}, #0", result_reg));                 // reject negative buffer indexes before touching the payload
-                emitter.instruction(&format!("b.ge {}", oob_ok));                        // continue once the requested index is non-negative
-                emitter.instruction("b __rt_buffer_bounds_fail");                        // abort immediately on negative buffer indexes
+                emitter.instruction(&format!("cmp {}, #0", result_reg));        // reject negative buffer indexes before touching the payload
+                emitter.instruction(&format!("b.ge {}", oob_ok));               // continue once the requested index is non-negative
+                emitter.instruction("b __rt_buffer_bounds_fail");               // abort immediately on negative buffer indexes
                 emitter.label(&oob_ok);
                 abi::emit_load_from_address(emitter, len_reg, buffer_reg, 0);            // load the logical buffer length from the header
-                emitter.instruction(&format!("cmp {}, {}", result_reg, len_reg));        // compare the requested index against the logical buffer length
-                emitter.instruction(&format!("b.lo {}", bounds_ok));                     // continue once the requested index is still in bounds
-                emitter.instruction(&format!("mov x1, {}", len_reg));                    // pass the logical buffer length to the fatal helper for parity with the ARM path
-                emitter.instruction("bl __rt_buffer_bounds_fail");                       // abort with the dedicated buffer-bounds diagnostic
+                emitter.instruction(&format!("cmp {}, {}", result_reg, len_reg)); // compare the requested index against the logical buffer length
+                emitter.instruction(&format!("b.lo {}", bounds_ok));            // continue once the requested index is still in bounds
+                emitter.instruction(&format!("mov x1, {}", len_reg));           // pass the logical buffer length to the fatal helper for parity with the ARM path
+                emitter.instruction("bl __rt_buffer_bounds_fail");              // abort with the dedicated buffer-bounds diagnostic
                 emitter.label(&bounds_ok);
                 abi::emit_load_from_address(emitter, stride_reg, buffer_reg, 8);         // load the element stride from the buffer header
                 emitter.instruction(&format!("add {}, {}, #16", buffer_reg, buffer_reg)); // skip the buffer header to reach the contiguous payload base
                 emitter.instruction(&format!("madd {}, {}, {}, {}", buffer_reg, result_reg, stride_reg, buffer_reg)); // compute payload base + index*stride for the addressed buffer element
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("cmp {}, 0", result_reg));                  // reject negative buffer indexes before touching the payload
-                emitter.instruction(&format!("jge {}", oob_ok));                         // continue once the requested index is non-negative
-                emitter.instruction("jmp __rt_buffer_bounds_fail");                      // abort immediately on negative buffer indexes
+                emitter.instruction(&format!("cmp {}, 0", result_reg));         // reject negative buffer indexes before touching the payload
+                emitter.instruction(&format!("jge {}", oob_ok));                // continue once the requested index is non-negative
+                emitter.instruction("jmp __rt_buffer_bounds_fail");             // abort immediately on negative buffer indexes
                 emitter.label(&oob_ok);
                 abi::emit_load_from_address(emitter, len_reg, buffer_reg, 0);            // load the logical buffer length from the header
-                emitter.instruction(&format!("cmp {}, {}", result_reg, len_reg));        // compare the requested index against the logical buffer length
-                emitter.instruction(&format!("jl {}", bounds_ok));                       // continue once the requested index is still in bounds
-                emitter.instruction("jmp __rt_buffer_bounds_fail");                      // abort with the dedicated buffer-bounds diagnostic
+                emitter.instruction(&format!("cmp {}, {}", result_reg, len_reg)); // compare the requested index against the logical buffer length
+                emitter.instruction(&format!("jl {}", bounds_ok));              // continue once the requested index is still in bounds
+                emitter.instruction("jmp __rt_buffer_bounds_fail");             // abort with the dedicated buffer-bounds diagnostic
                 emitter.label(&bounds_ok);
                 abi::emit_load_from_address(emitter, stride_reg, buffer_reg, 8);         // load the element stride from the buffer header
-                emitter.instruction(&format!("add {}, 16", buffer_reg));                 // skip the buffer header to reach the contiguous payload base
-                emitter.instruction(&format!("imul {}, {}", result_reg, stride_reg));    // scale the requested index by the element stride in bytes
-                emitter.instruction(&format!("add {}, {}", buffer_reg, result_reg));     // advance the payload base to the addressed buffer element
+                emitter.instruction(&format!("add {}, 16", buffer_reg));        // skip the buffer header to reach the contiguous payload base
+                emitter.instruction(&format!("imul {}, {}", result_reg, stride_reg)); // scale the requested index by the element stride in bytes
+                emitter.instruction(&format!("add {}, {}", buffer_reg, result_reg)); // advance the payload base to the addressed buffer element
             }
         }
         match &elem_ty {
@@ -180,7 +180,7 @@ pub(crate) fn emit_array_access(
                 return PhpType::Float;
             }
             PhpType::Packed(name) => {
-                emitter.instruction(&format!("mov {}, {}", result_reg, buffer_reg));     // expose the packed element address as a typed pointer result
+                emitter.instruction(&format!("mov {}, {}", result_reg, buffer_reg)); // expose the packed element address as a typed pointer result
                 return PhpType::Pointer(Some(name.clone()));
             }
             _ => {
@@ -271,35 +271,35 @@ pub(crate) fn emit_array_access(
         match emitter.target.arch {
             Arch::AArch64 => match &val_ty {
                 PhpType::Int | PhpType::Bool => {
-                    emitter.instruction("mov x0, x1");                              // move the borrowed associative-array scalar payload into the standard integer result register
+                    emitter.instruction("mov x0, x1");                          // move the borrowed associative-array scalar payload into the standard integer result register
                 }
                 PhpType::Str => {}
                 PhpType::Float => {
-                    emitter.instruction("fmov d0, x1");                             // move the borrowed associative-array float bits into the standard float result register
+                    emitter.instruction("fmov d0, x1");                         // move the borrowed associative-array float bits into the standard float result register
                 }
                 PhpType::Mixed => {
                     super::super::super::emit_box_runtime_payload_as_mixed(emitter, "x3", "x1", "x2"); // box the borrowed associative-array payload into an owned mixed cell
                 }
                 _ => {
-                    emitter.instruction("mov x0, x1");                              // move the borrowed associative-array pointer payload into the standard integer result register
+                    emitter.instruction("mov x0, x1");                          // move the borrowed associative-array pointer payload into the standard integer result register
                 }
             },
             Arch::X86_64 => match &val_ty {
                 PhpType::Int | PhpType::Bool => {
-                    emitter.instruction("mov rax, rdi");                            // move the borrowed associative-array scalar payload into the standard integer result register
+                    emitter.instruction("mov rax, rdi");                        // move the borrowed associative-array scalar payload into the standard integer result register
                 }
                 PhpType::Str => {
-                    emitter.instruction("mov rax, rdi");                            // move the borrowed associative-array string pointer into the standard x86_64 string result register
-                    emitter.instruction("mov rdx, rsi");                            // move the borrowed associative-array string length into the paired x86_64 string result register
+                    emitter.instruction("mov rax, rdi");                        // move the borrowed associative-array string pointer into the standard x86_64 string result register
+                    emitter.instruction("mov rdx, rsi");                        // move the borrowed associative-array string length into the paired x86_64 string result register
                 }
                 PhpType::Float => {
-                    emitter.instruction("movq xmm0, rdi");                          // move the borrowed associative-array float bits into the standard float result register
+                    emitter.instruction("movq xmm0, rdi");                      // move the borrowed associative-array float bits into the standard float result register
                 }
                 PhpType::Mixed => {
                     super::super::super::emit_box_runtime_payload_as_mixed(emitter, "rcx", "rdi", "rsi"); // box the borrowed associative-array payload into an owned mixed cell
                 }
                 _ => {
-                    emitter.instruction("mov rax, rdi");                            // move the borrowed associative-array pointer payload into the standard integer result register
+                    emitter.instruction("mov rax, rdi");                        // move the borrowed associative-array pointer payload into the standard integer result register
                 }
             },
         }

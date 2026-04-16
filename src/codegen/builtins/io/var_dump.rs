@@ -12,16 +12,16 @@ fn emit_write_literal(emitter: &mut Emitter, data: &mut DataSection, bytes: &[u8
         Arch::AArch64 => {
             emitter.adrp("x1", &lbl);                                         // load the page that contains the literal string bytes
             emitter.add_lo12("x1", "x1", &lbl);                               // resolve the literal string address within that page
-            emitter.instruction(&format!("mov x2, #{}", len));                 // pass the literal string length to write()
-            emitter.instruction("mov x0, #1");                                 // fd = stdout
+            emitter.instruction(&format!("mov x2, #{}", len));                  // pass the literal string length to write()
+            emitter.instruction("mov x0, #1");                                  // fd = stdout
             emitter.syscall(4);
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("lea rsi, [rip + {}]", lbl));         // point the Linux write() buffer register at the literal string bytes
-            emitter.instruction(&format!("mov edx, {}", len));                 // pass the literal string length to write()
-            emitter.instruction("mov edi, 1");                                 // fd = stdout
-            emitter.instruction("mov eax, 1");                                 // Linux x86_64 syscall 1 = write
-            emitter.instruction("syscall");                                    // write the literal bytes directly to stdout
+            emitter.instruction(&format!("lea rsi, [rip + {}]", lbl));          // point the Linux write() buffer register at the literal string bytes
+            emitter.instruction(&format!("mov edx, {}", len));                  // pass the literal string length to write()
+            emitter.instruction("mov edi, 1");                                  // fd = stdout
+            emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall 1 = write
+            emitter.instruction("syscall");                                     // write the literal bytes directly to stdout
         }
     }
 }
@@ -29,10 +29,10 @@ fn emit_write_literal(emitter: &mut Emitter, data: &mut DataSection, bytes: &[u8
 fn emit_branch_if_nonzero(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("b.ne {}", label));                   // branch when the compared integer payload is non-zero
+            emitter.instruction(&format!("b.ne {}", label));                    // branch when the compared integer payload is non-zero
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("jne {}", label));                    // branch when the compared integer payload is non-zero
+            emitter.instruction(&format!("jne {}", label));                     // branch when the compared integer payload is non-zero
         }
     }
 }
@@ -40,10 +40,10 @@ fn emit_branch_if_nonzero(emitter: &mut Emitter, label: &str) {
 fn emit_branch_if_eq(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("b.eq {}", label));                   // branch when the compared values are equal
+            emitter.instruction(&format!("b.eq {}", label));                    // branch when the compared values are equal
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("je {}", label));                     // branch when the compared values are equal
+            emitter.instruction(&format!("je {}", label));                      // branch when the compared values are equal
         }
     }
 }
@@ -51,10 +51,10 @@ fn emit_branch_if_eq(emitter: &mut Emitter, label: &str) {
 fn emit_branch_if_ne(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("b.ne {}", label));                   // branch when the compared values are different
+            emitter.instruction(&format!("b.ne {}", label));                    // branch when the compared values are different
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("jne {}", label));                    // branch when the compared values are different
+            emitter.instruction(&format!("jne {}", label));                     // branch when the compared values are different
         }
     }
 }
@@ -69,7 +69,7 @@ fn emit_var_dump_int(emitter: &mut Emitter, ctx: &mut Context, data: &mut DataSe
     let result_reg = abi::int_result_reg(emitter);
     let scratch_reg = abi::symbol_scratch_reg(emitter);
     abi::emit_load_int_immediate(emitter, scratch_reg, 0x7fff_ffff_ffff_fffe_u64 as i64); // materialize the shared null sentinel used by int-valued locals
-    emitter.instruction(&format!("cmp {}, {}", result_reg, scratch_reg));      // compare the incoming integer payload against the null sentinel
+    emitter.instruction(&format!("cmp {}, {}", result_reg, scratch_reg));       // compare the incoming integer payload against the null sentinel
     emit_branch_if_ne(emitter, &not_null);                                      // branch to the ordinary int path when the payload is not null
     emit_write_literal(emitter, data, b"NULL\n");
     abi::emit_jump(emitter, &done);                                             // skip the int formatter after printing NULL

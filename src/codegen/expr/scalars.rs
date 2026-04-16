@@ -57,7 +57,7 @@ pub(super) fn emit_float_literal(
                 "movsd {}, QWORD PTR [{}]",
                 abi::float_result_reg(emitter),
                 scratch
-            )); // load the 64-bit float literal through the symbol scratch register
+            ));                                                                 // load the 64-bit float literal through the symbol scratch register
         }
     }
     PhpType::Float
@@ -78,18 +78,18 @@ pub(super) fn emit_negate(
                     "fneg {}, {}",
                     abi::float_result_reg(emitter),
                     abi::float_result_reg(emitter)
-                )); // flip the sign bit of the current floating-point result
+                ));                                                             // flip the sign bit of the current floating-point result
             }
             Arch::X86_64 => {
-                emitter.instruction("xorpd xmm15, xmm15");                               // materialize +0.0 in a scratch xmm register before subtracting the value
+                emitter.instruction("xorpd xmm15, xmm15");                      // materialize +0.0 in a scratch xmm register before subtracting the value
                 emitter.instruction(&format!(
                     "subsd xmm15, {}",
                     abi::float_result_reg(emitter)
-                )); // compute 0.0 - value to negate the current floating-point result
+                ));                                                             // compute 0.0 - value to negate the current floating-point result
                 emitter.instruction(&format!(
                     "movsd {}, xmm15",
                     abi::float_result_reg(emitter)
-                )); // move the negated floating-point result back into the ABI return register
+                ));                                                             // move the negated floating-point result back into the ABI return register
             }
         }
         PhpType::Float
@@ -100,10 +100,10 @@ pub(super) fn emit_negate(
                     "neg {}, {}",
                     abi::int_result_reg(emitter),
                     abi::int_result_reg(emitter)
-                )); // two's-complement negate the current integer result in place
+                ));                                                             // two's-complement negate the current integer result in place
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("neg {}", abi::int_result_reg(emitter)));   // two's-complement negate the current integer result in place
+                emitter.instruction(&format!("neg {}", abi::int_result_reg(emitter))); // two's-complement negate the current integer result in place
             }
         }
         PhpType::Int
@@ -125,10 +125,10 @@ pub(super) fn emit_bit_not(
                 "mvn {}, {}",
                 abi::int_result_reg(emitter),
                 abi::int_result_reg(emitter)
-            )); // invert every bit of the current integer result in place
+            ));                                                                 // invert every bit of the current integer result in place
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("not {}", abi::int_result_reg(emitter)));       // invert every bit of the current integer result in place
+            emitter.instruction(&format!("not {}", abi::int_result_reg(emitter))); // invert every bit of the current integer result in place
         }
     }
     PhpType::Int
@@ -145,13 +145,13 @@ pub(super) fn emit_not(
     super::coerce_to_truthiness(emitter, ctx, &ty);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("cmp x0, #0");                                          // test if the coerced truthiness result is falsy
-            emitter.instruction("cset x0, eq");                                         // return 1 when the coerced truthiness result was false, else 0
+            emitter.instruction("cmp x0, #0");                                  // test if the coerced truthiness result is falsy
+            emitter.instruction("cset x0, eq");                                 // return 1 when the coerced truthiness result was false, else 0
         }
         Arch::X86_64 => {
-            emitter.instruction("cmp rax, 0");                                          // test if the coerced truthiness result is falsy
-            emitter.instruction("sete al");                                             // write 1 to the low byte when the coerced truthiness result was false
-            emitter.instruction("movzx rax, al");                                       // widen the boolean low byte back into the full integer result register
+            emitter.instruction("cmp rax, 0");                                  // test if the coerced truthiness result is falsy
+            emitter.instruction("sete al");                                     // write 1 to the low byte when the coerced truthiness result was false
+            emitter.instruction("movzx rax, al");                               // widen the boolean low byte back into the full integer result register
         }
     }
     PhpType::Bool

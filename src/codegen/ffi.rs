@@ -164,10 +164,10 @@ fn float_abi_arg_reg(emitter: &Emitter, idx: usize) -> &'static str {
 fn emit_widen_int_like_to_float(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("scvtf d0, x0");                                  // widen the integer-like result in x0 into the floating-point result register
+            emitter.instruction("scvtf d0, x0");                                // widen the integer-like result in x0 into the floating-point result register
         }
         Arch::X86_64 => {
-            emitter.instruction("cvtsi2sd xmm0, rax");                            // widen the integer-like result in rax into the floating-point result register
+            emitter.instruction("cvtsi2sd xmm0, rax");                          // widen the integer-like result in rax into the floating-point result register
         }
     }
 }
@@ -175,10 +175,10 @@ fn emit_widen_int_like_to_float(emitter: &mut Emitter) {
 fn emit_zero_int_result(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("mov x0, #0");                                    // materialize a null C pointer in the integer result register
+            emitter.instruction("mov x0, #0");                                  // materialize a null C pointer in the integer result register
         }
         Arch::X86_64 => {
-            emitter.instruction("mov rax, 0");                                    // materialize a null C pointer in the integer result register
+            emitter.instruction("mov rax, 0");                                  // materialize a null C pointer in the integer result register
         }
     }
 }
@@ -186,10 +186,10 @@ fn emit_zero_int_result(emitter: &mut Emitter) {
 fn emit_sign_extend_i32_result(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("sxtw x0, w0");                                   // sign-extend the 32-bit C integer return into the 64-bit result register
+            emitter.instruction("sxtw x0, w0");                                 // sign-extend the 32-bit C integer return into the 64-bit result register
         }
         Arch::X86_64 => {
-            emitter.instruction("movsxd rax, eax");                               // sign-extend the 32-bit C integer return into the 64-bit result register
+            emitter.instruction("movsxd rax, eax");                             // sign-extend the 32-bit C integer return into the 64-bit result register
         }
     }
 }

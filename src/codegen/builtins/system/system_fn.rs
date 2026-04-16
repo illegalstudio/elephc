@@ -22,7 +22,7 @@ pub fn emit(
     match emitter.target.arch {
         Arch::AArch64 => {}
         Arch::X86_64 => {
-            emitter.instruction("mov rdi, rax");                                 // pass the null-terminated command pointer in the SysV first-argument register
+            emitter.instruction("mov rdi, rax");                                // pass the null-terminated command pointer in the SysV first-argument register
         }
     }
     emitter.bl_c("system");                                          // execute command, output goes to stdout

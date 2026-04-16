@@ -70,7 +70,7 @@ pub fn emit(
     if emitter.target.arch == Arch::X86_64 {
         abi::emit_call_label(emitter, runtime_label);                            // call the x86_64 callback-driven filter runtime helper
     } else {
-        emitter.instruction(&format!("bl {}", runtime_label));                   // call the ARM64 callback-driven filter runtime helper
+        emitter.instruction(&format!("bl {}", runtime_label));                  // call the ARM64 callback-driven filter runtime helper
     }
 
     match arr_ty {

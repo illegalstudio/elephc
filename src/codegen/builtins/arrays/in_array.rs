@@ -87,7 +87,7 @@ pub fn emit(
                     PhpType::Str => {
                         emitter.instruction("mov x1, x3");                      // move the associative-array entry string pointer into the first string-compare register
                         emitter.instruction("mov x2, x4");                      // move the associative-array entry string length into the paired string-compare register
-                        emitter.instruction("ldp x3, x4, [sp, #16]");          // reload the saved string needle from the associative-array search stack frame
+                        emitter.instruction("ldp x3, x4, [sp, #16]");           // reload the saved string needle from the associative-array search stack frame
                         emitter.instruction("bl __rt_str_eq");                  // compare the associative-array entry string value against the searched needle
                         emitter.instruction(&format!("cbnz x0, {}", found_label)); // stop once the associative-array string value matches the searched needle
                     }
@@ -100,7 +100,7 @@ pub fn emit(
                             PhpType::Str => {
                                 emitter.instruction("mov x1, x3");              // move the associative-array mixed entry string pointer into the first string-compare register
                                 emitter.instruction("mov x2, x4");              // move the associative-array mixed entry string length into the paired string-compare register
-                                emitter.instruction("ldp x3, x4, [sp, #16]");  // reload the saved string needle from the associative-array search stack frame
+                                emitter.instruction("ldp x3, x4, [sp, #16]");   // reload the saved string needle from the associative-array search stack frame
                                 emitter.instruction("bl __rt_str_eq");          // compare the associative-array mixed string entry against the searched needle
                                 emitter.instruction(&format!("cbnz x0, {}", found_label)); // stop once the associative-array mixed string value matches the needle
                             }

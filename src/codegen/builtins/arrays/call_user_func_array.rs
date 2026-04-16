@@ -263,7 +263,7 @@ pub fn emit(
                     }
                     crate::codegen::platform::Arch::X86_64 => {
                         emitter.instruction(&format!("mov {}, {}", offset_reg, index_reg)); // copy the element index before scaling to bytes
-                        emitter.instruction(&format!("shl {}, 4", offset_reg));  // compute the 16-byte source slot offset for a string element
+                        emitter.instruction(&format!("shl {}, 4", offset_reg)); // compute the 16-byte source slot offset for a string element
                         emitter.instruction(&format!("add {}, {}", data_reg, offset_reg)); // advance to the selected source string element
                         let (ptr_reg, len_reg_out) = abi::string_result_regs(emitter);
                         abi::emit_load_from_address(emitter, ptr_reg, data_reg, 0);
@@ -279,7 +279,7 @@ pub fn emit(
                     }
                     crate::codegen::platform::Arch::X86_64 => {
                         emitter.instruction(&format!("mov {}, {}", offset_reg, index_reg)); // copy the element index before scaling to bytes
-                        emitter.instruction(&format!("shl {}, 3", offset_reg));  // compute the 8-byte source slot offset for a float element
+                        emitter.instruction(&format!("shl {}, 3", offset_reg)); // compute the 8-byte source slot offset for a float element
                         emitter.instruction(&format!("add {}, {}", data_reg, offset_reg)); // advance to the selected source float element
                     }
                 }
@@ -294,7 +294,7 @@ pub fn emit(
                     }
                     crate::codegen::platform::Arch::X86_64 => {
                         emitter.instruction(&format!("mov {}, {}", offset_reg, index_reg)); // copy the element index before scaling to bytes
-                        emitter.instruction(&format!("shl {}, 3", offset_reg));  // compute the 8-byte source slot offset for a scalar or boxed element
+                        emitter.instruction(&format!("shl {}, 3", offset_reg)); // compute the 8-byte source slot offset for a scalar or boxed element
                         emitter.instruction(&format!("add {}, {}", data_reg, offset_reg)); // advance to the selected source scalar element
                     }
                 }
@@ -313,7 +313,7 @@ pub fn emit(
         }
         match emitter.target.arch {
             crate::codegen::platform::Arch::AArch64 => {
-                emitter.instruction(&format!("ldr {}, [sp]", peek_reg));         // reload the variadic array pointer from the stack
+                emitter.instruction(&format!("ldr {}, [sp]", peek_reg));        // reload the variadic array pointer from the stack
             }
             crate::codegen::platform::Arch::X86_64 => {
                 emitter.instruction(&format!("mov {}, QWORD PTR [rsp]", peek_reg)); // reload the variadic array pointer from the stack
@@ -342,7 +342,7 @@ pub fn emit(
                     crate::codegen::platform::Arch::X86_64 => {
                         emitter.instruction(&format!("add {}, 24", dest_reg));  // point at the variadic array payload
                         emitter.instruction(&format!("mov {}, {}", offset_reg, tail_index_reg)); // copy the destination index before scaling
-                        emitter.instruction(&format!("shl {}, 3", offset_reg));  // compute the 8-byte destination slot offset
+                        emitter.instruction(&format!("shl {}, 3", offset_reg)); // compute the 8-byte destination slot offset
                         emitter.instruction(&format!("add {}, {}", dest_reg, offset_reg)); // advance to the selected variadic destination slot
                     }
                 }
@@ -360,7 +360,7 @@ pub fn emit(
                     crate::codegen::platform::Arch::X86_64 => {
                         emitter.instruction(&format!("add {}, 24", dest_reg));  // point at the variadic array payload
                         emitter.instruction(&format!("mov {}, {}", offset_reg, tail_index_reg)); // copy the destination index before scaling
-                        emitter.instruction(&format!("shl {}, 3", offset_reg));  // compute the 8-byte destination slot offset
+                        emitter.instruction(&format!("shl {}, 3", offset_reg)); // compute the 8-byte destination slot offset
                         emitter.instruction(&format!("add {}, {}", dest_reg, offset_reg)); // advance to the selected variadic destination slot
                     }
                 }
@@ -379,7 +379,7 @@ pub fn emit(
                     crate::codegen::platform::Arch::X86_64 => {
                         emitter.instruction(&format!("add {}, 24", dest_reg));  // point at the variadic array payload
                         emitter.instruction(&format!("mov {}, {}", offset_reg, tail_index_reg)); // copy the destination index before scaling
-                        emitter.instruction(&format!("shl {}, 4", offset_reg));  // compute the 16-byte destination slot offset
+                        emitter.instruction(&format!("shl {}, 4", offset_reg)); // compute the 16-byte destination slot offset
                         emitter.instruction(&format!("add {}, {}", dest_reg, offset_reg)); // advance to the selected variadic destination slot
                     }
                 }
@@ -393,7 +393,7 @@ pub fn emit(
                 emitter.instruction(&format!("add {}, {}, #1", tail_index_reg, tail_index_reg)); // advance to the next tail element
             }
             crate::codegen::platform::Arch::X86_64 => {
-                emitter.instruction(&format!("add {}, 1", tail_index_reg));      // advance to the next tail element
+                emitter.instruction(&format!("add {}, 1", tail_index_reg));     // advance to the next tail element
             }
         }
         abi::emit_store_to_address(emitter, tail_index_reg, peek_reg, 0);       // persist the updated variadic array length

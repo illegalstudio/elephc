@@ -7,133 +7,133 @@ pub fn emit_heap_debug_report(emitter: &mut Emitter) {
         emitter.comment("--- runtime: heap_debug_report ---");
         emitter.label_global("__rt_heap_debug_report");
 
-        emitter.instruction("sub rsp, 40");                                      // reserve aligned stack space for saved counters across nested itoa calls
+        emitter.instruction("sub rsp, 40");                                     // reserve aligned stack space for saved counters across nested itoa calls
         crate::codegen::abi::emit_symbol_address(emitter, "r8", "_gc_allocs");
-        emitter.instruction("mov r8, QWORD PTR [r8]");                           // load the total allocation count once for the summary
+        emitter.instruction("mov r8, QWORD PTR [r8]");                          // load the total allocation count once for the summary
         crate::codegen::abi::emit_symbol_address(emitter, "r9", "_gc_frees");
-        emitter.instruction("mov r9, QWORD PTR [r9]");                           // load the total free count once for the summary
-        emitter.instruction("mov r10, r8");                                      // start deriving the live block count from allocs - frees
-        emitter.instruction("sub r10, r9");                                      // compute the current live block count from allocs - frees
+        emitter.instruction("mov r9, QWORD PTR [r9]");                          // load the total free count once for the summary
+        emitter.instruction("mov r10, r8");                                     // start deriving the live block count from allocs - frees
+        emitter.instruction("sub r10, r9");                                     // compute the current live block count from allocs - frees
         crate::codegen::abi::emit_symbol_address(emitter, "r11", "_gc_live");
-        emitter.instruction("mov r11, QWORD PTR [r11]");                         // load the current live-byte count once for the summary
-        emitter.instruction("mov QWORD PTR [rsp], r8");                          // save alloc count across syscalls and nested itoa calls
-        emitter.instruction("mov QWORD PTR [rsp + 8], r9");                      // save free count across syscalls and nested itoa calls
-        emitter.instruction("mov QWORD PTR [rsp + 16], r10");                    // save live block count for the second report line
-        emitter.instruction("mov QWORD PTR [rsp + 24], r11");                    // save live-byte count for the second report line
+        emitter.instruction("mov r11, QWORD PTR [r11]");                        // load the current live-byte count once for the summary
+        emitter.instruction("mov QWORD PTR [rsp], r8");                         // save alloc count across syscalls and nested itoa calls
+        emitter.instruction("mov QWORD PTR [rsp + 8], r9");                     // save free count across syscalls and nested itoa calls
+        emitter.instruction("mov QWORD PTR [rsp + 16], r10");                   // save live block count for the second report line
+        emitter.instruction("mov QWORD PTR [rsp + 24], r11");                   // save live-byte count for the second report line
 
         crate::codegen::abi::emit_symbol_address(emitter, "rsi", "_heap_dbg_stats_prefix");
-        emitter.instruction("mov edx, 19");                                      // pass the exact heap-debug summary prefix length to write
-        emitter.instruction("mov edi, 2");                                       // fd = stderr for the heap-debug summary prefix
-        emitter.instruction("mov eax, 1");                                       // Linux x86_64 syscall 1 = write
-        emitter.instruction("syscall");                                          // print the heap-debug summary prefix
-        emitter.instruction("mov rax, QWORD PTR [rsp]");                         // reload the alloc count after the write syscall
-        emitter.instruction("call __rt_itoa");                                   // convert the alloc count to decimal text through the shared runtime helper
-        emitter.instruction("mov rsi, rax");                                     // point the Linux write syscall at the decimal alloc-count string
-        emitter.instruction("mov edi, 2");                                       // fd = stderr for the alloc-count decimal text
-        emitter.instruction("mov eax, 1");                                       // Linux x86_64 syscall 1 = write
-        emitter.instruction("syscall");                                          // print the alloc-count decimal text
+        emitter.instruction("mov edx, 19");                                     // pass the exact heap-debug summary prefix length to write
+        emitter.instruction("mov edi, 2");                                      // fd = stderr for the heap-debug summary prefix
+        emitter.instruction("mov eax, 1");                                      // Linux x86_64 syscall 1 = write
+        emitter.instruction("syscall");                                         // print the heap-debug summary prefix
+        emitter.instruction("mov rax, QWORD PTR [rsp]");                        // reload the alloc count after the write syscall
+        emitter.instruction("call __rt_itoa");                                  // convert the alloc count to decimal text through the shared runtime helper
+        emitter.instruction("mov rsi, rax");                                    // point the Linux write syscall at the decimal alloc-count string
+        emitter.instruction("mov edi, 2");                                      // fd = stderr for the alloc-count decimal text
+        emitter.instruction("mov eax, 1");                                      // Linux x86_64 syscall 1 = write
+        emitter.instruction("syscall");                                         // print the alloc-count decimal text
 
         crate::codegen::abi::emit_symbol_address(emitter, "rsi", "_heap_dbg_frees_label");
-        emitter.instruction("mov edx, 7");                                       // pass the exact \" frees=\" label length to write
-        emitter.instruction("mov edi, 2");                                       // fd = stderr for the frees label
-        emitter.instruction("mov eax, 1");                                       // Linux x86_64 syscall 1 = write
-        emitter.instruction("syscall");                                          // print the frees label
-        emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                     // reload the free count after the previous write syscall
-        emitter.instruction("call __rt_itoa");                                   // convert the free count to decimal text through the shared runtime helper
-        emitter.instruction("mov rsi, rax");                                     // point the Linux write syscall at the decimal free-count string
-        emitter.instruction("mov edi, 2");                                       // fd = stderr for the free-count decimal text
-        emitter.instruction("mov eax, 1");                                       // Linux x86_64 syscall 1 = write
-        emitter.instruction("syscall");                                          // print the free-count decimal text
+        emitter.instruction("mov edx, 7");                                      // pass the exact \" frees=\" label length to write
+        emitter.instruction("mov edi, 2");                                      // fd = stderr for the frees label
+        emitter.instruction("mov eax, 1");                                      // Linux x86_64 syscall 1 = write
+        emitter.instruction("syscall");                                         // print the frees label
+        emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                    // reload the free count after the previous write syscall
+        emitter.instruction("call __rt_itoa");                                  // convert the free count to decimal text through the shared runtime helper
+        emitter.instruction("mov rsi, rax");                                    // point the Linux write syscall at the decimal free-count string
+        emitter.instruction("mov edi, 2");                                      // fd = stderr for the free-count decimal text
+        emitter.instruction("mov eax, 1");                                      // Linux x86_64 syscall 1 = write
+        emitter.instruction("syscall");                                         // print the free-count decimal text
 
         crate::codegen::abi::emit_symbol_address(emitter, "rsi", "_heap_dbg_live_blocks_label");
-        emitter.instruction("mov edx, 13");                                      // pass the exact \" live_blocks=\" label length to write
-        emitter.instruction("mov edi, 2");                                       // fd = stderr for the live-block label
-        emitter.instruction("mov eax, 1");                                       // Linux x86_64 syscall 1 = write
-        emitter.instruction("syscall");                                          // print the live-block label
-        emitter.instruction("mov rax, QWORD PTR [rsp + 16]");                    // reload the live block count after the previous write syscall
-        emitter.instruction("call __rt_itoa");                                   // convert the live block count to decimal text through the shared runtime helper
-        emitter.instruction("mov rsi, rax");                                     // point the Linux write syscall at the decimal live-block string
-        emitter.instruction("mov edi, 2");                                       // fd = stderr for the live-block decimal text
-        emitter.instruction("mov eax, 1");                                       // Linux x86_64 syscall 1 = write
-        emitter.instruction("syscall");                                          // print the live-block decimal text
+        emitter.instruction("mov edx, 13");                                     // pass the exact \" live_blocks=\" label length to write
+        emitter.instruction("mov edi, 2");                                      // fd = stderr for the live-block label
+        emitter.instruction("mov eax, 1");                                      // Linux x86_64 syscall 1 = write
+        emitter.instruction("syscall");                                         // print the live-block label
+        emitter.instruction("mov rax, QWORD PTR [rsp + 16]");                   // reload the live block count after the previous write syscall
+        emitter.instruction("call __rt_itoa");                                  // convert the live block count to decimal text through the shared runtime helper
+        emitter.instruction("mov rsi, rax");                                    // point the Linux write syscall at the decimal live-block string
+        emitter.instruction("mov edi, 2");                                      // fd = stderr for the live-block decimal text
+        emitter.instruction("mov eax, 1");                                      // Linux x86_64 syscall 1 = write
+        emitter.instruction("syscall");                                         // print the live-block decimal text
 
         crate::codegen::abi::emit_symbol_address(emitter, "rsi", "_heap_dbg_live_bytes_label");
-        emitter.instruction("mov edx, 12");                                      // pass the exact \" live_bytes=\" label length to write
-        emitter.instruction("mov edi, 2");                                       // fd = stderr for the live-bytes label
-        emitter.instruction("mov eax, 1");                                       // Linux x86_64 syscall 1 = write
-        emitter.instruction("syscall");                                          // print the live-bytes label
-        emitter.instruction("mov rax, QWORD PTR [rsp + 24]");                    // reload the live-byte count after the previous write syscall
-        emitter.instruction("call __rt_itoa");                                   // convert the live-byte count to decimal text through the shared runtime helper
-        emitter.instruction("mov rsi, rax");                                     // point the Linux write syscall at the decimal live-byte string
-        emitter.instruction("mov edi, 2");                                       // fd = stderr for the live-byte decimal text
-        emitter.instruction("mov eax, 1");                                       // Linux x86_64 syscall 1 = write
-        emitter.instruction("syscall");                                          // print the live-byte decimal text
+        emitter.instruction("mov edx, 12");                                     // pass the exact \" live_bytes=\" label length to write
+        emitter.instruction("mov edi, 2");                                      // fd = stderr for the live-bytes label
+        emitter.instruction("mov eax, 1");                                      // Linux x86_64 syscall 1 = write
+        emitter.instruction("syscall");                                         // print the live-bytes label
+        emitter.instruction("mov rax, QWORD PTR [rsp + 24]");                   // reload the live-byte count after the previous write syscall
+        emitter.instruction("call __rt_itoa");                                  // convert the live-byte count to decimal text through the shared runtime helper
+        emitter.instruction("mov rsi, rax");                                    // point the Linux write syscall at the decimal live-byte string
+        emitter.instruction("mov edi, 2");                                      // fd = stderr for the live-byte decimal text
+        emitter.instruction("mov eax, 1");                                      // Linux x86_64 syscall 1 = write
+        emitter.instruction("syscall");                                         // print the live-byte decimal text
 
         crate::codegen::abi::emit_symbol_address(emitter, "rsi", "_heap_dbg_peak_label");
-        emitter.instruction("mov edx, 17");                                      // pass the exact \" peak_live_bytes=\" label length to write
-        emitter.instruction("mov edi, 2");                                       // fd = stderr for the peak-live-bytes label
-        emitter.instruction("mov eax, 1");                                       // Linux x86_64 syscall 1 = write
-        emitter.instruction("syscall");                                          // print the peak-live-bytes label
+        emitter.instruction("mov edx, 17");                                     // pass the exact \" peak_live_bytes=\" label length to write
+        emitter.instruction("mov edi, 2");                                      // fd = stderr for the peak-live-bytes label
+        emitter.instruction("mov eax, 1");                                      // Linux x86_64 syscall 1 = write
+        emitter.instruction("syscall");                                         // print the peak-live-bytes label
         crate::codegen::abi::emit_symbol_address(emitter, "r8", "_gc_peak");
-        emitter.instruction("mov rax, QWORD PTR [r8]");                          // load the peak live-byte watermark after the prefix writes
-        emitter.instruction("call __rt_itoa");                                   // convert the peak live-byte watermark to decimal text
-        emitter.instruction("mov rsi, rax");                                     // point the Linux write syscall at the decimal peak-live-byte string
-        emitter.instruction("mov edi, 2");                                       // fd = stderr for the peak-live-byte decimal text
-        emitter.instruction("mov eax, 1");                                       // Linux x86_64 syscall 1 = write
-        emitter.instruction("syscall");                                          // print the peak-live-byte decimal text
+        emitter.instruction("mov rax, QWORD PTR [r8]");                         // load the peak live-byte watermark after the prefix writes
+        emitter.instruction("call __rt_itoa");                                  // convert the peak live-byte watermark to decimal text
+        emitter.instruction("mov rsi, rax");                                    // point the Linux write syscall at the decimal peak-live-byte string
+        emitter.instruction("mov edi, 2");                                      // fd = stderr for the peak-live-byte decimal text
+        emitter.instruction("mov eax, 1");                                      // Linux x86_64 syscall 1 = write
+        emitter.instruction("syscall");                                         // print the peak-live-byte decimal text
         crate::codegen::abi::emit_symbol_address(emitter, "rsi", "_heap_dbg_newline");
-        emitter.instruction("mov edx, 1");                                       // pass the newline byte count to write
-        emitter.instruction("mov edi, 2");                                       // fd = stderr for the newline terminator
-        emitter.instruction("mov eax, 1");                                       // Linux x86_64 syscall 1 = write
-        emitter.instruction("syscall");                                          // terminate the summary line with a newline
+        emitter.instruction("mov edx, 1");                                      // pass the newline byte count to write
+        emitter.instruction("mov edi, 2");                                      // fd = stderr for the newline terminator
+        emitter.instruction("mov eax, 1");                                      // Linux x86_64 syscall 1 = write
+        emitter.instruction("syscall");                                         // terminate the summary line with a newline
 
         crate::codegen::abi::emit_symbol_address(emitter, "rsi", "_heap_dbg_leak_prefix");
-        emitter.instruction("mov edx, 26");                                      // pass the exact leak-summary prefix length to write
-        emitter.instruction("mov edi, 2");                                       // fd = stderr for the leak-summary prefix
-        emitter.instruction("mov eax, 1");                                       // Linux x86_64 syscall 1 = write
-        emitter.instruction("syscall");                                          // print the leak-summary prefix
-        emitter.instruction("mov r8, QWORD PTR [rsp + 16]");                     // reload the live-block count to choose between clean and leak-detail output
-        emitter.instruction("test r8, r8");                                      // are there any live heap blocks left at process exit?
-        emitter.instruction("jnz __rt_heap_debug_report_leak_details");          // yes — print the detailed leak counts instead of the clean marker
+        emitter.instruction("mov edx, 26");                                     // pass the exact leak-summary prefix length to write
+        emitter.instruction("mov edi, 2");                                      // fd = stderr for the leak-summary prefix
+        emitter.instruction("mov eax, 1");                                      // Linux x86_64 syscall 1 = write
+        emitter.instruction("syscall");                                         // print the leak-summary prefix
+        emitter.instruction("mov r8, QWORD PTR [rsp + 16]");                    // reload the live-block count to choose between clean and leak-detail output
+        emitter.instruction("test r8, r8");                                     // are there any live heap blocks left at process exit?
+        emitter.instruction("jnz __rt_heap_debug_report_leak_details");         // yes — print the detailed leak counts instead of the clean marker
         crate::codegen::abi::emit_symbol_address(emitter, "rsi", "_heap_dbg_clean_label");
-        emitter.instruction("mov edx, 6");                                       // pass the exact \"clean\\n\" label length to write
-        emitter.instruction("mov edi, 2");                                       // fd = stderr for the clean leak-summary marker
-        emitter.instruction("mov eax, 1");                                       // Linux x86_64 syscall 1 = write
-        emitter.instruction("syscall");                                          // print the clean leak-summary marker
-        emitter.instruction("jmp __rt_heap_debug_report_done");                  // skip the leak-detail path once the clean marker is written
+        emitter.instruction("mov edx, 6");                                      // pass the exact \"clean\\n\" label length to write
+        emitter.instruction("mov edi, 2");                                      // fd = stderr for the clean leak-summary marker
+        emitter.instruction("mov eax, 1");                                      // Linux x86_64 syscall 1 = write
+        emitter.instruction("syscall");                                         // print the clean leak-summary marker
+        emitter.instruction("jmp __rt_heap_debug_report_done");                 // skip the leak-detail path once the clean marker is written
 
         emitter.label("__rt_heap_debug_report_leak_details");
         crate::codegen::abi::emit_symbol_address(emitter, "rsi", "_heap_dbg_live_blocks_short_label");
-        emitter.instruction("mov edx, 12");                                      // pass the exact short live-block label length to write
-        emitter.instruction("mov edi, 2");                                       // fd = stderr for the short live-block label
-        emitter.instruction("mov eax, 1");                                       // Linux x86_64 syscall 1 = write
-        emitter.instruction("syscall");                                          // print the short live-block label
-        emitter.instruction("mov rax, QWORD PTR [rsp + 16]");                    // reload the live-block count for decimal conversion
-        emitter.instruction("call __rt_itoa");                                   // convert the live-block count to decimal text for the leak summary
-        emitter.instruction("mov rsi, rax");                                     // point the Linux write syscall at the decimal live-block string
-        emitter.instruction("mov edi, 2");                                       // fd = stderr for the live-block leak-summary value
-        emitter.instruction("mov eax, 1");                                       // Linux x86_64 syscall 1 = write
-        emitter.instruction("syscall");                                          // print the leak-summary live-block value
+        emitter.instruction("mov edx, 12");                                     // pass the exact short live-block label length to write
+        emitter.instruction("mov edi, 2");                                      // fd = stderr for the short live-block label
+        emitter.instruction("mov eax, 1");                                      // Linux x86_64 syscall 1 = write
+        emitter.instruction("syscall");                                         // print the short live-block label
+        emitter.instruction("mov rax, QWORD PTR [rsp + 16]");                   // reload the live-block count for decimal conversion
+        emitter.instruction("call __rt_itoa");                                  // convert the live-block count to decimal text for the leak summary
+        emitter.instruction("mov rsi, rax");                                    // point the Linux write syscall at the decimal live-block string
+        emitter.instruction("mov edi, 2");                                      // fd = stderr for the live-block leak-summary value
+        emitter.instruction("mov eax, 1");                                      // Linux x86_64 syscall 1 = write
+        emitter.instruction("syscall");                                         // print the leak-summary live-block value
         crate::codegen::abi::emit_symbol_address(emitter, "rsi", "_heap_dbg_live_bytes_label");
-        emitter.instruction("mov edx, 12");                                      // pass the exact live-bytes label length to write
-        emitter.instruction("mov edi, 2");                                       // fd = stderr for the leak-summary live-bytes label
-        emitter.instruction("mov eax, 1");                                       // Linux x86_64 syscall 1 = write
-        emitter.instruction("syscall");                                          // print the leak-summary live-bytes label
-        emitter.instruction("mov rax, QWORD PTR [rsp + 24]");                    // reload the live-byte count for decimal conversion
-        emitter.instruction("call __rt_itoa");                                   // convert the live-byte count to decimal text for the leak summary
-        emitter.instruction("mov rsi, rax");                                     // point the Linux write syscall at the decimal live-byte string
-        emitter.instruction("mov edi, 2");                                       // fd = stderr for the live-byte leak-summary value
-        emitter.instruction("mov eax, 1");                                       // Linux x86_64 syscall 1 = write
-        emitter.instruction("syscall");                                          // print the leak-summary live-byte value
+        emitter.instruction("mov edx, 12");                                     // pass the exact live-bytes label length to write
+        emitter.instruction("mov edi, 2");                                      // fd = stderr for the leak-summary live-bytes label
+        emitter.instruction("mov eax, 1");                                      // Linux x86_64 syscall 1 = write
+        emitter.instruction("syscall");                                         // print the leak-summary live-bytes label
+        emitter.instruction("mov rax, QWORD PTR [rsp + 24]");                   // reload the live-byte count for decimal conversion
+        emitter.instruction("call __rt_itoa");                                  // convert the live-byte count to decimal text for the leak summary
+        emitter.instruction("mov rsi, rax");                                    // point the Linux write syscall at the decimal live-byte string
+        emitter.instruction("mov edi, 2");                                      // fd = stderr for the live-byte leak-summary value
+        emitter.instruction("mov eax, 1");                                      // Linux x86_64 syscall 1 = write
+        emitter.instruction("syscall");                                         // print the leak-summary live-byte value
         crate::codegen::abi::emit_symbol_address(emitter, "rsi", "_heap_dbg_newline");
-        emitter.instruction("mov edx, 1");                                       // pass the newline byte count to write
-        emitter.instruction("mov edi, 2");                                       // fd = stderr for the leak-summary newline terminator
-        emitter.instruction("mov eax, 1");                                       // Linux x86_64 syscall 1 = write
-        emitter.instruction("syscall");                                          // terminate the leak-summary line with a newline
+        emitter.instruction("mov edx, 1");                                      // pass the newline byte count to write
+        emitter.instruction("mov edi, 2");                                      // fd = stderr for the leak-summary newline terminator
+        emitter.instruction("mov eax, 1");                                      // Linux x86_64 syscall 1 = write
+        emitter.instruction("syscall");                                         // terminate the leak-summary line with a newline
 
         emitter.label("__rt_heap_debug_report_done");
-        emitter.instruction("add rsp, 40");                                      // release the temporary stack frame used for saved counters
-        emitter.instruction("ret");                                              // return to the process epilogue after printing the heap-debug summary
+        emitter.instruction("add rsp, 40");                                     // release the temporary stack frame used for saved counters
+        emitter.instruction("ret");                                             // return to the process epilogue after printing the heap-debug summary
         return;
     }
 

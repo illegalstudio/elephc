@@ -149,9 +149,9 @@ pub(super) fn coerce_null_to_zero(emitter: &mut Emitter, ty: &PhpType) {
                 let sentinel_reg = abi::temp_int_reg(emitter.target);
                 let zero_reg = abi::symbol_scratch_reg(emitter);
                 emitter.instruction(&format!("mov {}, 9223372036854775806", sentinel_reg)); // materialize the runtime null sentinel in a scratch register
-                emitter.instruction(&format!("xor {}, {}", zero_reg, zero_reg));            // materialize an integer zero in a second scratch register
+                emitter.instruction(&format!("xor {}, {}", zero_reg, zero_reg)); // materialize an integer zero in a second scratch register
                 emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(emitter), sentinel_reg)); // compare the current integer result against the runtime null sentinel
-                emitter.instruction(&format!("cmove {}, {}", abi::int_result_reg(emitter), zero_reg));   // replace the sentinel with zero while leaving ordinary integers unchanged
+                emitter.instruction(&format!("cmove {}, {}", abi::int_result_reg(emitter), zero_reg)); // replace the sentinel with zero while leaving ordinary integers unchanged
             }
         }
     }
@@ -171,14 +171,14 @@ pub(super) fn coerce_to_truthiness(emitter: &mut Emitter, ctx: &mut Context, ty:
         match emitter.target.arch {
             Arch::AArch64 => {
                 emitter.instruction(&format!("cbz {}, {falsy_label}", len_reg)); // empty string is falsy
-                emitter.instruction(&format!("cmp {}, #1", len_reg));            // check if length is 1
-                emitter.instruction(&format!("b.ne {truthy_label}"));            // length != 1 means truthy
-                emitter.instruction(&format!("ldrb w9, [{}]", ptr_reg));         // load first byte of string
-                emitter.instruction("cmp w9, #48");                              // compare with ASCII '0'
-                emitter.instruction(&format!("b.eq {falsy_label}"));             // string "0" is falsy
+                emitter.instruction(&format!("cmp {}, #1", len_reg));           // check if length is 1
+                emitter.instruction(&format!("b.ne {truthy_label}"));           // length != 1 means truthy
+                emitter.instruction(&format!("ldrb w9, [{}]", ptr_reg));        // load first byte of string
+                emitter.instruction("cmp w9, #48");                             // compare with ASCII '0'
+                emitter.instruction(&format!("b.eq {falsy_label}"));            // string "0" is falsy
                 emitter.label(&truthy_label);
                 emitter.instruction(&format!("mov {}, #1", abi::int_result_reg(emitter))); // truthy: set result = 1
-                emitter.instruction(&format!("b {done_label}"));                 // skip falsy path
+                emitter.instruction(&format!("b {done_label}"));                // skip falsy path
                 emitter.label(&falsy_label);
                 emitter.instruction(&format!("mov {}, #0", abi::int_result_reg(emitter))); // falsy: set result = 0
                 emitter.label(&done_label);
@@ -186,15 +186,15 @@ pub(super) fn coerce_to_truthiness(emitter: &mut Emitter, ctx: &mut Context, ty:
             Arch::X86_64 => {
                 let scratch = abi::temp_int_reg(emitter.target);
                 emitter.instruction(&format!("test {}, {}", len_reg, len_reg)); // empty string is falsy
-                emitter.instruction(&format!("je {}", falsy_label));             // branch to falsy path when the string length is zero
-                emitter.instruction(&format!("cmp {}, 1", len_reg));             // check if length is 1
-                emitter.instruction(&format!("jne {}", truthy_label));           // any other non-empty length is truthy
+                emitter.instruction(&format!("je {}", falsy_label));            // branch to falsy path when the string length is zero
+                emitter.instruction(&format!("cmp {}, 1", len_reg));            // check if length is 1
+                emitter.instruction(&format!("jne {}", truthy_label));          // any other non-empty length is truthy
                 emitter.instruction(&format!("movzx {}d, BYTE PTR [{}]", scratch, ptr_reg)); // load the first byte of the one-character string
-                emitter.instruction(&format!("cmp {}d, 48", scratch));           // compare against ASCII '0'
-                emitter.instruction(&format!("je {}", falsy_label));             // the string \"0\" is falsy in PHP
+                emitter.instruction(&format!("cmp {}d, 48", scratch));          // compare against ASCII '0'
+                emitter.instruction(&format!("je {}", falsy_label));            // the string \"0\" is falsy in PHP
                 emitter.label(&truthy_label);
                 emitter.instruction(&format!("mov {}, 1", abi::int_result_reg(emitter))); // truthy: set result = 1
-                emitter.instruction(&format!("jmp {}", done_label));             // skip the falsy path once the result is known
+                emitter.instruction(&format!("jmp {}", done_label));            // skip the falsy path once the result is known
                 emitter.label(&falsy_label);
                 emitter.instruction(&format!("mov {}, 0", abi::int_result_reg(emitter))); // falsy: set result = 0
                 emitter.label(&done_label);

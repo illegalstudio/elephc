@@ -26,13 +26,13 @@ pub fn emit_exit(emitter: &mut Emitter, code: u32) {
     match (emitter.target.platform, emitter.target.arch) {
         (super::super::platform::Platform::MacOS, Arch::AArch64)
         | (super::super::platform::Platform::Linux, Arch::AArch64) => {
-            emitter.instruction(&format!("mov x0, #{}", code));                        // load the requested process exit code into the ABI return register
+            emitter.instruction(&format!("mov x0, #{}", code));                 // load the requested process exit code into the ABI return register
             emitter.syscall(1);
         }
         (super::super::platform::Platform::Linux, Arch::X86_64) => {
-            emitter.instruction(&format!("mov edi, {}", code));                        // load the requested process exit code into the SysV first-argument register
-            emitter.instruction("mov eax, 60");                                        // Linux x86_64 syscall 60 = exit
-            emitter.instruction("syscall");                                            // terminate the process through the Linux x86_64 syscall ABI
+            emitter.instruction(&format!("mov edi, {}", code));                 // load the requested process exit code into the SysV first-argument register
+            emitter.instruction("mov eax, 60");                                 // Linux x86_64 syscall 60 = exit
+            emitter.instruction("syscall");                                     // terminate the process through the Linux x86_64 syscall ABI
         }
         (super::super::platform::Platform::MacOS, Arch::X86_64) => {
             panic!("process exit emission is not implemented yet for target macos-x86_64");

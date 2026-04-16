@@ -48,17 +48,17 @@ pub(super) fn emit_assoc_array_assign(
                     ("x1", "x2")
                 }
                 PhpType::Float => {
-                    emitter.instruction("fmov x9, d0");                               // move the float payload bits into an integer register for the hash runtime ABI
+                    emitter.instruction("fmov x9, d0");                         // move the float payload bits into an integer register for the hash runtime ABI
                     ("x9", "xzr")
                 }
                 _ => ("x0", "xzr"),
             };
-            emitter.instruction(&format!("mov x3, {}", val_lo));                      // place the low payload word into the hash-set helper value register
-            emitter.instruction(&format!("mov x4, {}", val_hi));                      // place the high payload word into the hash-set helper value register
+            emitter.instruction(&format!("mov x3, {}", val_lo));                // place the low payload word into the hash-set helper value register
+            emitter.instruction(&format!("mov x4, {}", val_hi));                // place the high payload word into the hash-set helper value register
             emitter.instruction(&format!(
                 "mov x5, #{}",
                 super::super::super::super::runtime_value_tag(&val_ty)
-            )); // materialize the runtime value tag that describes the inserted associative-array payload
+            ));                                                                 // materialize the runtime value tag that describes the inserted associative-array payload
             abi::emit_pop_reg_pair(emitter, "x1", "x2");                              // restore the preserved key pointer and length into the hash-set helper argument registers
             abi::emit_pop_reg(emitter, "x0");                                          // restore the preserved hash-table pointer into the first hash-set helper argument register
         }
@@ -66,16 +66,16 @@ pub(super) fn emit_assoc_array_assign(
             match &val_ty {
                 PhpType::Str => {
                     abi::emit_call_label(emitter, "__rt_str_persist");                // persist the inserted string value before handing ownership to the hash table
-                    emitter.instruction("mov rcx, rax");                              // place the owned string pointer into the SysV hash-set helper low-payload register
-                    emitter.instruction("mov r8, rdx");                               // place the owned string length into the SysV hash-set helper high-payload register
+                    emitter.instruction("mov rcx, rax");                        // place the owned string pointer into the SysV hash-set helper low-payload register
+                    emitter.instruction("mov r8, rdx");                         // place the owned string length into the SysV hash-set helper high-payload register
                 }
                 PhpType::Float => {
-                    emitter.instruction("movq rcx, xmm0");                            // move the float payload bits into the SysV hash-set helper low-payload register
-                    emitter.instruction("xor r8, r8");                                // float associative-array payloads only use the low payload word
+                    emitter.instruction("movq rcx, xmm0");                      // move the float payload bits into the SysV hash-set helper low-payload register
+                    emitter.instruction("xor r8, r8");                          // float associative-array payloads only use the low payload word
                 }
                 _ => {
-                    emitter.instruction("mov rcx, rax");                              // place the scalar or pointer payload into the SysV hash-set helper low-payload register
-                    emitter.instruction("xor r8, r8");                                // scalar or pointer associative-array payloads only use the low payload word
+                    emitter.instruction("mov rcx, rax");                        // place the scalar or pointer payload into the SysV hash-set helper low-payload register
+                    emitter.instruction("xor r8, r8");                          // scalar or pointer associative-array payloads only use the low payload word
                 }
             }
             abi::emit_load_int_immediate(

@@ -129,7 +129,7 @@ pub(super) fn emit_property_access(
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
             let base_reg = abi::symbol_scratch_reg(emitter);
-            emitter.instruction(&format!("mov {}, {}", base_reg, object_reg)); // preserve the object base pointer while loading the two-word string property payload
+            emitter.instruction(&format!("mov {}, {}", base_reg, object_reg));  // preserve the object base pointer while loading the two-word string property payload
             abi::emit_load_from_address(emitter, ptr_reg, base_reg, offset);
             abi::emit_load_from_address(emitter, len_reg, base_reg, offset + 8);
         }

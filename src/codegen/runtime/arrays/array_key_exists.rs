@@ -36,15 +36,15 @@ fn emit_array_key_exists_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: array_key_exists ---");
     emitter.label_global("__rt_array_key_exists");
 
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                             // load the current array length from the indexed-array header
-    emitter.instruction("cmp rsi, 0");                                           // negative integer keys never exist in indexed arrays
-    emitter.instruction("jl __rt_array_key_exists_no");                          // reject negative keys before the upper-bound comparison
-    emitter.instruction("cmp rsi, r10");                                         // compare the candidate key against the current array length
-    emitter.instruction("jge __rt_array_key_exists_no");                         // keys at or beyond length do not exist in the indexed array
-    emitter.instruction("mov rax, 1");                                           // return true once the key is proven to be in bounds
-    emitter.instruction("ret");                                                  // return the success flag to the caller
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the current array length from the indexed-array header
+    emitter.instruction("cmp rsi, 0");                                          // negative integer keys never exist in indexed arrays
+    emitter.instruction("jl __rt_array_key_exists_no");                         // reject negative keys before the upper-bound comparison
+    emitter.instruction("cmp rsi, r10");                                        // compare the candidate key against the current array length
+    emitter.instruction("jge __rt_array_key_exists_no");                        // keys at or beyond length do not exist in the indexed array
+    emitter.instruction("mov rax, 1");                                          // return true once the key is proven to be in bounds
+    emitter.instruction("ret");                                                 // return the success flag to the caller
 
     emitter.label("__rt_array_key_exists_no");
-    emitter.instruction("xor eax, eax");                                         // return false when the integer key is out of bounds
-    emitter.instruction("ret");                                                  // return the failure flag to the caller
+    emitter.instruction("xor eax, eax");                                        // return false when the integer key is out of bounds
+    emitter.instruction("ret");                                                 // return the failure flag to the caller
 }

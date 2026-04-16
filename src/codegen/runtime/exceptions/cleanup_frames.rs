@@ -57,19 +57,19 @@ fn emit_exception_cleanup_frames_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_exception_cleanup_frames_loop");
     emitter.instruction("cmp r13, r12");                                        // have we reached the activation record that should survive the catch?
-    emitter.instruction("je __rt_exception_cleanup_frames_done");                // stop once the surviving activation is on top
+    emitter.instruction("je __rt_exception_cleanup_frames_done");               // stop once the surviving activation is on top
     emitter.instruction("test r13, r13");                                       // has the cleanup stack unexpectedly bottomed out?
-    emitter.instruction("je __rt_exception_cleanup_frames_done");                // stop defensively when no more activation records remain
+    emitter.instruction("je __rt_exception_cleanup_frames_done");               // stop defensively when no more activation records remain
     emitter.instruction("mov r10, QWORD PTR [r13 + 8]");                        // load the cleanup callback pointer for the current unwound activation
     emitter.instruction("mov r11, QWORD PTR [r13 + 16]");                       // load the saved frame pointer for the current unwound activation
     emitter.instruction("test r10, r10");                                       // does this activation record have cleanup work to run?
-    emitter.instruction("je __rt_exception_cleanup_frames_next");                // skip callback execution when the activation carries no cleanup hook
+    emitter.instruction("je __rt_exception_cleanup_frames_next");               // skip callback execution when the activation carries no cleanup hook
     emitter.instruction("mov rdi, r11");                                        // pass the unwound activation frame pointer into the cleanup callback ABI register
     emitter.instruction("call r10");                                            // run the per-function cleanup callback for this unwound activation record
 
     emitter.label("__rt_exception_cleanup_frames_next");
     emitter.instruction("mov r13, QWORD PTR [r13]");                            // advance to the previous activation record in the cleanup stack
-    emitter.instruction("jmp __rt_exception_cleanup_frames_loop");               // continue unwinding older activation records until the survivor is reached
+    emitter.instruction("jmp __rt_exception_cleanup_frames_loop");              // continue unwinding older activation records until the survivor is reached
 
     emitter.label("__rt_exception_cleanup_frames_done");
     abi::emit_store_reg_to_symbol(emitter, "r12", "_exc_call_frame_top", 0);

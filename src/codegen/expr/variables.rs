@@ -261,10 +261,10 @@ fn emit_global_store_inline(emitter: &mut Emitter, name: &str, reg: &str) {
 fn emit_copy_int_reg(emitter: &mut Emitter, dst: &str, src: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("mov {}, {}", dst, src));                    // copy the integer result into a scratch register before mutating it
+            emitter.instruction(&format!("mov {}, {}", dst, src));              // copy the integer result into a scratch register before mutating it
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov {}, {}", dst, src));                    // copy the integer result into a scratch register before mutating it
+            emitter.instruction(&format!("mov {}, {}", dst, src));              // copy the integer result into a scratch register before mutating it
         }
     }
 }
@@ -272,10 +272,10 @@ fn emit_copy_int_reg(emitter: &mut Emitter, dst: &str, src: &str) {
 fn emit_add_one(emitter: &mut Emitter, reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("add {}, {}, #1", reg, reg));                // increment the integer value in place
+            emitter.instruction(&format!("add {}, {}, #1", reg, reg));          // increment the integer value in place
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("add {}, 1", reg));                          // increment the integer value in place
+            emitter.instruction(&format!("add {}, 1", reg));                    // increment the integer value in place
         }
     }
 }
@@ -283,10 +283,10 @@ fn emit_add_one(emitter: &mut Emitter, reg: &str) {
 fn emit_sub_one(emitter: &mut Emitter, reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("sub {}, {}, #1", reg, reg));                // decrement the integer value in place
+            emitter.instruction(&format!("sub {}, {}, #1", reg, reg));          // decrement the integer value in place
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("sub {}, 1", reg));                          // decrement the integer value in place
+            emitter.instruction(&format!("sub {}, 1", reg));                    // decrement the integer value in place
         }
     }
 }

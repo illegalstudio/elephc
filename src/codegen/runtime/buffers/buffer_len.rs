@@ -20,7 +20,7 @@ fn emit_buffer_len_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: buffer_len ---");
     emitter.label_global("__rt_buffer_len");
     emitter.instruction("test rax, rax");                                       // abort deterministically when buffer_len() is called after buffer_free() nulled the local slot
-    emitter.instruction("jz __rt_buffer_use_after_free");                        // jump to the shared fatal helper when the buffer header pointer is null
+    emitter.instruction("jz __rt_buffer_use_after_free");                       // jump to the shared fatal helper when the buffer header pointer is null
     emitter.instruction("mov rax, QWORD PTR [rax]");                            // load the logical element count from the buffer header
     emitter.instruction("ret");                                                 // return the logical length in rax
 }
