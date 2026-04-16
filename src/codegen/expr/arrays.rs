@@ -624,29 +624,59 @@ pub(super) fn emit_array_access(
     }
 
     if arr_ty == PhpType::Str {
-        emitter.instruction("stp x1, x2, [sp, #-16]!");                         // save string ptr/len while evaluating the index expression
+        let (str_ptr_reg, str_len_reg) = abi::string_result_regs(emitter);
+        abi::emit_push_reg_pair(emitter, str_ptr_reg, str_len_reg);             // preserve the indexed source string while evaluating the scalar offset expression
         emit_expr(index, emitter, ctx, data);
-        emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the indexed string after the index expression
         emitter.comment("string indexing");
 
         let non_negative = ctx.next_label("str_idx_pos");
         let oob = ctx.next_label("str_idx_oob");
         let end = ctx.next_label("str_idx_end");
 
-        // -- lower $str[$i] to substr-style access with length 1 --
-        emitter.instruction("cmp x0, #0");                                      // check whether the requested string offset is negative
-        emitter.instruction(&format!("b.ge {}", non_negative));                 // keep non-negative offsets as-is
-        emitter.instruction("add x0, x2, x0");                                  // convert negative offsets to length + offset
-        emitter.instruction("cmp x0, #0");                                      // check whether the adjusted offset still points before the string
-        emitter.instruction(&format!("b.lt {}", oob));                          // negative offsets beyond -len return empty string
-        emitter.label(&non_negative);
-        emitter.instruction("cmp x0, x2");                                      // compare the offset against the string length
-        emitter.instruction(&format!("b.ge {}", oob));                          // offsets at or beyond length return empty string
-        emitter.instruction("add x1, x1, x0");                                  // advance the string pointer to the selected character
-        emitter.instruction("mov x2, #1");                                      // string indexing returns exactly one character when in bounds
-        emitter.instruction(&format!("b {}", end));                             // skip the out-of-bounds fallback
-        emitter.label(&oob);
-        emitter.instruction("mov x2, #0");                                      // out-of-bounds: return empty string
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_pop_reg_pair(emitter, "x1", "x2");                    // restore the indexed source string into the standard AArch64 string result registers after evaluating the scalar offset
+
+                // -- lower $str[$i] to substr-style access with length 1 --
+                emitter.instruction("cmp x0, #0");                              // check whether the requested string offset is negative
+                emitter.instruction(&format!("b.ge {}", non_negative));         // keep non-negative offsets as-is
+                emitter.instruction("add x0, x2, x0");                          // convert negative offsets to length + offset
+                emitter.instruction("cmp x0, #0");                              // check whether the adjusted offset still points before the string
+                emitter.instruction(&format!("b.lt {}", oob));                  // negative offsets beyond -len return empty string
+                emitter.label(&non_negative);
+                emitter.instruction("cmp x0, x2");                              // compare the offset against the string length
+                emitter.instruction(&format!("b.ge {}", oob));                  // offsets at or beyond length return empty string
+                emitter.instruction("add x1, x1, x0");                          // advance the string pointer to the selected character
+                emitter.instruction("mov x2, #1");                              // string indexing returns exactly one character when in bounds
+                emitter.instruction(&format!("b {}", end));                     // skip the out-of-bounds fallback
+                emitter.label(&oob);
+                emitter.instruction("mov x2, #0");                              // out-of-bounds: return empty string
+            }
+            Arch::X86_64 => {
+                abi::emit_push_reg(emitter, "rax");                             // preserve the computed scalar string offset in its own temporary slot before the original string pair is restored from the older stack slot
+                emitter.instruction("mov rax, QWORD PTR [rsp]");                // reload the computed scalar string offset from the top temporary stack slot without disturbing the older saved string pair yet
+                emitter.instruction("mov r8, QWORD PTR [rsp + 16]");            // reload the indexed source string pointer from the older temporary stack slot below the saved scalar offset
+                emitter.instruction("mov r9, QWORD PTR [rsp + 24]");            // reload the indexed source string length from the older temporary stack slot below the saved scalar offset
+                emitter.instruction("add rsp, 32");                             // release both temporary stack slots after restoring the scalar index and indexed source string pair
+
+                // -- lower $str[$i] to substr-style access with length 1 --
+                emitter.instruction("cmp rax, 0");                              // check whether the requested string offset is negative
+                emitter.instruction(&format!("jge {}", non_negative));          // keep non-negative offsets as-is
+                emitter.instruction("add rax, r9");                             // convert negative offsets to length + offset
+                emitter.instruction("cmp rax, 0");                              // check whether the adjusted offset still points before the string
+                emitter.instruction(&format!("jl {}", oob));                    // negative offsets beyond -len return empty string
+                emitter.label(&non_negative);
+                emitter.instruction("cmp rax, r9");                             // compare the offset against the string length
+                emitter.instruction(&format!("jge {}", oob));                   // offsets at or beyond length return empty string
+                emitter.instruction("add r8, rax");                             // advance the string pointer to the selected character
+                emitter.instruction("mov rax, r8");                             // publish the addressed character pointer in the standard x86_64 string result pointer register
+                emitter.instruction("mov rdx, 1");                              // string indexing returns exactly one character when in bounds
+                emitter.instruction(&format!("jmp {}", end));                   // skip the out-of-bounds fallback
+                emitter.label(&oob);
+                emitter.instruction("mov rax, r8");                             // preserve the original string pointer as the empty-string base pointer for out-of-bounds indexing
+                emitter.instruction("mov rdx, 0");                              // out-of-bounds: return empty string
+            }
+        }
         emitter.label(&end);
 
         return PhpType::Str;

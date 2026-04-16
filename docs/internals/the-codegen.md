@@ -973,6 +973,8 @@ The x86_64 runtime is no longer limited to the earlier `malloc` / `free` bootstr
 
 The same minimal x86_64 runtime now also carries the first string-search / compare slice: `__rt_strpos`, `__rt_strrpos`, `__rt_strcmp`, `__rt_strcasecmp`, `__rt_str_starts_with`, `__rt_str_ends_with`, `__rt_strtolower`, `__rt_strrev`, `__rt_wordwrap`, `__rt_str_split`, `__rt_str_pad`, `__rt_str_replace`, `__rt_str_ireplace`, `__rt_substr_replace`, `__rt_sprintf`, and `__rt_sscanf`, with the matching builtin lowering for `strpos()`, `strrpos()`, `strcmp()`, `strcasecmp()`, `str_contains()`, `str_starts_with()`, `str_ends_with()`, `strstr()`, `ord()`, `substr()`, `substr_replace()`, `strtolower()`, `strrev()`, `wordwrap()`, `str_split()`, `str_pad()`, `str_replace()`, `str_ireplace()`, `sprintf()`, `printf()`, and `sscanf()`. That keeps this family on the SysV ABI path instead of falling back to ARM64-only `stp`/`ldp` lowering.
 
+The remaining inline array/string accessors are on that same path now too: x86_64 string indexing via `ArrayAccess` (`$str[$i]`, including negative offsets) and statement-side indexed-array list unpacking no longer emit raw AArch64 `ldr` / `stp` snippets. They now restore temporaries through the shared ABI helpers and use native SysV register pairs / stack slots instead.
+
 ---
 
 Next: [The Runtime →](the-runtime.md)

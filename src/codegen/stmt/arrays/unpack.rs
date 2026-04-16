@@ -3,6 +3,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -22,7 +23,7 @@ pub(super) fn emit_list_unpack_stmt(
         _ => PhpType::Int,
     };
 
-    emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer onto stack
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                  // preserve the source indexed-array pointer while each unpack target local is assigned from its element slot
 
     for (i, var_name) in vars.iter().enumerate() {
         let var = match ctx.variables.get(var_name) {
@@ -34,29 +35,60 @@ pub(super) fn emit_list_unpack_stmt(
         };
         let offset = var.stack_offset;
 
-        emitter.instruction("ldr x9, [sp]");                                    // peek array pointer from stack
-        match &elem_ty {
-            PhpType::Int | PhpType::Bool => {
-                emitter.instruction("add x9, x9, #24");                         // skip 24-byte array header
-                emitter.instruction(&format!("ldr x0, [x9, #{}]", i * 8));      // load element at index
-                abi::store_at_offset(emitter, "x0", offset);
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("ldr x9, [sp]");                            // peek the preserved indexed-array pointer from the temporary stack slot before loading the requested unpack element
+                match &elem_ty {
+                    PhpType::Int | PhpType::Bool => {
+                        emitter.instruction("add x9, x9, #24");                 // skip the fixed indexed-array header before addressing the scalar payload region
+                        emitter.instruction(&format!("ldr x0, [x9, #{}]", i * 8)); // load the requested scalar unpack element from the indexed-array payload region
+                        abi::store_at_offset(emitter, "x0", offset);
+                    }
+                    PhpType::Str => {
+                        emitter.instruction(&format!("add x9, x9, #{}", 24 + i * 16)); // advance from the indexed-array base to the selected 16-byte string slot
+                        emitter.instruction("ldr x1, [x9]");                    // load the requested unpack string pointer from the selected indexed-array slot
+                        emitter.instruction("ldr x2, [x9, #8]");                // load the requested unpack string length from the selected indexed-array slot
+                        abi::store_at_offset(emitter, "x1", offset);
+                        abi::store_at_offset(emitter, "x2", offset - 8);
+                    }
+                    PhpType::Float => {
+                        emitter.instruction("add x9, x9, #24");                 // skip the fixed indexed-array header before addressing the floating payload region
+                        emitter.instruction(&format!("ldr d0, [x9, #{}]", i * 8)); // load the requested floating unpack element from the indexed-array payload region
+                        abi::store_at_offset(emitter, "d0", offset);
+                    }
+                    _ => {
+                        emitter.instruction("add x9, x9, #24");                 // skip the fixed indexed-array header before addressing the pointer-like payload region
+                        emitter.instruction(&format!("ldr x0, [x9, #{}]", i * 8)); // load the requested pointer-like unpack element from the indexed-array payload region
+                        abi::store_at_offset(emitter, "x0", offset);
+                    }
+                }
             }
-            PhpType::Str => {
-                emitter.instruction(&format!("add x9, x9, #{}", 24 + i * 16));  // offset to string slot
-                emitter.instruction("ldr x1, [x9]");                            // load string pointer
-                emitter.instruction("ldr x2, [x9, #8]");                        // load string length
-                abi::store_at_offset(emitter, "x1", offset);
-                abi::store_at_offset(emitter, "x2", offset - 8);
-            }
-            PhpType::Float => {
-                emitter.instruction("add x9, x9, #24");                         // skip 24-byte array header
-                emitter.instruction(&format!("ldr d0, [x9, #{}]", i * 8));      // load float at index
-                abi::store_at_offset(emitter, "d0", offset);
-            }
-            _ => {
-                emitter.instruction("add x9, x9, #24");                         // skip 24-byte array header
-                emitter.instruction(&format!("ldr x0, [x9, #{}]", i * 8));      // load element at index
-                abi::store_at_offset(emitter, "x0", offset);
+            Arch::X86_64 => {
+                emitter.instruction("mov r11, QWORD PTR [rsp]");                // peek the preserved indexed-array pointer from the temporary stack slot before loading the requested unpack element
+                match &elem_ty {
+                    PhpType::Int | PhpType::Bool => {
+                        emitter.instruction("add r11, 24");                     // skip the fixed indexed-array header before addressing the scalar payload region
+                        emitter.instruction(&format!("mov rax, QWORD PTR [r11 + {}]", i * 8)); // load the requested scalar unpack element from the indexed-array payload region
+                        abi::store_at_offset(emitter, "rax", offset);
+                    }
+                    PhpType::Str => {
+                        emitter.instruction(&format!("add r11, {}", 24 + i * 16)); // advance from the indexed-array base to the selected 16-byte string slot
+                        emitter.instruction("mov rax, QWORD PTR [r11]");        // load the requested unpack string pointer from the selected indexed-array slot
+                        emitter.instruction("mov rdx, QWORD PTR [r11 + 8]");    // load the requested unpack string length from the selected indexed-array slot
+                        abi::store_at_offset(emitter, "rax", offset);
+                        abi::store_at_offset(emitter, "rdx", offset - 8);
+                    }
+                    PhpType::Float => {
+                        emitter.instruction("add r11, 24");                     // skip the fixed indexed-array header before addressing the floating payload region
+                        emitter.instruction(&format!("movsd xmm0, QWORD PTR [r11 + {}]", i * 8)); // load the requested floating unpack element from the indexed-array payload region
+                        abi::store_at_offset(emitter, "xmm0", offset);
+                    }
+                    _ => {
+                        emitter.instruction("add r11, 24");                     // skip the fixed indexed-array header before addressing the pointer-like payload region
+                        emitter.instruction(&format!("mov rax, QWORD PTR [r11 + {}]", i * 8)); // load the requested pointer-like unpack element from the indexed-array payload region
+                        abi::store_at_offset(emitter, "rax", offset);
+                    }
+                }
             }
         }
         ctx.update_var_type_and_ownership(
@@ -66,5 +98,5 @@ pub(super) fn emit_list_unpack_stmt(
         );
     }
 
-    emitter.instruction("add sp, sp, #16");                                     // pop saved array pointer
+    abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));                   // discard the preserved indexed-array pointer after every list-unpack target local has been assigned
 }
