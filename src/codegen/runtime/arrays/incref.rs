@@ -56,6 +56,12 @@ fn emit_incref_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
     emitter.instruction(&format!("cmp r10d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // verify that the payload is owned by the x86_64 heap wrapper before mutating refcount state
     emitter.instruction("jne __rt_incref_skip");                                // skip static strings or foreign pointers that do not carry elephc heap headers
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_heap_debug_enabled");
+    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the heap-debug enabled flag before mutating the x86_64 refcount
+    emitter.instruction("test r11, r11");                                       // is heap-debug live validation enabled for incref?
+    emitter.instruction("jz __rt_incref_checked");                              // skip the nested live-check helper when heap-debug mode is disabled
+    emitter.instruction("call __rt_heap_debug_check_live");                     // ensure the referenced heap block still looks live before incrementing its refcount
+    emitter.label("__rt_incref_checked");
     emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the 32-bit refcount stored in the uniform heap header
     emitter.instruction("add r10d, 1");                                         // increment the refcount for the additional x86_64 heap owner
     emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // store the incremented refcount back into the uniform heap header

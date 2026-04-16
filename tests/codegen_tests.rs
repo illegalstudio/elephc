@@ -12273,10 +12273,9 @@ fn test_gc_heap_alloc_reuses_small_bin_before_bump() {
 
 #[test]
 fn test_heap_debug_double_free_reports_error() {
-    let err = compile_harness_expect_failure(
-        "<?php",
-        65_536,
-        r#"    mov x0, #16
+    let harness = match target().arch {
+        Arch::AArch64 => {
+            r#"    mov x0, #16
     bl __rt_heap_alloc
     str x0, [sp, #-16]!
     mov x0, #24
@@ -12285,30 +12284,58 @@ fn test_heap_debug_double_free_reports_error() {
     ldr x0, [sp, #16]
     bl __rt_heap_free
     ldr x0, [sp, #16]
-    bl __rt_heap_free"#,
+    bl __rt_heap_free"#
+        }
+        Arch::X86_64 => {
+            r#"    mov eax, 16
+    call __rt_heap_alloc
+    push rax
+    mov eax, 24
+    call __rt_heap_alloc
+    push rax
+    mov rax, QWORD PTR [rsp + 8]
+    call __rt_heap_free
+    mov rax, QWORD PTR [rsp + 8]
+    call __rt_heap_free"#
+        }
+    };
+    let err = compile_harness_expect_failure(
+        "<?php",
+        65_536,
+        harness,
     );
     assert!(err.contains("heap debug detected double free"), "{err}");
 }
 
 #[test]
 fn test_heap_debug_bad_refcount_reports_error() {
+    let harness = match target().arch {
+        Arch::AArch64 => {
+            r#"    mov x0, #16
+    bl __rt_heap_alloc
+    str wzr, [x0, #-12]
+    bl __rt_incref"#
+        }
+        Arch::X86_64 => {
+            r#"    mov eax, 16
+    call __rt_heap_alloc
+    mov DWORD PTR [rax - 12], 0
+    call __rt_incref"#
+        }
+    };
     let err = compile_harness_expect_failure(
         "<?php",
         65_536,
-        r#"    mov x0, #16
-    bl __rt_heap_alloc
-    str wzr, [x0, #-12]
-    bl __rt_incref"#,
+        harness,
     );
     assert!(err.contains("heap debug detected bad refcount"), "{err}");
 }
 
 #[test]
 fn test_heap_debug_free_list_corruption_reports_error() {
-    let err = compile_harness_expect_failure(
-        "<?php",
-        65_536,
-        r#"    mov x0, #16
+    let harness = match target().arch {
+        Arch::AArch64 => {
+            r#"    mov x0, #16
     bl __rt_heap_alloc
     str x0, [sp, #-16]!
     mov x0, #24
@@ -12318,7 +12345,27 @@ fn test_heap_debug_free_list_corruption_reports_error() {
     sub x9, x0, #16
     str x9, [x9, #16]
     mov x0, #8
-    bl __rt_heap_alloc"#,
+    bl __rt_heap_alloc"#
+        }
+        Arch::X86_64 => {
+            r#"    mov eax, 16
+    call __rt_heap_alloc
+    push rax
+    mov eax, 24
+    call __rt_heap_alloc
+    mov rax, QWORD PTR [rsp]
+    call __rt_heap_free
+    mov r9, QWORD PTR [rsp]
+    lea r9, [r9 - 16]
+    mov QWORD PTR [r9 + 16], r9
+    mov eax, 8
+    call __rt_heap_alloc"#
+        }
+    };
+    let err = compile_harness_expect_failure(
+        "<?php",
+        65_536,
+        harness,
     );
     assert!(
         err.contains("heap debug detected free-list corruption"),
@@ -12341,10 +12388,9 @@ fn test_heap_debug_reports_exit_summary() {
 
 #[test]
 fn test_heap_debug_poison_freed_payload() {
-    let out = compile_harness_and_run_with_heap_debug(
-        "<?php",
-        65_536,
-        r#"    mov x0, #16
+    let harness = match target().arch {
+        Arch::AArch64 => {
+            r#"    mov x0, #16
     bl __rt_heap_alloc
     str x0, [sp, #-16]!
     bl __rt_heap_free
@@ -12353,7 +12399,27 @@ fn test_heap_debug_poison_freed_payload() {
     bl __rt_itoa
     mov x0, #1
     mov x16, #4
-    svc #0x80"#,
+    svc #0x80"#
+        }
+        Arch::X86_64 => {
+            r#"    mov eax, 16
+    call __rt_heap_alloc
+    push rax
+    call __rt_heap_free
+    mov rax, QWORD PTR [rsp]
+    add rsp, 8
+    movzx eax, BYTE PTR [rax + 8]
+    call __rt_itoa
+    mov rsi, rax
+    mov edi, 1
+    mov eax, 1
+    syscall"#
+        }
+    };
+    let out = compile_harness_and_run_with_heap_debug(
+        "<?php",
+        65_536,
+        harness,
     );
     assert_eq!(out, "165");
 }
@@ -12385,10 +12451,9 @@ echo count($c) . "|" . count($c[25]);
 
 #[test]
 fn test_heap_kind_tags_raw_array_hash_and_string() {
-    let out = compile_harness_and_run(
-        "<?php",
-        65_536,
-        r#"    mov x0, #16
+    let harness = match target().arch {
+        Arch::AArch64 => {
+            r#"    mov x0, #16
     bl __rt_heap_alloc
     bl __rt_heap_kind
     bl __rt_itoa
@@ -12426,7 +12491,53 @@ fn test_heap_kind_tags_raw_array_hash_and_string() {
     bl __rt_itoa
     mov x0, #1
     mov x16, #4
-    svc #0x80"#,
+    svc #0x80"#
+        }
+        Arch::X86_64 => {
+            r#"    mov eax, 16
+    call __rt_heap_alloc
+    call __rt_heap_kind
+    call __rt_itoa
+    mov rsi, rax
+    mov edi, 1
+    mov eax, 1
+    syscall
+    mov edi, 4
+    mov esi, 8
+    call __rt_array_new
+    call __rt_heap_kind
+    call __rt_itoa
+    mov rsi, rax
+    mov edi, 1
+    mov eax, 1
+    syscall
+    mov edi, 4
+    xor esi, esi
+    call __rt_hash_new
+    call __rt_heap_kind
+    call __rt_itoa
+    mov rsi, rax
+    mov edi, 1
+    mov eax, 1
+    syscall
+    lea rax, [rip + _concat_buf]
+    mov BYTE PTR [rax], 65
+    mov BYTE PTR [rax + 1], 66
+    mov BYTE PTR [rax + 2], 67
+    mov rdx, 3
+    call __rt_str_persist
+    call __rt_heap_kind
+    call __rt_itoa
+    mov rsi, rax
+    mov edi, 1
+    mov eax, 1
+    syscall"#
+        }
+    };
+    let out = compile_harness_and_run(
+        "<?php",
+        65_536,
+        harness,
     );
     assert_eq!(out, "0231");
 }
@@ -12447,7 +12558,10 @@ fn test_new_object_codegen_sets_heap_kind() {
         false,
     );
     assert!(user_asm.contains("new Foo()"));
-    assert!(user_asm.contains("str x9, [x0, #-8]"), "{user_asm}");
+    match target().arch {
+        Arch::AArch64 => assert!(user_asm.contains("str x9, [x0, #-8]"), "{user_asm}"),
+        Arch::X86_64 => assert!(user_asm.contains("mov QWORD PTR [rax - 8], r10"), "{user_asm}"),
+    }
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -12477,14 +12591,28 @@ unset($map);
         runtime_asm.contains("__rt_hash_may_have_cyclic_values"),
         "runtime missing cyclic-value check"
     );
-    assert!(
-        runtime_asm.contains("bl __rt_hash_may_have_cyclic_values"),
-        "runtime missing cyclic-value call"
-    );
-    assert!(
-        runtime_asm.contains("cbz x0, __rt_decref_hash_skip"),
-        "runtime missing scalar-only skip branch"
-    );
+    match target().arch {
+        Arch::AArch64 => {
+            assert!(
+                runtime_asm.contains("bl __rt_hash_may_have_cyclic_values"),
+                "runtime missing cyclic-value call"
+            );
+            assert!(
+                runtime_asm.contains("cbz x0, __rt_decref_hash_skip"),
+                "runtime missing scalar-only skip branch"
+            );
+        }
+        Arch::X86_64 => {
+            assert!(
+                runtime_asm.contains("call __rt_hash_may_have_cyclic_values"),
+                "runtime missing cyclic-value call"
+            );
+            assert!(
+                runtime_asm.contains("jz __rt_decref_hash_skip"),
+                "runtime missing scalar-only skip branch"
+            );
+        }
+    }
 
     let _ = fs::remove_dir_all(&dir);
 }

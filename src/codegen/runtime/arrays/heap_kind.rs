@@ -1,9 +1,31 @@
-use crate::codegen::emit::Emitter;
+use crate::codegen::{emit::Emitter, platform::Arch};
 
 /// heap_kind: return the uniform heap kind tag for a heap-backed value.
 /// Input: x0 = heap user pointer
 /// Output: x0 = kind tag (0 for null/non-heap/raw allocations)
 pub fn emit_heap_kind(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.blank();
+        emitter.comment("--- runtime: heap_kind ---");
+        emitter.label_global("__rt_heap_kind");
+
+        emitter.instruction("test rax, rax");                                   // null pointers have no heap kind
+        emitter.instruction("jz __rt_heap_kind_zero");                          // return heap kind 0 for null pointers
+        emitter.instruction("mov rcx, QWORD PTR [rax - 8]");                    // load the stamped x86_64 heap kind word from the uniform header
+        emitter.instruction("mov rdx, rcx");                                    // preserve the low-byte heap kind before validating the ownership marker
+        emitter.instruction("shr rcx, 32");                                     // isolate the high-word heap marker from the packed heap metadata
+        emitter.instruction("cmp ecx, 0x454c5048");                             // verify that this pointer belongs to the elephc x86_64 heap runtime
+        emitter.instruction("jne __rt_heap_kind_zero");                         // foreign or freed pointers report heap kind 0
+        emitter.instruction("and edx, 0xff");                                   // isolate the low-byte uniform heap kind tag from the packed kind word
+        emitter.instruction("mov eax, edx");                                    // return the low-byte heap kind tag in the integer result register
+        emitter.instruction("ret");                                             // return the heap kind to the caller
+
+        emitter.label("__rt_heap_kind_zero");
+        emitter.instruction("xor eax, eax");                                    // report raw/non-heap kind 0
+        emitter.instruction("ret");                                             // return default kind 0
+        return;
+    }
+
     emitter.blank();
     emitter.comment("--- runtime: heap_kind ---");
     emitter.label_global("__rt_heap_kind");

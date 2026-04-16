@@ -91,6 +91,9 @@ fn emit_decref_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the collector-active flag before attempting another collection pass
     emitter.instruction("test r11, r11");                                       // is the collector already running?
     emitter.instruction("jnz __rt_decref_hash_skip");                           // yes — nested decref calls during collection must not restart the collector
+    emitter.instruction("call __rt_hash_may_have_cyclic_values");               // inspect entry tags to see whether this hash can still participate in a cycle
+    emitter.instruction("test rax, rax");                                       // did the cyclic-value inspection find any refcounted hash payloads?
+    emitter.instruction("jz __rt_decref_hash_skip");                            // scalar-only hashes can skip the collector entirely on x86_64 too
     emitter.instruction("call __rt_gc_collect_cycles");                         // reclaim any newly unrooted hash-containing graph components on x86_64
     emitter.instruction("jmp __rt_decref_hash_skip");                           // return after the optional x86_64 collector pass
     emitter.label("__rt_decref_hash_skip");

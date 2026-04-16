@@ -354,7 +354,7 @@ pub fn generate(
 
     if heap_debug {
         emitter.comment("heap-debug: print allocator summary and leak report to stderr");
-        emitter.instruction("bl __rt_heap_debug_report");                       // emit the heap-debug summary at process exit
+        abi::emit_call_label(&mut emitter, "__rt_heap_debug_report");           // emit the heap-debug summary at process exit through the active target ABI
     }
 
     abi::emit_exit(&mut emitter, 0);

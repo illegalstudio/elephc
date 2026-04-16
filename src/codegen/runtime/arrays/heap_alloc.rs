@@ -189,6 +189,17 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, 8");                                          // round tiny allocations up so free blocks can still carry a next pointer
     emitter.label("__rt_heap_alloc_start");
 
+    crate::codegen::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
+    emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the heap-debug enabled flag before consuming cached free-list state
+    emitter.instruction("test r8, r8");                                         // is heap-debug validation enabled for this allocation path?
+    emitter.instruction("jz __rt_heap_alloc_debug_checked");                    // skip the validator when heap-debug mode is disabled
+    emitter.instruction("sub rsp, 16");                                         // reserve one aligned stack slot to preserve the requested allocation size
+    emitter.instruction("mov QWORD PTR [rsp], rax");                            // save the requested allocation size across the nested validator call
+    emitter.instruction("call __rt_heap_debug_validate_free_list");             // verify the ordered free list and cached small bins before consuming them
+    emitter.instruction("mov rax, QWORD PTR [rsp]");                            // restore the requested allocation size after the nested validator call
+    emitter.instruction("add rsp, 16");                                         // release the temporary validator spill slot
+    emitter.label("__rt_heap_alloc_debug_checked");
+
     // -- try small segregated bins before walking the general free list --
     emitter.instruction("cmp rax, 64");                                         // does this request fit within the cached small-bin size classes?
     emitter.instruction("ja __rt_heap_alloc_fl_start");                         // larger payloads still use the general ordered free list

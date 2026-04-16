@@ -244,6 +244,11 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
 fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     emit_optional_linux_crypto_decls(emitter);
     arrays::emit_heap_alloc(emitter);
+    arrays::emit_heap_debug_fail(emitter);
+    arrays::emit_heap_debug_check_live(emitter);
+    arrays::emit_heap_debug_validate_free_list(emitter);
+    arrays::emit_heap_debug_report(emitter);
+    arrays::emit_heap_kind(emitter);
     arrays::emit_heap_free(emitter);
     arrays::emit_array_clone_shallow(emitter);
     arrays::emit_array_ensure_unique(emitter);
@@ -339,6 +344,7 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_hash_insert_owned(emitter);
     arrays::emit_hash_clone_shallow(emitter);
     arrays::emit_hash_ensure_unique(emitter);
+    arrays::emit_hash_may_have_cyclic_values(emitter);
     arrays::emit_hash_set(emitter);
     arrays::emit_hash_get(emitter);
     arrays::emit_hash_iter(emitter);

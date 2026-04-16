@@ -248,18 +248,63 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
 }
 
 fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
+    let double_free_msg = "Fatal error: heap debug detected double free\n";
+
     emitter.blank();
     emitter.comment("--- runtime: heap_free ---");
     emitter.label_global("__rt_heap_free");
 
     emitter.instruction("test rax, rax");                                       // ignore null pointers so the x86_64 heap runtime matches the shared heap_free contract
     emitter.instruction("jz __rt_heap_free_done");                              // null payloads do not own heap storage and therefore need no release work
+    crate::codegen::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
+    emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the heap-debug enabled flag before mutating free-list state
+    emitter.instruction("test r8, r8");                                         // is heap-debug validation enabled for this free path?
+    emitter.instruction("jz __rt_heap_free_debug_checked");                     // skip the validator and double-free guard when heap-debug mode is disabled
+    crate::codegen::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    emitter.instruction("cmp rax, r10");                                        // does the candidate freed pointer begin below the heap base?
+    emitter.instruction("jb __rt_heap_free_debug_checked");                     // pointers outside the heap cannot participate in heap-debug double-free checks
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_heap_off");
+    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the current bump offset before deriving the live heap end
+    emitter.instruction("lea r11, [r10 + r11]");                                // compute the current live heap end from the base plus bump offset
+    emitter.instruction("cmp rax, r11");                                        // does the candidate freed pointer lie at or beyond the live heap end?
+    emitter.instruction("jae __rt_heap_free_debug_checked");                    // pointers outside the live heap window cannot participate in heap-debug double-free checks
+    emitter.instruction("sub rsp, 16");                                         // reserve one aligned stack slot to preserve the user pointer across the nested call
+    emitter.instruction("mov QWORD PTR [rsp], rax");                            // save the user pointer across the free-list validator call
+    emitter.instruction("call __rt_heap_debug_validate_free_list");             // verify the ordered free list and cached small bins before mutating them
+    emitter.instruction("mov rax, QWORD PTR [rsp]");                            // restore the user pointer after the free-list validator call returns
+    emitter.instruction("add rsp, 16");                                         // release the temporary validator spill slot
+    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the current heap kind word before deciding whether a zero refcount is stale or legitimately being freed
+    emitter.instruction("mov r11, r10");                                        // preserve the full heap kind word while isolating the ownership marker for the stale-free check
+    emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker from the packed kind metadata
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // does this heap-range pointer still carry a live x86_64 heap marker?
+    emitter.instruction("je __rt_heap_free_debug_checked");                     // yes — a live marker means this is the first legitimate free path, even if refcount is already zero
+    emitter.instruction("mov ecx, DWORD PTR [rax - 12]");                       // load the current live refcount before any x86_64 free-side mutations
+    emitter.instruction("test ecx, ecx");                                       // does the header still look like a live heap block?
+    emitter.instruction("jnz __rt_heap_free_debug_checked");                    // yes — continue through the ordinary x86_64 free path
+    crate::codegen::abi::emit_symbol_address(emitter, "rsi", "_heap_dbg_double_free_msg");
+    emitter.instruction(&format!("mov edx, {}", double_free_msg.len()));        // pass the exact double-free debug message length to the failure helper
+    emitter.instruction("jmp __rt_heap_debug_fail");                            // report the duplicate free immediately under heap-debug mode
+    emitter.label("__rt_heap_free_debug_checked");
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used to distinguish owned heap payloads from foreign pointers
     emitter.instruction(&format!("cmp r10d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // verify that this payload belongs to the x86_64 heap runtime before mutating allocator state
     emitter.instruction("jne __rt_heap_free_done");                             // silently ignore foreign/static pointers so callers can safely pass literals or concat-buffer storage
     emitter.instruction("lea r9, [rax - 16]");                                  // recover the internal block header address from the user payload pointer
     emitter.instruction("mov r11d, DWORD PTR [r9]");                            // load the block payload size from the uniform heap header before releasing it
+    crate::codegen::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
+    emitter.instruction("mov r8, QWORD PTR [r8]");                              // reload the heap-debug enabled flag before optional payload poisoning
+    emitter.instruction("test r8, r8");                                         // should the x86_64 heap runtime poison freed payload bytes?
+    emitter.instruction("jz __rt_heap_free_poison_done");                       // skip payload poisoning entirely when heap-debug mode is disabled
+    emitter.instruction("mov rcx, rax");                                        // start poisoning at the first user payload byte
+    emitter.instruction("lea rdx, [rax + r11]");                                // compute the end of the user payload for the poison loop
+    emitter.instruction("mov esi, 0xa5");                                       // use the recognizable freed-memory poison byte pattern
+    emitter.label("__rt_heap_free_poison_loop");
+    emitter.instruction("cmp rcx, rdx");                                        // have all freed payload bytes been overwritten already?
+    emitter.instruction("jae __rt_heap_free_poison_done");                      // yes — stop the payload poisoning loop
+    emitter.instruction("mov BYTE PTR [rcx], sil");                             // overwrite the current freed payload byte with the poison marker
+    emitter.instruction("add rcx, 1");                                          // advance to the next payload byte in the poison loop
+    emitter.instruction("jmp __rt_heap_free_poison_loop");                      // continue poisoning the remaining freed payload bytes
+    emitter.label("__rt_heap_free_poison_done");
     emitter.instruction("mov r10, r11");                                        // widen the payload size into a 64-bit scratch register for live-byte accounting
     emitter.instruction("add r10, 16");                                         // include the uniform 16-byte header in the freed block footprint
     crate::codegen::abi::emit_symbol_address(emitter, "r8", "_gc_live");
@@ -299,10 +344,27 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, 24");                                         // remaining cached payloads belong to the <=64-byte bin offset
     emitter.label("__rt_heap_free_cache_small_ready");
     emitter.instruction("add r10, rcx");                                        // r10 = address of the selected small-bin head slot
+    crate::codegen::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
+    emitter.instruction("mov r8, QWORD PTR [r8]");                              // reload the heap-debug enabled flag before checking cached-bin duplicates
+    emitter.instruction("test r8, r8");                                         // is duplicate detection enabled for the small-bin cache?
+    emitter.instruction("jz __rt_heap_free_cache_small_insert");                // skip duplicate detection when heap-debug mode is disabled
+    emitter.instruction("mov rdx, QWORD PTR [r10]");                            // start scanning the cached small-bin chain for duplicate headers
+    emitter.label("__rt_heap_free_cache_small_scan");
+    emitter.instruction("test rdx, rdx");                                       // did the cached small-bin scan reach the tail?
+    emitter.instruction("jz __rt_heap_free_cache_small_insert");                // yes — this block is not already cached in the selected size class
+    emitter.instruction("cmp rdx, r9");                                         // is this exact header already present in the selected cached size class?
+    emitter.instruction("je __rt_heap_free_cache_small_duplicate");             // yes — report the double free while heap-debug mode is enabled
+    emitter.instruction("mov rdx, QWORD PTR [rdx + 16]");                       // advance to the next cached small-bin header while scanning for duplicates
+    emitter.instruction("jmp __rt_heap_free_cache_small_scan");                 // keep scanning the cached small-bin chain for duplicates
+    emitter.label("__rt_heap_free_cache_small_duplicate");
+    crate::codegen::abi::emit_symbol_address(emitter, "rsi", "_heap_dbg_double_free_msg");
+    emitter.instruction(&format!("mov edx, {}", double_free_msg.len()));        // pass the exact double-free debug message length to the failure helper
+    emitter.instruction("jmp __rt_heap_debug_fail");                            // report the duplicate cached block and terminate immediately
+    emitter.label("__rt_heap_free_cache_small_insert");
     emitter.instruction("mov rdx, QWORD PTR [r10]");                            // load the previous cached head for this small-bin size class
     emitter.instruction("mov QWORD PTR [r9 + 16], rdx");                        // splice the freed block onto the front of the selected small-bin chain
     emitter.instruction("mov QWORD PTR [r10], r9");                             // publish the freed block as the new small-bin head
-    emitter.instruction("jmp __rt_heap_free_count");                            // finish through the shared free-counting path
+    emitter.instruction("jmp __rt_heap_free_post_validate");                    // finish through the shared post-mutation validation and free-counting path
 
     // -- larger blocks still use the ordered free list for coalescing --
     emitter.label("__rt_heap_free_insert");
@@ -312,10 +374,20 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rdx, rdx");                                       // did the free-list scan reach the tail?
     emitter.instruction("jz __rt_heap_free_insert_here");                       // yes — insert the freed block at the end of the ordered free list
     emitter.instruction("cmp rdx, r9");                                         // does the current free block begin at or after the freed block?
-    emitter.instruction("jae __rt_heap_free_insert_here");                      // yes — this is the ordered insertion point
+    emitter.instruction("je __rt_heap_free_duplicate_candidate");               // equal addresses mean this exact block is already present in the free list
+    emitter.instruction("ja __rt_heap_free_insert_here");                       // yes — this is the ordered insertion point
     emitter.instruction("lea r10, [rdx + 16]");                                 // advance prev_next_addr to the current block's next field
     emitter.instruction("mov rdx, QWORD PTR [rdx + 16]");                       // move on to the next block in the ordered free list
     emitter.instruction("jmp __rt_heap_free_insert_loop");                      // continue searching for the ordered insertion point
+
+    emitter.label("__rt_heap_free_duplicate_candidate");
+    crate::codegen::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
+    emitter.instruction("mov r8, QWORD PTR [r8]");                              // reload the heap-debug enabled flag before deciding whether duplicate headers are fatal
+    emitter.instruction("test r8, r8");                                         // is heap-debug mode enabled for duplicate free-list detection?
+    emitter.instruction("jz __rt_heap_free_insert_here");                       // no — keep legacy non-debug behavior for duplicate free-list headers
+    crate::codegen::abi::emit_symbol_address(emitter, "rsi", "_heap_dbg_double_free_msg");
+    emitter.instruction(&format!("mov edx, {}", double_free_msg.len()));        // pass the exact double-free debug message length to the failure helper
+    emitter.instruction("jmp __rt_heap_debug_fail");                            // report the duplicate ordered free-list header and terminate immediately
 
     emitter.label("__rt_heap_free_insert_here");
     emitter.instruction("mov QWORD PTR [r9 + 16], rdx");                        // splice the freed block in front of the current successor
@@ -376,6 +448,13 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsi, r10");                                        // compute the new bump offset from the heap base to the reclaimed block header
     emitter.instruction("mov QWORD PTR [r8], rsi");                             // shrink the bump pointer back to the reclaimed free block start
     emitter.instruction("jmp __rt_heap_free_trim_tail");                        // continue trimming while more adjacent free blocks now reach the new heap tail
+
+    emitter.label("__rt_heap_free_post_validate");
+    crate::codegen::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
+    emitter.instruction("mov r8, QWORD PTR [r8]");                              // reload the heap-debug enabled flag after mutating free-list or cached-bin state
+    emitter.instruction("test r8, r8");                                         // should the x86_64 runtime validate the updated free state now?
+    emitter.instruction("jz __rt_heap_free_count");                             // skip the post-mutation validator when heap-debug mode is disabled
+    emitter.instruction("call __rt_heap_debug_validate_free_list");             // verify the ordered free list and cached bins after insertion, coalescing, and trimming
 
     // -- increment gc_frees counter --
     emitter.label("__rt_heap_free_count");
