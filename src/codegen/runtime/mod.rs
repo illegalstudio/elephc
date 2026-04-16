@@ -266,6 +266,12 @@ fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     strings::emit_atoi(emitter);
     strings::emit_str_persist(emitter);
     strings::emit_str_eq(emitter);
+    strings::emit_strpos(emitter);
+    strings::emit_strrpos(emitter);
+    strings::emit_strcmp(emitter);
+    strings::emit_strcasecmp(emitter);
+    strings::emit_str_starts_with(emitter);
+    strings::emit_str_ends_with(emitter);
     strings::emit_trim(emitter);
     strings::emit_ltrim(emitter);
     strings::emit_rtrim(emitter);

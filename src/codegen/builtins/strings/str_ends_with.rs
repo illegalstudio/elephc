@@ -2,6 +2,7 @@ use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::expr::emit_expr;
+use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -14,13 +15,23 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("str_ends_with()");
     emit_expr(&args[0], emitter, ctx, data);
-    // -- save haystack, evaluate suffix --
-    emitter.instruction("stp x1, x2, [sp, #-16]!");                             // push haystack ptr and length onto stack
-    emit_expr(&args[1], emitter, ctx, data);
-    emitter.instruction("mov x3, x1");                                          // move suffix pointer to x3
-    emitter.instruction("mov x4, x2");                                          // move suffix length to x4
-    emitter.instruction("ldp x1, x2, [sp], #16");                               // pop haystack ptr into x1, length into x2
-    emitter.instruction("bl __rt_str_ends_with");                               // call runtime: check if haystack ends with suffix
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // push the haystack pointer and length while evaluating the suffix string
+            emit_expr(&args[1], emitter, ctx, data);
+            emitter.instruction("mov x3, x1");                                  // move the suffix pointer into the third string-helper argument register
+            emitter.instruction("mov x4, x2");                                  // move the suffix length into the fourth string-helper argument register
+            emitter.instruction("ldp x1, x2, [sp], #16");                       // restore the haystack pointer and length after evaluating the suffix
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg_pair(emitter, "rax", "rdx");                     // save the haystack pointer and length while evaluating the suffix string
+            emit_expr(&args[1], emitter, ctx, data);
+            emitter.instruction("mov rcx, rdx");                                // move the suffix length into the fourth SysV string-helper argument register
+            emitter.instruction("mov rdx, rax");                                // move the suffix pointer into the third SysV string-helper argument register
+            abi::emit_pop_reg_pair(emitter, "rdi", "rsi");                      // restore the haystack pointer and length into the first two SysV helper argument registers
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_str_ends_with");                        // check whether the haystack ends with the provided suffix through the target-aware runtime helper
 
     Some(PhpType::Bool)
 }
