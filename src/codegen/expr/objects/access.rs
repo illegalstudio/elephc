@@ -35,8 +35,10 @@ pub(super) fn emit_property_access(
                 None => {
                     if class_info.methods.contains_key("__get") {
                         emitter.comment(&format!("magic __get('{}')", property));
+                        let object_reg = abi::symbol_scratch_reg(emitter);
+                        emitter.instruction(&format!("mov {}, {}", object_reg, abi::int_result_reg(emitter))); // preserve $this while the magic-property name setup clobbers normal result registers
                         super::push_magic_property_name_arg(property, emitter, data);
-                        abi::emit_push_reg(emitter, abi::int_result_reg(emitter)); // push $this pointer for __get dispatch using the active target ABI
+                        abi::emit_push_reg(emitter, object_reg);                  // push $this pointer for __get dispatch using the preserved object register
                         return super::emit_method_call_with_pushed_args(
                             class_name,
                             "__get",

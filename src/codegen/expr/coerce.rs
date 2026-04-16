@@ -67,7 +67,7 @@ pub(super) fn coerce_to_string(
                 .get(class_name)
                 .is_some_and(|class_info| class_info.methods.contains_key("__toString"))
             {
-                emitter.instruction("str x0, [sp, #-16]!");                     // push $this pointer for __toString dispatch
+                abi::emit_push_reg(emitter, abi::int_result_reg(emitter));      // push $this pointer for __toString dispatch using the active target ABI
                 super::objects::emit_method_call_with_pushed_args(
                     class_name,
                     "__toString",
@@ -95,13 +95,27 @@ fn emit_missing_tostring_fatal(emitter: &mut Emitter, data: &mut DataSection, cl
         class_name
     );
     let (label, len) = data.add_string(message.as_bytes());
-    emitter.instruction("mov x0, #2");                                          // fd = stderr for fatal conversion diagnostics
-    emitter.adrp("x1", &format!("{}", label));                   // load page of the fatal conversion message
-    emitter.add_lo12("x1", "x1", &format!("{}", label));             // resolve the fatal conversion message address
-    emitter.instruction(&format!("mov x2, #{}", len));                          // pass the fatal conversion message length
-    emitter.syscall(4);
-    emitter.instruction("mov x0, #1");                                          // exit status 1 indicates abnormal termination
-    emitter.syscall(1);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x0, #2");                                  // fd = stderr for fatal conversion diagnostics
+            emitter.adrp("x1", &label);                                          // load the page that contains the fatal conversion message
+            emitter.add_lo12("x1", "x1", &label);                               // resolve the fatal conversion message address within that page
+            emitter.instruction(&format!("mov x2, #{}", len));                  // pass the fatal conversion message length to write()
+            emitter.syscall(4);
+            emitter.instruction("mov x0, #1");                                  // exit status 1 indicates abnormal termination
+            emitter.syscall(1);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "rsi", &label);                   // point the Linux write() buffer register at the fatal conversion message
+            emitter.instruction(&format!("mov edx, {}", len));                  // pass the fatal conversion message length to write()
+            emitter.instruction("mov edi, 2");                                  // fd = stderr for fatal conversion diagnostics
+            emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall 1 = write
+            emitter.instruction("syscall");                                     // emit the fatal conversion message before terminating
+            emitter.instruction("mov edi, 1");                                  // exit status 1 indicates abnormal termination
+            emitter.instruction("mov eax, 60");                                 // Linux x86_64 syscall 60 = exit
+            emitter.instruction("syscall");                                     // terminate the process after reporting the failed string conversion
+        }
+    }
 }
 
 /// Replace null sentinel with 0 in x0 (for arithmetic/comparison with null).
