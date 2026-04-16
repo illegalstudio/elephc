@@ -588,10 +588,13 @@ fn emit_enum_from_like(
                 let match_label = ctx.next_label("enum_from_case");
                 let next_label = ctx.next_label("enum_from_next");
                 let (label, len) = data.add_string(value.as_bytes());
-                let candidate_ptr_reg = abi::int_arg_reg_name(emitter.target, 2);
-                let candidate_len_reg = abi::int_arg_reg_name(emitter.target, 3);
-                abi::emit_load_temporary_stack_slot(emitter, string_ptr_reg, 0); // reload the input string pointer for this candidate comparison
-                abi::emit_load_temporary_stack_slot(emitter, string_len_reg, 8); // reload the input string length for this candidate comparison
+                let (input_ptr_reg, input_len_reg, candidate_ptr_reg, candidate_len_reg) =
+                    match emitter.target.arch {
+                        crate::codegen::platform::Arch::AArch64 => ("x1", "x2", "x3", "x4"),
+                        crate::codegen::platform::Arch::X86_64 => ("rdi", "rsi", "rdx", "rcx"),
+                    };
+                abi::emit_load_temporary_stack_slot(emitter, input_ptr_reg, 0); // reload the input string pointer into the first __rt_str_eq argument register for this candidate comparison
+                abi::emit_load_temporary_stack_slot(emitter, input_len_reg, 8); // reload the input string length into the paired __rt_str_eq argument register for this candidate comparison
                 abi::emit_symbol_address(emitter, candidate_ptr_reg, &label);   // materialize the candidate enum backing string address
                 abi::emit_load_int_immediate(emitter, candidate_len_reg, len as i64); // materialize the candidate enum backing string length
                 abi::emit_call_label(emitter, "__rt_str_eq");                    // compare the input string against the candidate backing string
