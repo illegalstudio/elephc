@@ -1,5 +1,8 @@
 use crate::support::*;
 
+#[path = "types/return_inference.rs"]
+mod return_inference;
+
 #[test]
 fn test_backed_enum_value_and_from_identity() {
     let out = compile_and_run(
