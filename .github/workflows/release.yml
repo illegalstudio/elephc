@@ -20,11 +20,39 @@ jobs:
       - name: Set version from tag and commit
         run: |
           VERSION="${GITHUB_REF#refs/tags/v}"
-          sed -i '' "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
-          echo "Set Cargo.toml version to ${VERSION}"
+          export VERSION
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          import re
+
+          version = os.environ["VERSION"]
+
+          cargo_toml = Path("Cargo.toml")
+          cargo_toml.write_text(
+              re.sub(
+                  r'^version = ".*"$',
+                  f'version = "{version}"',
+                  cargo_toml.read_text(),
+                  count=1,
+                  flags=re.MULTILINE,
+              )
+          )
+
+          cargo_lock = Path("Cargo.lock")
+          cargo_lock.write_text(
+              re.sub(
+                  r'(\[\[package\]\]\nname = "elephc"\nversion = ")[^"]+(")',
+                  rf'\g<1>{version}\2',
+                  cargo_lock.read_text(),
+                  count=1,
+              )
+          )
+          PY
+          echo "Set Cargo.toml and Cargo.lock version to ${VERSION}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml
+          git add Cargo.toml Cargo.lock
           git commit -m "chore: bump version to ${VERSION}" || true
           git push origin HEAD:main
 
