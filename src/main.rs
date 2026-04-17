@@ -17,7 +17,7 @@ use std::process::{self, Command};
 
 use codegen::platform::{Platform, Target};
 
-const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] <source.php>";
+const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-asm] [--check] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] <source.php>";
 
 fn run_tool(name: &str, cmd: &mut Command) {
     match cmd.status() {
@@ -70,6 +70,8 @@ fn main() {
     let mut heap_size: usize = 8_388_608; // 8MB default
     let mut gc_stats = false;
     let mut heap_debug = false;
+    let mut emit_asm = false;
+    let mut check_only = false;
     let mut filename_arg = None;
     let mut target = Target::detect_host();
     let mut extra_link_libs: Vec<String> = Vec::new();
@@ -114,6 +116,10 @@ fn main() {
             gc_stats = true;
         } else if arg == "--heap-debug" {
             heap_debug = true;
+        } else if arg == "--emit-asm" {
+            emit_asm = true;
+        } else if arg == "--check" {
+            check_only = true;
         } else if arg == "--define" {
             i += 1;
             if i < args.len() {
@@ -172,6 +178,10 @@ fn main() {
             process::exit(1);
         }
     };
+    if emit_asm && check_only {
+        eprintln!("--emit-asm and --check are mutually exclusive");
+        process::exit(1);
+    }
     let stem = Path::new(filename)
         .file_stem()
         .and_then(|s| s.to_str())
@@ -236,10 +246,15 @@ fn main() {
 
     if !target.supports_current_backend() {
         eprintln!(
-            "Target '{}' is recognized, but only the AArch64 backend is implemented today",
+            "Target '{}' is recognized, but it is outside the current supported target matrix",
             target
         );
         process::exit(1);
+    }
+
+    if check_only {
+        println!("Checked '{}'", filename);
+        return;
     }
 
     let (user_asm, runtime_asm) = codegen::generate(
@@ -274,6 +289,11 @@ fn main() {
     if let Err(e) = fs::write(&asm_path, &asm) {
         eprintln!("Error writing '{}': {}", asm_path.display(), e);
         process::exit(1);
+    }
+
+    if emit_asm {
+        println!("Emitted assembly '{}' -> '{}'", filename, asm_path.display());
+        return;
     }
 
     // Assemble

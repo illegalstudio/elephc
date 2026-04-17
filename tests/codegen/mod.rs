@@ -2,6 +2,7 @@ mod exceptions;
 mod buffers;
 mod preprocessor;
 mod namespaces;
+mod cli;
 mod echo_vars;
 mod operators;
 mod control_flow;
