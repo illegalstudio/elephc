@@ -66,3 +66,55 @@ echo check(5) . "|" . check(15);
     );
     assert_eq!(out, "small|big");
 }
+
+#[test]
+fn test_array_return_type_survives_indexing() {
+    let out = compile_and_run(
+        r#"<?php
+function getColor(): array {
+    return [255, 128, 0];
+}
+
+$color = getColor();
+echo $color[0] . "," . $color[1] . "," . $color[2];
+"#,
+    );
+    assert_eq!(out, "255,128,0");
+}
+
+#[test]
+fn test_string_array_element_keeps_string_type() {
+    let out = compile_and_run(
+        r#"<?php
+function paint(string $name): string {
+    return $name;
+}
+
+function pickSecond(array $names): string {
+    return paint($names[1]);
+}
+
+echo pickSecond(["foo", "bar"]);
+"#,
+    );
+    assert_eq!(out, "bar");
+}
+
+#[test]
+fn test_string_array_return_type_keeps_string_elements() {
+    let out = compile_and_run(
+        r#"<?php
+function paint(string $name): string {
+    return $name;
+}
+
+function loadNames(): array {
+    return ["foo", "bar"];
+}
+
+$names = loadNames();
+echo paint($names[1]);
+"#,
+    );
+    assert_eq!(out, "bar");
+}

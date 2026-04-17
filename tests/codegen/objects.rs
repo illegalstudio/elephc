@@ -885,6 +885,42 @@ echo $shop->getItems()[0]->name;
 }
 
 #[test]
+fn test_property_access_on_array_of_objects_element() {
+    let out = compile_and_run(
+        r#"<?php
+class Entry {
+    public $name;
+
+    public function __construct($name) {
+        $this->name = $name;
+    }
+}
+
+class Wad {
+    public $entries;
+
+    public function __construct() {
+        $this->entries = $this->loadEntries();
+    }
+
+    public function loadEntries(): array {
+        return [new Entry("PLAYPAL"), new Entry("COLORMAP")];
+    }
+
+    public function secondName(): string {
+        $i = 1;
+        return $this->entries[$i]->name;
+    }
+}
+
+$wad = new Wad();
+echo $wad->secondName();
+"#,
+    );
+    assert_eq!(out, "COLORMAP");
+}
+
+#[test]
 fn test_deep_property_assign_after_array_access() {
     let out = compile_and_run(
         r#"<?php

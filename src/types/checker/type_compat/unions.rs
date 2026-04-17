@@ -37,6 +37,30 @@ impl Checker {
             PhpType::Union(members) => members
                 .iter()
                 .any(|member| self.type_accepts(member, actual)),
+            PhpType::Array(expected_elem) => match actual {
+                PhpType::Array(actual_elem) => self.type_accepts(expected_elem.as_ref(), actual_elem.as_ref()),
+                PhpType::AssocArray { .. } => matches!(expected_elem.as_ref(), PhpType::Mixed),
+                _ => false,
+            },
+            PhpType::AssocArray {
+                key: expected_key,
+                value: expected_value,
+            } => match actual {
+                PhpType::AssocArray {
+                    key: actual_key,
+                    value: actual_value,
+                } => {
+                    self.type_accepts(expected_key.as_ref(), actual_key.as_ref())
+                        && self.type_accepts(expected_value.as_ref(), actual_value.as_ref())
+                }
+                PhpType::Array(actual_elem)
+                    if matches!(expected_key.as_ref(), PhpType::Mixed)
+                        && self.type_accepts(expected_value.as_ref(), actual_elem.as_ref()) =>
+                {
+                    true
+                }
+                _ => false,
+            },
             PhpType::Object(expected_name) => match actual {
                 PhpType::Object(actual_name) => {
                     expected_name == actual_name
@@ -142,6 +166,23 @@ impl Checker {
         match (existing, new_ty) {
             (PhpType::Object(left), PhpType::Object(right)) => self.common_object_type(left, right),
             _ => None,
+        }
+    }
+
+    pub(crate) fn is_generic_array_hint(ty: &PhpType) -> bool {
+        matches!(ty, PhpType::Array(inner) if matches!(inner.as_ref(), PhpType::Mixed))
+    }
+
+    pub(crate) fn specialize_generic_array_hint(
+        declared_ty: &PhpType,
+        actual_ty: &PhpType,
+    ) -> PhpType {
+        if Self::is_generic_array_hint(declared_ty)
+            && matches!(actual_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+        {
+            actual_ty.clone()
+        } else {
+            declared_ty.clone()
         }
     }
 }
