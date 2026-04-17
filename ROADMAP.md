@@ -307,17 +307,19 @@ Proper type system for PHP compatibility.
 
 ## v0.19.x — Tooling and compiler throughput
 
-- [ ] Runtime object cache — pre-assemble the runtime into `~/.cache/elephc/runtime-<version>.o` and reuse across compilations, invalidating on compiler version change. Cuts repeated compile time by ~50%.
-- [ ] Benchmark suite (vs C, vs PHP interpreter)
-- [ ] Source maps (assembly ↔ PHP line mapping)
-- [ ] Compiler timing / profiling output for parse, typecheck, codegen, assemble, and link phases
+- [x] Runtime object cache — pre-assemble the runtime into `~/.cache/elephc/runtime-<version>.o` and reuse across compilations, invalidating on compiler version change. Cuts repeated compile time by ~50%.
+- [x] Benchmark suite (vs C, vs PHP interpreter)
+- [x] Source maps (assembly ↔ PHP line mapping)
+- [x] Compiler timing / profiling output for parse, typecheck, codegen, assemble, and link phases
+- [ ] Source maps v2 — richer mappings for functions / expressions / labels and a more stable machine-readable schema for external tooling
+- [ ] Benchmark automation — run the benchmark harness in CI or release verification so performance regressions are tracked continuously
 
 ## v0.20.x — Early optimization pass
 
 - [ ] Constant folding (`2 + 3` → `5` at compile time)
 - [ ] Dead code elimination
 - [ ] Peephole optimization (redundant load/store elimination)
-- [ ] Add regression benchmarks so optimization work is measured instead of anecdotal
+- [x] Add regression benchmarks so optimization work is measured instead of anecdotal
 
 ## v0.21.x — Code quality and performance validation
 
