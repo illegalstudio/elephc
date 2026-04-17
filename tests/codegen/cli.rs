@@ -238,3 +238,44 @@ fn test_cli_runtime_cache_reuses_runtime_object() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn test_cli_source_map_writes_sidecar_file() {
+    let dir = make_cli_test_dir("elephc_cli_source_map");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+echo 1;
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(elephc_cli_bin())
+        .arg("--emit-asm")
+        .arg("--source-map")
+        .arg(&php_path)
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run elephc CLI with --source-map");
+
+    assert!(
+        output.status.success(),
+        "elephc --source-map failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let map_path = dir.join("main.map");
+    assert!(map_path.exists(), "expected source map sidecar to exist");
+    let map = fs::read_to_string(&map_path).expect("failed to read source map");
+    assert!(
+        map.contains("\"format\": \"elephc-source-map-v1\""),
+        "missing source map format header: {map}"
+    );
+    assert!(
+        map.contains("\"php_line\": 2"),
+        "expected source map to reference PHP line 2: {map}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

@@ -31,6 +31,13 @@ fn emit_static_store(emitter: &mut Emitter, ctx: &Context, name: &str, ty: &PhpT
 }
 
 pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &mut DataSection) {
+    if stmt.span.line > 0 {
+        emitter.comment(&format!(
+            "@src line={} col={}",
+            stmt.span.line, stmt.span.col
+        ));
+    }
+
     // -- reset concat buffer at the start of each statement --
     // This is safe because any string that needs to persist beyond the current
     // statement is copied to heap via __rt_str_persist (in emit_store).

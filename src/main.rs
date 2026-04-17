@@ -7,6 +7,7 @@ mod names;
 mod parser;
 mod resolver;
 mod runtime_cache;
+mod source_map;
 mod span;
 mod types;
 
@@ -19,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use codegen::platform::{Platform, Target};
 
-const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-asm] [--check] [--timings] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] <source.php>";
+const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-asm] [--check] [--timings] [--source-map] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] <source.php>";
 
 struct CompileTimings {
     enabled: bool,
@@ -124,6 +125,7 @@ fn main() {
     let mut emit_asm = false;
     let mut check_only = false;
     let mut emit_timings = false;
+    let mut emit_source_map = false;
     let mut filename_arg = None;
     let mut target = Target::detect_host();
     let mut extra_link_libs: Vec<String> = Vec::new();
@@ -174,6 +176,8 @@ fn main() {
             check_only = true;
         } else if arg == "--timings" {
             emit_timings = true;
+        } else if arg == "--source-map" {
+            emit_source_map = true;
         } else if arg == "--define" {
             i += 1;
             if i < args.len() {
@@ -244,6 +248,7 @@ fn main() {
     let asm_path = parent.join(format!("{}.s", stem));
     let obj_path = parent.join(format!("{}.o", stem));
     let bin_path = parent.join(stem);
+    let source_map_path = parent.join(format!("{}.map", stem));
     let mut timings = CompileTimings::new(emit_timings);
 
     let phase_started = Instant::now();
@@ -371,6 +376,15 @@ fn main() {
         process::exit(1);
     }
     timings.record_since("write-asm", phase_started);
+
+    if emit_source_map {
+        let phase_started = Instant::now();
+        if let Err(err) = source_map::write_source_map(&user_asm, Path::new(filename), &source_map_path) {
+            eprintln!("Source map error: {}", err);
+            process::exit(1);
+        }
+        timings.record_since("source-map", phase_started);
+    }
 
     if emit_asm {
         timings.report();
