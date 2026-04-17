@@ -4,6 +4,7 @@ pub mod errors;
 pub mod lexer;
 pub mod names;
 pub mod name_resolver;
+pub mod optimize;
 pub mod parser;
 pub mod resolver;
 pub mod span;

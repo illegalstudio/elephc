@@ -30,6 +30,7 @@ pub(crate) fn compile_source_to_asm_with_defines(
     let ast = elephc::conditional::apply(ast, defines);
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
+    let resolved = elephc::optimize::fold_constants(resolved);
     let check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let (user_asm, runtime_asm) = elephc::codegen::generate(
         &resolved,

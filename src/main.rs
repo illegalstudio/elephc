@@ -4,6 +4,7 @@ mod errors;
 mod lexer;
 mod name_resolver;
 mod names;
+mod optimize;
 mod parser;
 mod resolver;
 mod runtime_cache;
@@ -302,6 +303,10 @@ fn main() {
         }
     };
     timings.record_since("name-resolve", phase_started);
+
+    let phase_started = Instant::now();
+    let ast = optimize::fold_constants(ast);
+    timings.record_since("optimize", phase_started);
 
     let phase_started = Instant::now();
     let check_result = match types::check_with_target(&ast, target) {
