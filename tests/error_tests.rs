@@ -4,6 +4,11 @@ use elephc::parser::parse_with_recovery;
 use elephc::types;
 use elephc::types::PhpType;
 use std::collections::HashSet;
+use std::fs;
+use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static TEST_PROJECT_ID: AtomicUsize = AtomicUsize::new(0);
 
 fn check_source(src: &str) -> Result<(), String> {
     check_source_with_defines(src, &[])
@@ -24,6 +29,37 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = parse(&tokens)?;
     let ast = elephc::name_resolver::resolve(ast)?;
     types::check(&ast)
+}
+
+fn resolve_files_error(
+    files: &[(&str, &str)],
+    main_file: &str,
+) -> elephc::errors::CompileError {
+    let id = TEST_PROJECT_ID.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("elephc_error_test_{}_{}", std::process::id(), id));
+    fs::create_dir_all(&dir).unwrap();
+
+    for (path, content) in files {
+        let full_path = dir.join(path);
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&full_path, content).unwrap();
+    }
+
+    let php_path = dir.join(main_file);
+    let source = fs::read_to_string(&php_path).unwrap();
+    let base_dir = php_path.parent().unwrap();
+
+    let result = (|| -> Result<(), elephc::errors::CompileError> {
+        let tokens = tokenize(&source)?;
+        let ast = parse(&tokens)?;
+        let _ = elephc::resolver::resolve(ast, base_dir)?;
+        Ok(())
+    })();
+
+    let _ = fs::remove_dir_all(&dir);
+    result.expect_err("expected resolve to fail")
 }
 
 fn expect_error(src: &str, expected_substr: &str) {
@@ -749,6 +785,36 @@ fn test_error_has_column() {
     let result = tokenize("<?php @");
     let err = result.unwrap_err();
     assert!(err.span.col > 0, "Error should have a column number");
+}
+
+#[test]
+fn test_require_once_chain_preserves_included_file_error_location() {
+    let err = resolve_files_error(
+        &[
+            ("main.php", "<?php\nrequire_once 'a.php';\n"),
+            ("a.php", "<?php\nrequire_once 'nested/b.php';\n"),
+            ("nested/b.php", "<?php\nfunction broken() {\n    echo 1\n}\n"),
+        ],
+        "main.php",
+    );
+
+    assert_eq!(err.span.line, 4, "expected parser error to point into nested/b.php");
+    assert_ne!(err.span.line, 2, "error should not point back to the require_once line");
+    assert!(
+        Path::new(err.file.as_deref().expect("expected included file path")).ends_with("nested/b.php"),
+        "expected file path to reference nested/b.php, got {:?}",
+        err.file,
+    );
+    assert!(
+        err.message.contains("Expected ';'"),
+        "unexpected error message: {}",
+        err.message,
+    );
+    assert!(
+        err.to_string().contains("nested/b.php:4"),
+        "expected display output to include nested/b.php:4, got {}",
+        err,
+    );
 }
 
 // --- Float/math function errors ---

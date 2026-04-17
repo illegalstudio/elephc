@@ -202,7 +202,7 @@ fn main() {
     let tokens = match lexer::tokenize(&source) {
         Ok(tokens) => tokens,
         Err(e) => {
-            errors::report(&e);
+            errors::report(&e.with_file(filename.to_string()));
             process::exit(1);
         }
     };
@@ -210,7 +210,7 @@ fn main() {
     let parsed = match parser::parse(&tokens) {
         Ok(ast) => ast,
         Err(e) => {
-            errors::report(&e);
+            errors::report(&e.with_file(filename.to_string()));
             process::exit(1);
         }
     };

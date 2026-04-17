@@ -362,17 +362,9 @@ fn parse_file(path: &Path, include_span: Span) -> Result<Vec<Stmt>, CompileError
         )
     })?;
 
-    let tokens = lexer::tokenize(&source).map_err(|e| {
-        CompileError::new(
-            include_span,
-            &format!("Error in '{}': {}", path.display(), e.message),
-        )
-    })?;
+    let file = path.display().to_string();
 
-    parser::parse(&tokens).map_err(|e| {
-        CompileError::new(
-            include_span,
-            &format!("Error in '{}': {}", path.display(), e.message),
-        )
-    })
+    let tokens = lexer::tokenize(&source).map_err(|e| e.with_file(file.clone()))?;
+
+    parser::parse(&tokens).map_err(|e| e.with_file(file))
 }
