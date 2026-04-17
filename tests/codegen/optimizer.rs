@@ -254,3 +254,39 @@ echo 3;
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn test_constant_folding_prunes_for_false_body_and_update_from_user_assembly() {
+    let dir = make_cli_test_dir("elephc_constant_folding_for_prune");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$n = 8;
+for ($i = 1; false; $i = 2 ** $n) {
+    echo 2 ** $n;
+}
+echo $i;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "for(false) body and update should be pruned from user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "1");
+
+    let _ = fs::remove_dir_all(&dir);
+}

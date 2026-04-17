@@ -328,15 +328,20 @@ fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
             condition,
             update,
             body,
-        } => vec![Stmt {
-            kind: StmtKind::For {
-                init,
-                condition,
-                update,
-                body: prune_block(body),
-            },
-            span,
-        }],
+        } => match condition.as_ref().and_then(scalar_value) {
+            Some(value) if !value.truthy() => init
+                .map(|stmt| prune_stmt(*stmt))
+                .unwrap_or_default(),
+            _ => vec![Stmt {
+                kind: StmtKind::For {
+                    init,
+                    condition,
+                    update,
+                    body: prune_block(body),
+                },
+                span,
+            }],
+        },
         StmtKind::Foreach {
             array,
             key_var,
@@ -1453,5 +1458,22 @@ mod tests {
         let pruned = prune_constant_control_flow(program);
 
         assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(2))]);
+    }
+
+    #[test]
+    fn test_prune_for_false_keeps_init_only() {
+        let program = vec![Stmt::new(
+            StmtKind::For {
+                init: Some(Box::new(Stmt::assign("i", Expr::int_lit(1)))),
+                condition: Some(Expr::new(ExprKind::BoolLiteral(false), Span::dummy())),
+                update: Some(Box::new(Stmt::assign("i", Expr::int_lit(2)))),
+                body: vec![Stmt::echo(Expr::int_lit(3))],
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = prune_constant_control_flow(program);
+
+        assert_eq!(pruned, vec![Stmt::assign("i", Expr::int_lit(1))]);
     }
 }
