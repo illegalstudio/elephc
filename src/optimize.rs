@@ -559,10 +559,17 @@ fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
             },
             span,
         }],
-        StmtKind::ExprStmt(expr) => vec![Stmt {
-            kind: StmtKind::ExprStmt(prune_expr(expr)),
-            span,
-        }],
+        StmtKind::ExprStmt(expr) => {
+            let expr = prune_expr(expr);
+            if expr_has_side_effects(&expr) {
+                vec![Stmt {
+                    kind: StmtKind::ExprStmt(expr),
+                    span,
+                }]
+            } else {
+                Vec::new()
+            }
+        }
         StmtKind::EnumDecl {
             name,
             backing_type,
@@ -894,6 +901,79 @@ fn prune_expr(expr: Expr) -> Expr {
         },
     };
     Expr { kind, span }
+}
+
+fn expr_has_side_effects(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::Variable(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::ConstRef(_)
+        | ExprKind::EnumCase { .. }
+        | ExprKind::This => false,
+        ExprKind::Negate(inner)
+        | ExprKind::Not(inner)
+        | ExprKind::BitNot(inner)
+        | ExprKind::Spread(inner) => expr_has_side_effects(inner),
+        ExprKind::BinaryOp { left, right, .. } => {
+            expr_has_side_effects(left) || expr_has_side_effects(right)
+        }
+        ExprKind::Throw(_)
+        | ExprKind::PreIncrement(_)
+        | ExprKind::PostIncrement(_)
+        | ExprKind::PreDecrement(_)
+        | ExprKind::PostDecrement(_)
+        | ExprKind::FunctionCall { .. }
+        | ExprKind::ClosureCall { .. }
+        | ExprKind::ExprCall { .. }
+        | ExprKind::NewObject { .. }
+        | ExprKind::MethodCall { .. }
+        | ExprKind::StaticMethodCall { .. }
+        | ExprKind::PropertyAccess { .. }
+        | ExprKind::ArrayAccess { .. }
+        | ExprKind::BufferNew { .. } => true,
+        ExprKind::NullCoalesce { value, default } => {
+            expr_has_side_effects(value) || expr_has_side_effects(default)
+        }
+        ExprKind::ArrayLiteral(items) => items.iter().any(expr_has_side_effects),
+        ExprKind::ArrayLiteralAssoc(items) => items
+            .iter()
+            .any(|(key, value)| expr_has_side_effects(key) || expr_has_side_effects(value)),
+        ExprKind::Match {
+            subject,
+            arms,
+            default,
+        } => {
+            expr_has_side_effects(subject)
+                || arms.iter().any(|(patterns, value)| {
+                    patterns.iter().any(expr_has_side_effects) || expr_has_side_effects(value)
+                })
+                || default.as_ref().is_some_and(|expr| expr_has_side_effects(expr))
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            expr_has_side_effects(condition)
+                || expr_has_side_effects(then_expr)
+                || expr_has_side_effects(else_expr)
+        }
+        ExprKind::Cast { expr, .. } | ExprKind::PtrCast { expr, .. } => expr_has_side_effects(expr),
+        ExprKind::Closure { .. } => false,
+        ExprKind::NamedArg { value, .. } => expr_has_side_effects(value),
+        ExprKind::FirstClassCallable(target) => callable_target_has_side_effects(target),
+    }
+}
+
+fn callable_target_has_side_effects(target: &CallableTarget) -> bool {
+    match target {
+        CallableTarget::Function(_) | CallableTarget::StaticMethod { .. } => false,
+        CallableTarget::Method { .. } => true,
+    }
 }
 
 fn prune_callable_target(target: CallableTarget) -> CallableTarget {
@@ -1965,6 +2045,34 @@ mod tests {
         };
         assert_eq!(body.len(), 1);
         assert!(matches!(body[0].kind, StmtKind::Return(_)));
+    }
+
+    #[test]
+    fn test_prune_drops_pure_expr_stmt() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "answer".into(),
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::ExprStmt(Expr::binop(Expr::int_lit(2), BinOp::Pow, Expr::int_lit(8))),
+                        Span::dummy(),
+                    ),
+                    Stmt::echo(Expr::int_lit(7)),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = prune_constant_control_flow(program);
+
+        let StmtKind::FunctionDecl { body, .. } = &pruned[0].kind else {
+            panic!("expected function");
+        };
+        assert_eq!(body.len(), 1);
+        assert_eq!(body[0], Stmt::echo(Expr::int_lit(7)));
     }
 
     #[test]
