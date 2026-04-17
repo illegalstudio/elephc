@@ -754,6 +754,264 @@ echo $total;
 }
 
 #[test]
+fn test_class_property_array_push() {
+    let out = compile_and_run(
+        r#"<?php
+class Bucket {
+    public $items;
+
+    public function __construct() {
+        $this->items = [1, 2];
+    }
+
+    public function add($value) {
+        $this->items[] = $value;
+    }
+
+    public function last(): int {
+        return $this->items[2];
+    }
+}
+
+$bucket = new Bucket();
+$bucket->add(7);
+echo $bucket->last();
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_class_property_array_assign() {
+    let out = compile_and_run(
+        r#"<?php
+class Bucket {
+    public $items;
+
+    public function __construct() {
+        $this->items = [1, 2, 3];
+    }
+
+    public function replaceFirst($value) {
+        $this->items[0] = $value;
+    }
+
+    public function first(): int {
+        return $this->items[0];
+    }
+}
+
+$bucket = new Bucket();
+$bucket->replaceFirst(9);
+echo $bucket->first();
+"#,
+    );
+    assert_eq!(out, "9");
+}
+
+#[test]
+fn test_deep_mixed_property_and_array_chain() {
+    let out = compile_and_run(
+        r#"<?php
+class Color {
+    public $r;
+
+    public function __construct($r) {
+        $this->r = $r;
+    }
+}
+
+class Palette {
+    public $colors;
+
+    public function __construct() {
+        $this->colors = [];
+        $this->colors[] = new Color(4);
+        $this->colors[] = new Color(9);
+    }
+}
+
+class Catalog {
+    public $palette;
+
+    public function __construct() {
+        $this->palette = new Palette();
+    }
+
+    public function sample(): int {
+        $i = 1;
+        return $this->palette->colors[$i]->r;
+    }
+}
+
+$catalog = new Catalog();
+echo $catalog->sample();
+"#,
+    );
+    assert_eq!(out, "9");
+}
+
+#[test]
+fn test_method_call_array_access_then_property_access() {
+    let out = compile_and_run(
+        r#"<?php
+class Item {
+    public $name;
+
+    public function __construct($name) {
+        $this->name = $name;
+    }
+}
+
+class Shop {
+    public $items;
+
+    public function __construct() {
+        $this->items = [];
+        $this->items[] = new Item("apple");
+        $this->items[] = new Item("banana");
+    }
+
+    public function getItems() {
+        return $this->items;
+    }
+}
+
+$shop = new Shop();
+echo $shop->getItems()[0]->name;
+"#,
+    );
+    assert_eq!(out, "apple");
+}
+
+#[test]
+fn test_deep_property_assign_after_array_access() {
+    let out = compile_and_run(
+        r#"<?php
+class Color {
+    public $r;
+
+    public function __construct($r) {
+        $this->r = $r;
+    }
+}
+
+class Palette {
+    public $colors;
+
+    public function __construct() {
+        $this->colors = [];
+        $this->colors[] = new Color(4);
+        $this->colors[] = new Color(9);
+    }
+}
+
+class Catalog {
+    public $palette;
+
+    public function __construct() {
+        $this->palette = new Palette();
+    }
+
+    public function repaint(): int {
+        $i = 1;
+        $this->palette->colors[$i]->r = 12;
+        return $this->palette->colors[$i]->r;
+    }
+}
+
+$catalog = new Catalog();
+echo $catalog->repaint();
+"#,
+    );
+    assert_eq!(out, "12");
+}
+
+#[test]
+fn test_deep_property_array_assign_after_array_access() {
+    let out = compile_and_run(
+        r#"<?php
+class Color {
+    public $shades;
+
+    public function __construct() {
+        $this->shades = [1, 2];
+    }
+}
+
+class Palette {
+    public $colors;
+
+    public function __construct() {
+        $this->colors = [];
+        $this->colors[] = new Color();
+    }
+}
+
+class Catalog {
+    public $palette;
+
+    public function __construct() {
+        $this->palette = new Palette();
+    }
+
+    public function repaint(): int {
+        $i = 0;
+        $this->palette->colors[$i]->shades[1] = 7;
+        return $this->palette->colors[$i]->shades[1];
+    }
+}
+
+$catalog = new Catalog();
+echo $catalog->repaint();
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_deep_property_array_push_after_array_access() {
+    let out = compile_and_run(
+        r#"<?php
+class Color {
+    public $shades;
+
+    public function __construct() {
+        $this->shades = [1, 2];
+    }
+}
+
+class Palette {
+    public $colors;
+
+    public function __construct() {
+        $this->colors = [];
+        $this->colors[] = new Color();
+    }
+}
+
+class Catalog {
+    public $palette;
+
+    public function __construct() {
+        $this->palette = new Palette();
+    }
+
+    public function repaint(): int {
+        $i = 0;
+        $this->palette->colors[$i]->shades[] = 7;
+        return $this->palette->colors[$i]->shades[2];
+    }
+}
+
+$catalog = new Catalog();
+echo $catalog->repaint();
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+#[test]
 fn test_class_static_method_string_param() {
     let out = compile_and_run(
         r#"<?php

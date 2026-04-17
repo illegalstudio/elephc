@@ -410,6 +410,46 @@ pub(super) fn resolve_stmt_list(
                             stmt.span,
                         ));
                     }
+                    StmtKind::PropertyArrayPush {
+                        object,
+                        property,
+                        value,
+                    } => {
+                        resolved.push(Stmt::new(
+                            StmtKind::PropertyArrayPush {
+                                object: Box::new(resolve_expr(
+                                    object,
+                                    namespace.as_deref(),
+                                    &imports,
+                                    symbols,
+                                )),
+                                property: property.clone(),
+                                value: resolve_expr(value, namespace.as_deref(), &imports, symbols),
+                            },
+                            stmt.span,
+                        ));
+                    }
+                    StmtKind::PropertyArrayAssign {
+                        object,
+                        property,
+                        index,
+                        value,
+                    } => {
+                        resolved.push(Stmt::new(
+                            StmtKind::PropertyArrayAssign {
+                                object: Box::new(resolve_expr(
+                                    object,
+                                    namespace.as_deref(),
+                                    &imports,
+                                    symbols,
+                                )),
+                                property: property.clone(),
+                                index: resolve_expr(index, namespace.as_deref(), &imports, symbols),
+                                value: resolve_expr(value, namespace.as_deref(), &imports, symbols),
+                            },
+                            stmt.span,
+                        ));
+                    }
                     _ => resolved.push(stmt.clone()),
                 }
             }

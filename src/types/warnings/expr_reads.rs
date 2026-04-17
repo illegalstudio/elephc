@@ -149,6 +149,22 @@ pub(super) fn collect_closure_warnings_in_stmt(stmt: &Stmt, warnings: &mut Vec<C
             collect_expr_reads(object, &mut scope, warnings);
             collect_expr_reads(value, &mut scope, warnings);
         }
+        StmtKind::PropertyArrayPush { object, value, .. } => {
+            let mut scope = ScopeUsage::default();
+            collect_expr_reads(object, &mut scope, warnings);
+            collect_expr_reads(value, &mut scope, warnings);
+        }
+        StmtKind::PropertyArrayAssign {
+            object,
+            index,
+            value,
+            ..
+        } => {
+            let mut scope = ScopeUsage::default();
+            collect_expr_reads(object, &mut scope, warnings);
+            collect_expr_reads(index, &mut scope, warnings);
+            collect_expr_reads(value, &mut scope, warnings);
+        }
         StmtKind::If {
             condition,
             then_body,

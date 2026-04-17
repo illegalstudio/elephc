@@ -309,6 +309,302 @@ impl Checker {
                 }
                 Ok(())
             }
+            StmtKind::PropertyArrayPush {
+                object,
+                property,
+                value,
+            } => {
+                let obj_ty = self.infer_type(object, env)?;
+                let val_ty = self.infer_type(value, env)?;
+                match &obj_ty {
+                    PhpType::Object(class_name) => {
+                        let prop_ty = {
+                            let class_info = self.classes.get(class_name).ok_or_else(|| {
+                                CompileError::new(
+                                    stmt.span,
+                                    &format!("Undefined class: {}", class_name),
+                                )
+                            })?;
+                            if !class_info.properties.iter().any(|(n, _)| n == property) {
+                                return Err(CompileError::new(
+                                    stmt.span,
+                                    &format!("Undefined property: {}::{}", class_name, property),
+                                ));
+                            }
+                            if let Some(visibility) = class_info.property_visibilities.get(property) {
+                                let declaring_class = class_info
+                                    .property_declaring_classes
+                                    .get(property)
+                                    .map(String::as_str)
+                                    .unwrap_or(class_name);
+                                if !self.can_access_member(declaring_class, visibility) {
+                                    return Err(CompileError::new(
+                                        stmt.span,
+                                        &format!(
+                                            "Cannot access {} property: {}::{}",
+                                            Self::visibility_label(visibility),
+                                            class_name,
+                                            property
+                                        ),
+                                    ));
+                                }
+                            }
+                            if class_info.readonly_properties.contains(property)
+                                && !(self.current_class.as_deref()
+                                    == class_info
+                                        .property_declaring_classes
+                                        .get(property)
+                                        .map(String::as_str)
+                                    && self.current_method.as_deref() == Some("__construct"))
+                            {
+                                return Err(CompileError::new(
+                                    stmt.span,
+                                    &format!(
+                                        "Cannot assign to readonly property outside constructor: {}::{}",
+                                        class_name, property
+                                    ),
+                                ));
+                            }
+                            class_info
+                                .properties
+                                .iter()
+                                .find(|(name, _)| name == property)
+                                .map(|(_, ty)| ty.clone())
+                                .unwrap_or(PhpType::Int)
+                        };
+
+                        let updated_prop_ty = match prop_ty {
+                            PhpType::Array(elem_ty) => {
+                                if *elem_ty == val_ty {
+                                    PhpType::Array(elem_ty)
+                                } else {
+                                    let merged_ty = self
+                                        .merge_array_element_type(&elem_ty, &val_ty)
+                                        .unwrap_or(val_ty.clone());
+                                    PhpType::Array(Box::new(merged_ty))
+                                }
+                            }
+                            PhpType::Int => PhpType::Array(Box::new(val_ty.clone())),
+                            PhpType::Buffer(_) => {
+                                return Err(CompileError::new(
+                                    stmt.span,
+                                    "buffer<T> does not support push; allocate with buffer_new<T>(len)",
+                                ))
+                            }
+                            other => {
+                                return Err(CompileError::new(
+                                    stmt.span,
+                                    &format!(
+                                        "Array push requires an array property, got {}",
+                                        other
+                                    ),
+                                ))
+                            }
+                        };
+
+                        if let Some(class_info) = self.classes.get_mut(class_name) {
+                            if let Some(prop) = class_info
+                                .properties
+                                .iter_mut()
+                                .find(|(name, _)| name == property)
+                            {
+                                prop.1 = updated_prop_ty;
+                            }
+                        }
+                        Ok(())
+                    }
+                    PhpType::Pointer(Some(class_name)) => {
+                        let field_ty = if let Some(field_ty) = self.extern_field_type(class_name, property) {
+                            field_ty
+                        } else if let Some(field_ty) = self.packed_field_type(class_name, property) {
+                            field_ty
+                        } else if self.extern_classes.contains_key(class_name) {
+                            return Err(CompileError::new(
+                                stmt.span,
+                                &format!("Undefined extern field: {}::{}", class_name, property),
+                            ));
+                        } else if self.packed_classes.contains_key(class_name) {
+                            return Err(CompileError::new(
+                                stmt.span,
+                                &format!("Undefined packed field: {}::{}", class_name, property),
+                            ));
+                        } else {
+                            return Err(CompileError::new(
+                                stmt.span,
+                                "Array push requires an object or typed pointer",
+                            ));
+                        };
+
+                        match field_ty {
+                            PhpType::Array(_) => Ok(()),
+                            PhpType::Buffer(_) => Err(CompileError::new(
+                                stmt.span,
+                                "buffer<T> does not support push; allocate with buffer_new<T>(len)",
+                            )),
+                            other => Err(CompileError::new(
+                                stmt.span,
+                                &format!("Array push requires an array property, got {}", other),
+                            )),
+                        }
+                    }
+                    _ => Err(CompileError::new(
+                        stmt.span,
+                        "Array push requires an object or typed pointer",
+                    )),
+                }
+            }
+            StmtKind::PropertyArrayAssign {
+                object,
+                property,
+                index,
+                value,
+            } => {
+                let obj_ty = self.infer_type(object, env)?;
+                let idx_ty = self.infer_type(index, env)?;
+                let val_ty = self.infer_type(value, env)?;
+                match &obj_ty {
+                    PhpType::Object(class_name) => {
+                        let prop_ty = {
+                            let class_info = self.classes.get(class_name).ok_or_else(|| {
+                                CompileError::new(
+                                    stmt.span,
+                                    &format!("Undefined class: {}", class_name),
+                                )
+                            })?;
+                            if !class_info.properties.iter().any(|(n, _)| n == property) {
+                                return Err(CompileError::new(
+                                    stmt.span,
+                                    &format!("Undefined property: {}::{}", class_name, property),
+                                ));
+                            }
+                            if let Some(visibility) = class_info.property_visibilities.get(property) {
+                                let declaring_class = class_info
+                                    .property_declaring_classes
+                                    .get(property)
+                                    .map(String::as_str)
+                                    .unwrap_or(class_name);
+                                if !self.can_access_member(declaring_class, visibility) {
+                                    return Err(CompileError::new(
+                                        stmt.span,
+                                        &format!(
+                                            "Cannot access {} property: {}::{}",
+                                            Self::visibility_label(visibility),
+                                            class_name,
+                                            property
+                                        ),
+                                    ));
+                                }
+                            }
+                            if class_info.readonly_properties.contains(property)
+                                && !(self.current_class.as_deref()
+                                    == class_info
+                                        .property_declaring_classes
+                                        .get(property)
+                                        .map(String::as_str)
+                                    && self.current_method.as_deref() == Some("__construct"))
+                            {
+                                return Err(CompileError::new(
+                                    stmt.span,
+                                    &format!(
+                                        "Cannot assign to readonly property outside constructor: {}::{}",
+                                        class_name, property
+                                    ),
+                                ));
+                            }
+                            class_info
+                                .properties
+                                .iter()
+                                .find(|(name, _)| name == property)
+                                .map(|(_, ty)| ty.clone())
+                                .unwrap_or(PhpType::Int)
+                        };
+
+                        if idx_ty != PhpType::Int {
+                            return Err(CompileError::new(
+                                stmt.span,
+                                "Array index must be integer",
+                            ));
+                        }
+
+                        let updated_prop_ty = match prop_ty {
+                            PhpType::Array(elem_ty) => {
+                                if *elem_ty == val_ty {
+                                    PhpType::Array(elem_ty)
+                                } else {
+                                    let merged_ty = self
+                                        .merge_array_element_type(&elem_ty, &val_ty)
+                                        .unwrap_or(val_ty.clone());
+                                    PhpType::Array(Box::new(merged_ty))
+                                }
+                            }
+                            other => {
+                                return Err(CompileError::new(
+                                    stmt.span,
+                                    &format!(
+                                        "Array index assignment requires an array property, got {}",
+                                        other
+                                    ),
+                                ))
+                            }
+                        };
+
+                        if let Some(class_info) = self.classes.get_mut(class_name) {
+                            if let Some(prop) = class_info
+                                .properties
+                                .iter_mut()
+                                .find(|(name, _)| name == property)
+                            {
+                                prop.1 = updated_prop_ty;
+                            }
+                        }
+                        Ok(())
+                    }
+                    PhpType::Pointer(Some(class_name)) => {
+                        let field_ty = if let Some(field_ty) = self.extern_field_type(class_name, property) {
+                            field_ty
+                        } else if let Some(field_ty) = self.packed_field_type(class_name, property) {
+                            field_ty
+                        } else if self.extern_classes.contains_key(class_name) {
+                            return Err(CompileError::new(
+                                stmt.span,
+                                &format!("Undefined extern field: {}::{}", class_name, property),
+                            ));
+                        } else if self.packed_classes.contains_key(class_name) {
+                            return Err(CompileError::new(
+                                stmt.span,
+                                &format!("Undefined packed field: {}::{}", class_name, property),
+                            ));
+                        } else {
+                            return Err(CompileError::new(
+                                stmt.span,
+                                "Array index assignment requires an object or typed pointer",
+                            ));
+                        };
+
+                        if idx_ty != PhpType::Int {
+                            return Err(CompileError::new(
+                                stmt.span,
+                                "Array index must be integer",
+                            ));
+                        }
+
+                        match field_ty {
+                            PhpType::Array(_) => Ok(()),
+                            other => Err(CompileError::new(
+                                stmt.span,
+                                &format!(
+                                    "Array index assignment requires an array property, got {}",
+                                    other
+                                ),
+                            )),
+                        }
+                    }
+                    _ => Err(CompileError::new(
+                        stmt.span,
+                        "Array index assignment requires an object or typed pointer",
+                    )),
+                }
+            }
             _ => unreachable!("non-assignment statement routed to assignment checker"),
         }
     }

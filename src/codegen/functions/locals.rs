@@ -136,6 +136,7 @@ pub fn collect_local_vars(
                 } else {
                 }
             }
+            StmtKind::PropertyArrayPush { .. } | StmtKind::PropertyArrayAssign { .. } => {}
             StmtKind::DoWhile { body, .. } | StmtKind::While { body, .. } => {
                 collect_local_vars(body, ctx, sig);
             }
