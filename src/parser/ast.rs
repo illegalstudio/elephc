@@ -385,6 +385,11 @@ pub enum StmtKind {
         property: String,
         value: Expr,
     },
+    PropertyArrayPush {
+        object: Box<Expr>,
+        property: String,
+        value: Expr,
+    },
     ExternFunctionDecl {
         name: String,
         params: Vec<ExternParam>,

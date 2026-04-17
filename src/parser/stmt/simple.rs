@@ -4,6 +4,7 @@ use crate::parser::ast::{ExprKind, Stmt, StmtKind};
 use crate::parser::expr::parse_expr;
 use crate::span::Span;
 
+use super::assign::try_parse_postfix_assignment;
 use super::{expect_semicolon, expect_token};
 
 pub(super) fn parse_include(
@@ -91,6 +92,10 @@ pub(super) fn parse_this_stmt(
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
+    if let Some(stmt) = try_parse_postfix_assignment(tokens, pos, span)? {
+        return Ok(stmt);
+    }
+
     // Parse as expression first
     let expr = parse_expr(tokens, pos)?;
     // Check if followed by assignment

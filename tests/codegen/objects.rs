@@ -754,6 +754,34 @@ echo $total;
 }
 
 #[test]
+fn test_class_property_array_push() {
+    let out = compile_and_run(
+        r#"<?php
+class Bucket {
+    public $items;
+
+    public function __construct() {
+        $this->items = [1, 2];
+    }
+
+    public function add($value) {
+        $this->items[] = $value;
+    }
+
+    public function last(): int {
+        return $this->items[2];
+    }
+}
+
+$bucket = new Bucket();
+$bucket->add(7);
+echo $bucket->last();
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+#[test]
 fn test_class_static_method_string_param() {
     let out = compile_and_run(
         r#"<?php

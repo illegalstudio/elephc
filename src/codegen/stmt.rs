@@ -245,6 +245,13 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
         } => {
             assignments::emit_property_assign_stmt(object, property, value, emitter, ctx, data);
         }
+        StmtKind::PropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            assignments::emit_property_array_push_stmt(object, property, value, emitter, ctx, data);
+        }
     }
 }
 

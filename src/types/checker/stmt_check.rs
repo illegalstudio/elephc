@@ -31,7 +31,8 @@ impl Checker {
             | StmtKind::ListUnpack { .. }
             | StmtKind::Global { .. }
             | StmtKind::StaticVar { .. }
-            | StmtKind::PropertyAssign { .. } => self.check_assignment_like_stmt(stmt, env),
+            | StmtKind::PropertyAssign { .. }
+            | StmtKind::PropertyArrayPush { .. } => self.check_assignment_like_stmt(stmt, env),
             StmtKind::Foreach { .. }
             | StmtKind::Switch { .. }
             | StmtKind::If { .. }

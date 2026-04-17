@@ -410,6 +410,25 @@ pub(super) fn resolve_stmt_list(
                             stmt.span,
                         ));
                     }
+                    StmtKind::PropertyArrayPush {
+                        object,
+                        property,
+                        value,
+                    } => {
+                        resolved.push(Stmt::new(
+                            StmtKind::PropertyArrayPush {
+                                object: Box::new(resolve_expr(
+                                    object,
+                                    namespace.as_deref(),
+                                    &imports,
+                                    symbols,
+                                )),
+                                property: property.clone(),
+                                value: resolve_expr(value, namespace.as_deref(), &imports, symbols),
+                            },
+                            stmt.span,
+                        ));
+                    }
                     _ => resolved.push(stmt.clone()),
                 }
             }

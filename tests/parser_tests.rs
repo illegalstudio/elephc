@@ -1739,6 +1739,23 @@ fn test_parse_property_assign() {
 }
 
 #[test]
+fn test_parse_property_array_push() {
+    let stmts = parse_source("<?php $obj->entries[] = $item;");
+    match &stmts[0].kind {
+        StmtKind::PropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            assert_eq!(property, "entries");
+            assert!(matches!(object.kind, ExprKind::Variable(_)));
+            assert!(matches!(value.kind, ExprKind::Variable(_)));
+        }
+        other => panic!("Expected PropertyArrayPush, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_parse_chained_access() {
     let stmts = parse_source("<?php echo $obj->make()->prop;");
     match &stmts[0].kind {
@@ -1761,6 +1778,27 @@ fn test_parse_chained_access() {
             _ => panic!("Expected PropertyAccess"),
         },
         _ => panic!("Expected Echo"),
+    }
+}
+
+#[test]
+fn test_parse_array_access_on_function_call_result() {
+    let stmts = parse_source("<?php echo getColor()[0];");
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::ArrayAccess { array, index } => {
+                assert!(matches!(index.kind, ExprKind::IntLiteral(0)));
+                match &array.kind {
+                    ExprKind::FunctionCall { name, args } => {
+                        assert_eq!(name.as_str(), "getColor");
+                        assert!(args.is_empty());
+                    }
+                    other => panic!("Expected FunctionCall, got {:?}", other),
+                }
+            }
+            other => panic!("Expected ArrayAccess, got {:?}", other),
+        },
+        other => panic!("Expected Echo, got {:?}", other),
     }
 }
 

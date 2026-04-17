@@ -234,6 +234,14 @@ pub(super) fn collect_scope_reads(
                 collect_expr_reads(object, scope, warnings);
                 collect_expr_reads(value, scope, warnings);
             }
+            StmtKind::PropertyArrayPush {
+                object,
+                value,
+                ..
+            } => {
+                collect_expr_reads(object, scope, warnings);
+                collect_expr_reads(value, scope, warnings);
+            }
             StmtKind::FunctionDecl {
                 params,
                 variadic,

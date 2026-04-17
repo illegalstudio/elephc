@@ -269,6 +269,15 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             property,
             value: rewrite_expr(value, defines),
         },
+        StmtKind::PropertyArrayPush {
+            object,
+            property,
+            value,
+        } => StmtKind::PropertyArrayPush {
+            object: Box::new(rewrite_expr(*object, defines)),
+            property,
+            value: rewrite_expr(value, defines),
+        },
         StmtKind::ExternFunctionDecl {
             name,
             params,
