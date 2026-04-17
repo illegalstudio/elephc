@@ -131,3 +131,53 @@ echo (2 <=> 3) + 2;
     );
     assert_eq!(out, "11");
 }
+
+#[test]
+fn test_constant_folding_int_cast_removes_runtime_atoi_call() {
+    let dir = make_cli_test_dir("elephc_constant_folding_cast_int");
+    let (user_asm, _runtime_asm, required_libraries) =
+        compile_source_to_asm_with_options("<?php echo (int)\"42\";", &dir, 8_388_608, false, false);
+
+    assert!(
+        !user_asm.contains("__rt_atoi"),
+        "constant-folded int cast should not leave __rt_atoi in user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "42");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_constant_folding_string_cast_removes_runtime_itoa_call() {
+    let dir = make_cli_test_dir("elephc_constant_folding_cast_string");
+    let (user_asm, _runtime_asm, required_libraries) =
+        compile_source_to_asm_with_options("<?php echo (string)42;", &dir, 8_388_608, false, false);
+
+    assert!(
+        !user_asm.contains("__rt_itoa"),
+        "constant-folded string cast should not leave __rt_itoa in user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "42");
+
+    let _ = fs::remove_dir_all(&dir);
+}
