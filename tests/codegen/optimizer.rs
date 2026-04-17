@@ -484,3 +484,44 @@ echo answer(true);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn test_constant_folding_prunes_dead_statements_after_exhaustive_switch_from_user_assembly() {
+    let dir = make_cli_test_dir("elephc_constant_folding_exhaustive_switch_dce");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+function answer($flag) {
+    switch ($flag) {
+        case 1:
+            return 7;
+        default:
+            return 8;
+    }
+    echo 2 ** 8;
+}
+echo answer(1);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "dead statements after exhaustive switch should not remain in user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "7");
+
+    let _ = fs::remove_dir_all(&dir);
+}

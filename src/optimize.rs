@@ -278,7 +278,9 @@ fn prune_block(body: Vec<Stmt>) -> Vec<Stmt> {
     let mut pruned = Vec::new();
     for stmt in body {
         let pruned_stmt = prune_stmt(stmt);
-        let stops_here = pruned_stmt.last().is_some_and(stmt_exits_current_block);
+        let stops_here = pruned_stmt
+            .last()
+            .is_some_and(|stmt| !matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough));
         pruned.extend(pruned_stmt);
         if stops_here {
             break;
@@ -287,39 +289,107 @@ fn prune_block(body: Vec<Stmt>) -> Vec<Stmt> {
     pruned
 }
 
-fn block_exits_current_block(body: &[Stmt]) -> bool {
-    body.last().is_some_and(stmt_exits_current_block)
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TerminalEffect {
+    FallsThrough,
+    Breaks,
+    ExitsCurrentBlock,
+    TerminatesMixed,
 }
 
-fn stmt_exits_current_block(stmt: &Stmt) -> bool {
+fn block_terminal_effect(body: &[Stmt]) -> TerminalEffect {
+    body.last()
+        .map(stmt_terminal_effect)
+        .unwrap_or(TerminalEffect::FallsThrough)
+}
+
+fn stmt_terminal_effect(stmt: &Stmt) -> TerminalEffect {
     match &stmt.kind {
-        StmtKind::Return(_) | StmtKind::Throw(_) | StmtKind::Break | StmtKind::Continue => true,
+        StmtKind::Return(_) | StmtKind::Throw(_) | StmtKind::Continue => {
+            TerminalEffect::ExitsCurrentBlock
+        }
+        StmtKind::Break => TerminalEffect::Breaks,
         StmtKind::If {
             then_body,
             elseif_clauses,
             else_body,
             ..
-        } => {
-            block_exits_current_block(then_body)
-                && elseif_clauses
-                    .iter()
-                    .all(|(_, body)| block_exits_current_block(body))
-                && else_body
-                    .as_ref()
-                    .is_some_and(|body| block_exits_current_block(body))
-        }
+        } => combine_branch_effects(
+            std::iter::once(block_terminal_effect(then_body))
+                .chain(elseif_clauses.iter().map(|(_, body)| block_terminal_effect(body))),
+            else_body.as_ref().map(|body| block_terminal_effect(body)),
+        ),
         StmtKind::IfDef {
             then_body,
             else_body,
             ..
-        } => {
-            block_exits_current_block(then_body)
-                && else_body
-                    .as_ref()
-                    .is_some_and(|body| block_exits_current_block(body))
-        }
-        _ => false,
+        } => combine_branch_effects(
+            std::iter::once(block_terminal_effect(then_body)),
+            else_body.as_ref().map(|body| block_terminal_effect(body)),
+        ),
+        StmtKind::Switch { cases, default, .. } => switch_terminal_effect(cases, default),
+        _ => TerminalEffect::FallsThrough,
     }
+}
+
+fn combine_branch_effects(
+    branch_effects: impl Iterator<Item = TerminalEffect>,
+    else_effect: Option<TerminalEffect>,
+) -> TerminalEffect {
+    let Some(else_effect) = else_effect else {
+        return TerminalEffect::FallsThrough;
+    };
+
+    let mut saw_break = else_effect == TerminalEffect::Breaks;
+    let mut saw_exit = else_effect == TerminalEffect::ExitsCurrentBlock;
+    let mut saw_mixed = else_effect == TerminalEffect::TerminatesMixed;
+
+    for effect in branch_effects {
+        match effect {
+            TerminalEffect::FallsThrough => return TerminalEffect::FallsThrough,
+            TerminalEffect::Breaks => saw_break = true,
+            TerminalEffect::ExitsCurrentBlock => saw_exit = true,
+            TerminalEffect::TerminatesMixed => saw_mixed = true,
+        }
+    }
+
+    if saw_mixed || (saw_break && saw_exit) {
+        TerminalEffect::TerminatesMixed
+    } else if saw_exit {
+        TerminalEffect::ExitsCurrentBlock
+    } else if saw_break {
+        TerminalEffect::Breaks
+    } else {
+        TerminalEffect::FallsThrough
+    }
+}
+
+fn switch_terminal_effect(
+    cases: &[(Vec<Expr>, Vec<Stmt>)],
+    default: &Option<Vec<Stmt>>,
+) -> TerminalEffect {
+    let Some(default_body) = default.as_ref() else {
+        return TerminalEffect::FallsThrough;
+    };
+
+    let mut suffix_exits = block_terminal_effect(default_body) == TerminalEffect::ExitsCurrentBlock;
+    if !suffix_exits {
+        return TerminalEffect::FallsThrough;
+    }
+
+    for (_, body) in cases.iter().rev() {
+        suffix_exits = match block_terminal_effect(body) {
+            TerminalEffect::ExitsCurrentBlock => true,
+            TerminalEffect::FallsThrough => suffix_exits,
+            TerminalEffect::Breaks | TerminalEffect::TerminatesMixed => false,
+        };
+
+        if !suffix_exits {
+            return TerminalEffect::FallsThrough;
+        }
+    }
+
+    TerminalEffect::ExitsCurrentBlock
 }
 
 fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
@@ -1935,6 +2005,49 @@ mod tests {
         assert_eq!(body.len(), 1);
         let StmtKind::If { .. } = &body[0].kind else {
             panic!("expected if");
+        };
+    }
+
+    #[test]
+    fn test_prune_block_drops_statements_after_exhaustive_switch() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "answer".into(),
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::Switch {
+                            subject: Expr::var("flag"),
+                            cases: vec![(
+                                vec![Expr::int_lit(1)],
+                                vec![Stmt::new(
+                                    StmtKind::Return(Some(Expr::int_lit(7))),
+                                    Span::dummy(),
+                                )],
+                            )],
+                            default: Some(vec![Stmt::new(
+                                StmtKind::Return(Some(Expr::int_lit(8))),
+                                Span::dummy(),
+                            )]),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::echo(Expr::int_lit(9)),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = prune_constant_control_flow(program);
+
+        let StmtKind::FunctionDecl { body, .. } = &pruned[0].kind else {
+            panic!("expected function");
+        };
+        assert_eq!(body.len(), 1);
+        let StmtKind::Switch { .. } = &body[0].kind else {
+            panic!("expected switch");
         };
     }
 
