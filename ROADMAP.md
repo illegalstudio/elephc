@@ -304,29 +304,35 @@ Proper type system for PHP compatibility.
 - [x] Split `src/codegen/expr.rs` into a slim dispatcher plus smaller focused helpers
 - [x] Split `src/codegen/stmt.rs` into a slim dispatcher plus smaller focused helpers
 - [x] Target support matrix: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## v0.19.x — Tooling and compiler throughput
+
+- [ ] Runtime object cache — pre-assemble the runtime into `~/.cache/elephc/runtime-<version>.o` and reuse across compilations, invalidating on compiler version change. Cuts repeated compile time by ~50%.
+- [ ] Benchmark suite (vs C, vs PHP interpreter)
+- [ ] Source maps (assembly ↔ PHP line mapping)
+- [ ] Compiler timing / profiling output for parse, typecheck, codegen, assemble, and link phases
+
+## v0.20.x — Early optimization pass
+
 - [ ] Constant folding (`2 + 3` → `5` at compile time)
 - [ ] Dead code elimination
+- [ ] Peephole optimization (redundant load/store elimination)
+- [ ] Add regression benchmarks so optimization work is measured instead of anecdotal
+
+## v0.21.x — Code quality and performance validation
+
 - [ ] Register allocation (reduce stack spills)
 - [ ] Inline small functions
 - [ ] Tail-call optimization
-- [ ] Peephole optimization (redundant load/store elimination)
-
-## v1.0.x — Production-ready
-
-- [ ] Source maps (assembly ↔ PHP line mapping)
-- [ ] `--emit-asm`, `--check` flags
-- [ ] Benchmark suite (vs C, vs PHP interpreter)
-- [x] Full test coverage (>500 focused checks across lexer/parser/codegen/error suites)
-- [x] Documentation: language subset spec, architecture guide
-- [x] CI/CD with release binaries
-- [ ] Apple notarization for direct downloads (codesign + notarytool)
 - [ ] Performance within 2x of C -O0 on compute benchmarks
 - [ ] Real-world CLI tools compiled as validation
-- [ ] Runtime object cache — pre-assemble the runtime into `~/.cache/elephc/runtime-<version>.o` and reuse across compilations, invalidating on compiler version change. Cuts repeated compile time by ~50%.
 
----
+## v0.22.x — Release engineering and distribution
 
-## v1.1.x — Shared and static libraries (C ABI)
+- [ ] Apple notarization for direct downloads (codesign + notarytool)
+- [ ] Installation / packaging documentation for the supported host platforms
+
+## v0.23.x — Shared and static libraries (C ABI)
 
 - [ ] `--lib` flag, export PHP functions as C-callable symbols
 - [ ] `.dylib` / `.so` / `.a` output
@@ -334,21 +340,21 @@ Proper type system for PHP compatibility.
 - [ ] Null-terminated string convention for C interop
 - [ ] FFI documentation for C, Rust, Python, Go
 
-## v1.2.x — Library ecosystem
+## v0.24.x — Library ecosystem
 
 - [ ] `--export` flag for symbol selection
 - [ ] Multi-file library compilation
 - [ ] Symbol visibility control
 - [ ] `pkg-config` generation
 
-## v1.3.x — WebAssembly target
+## v0.25.x — WebAssembly target
 
 - [ ] WASM codegen backend
 - [ ] `.wat` / `.wasm` emission
 - [ ] WASI support for I/O
 - [ ] NPM package generation
 
-## v1.4.x — PHP extension bridge (experimental)
+## v0.26.x — PHP extension bridge (experimental)
 
 - [ ] `zval` pack/unpack routines (convert elephc values ↔ PHP `zval` structs)
 - [ ] Link against PHP extension `.so`/`.dylib` shared libraries
@@ -356,6 +362,16 @@ Proper type system for PHP compatibility.
 - [ ] Proof of concept with one extension (e.g., `mbstring` or `curl`)
 - [ ] `--ext` flag to specify extension libraries at compile time
 - [ ] Documentation: how to bridge a PHP extension
+
+## v1.0.x — Stabilization and release gate
+
+- [x] `--emit-asm`, `--check` flags
+- [x] Full test coverage (>500 focused checks across lexer/parser/codegen/error suites)
+- [x] Documentation: language subset spec, architecture guide
+- [x] CI/CD with release binaries
+- [ ] Freeze the documented language/runtime contract for the supported target matrix
+- [ ] Run a dedicated release-candidate stabilization pass across compiler, runtime, docs, and examples
+- [ ] Ship 1.0 once the pre-1.0 roadmap is reduced to true post-1.0 work only
 
 ---
 
