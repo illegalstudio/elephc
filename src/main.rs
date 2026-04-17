@@ -6,6 +6,7 @@ mod name_resolver;
 mod names;
 mod parser;
 mod resolver;
+mod runtime_cache;
 mod span;
 mod types;
 
@@ -23,6 +24,7 @@ const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-s
 struct CompileTimings {
     enabled: bool,
     started_at: Instant,
+    notes: Vec<String>,
     phases: Vec<(&'static str, Duration)>,
 }
 
@@ -31,6 +33,7 @@ impl CompileTimings {
         Self {
             enabled,
             started_at: Instant::now(),
+            notes: Vec::new(),
             phases: Vec::new(),
         }
     }
@@ -41,12 +44,21 @@ impl CompileTimings {
         }
     }
 
+    fn note(&mut self, note: impl Into<String>) {
+        if self.enabled {
+            self.notes.push(note.into());
+        }
+    }
+
     fn report(&self) {
         if !self.enabled {
             return;
         }
 
         eprintln!("Compiler timings:");
+        for note in &self.notes {
+            eprintln!("  {}", note);
+        }
         for (phase, duration) in &self.phases {
             eprintln!("  {:<12} {:>8.2} ms", phase, duration.as_secs_f64() * 1000.0);
         }
@@ -314,7 +326,21 @@ fn main() {
     }
 
     let phase_started = Instant::now();
-    let (user_asm, runtime_asm) = codegen::generate(
+    let runtime_object = match runtime_cache::prepare_runtime_object(heap_size, target) {
+        Ok(runtime_object) => runtime_object,
+        Err(err) => {
+            eprintln!("Runtime cache error: {}", err);
+            process::exit(1);
+        }
+    };
+    timings.record_since("runtime-cache", phase_started);
+    timings.note(format!(
+        "runtime-cache {}",
+        runtime_object.status.as_str()
+    ));
+
+    let phase_started = Instant::now();
+    let user_asm = codegen::generate_user_asm(
         &ast,
         &check_result.global_env,
         &check_result.functions,
@@ -339,13 +365,8 @@ fn main() {
         }
     }
 
-    // Concatenate user + runtime into a single assembly file
-    let mut asm = user_asm;
-    asm.push('\n');
-    asm.push_str(&runtime_asm);
-
     let phase_started = Instant::now();
-    if let Err(e) = fs::write(&asm_path, &asm) {
+    if let Err(e) = fs::write(&asm_path, &user_asm) {
         eprintln!("Error writing '{}': {}", asm_path.display(), e);
         process::exit(1);
     }
@@ -377,6 +398,7 @@ fn main() {
             cmd.args(["-arch", target.darwin_arch_name(), "-e", "_main", "-o"]);
             cmd.arg(&bin_path);
             cmd.arg(&obj_path);
+            cmd.arg(&runtime_object.path);
             cmd.args(["-lSystem", "-syslibroot"]);
             cmd.arg(&sdk_path);
             cmd.args(["-platform_version", "macos", &sdk_version, &sdk_version]);
@@ -384,7 +406,7 @@ fn main() {
         }
         Platform::Linux => {
             let mut cmd = Command::new(target.linker_cmd());
-            cmd.arg("-o").arg(&bin_path).arg(&obj_path);
+            cmd.arg("-o").arg(&bin_path).arg(&obj_path).arg(&runtime_object.path);
             if extra_link_libs.is_empty() {
                 cmd.arg("-static");
             }

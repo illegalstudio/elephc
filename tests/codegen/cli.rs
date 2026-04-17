@@ -179,3 +179,62 @@ fn test_cli_timings_reports_assemble_and_link() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn test_cli_runtime_cache_reuses_runtime_object() {
+    let dir = make_cli_test_dir("elephc_cli_runtime_cache");
+    let cache_root = dir.join("cache-root");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 1;").unwrap();
+
+    let first = Command::new(elephc_cli_bin())
+        .arg("--timings")
+        .arg(&php_path)
+        .env("XDG_CACHE_HOME", &cache_root)
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run first elephc CLI compile with runtime cache");
+    assert!(
+        first.status.success(),
+        "first cached compile failed: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first_stderr = String::from_utf8_lossy(&first.stderr);
+    assert!(
+        first_stderr.contains("runtime-cache miss"),
+        "expected first compile to miss runtime cache, got stderr={first_stderr}"
+    );
+
+    let cache_dir = cache_root.join("elephc");
+    let cached_objects: Vec<_> = fs::read_dir(&cache_dir)
+        .expect("expected runtime cache directory to exist")
+        .map(|entry| entry.expect("cache entry").path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("o"))
+        .collect();
+    assert_eq!(
+        cached_objects.len(),
+        1,
+        "expected exactly one cached runtime object, got {:?}",
+        cached_objects
+    );
+
+    let second = Command::new(elephc_cli_bin())
+        .arg("--timings")
+        .arg(&php_path)
+        .env("XDG_CACHE_HOME", &cache_root)
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run second elephc CLI compile with runtime cache");
+    assert!(
+        second.status.success(),
+        "second cached compile failed: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let second_stderr = String::from_utf8_lossy(&second.stderr);
+    assert!(
+        second_stderr.contains("runtime-cache hit"),
+        "expected second compile to hit runtime cache, got stderr={second_stderr}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

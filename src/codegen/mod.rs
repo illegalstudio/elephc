@@ -40,7 +40,7 @@ use prescan::{
 };
 use program_usage::{collect_required_class_names, program_uses_variable};
 
-pub fn generate(
+pub fn generate_user_asm(
     program: &Program,
     global_env: &TypeEnv,
     functions: &HashMap<String, FunctionSig>,
@@ -51,11 +51,11 @@ pub fn generate(
     extern_functions: &HashMap<String, ExternFunctionSig>,
     extern_classes: &HashMap<String, ExternClassInfo>,
     extern_globals: &HashMap<String, PhpType>,
-    heap_size: usize,
+    _heap_size: usize,
     gc_stats: bool,
     heap_debug: bool,
     target: Target,
-) -> (String, String) {
+) -> String {
     let mut emitter = Emitter::new(target);
     if target.arch == platform::Arch::X86_64 {
         emitter.emit_text_prelude();
@@ -397,7 +397,42 @@ pub fn generate(
     user_asm.push('\n');
     user_asm.push_str(&user_data);
 
-    // -- build runtime assembly (routines + fixed data) --
+    user_asm
+}
+
+#[allow(dead_code)]
+pub fn generate(
+    program: &Program,
+    global_env: &TypeEnv,
+    functions: &HashMap<String, FunctionSig>,
+    interfaces: &HashMap<String, InterfaceInfo>,
+    classes: &HashMap<String, ClassInfo>,
+    enums: &HashMap<String, EnumInfo>,
+    packed_classes: &HashMap<String, PackedClassInfo>,
+    extern_functions: &HashMap<String, ExternFunctionSig>,
+    extern_classes: &HashMap<String, ExternClassInfo>,
+    extern_globals: &HashMap<String, PhpType>,
+    heap_size: usize,
+    gc_stats: bool,
+    heap_debug: bool,
+    target: Target,
+) -> (String, String) {
+    let user_asm = generate_user_asm(
+        program,
+        global_env,
+        functions,
+        interfaces,
+        classes,
+        enums,
+        packed_classes,
+        extern_functions,
+        extern_classes,
+        extern_globals,
+        heap_size,
+        gc_stats,
+        heap_debug,
+        target,
+    );
     let runtime_asm = generate_runtime(heap_size, target);
 
     (user_asm, runtime_asm)
