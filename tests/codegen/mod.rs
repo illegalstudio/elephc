@@ -3,6 +3,7 @@ mod buffers;
 mod preprocessor;
 mod namespaces;
 mod cli;
+mod benchmarks;
 mod echo_vars;
 mod operators;
 mod control_flow;
