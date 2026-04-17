@@ -124,27 +124,31 @@ pub(super) fn check_types_impl(
 
     checker.prescan_extern_decls(program, &mut errors);
 
-    let mut global_env: TypeEnv = HashMap::new();
-    global_env.insert("argc".to_string(), PhpType::Int);
-    global_env.insert("argv".to_string(), PhpType::Array(Box::new(PhpType::Str)));
-    for (name, ty) in &checker.extern_globals {
-        global_env.insert(name.clone(), ty.clone());
-    }
-    for stmt in program {
-        checker.top_level_env = global_env.clone();
-        if let Err(error) = checker.check_stmt(stmt, &mut global_env) {
-            errors.extend(error.flatten());
-        }
-    }
+    let (global_env, initial_top_level_errors) = checker.check_top_level_program(program);
 
     checker.resolve_unchecked_functions(&mut errors);
     checker.type_check_methods_until_stable(&flattened_classes, &global_env, &mut errors)?;
+
+    let (final_global_env, final_top_level_errors) = checker.check_top_level_program(program);
+    for ((stmt, initial_errors), final_errors) in program
+        .iter()
+        .zip(initial_top_level_errors.into_iter())
+        .zip(final_top_level_errors.into_iter())
+    {
+        if !final_errors.is_empty() {
+            errors.extend(final_errors);
+            continue;
+        }
+        if !Checker::can_suppress_initial_top_level_errors(stmt, &initial_errors) {
+            errors.extend(initial_errors);
+        }
+    }
 
     if !errors.is_empty() {
         return Err(CompileError::from_many(errors));
     }
 
-    Ok((checker, global_env))
+    Ok((checker, final_global_env))
 }
 
 impl Checker {
@@ -405,6 +409,167 @@ impl Checker {
                     Err(error) => errors.extend(error.flatten()),
                 }
             }
+        }
+    }
+
+    fn seed_global_env(&self) -> TypeEnv {
+        let mut global_env: TypeEnv = HashMap::new();
+        global_env.insert("argc".to_string(), PhpType::Int);
+        global_env.insert("argv".to_string(), PhpType::Array(Box::new(PhpType::Str)));
+        for (name, ty) in &self.extern_globals {
+            global_env.insert(name.clone(), ty.clone());
+        }
+        global_env
+    }
+
+    fn check_top_level_program(
+        &mut self,
+        program: &Program,
+    ) -> (TypeEnv, Vec<Vec<CompileError>>) {
+        let mut global_env = self.seed_global_env();
+        let mut all_errors = Vec::with_capacity(program.len());
+        for stmt in program {
+            self.top_level_env = global_env.clone();
+            let stmt_errors = self
+                .check_stmt(stmt, &mut global_env)
+                .err()
+                .map(|error| error.flatten())
+                .unwrap_or_default();
+            all_errors.push(stmt_errors);
+        }
+        (global_env, all_errors)
+    }
+
+    fn can_suppress_initial_top_level_errors(
+        stmt: &crate::parser::ast::Stmt,
+        errors: &[CompileError],
+    ) -> bool {
+        !errors.is_empty()
+            && Self::stmt_contains_method_call(stmt)
+            && errors.iter().all(|error| {
+                matches!(
+                    error.message.as_str(),
+                    "Cannot index non-array"
+                        | "Property access requires an object or typed pointer"
+                )
+            })
+    }
+
+    fn stmt_contains_method_call(stmt: &crate::parser::ast::Stmt) -> bool {
+        match &stmt.kind {
+            StmtKind::ExprStmt(expr)
+            | StmtKind::Echo(expr)
+            | StmtKind::Return(Some(expr)) => Self::expr_contains_method_call(expr),
+            StmtKind::Assign { value, .. }
+            | StmtKind::TypedAssign { value, .. }
+            | StmtKind::ConstDecl { value, .. }
+            | StmtKind::ListUnpack { value, .. } => Self::expr_contains_method_call(value),
+            StmtKind::ArrayAssign { index, value, .. } => {
+                Self::expr_contains_method_call(index) || Self::expr_contains_method_call(value)
+            }
+            StmtKind::ArrayPush { value, .. } => Self::expr_contains_method_call(value),
+            StmtKind::PropertyAssign { object, value, .. } => {
+                Self::expr_contains_method_call(object) || Self::expr_contains_method_call(value)
+            }
+            StmtKind::PropertyArrayPush { object, value, .. } => {
+                Self::expr_contains_method_call(object) || Self::expr_contains_method_call(value)
+            }
+            StmtKind::PropertyArrayAssign {
+                object,
+                index,
+                value,
+                ..
+            } => {
+                Self::expr_contains_method_call(object)
+                    || Self::expr_contains_method_call(index)
+                    || Self::expr_contains_method_call(value)
+            }
+            _ => false,
+        }
+    }
+
+    fn expr_contains_method_call(expr: &Expr) -> bool {
+        match &expr.kind {
+            crate::parser::ast::ExprKind::MethodCall { object, args, .. } => {
+                Self::expr_contains_method_call(object)
+                    || args.iter().any(Self::expr_contains_method_call)
+                    || true
+            }
+            crate::parser::ast::ExprKind::PropertyAccess { object, .. }
+            | crate::parser::ast::ExprKind::Negate(object)
+            | crate::parser::ast::ExprKind::Not(object)
+            | crate::parser::ast::ExprKind::BitNot(object)
+            | crate::parser::ast::ExprKind::Spread(object)
+            | crate::parser::ast::ExprKind::Throw(object) => Self::expr_contains_method_call(object),
+            crate::parser::ast::ExprKind::ArrayAccess { array, index } => {
+                Self::expr_contains_method_call(array) || Self::expr_contains_method_call(index)
+            }
+            crate::parser::ast::ExprKind::BinaryOp { left, right, .. } => {
+                Self::expr_contains_method_call(left) || Self::expr_contains_method_call(right)
+            }
+            crate::parser::ast::ExprKind::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                Self::expr_contains_method_call(condition)
+                    || Self::expr_contains_method_call(then_expr)
+                    || Self::expr_contains_method_call(else_expr)
+            }
+            crate::parser::ast::ExprKind::NullCoalesce { value, default } => {
+                Self::expr_contains_method_call(value) || Self::expr_contains_method_call(default)
+            }
+            crate::parser::ast::ExprKind::FunctionCall { args, .. }
+            | crate::parser::ast::ExprKind::ClosureCall { args, .. }
+            | crate::parser::ast::ExprKind::ExprCall { args, .. }
+            | crate::parser::ast::ExprKind::StaticMethodCall { args, .. }
+            | crate::parser::ast::ExprKind::NewObject { args, .. } => {
+                args.iter().any(Self::expr_contains_method_call)
+            }
+            crate::parser::ast::ExprKind::Match {
+                subject,
+                arms,
+                default,
+            } => {
+                Self::expr_contains_method_call(subject)
+                    || arms.iter().any(|(conditions, result)| {
+                        conditions.iter().any(Self::expr_contains_method_call)
+                            || Self::expr_contains_method_call(result)
+                    })
+                    || default
+                        .as_ref()
+                        .map(|expr| Self::expr_contains_method_call(expr))
+                        .unwrap_or(false)
+            }
+            crate::parser::ast::ExprKind::ArrayLiteral(items) => {
+                items.iter().any(Self::expr_contains_method_call)
+            }
+            crate::parser::ast::ExprKind::ArrayLiteralAssoc(items) => items.iter().any(
+                |(key, value)| {
+                    Self::expr_contains_method_call(key) || Self::expr_contains_method_call(value)
+                },
+            ),
+            crate::parser::ast::ExprKind::Cast { expr, .. }
+            | crate::parser::ast::ExprKind::PtrCast { expr, .. }
+            | crate::parser::ast::ExprKind::NamedArg { value: expr, .. } => {
+                Self::expr_contains_method_call(expr)
+            }
+            crate::parser::ast::ExprKind::Closure { .. }
+            | crate::parser::ast::ExprKind::FirstClassCallable(_)
+            | crate::parser::ast::ExprKind::EnumCase { .. }
+            | crate::parser::ast::ExprKind::BoolLiteral(_)
+            | crate::parser::ast::ExprKind::Null
+            | crate::parser::ast::ExprKind::StringLiteral(_)
+            | crate::parser::ast::ExprKind::IntLiteral(_)
+            | crate::parser::ast::ExprKind::FloatLiteral(_)
+            | crate::parser::ast::ExprKind::Variable(_)
+            | crate::parser::ast::ExprKind::PreIncrement(_)
+            | crate::parser::ast::ExprKind::PostIncrement(_)
+            | crate::parser::ast::ExprKind::PreDecrement(_)
+            | crate::parser::ast::ExprKind::PostDecrement(_)
+            | crate::parser::ast::ExprKind::ConstRef(_)
+            | crate::parser::ast::ExprKind::This
+            | crate::parser::ast::ExprKind::BufferNew { .. } => false,
         }
     }
 }

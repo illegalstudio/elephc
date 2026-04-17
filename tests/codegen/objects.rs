@@ -810,6 +810,81 @@ echo $bucket->first();
 }
 
 #[test]
+fn test_deep_mixed_property_and_array_chain() {
+    let out = compile_and_run(
+        r#"<?php
+class Color {
+    public $r;
+
+    public function __construct($r) {
+        $this->r = $r;
+    }
+}
+
+class Palette {
+    public $colors;
+
+    public function __construct() {
+        $this->colors = [];
+        $this->colors[] = new Color(4);
+        $this->colors[] = new Color(9);
+    }
+}
+
+class Catalog {
+    public $palette;
+
+    public function __construct() {
+        $this->palette = new Palette();
+    }
+
+    public function sample(): int {
+        $i = 1;
+        return $this->palette->colors[$i]->r;
+    }
+}
+
+$catalog = new Catalog();
+echo $catalog->sample();
+"#,
+    );
+    assert_eq!(out, "9");
+}
+
+#[test]
+fn test_method_call_array_access_then_property_access() {
+    let out = compile_and_run(
+        r#"<?php
+class Item {
+    public $name;
+
+    public function __construct($name) {
+        $this->name = $name;
+    }
+}
+
+class Shop {
+    public $items;
+
+    public function __construct() {
+        $this->items = [];
+        $this->items[] = new Item("apple");
+        $this->items[] = new Item("banana");
+    }
+
+    public function getItems() {
+        return $this->items;
+    }
+}
+
+$shop = new Shop();
+echo $shop->getItems()[0]->name;
+"#,
+    );
+    assert_eq!(out, "apple");
+}
+
+#[test]
 fn test_class_static_method_string_param() {
     let out = compile_and_run(
         r#"<?php

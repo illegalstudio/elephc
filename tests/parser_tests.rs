@@ -1843,6 +1843,75 @@ fn test_parse_array_access_on_function_call_result() {
 }
 
 #[test]
+fn test_parse_deep_mixed_property_and_array_chain() {
+    let stmts = parse_source("<?php echo $catalog->palette->colors[$i]->r;");
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::PropertyAccess { object, property } => {
+                assert_eq!(property, "r");
+                match &object.kind {
+                    ExprKind::ArrayAccess { array, index } => {
+                        assert!(matches!(index.kind, ExprKind::Variable(ref name) if name == "i"));
+                        match &array.kind {
+                            ExprKind::PropertyAccess { object, property } => {
+                                assert_eq!(property, "colors");
+                                match &object.kind {
+                                    ExprKind::PropertyAccess { object, property } => {
+                                        assert_eq!(property, "palette");
+                                        assert!(matches!(object.kind, ExprKind::Variable(ref name) if name == "catalog"));
+                                    }
+                                    other => {
+                                        panic!("Expected nested PropertyAccess, got {:?}", other)
+                                    }
+                                }
+                            }
+                            other => panic!("Expected PropertyAccess, got {:?}", other),
+                        }
+                    }
+                    other => panic!("Expected ArrayAccess, got {:?}", other),
+                }
+            }
+            other => panic!("Expected PropertyAccess, got {:?}", other),
+        },
+        other => panic!("Expected Echo, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_property_access_after_array_access_on_method_call_result() {
+    let stmts = parse_source("<?php echo $shop->getItems()[0]->name;");
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::PropertyAccess { object, property } => {
+                assert_eq!(property, "name");
+                match &object.kind {
+                    ExprKind::ArrayAccess { array, index } => {
+                        assert!(matches!(index.kind, ExprKind::IntLiteral(0)));
+                        match &array.kind {
+                            ExprKind::MethodCall {
+                                object,
+                                method,
+                                args,
+                            } => {
+                                assert_eq!(method, "getItems");
+                                assert!(args.is_empty());
+                                assert!(
+                                    matches!(object.kind, ExprKind::Variable(ref name) if name == "shop")
+                                );
+                            }
+                            other => panic!("Expected MethodCall, got {:?}", other),
+                        }
+                    }
+                    other => panic!("Expected ArrayAccess, got {:?}", other),
+                }
+            }
+            other => panic!("Expected PropertyAccess, got {:?}", other),
+        },
+        other => panic!("Expected Echo, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_parse_ptr_cast() {
     let stmts = parse_source("<?php $q = ptr_cast<Point>($p);");
     match &stmts[0].kind {

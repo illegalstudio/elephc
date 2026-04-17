@@ -173,11 +173,19 @@ impl Checker {
             ));
         }
         if let Some(sig) = self.functions.get(callback_name) {
+            if !Self::callback_type_is_c_compatible(&sig.return_type) {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "Callback function '{}' uses an unsupported return type; only int, float, bool, ptr, and void are supported",
+                        callback_name
+                    ),
+                ));
+            }
             if sig
                 .params
                 .iter()
                 .any(|(_, ty)| !Self::callback_type_is_c_compatible(ty))
-                || !Self::callback_type_is_c_compatible(&sig.return_type)
             {
                 return Err(CompileError::new(
                     span,
