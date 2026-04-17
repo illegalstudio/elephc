@@ -17,7 +17,7 @@ For an introduction to AArch64, see [Introduction to ARM64 Assembly](arm64-assem
 
 ## Overview
 
-The codegen walks the AST and emits assembly for each node. The output is a single `.s` file with this structure:
+The codegen walks the AST and emits assembly for each node. In the CLI, the main output is now the **user program assembly**; the shared runtime helpers are usually assembled separately and reused from the runtime object cache. The user-facing `.s` file still has this structure:
 
 ```asm
 .global _main
@@ -45,27 +45,20 @@ _closure_1:
     ...
     ret
 
-; --- runtime routines ---
-__rt_throw_current:
-    ...
-__rt_itoa:
-    ...
-__rt_concat:
-    ...
-
 ; --- data section ---
 .data
 _str_0: .ascii "hello"
 _float_0: .quad 0x400921FB54442D18
 
-; --- runtime data / BSS declarations ---
-.comm _concat_buf, 65536, 3
-.comm _heap_buf, 8388608, 3
+; --- source markers used by --source-map ---
+; @src line=12 col=5
 ```
 
 Trait composition does not add a separate runtime dispatch layer. Traits are flattened into each concrete class during type checking, then inheritance metadata is layered on top. Codegen still emits `_method_Class_method` / `_static_Class_method` labels, but instance calls now use vtable slots keyed by `class_id` so child overrides work through inherited methods.
 
-The exact directives and symbol decoration vary by target. The example above is intentionally AArch64-flavored, but the same structural phases apply on Linux `x86_64`: user code first, runtime helpers next, then data/runtime storage.
+The exact directives and symbol decoration vary by target. The example above is intentionally AArch64-flavored, but the same structural phases apply on Linux `x86_64`.
+
+When you call the library-style `codegen::generate(...)` entry point, elephc still exposes both pieces explicitly as `(user_asm, runtime_asm)`. The CLI path uses `generate_user_asm(...)` plus the runtime-object cache so repeated compiles do not have to reassemble the same shared runtime text every time.
 
 ## The Emitter
 
@@ -82,6 +75,24 @@ The `Emitter` is a simple string buffer with helper methods:
 | `blank()` | `\n` |
 
 All assembly is built as text, then written to the `.s` file.
+
+Statement emission also injects source markers of the form `@src line=<N> col=<M>`. They are ignored by the assembler as comments, but the CLI can later scan them to build a simple source-map sidecar file when `--source-map` is enabled.
+
+## Runtime split, cache, and source maps
+
+The compiler's codegen/runtime handoff now has three distinct artifacts:
+
+1. **User assembly** — emitted from the checked AST into the per-build `.s` file
+2. **Runtime object** — assembled from the shared runtime once and cached under `~/.cache/elephc/` (or `XDG_CACHE_HOME`) using the compiler version, target, and heap size in the filename
+3. **Optional source map** — a JSON sidecar generated from `@src` markers embedded in the user assembly comments
+
+This means normal CLI builds no longer concatenate the runtime text into every output assembly file before assembling. Instead, they:
+
+- prepare or reuse the cached runtime object
+- assemble only the user `.s` file into `file.o`
+- link `file.o` against the cached runtime object
+
+The source-map file is intentionally simple. Today it stores a list of `(asm_line, php_line, php_col)` entries so tools and humans can correlate generated assembly back to the original PHP statements without needing full DWARF debug info.
 
 ## The Context
 

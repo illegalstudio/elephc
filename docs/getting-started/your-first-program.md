@@ -98,6 +98,24 @@ When you run `elephc hello.php`, the compiler:
 
 The intermediate `.s` and `.o` files are cleaned up automatically. You're left with a single executable.
 
+## Useful inspection flags
+
+If you want to inspect the compile more closely, these flags are a good starting point:
+
+```bash
+# Print per-phase compiler timings to stderr
+elephc --timings hello.php
+
+# Emit assembly only, plus a sidecar source-map file
+elephc --emit-asm --source-map hello.php
+```
+
+`--timings` reports phases such as lexing, parsing, type checking, runtime-cache preparation, code generation, assembling, and linking.
+
+`--source-map` writes a `hello.map` JSON file next to `hello.s`. The map records which emitted assembly lines came from which PHP source lines and columns.
+
+If you want to compare elephc against the PHP interpreter and equivalent C fixtures, see the [benchmark suite](https://github.com/illegalstudio/elephc/blob/main/benchmarks/README.md).
+
 ## Next steps
 
 - Browse the [PHP syntax reference](../php/types.md) to see what's supported

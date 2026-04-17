@@ -11,6 +11,7 @@ elephc compiles PHP to native binaries for the supported targets — currently m
 
 - [Installation](getting-started/installation.md) — install elephc via Homebrew or from source
 - [Your First Program](getting-started/your-first-program.md) — write, compile, and run your first PHP binary
+- [Benchmark Suite](https://github.com/illegalstudio/elephc/blob/main/benchmarks/README.md) — compare elephc against PHP and equivalent C fixtures
 
 ## PHP Syntax
 
@@ -52,3 +53,5 @@ How elephc works under the hood — from lexing to code generation and runtime s
 - [Architecture](internals/architecture.md) — module map, calling conventions
 - [ARM64 Assembly](internals/arm64-assembly.md) — introduction to ARM64
 - [ARM64 Instructions](internals/arm64-instructions.md) — instruction reference
+
+For compile-time instrumentation and debug artifacts, the CLI also supports `--timings` to print per-phase compiler timings and `--source-map` to emit a sidecar `.map` file next to generated assembly.
