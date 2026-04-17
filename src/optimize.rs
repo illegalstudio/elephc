@@ -345,10 +345,14 @@ fn fold_expr(expr: Expr) -> Expr {
             try_fold_bit_not(&inner).unwrap_or_else(|| ExprKind::BitNot(Box::new(inner)))
         }
         ExprKind::Throw(inner) => ExprKind::Throw(Box::new(fold_expr(*inner))),
-        ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce {
-            value: Box::new(fold_expr(*value)),
-            default: Box::new(fold_expr(*default)),
-        },
+        ExprKind::NullCoalesce { value, default } => {
+            let value = fold_expr(*value);
+            let default = fold_expr(*default);
+            try_fold_null_coalesce(&value, &default).unwrap_or_else(|| ExprKind::NullCoalesce {
+                value: Box::new(value),
+                default: Box::new(default),
+            })
+        }
         ExprKind::PreIncrement(name) => ExprKind::PreIncrement(name),
         ExprKind::PostIncrement(name) => ExprKind::PostIncrement(name),
         ExprKind::PreDecrement(name) => ExprKind::PreDecrement(name),
@@ -390,11 +394,18 @@ fn fold_expr(expr: Expr) -> Expr {
             condition,
             then_expr,
             else_expr,
-        } => ExprKind::Ternary {
-            condition: Box::new(fold_expr(*condition)),
-            then_expr: Box::new(fold_expr(*then_expr)),
-            else_expr: Box::new(fold_expr(*else_expr)),
-        },
+        } => {
+            let condition = fold_expr(*condition);
+            let then_expr = fold_expr(*then_expr);
+            let else_expr = fold_expr(*else_expr);
+            try_fold_ternary(&condition, &then_expr, &else_expr).unwrap_or_else(|| {
+                ExprKind::Ternary {
+                    condition: Box::new(condition),
+                    then_expr: Box::new(then_expr),
+                    else_expr: Box::new(else_expr),
+                }
+            })
+        }
         ExprKind::Cast { target, expr } => ExprKind::Cast {
             target,
             expr: Box::new(fold_expr(*expr)),
@@ -497,10 +508,7 @@ fn try_fold_negate(expr: &Expr) -> Option<ExprKind> {
 }
 
 fn try_fold_not(expr: &Expr) -> Option<ExprKind> {
-    match &expr.kind {
-        ExprKind::BoolLiteral(value) => Some(ExprKind::BoolLiteral(!value)),
-        _ => None,
-    }
+    Some(ExprKind::BoolLiteral(!scalar_value(expr)?.truthy()))
 }
 
 fn try_fold_bit_not(expr: &Expr) -> Option<ExprKind> {
@@ -520,6 +528,16 @@ fn try_fold_binary_op(op: &BinOp, left: &Expr, right: &Expr) -> Option<ExprKind>
         BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight => {
             try_fold_bitwise_binop(op, left, right)
         }
+        BinOp::And | BinOp::Or => try_fold_logical_binop(op, left, right),
+        BinOp::Eq
+        | BinOp::NotEq
+        | BinOp::StrictEq
+        | BinOp::StrictNotEq
+        | BinOp::Lt
+        | BinOp::Gt
+        | BinOp::LtEq
+        | BinOp::GtEq
+        | BinOp::Spaceship => try_fold_compare_binop(op, left, right),
         _ => None,
     }
 }
@@ -609,6 +627,53 @@ fn try_fold_bitwise_binop(op: &BinOp, left: &Expr, right: &Expr) -> Option<ExprK
     }
 }
 
+fn try_fold_logical_binop(op: &BinOp, left: &Expr, right: &Expr) -> Option<ExprKind> {
+    let left = scalar_value(left)?;
+    let right = scalar_value(right)?;
+    let result = match op {
+        BinOp::And => left.truthy() && right.truthy(),
+        BinOp::Or => left.truthy() || right.truthy(),
+        _ => return None,
+    };
+    Some(ExprKind::BoolLiteral(result))
+}
+
+fn try_fold_compare_binop(op: &BinOp, left: &Expr, right: &Expr) -> Option<ExprKind> {
+    match op {
+        BinOp::Eq => Some(ExprKind::BoolLiteral(loose_eq(left, right)?)),
+        BinOp::NotEq => Some(ExprKind::BoolLiteral(!loose_eq(left, right)?)),
+        BinOp::StrictEq => Some(ExprKind::BoolLiteral(strict_eq(left, right)?)),
+        BinOp::StrictNotEq => Some(ExprKind::BoolLiteral(!strict_eq(left, right)?)),
+        BinOp::Lt => Some(ExprKind::BoolLiteral(compare_numeric(left, right, |l, r| l < r)?)),
+        BinOp::Gt => Some(ExprKind::BoolLiteral(compare_numeric(left, right, |l, r| l > r)?)),
+        BinOp::LtEq => Some(ExprKind::BoolLiteral(compare_numeric(left, right, |l, r| l <= r)?)),
+        BinOp::GtEq => Some(ExprKind::BoolLiteral(compare_numeric(left, right, |l, r| l >= r)?)),
+        BinOp::Spaceship => Some(ExprKind::IntLiteral(spaceship_numeric(left, right)?)),
+        _ => None,
+    }
+}
+
+fn try_fold_null_coalesce(value: &Expr, default: &Expr) -> Option<ExprKind> {
+    let value = scalar_value(value)?;
+    let default = scalar_value(default)?;
+    if matches!(value, ScalarValue::Null) {
+        Some(default.into_expr_kind())
+    } else {
+        Some(value.into_expr_kind())
+    }
+}
+
+fn try_fold_ternary(condition: &Expr, then_expr: &Expr, else_expr: &Expr) -> Option<ExprKind> {
+    let condition = scalar_value(condition)?;
+    let then_expr = scalar_value(then_expr)?;
+    let else_expr = scalar_value(else_expr)?;
+    if condition.truthy() {
+        Some(then_expr.into_expr_kind())
+    } else {
+        Some(else_expr.into_expr_kind())
+    }
+}
+
 fn int_literal(expr: &Expr) -> Option<i64> {
     match expr.kind {
         ExprKind::IntLiteral(value) => Some(value),
@@ -621,6 +686,87 @@ fn numeric_literal(expr: &Expr) -> Option<f64> {
         ExprKind::IntLiteral(value) => Some(value as f64),
         ExprKind::FloatLiteral(value) => Some(value),
         _ => None,
+    }
+}
+
+fn scalar_value(expr: &Expr) -> Option<ScalarValue> {
+    match &expr.kind {
+        ExprKind::Null => Some(ScalarValue::Null),
+        ExprKind::BoolLiteral(value) => Some(ScalarValue::Bool(*value)),
+        ExprKind::IntLiteral(value) => Some(ScalarValue::Int(*value)),
+        ExprKind::FloatLiteral(value) => Some(ScalarValue::Float(*value)),
+        ExprKind::StringLiteral(value) => Some(ScalarValue::String(value.clone())),
+        _ => None,
+    }
+}
+
+fn strict_eq(left: &Expr, right: &Expr) -> Option<bool> {
+    let left = scalar_value(left)?;
+    let right = scalar_value(right)?;
+    Some(left == right)
+}
+
+fn loose_eq(left: &Expr, right: &Expr) -> Option<bool> {
+    let left = scalar_value(left)?;
+    let right = scalar_value(right)?;
+    match (&left, &right) {
+        (ScalarValue::Null, ScalarValue::Null) => Some(true),
+        (ScalarValue::Bool(left), ScalarValue::Bool(right)) => Some(left == right),
+        (ScalarValue::String(left), ScalarValue::String(right)) => Some(left == right),
+        (ScalarValue::Int(left), ScalarValue::Int(right)) => Some(left == right),
+        (ScalarValue::Float(left), ScalarValue::Float(right)) => Some(left == right),
+        (ScalarValue::Int(left), ScalarValue::Float(right)) => Some(*left as f64 == *right),
+        (ScalarValue::Float(left), ScalarValue::Int(right)) => Some(*left == *right as f64),
+        _ => None,
+    }
+}
+
+fn compare_numeric(left: &Expr, right: &Expr, cmp: impl FnOnce(f64, f64) -> bool) -> Option<bool> {
+    let left = numeric_literal(left)?;
+    let right = numeric_literal(right)?;
+    Some(cmp(left, right))
+}
+
+fn spaceship_numeric(left: &Expr, right: &Expr) -> Option<i64> {
+    let left = numeric_literal(left)?;
+    let right = numeric_literal(right)?;
+    Some(if left < right {
+        -1
+    } else if left > right {
+        1
+    } else {
+        0
+    })
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum ScalarValue {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    String(String),
+}
+
+impl ScalarValue {
+    fn truthy(&self) -> bool {
+        match self {
+            ScalarValue::Null => false,
+            ScalarValue::Bool(value) => *value,
+            ScalarValue::Int(value) => *value != 0,
+            ScalarValue::Float(value) => *value != 0.0,
+            ScalarValue::String(value) => !value.is_empty() && value != "0",
+        }
+    }
+
+    fn into_expr_kind(self) -> ExprKind {
+        match self {
+            ScalarValue::Null => ExprKind::Null,
+            ScalarValue::Bool(value) => ExprKind::BoolLiteral(value),
+            ScalarValue::Int(value) => ExprKind::IntLiteral(value),
+            ScalarValue::Float(value) => ExprKind::FloatLiteral(value),
+            ScalarValue::String(value) => ExprKind::StringLiteral(value),
+        }
     }
 }
 
@@ -731,6 +877,106 @@ mod tests {
         assert_eq!(
             properties[0].default,
             Some(Expr::string_lit("hello world"))
+        );
+    }
+
+    #[test]
+    fn test_fold_strict_and_numeric_comparisons() {
+        let program = vec![
+            Stmt::echo(Expr::new(
+                ExprKind::BinaryOp {
+                    left: Box::new(Expr::int_lit(2)),
+                    op: BinOp::StrictEq,
+                    right: Box::new(Expr::int_lit(2)),
+                },
+                Span::dummy(),
+            )),
+            Stmt::echo(Expr::new(
+                ExprKind::BinaryOp {
+                    left: Box::new(Expr::float_lit(2.5)),
+                    op: BinOp::Lt,
+                    right: Box::new(Expr::float_lit(3.0)),
+                },
+                Span::dummy(),
+            )),
+            Stmt::echo(Expr::new(
+                ExprKind::BinaryOp {
+                    left: Box::new(Expr::int_lit(2)),
+                    op: BinOp::Spaceship,
+                    right: Box::new(Expr::int_lit(3)),
+                },
+                Span::dummy(),
+            )),
+        ];
+
+        let folded = fold_constants(program);
+
+        assert_eq!(
+            folded,
+            vec![
+                Stmt::echo(Expr::new(ExprKind::BoolLiteral(true), Span::dummy())),
+                Stmt::echo(Expr::new(ExprKind::BoolLiteral(true), Span::dummy())),
+                Stmt::echo(Expr::int_lit(-1)),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_fold_null_coalesce_and_ternary_only_for_scalar_constants() {
+        let program = vec![
+            Stmt::echo(Expr::new(
+                ExprKind::NullCoalesce {
+                    value: Box::new(Expr::new(ExprKind::Null, Span::dummy())),
+                    default: Box::new(Expr::string_lit("fallback")),
+                },
+                Span::dummy(),
+            )),
+            Stmt::echo(Expr::new(
+                ExprKind::Ternary {
+                    condition: Box::new(Expr::string_lit("0")),
+                    then_expr: Box::new(Expr::int_lit(10)),
+                    else_expr: Box::new(Expr::int_lit(20)),
+                },
+                Span::dummy(),
+            )),
+        ];
+
+        let folded = fold_constants(program);
+
+        assert_eq!(
+            folded,
+            vec![
+                Stmt::echo(Expr::string_lit("fallback")),
+                Stmt::echo(Expr::int_lit(20)),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_fold_logical_ops_and_not_using_php_truthiness() {
+        let program = vec![
+            Stmt::echo(Expr::new(
+                ExprKind::BinaryOp {
+                    left: Box::new(Expr::string_lit("0")),
+                    op: BinOp::Or,
+                    right: Box::new(Expr::string_lit("hello")),
+                },
+                Span::dummy(),
+            )),
+            Stmt::echo(Expr::new(
+                ExprKind::Not(Box::new(Expr::string_lit("0"))),
+                Span::dummy(),
+            )),
+        ];
+
+        let folded = fold_constants(program);
+
+        assert_eq!(
+            folded,
+            vec![
+                Stmt::echo(Expr::new(ExprKind::BoolLiteral(true), Span::dummy())),
+                Stmt::echo(Expr::new(ExprKind::BoolLiteral(true), Span::dummy())),
+            ]
         );
     }
 }
