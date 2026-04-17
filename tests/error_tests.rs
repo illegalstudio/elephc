@@ -1108,6 +1108,94 @@ fn test_null_coalesce_widens_function_return_type_in_checker() {
     assert_eq!(sig.return_type, PhpType::Float);
 }
 
+#[test]
+fn test_generic_array_return_hint_keeps_specific_method_and_property_types() {
+    let result = check_source_full(
+        r#"<?php
+class Entry {
+    public $name;
+
+    public function __construct($name) {
+        $this->name = $name;
+    }
+}
+
+class Wad {
+    public $entries;
+
+    public function __construct() {
+        $this->entries = $this->loadEntries();
+    }
+
+    public function loadEntries(): array {
+        return [new Entry("PLAYPAL"), new Entry("COLORMAP")];
+    }
+
+    public function secondName(): string {
+        $i = 1;
+        return $this->entries[$i]->name;
+    }
+}
+"#,
+    )
+    .expect("expected source to type-check");
+
+    let wad = result.classes.get("Wad").expect("missing Wad class");
+    let entries_ty = wad
+        .properties
+        .iter()
+        .find(|(name, _)| name == "entries")
+        .map(|(_, ty)| ty.clone())
+        .expect("missing entries property");
+    assert_eq!(
+        entries_ty,
+        PhpType::Array(Box::new(PhpType::Object("Entry".to_string())))
+    );
+
+    let load_entries = wad.methods.get("loadEntries").expect("missing loadEntries");
+    assert_eq!(
+        load_entries.return_type,
+        PhpType::Array(Box::new(PhpType::Object("Entry".to_string())))
+    );
+}
+
+#[test]
+fn test_generic_array_param_and_return_hints_keep_specific_string_array_types() {
+    let result = check_source_full(
+        r#"<?php
+function paint(string $name): string {
+    return $name;
+}
+
+function pickSecond(array $names): string {
+    return paint($names[1]);
+}
+
+function loadNames(): array {
+    return ["foo", "bar"];
+}
+
+echo pickSecond(loadNames());
+"#,
+    )
+    .expect("expected source to type-check");
+
+    let pick_second = result
+        .functions
+        .get("pickSecond")
+        .expect("missing pickSecond signature");
+    assert_eq!(
+        pick_second.params[0].1,
+        PhpType::Array(Box::new(PhpType::Str))
+    );
+
+    let load_names = result
+        .functions
+        .get("loadNames")
+        .expect("missing loadNames signature");
+    assert_eq!(load_names.return_type, PhpType::Array(Box::new(PhpType::Str)));
+}
+
 // --- Include/Require errors ---
 
 #[test]

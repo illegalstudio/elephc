@@ -286,7 +286,8 @@ impl Checker {
                         arg.span,
                         &format!("Function '{}' parameter ${}", name, param_name),
                     )?;
-                    param_types.push((decl.params[arg_idx].clone(), declared_ty));
+                    let specialized_ty = Self::specialize_generic_array_hint(&declared_ty, &ty);
+                    param_types.push((decl.params[arg_idx].clone(), specialized_ty));
                     arg_idx += 1;
                     continue;
                 }
@@ -454,7 +455,13 @@ impl Checker {
                     )?;
                 }
             }
-            return_type = declared_ret;
+            return_type = if Self::is_generic_array_hint(&declared_ret)
+                && matches!(inferred_specific_array_type(&all_return_types), Some(_))
+            {
+                inferred_specific_array_type(&all_return_types).unwrap()
+            } else {
+                declared_ret
+            };
         } else if !all_return_types.is_empty() {
             return_type = all_return_types[0].clone();
             for rt in &all_return_types[1..] {
@@ -479,4 +486,22 @@ impl Checker {
 
         Ok(return_type)
     }
+}
+
+fn inferred_specific_array_type(return_types: &[PhpType]) -> Option<PhpType> {
+    let mut specific: Option<PhpType> = None;
+    for return_ty in return_types {
+        if matches!(return_ty, PhpType::Void) {
+            continue;
+        }
+        if !matches!(return_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            return None;
+        }
+        match &specific {
+            None => specific = Some(return_ty.clone()),
+            Some(existing) if existing == return_ty => {}
+            _ => return None,
+        }
+    }
+    specific
 }

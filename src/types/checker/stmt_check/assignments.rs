@@ -270,6 +270,12 @@ impl Checker {
                         {
                             if prop.1 == PhpType::Int && val_ty != PhpType::Int {
                                 prop.1 = val_ty.clone();
+                            } else {
+                                let refined_ty =
+                                    Self::specialize_generic_array_hint(&prop.1, &val_ty);
+                                if refined_ty != prop.1 {
+                                    prop.1 = refined_ty;
+                                }
                             }
                         }
                     }

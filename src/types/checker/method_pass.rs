@@ -162,7 +162,13 @@ impl Checker {
                         self.current_method_is_static = false;
                         return;
                     }
-                    declared
+                    if Self::is_generic_array_hint(&declared)
+                        && matches!(inferred_return, PhpType::Array(_) | PhpType::AssocArray { .. })
+                    {
+                        inferred_return
+                    } else {
+                        declared
+                    }
                 }
                 Err(error) => {
                     pass_errors.extend(error.flatten());

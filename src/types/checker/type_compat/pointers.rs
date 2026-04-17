@@ -81,7 +81,7 @@ impl Checker {
                 "mixed" => Ok(PhpType::Mixed),
                 "callable" => Ok(PhpType::Callable),
                 "void" => Ok(PhpType::Void),
-                "array" => Ok(PhpType::Array(Box::new(PhpType::Int))),
+                "array" => Ok(PhpType::Array(Box::new(PhpType::Mixed))),
                 _ if self.classes.contains_key(name.as_str())
                     || self.declared_classes.contains(name.as_str())
                     || self.interfaces.contains_key(name.as_str())
