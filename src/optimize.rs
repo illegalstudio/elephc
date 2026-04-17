@@ -7,6 +7,10 @@ pub fn fold_constants(program: Program) -> Program {
     program.into_iter().map(fold_stmt).collect()
 }
 
+pub fn prune_constant_control_flow(program: Program) -> Program {
+    prune_block(program)
+}
+
 fn fold_stmt(stmt: Stmt) -> Stmt {
     let span = stmt.span;
     let kind = match stmt.kind {
@@ -268,6 +272,284 @@ fn fold_stmt(stmt: Stmt) -> Stmt {
 
 fn fold_block(body: Vec<Stmt>) -> Vec<Stmt> {
     body.into_iter().map(fold_stmt).collect()
+}
+
+fn prune_block(body: Vec<Stmt>) -> Vec<Stmt> {
+    let mut pruned = Vec::new();
+    for stmt in body {
+        pruned.extend(prune_stmt(stmt));
+    }
+    pruned
+}
+
+fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
+    let span = stmt.span;
+    match stmt.kind {
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => prune_if_chain(condition, then_body, elseif_clauses, else_body),
+        StmtKind::IfDef {
+            symbol,
+            then_body,
+            else_body,
+        } => vec![Stmt {
+            kind: StmtKind::IfDef {
+                symbol,
+                then_body: prune_block(then_body),
+                else_body: else_body.map(prune_block),
+            },
+            span,
+        }],
+        StmtKind::While { condition, body } => match scalar_value(&condition) {
+            Some(value) if !value.truthy() => Vec::new(),
+            _ => vec![Stmt {
+                kind: StmtKind::While {
+                    condition,
+                    body: prune_block(body),
+                },
+                span,
+            }],
+        },
+        StmtKind::DoWhile { body, condition } => match scalar_value(&condition) {
+            Some(value) if !value.truthy() => prune_block(body),
+            _ => vec![Stmt {
+                kind: StmtKind::DoWhile {
+                    body: prune_block(body),
+                    condition,
+                },
+                span,
+            }],
+        },
+        StmtKind::For {
+            init,
+            condition,
+            update,
+            body,
+        } => vec![Stmt {
+            kind: StmtKind::For {
+                init,
+                condition,
+                update,
+                body: prune_block(body),
+            },
+            span,
+        }],
+        StmtKind::Foreach {
+            array,
+            key_var,
+            value_var,
+            body,
+        } => vec![Stmt {
+            kind: StmtKind::Foreach {
+                array,
+                key_var,
+                value_var,
+                body: prune_block(body),
+            },
+            span,
+        }],
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => vec![Stmt {
+            kind: StmtKind::Switch {
+                subject,
+                cases: cases
+                    .into_iter()
+                    .map(|(exprs, body)| (exprs, prune_block(body)))
+                    .collect(),
+                default: default.map(prune_block),
+            },
+            span,
+        }],
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => vec![Stmt {
+            kind: StmtKind::Try {
+                try_body: prune_block(try_body),
+                catches: catches
+                    .into_iter()
+                    .map(|catch| crate::parser::ast::CatchClause {
+                        exception_types: catch.exception_types,
+                        variable: catch.variable,
+                        body: prune_block(catch.body),
+                    })
+                    .collect(),
+                finally_body: finally_body.map(prune_block),
+            },
+            span,
+        }],
+        StmtKind::NamespaceBlock { name, body } => vec![Stmt {
+            kind: StmtKind::NamespaceBlock {
+                name,
+                body: prune_block(body),
+            },
+            span,
+        }],
+        StmtKind::FunctionDecl {
+            name,
+            params,
+            variadic,
+            return_type,
+            body,
+        } => vec![Stmt {
+            kind: StmtKind::FunctionDecl {
+                name,
+                params,
+                variadic,
+                return_type,
+                body: prune_block(body),
+            },
+            span,
+        }],
+        StmtKind::ClassDecl {
+            name,
+            extends,
+            implements,
+            is_abstract,
+            is_readonly_class,
+            trait_uses,
+            properties,
+            methods,
+        } => vec![Stmt {
+            kind: StmtKind::ClassDecl {
+                name,
+                extends,
+                implements,
+                is_abstract,
+                is_readonly_class,
+                trait_uses,
+                properties,
+                methods: methods.into_iter().map(prune_method).collect(),
+            },
+            span,
+        }],
+        StmtKind::EnumDecl {
+            name,
+            backing_type,
+            cases,
+        } => vec![Stmt {
+            kind: StmtKind::EnumDecl {
+                name,
+                backing_type,
+                cases,
+            },
+            span,
+        }],
+        StmtKind::PackedClassDecl { name, fields } => vec![Stmt {
+            kind: StmtKind::PackedClassDecl { name, fields },
+            span,
+        }],
+        StmtKind::InterfaceDecl {
+            name,
+            extends,
+            methods,
+        } => vec![Stmt {
+            kind: StmtKind::InterfaceDecl {
+                name,
+                extends,
+                methods: methods.into_iter().map(prune_method).collect(),
+            },
+            span,
+        }],
+        StmtKind::TraitDecl {
+            name,
+            trait_uses,
+            properties,
+            methods,
+        } => vec![Stmt {
+            kind: StmtKind::TraitDecl {
+                name,
+                trait_uses,
+                properties,
+                methods: methods.into_iter().map(prune_method).collect(),
+            },
+            span,
+        }],
+        kind => vec![Stmt { kind, span }],
+    }
+}
+
+fn prune_if_chain(
+    condition: Expr,
+    then_body: Vec<Stmt>,
+    elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
+    else_body: Option<Vec<Stmt>>,
+) -> Vec<Stmt> {
+    match scalar_value(&condition) {
+        Some(value) if value.truthy() => prune_block(then_body),
+        Some(_) => prune_else_if_chain(elseif_clauses, else_body),
+        None => {
+            let span = condition.span;
+            let (kept_elseifs, kept_else) = prune_remaining_elseif_chain(elseif_clauses, else_body);
+
+            vec![Stmt {
+                kind: StmtKind::If {
+                    condition,
+                    then_body: prune_block(then_body),
+                    elseif_clauses: kept_elseifs,
+                    else_body: kept_else,
+                },
+                span,
+            }]
+        }
+    }
+}
+
+fn prune_else_if_chain(
+    elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
+    else_body: Option<Vec<Stmt>>,
+) -> Vec<Stmt> {
+    let mut clauses = elseif_clauses.into_iter();
+    while let Some((condition, body)) = clauses.next() {
+        match scalar_value(&condition) {
+            Some(value) if value.truthy() => return prune_block(body),
+            Some(_) => continue,
+            None => {
+                let span = condition.span;
+                let remaining: Vec<_> = clauses.collect();
+                let (kept_elseifs, kept_else) = prune_remaining_elseif_chain(remaining, else_body);
+                return vec![Stmt {
+                    kind: StmtKind::If {
+                        condition,
+                        then_body: prune_block(body),
+                        elseif_clauses: kept_elseifs,
+                        else_body: kept_else,
+                    },
+                    span,
+                }];
+            }
+        }
+    }
+    else_body.map(prune_block).unwrap_or_default()
+}
+
+fn prune_remaining_elseif_chain(
+    elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
+    else_body: Option<Vec<Stmt>>,
+) -> (Vec<(Expr, Vec<Stmt>)>, Option<Vec<Stmt>>) {
+    let mut kept = Vec::new();
+    for (condition, body) in elseif_clauses {
+        match scalar_value(&condition) {
+            Some(value) if value.truthy() => return (kept, Some(prune_block(body))),
+            Some(_) => {}
+            None => kept.push((condition, prune_block(body))),
+        }
+    }
+    (kept, else_body.map(prune_block))
+}
+
+fn prune_method(method: ClassMethod) -> ClassMethod {
+    ClassMethod {
+        body: prune_block(method.body),
+        ..method
+    }
 }
 
 fn fold_params(
@@ -1121,5 +1403,55 @@ mod tests {
         let folded = fold_constants(vec![Stmt::echo(expr.clone())]);
 
         assert_eq!(folded, vec![Stmt::echo(expr)]);
+    }
+
+    #[test]
+    fn test_prune_constant_if_chain() {
+        let program = vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
+                then_body: vec![Stmt::echo(Expr::int_lit(1))],
+                elseif_clauses: vec![
+                    (
+                        Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
+                        vec![Stmt::echo(Expr::int_lit(2))],
+                    ),
+                    (
+                        Expr::new(ExprKind::BoolLiteral(true), Span::dummy()),
+                        vec![Stmt::echo(Expr::int_lit(3))],
+                    ),
+                ],
+                else_body: Some(vec![Stmt::echo(Expr::int_lit(4))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = prune_constant_control_flow(program);
+
+        assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(3))]);
+    }
+
+    #[test]
+    fn test_prune_while_false_and_do_while_false() {
+        let program = vec![
+            Stmt::new(
+                StmtKind::While {
+                    condition: Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
+                    body: vec![Stmt::echo(Expr::int_lit(1))],
+                },
+                Span::dummy(),
+            ),
+            Stmt::new(
+                StmtKind::DoWhile {
+                    body: vec![Stmt::echo(Expr::int_lit(2))],
+                    condition: Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
+                },
+                Span::dummy(),
+            ),
+        ];
+
+        let pruned = prune_constant_control_flow(program);
+
+        assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(2))]);
     }
 }

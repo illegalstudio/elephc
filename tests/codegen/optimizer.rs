@@ -181,3 +181,76 @@ fn test_constant_folding_string_cast_removes_runtime_itoa_call() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn test_constant_folding_prunes_constant_if_branch_from_user_assembly() {
+    let dir = make_cli_test_dir("elephc_constant_folding_if_prune");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$n = 8;
+if (false) {
+    echo 2 ** $n;
+} else {
+    echo 3;
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "constant false if-branch should be pruned from user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "3");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_constant_folding_prunes_while_false_body_from_user_assembly() {
+    let dir = make_cli_test_dir("elephc_constant_folding_while_prune");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$n = 8;
+while (false) {
+    echo 2 ** $n;
+}
+echo 3;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "while(false) body should be pruned from user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "3");
+
+    let _ = fs::remove_dir_all(&dir);
+}
