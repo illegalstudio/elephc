@@ -290,3 +290,82 @@ echo $i;
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn test_constant_folding_prunes_match_to_selected_arm_in_user_assembly() {
+    let dir = make_cli_test_dir("elephc_constant_folding_match_prune");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$n = 8;
+echo match (3) {
+    1 => 2 ** $n,
+    3 => 7,
+    default => 9,
+};
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "constant match should not leave dead arms in user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "7");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_constant_folding_prunes_switch_leading_cases_from_user_assembly() {
+    let dir = make_cli_test_dir("elephc_constant_folding_switch_prune");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$n = 8;
+switch (3) {
+    case 1:
+        echo 2 ** $n;
+        break;
+    case 3:
+        echo 7;
+        break;
+    default:
+        echo 9;
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "constant switch should not leave dead leading cases in user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "7");
+
+    let _ = fs::remove_dir_all(&dir);
+}

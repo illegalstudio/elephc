@@ -285,6 +285,17 @@ fn prune_block(body: Vec<Stmt>) -> Vec<Stmt> {
 fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
     let span = stmt.span;
     match stmt.kind {
+        StmtKind::Echo(expr) => vec![Stmt {
+            kind: StmtKind::Echo(prune_expr(expr)),
+            span,
+        }],
+        StmtKind::Assign { name, value } => vec![Stmt {
+            kind: StmtKind::Assign {
+                name,
+                value: prune_expr(value),
+            },
+            span,
+        }],
         StmtKind::If {
             condition,
             then_body,
@@ -303,7 +314,9 @@ fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
             },
             span,
         }],
-        StmtKind::While { condition, body } => match scalar_value(&condition) {
+        StmtKind::While { condition, body } => {
+            let condition = prune_expr(condition);
+            match scalar_value(&condition) {
             Some(value) if !value.truthy() => Vec::new(),
             _ => vec![Stmt {
                 kind: StmtKind::While {
@@ -312,8 +325,11 @@ fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                 },
                 span,
             }],
-        },
-        StmtKind::DoWhile { body, condition } => match scalar_value(&condition) {
+        }
+        }
+        StmtKind::DoWhile { body, condition } => {
+            let condition = prune_expr(condition);
+            match scalar_value(&condition) {
             Some(value) if !value.truthy() => prune_block(body),
             _ => vec![Stmt {
                 kind: StmtKind::DoWhile {
@@ -322,26 +338,30 @@ fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                 },
                 span,
             }],
-        },
+        }
+        }
         StmtKind::For {
             init,
             condition,
             update,
             body,
-        } => match condition.as_ref().and_then(scalar_value) {
-            Some(value) if !value.truthy() => init
-                .map(|stmt| prune_stmt(*stmt))
-                .unwrap_or_default(),
-            _ => vec![Stmt {
-                kind: StmtKind::For {
-                    init,
-                    condition,
-                    update,
-                    body: prune_block(body),
-                },
-                span,
-            }],
-        },
+        } => {
+            let init = prune_for_clause(init);
+            let condition = condition.map(prune_expr);
+            let update = prune_for_clause(update);
+            match condition.as_ref().and_then(scalar_value) {
+                Some(value) if !value.truthy() => init.map(|stmt| vec![*stmt]).unwrap_or_default(),
+                _ => vec![Stmt {
+                    kind: StmtKind::For {
+                        init,
+                        condition,
+                        update,
+                        body: prune_block(body),
+                    },
+                    span,
+                }],
+            }
+        }
         StmtKind::Foreach {
             array,
             key_var,
@@ -349,7 +369,7 @@ fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
             body,
         } => vec![Stmt {
             kind: StmtKind::Foreach {
-                array,
+                array: prune_expr(array),
                 key_var,
                 value_var,
                 body: prune_block(body),
@@ -360,17 +380,7 @@ fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
             subject,
             cases,
             default,
-        } => vec![Stmt {
-            kind: StmtKind::Switch {
-                subject,
-                cases: cases
-                    .into_iter()
-                    .map(|(exprs, body)| (exprs, prune_block(body)))
-                    .collect(),
-                default: default.map(prune_block),
-            },
-            span,
-        }],
+        } => prune_switch_stmt(subject, cases, default, span),
         StmtKind::Try {
             try_body,
             catches,
@@ -413,6 +423,10 @@ fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
             },
             span,
         }],
+        StmtKind::Return(expr) => vec![Stmt {
+            kind: StmtKind::Return(expr.map(prune_expr)),
+            span,
+        }],
         StmtKind::ClassDecl {
             name,
             extends,
@@ -433,6 +447,10 @@ fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                 properties,
                 methods: methods.into_iter().map(prune_method).collect(),
             },
+            span,
+        }],
+        StmtKind::ExprStmt(expr) => vec![Stmt {
+            kind: StmtKind::ExprStmt(prune_expr(expr)),
             span,
         }],
         StmtKind::EnumDecl {
@@ -487,6 +505,7 @@ fn prune_if_chain(
     elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
     else_body: Option<Vec<Stmt>>,
 ) -> Vec<Stmt> {
+    let condition = prune_expr(condition);
     match scalar_value(&condition) {
         Some(value) if value.truthy() => prune_block(then_body),
         Some(_) => prune_else_if_chain(elseif_clauses, else_body),
@@ -513,6 +532,7 @@ fn prune_else_if_chain(
 ) -> Vec<Stmt> {
     let mut clauses = elseif_clauses.into_iter();
     while let Some((condition, body)) = clauses.next() {
+        let condition = prune_expr(condition);
         match scalar_value(&condition) {
             Some(value) if value.truthy() => return prune_block(body),
             Some(_) => continue,
@@ -541,6 +561,7 @@ fn prune_remaining_elseif_chain(
 ) -> (Vec<(Expr, Vec<Stmt>)>, Option<Vec<Stmt>>) {
     let mut kept = Vec::new();
     for (condition, body) in elseif_clauses {
+        let condition = prune_expr(condition);
         match scalar_value(&condition) {
             Some(value) if value.truthy() => return (kept, Some(prune_block(body))),
             Some(_) => {}
@@ -554,6 +575,340 @@ fn prune_method(method: ClassMethod) -> ClassMethod {
     ClassMethod {
         body: prune_block(method.body),
         ..method
+    }
+}
+
+fn prune_for_clause(stmt: Option<Box<Stmt>>) -> Option<Box<Stmt>> {
+    let stmt = stmt?;
+    prune_stmt(*stmt).into_iter().next().map(Box::new)
+}
+
+fn prune_switch_stmt(
+    subject: Expr,
+    cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
+    default: Option<Vec<Stmt>>,
+    span: crate::span::Span,
+) -> Vec<Stmt> {
+    let subject = prune_expr(subject);
+    let cases: Vec<(Vec<Expr>, Vec<Stmt>)> = cases
+        .into_iter()
+        .map(|(patterns, body)| (patterns.into_iter().map(prune_expr).collect(), prune_block(body)))
+        .collect();
+    let default = default.map(prune_block);
+
+    let Some(subject_value) = scalar_value(&subject) else {
+        return vec![Stmt {
+            kind: StmtKind::Switch {
+                subject,
+                cases,
+                default,
+            },
+            span,
+        }];
+    };
+
+    for (index, (patterns, _)) in cases.iter().enumerate() {
+        match classify_case_patterns(&subject_value, patterns, CaseComparison::LooseSwitch) {
+            CaseMatch::Matches | CaseMatch::Unknown => {
+                return vec![Stmt {
+                    kind: StmtKind::Switch {
+                        subject,
+                        cases: cases[index..].to_vec(),
+                        default,
+                    },
+                    span,
+                }];
+            }
+            CaseMatch::NoMatch => {}
+        }
+    }
+
+    if default.is_some() {
+        vec![Stmt {
+            kind: StmtKind::Switch {
+                subject,
+                cases: Vec::new(),
+                default,
+            },
+            span,
+        }]
+    } else {
+        Vec::new()
+    }
+}
+
+fn prune_expr(expr: Expr) -> Expr {
+    let span = expr.span;
+    let kind = match expr.kind {
+        ExprKind::StringLiteral(value) => ExprKind::StringLiteral(value),
+        ExprKind::IntLiteral(value) => ExprKind::IntLiteral(value),
+        ExprKind::FloatLiteral(value) => ExprKind::FloatLiteral(value),
+        ExprKind::Variable(name) => ExprKind::Variable(name),
+        ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
+            left: Box::new(prune_expr(*left)),
+            op,
+            right: Box::new(prune_expr(*right)),
+        },
+        ExprKind::BoolLiteral(value) => ExprKind::BoolLiteral(value),
+        ExprKind::Null => ExprKind::Null,
+        ExprKind::Negate(inner) => ExprKind::Negate(Box::new(prune_expr(*inner))),
+        ExprKind::Not(inner) => ExprKind::Not(Box::new(prune_expr(*inner))),
+        ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(prune_expr(*inner))),
+        ExprKind::Throw(inner) => ExprKind::Throw(Box::new(prune_expr(*inner))),
+        ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce {
+            value: Box::new(prune_expr(*value)),
+            default: Box::new(prune_expr(*default)),
+        },
+        ExprKind::PreIncrement(name) => ExprKind::PreIncrement(name),
+        ExprKind::PostIncrement(name) => ExprKind::PostIncrement(name),
+        ExprKind::PreDecrement(name) => ExprKind::PreDecrement(name),
+        ExprKind::PostDecrement(name) => ExprKind::PostDecrement(name),
+        ExprKind::FunctionCall { name, args } => ExprKind::FunctionCall {
+            name,
+            args: args.into_iter().map(prune_expr).collect(),
+        },
+        ExprKind::ArrayLiteral(items) => {
+            ExprKind::ArrayLiteral(items.into_iter().map(prune_expr).collect())
+        }
+        ExprKind::ArrayLiteralAssoc(items) => ExprKind::ArrayLiteralAssoc(
+            items.into_iter()
+                .map(|(key, value)| (prune_expr(key), prune_expr(value)))
+                .collect(),
+        ),
+        ExprKind::Match {
+            subject,
+            arms,
+            default,
+        } => {
+            let subject = prune_expr(*subject);
+            let arms: Vec<(Vec<Expr>, Expr)> = arms
+                .into_iter()
+                .map(|(patterns, value)| {
+                    (
+                        patterns.into_iter().map(prune_expr).collect(),
+                        prune_expr(value),
+                    )
+                })
+                .collect();
+            let default = default.map(|expr| Box::new(prune_expr(*expr)));
+            try_prune_match_expr(subject, arms, default)
+        }
+        ExprKind::ArrayAccess { array, index } => ExprKind::ArrayAccess {
+            array: Box::new(prune_expr(*array)),
+            index: Box::new(prune_expr(*index)),
+        },
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => ExprKind::Ternary {
+            condition: Box::new(prune_expr(*condition)),
+            then_expr: Box::new(prune_expr(*then_expr)),
+            else_expr: Box::new(prune_expr(*else_expr)),
+        },
+        ExprKind::Cast { target, expr } => ExprKind::Cast {
+            target,
+            expr: Box::new(prune_expr(*expr)),
+        },
+        ExprKind::Closure {
+            params,
+            variadic,
+            body,
+            is_arrow,
+            captures,
+        } => ExprKind::Closure {
+            params,
+            variadic,
+            body: prune_block(body),
+            is_arrow,
+            captures,
+        },
+        ExprKind::NamedArg { name, value } => ExprKind::NamedArg {
+            name,
+            value: Box::new(prune_expr(*value)),
+        },
+        ExprKind::Spread(inner) => ExprKind::Spread(Box::new(prune_expr(*inner))),
+        ExprKind::ClosureCall { var, args } => ExprKind::ClosureCall {
+            var,
+            args: args.into_iter().map(prune_expr).collect(),
+        },
+        ExprKind::ExprCall { callee, args } => ExprKind::ExprCall {
+            callee: Box::new(prune_expr(*callee)),
+            args: args.into_iter().map(prune_expr).collect(),
+        },
+        ExprKind::ConstRef(name) => ExprKind::ConstRef(name),
+        ExprKind::EnumCase {
+            enum_name,
+            case_name,
+        } => ExprKind::EnumCase {
+            enum_name,
+            case_name,
+        },
+        ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
+            class_name,
+            args: args.into_iter().map(prune_expr).collect(),
+        },
+        ExprKind::PropertyAccess { object, property } => ExprKind::PropertyAccess {
+            object: Box::new(prune_expr(*object)),
+            property,
+        },
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+        } => ExprKind::MethodCall {
+            object: Box::new(prune_expr(*object)),
+            method,
+            args: args.into_iter().map(prune_expr).collect(),
+        },
+        ExprKind::StaticMethodCall {
+            receiver,
+            method,
+            args,
+        } => ExprKind::StaticMethodCall {
+            receiver,
+            method,
+            args: args.into_iter().map(prune_expr).collect(),
+        },
+        ExprKind::FirstClassCallable(target) => {
+            ExprKind::FirstClassCallable(prune_callable_target(target))
+        }
+        ExprKind::This => ExprKind::This,
+        ExprKind::PtrCast { target_type, expr } => ExprKind::PtrCast {
+            target_type,
+            expr: Box::new(prune_expr(*expr)),
+        },
+        ExprKind::BufferNew { element_type, len } => ExprKind::BufferNew {
+            element_type,
+            len: Box::new(prune_expr(*len)),
+        },
+    };
+    Expr { kind, span }
+}
+
+fn prune_callable_target(target: CallableTarget) -> CallableTarget {
+    match target {
+        CallableTarget::Function(name) => CallableTarget::Function(name),
+        CallableTarget::StaticMethod { receiver, method } => {
+            CallableTarget::StaticMethod { receiver, method }
+        }
+        CallableTarget::Method { object, method } => CallableTarget::Method {
+            object: Box::new(prune_expr(*object)),
+            method,
+        },
+    }
+}
+
+fn try_prune_match_expr(
+    subject: Expr,
+    arms: Vec<(Vec<Expr>, Expr)>,
+    default: Option<Box<Expr>>,
+) -> ExprKind {
+    let Some(subject_value) = scalar_value(&subject) else {
+        return ExprKind::Match {
+            subject: Box::new(subject),
+            arms,
+            default,
+        };
+    };
+
+    for (index, (patterns, result)) in arms.iter().enumerate() {
+        match classify_case_patterns(&subject_value, patterns, CaseComparison::Strict) {
+            CaseMatch::Matches => return result.kind.clone(),
+            CaseMatch::NoMatch => {}
+            CaseMatch::Unknown => {
+                return ExprKind::Match {
+                    subject: Box::new(subject),
+                    arms: arms[index..].to_vec(),
+                    default,
+                };
+            }
+        }
+    }
+
+    if let Some(default) = default {
+        default.kind
+    } else {
+        ExprKind::Match {
+            subject: Box::new(subject),
+            arms: Vec::new(),
+            default: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CaseMatch {
+    Matches,
+    NoMatch,
+    Unknown,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CaseComparison {
+    Strict,
+    LooseSwitch,
+}
+
+fn classify_case_patterns(
+    subject: &ScalarValue,
+    patterns: &[Expr],
+    comparison: CaseComparison,
+) -> CaseMatch {
+    let mut has_unknown = false;
+    for pattern in patterns {
+        match pattern_matches_scalar(subject, pattern, comparison) {
+            Some(true) => return CaseMatch::Matches,
+            Some(false) => {}
+            None => has_unknown = true,
+        }
+    }
+    if has_unknown {
+        CaseMatch::Unknown
+    } else {
+        CaseMatch::NoMatch
+    }
+}
+
+fn pattern_matches_scalar(
+    subject: &ScalarValue,
+    pattern: &Expr,
+    comparison: CaseComparison,
+) -> Option<bool> {
+    let pattern = scalar_value(pattern)?;
+    match comparison {
+        CaseComparison::Strict => compare_scalar_strict(subject, &pattern),
+        CaseComparison::LooseSwitch => compare_scalar_switch(subject, &pattern),
+    }
+}
+
+fn compare_scalar_strict(left: &ScalarValue, right: &ScalarValue) -> Option<bool> {
+    match (left, right) {
+        (ScalarValue::Null, ScalarValue::Null) => Some(true),
+        (ScalarValue::Bool(left), ScalarValue::Bool(right)) => Some(left == right),
+        (ScalarValue::Int(left), ScalarValue::Int(right)) => Some(left == right),
+        (ScalarValue::String(left), ScalarValue::String(right)) => Some(left == right),
+        (ScalarValue::Float(left), ScalarValue::Float(right)) => Some(left == right),
+        _ => Some(false),
+    }
+}
+
+fn compare_scalar_switch(left: &ScalarValue, right: &ScalarValue) -> Option<bool> {
+    match (left, right) {
+        (ScalarValue::String(left), ScalarValue::String(right)) => Some(left == right),
+        (ScalarValue::Float(left), ScalarValue::Float(right)) => Some(left == right),
+        (ScalarValue::String(_), _) | (_, ScalarValue::String(_)) => None,
+        (ScalarValue::Float(_), _) | (_, ScalarValue::Float(_)) => None,
+        _ => Some(scalar_dispatch_int(left)? == scalar_dispatch_int(right)?),
+    }
+}
+
+fn scalar_dispatch_int(value: &ScalarValue) -> Option<i64> {
+    match value {
+        ScalarValue::Null => Some(0),
+        ScalarValue::Bool(value) => Some(i64::from(*value)),
+        ScalarValue::Int(value) => Some(*value),
+        ScalarValue::Float(_) | ScalarValue::String(_) => None,
     }
 }
 
@@ -1475,5 +1830,73 @@ mod tests {
         let pruned = prune_constant_control_flow(program);
 
         assert_eq!(pruned, vec![Stmt::assign("i", Expr::int_lit(1))]);
+    }
+
+    #[test]
+    fn test_prune_match_expr_to_selected_arm() {
+        let program = vec![Stmt::assign(
+            "x",
+            Expr::new(
+                ExprKind::Match {
+                    subject: Box::new(Expr::int_lit(3)),
+                    arms: vec![
+                        (vec![Expr::int_lit(1)], Expr::int_lit(10)),
+                        (vec![Expr::int_lit(3)], Expr::int_lit(20)),
+                    ],
+                    default: Some(Box::new(Expr::int_lit(30))),
+                },
+                Span::dummy(),
+            ),
+        )];
+
+        let pruned = prune_constant_control_flow(program);
+
+        assert_eq!(pruned, vec![Stmt::assign("x", Expr::int_lit(20))]);
+    }
+
+    #[test]
+    fn test_prune_match_uses_strict_case_comparison() {
+        let program = vec![Stmt::assign(
+            "x",
+            Expr::new(
+                ExprKind::Match {
+                    subject: Box::new(Expr::new(ExprKind::BoolLiteral(true), Span::dummy())),
+                    arms: vec![(vec![Expr::int_lit(1)], Expr::int_lit(10))],
+                    default: Some(Box::new(Expr::int_lit(20))),
+                },
+                Span::dummy(),
+            ),
+        )];
+
+        let pruned = prune_constant_control_flow(program);
+
+        assert_eq!(pruned, vec![Stmt::assign("x", Expr::int_lit(20))]);
+    }
+
+    #[test]
+    fn test_prune_switch_drops_leading_non_matching_cases() {
+        let program = vec![Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::int_lit(3),
+                cases: vec![
+                    (vec![Expr::int_lit(1)], vec![Stmt::echo(Expr::int_lit(10))]),
+                    (
+                        vec![Expr::int_lit(3)],
+                        vec![Stmt::echo(Expr::int_lit(20)), Stmt::new(StmtKind::Break, Span::dummy())],
+                    ),
+                ],
+                default: Some(vec![Stmt::echo(Expr::int_lit(30))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = prune_constant_control_flow(program);
+
+        assert_eq!(pruned.len(), 1);
+        let StmtKind::Switch { cases, .. } = &pruned[0].kind else {
+            panic!("expected switch");
+        };
+        assert_eq!(cases.len(), 1);
+        assert_eq!(cases[0].0, vec![Expr::int_lit(3)]);
     }
 }
