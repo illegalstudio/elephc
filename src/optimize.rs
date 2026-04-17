@@ -278,7 +278,7 @@ fn prune_block(body: Vec<Stmt>) -> Vec<Stmt> {
     let mut pruned = Vec::new();
     for stmt in body {
         let pruned_stmt = prune_stmt(stmt);
-        let stops_here = pruned_stmt.last().is_some_and(stmt_transfers_control);
+        let stops_here = pruned_stmt.last().is_some_and(stmt_exits_current_block);
         pruned.extend(pruned_stmt);
         if stops_here {
             break;
@@ -287,11 +287,39 @@ fn prune_block(body: Vec<Stmt>) -> Vec<Stmt> {
     pruned
 }
 
-fn stmt_transfers_control(stmt: &Stmt) -> bool {
-    matches!(
-        stmt.kind,
-        StmtKind::Return(_) | StmtKind::Throw(_) | StmtKind::Break | StmtKind::Continue
-    )
+fn block_exits_current_block(body: &[Stmt]) -> bool {
+    body.last().is_some_and(stmt_exits_current_block)
+}
+
+fn stmt_exits_current_block(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::Return(_) | StmtKind::Throw(_) | StmtKind::Break | StmtKind::Continue => true,
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            block_exits_current_block(then_body)
+                && elseif_clauses
+                    .iter()
+                    .all(|(_, body)| block_exits_current_block(body))
+                && else_body
+                    .as_ref()
+                    .is_some_and(|body| block_exits_current_block(body))
+        }
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => {
+            block_exits_current_block(then_body)
+                && else_body
+                    .as_ref()
+                    .is_some_and(|body| block_exits_current_block(body))
+        }
+        _ => false,
+    }
 }
 
 fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
@@ -1867,6 +1895,47 @@ mod tests {
         };
         assert_eq!(body.len(), 1);
         assert!(matches!(body[0].kind, StmtKind::Return(_)));
+    }
+
+    #[test]
+    fn test_prune_block_drops_statements_after_exhaustive_if() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "answer".into(),
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::If {
+                            condition: Expr::var("flag"),
+                            then_body: vec![Stmt::new(
+                                StmtKind::Return(Some(Expr::int_lit(7))),
+                                Span::dummy(),
+                            )],
+                            elseif_clauses: Vec::new(),
+                            else_body: Some(vec![Stmt::new(
+                                StmtKind::Return(Some(Expr::int_lit(8))),
+                                Span::dummy(),
+                            )]),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::echo(Expr::int_lit(9)),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = prune_constant_control_flow(program);
+
+        let StmtKind::FunctionDecl { body, .. } = &pruned[0].kind else {
+            panic!("expected function");
+        };
+        assert_eq!(body.len(), 1);
+        let StmtKind::If { .. } = &body[0].kind else {
+            panic!("expected if");
+        };
     }
 
     #[test]
