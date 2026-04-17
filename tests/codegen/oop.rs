@@ -851,6 +851,28 @@ echo $value;
 }
 
 #[test]
+fn test_instance_method_preserves_multiple_byref_array_params() {
+    let out = compile_and_run(
+        r#"<?php
+class Foo {
+    public function bar(array &$a, array &$b): void {
+        $a[0] = 1;
+        $b[0] = 2;
+    }
+}
+
+$x = [0];
+$y = [0];
+$foo = new Foo();
+$foo->bar($x, $y);
+echo $x[0];
+echo $y[0];
+"#,
+    );
+    assert_eq!(out, "12");
+}
+
+#[test]
 fn test_first_class_callable_variadic_function_call() {
     let out = compile_and_run(
         r#"<?php
