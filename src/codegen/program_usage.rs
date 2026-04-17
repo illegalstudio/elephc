@@ -138,6 +138,10 @@ fn collect_required_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<Stri
             | StmtKind::PropertyArrayPush { value, .. } => {
                 collect_required_class_names_in_expr(value, names);
             }
+            StmtKind::PropertyArrayAssign { index, value, .. } => {
+                collect_required_class_names_in_expr(index, names);
+                collect_required_class_names_in_expr(value, names);
+            }
             _ => {}
         }
     }
@@ -377,6 +381,16 @@ fn stmt_uses_variable(stmt: &Stmt, needle: &str) -> bool {
         }
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_uses_variable(object, needle) || expr_uses_variable(value, needle)
+        }
+        StmtKind::PropertyArrayAssign {
+            object,
+            index,
+            value,
+            ..
+        } => {
+            expr_uses_variable(object, needle)
+                || expr_uses_variable(index, needle)
+                || expr_uses_variable(value, needle)
         }
         StmtKind::FunctionDecl { body, .. } | StmtKind::NamespaceBlock { body, .. } => {
             body.iter().any(|stmt| stmt_uses_variable(stmt, needle))

@@ -1756,6 +1756,25 @@ fn test_parse_property_array_push() {
 }
 
 #[test]
+fn test_parse_property_array_assign() {
+    let stmts = parse_source("<?php $obj->items[0] = 42;");
+    match &stmts[0].kind {
+        StmtKind::PropertyArrayAssign {
+            object,
+            property,
+            index,
+            value,
+        } => {
+            assert_eq!(property, "items");
+            assert!(matches!(object.kind, ExprKind::Variable(_)));
+            assert!(matches!(index.kind, ExprKind::IntLiteral(0)));
+            assert!(matches!(value.kind, ExprKind::IntLiteral(42)));
+        }
+        other => panic!("Expected PropertyArrayAssign, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_parse_chained_access() {
     let stmts = parse_source("<?php echo $obj->make()->prop;");
     match &stmts[0].kind {
@@ -1778,6 +1797,27 @@ fn test_parse_chained_access() {
             _ => panic!("Expected PropertyAccess"),
         },
         _ => panic!("Expected Echo"),
+    }
+}
+
+#[test]
+fn test_parse_property_access_after_array_index() {
+    let stmts = parse_source("<?php echo $items[0]->name;");
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::PropertyAccess { object, property } => {
+                assert_eq!(property, "name");
+                match &object.kind {
+                    ExprKind::ArrayAccess { array, index } => {
+                        assert!(matches!(array.kind, ExprKind::Variable(_)));
+                        assert!(matches!(index.kind, ExprKind::IntLiteral(0)));
+                    }
+                    other => panic!("Expected ArrayAccess, got {:?}", other),
+                }
+            }
+            other => panic!("Expected PropertyAccess, got {:?}", other),
+        },
+        other => panic!("Expected Echo, got {:?}", other),
     }
 }
 

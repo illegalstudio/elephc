@@ -166,14 +166,19 @@ pub(super) fn try_parse_postfix_assignment(
             value,
         },
         ExprKind::ArrayAccess { array, index } => {
-            if let ExprKind::Variable(array) = array.kind {
-                StmtKind::ArrayAssign {
+            match array.kind {
+                ExprKind::Variable(array) => StmtKind::ArrayAssign {
                     array,
                     index: *index,
                     value,
-                }
-            } else {
-                return Err(CompileError::new(span, "Invalid assignment target"));
+                },
+                ExprKind::PropertyAccess { object, property } => StmtKind::PropertyArrayAssign {
+                    object,
+                    property,
+                    index: *index,
+                    value,
+                },
+                _ => return Err(CompileError::new(span, "Invalid assignment target")),
             }
         }
         ExprKind::PropertyAccess { object, property } => StmtKind::PropertyAssign {

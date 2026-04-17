@@ -101,6 +101,19 @@ fn test_array_push_builtin() {
 }
 
 #[test]
+fn test_array_access_on_function_call_result() {
+    let out = compile_and_run(
+        r#"<?php
+function getColor() {
+    return [255, 128, 0];
+}
+echo getColor()[1];
+"#,
+    );
+    assert_eq!(out, "128");
+}
+
+#[test]
 fn test_foreach_int() {
     let out = compile_and_run("<?php $a = [1, 2, 3]; foreach ($a as $v) { echo $v; }");
     assert_eq!(out, "123");
@@ -317,4 +330,3 @@ else { echo "other"; }
     );
     assert_eq!(out, "four");
 }
-

@@ -782,6 +782,34 @@ echo $bucket->last();
 }
 
 #[test]
+fn test_class_property_array_assign() {
+    let out = compile_and_run(
+        r#"<?php
+class Bucket {
+    public $items;
+
+    public function __construct() {
+        $this->items = [1, 2, 3];
+    }
+
+    public function replaceFirst($value) {
+        $this->items[0] = $value;
+    }
+
+    public function first(): int {
+        return $this->items[0];
+    }
+}
+
+$bucket = new Bucket();
+$bucket->replaceFirst(9);
+echo $bucket->first();
+"#,
+    );
+    assert_eq!(out, "9");
+}
+
+#[test]
 fn test_class_static_method_string_param() {
     let out = compile_and_run(
         r#"<?php
