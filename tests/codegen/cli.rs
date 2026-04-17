@@ -120,3 +120,62 @@ fn test_cli_rejects_emit_asm_and_check_together() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn test_cli_timings_reports_check_phases() {
+    let dir = make_cli_test_dir("elephc_cli_timings_check");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 1;").unwrap();
+
+    let output = Command::new(elephc_cli_bin())
+        .arg("--check")
+        .arg("--timings")
+        .arg(&php_path)
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run elephc CLI with --timings --check");
+
+    assert!(
+        output.status.success(),
+        "elephc --timings --check failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Compiler timings:"), "missing timings header: {stderr}");
+    assert!(stderr.contains("tokenize"), "missing tokenize timing: {stderr}");
+    assert!(stderr.contains("parse"), "missing parse timing: {stderr}");
+    assert!(stderr.contains("typecheck"), "missing typecheck timing: {stderr}");
+    assert!(stderr.contains("total"), "missing total timing: {stderr}");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_cli_timings_reports_assemble_and_link() {
+    let dir = make_cli_test_dir("elephc_cli_timings_build");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 1;").unwrap();
+
+    let output = Command::new(elephc_cli_bin())
+        .arg("--timings")
+        .arg(&php_path)
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run elephc CLI with --timings");
+
+    assert!(
+        output.status.success(),
+        "elephc --timings failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("codegen"), "missing codegen timing: {stderr}");
+    assert!(stderr.contains("assemble"), "missing assemble timing: {stderr}");
+    assert!(stderr.contains("link"), "missing link timing: {stderr}");
+    assert!(stderr.contains("total"), "missing total timing: {stderr}");
+    assert!(dir.join("main").exists(), "expected compiled binary to exist");
+
+    let _ = fs::remove_dir_all(&dir);
+}
