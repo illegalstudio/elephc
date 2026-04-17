@@ -106,6 +106,12 @@ elephc --gc-stats heavy.php
 # Enable compile-time feature branches
 elephc --define DEBUG app.php
 
+# Print per-phase compiler timings
+elephc --timings hello.php
+
+# Emit assembly and a simple source-map sidecar
+elephc --emit-asm --source-map hello.php
+
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 
@@ -249,6 +255,8 @@ elephc hello.php
 cat hello.s
 ```
 
+If you add `--source-map`, elephc also writes `hello.map`, a compact JSON sidecar that maps emitted assembly lines back to PHP line/column pairs. If you add `--timings`, the compiler prints per-phase durations such as lexing, parsing, runtime-cache preparation, code generation, assembling, and linking.
+
 ### Type system
 
 The static type system tracks these runtime shapes at compile time:
@@ -376,7 +384,7 @@ The **[docs/](docs/)** directory is a complete wiki covering every aspect of the
 
 If you're new to compilers or assembly, start from the top and work your way down. No prior low-level knowledge required.
 
-For runnable language samples, see `examples/`. For a focused perf comparison, see `benchmarks/hot-path-buffer-vs-arrays`.
+For runnable language samples, see `examples/`. For the benchmark harness that compares elephc against PHP and equivalent C fixtures, see `benchmarks/README.md`. For a focused perf comparison, see `benchmarks/hot-path-buffer-vs-arrays`.
 
 ## License
 

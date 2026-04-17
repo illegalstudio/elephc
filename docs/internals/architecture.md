@@ -60,6 +60,13 @@ PHP source (.php)
 └────┬─────┘
      │
      ▼
+┌───────────────┐
+│ Tooling glue  │  src/runtime_cache.rs, src/source_map.rs
+│               │  Reuses cached runtime objects, optionally emits
+│               │  sidecar source maps, and feeds timing output in CLI mode.
+└─────┬─────────┘
+      │
+      ▼
 ┌─────────┐
 │ as + ld  │  System assembler and linker
 │          │  .s → .o → target-native binary
@@ -85,6 +92,8 @@ src/
 ├── span.rs                    Source position (line, col)
 ├── conditional.rs             Build-time `ifdef` pass
 ├── resolver.rs                Include/require file resolution
+├── runtime_cache.rs           Cached shared runtime object preparation
+├── source_map.rs              Assembly comment markers → JSON sidecar map
 ├── names.rs                   Qualified/FQN name model + assembly symbol mangling
 ├── name_resolver/             Namespace/use resolution to canonical names
 │

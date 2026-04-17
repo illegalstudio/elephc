@@ -170,11 +170,27 @@ Key observations:
 - `echo "big\n"` → load string address + length, then `svc` to write to stdout
 - The string literal lives in the `.data` section, referenced by label `_str_0`
 
-## Phase 8: Assembly and linking
+## Phase 8: Runtime preparation, assembly, and linking
 
 **Tools:** native `as` and `ld` (or the equivalent system toolchain)
 
-elephc writes the assembly to a `.s` file, then invokes the system tools:
+elephc first prepares the shared runtime object, then writes the user assembly to a `.s` file, and finally invokes the system tools.
+
+The runtime is not reassembled on every compile. elephc caches a pre-assembled runtime object under the user's cache directory (typically `~/.cache/elephc/`) using the compiler version, target, and heap size in the cache key. If a matching object already exists, the compile reuses it directly.
+
+The user program still gets its own assembly file. If `--source-map` is enabled, elephc also writes a sidecar `.map` JSON file that records assembly-line to PHP-line/column mappings extracted from source markers inserted during statement emission.
+
+In normal compile mode, the toolchain flow is:
+
+1. Prepare or reuse the cached runtime object
+2. Write the program assembly to `file.s`
+3. Optionally write `file.map`
+4. Assemble `file.s` into `file.o`
+5. Link `file.o` together with the cached runtime object into the final executable
+
+If `--timings` is enabled, elephc prints the duration of each major phase to stderr so you can see where time is being spent.
+
+elephc then invokes the system tools:
 
 On macOS, elephc drives the Apple toolchain directly:
 
@@ -185,8 +201,8 @@ ld -arch arm64 -e _main -o file file.o -lSystem -syslibroot /path/to/sdk
 
 On Linux, elephc invokes the native assembler/linker for the requested target.
 
-- **`as`** (assembler) converts text mnemonics into binary machine code, producing an object file (`.o`)
-- **`ld`** (linker) resolves label addresses, links with system libraries, and produces the final native executable (Mach-O on macOS, ELF on Linux)
+- **`as`** (assembler) converts the user assembly text mnemonics into binary machine code, producing an object file (`.o`)
+- **`ld`** (linker) resolves label addresses, links the user object together with the cached runtime object and any requested system libraries, and produces the final native executable (Mach-O on macOS, ELF on Linux)
 
 The `.o` file is deleted after linking. The result is a standalone executable.
 
@@ -222,11 +238,17 @@ The binary runs directly on the CPU. There is no PHP interpreter or VM at runtim
                     ▼ Code Generator
     "sub sp, sp, #32 / stp x29, x30, ... / mov x0, #10 / ..."
                     │
+                    ▼ Runtime Cache
+    ~/.cache/elephc/runtime-v<version>-<target>-heap<size>.o
+                    │
+                    ▼ optional Source Map
+    file.map (asm line → PHP line/col)
+                    │
                     ▼ as (assembler)
-    file.o (machine code bytes)
+    file.o (machine code bytes for user program)
                     │
                     ▼ ld (linker)
-    file (native executable)
+    file (user object + cached runtime object)
                     │
                     ▼ CPU
     "big\n"
