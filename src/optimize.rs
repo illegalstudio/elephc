@@ -277,9 +277,21 @@ fn fold_block(body: Vec<Stmt>) -> Vec<Stmt> {
 fn prune_block(body: Vec<Stmt>) -> Vec<Stmt> {
     let mut pruned = Vec::new();
     for stmt in body {
-        pruned.extend(prune_stmt(stmt));
+        let pruned_stmt = prune_stmt(stmt);
+        let stops_here = pruned_stmt.last().is_some_and(stmt_transfers_control);
+        pruned.extend(pruned_stmt);
+        if stops_here {
+            break;
+        }
     }
     pruned
+}
+
+fn stmt_transfers_control(stmt: &Stmt) -> bool {
+    matches!(
+        stmt.kind,
+        StmtKind::Return(_) | StmtKind::Throw(_) | StmtKind::Break | StmtKind::Continue
+    )
 }
 
 fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
@@ -1830,6 +1842,58 @@ mod tests {
         let pruned = prune_constant_control_flow(program);
 
         assert_eq!(pruned, vec![Stmt::assign("i", Expr::int_lit(1))]);
+    }
+
+    #[test]
+    fn test_prune_block_drops_statements_after_return() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "answer".into(),
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(StmtKind::Return(Some(Expr::int_lit(7))), Span::dummy()),
+                    Stmt::echo(Expr::int_lit(9)),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = prune_constant_control_flow(program);
+
+        let StmtKind::FunctionDecl { body, .. } = &pruned[0].kind else {
+            panic!("expected function");
+        };
+        assert_eq!(body.len(), 1);
+        assert!(matches!(body[0].kind, StmtKind::Return(_)));
+    }
+
+    #[test]
+    fn test_prune_switch_case_body_drops_statements_after_break() {
+        let program = vec![Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::int_lit(1),
+                cases: vec![(
+                    vec![Expr::int_lit(1)],
+                    vec![
+                        Stmt::new(StmtKind::Break, Span::dummy()),
+                        Stmt::echo(Expr::int_lit(9)),
+                    ],
+                )],
+                default: None,
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = prune_constant_control_flow(program);
+
+        let StmtKind::Switch { cases, .. } = &pruned[0].kind else {
+            panic!("expected switch");
+        };
+        assert_eq!(cases.len(), 1);
+        assert_eq!(cases[0].1.len(), 1);
+        assert!(matches!(cases[0].1[0].kind, StmtKind::Break));
     }
 
     #[test]

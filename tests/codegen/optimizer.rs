@@ -369,3 +369,78 @@ switch (3) {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn test_constant_folding_prunes_dead_statements_after_return_from_user_assembly() {
+    let dir = make_cli_test_dir("elephc_constant_folding_return_dce");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+function answer() {
+    return 7;
+    echo 2 ** 8;
+}
+echo answer();
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "dead statements after return should not remain in user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "7");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_constant_folding_prunes_dead_statements_after_break_from_user_assembly() {
+    let dir = make_cli_test_dir("elephc_constant_folding_break_dce");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+switch (1) {
+    case 1:
+        echo 7;
+        break;
+        echo 2 ** 8;
+    default:
+        echo 9;
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "dead statements after break should not remain in user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "7");
+
+    let _ = fs::remove_dir_all(&dir);
+}
