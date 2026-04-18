@@ -437,7 +437,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
 
 Notable runtime-only helpers emitted here include `__rt_exception_cleanup_frames`, `__rt_exception_matches`, `__rt_throw_current`, `__rt_heap_debug_fail`, `__rt_heap_kind`, `__rt_hash_insert_owned`, `__rt_hash_free_deep`, `__rt_array_column_ref`, `__rt_preg_strip`, `__rt_pcre_to_posix`, `__rt_str_to_cstr`, and `__rt_cstr_to_str` in addition to the more user-visible helpers.
 
-All routines are included in every binary, even if unused. elephc already does AST-side dead-code pruning before codegen, but runtime-specific dead stripping is still future work.
+All routines are included in every binary, even if unused. elephc already does AST-side control-flow pruning and dead-code elimination before codegen, but runtime-specific dead stripping is still future work.
 
 ## Runtime data
 

@@ -62,8 +62,15 @@ PHP source (.php)
      ▼
 ┌──────────────┐
 │  Optimizer   │  src/optimize.rs
-│  (prune)     │  Removes constant-dead control flow and unreachable
-│              │  pure statements after successful checking.
+│  (prune)     │  Removes constant-dead control flow after successful
+│              │  checking.
+└─────┬────────┘
+      │
+      ▼
+┌──────────────┐
+│  Optimizer   │  src/optimize.rs
+│   (DCE)      │  Cleans up redundant control shells, hoists safe
+│              │  non-throwing `try` prefixes, and drops dead leftovers.
 └─────┬────────┘
       │
       ▼
@@ -106,7 +113,7 @@ src/
 ├── span.rs                    Source position (line, col)
 ├── conditional.rs             Build-time `ifdef` pass
 ├── resolver.rs                Include/require file resolution
-├── optimize.rs                Constant folding and local dead-code pruning
+├── optimize.rs                Constant folding, control-flow pruning, dead-code elimination
 ├── runtime_cache.rs           Cached shared runtime object preparation
 ├── source_map.rs              Assembly comment markers → JSON sidecar map
 ├── names.rs                   Qualified/FQN name model + assembly symbol mangling

@@ -245,7 +245,7 @@ User-defined constants are also supported via `const NAME = value;` and `define(
 ## How it works
 
 ```
-PHP source → Lexer → Parser (AST) → Conditional (ifdef/--define) → Resolver (include) → NameResolver (namespaces/use/FQNs) → Optimizer (constant folding) → Type Checker → Optimizer (dead-code pruning) → Codegen → as + ld → native executable
+PHP source → Lexer → Parser (AST) → Conditional (ifdef/--define) → Resolver (include) → NameResolver (namespaces/use/FQNs) → Optimizer (constant folding) → Type Checker → Optimizer (control-flow pruning) → Optimizer (dead-code elimination) → Codegen → as + ld → native executable
 ```
 
 The compiler emits human-readable assembly for the selected target. You can inspect the `.s` file to see exactly what your PHP becomes:
@@ -259,11 +259,11 @@ If you add `--source-map`, elephc also writes `hello.map`, a compact JSON sideca
 
 ### Current optimization passes
 
-elephc already performs a small but useful AST-level optimization pass before emitting assembly:
+elephc already performs a small but useful AST-level optimization pipeline before emitting assembly:
 
 - **Constant folding before type checking**: folds scalar arithmetic, bitwise ops, comparisons, logical ops, string-literal concatenation, scalar casts, ternaries, and null coalescing when the result is statically known.
-- **Control-flow pruning after type checking**: removes constant-dead `if` / `elseif` / `while (false)` / `for (...; false; ...)` branches, prunes constant `switch` prefixes and `match` arms, and trims unreachable statements after terminating constructs such as `return`, `throw`, `break`, and `continue`.
-- **Pure-expression cleanup**: drops unused expression statements and dead pure subexpressions when the surrounding expression already determines the result.
+- **Control-flow pruning after type checking**: removes constant-dead `if` / `elseif` / `while (false)` / `for (...; false; ...)` branches, materializes constant `switch` execution, prunes `match` arms, and trims unreachable statements after terminating constructs such as `return`, `throw`, `break`, and `continue`.
+- **Dead-code elimination after pruning**: removes empty control shells, simplifies single-path conditionals, hoists safe non-throwing `try` prefixes, and drops unused pure expression statements and dead pure subexpressions when the surrounding expression already determines the result.
 
 The optimizer is intentionally conservative. It does not yet do global constant propagation, interprocedural optimization, or assembly-level peephole rewriting.
 
@@ -308,7 +308,7 @@ src/
 ├── span.rs              # Source position tracking (line, col)
 ├── conditional.rs       # Build-time `ifdef` pass driven by --define
 ├── resolver.rs          # Include/require file resolution
-├── optimize.rs          # Constant folding and local dead-code pruning
+├── optimize.rs          # AST optimizer: constant folding, control-flow pruning, dead-code elimination
 ├── names.rs             # Qualified/FQN name model + symbol mangling helpers
 ├── name_resolver/       # Namespace/use resolution to canonical names
 │
