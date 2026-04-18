@@ -138,7 +138,7 @@ If you tried `$x = "hello"` after `$x = 10`, the type checker would reject it �
 
 On successful type checking, elephc also runs a warning pass that reports issues such as unused variables and unreachable code. On failing compilations, the parser and checker both try to recover conservatively so they can often report more than one independent error in a single run.
 
-## Phase 8: Post-typecheck pruning
+## Phase 8: Post-typecheck control-flow pruning
 
 **File:** `src/optimize.rs`
 
@@ -157,7 +157,23 @@ This split is intentional: elephc folds obvious scalar expressions early, but wa
 
 In our running example there is still nothing to prune, because `$x > 5` is not a compile-time constant at the AST level.
 
-## Phase 9: Code generation
+## Phase 9: Dead-code elimination and structural cleanup
+
+**File:** `src/optimize.rs`
+
+After control-flow pruning, elephc runs a final AST cleanup pass. This pass does not try to prove new constants; instead, it simplifies the shapes left behind by earlier rewrites.
+
+This pass currently handles cases such as:
+
+- removing empty `if`, `switch`, `ifdef`, and degenerate `try` shells
+- collapsing single-path conditionals such as `if ($a) { if ($b) { ... } }`
+- materializing constant `switch` execution into the exact statement tail that would run
+- hoisting safe non-throwing prefixes out of `try` blocks
+- simplifying non-throwing `try` / `catch` and some non-throwing `try` / `finally` fallthrough cases
+
+This is also where the optimizer does its final local dead-code cleanup before codegen sees the AST.
+
+## Phase 10: Code generation
 
 **File:** `src/codegen/` — See [The Code Generator](the-codegen.md) for details.
 
@@ -207,7 +223,7 @@ Key observations:
 - `echo "big\n"` → load string address + length, then `svc` to write to stdout
 - The string literal lives in the `.data` section, referenced by label `_str_0`
 
-## Phase 10: Runtime preparation, assembly, and linking
+## Phase 11: Runtime preparation, assembly, and linking
 
 **Tools:** native `as` and `ld` (or the equivalent system toolchain)
 
@@ -243,7 +259,7 @@ On Linux, elephc invokes the native assembler/linker for the requested target.
 
 The `.o` file is deleted after linking. The result is a standalone executable.
 
-## Phase 11: Execution
+## Phase 12: Execution
 
 ```bash
 ./file

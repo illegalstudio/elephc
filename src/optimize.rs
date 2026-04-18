@@ -2,6 +2,7 @@ use crate::parser::ast::{
     BinOp, CallableTarget, CastType, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
     Program, Stmt, StmtKind,
 };
+use crate::termination::{block_terminal_effect, stmt_terminal_effect, TerminalEffect};
 
 pub fn fold_constants(program: Program) -> Program {
     program.into_iter().map(fold_stmt).collect()
@@ -9,6 +10,308 @@ pub fn fold_constants(program: Program) -> Program {
 
 pub fn prune_constant_control_flow(program: Program) -> Program {
     prune_block(program)
+}
+
+pub fn eliminate_dead_code(program: Program) -> Program {
+    prune_block(program)
+}
+
+fn expr_to_effect_stmt(expr: Expr) -> Vec<Stmt> {
+    let span = expr.span;
+    if expr_has_side_effects(&expr) {
+        vec![Stmt::new(StmtKind::ExprStmt(expr), span)]
+    } else {
+        Vec::new()
+    }
+}
+
+fn normalize_optional_block(body: Option<Vec<Stmt>>) -> Option<Vec<Stmt>> {
+    body.filter(|body| !body.is_empty())
+}
+
+fn invert_condition(condition: Expr) -> Expr {
+    let span = condition.span;
+    prune_expr(Expr::new(ExprKind::Not(Box::new(condition)), span))
+}
+
+fn build_if_chain_body(
+    elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
+    else_body: Option<Vec<Stmt>>,
+) -> Vec<Stmt> {
+    if let Some(((condition, then_body), rest)) = elseif_clauses.split_first() {
+        vec![Stmt::new(
+            StmtKind::If {
+                condition: condition.clone(),
+                then_body: then_body.clone(),
+                elseif_clauses: rest.to_vec(),
+                else_body,
+            },
+            condition.span,
+        )]
+    } else {
+        else_body.unwrap_or_default()
+    }
+}
+
+fn materialize_switch_execution(
+    cases: &[(Vec<Expr>, Vec<Stmt>)],
+    default: &Option<Vec<Stmt>>,
+    start_case_index: Option<usize>,
+) -> Vec<Stmt> {
+    let mut out = Vec::new();
+
+    let push_body = |body: &[Stmt], out: &mut Vec<Stmt>| -> bool {
+        for stmt in body.iter().cloned() {
+            if matches!(stmt.kind, StmtKind::Break) {
+                return true;
+            }
+
+            let stops_here = !matches!(stmt_terminal_effect(&stmt), TerminalEffect::FallsThrough);
+            out.push(stmt);
+            if stops_here {
+                return true;
+            }
+        }
+
+        false
+    };
+
+    if let Some(start_case_index) = start_case_index {
+        for (_, body) in &cases[start_case_index..] {
+            if push_body(body, &mut out) {
+                return out;
+            }
+        }
+    }
+
+    if let Some(default_body) = default {
+        let _ = push_body(default_body, &mut out);
+    }
+
+    out
+}
+
+fn split_hoistable_try_prefix(mut try_body: Vec<Stmt>) -> (Vec<Stmt>, Vec<Stmt>) {
+    let hoist_len = try_body
+        .iter()
+        .take_while(|stmt| {
+            !stmt_may_throw(stmt)
+                && matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough)
+        })
+        .count();
+    let tail = try_body.split_off(hoist_len);
+    (try_body, tail)
+}
+
+fn combine_if_conditions(left: Expr, right: Expr) -> Expr {
+    let span = left.span;
+    prune_expr(Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(left),
+            op: BinOp::And,
+            right: Box::new(right),
+        },
+        span,
+    ))
+}
+
+fn build_if_stmt(
+    condition: Expr,
+    then_body: Vec<Stmt>,
+    elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
+    else_body: Option<Vec<Stmt>>,
+    span: crate::span::Span,
+) -> Stmt {
+    if elseif_clauses.is_empty() && else_body.is_none() && then_body.len() == 1 {
+        if let StmtKind::If {
+            condition: inner_condition,
+            then_body: inner_then_body,
+            elseif_clauses: inner_elseifs,
+            else_body: inner_else,
+        } = &then_body[0].kind
+        {
+            if inner_elseifs.is_empty() && inner_else.is_none() {
+                return Stmt {
+                    kind: StmtKind::If {
+                        condition: combine_if_conditions(condition, inner_condition.clone()),
+                        then_body: inner_then_body.clone(),
+                        elseif_clauses: Vec::new(),
+                        else_body: None,
+                    },
+                    span,
+                };
+            }
+        }
+    }
+
+    Stmt {
+        kind: StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        },
+        span,
+    }
+}
+
+fn block_may_throw(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(stmt_may_throw)
+}
+
+fn stmt_may_throw(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::Echo(expr)
+        | StmtKind::ExprStmt(expr)
+        | StmtKind::ConstDecl { value: expr, .. }
+        | StmtKind::StaticVar { init: expr, .. }
+        | StmtKind::ListUnpack { value: expr, .. }
+        | StmtKind::Return(Some(expr)) => expr_may_throw(expr),
+        StmtKind::Throw(_) => true,
+        StmtKind::Assign { value, .. }
+        | StmtKind::TypedAssign { value, .. }
+        | StmtKind::ArrayPush { value, .. } => expr_may_throw(value),
+        StmtKind::ArrayAssign { index, value, .. }
+        | StmtKind::PropertyArrayAssign { index, value, .. } => {
+            expr_may_throw(index) || expr_may_throw(value)
+        }
+        StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyArrayPush { object, value, .. } => {
+            expr_may_throw(object) || expr_may_throw(value)
+        }
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            expr_may_throw(condition)
+                || block_may_throw(then_body)
+                || elseif_clauses
+                    .iter()
+                    .any(|(condition, body)| expr_may_throw(condition) || block_may_throw(body))
+                || else_body.as_ref().is_some_and(|body| block_may_throw(body))
+        }
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => block_may_throw(then_body) || else_body.as_ref().is_some_and(|body| block_may_throw(body)),
+        StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
+            expr_may_throw(condition) || block_may_throw(body)
+        }
+        StmtKind::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_ref().is_some_and(|stmt| stmt_may_throw(stmt))
+                || condition.as_ref().is_some_and(expr_may_throw)
+                || update.as_ref().is_some_and(|stmt| stmt_may_throw(stmt))
+                || block_may_throw(body)
+        }
+        StmtKind::Foreach { array, body, .. } => expr_may_throw(array) || block_may_throw(body),
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => {
+            expr_may_throw(subject)
+                || cases.iter().any(|(patterns, body)| {
+                    patterns.iter().any(expr_may_throw) || block_may_throw(body)
+                })
+                || default.as_ref().is_some_and(|body| block_may_throw(body))
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            block_may_throw(try_body)
+                || catches.iter().any(|catch| block_may_throw(&catch.body))
+                || finally_body.as_ref().is_some_and(|body| block_may_throw(body))
+        }
+        StmtKind::NamespaceBlock { body, .. } => block_may_throw(body),
+        StmtKind::FunctionDecl { .. }
+        | StmtKind::NamespaceDecl { .. }
+        | StmtKind::UseDecl { .. }
+        | StmtKind::ClassDecl { .. }
+        | StmtKind::EnumDecl { .. }
+        | StmtKind::PackedClassDecl { .. }
+        | StmtKind::InterfaceDecl { .. }
+        | StmtKind::TraitDecl { .. }
+        | StmtKind::Global { .. }
+        | StmtKind::Return(None)
+        | StmtKind::Break
+        | StmtKind::Continue
+        | StmtKind::ExternFunctionDecl { .. }
+        | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ExternGlobalDecl { .. } => false,
+        StmtKind::Include { .. } => true,
+    }
+}
+
+fn expr_may_throw(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::Variable(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::ConstRef(_)
+        | ExprKind::EnumCase { .. }
+        | ExprKind::This => false,
+        ExprKind::Negate(inner)
+        | ExprKind::Not(inner)
+        | ExprKind::BitNot(inner)
+        | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::PtrCast { expr: inner, .. }
+        | ExprKind::Spread(inner) => expr_may_throw(inner),
+        ExprKind::BinaryOp { left, right, .. } => expr_may_throw(left) || expr_may_throw(right),
+        ExprKind::Throw(_) => true,
+        ExprKind::NullCoalesce { value, default } => expr_may_throw(value) || expr_may_throw(default),
+        ExprKind::PreIncrement(_)
+        | ExprKind::PostIncrement(_)
+        | ExprKind::PreDecrement(_)
+        | ExprKind::PostDecrement(_) => false,
+        ExprKind::FunctionCall { .. }
+        | ExprKind::ClosureCall { .. }
+        | ExprKind::ExprCall { .. }
+        | ExprKind::NewObject { .. }
+        | ExprKind::MethodCall { .. }
+        | ExprKind::StaticMethodCall { .. } => true,
+        ExprKind::ArrayLiteral(items) => items.iter().any(expr_may_throw),
+        ExprKind::ArrayLiteralAssoc(items) => {
+            items.iter().any(|(key, value)| expr_may_throw(key) || expr_may_throw(value))
+        }
+        ExprKind::Match {
+            subject,
+            arms,
+            default,
+        } => {
+            expr_may_throw(subject)
+                || arms.iter().any(|(patterns, value)| {
+                    patterns.iter().any(expr_may_throw) || expr_may_throw(value)
+                })
+                || default.as_ref().is_some_and(|expr| expr_may_throw(expr))
+        }
+        ExprKind::ArrayAccess { array, index } => expr_may_throw(array) || expr_may_throw(index),
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => expr_may_throw(condition) || expr_may_throw(then_expr) || expr_may_throw(else_expr),
+        ExprKind::Closure { .. } => false,
+        ExprKind::NamedArg { value, .. } => expr_may_throw(value),
+        ExprKind::PropertyAccess { object, .. } => expr_may_throw(object) || true,
+        ExprKind::FirstClassCallable(target) => match target {
+            CallableTarget::Function(_) | CallableTarget::StaticMethod { .. } => false,
+            CallableTarget::Method { object, .. } => expr_may_throw(object),
+        },
+        ExprKind::BufferNew { len, .. } => expr_may_throw(len),
+    }
 }
 
 fn fold_stmt(stmt: Stmt) -> Stmt {
@@ -289,109 +592,6 @@ fn prune_block(body: Vec<Stmt>) -> Vec<Stmt> {
     pruned
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum TerminalEffect {
-    FallsThrough,
-    Breaks,
-    ExitsCurrentBlock,
-    TerminatesMixed,
-}
-
-fn block_terminal_effect(body: &[Stmt]) -> TerminalEffect {
-    body.last()
-        .map(stmt_terminal_effect)
-        .unwrap_or(TerminalEffect::FallsThrough)
-}
-
-fn stmt_terminal_effect(stmt: &Stmt) -> TerminalEffect {
-    match &stmt.kind {
-        StmtKind::Return(_) | StmtKind::Throw(_) | StmtKind::Continue => {
-            TerminalEffect::ExitsCurrentBlock
-        }
-        StmtKind::Break => TerminalEffect::Breaks,
-        StmtKind::If {
-            then_body,
-            elseif_clauses,
-            else_body,
-            ..
-        } => combine_branch_effects(
-            std::iter::once(block_terminal_effect(then_body))
-                .chain(elseif_clauses.iter().map(|(_, body)| block_terminal_effect(body))),
-            else_body.as_ref().map(|body| block_terminal_effect(body)),
-        ),
-        StmtKind::IfDef {
-            then_body,
-            else_body,
-            ..
-        } => combine_branch_effects(
-            std::iter::once(block_terminal_effect(then_body)),
-            else_body.as_ref().map(|body| block_terminal_effect(body)),
-        ),
-        StmtKind::Switch { cases, default, .. } => switch_terminal_effect(cases, default),
-        _ => TerminalEffect::FallsThrough,
-    }
-}
-
-fn combine_branch_effects(
-    branch_effects: impl Iterator<Item = TerminalEffect>,
-    else_effect: Option<TerminalEffect>,
-) -> TerminalEffect {
-    let Some(else_effect) = else_effect else {
-        return TerminalEffect::FallsThrough;
-    };
-
-    let mut saw_break = else_effect == TerminalEffect::Breaks;
-    let mut saw_exit = else_effect == TerminalEffect::ExitsCurrentBlock;
-    let mut saw_mixed = else_effect == TerminalEffect::TerminatesMixed;
-
-    for effect in branch_effects {
-        match effect {
-            TerminalEffect::FallsThrough => return TerminalEffect::FallsThrough,
-            TerminalEffect::Breaks => saw_break = true,
-            TerminalEffect::ExitsCurrentBlock => saw_exit = true,
-            TerminalEffect::TerminatesMixed => saw_mixed = true,
-        }
-    }
-
-    if saw_mixed || (saw_break && saw_exit) {
-        TerminalEffect::TerminatesMixed
-    } else if saw_exit {
-        TerminalEffect::ExitsCurrentBlock
-    } else if saw_break {
-        TerminalEffect::Breaks
-    } else {
-        TerminalEffect::FallsThrough
-    }
-}
-
-fn switch_terminal_effect(
-    cases: &[(Vec<Expr>, Vec<Stmt>)],
-    default: &Option<Vec<Stmt>>,
-) -> TerminalEffect {
-    let Some(default_body) = default.as_ref() else {
-        return TerminalEffect::FallsThrough;
-    };
-
-    let mut suffix_exits = block_terminal_effect(default_body) == TerminalEffect::ExitsCurrentBlock;
-    if !suffix_exits {
-        return TerminalEffect::FallsThrough;
-    }
-
-    for (_, body) in cases.iter().rev() {
-        suffix_exits = match block_terminal_effect(body) {
-            TerminalEffect::ExitsCurrentBlock => true,
-            TerminalEffect::FallsThrough => suffix_exits,
-            TerminalEffect::Breaks | TerminalEffect::TerminatesMixed => false,
-        };
-
-        if !suffix_exits {
-            return TerminalEffect::FallsThrough;
-        }
-    }
-
-    TerminalEffect::ExitsCurrentBlock
-}
-
 fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
     let span = stmt.span;
     match stmt.kind {
@@ -416,14 +616,22 @@ fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
             symbol,
             then_body,
             else_body,
-        } => vec![Stmt {
-            kind: StmtKind::IfDef {
-                symbol,
-                then_body: prune_block(then_body),
-                else_body: else_body.map(prune_block),
-            },
-            span,
-        }],
+        } => {
+            let then_body = prune_block(then_body);
+            let else_body = normalize_optional_block(else_body.map(prune_block));
+            if then_body.is_empty() && else_body.is_none() {
+                Vec::new()
+            } else {
+                vec![Stmt {
+                    kind: StmtKind::IfDef {
+                        symbol,
+                        then_body,
+                        else_body,
+                    },
+                    span,
+                }]
+            }
+        }
         StmtKind::While { condition, body } => {
             let condition = prune_expr(condition);
             match scalar_value(&condition) {
@@ -495,21 +703,55 @@ fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
             try_body,
             catches,
             finally_body,
-        } => vec![Stmt {
-            kind: StmtKind::Try {
-                try_body: prune_block(try_body),
-                catches: catches
-                    .into_iter()
-                    .map(|catch| crate::parser::ast::CatchClause {
-                        exception_types: catch.exception_types,
-                        variable: catch.variable,
-                        body: prune_block(catch.body),
-                    })
-                    .collect(),
-                finally_body: finally_body.map(prune_block),
-            },
-            span,
-        }],
+        } => {
+            let try_body = prune_block(try_body);
+            let catches: Vec<_> = catches
+                .into_iter()
+                .map(|catch| crate::parser::ast::CatchClause {
+                    exception_types: catch.exception_types,
+                    variable: catch.variable,
+                    body: prune_block(catch.body),
+                })
+                .collect();
+            let finally_body = normalize_optional_block(finally_body.map(prune_block));
+            let (mut hoisted_prefix, try_body) = split_hoistable_try_prefix(try_body);
+
+            let mut remaining = if try_body.is_empty() {
+                finally_body.unwrap_or_default()
+            } else if !block_may_throw(&try_body) {
+                if let Some(finally_body) = finally_body {
+                    if matches!(block_terminal_effect(&try_body), TerminalEffect::FallsThrough) {
+                        let mut stmts = try_body;
+                        stmts.extend(finally_body);
+                        stmts
+                    } else {
+                        vec![Stmt {
+                            kind: StmtKind::Try {
+                                try_body,
+                                catches,
+                                finally_body: Some(finally_body),
+                            },
+                            span,
+                        }]
+                    }
+                } else {
+                    try_body
+                }
+            } else if catches.is_empty() && finally_body.is_none() {
+                try_body
+            } else {
+                vec![Stmt {
+                    kind: StmtKind::Try {
+                        try_body,
+                        catches,
+                        finally_body,
+                    },
+                    span,
+                }]
+            };
+            hoisted_prefix.append(&mut remaining);
+            hoisted_prefix
+        }
         StmtKind::NamespaceBlock { name, body } => vec![Stmt {
             kind: StmtKind::NamespaceBlock {
                 name,
@@ -628,17 +870,35 @@ fn prune_if_chain(
         Some(_) => prune_else_if_chain(elseif_clauses, else_body),
         None => {
             let span = condition.span;
+            let then_body = prune_block(then_body);
             let (kept_elseifs, kept_else) = prune_remaining_elseif_chain(elseif_clauses, else_body);
+            let kept_else = normalize_optional_block(kept_else);
 
-            vec![Stmt {
-                kind: StmtKind::If {
-                    condition,
-                    then_body: prune_block(then_body),
-                    elseif_clauses: kept_elseifs,
-                    else_body: kept_else,
-                },
+            if then_body.is_empty() && kept_elseifs.is_empty() && kept_else.is_none() {
+                return expr_to_effect_stmt(condition);
+            }
+
+            if then_body.is_empty() {
+                let fallback_body =
+                    build_if_chain_body(kept_elseifs.clone(), kept_else.clone());
+                if !fallback_body.is_empty() {
+                    return vec![build_if_stmt(
+                        invert_condition(condition),
+                        fallback_body,
+                        Vec::new(),
+                        None,
+                        span,
+                    )];
+                }
+            }
+
+            vec![build_if_stmt(
+                condition,
+                then_body,
+                kept_elseifs,
+                kept_else,
                 span,
-            }]
+            )]
         }
     }
 }
@@ -657,15 +917,13 @@ fn prune_else_if_chain(
                 let span = condition.span;
                 let remaining: Vec<_> = clauses.collect();
                 let (kept_elseifs, kept_else) = prune_remaining_elseif_chain(remaining, else_body);
-                return vec![Stmt {
-                    kind: StmtKind::If {
-                        condition,
-                        then_body: prune_block(body),
-                        elseif_clauses: kept_elseifs,
-                        else_body: kept_else,
-                    },
+                return vec![build_if_stmt(
+                    condition,
+                    prune_block(body),
+                    kept_elseifs,
+                    kept_else,
                     span,
-                }];
+                )];
             }
         }
     }
@@ -685,7 +943,7 @@ fn prune_remaining_elseif_chain(
             None => kept.push((condition, prune_block(body))),
         }
     }
-    (kept, else_body.map(prune_block))
+    (kept, normalize_optional_block(else_body.map(prune_block)))
 }
 
 fn prune_method(method: ClassMethod) -> ClassMethod {
@@ -711,7 +969,19 @@ fn prune_switch_stmt(
         .into_iter()
         .map(|(patterns, body)| (patterns.into_iter().map(prune_expr).collect(), prune_block(body)))
         .collect();
-    let default = default.map(prune_block);
+    let default = normalize_optional_block(default.map(prune_block));
+
+    if cases.iter().all(|(_, body)| body.is_empty()) && default.is_none() {
+        return expr_to_effect_stmt(subject);
+    }
+
+    if cases.is_empty() {
+        let mut stmts = expr_to_effect_stmt(subject);
+        if let Some(default_body) = default {
+            stmts.extend(default_body);
+        }
+        return stmts;
+    }
 
     let Some(subject_value) = scalar_value(&subject) else {
         return vec![Stmt {
@@ -726,7 +996,10 @@ fn prune_switch_stmt(
 
     for (index, (patterns, _)) in cases.iter().enumerate() {
         match classify_case_patterns(&subject_value, patterns, CaseComparison::LooseSwitch) {
-            CaseMatch::Matches | CaseMatch::Unknown => {
+            CaseMatch::Matches => {
+                return materialize_switch_execution(&cases, &default, Some(index));
+            }
+            CaseMatch::Unknown => {
                 return vec![Stmt {
                     kind: StmtKind::Switch {
                         subject,
@@ -741,14 +1014,7 @@ fn prune_switch_stmt(
     }
 
     if default.is_some() {
-        vec![Stmt {
-            kind: StmtKind::Switch {
-                subject,
-                cases: Vec::new(),
-                default,
-            },
-            span,
-        }]
+        materialize_switch_execution(&cases, &default, None)
     } else {
         Vec::new()
     }
@@ -1727,6 +1993,7 @@ fn parse_string_cast_float(value: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::names::Name;
     use crate::parser::ast::{ClassProperty, Visibility};
     use crate::span::Span;
 
@@ -2256,12 +2523,7 @@ mod tests {
 
         let pruned = prune_constant_control_flow(program);
 
-        let StmtKind::Switch { cases, .. } = &pruned[0].kind else {
-            panic!("expected switch");
-        };
-        assert_eq!(cases.len(), 1);
-        assert_eq!(cases[0].1.len(), 1);
-        assert!(matches!(cases[0].1[0].kind, StmtKind::Break));
+        assert!(pruned.is_empty());
     }
 
     #[test]
@@ -2324,11 +2586,499 @@ mod tests {
 
         let pruned = prune_constant_control_flow(program);
 
-        assert_eq!(pruned.len(), 1);
-        let StmtKind::Switch { cases, .. } = &pruned[0].kind else {
-            panic!("expected switch");
+        assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(20))]);
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_drops_statements_after_exhaustive_try_catch() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "answer".into(),
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::Try {
+                            try_body: vec![Stmt::new(
+                                StmtKind::Return(Some(Expr::int_lit(7))),
+                                Span::dummy(),
+                            )],
+                            catches: vec![crate::parser::ast::CatchClause {
+                                exception_types: vec!["Exception".into()],
+                                variable: Some("e".into()),
+                                body: vec![Stmt::new(
+                                    StmtKind::Return(Some(Expr::int_lit(8))),
+                                    Span::dummy(),
+                                )],
+                            }],
+                            finally_body: None,
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::echo(Expr::int_lit(9)),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let eliminated = eliminate_dead_code(program);
+
+        let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+            panic!("expected function");
         };
-        assert_eq!(cases.len(), 1);
-        assert_eq!(cases[0].0, vec![Expr::int_lit(3)]);
+        assert_eq!(body.len(), 1);
+        assert!(matches!(body[0].kind, StmtKind::Return(_)));
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_drops_statements_after_try_finally_exit() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "answer".into(),
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::Try {
+                            try_body: vec![Stmt::new(
+                                StmtKind::Return(Some(Expr::int_lit(7))),
+                                Span::dummy(),
+                            )],
+                            catches: Vec::new(),
+                            finally_body: Some(vec![Stmt::new(
+                                StmtKind::Return(Some(Expr::int_lit(8))),
+                                Span::dummy(),
+                            )]),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::echo(Expr::int_lit(9)),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let eliminated = eliminate_dead_code(program);
+
+        let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+            panic!("expected function");
+        };
+        assert_eq!(body.len(), 1);
+        assert!(matches!(body[0].kind, StmtKind::Try { .. }));
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_keeps_statements_after_fallthrough_try() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "answer".into(),
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::Try {
+                            try_body: vec![Stmt::echo(Expr::int_lit(7))],
+                            catches: vec![crate::parser::ast::CatchClause {
+                                exception_types: vec!["Exception".into()],
+                                variable: Some("e".into()),
+                                body: vec![Stmt::new(
+                                    StmtKind::Return(Some(Expr::int_lit(8))),
+                                    Span::dummy(),
+                                )],
+                            }],
+                            finally_body: None,
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::echo(Expr::int_lit(9)),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let eliminated = eliminate_dead_code(program);
+
+        let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+            panic!("expected function");
+        };
+        assert_eq!(body.len(), 2);
+        assert_eq!(body[1], Stmt::echo(Expr::int_lit(9)));
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_replaces_empty_if_with_effectful_condition_eval() {
+        let call = Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::unqualified("touch"),
+                args: Vec::new(),
+            },
+            Span::dummy(),
+        );
+        let program = vec![Stmt::new(
+            StmtKind::If {
+                condition: call.clone(),
+                then_body: Vec::new(),
+                elseif_clauses: Vec::new(),
+                else_body: None,
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(
+            pruned,
+            vec![Stmt::new(StmtKind::ExprStmt(call), Span::dummy())]
+        );
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_drops_empty_ifdef_shell() {
+        let program = vec![Stmt::new(
+            StmtKind::IfDef {
+                symbol: "DEBUG".into(),
+                then_body: Vec::new(),
+                else_body: Some(Vec::new()),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert!(pruned.is_empty());
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_replaces_empty_switch_with_subject_eval() {
+        let call = Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::unqualified("touch"),
+                args: Vec::new(),
+            },
+            Span::dummy(),
+        );
+        let program = vec![Stmt::new(
+            StmtKind::Switch {
+                subject: call.clone(),
+                cases: Vec::new(),
+                default: None,
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(
+            pruned,
+            vec![Stmt::new(StmtKind::ExprStmt(call), Span::dummy())]
+        );
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_inlines_empty_try_finally_body() {
+        let program = vec![Stmt::new(
+            StmtKind::Try {
+                try_body: Vec::new(),
+                catches: vec![crate::parser::ast::CatchClause {
+                    exception_types: vec![Name::unqualified("Exception")],
+                    variable: Some("e".into()),
+                    body: vec![Stmt::echo(Expr::int_lit(7))],
+                }],
+                finally_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(9))]);
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_inverts_single_live_else_branch() {
+        let program = vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::var("flag"),
+                then_body: Vec::new(),
+                elseif_clauses: Vec::new(),
+                else_body: Some(vec![Stmt::echo(Expr::int_lit(7))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(
+            pruned,
+            vec![Stmt::new(
+                StmtKind::If {
+                    condition: Expr::new(
+                        ExprKind::Not(Box::new(Expr::var("flag"))),
+                        Span::dummy(),
+                    ),
+                    then_body: vec![Stmt::echo(Expr::int_lit(7))],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                Span::dummy(),
+            )]
+        );
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_inlines_default_only_switch() {
+        let program = vec![Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::var("flag"),
+                cases: Vec::new(),
+                default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(9))]);
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_nests_elseif_chain_after_empty_head() {
+        let program = vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::var("a"),
+                then_body: Vec::new(),
+                elseif_clauses: vec![(
+                    Expr::var("b"),
+                    vec![Stmt::echo(Expr::int_lit(7))],
+                )],
+                else_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(
+            pruned,
+            vec![Stmt::new(
+                StmtKind::If {
+                    condition: Expr::new(
+                        ExprKind::Not(Box::new(Expr::var("a"))),
+                        Span::dummy(),
+                    ),
+                    then_body: vec![Stmt::new(
+                        StmtKind::If {
+                            condition: Expr::var("b"),
+                            then_body: vec![Stmt::echo(Expr::int_lit(7))],
+                            elseif_clauses: Vec::new(),
+                            else_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+                        },
+                        Span::dummy(),
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                Span::dummy(),
+            )]
+        );
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_materializes_constant_switch_match() {
+        let program = vec![Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::int_lit(2),
+                cases: vec![
+                    (
+                        vec![Expr::int_lit(1)],
+                        vec![Stmt::echo(Expr::int_lit(5)), Stmt::new(StmtKind::Break, Span::dummy())],
+                    ),
+                    (
+                        vec![Expr::int_lit(2)],
+                        vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+                    ),
+                ],
+                default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7))]);
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_materializes_constant_switch_fallthrough() {
+        let program = vec![Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::int_lit(1),
+                cases: vec![
+                    (vec![Expr::int_lit(1)], Vec::new()),
+                    (
+                        vec![Expr::int_lit(2)],
+                        vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+                    ),
+                ],
+                default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7))]);
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_materializes_constant_switch_default() {
+        let program = vec![Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::int_lit(3),
+                cases: vec![(
+                    vec![Expr::int_lit(1)],
+                    vec![Stmt::echo(Expr::int_lit(5)), Stmt::new(StmtKind::Break, Span::dummy())],
+                )],
+                default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(9))]);
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_inlines_non_throwing_try_catch() {
+        let program = vec![Stmt::new(
+            StmtKind::Try {
+                try_body: vec![Stmt::echo(Expr::int_lit(7))],
+                catches: vec![crate::parser::ast::CatchClause {
+                    exception_types: vec![Name::unqualified("Exception")],
+                    variable: Some("e".into()),
+                    body: vec![Stmt::echo(Expr::int_lit(9))],
+                }],
+                finally_body: None,
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7))]);
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_inlines_non_throwing_try_finally_fallthrough() {
+        let program = vec![Stmt::new(
+            StmtKind::Try {
+                try_body: vec![Stmt::echo(Expr::int_lit(7))],
+                catches: Vec::new(),
+                finally_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7)), Stmt::echo(Expr::int_lit(9))]);
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_keeps_non_throwing_try_finally_with_return() {
+        let program = vec![Stmt::new(
+            StmtKind::Try {
+                try_body: vec![Stmt::new(
+                    StmtKind::Return(Some(Expr::int_lit(7))),
+                    Span::dummy(),
+                )],
+                catches: Vec::new(),
+                finally_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(pruned.len(), 1);
+        assert!(matches!(pruned[0].kind, StmtKind::Try { .. }));
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_hoists_non_throwing_try_prefix() {
+        let program = vec![Stmt::new(
+            StmtKind::Try {
+                try_body: vec![
+                    Stmt::echo(Expr::int_lit(7)),
+                    Stmt::new(StmtKind::Throw(Expr::var("boom")), Span::dummy()),
+                ],
+                catches: vec![crate::parser::ast::CatchClause {
+                    exception_types: vec![Name::unqualified("Exception")],
+                    variable: Some("e".into()),
+                    body: vec![Stmt::echo(Expr::int_lit(9))],
+                }],
+                finally_body: None,
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(pruned.len(), 2);
+        assert_eq!(pruned[0], Stmt::echo(Expr::int_lit(7)));
+        assert!(matches!(pruned[1].kind, StmtKind::Try { .. }));
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_flattens_nested_single_path_ifs() {
+        let program = vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::var("a"),
+                then_body: vec![Stmt::new(
+                    StmtKind::If {
+                        condition: Expr::var("b"),
+                        then_body: vec![Stmt::echo(Expr::int_lit(7))],
+                        elseif_clauses: Vec::new(),
+                        else_body: None,
+                    },
+                    Span::dummy(),
+                )],
+                elseif_clauses: Vec::new(),
+                else_body: None,
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(pruned.len(), 1);
+        match &pruned[0].kind {
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            } => {
+                assert!(elseif_clauses.is_empty());
+                assert!(else_body.is_none());
+                assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(7))]);
+                assert_eq!(
+                    *condition,
+                    Expr::new(
+                        ExprKind::BinaryOp {
+                            left: Box::new(Expr::var("a")),
+                            op: BinOp::And,
+                            right: Box::new(Expr::var("b")),
+                        },
+                        Span::dummy(),
+                    )
+                );
+            }
+            other => panic!("expected flattened if, got {:?}", other),
+        }
     }
 }

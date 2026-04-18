@@ -1,6 +1,6 @@
 ---
 title: "The Optimizer"
-description: "How elephc folds constants and prunes dead code before code generation."
+description: "How elephc folds constants, prunes control flow, and eliminates dead code before code generation."
 sidebar:
   order: 6
 ---
@@ -9,10 +9,11 @@ sidebar:
 
 elephc's optimizer is intentionally simple and AST-focused. It does not build a separate IR or run heavyweight SSA passes. Instead, it performs a small set of local rewrites that already pay off in generated assembly quality and compile-time clarity.
 
-Today the optimizer is split into two passes:
+Today the optimizer is split into three passes:
 
 1. `fold_constants(program)` runs before type checking
 2. `prune_constant_control_flow(program)` runs after successful type checking and warning collection
+3. `eliminate_dead_code(program)` runs after pruning and performs cleanup / structural simplification on the already-pruned AST
 
 That split matters. Some rewrites are always safe on syntax alone, while others should only happen after diagnostics have already seen the checked program.
 
@@ -76,7 +77,7 @@ $x = 8;
 echo $x . "\n";
 ```
 
-## Pass 2: Post-check pruning
+## Pass 2: Post-check control-flow pruning
 
 `prune_constant_control_flow()` runs only after type checking succeeds. This pass is allowed to remove dead branches and dead statements because diagnostics have already seen the checked structure.
 
@@ -101,6 +102,36 @@ Current pruning coverage includes:
   - `??`
   - short-circuit `&&` / `||`
 
+## Pass 3: Dead-code elimination and structural cleanup
+
+`eliminate_dead_code()` runs after the pruning pass. At this point the AST already has constant-dead branches removed, so the job becomes "clean up the shells and leftovers" rather than "decide which branch is dead".
+
+Current cleanup coverage includes:
+
+- empty `ifdef`, `if`, `switch`, and degenerate `try` shells
+- single-path conditionals such as:
+  - `if ($cond) {} else { ... }` → `if (!$cond) { ... }`
+  - nested single-path `if` chains collapsed into one condition with `&&`
+- constant `switch` execution materialized into the exact statement tail that would run, preserving fallthrough and `break`
+- non-throwing `try` / `catch` simplification
+- safe hoisting of non-throwing, fallthrough prefixes out of `try` blocks
+- conservative flattening of `try` / `finally` when the `try` body cannot throw and the body falls through
+- pure expression statements that are left behind after earlier pruning
+
+### Example
+
+```php
+<?php
+try {
+    echo "a";
+    throw new Exception("boom");
+} catch (Exception $e) {
+    echo "b";
+}
+```
+
+The leading `echo "a";` is known not to throw, so the optimizer can hoist it out of the `try` and leave only the actually-throwing tail protected by the handler.
+
 ### Example
 
 ```php
@@ -114,7 +145,7 @@ if (true) {
 
 After pruning, the dead branch disappears entirely. That means codegen never emits the `pow` path.
 
-## Why there are two passes
+## Why there are three passes
 
 If elephc removed whole branches before type checking, it could accidentally hide useful diagnostics.
 
@@ -134,10 +165,11 @@ So the current rule is:
 
 - fold obvious pure scalar expressions early
 - prune larger dead control-flow only after checking
+- run structural dead-code cleanup only after those two earlier passes have already simplified the tree
 
 ## Conservatism and side effects
 
-The optimizer is intentionally conservative about what counts as "pure".
+The optimizer is intentionally conservative about what counts as "pure" or "non-throwing".
 
 It does **not** assume purity for operations such as:
 

@@ -1,5 +1,6 @@
 use crate::errors::CompileWarning;
 use crate::parser::ast::{Stmt, StmtKind};
+use crate::termination::stmt_guarantees_termination as shared_stmt_guarantees_termination;
 
 pub(super) fn collect_unreachable_recursive(stmts: &[Stmt], warnings: &mut Vec<CompileWarning>) {
     collect_unreachable_in_block(stmts, warnings);
@@ -92,24 +93,5 @@ fn collect_unreachable_in_block(stmts: &[Stmt], warnings: &mut Vec<CompileWarnin
 }
 
 fn stmt_guarantees_termination(stmt: &Stmt) -> bool {
-    match &stmt.kind {
-        StmtKind::Return(_) | StmtKind::Throw(_) | StmtKind::Break | StmtKind::Continue => true,
-        StmtKind::If {
-            then_body,
-            elseif_clauses,
-            else_body: Some(else_body),
-            ..
-        } => {
-            block_guarantees_termination(then_body)
-                && elseif_clauses
-                    .iter()
-                    .all(|(_, body)| block_guarantees_termination(body))
-                && block_guarantees_termination(else_body)
-        }
-        _ => false,
-    }
-}
-
-fn block_guarantees_termination(stmts: &[Stmt]) -> bool {
-    stmts.last().is_some_and(stmt_guarantees_termination)
+    shared_stmt_guarantees_termination(stmt)
 }

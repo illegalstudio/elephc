@@ -277,6 +277,38 @@ fn test_warning_unreachable_code() {
 }
 
 #[test]
+fn test_warning_unreachable_after_exhaustive_switch() {
+    expect_warning(
+        "<?php function foo($flag) { switch ($flag) { case 1: return 1; default: return 2; } echo 3; }",
+        "Unreachable code",
+    );
+}
+
+#[test]
+fn test_warning_unreachable_after_exhaustive_try_catch() {
+    expect_warning(
+        "<?php function foo() { try { return 1; } catch (Exception $e) { return 2; } echo 3; }",
+        "Unreachable code",
+    );
+}
+
+#[test]
+fn test_warning_unreachable_after_try_finally_return() {
+    expect_warning(
+        "<?php function foo() { try { return 1; } finally { return 2; } echo 3; }",
+        "Unreachable code",
+    );
+}
+
+#[test]
+fn test_warning_no_unreachable_after_fallthrough_try() {
+    expect_no_warning(
+        "<?php function foo() { try { echo 1; } catch (Exception $e) { return 2; } echo 3; }",
+        "Unreachable code",
+    );
+}
+
+#[test]
 fn test_warning_closure_call_marks_callable_variable_as_used() {
     expect_no_warning(
         "<?php function foo() { $f = function() { return 1; }; $f(); }",
