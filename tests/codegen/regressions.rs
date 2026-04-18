@@ -805,6 +805,21 @@ echo strlen($s);
 }
 
 #[test]
+fn test_concat_assignment_loop_5000() {
+    // Regression for x86_64 local-string cleanup: `$s = $s . "x"` must release old heap strings.
+    let out = compile_and_run(
+        r#"<?php
+$s = "";
+for ($i = 0; $i < 5000; $i++) {
+    $s = $s . "x";
+}
+echo strlen($s);
+"#,
+    );
+    assert_eq!(out, "5000");
+}
+
+#[test]
 fn test_string_function_in_loop() {
     let out = compile_and_run(
         r#"<?php
@@ -1019,4 +1034,3 @@ echo count($arr) . "|" . $arr[2];
     );
     assert_eq!(out, "3|3.7");
 }
-

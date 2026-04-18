@@ -62,16 +62,22 @@ pub(super) fn release_owned_slot(
     emitter: &mut Emitter,
     ty: &PhpType,
     offset: usize,
-    preserve_result: bool,
+    result_ty: &PhpType,
 ) {
-    if emitter.target.arch == Arch::X86_64 && (matches!(ty, PhpType::Str) || ty.is_refcounted()) {
-        return;
+    match result_ty {
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+            abi::emit_push_reg_pair(emitter, ptr_reg, len_reg);                        // preserve the incoming string result across old-slot cleanup helpers
+        }
+        PhpType::Float => {
+            abi::emit_push_float_reg(emitter, abi::float_result_reg(emitter));         // preserve the incoming float result across old-slot cleanup helpers
+        }
+        _ => {
+            abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                 // preserve the incoming scalar/pointer result across old-slot cleanup helpers
+        }
     }
 
     let result_reg = abi::int_result_reg(emitter);
-    if preserve_result {
-        abi::emit_push_reg(emitter, result_reg);
-    }
     if matches!(ty, PhpType::Str) {
         abi::load_at_offset(emitter, result_reg, offset);                                // load the previous string pointer from the local slot before releasing it
         abi::emit_call_label(emitter, "__rt_heap_free_safe");
@@ -79,8 +85,18 @@ pub(super) fn release_owned_slot(
         abi::load_at_offset(emitter, result_reg, offset);                                // load the previous heap pointer from the local slot before decreffing it
         abi::emit_decref_if_refcounted(emitter, ty);
     }
-    if preserve_result {
-        abi::emit_pop_reg(emitter, result_reg);
+
+    match result_ty {
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+            abi::emit_pop_reg_pair(emitter, ptr_reg, len_reg);                         // restore the incoming string result after old-slot cleanup helpers finish
+        }
+        PhpType::Float => {
+            abi::emit_pop_float_reg(emitter, abi::float_result_reg(emitter));          // restore the incoming float result after old-slot cleanup helpers finish
+        }
+        _ => {
+            abi::emit_pop_reg(emitter, result_reg);                                    // restore the incoming scalar/pointer result after old-slot cleanup helpers finish
+        }
     }
 }
 

@@ -108,8 +108,7 @@ pub(crate) fn emit_assign_stmt(
             if !dest_needs_mixed_box {
                 super::super::helpers::retain_borrowed_heap_result(emitter, value, &ty);
             }
-            let needs_save_x0 = !matches!(&ty, PhpType::Str | PhpType::Float);
-            super::super::helpers::release_owned_slot(emitter, &old_ty, offset, needs_save_x0);
+            super::super::helpers::release_owned_slot(emitter, &old_ty, offset, &ty);
         }
 
         abi::emit_store(emitter, &ty, offset);
