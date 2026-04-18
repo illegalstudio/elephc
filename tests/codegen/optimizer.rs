@@ -991,6 +991,46 @@ try {
 }
 
 #[test]
+fn test_dead_code_elimination_inlines_try_with_pure_user_function_call() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_try_pure_user_function");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+function len3() {
+    return strlen("abc");
+}
+
+try {
+    echo len3();
+} catch (Exception $e) {
+    echo 2 ** 8;
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "pure non-throwing user functions should let dead catch bodies disappear:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "3");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dead_code_elimination_inlines_non_throwing_try_finally_fallthrough() {
     let out = compile_and_run(
         r#"<?php

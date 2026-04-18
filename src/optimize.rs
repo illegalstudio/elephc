@@ -3,17 +3,25 @@ use crate::parser::ast::{
     Program, Stmt, StmtKind,
 };
 use crate::termination::{block_terminal_effect, stmt_terminal_effect, TerminalEffect};
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+thread_local! {
+    static ACTIVE_FUNCTION_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
+}
 
 pub fn fold_constants(program: Program) -> Program {
     program.into_iter().map(fold_stmt).collect()
 }
 
 pub fn prune_constant_control_flow(program: Program) -> Program {
-    prune_block(program)
+    let effects = compute_program_function_effects(&program);
+    with_function_effects(effects, || prune_block(program))
 }
 
 pub fn eliminate_dead_code(program: Program) -> Program {
-    prune_block(program)
+    let effects = compute_program_function_effects(&program);
+    with_function_effects(effects, || prune_block(program))
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -47,6 +55,58 @@ impl Effect {
 
     fn is_observable(self) -> bool {
         self.has_side_effects || self.may_throw
+    }
+}
+
+fn with_function_effects<R>(effects: HashMap<String, Effect>, f: impl FnOnce() -> R) -> R {
+    ACTIVE_FUNCTION_EFFECTS.with(|slot| {
+        let previous = slot.replace(Some(effects));
+        let result = f();
+        slot.replace(previous);
+        result
+    })
+}
+
+fn compute_program_function_effects(program: &[Stmt]) -> HashMap<String, Effect> {
+    let mut function_bodies = HashMap::new();
+    collect_program_function_bodies(program, &mut function_bodies);
+    let mut effects: HashMap<String, Effect> = function_bodies
+        .keys()
+        .cloned()
+        .map(|name| (name, Effect::PURE))
+        .collect();
+
+    loop {
+        let snapshot = effects.clone();
+        let mut changed = false;
+
+        ACTIVE_FUNCTION_EFFECTS.with(|slot| {
+            let previous = slot.replace(Some(snapshot));
+            for (name, body) in &function_bodies {
+                let effect = block_effect(body);
+                if effects.get(name).copied() != Some(effect) {
+                    effects.insert(name.clone(), effect);
+                    changed = true;
+                }
+            }
+            slot.replace(previous);
+        });
+
+        if !changed {
+            return effects;
+        }
+    }
+}
+
+fn collect_program_function_bodies(stmts: &[Stmt], out: &mut HashMap<String, Vec<Stmt>>) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::FunctionDecl { name, body, .. } => {
+                out.insert(name.clone(), body.clone());
+            }
+            StmtKind::NamespaceBlock { body, .. } => collect_program_function_bodies(body, out),
+            _ => {}
+        }
     }
 }
 
@@ -418,11 +478,18 @@ fn combine_effects(effects: impl IntoIterator<Item = Effect>) -> Effect {
 }
 
 fn function_call_effect(name: &str) -> Effect {
-    if is_pure_non_throwing_builtin(name) {
-        Effect::PURE
-    } else {
-        Effect::PURE.with_side_effects().with_may_throw()
-    }
+    ACTIVE_FUNCTION_EFFECTS.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|effects| effects.get(name).copied())
+    })
+    .unwrap_or_else(|| {
+        if is_pure_non_throwing_builtin(name) {
+            Effect::PURE
+        } else {
+            Effect::PURE.with_side_effects().with_may_throw()
+        }
+    })
 }
 
 fn is_pure_non_throwing_builtin(name: &str) -> bool {
@@ -2205,6 +2272,84 @@ mod tests {
         assert!(!expr_effect(&property).may_throw);
         assert!(!expr_has_side_effects(&array));
         assert!(!expr_effect(&array).may_throw);
+    }
+
+    #[test]
+    fn test_program_function_effects_recognize_pure_user_functions() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "len3".to_string(),
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![Stmt::new(
+                    StmtKind::Return(Some(Expr::new(
+                        ExprKind::FunctionCall {
+                            name: Name::from("strlen"),
+                            args: vec![Expr::string_lit("abc")],
+                        },
+                        Span::dummy(),
+                    ))),
+                    Span::dummy(),
+                )],
+            },
+            Span::dummy(),
+        )];
+
+        let effects = compute_program_function_effects(&program);
+
+        assert_eq!(effects.get("len3"), Some(&Effect::PURE));
+    }
+
+    #[test]
+    fn test_program_function_effects_propagate_throwing_calls() {
+        let program = vec![
+            Stmt::new(
+                StmtKind::FunctionDecl {
+                    name: "boom".to_string(),
+                    params: Vec::new(),
+                    variadic: None,
+                    return_type: None,
+                    body: vec![Stmt::new(
+                        StmtKind::Throw(Expr::new(
+                            ExprKind::NewObject {
+                                class_name: Name::from("Exception"),
+                                args: Vec::new(),
+                            },
+                            Span::dummy(),
+                        )),
+                        Span::dummy(),
+                    )],
+                },
+                Span::dummy(),
+            ),
+            Stmt::new(
+                StmtKind::FunctionDecl {
+                    name: "wrapper".to_string(),
+                    params: Vec::new(),
+                    variadic: None,
+                    return_type: None,
+                    body: vec![Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::FunctionCall {
+                                name: Name::from("boom"),
+                                args: Vec::new(),
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    )],
+                },
+                Span::dummy(),
+            ),
+        ];
+
+        let effects = compute_program_function_effects(&program);
+
+        assert_eq!(
+            effects.get("wrapper"),
+            Some(&Effect::PURE.with_side_effects().with_may_throw())
+        );
     }
 
     #[test]
