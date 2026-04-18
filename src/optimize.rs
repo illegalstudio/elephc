@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 thread_local! {
     static ACTIVE_FUNCTION_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
+    static ACTIVE_STATIC_METHOD_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
 }
 
 pub fn fold_constants(program: Program) -> Program {
@@ -15,13 +16,13 @@ pub fn fold_constants(program: Program) -> Program {
 }
 
 pub fn prune_constant_control_flow(program: Program) -> Program {
-    let effects = compute_program_function_effects(&program);
-    with_function_effects(effects, || prune_block(program))
+    let (function_effects, static_method_effects) = compute_program_callable_effects(&program);
+    with_callable_effects(function_effects, static_method_effects, || prune_block(program))
 }
 
 pub fn eliminate_dead_code(program: Program) -> Program {
-    let effects = compute_program_function_effects(&program);
-    with_function_effects(effects, || prune_block(program))
+    let (function_effects, static_method_effects) = compute_program_callable_effects(&program);
+    with_callable_effects(function_effects, static_method_effects, || prune_block(program))
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -58,42 +59,75 @@ impl Effect {
     }
 }
 
-fn with_function_effects<R>(effects: HashMap<String, Effect>, f: impl FnOnce() -> R) -> R {
-    ACTIVE_FUNCTION_EFFECTS.with(|slot| {
-        let previous = slot.replace(Some(effects));
-        let result = f();
-        slot.replace(previous);
-        result
+fn with_callable_effects<R>(
+    function_effects: HashMap<String, Effect>,
+    static_method_effects: HashMap<String, Effect>,
+    f: impl FnOnce() -> R,
+) -> R {
+    ACTIVE_FUNCTION_EFFECTS.with(|function_slot| {
+        ACTIVE_STATIC_METHOD_EFFECTS.with(|static_slot| {
+            let previous_functions = function_slot.replace(Some(function_effects));
+            let previous_static_methods = static_slot.replace(Some(static_method_effects));
+            let result = f();
+            static_slot.replace(previous_static_methods);
+            function_slot.replace(previous_functions);
+            result
+        })
     })
 }
 
-fn compute_program_function_effects(program: &[Stmt]) -> HashMap<String, Effect> {
+fn compute_program_callable_effects(
+    program: &[Stmt],
+) -> (HashMap<String, Effect>, HashMap<String, Effect>) {
     let mut function_bodies = HashMap::new();
     collect_program_function_bodies(program, &mut function_bodies);
-    let mut effects: HashMap<String, Effect> = function_bodies
+    let mut static_method_bodies = HashMap::new();
+    collect_program_static_method_bodies(program, &mut static_method_bodies);
+
+    let mut function_effects: HashMap<String, Effect> = function_bodies
+        .keys()
+        .cloned()
+        .map(|name| (name, Effect::PURE))
+        .collect();
+    let mut static_method_effects: HashMap<String, Effect> = static_method_bodies
         .keys()
         .cloned()
         .map(|name| (name, Effect::PURE))
         .collect();
 
     loop {
-        let snapshot = effects.clone();
+        let function_snapshot = function_effects.clone();
+        let static_method_snapshot = static_method_effects.clone();
         let mut changed = false;
 
-        ACTIVE_FUNCTION_EFFECTS.with(|slot| {
-            let previous = slot.replace(Some(snapshot));
-            for (name, body) in &function_bodies {
-                let effect = block_effect(body);
-                if effects.get(name).copied() != Some(effect) {
-                    effects.insert(name.clone(), effect);
-                    changed = true;
+        ACTIVE_FUNCTION_EFFECTS.with(|function_slot| {
+            ACTIVE_STATIC_METHOD_EFFECTS.with(|static_slot| {
+                let previous_functions = function_slot.replace(Some(function_snapshot));
+                let previous_static_methods = static_slot.replace(Some(static_method_snapshot));
+
+                for (name, body) in &function_bodies {
+                    let effect = block_effect(body);
+                    if function_effects.get(name).copied() != Some(effect) {
+                        function_effects.insert(name.clone(), effect);
+                        changed = true;
+                    }
                 }
-            }
-            slot.replace(previous);
+
+                for (name, body) in &static_method_bodies {
+                    let effect = block_effect(body);
+                    if static_method_effects.get(name).copied() != Some(effect) {
+                        static_method_effects.insert(name.clone(), effect);
+                        changed = true;
+                    }
+                }
+
+                static_slot.replace(previous_static_methods);
+                function_slot.replace(previous_functions);
+            });
         });
 
         if !changed {
-            return effects;
+            return (function_effects, static_method_effects);
         }
     }
 }
@@ -108,6 +142,26 @@ fn collect_program_function_bodies(stmts: &[Stmt], out: &mut HashMap<String, Vec
             _ => {}
         }
     }
+}
+
+fn collect_program_static_method_bodies(stmts: &[Stmt], out: &mut HashMap<String, Vec<Stmt>>) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::ClassDecl { name, methods, .. } => {
+                for method in methods {
+                    if method.is_static && method.has_body {
+                        out.insert(method_effect_key(name, &method.name), method.body.clone());
+                    }
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. } => collect_program_static_method_bodies(body, out),
+            _ => {}
+        }
+    }
+}
+
+fn method_effect_key(class_name: &str, method_name: &str) -> String {
+    format!("{class_name}::{method_name}")
 }
 
 fn expr_to_effect_stmt(expr: Expr) -> Vec<Stmt> {
@@ -428,9 +482,12 @@ fn expr_effect(expr: &Expr) -> Effect {
             .combine(combine_effects(args.iter().map(expr_effect)))
             .with_side_effects()
             .with_may_throw(),
-        ExprKind::StaticMethodCall { args, .. } => combine_effects(args.iter().map(expr_effect))
-            .with_side_effects()
-            .with_may_throw(),
+        ExprKind::StaticMethodCall {
+            receiver,
+            method,
+            args,
+        } => combine_effects(args.iter().map(expr_effect))
+            .combine(static_method_call_effect(receiver, method)),
         ExprKind::ArrayLiteral(items) => combine_effects(items.iter().map(expr_effect)),
         ExprKind::ArrayLiteralAssoc(items) => combine_effects(
             items
@@ -490,6 +547,22 @@ fn function_call_effect(name: &str) -> Effect {
             Effect::PURE.with_side_effects().with_may_throw()
         }
     })
+}
+
+fn static_method_call_effect(
+    receiver: &crate::parser::ast::StaticReceiver,
+    method_name: &str,
+) -> Effect {
+    let crate::parser::ast::StaticReceiver::Named(class_name) = receiver else {
+        return Effect::PURE.with_side_effects().with_may_throw();
+    };
+
+    ACTIVE_STATIC_METHOD_EFFECTS.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|effects| effects.get(&method_effect_key(class_name.as_str(), method_name)).copied())
+    })
+    .unwrap_or_else(|| Effect::PURE.with_side_effects().with_may_throw())
 }
 
 fn is_pure_non_throwing_builtin(name: &str) -> bool {
@@ -2296,9 +2369,9 @@ mod tests {
             Span::dummy(),
         )];
 
-        let effects = compute_program_function_effects(&program);
+        let (function_effects, _) = compute_program_callable_effects(&program);
 
-        assert_eq!(effects.get("len3"), Some(&Effect::PURE));
+        assert_eq!(function_effects.get("len3"), Some(&Effect::PURE));
     }
 
     #[test]
@@ -2344,11 +2417,55 @@ mod tests {
             ),
         ];
 
-        let effects = compute_program_function_effects(&program);
+        let (function_effects, _) = compute_program_callable_effects(&program);
 
         assert_eq!(
-            effects.get("wrapper"),
+            function_effects.get("wrapper"),
             Some(&Effect::PURE.with_side_effects().with_may_throw())
+        );
+    }
+
+    #[test]
+    fn test_program_static_method_effects_recognize_pure_static_methods() {
+        let program = vec![Stmt::new(
+            StmtKind::ClassDecl {
+                name: "Util".to_string(),
+                extends: None,
+                implements: Vec::new(),
+                is_abstract: false,
+                is_readonly_class: false,
+                trait_uses: Vec::new(),
+                properties: Vec::new(),
+                methods: vec![ClassMethod {
+                    name: "len3".to_string(),
+                    visibility: Visibility::Public,
+                    is_static: true,
+                    is_abstract: false,
+                    has_body: true,
+                    params: Vec::new(),
+                    variadic: None,
+                    return_type: None,
+                    body: vec![Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::FunctionCall {
+                                name: Name::from("strlen"),
+                                args: vec![Expr::string_lit("abc")],
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    )],
+                    span: Span::dummy(),
+                }],
+            },
+            Span::dummy(),
+        )];
+
+        let (_, static_method_effects) = compute_program_callable_effects(&program);
+
+        assert_eq!(
+            static_method_effects.get("Util::len3"),
+            Some(&Effect::PURE)
         );
     }
 
