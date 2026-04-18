@@ -935,3 +935,36 @@ try {
 
     assert_eq!(out, "ab");
 }
+
+#[test]
+fn test_dead_code_elimination_hoists_non_throwing_try_prefix() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    echo "a";
+    throw new Exception("boom");
+} catch (Exception $e) {
+    echo "b";
+}
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
+fn test_dead_code_elimination_flattens_nested_single_path_ifs() {
+    let out = compile_and_run(
+        r#"<?php
+$a = true;
+$b = true;
+if ($a) {
+    if ($b) {
+        echo 7;
+    }
+}
+"#,
+    );
+
+    assert_eq!(out, "7");
+}

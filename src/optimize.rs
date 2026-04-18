@@ -91,6 +91,70 @@ fn materialize_switch_execution(
     out
 }
 
+fn split_hoistable_try_prefix(mut try_body: Vec<Stmt>) -> (Vec<Stmt>, Vec<Stmt>) {
+    let hoist_len = try_body
+        .iter()
+        .take_while(|stmt| {
+            !stmt_may_throw(stmt)
+                && matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough)
+        })
+        .count();
+    let tail = try_body.split_off(hoist_len);
+    (try_body, tail)
+}
+
+fn combine_if_conditions(left: Expr, right: Expr) -> Expr {
+    let span = left.span;
+    prune_expr(Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(left),
+            op: BinOp::And,
+            right: Box::new(right),
+        },
+        span,
+    ))
+}
+
+fn build_if_stmt(
+    condition: Expr,
+    then_body: Vec<Stmt>,
+    elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
+    else_body: Option<Vec<Stmt>>,
+    span: crate::span::Span,
+) -> Stmt {
+    if elseif_clauses.is_empty() && else_body.is_none() && then_body.len() == 1 {
+        if let StmtKind::If {
+            condition: inner_condition,
+            then_body: inner_then_body,
+            elseif_clauses: inner_elseifs,
+            else_body: inner_else,
+        } = &then_body[0].kind
+        {
+            if inner_elseifs.is_empty() && inner_else.is_none() {
+                return Stmt {
+                    kind: StmtKind::If {
+                        condition: combine_if_conditions(condition, inner_condition.clone()),
+                        then_body: inner_then_body.clone(),
+                        elseif_clauses: Vec::new(),
+                        else_body: None,
+                    },
+                    span,
+                };
+            }
+        }
+    }
+
+    Stmt {
+        kind: StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        },
+        span,
+    }
+}
+
 fn block_may_throw(stmts: &[Stmt]) -> bool {
     stmts.iter().any(stmt_may_throw)
 }
@@ -98,12 +162,12 @@ fn block_may_throw(stmts: &[Stmt]) -> bool {
 fn stmt_may_throw(stmt: &Stmt) -> bool {
     match &stmt.kind {
         StmtKind::Echo(expr)
-        | StmtKind::Throw(expr)
         | StmtKind::ExprStmt(expr)
         | StmtKind::ConstDecl { value: expr, .. }
         | StmtKind::StaticVar { init: expr, .. }
         | StmtKind::ListUnpack { value: expr, .. }
         | StmtKind::Return(Some(expr)) => expr_may_throw(expr),
+        StmtKind::Throw(_) => true,
         StmtKind::Assign { value, .. }
         | StmtKind::TypedAssign { value, .. }
         | StmtKind::ArrayPush { value, .. } => expr_may_throw(value),
@@ -650,8 +714,9 @@ fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                 })
                 .collect();
             let finally_body = normalize_optional_block(finally_body.map(prune_block));
+            let (mut hoisted_prefix, try_body) = split_hoistable_try_prefix(try_body);
 
-            if try_body.is_empty() {
+            let mut remaining = if try_body.is_empty() {
                 finally_body.unwrap_or_default()
             } else if !block_may_throw(&try_body) {
                 if let Some(finally_body) = finally_body {
@@ -683,7 +748,9 @@ fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                     },
                     span,
                 }]
-            }
+            };
+            hoisted_prefix.append(&mut remaining);
+            hoisted_prefix
         }
         StmtKind::NamespaceBlock { name, body } => vec![Stmt {
             kind: StmtKind::NamespaceBlock {
@@ -815,27 +882,23 @@ fn prune_if_chain(
                 let fallback_body =
                     build_if_chain_body(kept_elseifs.clone(), kept_else.clone());
                 if !fallback_body.is_empty() {
-                    return vec![Stmt {
-                        kind: StmtKind::If {
-                            condition: invert_condition(condition),
-                            then_body: fallback_body,
-                            elseif_clauses: Vec::new(),
-                            else_body: None,
-                        },
+                    return vec![build_if_stmt(
+                        invert_condition(condition),
+                        fallback_body,
+                        Vec::new(),
+                        None,
                         span,
-                    }];
+                    )];
                 }
             }
 
-            vec![Stmt {
-                kind: StmtKind::If {
-                    condition,
-                    then_body,
-                    elseif_clauses: kept_elseifs,
-                    else_body: kept_else,
-                },
+            vec![build_if_stmt(
+                condition,
+                then_body,
+                kept_elseifs,
+                kept_else,
                 span,
-            }]
+            )]
         }
     }
 }
@@ -854,15 +917,13 @@ fn prune_else_if_chain(
                 let span = condition.span;
                 let remaining: Vec<_> = clauses.collect();
                 let (kept_elseifs, kept_else) = prune_remaining_elseif_chain(remaining, else_body);
-                return vec![Stmt {
-                    kind: StmtKind::If {
-                        condition,
-                        then_body: prune_block(body),
-                        elseif_clauses: kept_elseifs,
-                        else_body: kept_else,
-                    },
+                return vec![build_if_stmt(
+                    condition,
+                    prune_block(body),
+                    kept_elseifs,
+                    kept_else,
                     span,
-                }];
+                )];
             }
         }
     }
@@ -2945,5 +3006,79 @@ mod tests {
 
         assert_eq!(pruned.len(), 1);
         assert!(matches!(pruned[0].kind, StmtKind::Try { .. }));
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_hoists_non_throwing_try_prefix() {
+        let program = vec![Stmt::new(
+            StmtKind::Try {
+                try_body: vec![
+                    Stmt::echo(Expr::int_lit(7)),
+                    Stmt::new(StmtKind::Throw(Expr::var("boom")), Span::dummy()),
+                ],
+                catches: vec![crate::parser::ast::CatchClause {
+                    exception_types: vec![Name::unqualified("Exception")],
+                    variable: Some("e".into()),
+                    body: vec![Stmt::echo(Expr::int_lit(9))],
+                }],
+                finally_body: None,
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(pruned.len(), 2);
+        assert_eq!(pruned[0], Stmt::echo(Expr::int_lit(7)));
+        assert!(matches!(pruned[1].kind, StmtKind::Try { .. }));
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_flattens_nested_single_path_ifs() {
+        let program = vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::var("a"),
+                then_body: vec![Stmt::new(
+                    StmtKind::If {
+                        condition: Expr::var("b"),
+                        then_body: vec![Stmt::echo(Expr::int_lit(7))],
+                        elseif_clauses: Vec::new(),
+                        else_body: None,
+                    },
+                    Span::dummy(),
+                )],
+                elseif_clauses: Vec::new(),
+                else_body: None,
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(pruned.len(), 1);
+        match &pruned[0].kind {
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            } => {
+                assert!(elseif_clauses.is_empty());
+                assert!(else_body.is_none());
+                assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(7))]);
+                assert_eq!(
+                    *condition,
+                    Expr::new(
+                        ExprKind::BinaryOp {
+                            left: Box::new(Expr::var("a")),
+                            op: BinOp::And,
+                            right: Box::new(Expr::var("b")),
+                        },
+                        Span::dummy(),
+                    )
+                );
+            }
+            other => panic!("expected flattened if, got {:?}", other),
+        }
     }
 }
