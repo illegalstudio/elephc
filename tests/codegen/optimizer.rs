@@ -434,6 +434,39 @@ echo 7;
 }
 
 #[test]
+fn test_dead_code_elimination_prunes_pure_builtin_expr_statement() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_pure_builtin_expr_stmt");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+strlen("abc");
+echo 7;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("strlen()"),
+        "pure builtin expr statements should disappear from user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "7");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_constant_folding_prunes_dead_statements_after_break_from_user_assembly() {
     let dir = make_cli_test_dir("elephc_constant_folding_break_dce");
     let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
@@ -917,6 +950,42 @@ try {
         &[],
     );
     assert_eq!(out, "7");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dead_code_elimination_inlines_try_with_pure_builtin_call() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_try_pure_builtin");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+try {
+    echo strlen("abc");
+} catch (Exception $e) {
+    echo 2 ** 8;
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "pure non-throwing builtin calls should let dead catch bodies disappear:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "3");
 
     let _ = fs::remove_dir_all(&dir);
 }

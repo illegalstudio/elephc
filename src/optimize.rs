@@ -16,9 +16,43 @@ pub fn eliminate_dead_code(program: Program) -> Program {
     prune_block(program)
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Effect {
+    has_side_effects: bool,
+    may_throw: bool,
+}
+
+impl Effect {
+    const PURE: Self = Self {
+        has_side_effects: false,
+        may_throw: false,
+    };
+
+    fn with_side_effects(mut self) -> Self {
+        self.has_side_effects = true;
+        self
+    }
+
+    fn with_may_throw(mut self) -> Self {
+        self.may_throw = true;
+        self
+    }
+
+    fn combine(self, other: Self) -> Self {
+        Self {
+            has_side_effects: self.has_side_effects || other.has_side_effects,
+            may_throw: self.may_throw || other.may_throw,
+        }
+    }
+
+    fn is_observable(self) -> bool {
+        self.has_side_effects || self.may_throw
+    }
+}
+
 fn expr_to_effect_stmt(expr: Expr) -> Vec<Stmt> {
     let span = expr.span;
-    if expr_has_side_effects(&expr) {
+    if expr_is_observable(&expr) {
         vec![Stmt::new(StmtKind::ExprStmt(expr), span)]
     } else {
         Vec::new()
@@ -160,79 +194,117 @@ fn block_may_throw(stmts: &[Stmt]) -> bool {
 }
 
 fn stmt_may_throw(stmt: &Stmt) -> bool {
+    stmt_effect(stmt).may_throw
+}
+
+fn stmt_effect(stmt: &Stmt) -> Effect {
     match &stmt.kind {
-        StmtKind::Echo(expr)
-        | StmtKind::ExprStmt(expr)
+        StmtKind::Echo(expr) => expr_effect(expr).with_side_effects(),
+        StmtKind::ExprStmt(expr)
         | StmtKind::ConstDecl { value: expr, .. }
         | StmtKind::StaticVar { init: expr, .. }
         | StmtKind::ListUnpack { value: expr, .. }
-        | StmtKind::Return(Some(expr)) => expr_may_throw(expr),
-        StmtKind::Throw(_) => true,
+        | StmtKind::Return(Some(expr)) => expr_effect(expr),
+        StmtKind::Throw(expr) => expr_effect(expr).with_side_effects().with_may_throw(),
         StmtKind::Assign { value, .. }
         | StmtKind::TypedAssign { value, .. }
-        | StmtKind::ArrayPush { value, .. } => expr_may_throw(value),
+        | StmtKind::ArrayPush { value, .. } => expr_effect(value).with_side_effects(),
         StmtKind::ArrayAssign { index, value, .. }
         | StmtKind::PropertyArrayAssign { index, value, .. } => {
-            expr_may_throw(index) || expr_may_throw(value)
+            expr_effect(index)
+                .combine(expr_effect(value))
+                .with_side_effects()
         }
         StmtKind::PropertyAssign { object, value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
-            expr_may_throw(object) || expr_may_throw(value)
+            expr_effect(object)
+                .combine(expr_effect(value))
+                .with_side_effects()
         }
         StmtKind::If {
             condition,
             then_body,
             elseif_clauses,
             else_body,
-        } => {
-            expr_may_throw(condition)
-                || block_may_throw(then_body)
-                || elseif_clauses
-                    .iter()
-                    .any(|(condition, body)| expr_may_throw(condition) || block_may_throw(body))
-                || else_body.as_ref().is_some_and(|body| block_may_throw(body))
-        }
+        } => expr_effect(condition)
+            .combine(block_effect(then_body))
+            .combine(combine_effects(
+                elseif_clauses.iter().map(|(condition, body)| {
+                    expr_effect(condition).combine(block_effect(body))
+                }),
+            ))
+            .combine(
+                else_body
+                    .as_ref()
+                    .map(|body| block_effect(body))
+                    .unwrap_or(Effect::PURE),
+            ),
         StmtKind::IfDef {
             then_body,
             else_body,
             ..
-        } => block_may_throw(then_body) || else_body.as_ref().is_some_and(|body| block_may_throw(body)),
+        } => block_effect(then_body).combine(
+            else_body
+                .as_ref()
+                .map(|body| block_effect(body))
+                .unwrap_or(Effect::PURE),
+        ),
         StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
-            expr_may_throw(condition) || block_may_throw(body)
+            expr_effect(condition).combine(block_effect(body))
         }
         StmtKind::For {
             init,
             condition,
             update,
             body,
-        } => {
-            init.as_ref().is_some_and(|stmt| stmt_may_throw(stmt))
-                || condition.as_ref().is_some_and(expr_may_throw)
-                || update.as_ref().is_some_and(|stmt| stmt_may_throw(stmt))
-                || block_may_throw(body)
-        }
-        StmtKind::Foreach { array, body, .. } => expr_may_throw(array) || block_may_throw(body),
+        } => init
+            .as_ref()
+            .map(|stmt| stmt_effect(stmt))
+            .unwrap_or(Effect::PURE)
+            .combine(
+                condition
+                    .as_ref()
+                    .map(|expr| expr_effect(expr))
+                    .unwrap_or(Effect::PURE),
+            )
+            .combine(
+                update
+                    .as_ref()
+                    .map(|stmt| stmt_effect(stmt))
+                    .unwrap_or(Effect::PURE),
+            )
+            .combine(block_effect(body)),
+        StmtKind::Foreach { array, body, .. } => expr_effect(array)
+            .combine(block_effect(body))
+            .with_side_effects(),
         StmtKind::Switch {
             subject,
             cases,
             default,
-        } => {
-            expr_may_throw(subject)
-                || cases.iter().any(|(patterns, body)| {
-                    patterns.iter().any(expr_may_throw) || block_may_throw(body)
-                })
-                || default.as_ref().is_some_and(|body| block_may_throw(body))
-        }
+        } => expr_effect(subject).combine(combine_effects(cases.iter().map(|(patterns, body)| {
+            combine_effects(patterns.iter().map(expr_effect)).combine(block_effect(body))
+        })))
+        .combine(
+            default
+                .as_ref()
+                .map(|body| block_effect(body))
+                .unwrap_or(Effect::PURE),
+        ),
         StmtKind::Try {
             try_body,
             catches,
             finally_body,
-        } => {
-            block_may_throw(try_body)
-                || catches.iter().any(|catch| block_may_throw(&catch.body))
-                || finally_body.as_ref().is_some_and(|body| block_may_throw(body))
-        }
-        StmtKind::NamespaceBlock { body, .. } => block_may_throw(body),
+        } => block_effect(try_body)
+            .combine(combine_effects(
+                catches.iter().map(|catch| block_effect(&catch.body)),
+            ))
+            .combine(
+                finally_body
+                    .as_ref()
+                    .map(|body| block_effect(body))
+                    .unwrap_or(Effect::PURE),
+            ),
+        StmtKind::NamespaceBlock { body, .. } => block_effect(body),
         StmtKind::FunctionDecl { .. }
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
@@ -247,12 +319,16 @@ fn stmt_may_throw(stmt: &Stmt) -> bool {
         | StmtKind::Continue
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
-        | StmtKind::ExternGlobalDecl { .. } => false,
-        StmtKind::Include { .. } => true,
+        | StmtKind::ExternGlobalDecl { .. } => Effect::PURE,
+        StmtKind::Include { .. } => Effect::PURE.with_side_effects().with_may_throw(),
     }
 }
 
-fn expr_may_throw(expr: &Expr) -> bool {
+fn expr_is_observable(expr: &Expr) -> bool {
+    expr_effect(expr).is_observable()
+}
+
+fn expr_effect(expr: &Expr) -> Effect {
     match &expr.kind {
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
@@ -262,56 +338,214 @@ fn expr_may_throw(expr: &Expr) -> bool {
         | ExprKind::Null
         | ExprKind::ConstRef(_)
         | ExprKind::EnumCase { .. }
-        | ExprKind::This => false,
+        | ExprKind::This => Effect::PURE,
         ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Cast { expr: inner, .. }
         | ExprKind::PtrCast { expr: inner, .. }
-        | ExprKind::Spread(inner) => expr_may_throw(inner),
-        ExprKind::BinaryOp { left, right, .. } => expr_may_throw(left) || expr_may_throw(right),
-        ExprKind::Throw(_) => true,
-        ExprKind::NullCoalesce { value, default } => expr_may_throw(value) || expr_may_throw(default),
+        | ExprKind::Spread(inner) => expr_effect(inner),
+        ExprKind::BinaryOp { left, right, .. } => expr_effect(left).combine(expr_effect(right)),
+        ExprKind::Throw(inner) => expr_effect(inner).with_side_effects().with_may_throw(),
+        ExprKind::NullCoalesce { value, default } => expr_effect(value).combine(expr_effect(default)),
         ExprKind::PreIncrement(_)
         | ExprKind::PostIncrement(_)
         | ExprKind::PreDecrement(_)
-        | ExprKind::PostDecrement(_) => false,
-        ExprKind::FunctionCall { .. }
-        | ExprKind::ClosureCall { .. }
-        | ExprKind::ExprCall { .. }
-        | ExprKind::NewObject { .. }
-        | ExprKind::MethodCall { .. }
-        | ExprKind::StaticMethodCall { .. } => true,
-        ExprKind::ArrayLiteral(items) => items.iter().any(expr_may_throw),
-        ExprKind::ArrayLiteralAssoc(items) => {
-            items.iter().any(|(key, value)| expr_may_throw(key) || expr_may_throw(value))
-        }
+        | ExprKind::PostDecrement(_) => Effect::PURE.with_side_effects(),
+        ExprKind::FunctionCall { name, args } => combine_effects(args.iter().map(expr_effect))
+            .combine(function_call_effect(name.as_str())),
+        ExprKind::ClosureCall { args, .. } => combine_effects(args.iter().map(expr_effect))
+            .with_side_effects()
+            .with_may_throw(),
+        ExprKind::ExprCall { callee, args } => expr_effect(callee)
+            .combine(combine_effects(args.iter().map(expr_effect)))
+            .with_side_effects()
+            .with_may_throw(),
+        ExprKind::NewObject { args, .. } => combine_effects(args.iter().map(expr_effect))
+            .with_side_effects()
+            .with_may_throw(),
+        ExprKind::MethodCall { object, args, .. } => expr_effect(object)
+            .combine(combine_effects(args.iter().map(expr_effect)))
+            .with_side_effects()
+            .with_may_throw(),
+        ExprKind::StaticMethodCall { args, .. } => combine_effects(args.iter().map(expr_effect))
+            .with_side_effects()
+            .with_may_throw(),
+        ExprKind::ArrayLiteral(items) => combine_effects(items.iter().map(expr_effect)),
+        ExprKind::ArrayLiteralAssoc(items) => combine_effects(
+            items
+                .iter()
+                .map(|(key, value)| expr_effect(key).combine(expr_effect(value))),
+        ),
         ExprKind::Match {
             subject,
             arms,
             default,
-        } => {
-            expr_may_throw(subject)
-                || arms.iter().any(|(patterns, value)| {
-                    patterns.iter().any(expr_may_throw) || expr_may_throw(value)
-                })
-                || default.as_ref().is_some_and(|expr| expr_may_throw(expr))
-        }
-        ExprKind::ArrayAccess { array, index } => expr_may_throw(array) || expr_may_throw(index),
+        } => expr_effect(subject)
+            .combine(combine_effects(arms.iter().map(|(patterns, value)| {
+                combine_effects(patterns.iter().map(expr_effect)).combine(expr_effect(value))
+            })))
+            .combine(
+                default
+                    .as_ref()
+                    .map(|expr| expr_effect(expr))
+                    .unwrap_or(Effect::PURE),
+            ),
+        ExprKind::ArrayAccess { array, index } => expr_effect(array).combine(expr_effect(index)),
         ExprKind::Ternary {
             condition,
             then_expr,
             else_expr,
-        } => expr_may_throw(condition) || expr_may_throw(then_expr) || expr_may_throw(else_expr),
-        ExprKind::Closure { .. } => false,
-        ExprKind::NamedArg { value, .. } => expr_may_throw(value),
-        ExprKind::PropertyAccess { object, .. } => expr_may_throw(object) || true,
-        ExprKind::FirstClassCallable(target) => match target {
-            CallableTarget::Function(_) | CallableTarget::StaticMethod { .. } => false,
-            CallableTarget::Method { object, .. } => expr_may_throw(object),
-        },
-        ExprKind::BufferNew { len, .. } => expr_may_throw(len),
+        } => expr_effect(condition)
+            .combine(expr_effect(then_expr))
+            .combine(expr_effect(else_expr)),
+        ExprKind::Closure { .. } => Effect::PURE,
+        ExprKind::NamedArg { value, .. } => expr_effect(value),
+        ExprKind::PropertyAccess { object, .. } => expr_effect(object),
+        ExprKind::FirstClassCallable(target) => callable_target_effect(target),
+        ExprKind::BufferNew { len, .. } => expr_effect(len).with_side_effects(),
     }
+}
+
+fn block_effect(stmts: &[Stmt]) -> Effect {
+    combine_effects(stmts.iter().map(stmt_effect))
+}
+
+fn combine_effects(effects: impl IntoIterator<Item = Effect>) -> Effect {
+    effects
+        .into_iter()
+        .fold(Effect::PURE, |acc, effect| acc.combine(effect))
+}
+
+fn function_call_effect(name: &str) -> Effect {
+    if is_pure_non_throwing_builtin(name) {
+        Effect::PURE
+    } else {
+        Effect::PURE.with_side_effects().with_may_throw()
+    }
+}
+
+fn is_pure_non_throwing_builtin(name: &str) -> bool {
+    matches!(
+        name,
+        "strlen"
+            | "count"
+            | "intval"
+            | "floatval"
+            | "boolval"
+            | "gettype"
+            | "is_array"
+            | "is_bool"
+            | "is_float"
+            | "is_int"
+            | "is_null"
+            | "is_numeric"
+            | "is_string"
+            | "abs"
+            | "min"
+            | "max"
+            | "floor"
+            | "ceil"
+            | "round"
+            | "sqrt"
+            | "pow"
+            | "fmod"
+            | "fdiv"
+            | "sin"
+            | "cos"
+            | "tan"
+            | "asin"
+            | "acos"
+            | "atan"
+            | "atan2"
+            | "deg2rad"
+            | "rad2deg"
+            | "sinh"
+            | "cosh"
+            | "tanh"
+            | "log"
+            | "log2"
+            | "log10"
+            | "exp"
+            | "hypot"
+            | "pi"
+            | "number_format"
+            | "substr"
+            | "strpos"
+            | "strrpos"
+            | "strstr"
+            | "str_replace"
+            | "str_ireplace"
+            | "substr_replace"
+            | "strtolower"
+            | "strtoupper"
+            | "ucfirst"
+            | "lcfirst"
+            | "ucwords"
+            | "trim"
+            | "ltrim"
+            | "rtrim"
+            | "str_repeat"
+            | "strrev"
+            | "str_pad"
+            | "explode"
+            | "implode"
+            | "str_split"
+            | "strcmp"
+            | "strcasecmp"
+            | "str_contains"
+            | "str_starts_with"
+            | "str_ends_with"
+            | "ord"
+            | "chr"
+            | "nl2br"
+            | "wordwrap"
+            | "addslashes"
+            | "stripslashes"
+            | "htmlspecialchars"
+            | "htmlentities"
+            | "html_entity_decode"
+            | "urlencode"
+            | "urldecode"
+            | "rawurlencode"
+            | "rawurldecode"
+            | "md5"
+            | "sha1"
+            | "hash"
+            | "base64_encode"
+            | "base64_decode"
+            | "bin2hex"
+            | "hex2bin"
+            | "ctype_alpha"
+            | "ctype_digit"
+            | "ctype_alnum"
+            | "ctype_space"
+            | "array_key_exists"
+            | "array_search"
+            | "array_keys"
+            | "array_values"
+            | "array_merge"
+            | "array_slice"
+            | "array_combine"
+            | "array_flip"
+            | "array_reverse"
+            | "array_unique"
+            | "array_column"
+            | "array_sum"
+            | "array_product"
+            | "array_chunk"
+            | "array_pad"
+            | "array_fill"
+            | "array_fill_keys"
+            | "array_diff"
+            | "array_intersect"
+            | "array_diff_key"
+            | "array_intersect_key"
+            | "range"
+            | "json_encode"
+            | "json_decode"
+            | "json_last_error"
+    )
 }
 
 fn fold_stmt(stmt: Stmt) -> Stmt {
@@ -1171,75 +1405,13 @@ fn prune_expr(expr: Expr) -> Expr {
 }
 
 fn expr_has_side_effects(expr: &Expr) -> bool {
-    match &expr.kind {
-        ExprKind::StringLiteral(_)
-        | ExprKind::IntLiteral(_)
-        | ExprKind::FloatLiteral(_)
-        | ExprKind::Variable(_)
-        | ExprKind::BoolLiteral(_)
-        | ExprKind::Null
-        | ExprKind::ConstRef(_)
-        | ExprKind::EnumCase { .. }
-        | ExprKind::This => false,
-        ExprKind::Negate(inner)
-        | ExprKind::Not(inner)
-        | ExprKind::BitNot(inner)
-        | ExprKind::Spread(inner) => expr_has_side_effects(inner),
-        ExprKind::BinaryOp { left, right, .. } => {
-            expr_has_side_effects(left) || expr_has_side_effects(right)
-        }
-        ExprKind::Throw(_)
-        | ExprKind::PreIncrement(_)
-        | ExprKind::PostIncrement(_)
-        | ExprKind::PreDecrement(_)
-        | ExprKind::PostDecrement(_)
-        | ExprKind::FunctionCall { .. }
-        | ExprKind::ClosureCall { .. }
-        | ExprKind::ExprCall { .. }
-        | ExprKind::NewObject { .. }
-        | ExprKind::MethodCall { .. }
-        | ExprKind::StaticMethodCall { .. }
-        | ExprKind::PropertyAccess { .. }
-        | ExprKind::ArrayAccess { .. }
-        | ExprKind::BufferNew { .. } => true,
-        ExprKind::NullCoalesce { value, default } => {
-            expr_has_side_effects(value) || expr_has_side_effects(default)
-        }
-        ExprKind::ArrayLiteral(items) => items.iter().any(expr_has_side_effects),
-        ExprKind::ArrayLiteralAssoc(items) => items
-            .iter()
-            .any(|(key, value)| expr_has_side_effects(key) || expr_has_side_effects(value)),
-        ExprKind::Match {
-            subject,
-            arms,
-            default,
-        } => {
-            expr_has_side_effects(subject)
-                || arms.iter().any(|(patterns, value)| {
-                    patterns.iter().any(expr_has_side_effects) || expr_has_side_effects(value)
-                })
-                || default.as_ref().is_some_and(|expr| expr_has_side_effects(expr))
-        }
-        ExprKind::Ternary {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            expr_has_side_effects(condition)
-                || expr_has_side_effects(then_expr)
-                || expr_has_side_effects(else_expr)
-        }
-        ExprKind::Cast { expr, .. } | ExprKind::PtrCast { expr, .. } => expr_has_side_effects(expr),
-        ExprKind::Closure { .. } => false,
-        ExprKind::NamedArg { value, .. } => expr_has_side_effects(value),
-        ExprKind::FirstClassCallable(target) => callable_target_has_side_effects(target),
-    }
+    expr_effect(expr).has_side_effects
 }
 
-fn callable_target_has_side_effects(target: &CallableTarget) -> bool {
+fn callable_target_effect(target: &CallableTarget) -> Effect {
     match target {
-        CallableTarget::Function(_) | CallableTarget::StaticMethod { .. } => false,
-        CallableTarget::Method { .. } => true,
+        CallableTarget::Function(_) | CallableTarget::StaticMethod { .. } => Effect::PURE,
+        CallableTarget::Method { object, .. } => expr_effect(object),
     }
 }
 
@@ -1996,6 +2168,44 @@ mod tests {
     use crate::names::Name;
     use crate::parser::ast::{ClassProperty, Visibility};
     use crate::span::Span;
+
+    #[test]
+    fn test_effect_analysis_recognizes_pure_builtin_calls() {
+        let expr = Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::from("strlen"),
+                args: vec![Expr::string_lit("abc")],
+            },
+            Span::dummy(),
+        );
+
+        assert!(!expr_has_side_effects(&expr));
+        assert!(!expr_effect(&expr).may_throw);
+        assert!(!expr_is_observable(&expr));
+    }
+
+    #[test]
+    fn test_effect_analysis_treats_property_and_array_reads_as_pure() {
+        let property = Expr::new(
+            ExprKind::PropertyAccess {
+                object: Box::new(Expr::var("entry")),
+                property: "name".to_string(),
+            },
+            Span::dummy(),
+        );
+        let array = Expr::new(
+            ExprKind::ArrayAccess {
+                array: Box::new(Expr::var("items")),
+                index: Box::new(Expr::int_lit(0)),
+            },
+            Span::dummy(),
+        );
+
+        assert!(!expr_has_side_effects(&property));
+        assert!(!expr_effect(&property).may_throw);
+        assert!(!expr_has_side_effects(&array));
+        assert!(!expr_effect(&array).may_throw);
+    }
 
     #[test]
     fn test_fold_nested_integer_arithmetic() {
