@@ -26,3 +26,4 @@ mod pointers;
 mod ffi;
 mod oop;
 mod types;
+mod optimizer;

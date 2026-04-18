@@ -316,13 +316,15 @@ Proper type system for PHP compatibility.
 
 ## v0.20.x — Early optimization pass
 
-- [ ] Constant folding (`2 + 3` → `5` at compile time)
-- [ ] Dead code elimination
+- [x] Constant folding (`2 + 3` → `5` at compile time)
+- [x] Dead code elimination
 - [ ] Peephole optimization (redundant load/store elimination)
 - [x] Add regression benchmarks so optimization work is measured instead of anecdotal
 
 ## v0.21.x — Code quality and performance validation
 
+- [ ] Constant propagation across locals / statement boundaries
+- [ ] Dead code elimination v2 (CFG/basic-block aware pass beyond local AST pruning)
 - [ ] Register allocation (reduce stack spills)
 - [ ] Inline small functions
 - [ ] Tail-call optimization

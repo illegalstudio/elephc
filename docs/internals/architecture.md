@@ -2,7 +2,7 @@
 title: "Architecture"
 description: "Module map, calling conventions, and pipeline diagram."
 sidebar:
-  order: 9
+  order: 10
 ---
 
 ## Compilation pipeline
@@ -46,6 +46,13 @@ PHP source (.php)
 └─────┬────────┘
       │
       ▼
+┌──────────────┐
+│  Optimizer   │  src/optimize.rs
+│   (fold)     │  Folds scalar constants and simplifies pure expressions
+│              │  before type checking.
+└─────┬────────┘
+      │
+      ▼
 ┌─────────┐
 │  Type    │  src/types/
 │  Checker │  traits.rs, checker/mod.rs, checker/builtins/, checker/functions/, warnings/
@@ -53,6 +60,13 @@ PHP source (.php)
 └────┬─────┘
      │
      ▼
+┌──────────────┐
+│  Optimizer   │  src/optimize.rs
+│  (prune)     │  Removes constant-dead control flow and unreachable
+│              │  pure statements after successful checking.
+└─────┬────────┘
+      │
+      ▼
 ┌─────────┐
 │ Codegen  │  src/codegen/
 │          │  mod.rs, expr.rs + expr/, stmt.rs + stmt/, functions/, abi/, platform/
@@ -92,6 +106,7 @@ src/
 ├── span.rs                    Source position (line, col)
 ├── conditional.rs             Build-time `ifdef` pass
 ├── resolver.rs                Include/require file resolution
+├── optimize.rs                Constant folding and local dead-code pruning
 ├── runtime_cache.rs           Cached shared runtime object preparation
 ├── source_map.rs              Assembly comment markers → JSON sidecar map
 ├── names.rs                   Qualified/FQN name model + assembly symbol mangling

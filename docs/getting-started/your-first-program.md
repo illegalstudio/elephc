@@ -91,10 +91,12 @@ When you run `elephc hello.php`, the compiler:
 1. **Lexes** the source into tokens
 2. **Parses** tokens into an AST (Abstract Syntax Tree)
 3. **Resolves** includes and namespaces
-4. **Type-checks** the program
-5. **Generates** assembly for the selected target
-6. **Assembles** the `.s` file with `as`
-7. **Links** the `.o` file with `ld` into a native executable
+4. **Folds constant expressions** that are already statically known
+5. **Type-checks** the program
+6. **Prunes dead constant control flow** after the checker has collected diagnostics
+7. **Generates** assembly for the selected target
+8. **Assembles** the `.s` file with `as`
+9. **Links** the `.o` file with `ld` into a native executable
 
 The intermediate `.s` and `.o` files are cleaned up automatically. You're left with a single executable.
 
@@ -110,7 +112,7 @@ elephc --timings hello.php
 elephc --emit-asm --source-map hello.php
 ```
 
-`--timings` reports phases such as lexing, parsing, type checking, runtime-cache preparation, code generation, assembling, and linking.
+`--timings` reports phases such as lexing, parsing, early optimization, type checking, post-check pruning, runtime-cache preparation, code generation, assembling, and linking.
 
 `--source-map` writes a `hello.map` JSON file next to `hello.s`. The map records which emitted assembly lines came from which PHP source lines and columns.
 

@@ -20,6 +20,7 @@ fn check_source_with_defines(src: &str, defines: &[&str]) -> Result<(), String> 
     let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();
     let ast = elephc::conditional::apply(ast, &define_set);
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
+    let ast = elephc::optimize::fold_constants(ast);
     types::check(&ast).map_err(|e| e.message.clone())?;
     Ok(())
 }
@@ -28,6 +29,7 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let tokens = tokenize(src).map_err(|e| elephc::errors::CompileError::new(e.span, &e.message))?;
     let ast = parse(&tokens)?;
     let ast = elephc::name_resolver::resolve(ast)?;
+    let ast = elephc::optimize::fold_constants(ast);
     types::check(&ast)
 }
 
@@ -1165,6 +1167,7 @@ fn test_null_coalesce_widens_function_return_type_in_checker() {
     let tokens = tokenize("<?php function fallback_pi($x) { return $x ?? 3.14159; }")
         .expect("tokenize failed");
     let ast = parse(&tokens).expect("parse failed");
+    let ast = elephc::optimize::fold_constants(ast);
     let check_result = types::check(&ast).expect("type check failed");
 
     let sig = check_result
