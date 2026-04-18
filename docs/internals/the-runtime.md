@@ -2,14 +2,14 @@
 title: "The Runtime"
 description: "Hand-written assembly routines for strings, arrays, and I/O."
 sidebar:
-  order: 7
+  order: 8
 ---
 
 **Source:** `src/codegen/runtime/` — `mod.rs`, `data.rs`, `strings/`, `arrays/`, `buffers/`, `exceptions.rs`, `exceptions/`, `io/`, `system/`, `pointers/`
 
 The runtime is a collection of **hand-written assembly routines** that handle operations too complex for inline code generation. When the [code generator](the-codegen.md) needs to convert an integer to a string or concatenate two strings, it emits a `bl __rt_itoa` or `bl __rt_concat` — a call to a runtime routine.
 
-These routines are emitted as assembly functions at the end of every compiled program. They're not external libraries — they're part of the binary.
+These routines end up in every compiled binary. In the CLI flow they are usually pre-assembled into the cached runtime object rather than textually appended to each user `.s` file, but they are still part of the final executable rather than an external shared dependency.
 
 ## Why a runtime?
 
@@ -437,7 +437,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
 
 Notable runtime-only helpers emitted here include `__rt_exception_cleanup_frames`, `__rt_exception_matches`, `__rt_throw_current`, `__rt_heap_debug_fail`, `__rt_heap_kind`, `__rt_hash_insert_owned`, `__rt_hash_free_deep`, `__rt_array_column_ref`, `__rt_preg_strip`, `__rt_pcre_to_posix`, `__rt_str_to_cstr`, and `__rt_cstr_to_str` in addition to the more user-visible helpers.
 
-All routines are included in every binary, even if unused. This is simpler than dead-code elimination (a potential future optimization).
+All routines are included in every binary, even if unused. elephc already does AST-side dead-code pruning before codegen, but runtime-specific dead stripping is still future work.
 
 ## Runtime data
 

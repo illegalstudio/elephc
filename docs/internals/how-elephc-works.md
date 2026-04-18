@@ -98,7 +98,25 @@ After includes are flattened, elephc resolves namespace-aware names. This pass a
 
 In this example there are no namespaces or imports, so the AST still passes through unchanged.
 
-## Phase 6: Type checking
+## Phase 6: Early optimization (constant folding)
+
+**File:** `src/optimize.rs`
+
+Before type checking, elephc runs a conservative AST simplification pass. This stage folds expressions whose result is already statically known without needing any type-environment information.
+
+Typical examples include:
+
+- `2 + 3 * 4` → `14`
+- `"hello " . "world"` → `"hello world"`
+- `(int)"42"` → `42`
+- `2 < 3 ? 8 : 9` → `8`
+- `null ?? "fallback"` → `"fallback"`
+
+The pass is deliberately local and side-effect aware. It simplifies scalar computations, but it does not speculate across calls, object/property access, or other expressions that may have runtime behavior.
+
+In our running example there is nothing to fold yet: the pass does not currently propagate `$x = 10` into the later `$x > 5` comparison.
+
+## Phase 7: Type checking
 
 **File:** `src/types/` — See [The Type Checker](the-type-checker.md) for details.
 
@@ -120,7 +138,26 @@ If you tried `$x = "hello"` after `$x = 10`, the type checker would reject it �
 
 On successful type checking, elephc also runs a warning pass that reports issues such as unused variables and unreachable code. On failing compilations, the parser and checker both try to recover conservatively so they can often report more than one independent error in a single run.
 
-## Phase 7: Code generation
+## Phase 8: Post-typecheck pruning
+
+**File:** `src/optimize.rs`
+
+After the checker succeeds, elephc runs a second optimization pass that is allowed to prune dead control flow without hiding diagnostics from the type checker.
+
+This pass currently handles cases such as:
+
+- `if`, `elseif`, and ternaries with constant conditions
+- `while (false)` and `for (...; false; ...)`
+- constant `match` expressions and prunable `switch` prefixes
+- unreachable statements after `return`, `throw`, `break`, or `continue`
+- dead code after exhaustive `if` / `else` and `switch` + `default` structures
+- pure expression statements and pure dead subexpressions that can be dropped safely
+
+This split is intentional: elephc folds obvious scalar expressions early, but waits until after type checking to remove whole blocks, so diagnostics still see the original checked structure.
+
+In our running example there is still nothing to prune, because `$x > 5` is not a compile-time constant at the AST level.
+
+## Phase 9: Code generation
 
 **File:** `src/codegen/` — See [The Code Generator](the-codegen.md) for details.
 
@@ -170,7 +207,7 @@ Key observations:
 - `echo "big\n"` → load string address + length, then `svc` to write to stdout
 - The string literal lives in the `.data` section, referenced by label `_str_0`
 
-## Phase 8: Runtime preparation, assembly, and linking
+## Phase 10: Runtime preparation, assembly, and linking
 
 **Tools:** native `as` and `ld` (or the equivalent system toolchain)
 
@@ -206,7 +243,7 @@ On Linux, elephc invokes the native assembler/linker for the requested target.
 
 The `.o` file is deleted after linking. The result is a standalone executable.
 
-## Phase 9: Execution
+## Phase 11: Execution
 
 ```bash
 ./file
@@ -232,8 +269,14 @@ The binary runs directly on the CPU. There is no PHP interpreter or VM at runtim
                     │
                     ▼ NameResolver (no-op here)
                     │
+                    ▼ Optimizer (fold constants, no-op here)
+    [Assign{x, 10}, If{Gt(Var(x), 5), [Echo("big\n")]}]
+                    │
                     ▼ Type Checker
     { x: Int } — all types consistent ✓
+                    │
+                    ▼ Optimizer (prune dead control flow, no-op here)
+    [Assign{x, 10}, If{Gt(Var(x), 5), [Echo("big\n")]}]
                     │
                     ▼ Code Generator
     "sub sp, sp, #32 / stp x29, x30, ... / mov x0, #10 / ..."

@@ -2,7 +2,7 @@
 title: "Memory Model"
 description: "Stack frames, heap allocation, and memory management."
 sidebar:
-  order: 8
+  order: 9
 ---
 
 elephc manages memory without calling `malloc`/`free` for PHP values directly. Storage lives on the **stack** (automatic, per-function), in fixed BSS regions, or in a compiler-managed **heap buffer** with a free-list allocator, reference counting, and a targeted cycle collector for array/hash/object graphs. The final binary still links `libSystem` for OS and libc services.

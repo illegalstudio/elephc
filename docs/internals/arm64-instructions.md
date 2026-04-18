@@ -2,7 +2,7 @@
 title: "ARM64 Instructions"
 description: "ARM64 instruction reference used by elephc."
 sidebar:
-  order: 11
+  order: 12
 ---
 
 This is a reference for the ARM64 instructions elephc uses most often, organized by category. Each entry shows the instruction, what it does, and where elephc uses it.

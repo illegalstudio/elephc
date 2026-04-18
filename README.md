@@ -245,7 +245,7 @@ User-defined constants are also supported via `const NAME = value;` and `define(
 ## How it works
 
 ```
-PHP source → Lexer → Parser (AST) → Conditional (ifdef/--define) → Resolver (include) → NameResolver (namespaces/use/FQNs) → Type Checker → Codegen → as + ld → native executable
+PHP source → Lexer → Parser (AST) → Conditional (ifdef/--define) → Resolver (include) → NameResolver (namespaces/use/FQNs) → Optimizer (constant folding) → Type Checker → Optimizer (dead-code pruning) → Codegen → as + ld → native executable
 ```
 
 The compiler emits human-readable assembly for the selected target. You can inspect the `.s` file to see exactly what your PHP becomes:
@@ -255,7 +255,17 @@ elephc hello.php
 cat hello.s
 ```
 
-If you add `--source-map`, elephc also writes `hello.map`, a compact JSON sidecar that maps emitted assembly lines back to PHP line/column pairs. If you add `--timings`, the compiler prints per-phase durations such as lexing, parsing, runtime-cache preparation, code generation, assembling, and linking.
+If you add `--source-map`, elephc also writes `hello.map`, a compact JSON sidecar that maps emitted assembly lines back to PHP line/column pairs. If you add `--timings`, the compiler prints per-phase durations such as lexing, parsing, early optimization, type checking, post-check pruning, runtime-cache preparation, code generation, assembling, and linking.
+
+### Current optimization passes
+
+elephc already performs a small but useful AST-level optimization pass before emitting assembly:
+
+- **Constant folding before type checking**: folds scalar arithmetic, bitwise ops, comparisons, logical ops, string-literal concatenation, scalar casts, ternaries, and null coalescing when the result is statically known.
+- **Control-flow pruning after type checking**: removes constant-dead `if` / `elseif` / `while (false)` / `for (...; false; ...)` branches, prunes constant `switch` prefixes and `match` arms, and trims unreachable statements after terminating constructs such as `return`, `throw`, `break`, and `continue`.
+- **Pure-expression cleanup**: drops unused expression statements and dead pure subexpressions when the surrounding expression already determines the result.
+
+The optimizer is intentionally conservative. It does not yet do global constant propagation, interprocedural optimization, or assembly-level peephole rewriting.
 
 ### Type system
 
@@ -298,6 +308,7 @@ src/
 ├── span.rs              # Source position tracking (line, col)
 ├── conditional.rs       # Build-time `ifdef` pass driven by --define
 ├── resolver.rs          # Include/require file resolution
+├── optimize.rs          # Constant folding and local dead-code pruning
 ├── names.rs             # Qualified/FQN name model + symbol mangling helpers
 ├── name_resolver/       # Namespace/use resolution to canonical names
 │

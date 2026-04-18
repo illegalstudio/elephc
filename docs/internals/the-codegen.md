@@ -2,12 +2,12 @@
 title: "The Code Generator"
 description: "How typed AST nodes become native assembly for the selected target."
 sidebar:
-  order: 6
+  order: 7
 ---
 
 **Source:** `src/codegen/` — `mod.rs`, `expr.rs`, `expr/`, `stmt.rs`, `stmt/`, `functions/`, `ffi.rs`, `abi/`, `context.rs`, `data_section.rs`, `emit.rs`
 
-The code generator (codegen) is the heart of the compiler. It takes the typed AST and produces native assembly text for the selected target — the actual instructions the CPU will execute.
+The code generator (codegen) is the heart of the compiler. It takes the checked AST after the optimizer's local simplification passes and produces native assembly text for the selected target — the actual instructions the CPU will execute.
 
 elephc now supports more than one backend. AArch64 is still the clearest reference path in the codebase and in this document, while Linux `x86_64` is also a supported backend that goes through the same high-level lowering pipeline.
 
@@ -93,6 +93,8 @@ This means normal CLI builds no longer concatenate the runtime text into every o
 - link `file.o` against the cached runtime object
 
 The source-map file is intentionally simple. Today it stores a list of `(asm_line, php_line, php_col)` entries so tools and humans can correlate generated assembly back to the original PHP statements without needing full DWARF debug info.
+
+The optimizer intentionally stays at the AST level. By the time codegen runs, constant expressions and some dead control-flow have already been removed, but codegen still sees a normal checked program shape rather than a target-specific IR. Assembly-level peephole cleanup is future work.
 
 ## The Context
 

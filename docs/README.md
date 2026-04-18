@@ -47,11 +47,12 @@ How elephc works under the hood — from lexing to code generation and runtime s
 - [The Lexer](internals/the-lexer.md) — raw text to tokens
 - [The Parser](internals/the-parser.md) — tokens to AST with Pratt parsing
 - [The Type Checker](internals/the-type-checker.md) — compile-time type inference and validation
-- [The Code Generator](internals/the-codegen.md) — AST to target assembly (with an AArch64-focused walkthrough)
+- [The Optimizer](internals/the-optimizer.md) — constant folding and local dead-code elimination on the AST
+- [The Code Generator](internals/the-codegen.md) — optimized checked AST to target assembly (with an AArch64-focused walkthrough)
 - [The Runtime](internals/the-runtime.md) — hand-written assembly routines
 - [Memory Model](internals/memory-model.md) — stack frames, heap, reference counting
 - [Architecture](internals/architecture.md) — module map, calling conventions
 - [ARM64 Assembly](internals/arm64-assembly.md) — introduction to ARM64
 - [ARM64 Instructions](internals/arm64-instructions.md) — instruction reference
 
-For compile-time instrumentation and debug artifacts, the CLI also supports `--timings` to print per-phase compiler timings and `--source-map` to emit a sidecar `.map` file next to generated assembly.
+For compile-time instrumentation and debug artifacts, the CLI also supports `--timings` to print per-phase compiler timings, including the optimizer phases, and `--source-map` to emit a sidecar `.map` file next to generated assembly.
