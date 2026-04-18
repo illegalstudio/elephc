@@ -34,6 +34,25 @@ fn invert_condition(condition: Expr) -> Expr {
     prune_expr(Expr::new(ExprKind::Not(Box::new(condition)), span))
 }
 
+fn build_if_chain_body(
+    elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
+    else_body: Option<Vec<Stmt>>,
+) -> Vec<Stmt> {
+    if let Some(((condition, then_body), rest)) = elseif_clauses.split_first() {
+        vec![Stmt::new(
+            StmtKind::If {
+                condition: condition.clone(),
+                then_body: then_body.clone(),
+                elseif_clauses: rest.to_vec(),
+                else_body,
+            },
+            condition.span,
+        )]
+    } else {
+        else_body.unwrap_or_default()
+    }
+}
+
 fn fold_stmt(stmt: Stmt) -> Stmt {
     let span = stmt.span;
     let kind = match stmt.kind {
@@ -576,12 +595,14 @@ fn prune_if_chain(
                 return expr_to_effect_stmt(condition);
             }
 
-            if then_body.is_empty() && kept_elseifs.is_empty() {
-                if let Some(else_body) = kept_else {
+            if then_body.is_empty() {
+                let fallback_body =
+                    build_if_chain_body(kept_elseifs.clone(), kept_else.clone());
+                if !fallback_body.is_empty() {
                     return vec![Stmt {
                         kind: StmtKind::If {
                             condition: invert_condition(condition),
-                            then_body: else_body,
+                            then_body: fallback_body,
                             elseif_clauses: Vec::new(),
                             else_body: None,
                         },
@@ -2558,5 +2579,47 @@ mod tests {
         let pruned = eliminate_dead_code(program);
 
         assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(9))]);
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_nests_elseif_chain_after_empty_head() {
+        let program = vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::var("a"),
+                then_body: Vec::new(),
+                elseif_clauses: vec![(
+                    Expr::var("b"),
+                    vec![Stmt::echo(Expr::int_lit(7))],
+                )],
+                else_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(
+            pruned,
+            vec![Stmt::new(
+                StmtKind::If {
+                    condition: Expr::new(
+                        ExprKind::Not(Box::new(Expr::var("a"))),
+                        Span::dummy(),
+                    ),
+                    then_body: vec![Stmt::new(
+                        StmtKind::If {
+                            condition: Expr::var("b"),
+                            then_body: vec![Stmt::echo(Expr::int_lit(7))],
+                            elseif_clauses: Vec::new(),
+                            else_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+                        },
+                        Span::dummy(),
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                Span::dummy(),
+            )]
+        );
     }
 }

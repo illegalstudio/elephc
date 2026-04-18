@@ -729,3 +729,40 @@ switch ($x) {
 
     assert_eq!(out, "d");
 }
+
+#[test]
+fn test_dead_code_elimination_preserves_elseif_order_after_empty_head() {
+    let out = compile_and_run(
+        r#"<?php
+function step($label, $ret) {
+    echo $label;
+    return $ret;
+}
+if (step("a", false)) {
+} elseif (step("b", true)) {
+    echo "!";
+}
+"#,
+    );
+
+    assert_eq!(out, "ab!");
+}
+
+#[test]
+fn test_dead_code_elimination_skips_elseif_when_empty_head_matches() {
+    let out = compile_and_run(
+        r#"<?php
+function step($label, $ret) {
+    echo $label;
+    return $ret;
+}
+if (step("a", true)) {
+} elseif (step("b", true)) {
+    echo "!";
+}
+echo "?";
+"#,
+    );
+
+    assert_eq!(out, "a?");
+}
