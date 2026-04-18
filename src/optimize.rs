@@ -53,6 +53,44 @@ fn build_if_chain_body(
     }
 }
 
+fn materialize_switch_execution(
+    cases: &[(Vec<Expr>, Vec<Stmt>)],
+    default: &Option<Vec<Stmt>>,
+    start_case_index: Option<usize>,
+) -> Vec<Stmt> {
+    let mut out = Vec::new();
+
+    let push_body = |body: &[Stmt], out: &mut Vec<Stmt>| -> bool {
+        for stmt in body.iter().cloned() {
+            if matches!(stmt.kind, StmtKind::Break) {
+                return true;
+            }
+
+            let stops_here = !matches!(stmt_terminal_effect(&stmt), TerminalEffect::FallsThrough);
+            out.push(stmt);
+            if stops_here {
+                return true;
+            }
+        }
+
+        false
+    };
+
+    if let Some(start_case_index) = start_case_index {
+        for (_, body) in &cases[start_case_index..] {
+            if push_body(body, &mut out) {
+                return out;
+            }
+        }
+    }
+
+    if let Some(default_body) = default {
+        let _ = push_body(default_body, &mut out);
+    }
+
+    out
+}
+
 fn fold_stmt(stmt: Stmt) -> Stmt {
     let span = stmt.span;
     let kind = match stmt.kind {
@@ -719,7 +757,10 @@ fn prune_switch_stmt(
 
     for (index, (patterns, _)) in cases.iter().enumerate() {
         match classify_case_patterns(&subject_value, patterns, CaseComparison::LooseSwitch) {
-            CaseMatch::Matches | CaseMatch::Unknown => {
+            CaseMatch::Matches => {
+                return materialize_switch_execution(&cases, &default, Some(index));
+            }
+            CaseMatch::Unknown => {
                 return vec![Stmt {
                     kind: StmtKind::Switch {
                         subject,
@@ -734,14 +775,7 @@ fn prune_switch_stmt(
     }
 
     if default.is_some() {
-        vec![Stmt {
-            kind: StmtKind::Switch {
-                subject,
-                cases: Vec::new(),
-                default,
-            },
-            span,
-        }]
+        materialize_switch_execution(&cases, &default, None)
     } else {
         Vec::new()
     }
@@ -2250,12 +2284,7 @@ mod tests {
 
         let pruned = prune_constant_control_flow(program);
 
-        let StmtKind::Switch { cases, .. } = &pruned[0].kind else {
-            panic!("expected switch");
-        };
-        assert_eq!(cases.len(), 1);
-        assert_eq!(cases[0].1.len(), 1);
-        assert!(matches!(cases[0].1[0].kind, StmtKind::Break));
+        assert!(pruned.is_empty());
     }
 
     #[test]
@@ -2318,12 +2347,7 @@ mod tests {
 
         let pruned = prune_constant_control_flow(program);
 
-        assert_eq!(pruned.len(), 1);
-        let StmtKind::Switch { cases, .. } = &pruned[0].kind else {
-            panic!("expected switch");
-        };
-        assert_eq!(cases.len(), 1);
-        assert_eq!(cases[0].0, vec![Expr::int_lit(3)]);
+        assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(20))]);
     }
 
     #[test]
@@ -2621,5 +2645,71 @@ mod tests {
                 Span::dummy(),
             )]
         );
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_materializes_constant_switch_match() {
+        let program = vec![Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::int_lit(2),
+                cases: vec![
+                    (
+                        vec![Expr::int_lit(1)],
+                        vec![Stmt::echo(Expr::int_lit(5)), Stmt::new(StmtKind::Break, Span::dummy())],
+                    ),
+                    (
+                        vec![Expr::int_lit(2)],
+                        vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+                    ),
+                ],
+                default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7))]);
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_materializes_constant_switch_fallthrough() {
+        let program = vec![Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::int_lit(1),
+                cases: vec![
+                    (vec![Expr::int_lit(1)], Vec::new()),
+                    (
+                        vec![Expr::int_lit(2)],
+                        vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+                    ),
+                ],
+                default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7))]);
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_materializes_constant_switch_default() {
+        let program = vec![Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::int_lit(3),
+                cases: vec![(
+                    vec![Expr::int_lit(1)],
+                    vec![Stmt::echo(Expr::int_lit(5)), Stmt::new(StmtKind::Break, Span::dummy())],
+                )],
+                default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(9))]);
     }
 }
