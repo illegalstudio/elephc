@@ -2,7 +2,7 @@ use crate::parser::ast::{
     BinOp, CallableTarget, CastType, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
     Program, Stmt, StmtKind,
 };
-use crate::termination::{stmt_terminal_effect, TerminalEffect};
+use crate::termination::{block_terminal_effect, stmt_terminal_effect, TerminalEffect};
 
 pub fn fold_constants(program: Program) -> Program {
     program.into_iter().map(fold_stmt).collect()
@@ -89,6 +89,165 @@ fn materialize_switch_execution(
     }
 
     out
+}
+
+fn block_may_throw(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(stmt_may_throw)
+}
+
+fn stmt_may_throw(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::Echo(expr)
+        | StmtKind::Throw(expr)
+        | StmtKind::ExprStmt(expr)
+        | StmtKind::ConstDecl { value: expr, .. }
+        | StmtKind::StaticVar { init: expr, .. }
+        | StmtKind::ListUnpack { value: expr, .. }
+        | StmtKind::Return(Some(expr)) => expr_may_throw(expr),
+        StmtKind::Assign { value, .. }
+        | StmtKind::TypedAssign { value, .. }
+        | StmtKind::ArrayPush { value, .. } => expr_may_throw(value),
+        StmtKind::ArrayAssign { index, value, .. }
+        | StmtKind::PropertyArrayAssign { index, value, .. } => {
+            expr_may_throw(index) || expr_may_throw(value)
+        }
+        StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyArrayPush { object, value, .. } => {
+            expr_may_throw(object) || expr_may_throw(value)
+        }
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            expr_may_throw(condition)
+                || block_may_throw(then_body)
+                || elseif_clauses
+                    .iter()
+                    .any(|(condition, body)| expr_may_throw(condition) || block_may_throw(body))
+                || else_body.as_ref().is_some_and(|body| block_may_throw(body))
+        }
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => block_may_throw(then_body) || else_body.as_ref().is_some_and(|body| block_may_throw(body)),
+        StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
+            expr_may_throw(condition) || block_may_throw(body)
+        }
+        StmtKind::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_ref().is_some_and(|stmt| stmt_may_throw(stmt))
+                || condition.as_ref().is_some_and(expr_may_throw)
+                || update.as_ref().is_some_and(|stmt| stmt_may_throw(stmt))
+                || block_may_throw(body)
+        }
+        StmtKind::Foreach { array, body, .. } => expr_may_throw(array) || block_may_throw(body),
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => {
+            expr_may_throw(subject)
+                || cases.iter().any(|(patterns, body)| {
+                    patterns.iter().any(expr_may_throw) || block_may_throw(body)
+                })
+                || default.as_ref().is_some_and(|body| block_may_throw(body))
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            block_may_throw(try_body)
+                || catches.iter().any(|catch| block_may_throw(&catch.body))
+                || finally_body.as_ref().is_some_and(|body| block_may_throw(body))
+        }
+        StmtKind::NamespaceBlock { body, .. } => block_may_throw(body),
+        StmtKind::FunctionDecl { .. }
+        | StmtKind::NamespaceDecl { .. }
+        | StmtKind::UseDecl { .. }
+        | StmtKind::ClassDecl { .. }
+        | StmtKind::EnumDecl { .. }
+        | StmtKind::PackedClassDecl { .. }
+        | StmtKind::InterfaceDecl { .. }
+        | StmtKind::TraitDecl { .. }
+        | StmtKind::Global { .. }
+        | StmtKind::Return(None)
+        | StmtKind::Break
+        | StmtKind::Continue
+        | StmtKind::ExternFunctionDecl { .. }
+        | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ExternGlobalDecl { .. } => false,
+        StmtKind::Include { .. } => true,
+    }
+}
+
+fn expr_may_throw(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::Variable(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::ConstRef(_)
+        | ExprKind::EnumCase { .. }
+        | ExprKind::This => false,
+        ExprKind::Negate(inner)
+        | ExprKind::Not(inner)
+        | ExprKind::BitNot(inner)
+        | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::PtrCast { expr: inner, .. }
+        | ExprKind::Spread(inner) => expr_may_throw(inner),
+        ExprKind::BinaryOp { left, right, .. } => expr_may_throw(left) || expr_may_throw(right),
+        ExprKind::Throw(_) => true,
+        ExprKind::NullCoalesce { value, default } => expr_may_throw(value) || expr_may_throw(default),
+        ExprKind::PreIncrement(_)
+        | ExprKind::PostIncrement(_)
+        | ExprKind::PreDecrement(_)
+        | ExprKind::PostDecrement(_) => false,
+        ExprKind::FunctionCall { .. }
+        | ExprKind::ClosureCall { .. }
+        | ExprKind::ExprCall { .. }
+        | ExprKind::NewObject { .. }
+        | ExprKind::MethodCall { .. }
+        | ExprKind::StaticMethodCall { .. } => true,
+        ExprKind::ArrayLiteral(items) => items.iter().any(expr_may_throw),
+        ExprKind::ArrayLiteralAssoc(items) => {
+            items.iter().any(|(key, value)| expr_may_throw(key) || expr_may_throw(value))
+        }
+        ExprKind::Match {
+            subject,
+            arms,
+            default,
+        } => {
+            expr_may_throw(subject)
+                || arms.iter().any(|(patterns, value)| {
+                    patterns.iter().any(expr_may_throw) || expr_may_throw(value)
+                })
+                || default.as_ref().is_some_and(|expr| expr_may_throw(expr))
+        }
+        ExprKind::ArrayAccess { array, index } => expr_may_throw(array) || expr_may_throw(index),
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => expr_may_throw(condition) || expr_may_throw(then_expr) || expr_may_throw(else_expr),
+        ExprKind::Closure { .. } => false,
+        ExprKind::NamedArg { value, .. } => expr_may_throw(value),
+        ExprKind::PropertyAccess { object, .. } => expr_may_throw(object) || true,
+        ExprKind::FirstClassCallable(target) => match target {
+            CallableTarget::Function(_) | CallableTarget::StaticMethod { .. } => false,
+            CallableTarget::Method { object, .. } => expr_may_throw(object),
+        },
+        ExprKind::BufferNew { len, .. } => expr_may_throw(len),
+    }
 }
 
 fn fold_stmt(stmt: Stmt) -> Stmt {
@@ -494,6 +653,25 @@ fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
 
             if try_body.is_empty() {
                 finally_body.unwrap_or_default()
+            } else if !block_may_throw(&try_body) {
+                if let Some(finally_body) = finally_body {
+                    if matches!(block_terminal_effect(&try_body), TerminalEffect::FallsThrough) {
+                        let mut stmts = try_body;
+                        stmts.extend(finally_body);
+                        stmts
+                    } else {
+                        vec![Stmt {
+                            kind: StmtKind::Try {
+                                try_body,
+                                catches,
+                                finally_body: Some(finally_body),
+                            },
+                            span,
+                        }]
+                    }
+                } else {
+                    try_body
+                }
             } else if catches.is_empty() && finally_body.is_none() {
                 try_body
             } else {
@@ -2389,7 +2567,7 @@ mod tests {
             panic!("expected function");
         };
         assert_eq!(body.len(), 1);
-        assert!(matches!(body[0].kind, StmtKind::Try { .. }));
+        assert!(matches!(body[0].kind, StmtKind::Return(_)));
     }
 
     #[test]
@@ -2711,5 +2889,61 @@ mod tests {
         let pruned = eliminate_dead_code(program);
 
         assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(9))]);
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_inlines_non_throwing_try_catch() {
+        let program = vec![Stmt::new(
+            StmtKind::Try {
+                try_body: vec![Stmt::echo(Expr::int_lit(7))],
+                catches: vec![crate::parser::ast::CatchClause {
+                    exception_types: vec![Name::unqualified("Exception")],
+                    variable: Some("e".into()),
+                    body: vec![Stmt::echo(Expr::int_lit(9))],
+                }],
+                finally_body: None,
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7))]);
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_inlines_non_throwing_try_finally_fallthrough() {
+        let program = vec![Stmt::new(
+            StmtKind::Try {
+                try_body: vec![Stmt::echo(Expr::int_lit(7))],
+                catches: Vec::new(),
+                finally_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7)), Stmt::echo(Expr::int_lit(9))]);
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_keeps_non_throwing_try_finally_with_return() {
+        let program = vec![Stmt::new(
+            StmtKind::Try {
+                try_body: vec![Stmt::new(
+                    StmtKind::Return(Some(Expr::int_lit(7))),
+                    Span::dummy(),
+                )],
+                catches: Vec::new(),
+                finally_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(pruned.len(), 1);
+        assert!(matches!(pruned[0].kind, StmtKind::Try { .. }));
     }
 }
