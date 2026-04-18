@@ -667,3 +667,35 @@ echo answer();
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn test_dead_code_elimination_preserves_effectful_empty_if_condition() {
+    let out = compile_and_run(
+        r#"<?php
+function touch() {
+    echo "t";
+    return true;
+}
+if (touch()) {
+}
+echo "!";
+"#,
+    );
+
+    assert_eq!(out, "t!");
+}
+
+#[test]
+fn test_dead_code_elimination_inlines_empty_try_finally() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+} finally {
+    echo "f";
+}
+echo "!";
+"#,
+    );
+
+    assert_eq!(out, "f!");
+}
