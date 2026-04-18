@@ -588,6 +588,9 @@ fn block_effect(stmts: &[Stmt]) -> Effect {
         let stmt_effect = with_callable_alias_effects(aliases.clone(), || stmt_effect(stmt));
         effect = effect.combine(stmt_effect);
         apply_stmt_callable_aliases(stmt, &mut aliases);
+        if !matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough) {
+            break;
+        }
     }
     effect
 }
@@ -1503,9 +1506,47 @@ fn apply_stmt_callable_aliases(stmt: &Stmt, aliases: &mut HashMap<String, Effect
                 aliases.remove(var);
             }
         }
-        StmtKind::If { .. }
-        | StmtKind::IfDef { .. }
-        | StmtKind::While { .. }
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            let mut fallthrough_paths = Vec::new();
+            if matches!(block_terminal_effect(then_body), TerminalEffect::FallsThrough) {
+                fallthrough_paths.push(simulate_block_callable_aliases(then_body, aliases.clone()));
+            }
+            for (_, body) in elseif_clauses {
+                if matches!(block_terminal_effect(body), TerminalEffect::FallsThrough) {
+                    fallthrough_paths.push(simulate_block_callable_aliases(body, aliases.clone()));
+                }
+            }
+            if let Some(body) = else_body {
+                if matches!(block_terminal_effect(body), TerminalEffect::FallsThrough) {
+                    fallthrough_paths.push(simulate_block_callable_aliases(body, aliases.clone()));
+                }
+            } else {
+                fallthrough_paths.push(aliases.clone());
+            }
+            *aliases = merge_callable_alias_paths(fallthrough_paths);
+        }
+        StmtKind::IfDef {
+            then_body, else_body, ..
+        } => {
+            let mut fallthrough_paths = Vec::new();
+            if matches!(block_terminal_effect(then_body), TerminalEffect::FallsThrough) {
+                fallthrough_paths.push(simulate_block_callable_aliases(then_body, aliases.clone()));
+            }
+            match else_body {
+                Some(body) if matches!(block_terminal_effect(body), TerminalEffect::FallsThrough) => {
+                    fallthrough_paths.push(simulate_block_callable_aliases(body, aliases.clone()));
+                }
+                None => fallthrough_paths.push(aliases.clone()),
+                _ => {}
+            }
+            *aliases = merge_callable_alias_paths(fallthrough_paths);
+        }
+        StmtKind::While { .. }
         | StmtKind::DoWhile { .. }
         | StmtKind::For { .. }
         | StmtKind::Foreach { .. }
@@ -1514,6 +1555,34 @@ fn apply_stmt_callable_aliases(stmt: &Stmt, aliases: &mut HashMap<String, Effect
         | StmtKind::Include { .. } => aliases.clear(),
         _ => {}
     }
+}
+
+fn simulate_block_callable_aliases(
+    body: &[Stmt],
+    mut aliases: HashMap<String, Effect>,
+) -> HashMap<String, Effect> {
+    for stmt in body {
+        apply_stmt_callable_aliases(stmt, &mut aliases);
+        if !matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough) {
+            break;
+        }
+    }
+    aliases
+}
+
+fn merge_callable_alias_paths(
+    mut paths: Vec<HashMap<String, Effect>>,
+) -> HashMap<String, Effect> {
+    let Some(first) = paths.pop() else {
+        return HashMap::new();
+    };
+    first
+        .into_iter()
+        .filter(|(name, effect)| {
+            paths.iter()
+                .all(|path| path.get(name).copied() == Some(*effect))
+        })
+        .collect()
 }
 
 fn prune_for_clause(stmt: Option<Box<Stmt>>) -> Option<Box<Stmt>> {
@@ -2849,6 +2918,69 @@ mod tests {
                         StmtKind::Assign {
                             name: "g".to_string(),
                             value: Expr::var("f"),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::ClosureCall {
+                                var: "g".to_string(),
+                                args: vec![Expr::string_lit("abc")],
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    ),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let (function_effects, _) = compute_program_callable_effects(&program);
+
+        assert_eq!(
+            function_effects.get("relay"),
+            Some(&Effect::PURE.with_side_effects())
+        );
+    }
+
+    #[test]
+    fn test_program_function_effects_merge_callable_aliases_across_if_paths() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "relay".to_string(),
+                params: vec![("flag".to_string(), None, None, false)],
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::If {
+                            condition: Expr::var("flag"),
+                            then_body: vec![Stmt::new(
+                                StmtKind::Assign {
+                                    name: "g".to_string(),
+                                    value: Expr::new(
+                                        ExprKind::FirstClassCallable(CallableTarget::Function(
+                                            Name::from("strlen"),
+                                        )),
+                                        Span::dummy(),
+                                    ),
+                                },
+                                Span::dummy(),
+                            )],
+                            elseif_clauses: Vec::new(),
+                            else_body: Some(vec![Stmt::new(
+                                StmtKind::Assign {
+                                    name: "g".to_string(),
+                                    value: Expr::new(
+                                        ExprKind::FirstClassCallable(CallableTarget::Function(
+                                            Name::from("strlen"),
+                                        )),
+                                        Span::dummy(),
+                                    ),
+                                },
+                                Span::dummy(),
+                            )]),
                         },
                         Span::dummy(),
                     ),
