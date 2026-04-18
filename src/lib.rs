@@ -8,4 +8,5 @@ pub mod optimize;
 pub mod parser;
 pub mod resolver;
 pub mod span;
+pub mod termination;
 pub mod types;

@@ -10,6 +10,7 @@ mod resolver;
 mod runtime_cache;
 mod source_map;
 mod span;
+mod termination;
 mod types;
 
 use std::collections::HashSet;
