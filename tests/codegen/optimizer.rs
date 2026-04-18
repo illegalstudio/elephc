@@ -587,3 +587,83 @@ echo true ? answer() : (2 ** 8);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn test_dead_code_elimination_prunes_after_exhaustive_try_catch() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_try_catch");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+function answer() {
+    try {
+        return 7;
+    } catch (Exception $e) {
+        return 8;
+    }
+    echo 2 ** 8;
+}
+echo answer();
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "dead statements after exhaustive try/catch should not remain in user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "7");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dead_code_elimination_prunes_after_try_finally_exit() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_try_finally");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+function answer() {
+    try {
+        return 7;
+    } finally {
+        echo 1;
+    }
+    echo 2 ** 8;
+}
+echo answer();
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "dead statements after try/finally exit should not remain in user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "17");
+
+    let _ = fs::remove_dir_all(&dir);
+}

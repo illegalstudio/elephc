@@ -11,6 +11,10 @@ pub fn prune_constant_control_flow(program: Program) -> Program {
     prune_block(program)
 }
 
+pub fn eliminate_dead_code(program: Program) -> Program {
+    prune_block(program)
+}
+
 fn fold_stmt(stmt: Stmt) -> Stmt {
     let span = stmt.span;
     let kind = match stmt.kind {
@@ -327,9 +331,32 @@ fn stmt_terminal_effect(stmt: &Stmt) -> TerminalEffect {
             std::iter::once(block_terminal_effect(then_body)),
             else_body.as_ref().map(|body| block_terminal_effect(body)),
         ),
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => try_terminal_effect(try_body, catches, finally_body),
         StmtKind::Switch { cases, default, .. } => switch_terminal_effect(cases, default),
         _ => TerminalEffect::FallsThrough,
     }
+}
+
+fn try_terminal_effect(
+    try_body: &[Stmt],
+    catches: &[crate::parser::ast::CatchClause],
+    finally_body: &Option<Vec<Stmt>>,
+) -> TerminalEffect {
+    if let Some(finally_body) = finally_body {
+        let finally_effect = block_terminal_effect(finally_body);
+        if !matches!(finally_effect, TerminalEffect::FallsThrough) {
+            return finally_effect;
+        }
+    }
+
+    merge_terminal_effects(
+        std::iter::once(block_terminal_effect(try_body))
+            .chain(catches.iter().map(|catch| block_terminal_effect(&catch.body))),
+    )
 }
 
 fn combine_branch_effects(
@@ -340,11 +367,17 @@ fn combine_branch_effects(
         return TerminalEffect::FallsThrough;
     };
 
-    let mut saw_break = else_effect == TerminalEffect::Breaks;
-    let mut saw_exit = else_effect == TerminalEffect::ExitsCurrentBlock;
-    let mut saw_mixed = else_effect == TerminalEffect::TerminatesMixed;
+    merge_terminal_effects(std::iter::once(else_effect).chain(branch_effects))
+}
 
-    for effect in branch_effects {
+fn merge_terminal_effects(effects: impl Iterator<Item = TerminalEffect>) -> TerminalEffect {
+    let mut saw_any = false;
+    let mut saw_break = false;
+    let mut saw_exit = false;
+    let mut saw_mixed = false;
+
+    for effect in effects {
+        saw_any = true;
         match effect {
             TerminalEffect::FallsThrough => return TerminalEffect::FallsThrough,
             TerminalEffect::Breaks => saw_break = true,
@@ -353,7 +386,9 @@ fn combine_branch_effects(
         }
     }
 
-    if saw_mixed || (saw_break && saw_exit) {
+    if !saw_any {
+        TerminalEffect::FallsThrough
+    } else if saw_mixed || (saw_break && saw_exit) {
         TerminalEffect::TerminatesMixed
     } else if saw_exit {
         TerminalEffect::ExitsCurrentBlock
@@ -2330,5 +2365,124 @@ mod tests {
         };
         assert_eq!(cases.len(), 1);
         assert_eq!(cases[0].0, vec![Expr::int_lit(3)]);
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_drops_statements_after_exhaustive_try_catch() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "answer".into(),
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::Try {
+                            try_body: vec![Stmt::new(
+                                StmtKind::Return(Some(Expr::int_lit(7))),
+                                Span::dummy(),
+                            )],
+                            catches: vec![crate::parser::ast::CatchClause {
+                                exception_types: vec!["Exception".into()],
+                                variable: Some("e".into()),
+                                body: vec![Stmt::new(
+                                    StmtKind::Return(Some(Expr::int_lit(8))),
+                                    Span::dummy(),
+                                )],
+                            }],
+                            finally_body: None,
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::echo(Expr::int_lit(9)),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let eliminated = eliminate_dead_code(program);
+
+        let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+            panic!("expected function");
+        };
+        assert_eq!(body.len(), 1);
+        assert!(matches!(body[0].kind, StmtKind::Try { .. }));
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_drops_statements_after_try_finally_exit() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "answer".into(),
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::Try {
+                            try_body: vec![Stmt::new(
+                                StmtKind::Return(Some(Expr::int_lit(7))),
+                                Span::dummy(),
+                            )],
+                            catches: Vec::new(),
+                            finally_body: Some(vec![Stmt::new(
+                                StmtKind::Return(Some(Expr::int_lit(8))),
+                                Span::dummy(),
+                            )]),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::echo(Expr::int_lit(9)),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let eliminated = eliminate_dead_code(program);
+
+        let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+            panic!("expected function");
+        };
+        assert_eq!(body.len(), 1);
+        assert!(matches!(body[0].kind, StmtKind::Try { .. }));
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_keeps_statements_after_fallthrough_try() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "answer".into(),
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::Try {
+                            try_body: vec![Stmt::echo(Expr::int_lit(7))],
+                            catches: vec![crate::parser::ast::CatchClause {
+                                exception_types: vec!["Exception".into()],
+                                variable: Some("e".into()),
+                                body: vec![Stmt::new(
+                                    StmtKind::Return(Some(Expr::int_lit(8))),
+                                    Span::dummy(),
+                                )],
+                            }],
+                            finally_body: None,
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::echo(Expr::int_lit(9)),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let eliminated = eliminate_dead_code(program);
+
+        let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+            panic!("expected function");
+        };
+        assert_eq!(body.len(), 2);
+        assert_eq!(body[1], Stmt::echo(Expr::int_lit(9)));
     }
 }

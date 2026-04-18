@@ -340,6 +340,10 @@ fn main() {
     timings.record_since("opt-post", phase_started);
 
     let phase_started = Instant::now();
+    let ast = optimize::eliminate_dead_code(ast);
+    timings.record_since("dce", phase_started);
+
+    let phase_started = Instant::now();
     let runtime_object = match runtime_cache::prepare_runtime_object(heap_size, target) {
         Ok(runtime_object) => runtime_object,
         Err(err) => {
