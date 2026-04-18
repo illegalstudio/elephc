@@ -552,3 +552,38 @@ echo answer(1);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn test_constant_folding_prunes_unused_pure_ternary_branch_from_user_assembly() {
+    let dir = make_cli_test_dir("elephc_constant_folding_ternary_dead_branch");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+function answer() {
+    return 7;
+}
+echo true ? answer() : (2 ** 8);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "unused pure ternary branch should not remain in user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "7");
+
+    let _ = fs::remove_dir_all(&dir);
+}

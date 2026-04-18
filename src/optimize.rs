@@ -900,6 +900,7 @@ fn prune_expr(expr: Expr) -> Expr {
             len: Box::new(prune_expr(*len)),
         },
     };
+    let kind = prune_unused_pure_subexpressions(kind);
     Expr { kind, span }
 }
 
@@ -973,6 +974,45 @@ fn callable_target_has_side_effects(target: &CallableTarget) -> bool {
     match target {
         CallableTarget::Function(_) | CallableTarget::StaticMethod { .. } => false,
         CallableTarget::Method { .. } => true,
+    }
+}
+
+fn prune_unused_pure_subexpressions(kind: ExprKind) -> ExprKind {
+    match kind {
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => match scalar_value(&condition) {
+            Some(value) if value.truthy() && !expr_has_side_effects(&else_expr) => then_expr.kind,
+            Some(value) if !value.truthy() && !expr_has_side_effects(&then_expr) => else_expr.kind,
+            _ => ExprKind::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            },
+        },
+        ExprKind::NullCoalesce { value, default } => match scalar_value(&value) {
+            Some(ScalarValue::Null) => default.kind,
+            Some(_) if !expr_has_side_effects(&default) => value.kind,
+            _ => ExprKind::NullCoalesce { value, default },
+        },
+        ExprKind::BinaryOp { left, op, right } => match op {
+            BinOp::And => match scalar_value(&left) {
+                Some(value) if !value.truthy() && !expr_has_side_effects(&right) => {
+                    ExprKind::BoolLiteral(false)
+                }
+                _ => ExprKind::BinaryOp { left, op, right },
+            },
+            BinOp::Or => match scalar_value(&left) {
+                Some(value) if value.truthy() && !expr_has_side_effects(&right) => {
+                    ExprKind::BoolLiteral(true)
+                }
+                _ => ExprKind::BinaryOp { left, op, right },
+            },
+            _ => ExprKind::BinaryOp { left, op, right },
+        },
+        other => other,
     }
 }
 
@@ -2073,6 +2113,44 @@ mod tests {
         };
         assert_eq!(body.len(), 1);
         assert_eq!(body[0], Stmt::echo(Expr::int_lit(7)));
+    }
+
+    #[test]
+    fn test_prune_ternary_drops_unused_pure_branch() {
+        let program = vec![Stmt::assign(
+            "x",
+            Expr::new(
+                ExprKind::Ternary {
+                    condition: Box::new(Expr::new(ExprKind::BoolLiteral(true), Span::dummy())),
+                    then_expr: Box::new(Expr::var("answer")),
+                    else_expr: Box::new(Expr::binop(Expr::int_lit(2), BinOp::Pow, Expr::int_lit(8))),
+                },
+                Span::dummy(),
+            ),
+        )];
+
+        let pruned = prune_constant_control_flow(program);
+
+        assert_eq!(pruned, vec![Stmt::assign("x", Expr::var("answer"))]);
+    }
+
+    #[test]
+    fn test_prune_short_circuit_drops_unused_pure_rhs() {
+        let program = vec![Stmt::echo(Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(Expr::new(ExprKind::BoolLiteral(true), Span::dummy())),
+                op: BinOp::Or,
+                right: Box::new(Expr::binop(Expr::int_lit(2), BinOp::Pow, Expr::int_lit(8))),
+            },
+            Span::dummy(),
+        ))];
+
+        let pruned = prune_constant_control_flow(program);
+
+        assert_eq!(
+            pruned,
+            vec![Stmt::echo(Expr::new(ExprKind::BoolLiteral(true), Span::dummy()))]
+        );
     }
 
     #[test]
