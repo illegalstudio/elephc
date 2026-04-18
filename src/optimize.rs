@@ -29,6 +29,11 @@ fn normalize_optional_block(body: Option<Vec<Stmt>>) -> Option<Vec<Stmt>> {
     body.filter(|body| !body.is_empty())
 }
 
+fn invert_condition(condition: Expr) -> Expr {
+    let span = condition.span;
+    prune_expr(Expr::new(ExprKind::Not(Box::new(condition)), span))
+}
+
 fn fold_stmt(stmt: Stmt) -> Stmt {
     let span = stmt.span;
     let kind = match stmt.kind {
@@ -571,6 +576,20 @@ fn prune_if_chain(
                 return expr_to_effect_stmt(condition);
             }
 
+            if then_body.is_empty() && kept_elseifs.is_empty() {
+                if let Some(else_body) = kept_else {
+                    return vec![Stmt {
+                        kind: StmtKind::If {
+                            condition: invert_condition(condition),
+                            then_body: else_body,
+                            elseif_clauses: Vec::new(),
+                            else_body: None,
+                        },
+                        span,
+                    }];
+                }
+            }
+
             vec![Stmt {
                 kind: StmtKind::If {
                     condition,
@@ -656,6 +675,14 @@ fn prune_switch_stmt(
 
     if cases.iter().all(|(_, body)| body.is_empty()) && default.is_none() {
         return expr_to_effect_stmt(subject);
+    }
+
+    if cases.is_empty() {
+        let mut stmts = expr_to_effect_stmt(subject);
+        if let Some(default_body) = default {
+            stmts.extend(default_body);
+        }
+        return stmts;
     }
 
     let Some(subject_value) = scalar_value(&subject) else {
@@ -2477,6 +2504,53 @@ mod tests {
                     body: vec![Stmt::echo(Expr::int_lit(7))],
                 }],
                 finally_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(9))]);
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_inverts_single_live_else_branch() {
+        let program = vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::var("flag"),
+                then_body: Vec::new(),
+                elseif_clauses: Vec::new(),
+                else_body: Some(vec![Stmt::echo(Expr::int_lit(7))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = eliminate_dead_code(program);
+
+        assert_eq!(
+            pruned,
+            vec![Stmt::new(
+                StmtKind::If {
+                    condition: Expr::new(
+                        ExprKind::Not(Box::new(Expr::var("flag"))),
+                        Span::dummy(),
+                    ),
+                    then_body: vec![Stmt::echo(Expr::int_lit(7))],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                Span::dummy(),
+            )]
+        );
+    }
+
+    #[test]
+    fn test_eliminate_dead_code_inlines_default_only_switch() {
+        let program = vec![Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::var("flag"),
+                cases: Vec::new(),
+                default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
             },
             Span::dummy(),
         )];

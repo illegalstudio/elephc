@@ -699,3 +699,33 @@ echo "!";
 
     assert_eq!(out, "f!");
 }
+
+#[test]
+fn test_dead_code_elimination_inverts_single_live_else_branch() {
+    let out = compile_and_run(
+        r#"<?php
+$flag = false;
+if ($flag) {
+} else {
+    echo "e";
+}
+"#,
+    );
+
+    assert_eq!(out, "e");
+}
+
+#[test]
+fn test_dead_code_elimination_inlines_default_only_switch() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1;
+switch ($x) {
+    default:
+        echo "d";
+}
+"#,
+    );
+
+    assert_eq!(out, "d");
+}
