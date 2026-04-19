@@ -325,9 +325,11 @@ Proper type system for PHP compatibility.
 
 - [ ] Constant propagation across locals / statement boundaries
 - [ ] Dead code elimination v2 (CFG/basic-block aware pass beyond local AST pruning)
-- [ ] Purity / may-throw analysis so AST optimizations can reason more precisely about safe hoisting and branch removal
+- [x] Purity / may-throw analysis so AST optimizations can reason more precisely about safe hoisting and branch removal
 - [ ] Exception-aware dead code elimination beyond conservative `try` / `catch` / `finally` heuristics
 - [ ] Control-flow normalization pass for flattening redundant nested `if` / `switch` / `try` shells after pruning
+- [ ] Alias-aware constant propagation so local callables and scalar values can stay precise across `if` / `switch` / `try` merges
+- [ ] Purity / may-throw v2 for dynamic instance dispatch, richer property/array reads, and less pessimistic builtin modeling
 - [ ] Register allocation (reduce stack spills)
 - [ ] Inline small functions
 - [ ] Tail-call optimization

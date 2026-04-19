@@ -47,7 +47,7 @@ How elephc works under the hood — from lexing to code generation and runtime s
 - [The Lexer](internals/the-lexer.md) — raw text to tokens
 - [The Parser](internals/the-parser.md) — tokens to AST with Pratt parsing
 - [The Type Checker](internals/the-type-checker.md) — compile-time type inference and validation
-- [The Optimizer](internals/the-optimizer.md) — constant folding, control-flow pruning, and dead-code elimination on the AST
+- [The Optimizer](internals/the-optimizer.md) — constant folding, purity / may-throw reasoning, control-flow pruning, and dead-code elimination on the AST
 - [The Code Generator](internals/the-codegen.md) — optimized checked AST to target assembly (with an AArch64-focused walkthrough)
 - [The Runtime](internals/the-runtime.md) — hand-written assembly routines
 - [Memory Model](internals/memory-model.md) — stack frames, heap, reference counting

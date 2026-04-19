@@ -17,6 +17,13 @@ Today the optimizer is split into three passes:
 
 That split matters. Some rewrites are always safe on syntax alone, while others should only happen after diagnostics have already seen the checked program.
 
+Alongside those three passes, the optimizer also builds lightweight local **effect summaries**. These summaries answer two questions conservatively:
+
+- does this expression have observable side effects?
+- can this expression throw?
+
+That effect information is what lets later pruning and dead-code elimination stay more precise around `try` / `catch`, callable aliases, and non-trivial control-flow merges.
+
 ## Why optimize at the AST level
 
 elephc goes straight from AST to target assembly. There is no middle IR for optimization to target, so the cheapest high-value place to simplify code is the AST itself.
@@ -145,6 +152,48 @@ if (true) {
 
 After pruning, the dead branch disappears entirely. That means codegen never emits the `pow` path.
 
+## Effect summaries: purity and `may_throw`
+
+The optimizer now maintains a small local effect-analysis layer that sits underneath the pruning and dead-code-elimination passes.
+
+Current coverage includes:
+
+- known pure / non-throwing builtins such as `strlen()`
+- user-defined functions whose bodies are themselves pure / non-throwing
+- user-defined static methods with the same conservative summary inference
+- private instance methods called on `$this`, where dispatch is statically known
+- direct closure calls and local closure aliases
+- named first-class callables and expr-calls on those callables
+- callable aliases that survive merges through:
+  - `if` / `else`
+  - `try` / `catch` / `finally`
+  - `switch`
+- callable-producing expressions such as:
+  - ternaries
+  - `??`
+  - `match`
+  when every surviving branch agrees on the same callable effect
+
+This analysis is still intentionally local. It does not try to solve general whole-program purity. Instead, it focuses on the small set of call shapes that matter most for AST rewriting today.
+
+### Example
+
+```php
+<?php
+$f = match ($mode) {
+    1 => strlen(...),
+    default => strlen(...),
+};
+
+try {
+    echo $f("abc");
+} catch (Exception $e) {
+    echo pow(2, 8);
+}
+```
+
+Because every `match` arm produces the same known pure / non-throwing callable, the optimizer can prove that the `catch` path is dead and avoid emitting the `pow` branch at all.
+
 ## Why there are three passes
 
 If elephc removed whole branches before type checking, it could accidentally hide useful diagnostics.
@@ -171,25 +220,25 @@ So the current rule is:
 
 The optimizer is intentionally conservative about what counts as "pure" or "non-throwing".
 
-It does **not** assume purity for operations such as:
+It now recognizes a useful subset of call expressions precisely, but it still does **not** assume purity for broad dynamic operations such as:
 
-- function calls
-- method calls
+- unknown function or method calls
+- dynamic instance dispatch beyond the statically-known `$this` / private-method case
 - object creation
-- property access
-- array access
+- most property and array reads where runtime hooks or dynamic behavior could matter
 - buffer allocation
 - increment/decrement
 - `throw`
 
-That conservatism is why the pass is safe to run by default: if an expression could have runtime behavior, the optimizer prefers to keep it.
+That conservatism is why the pass is safe to run by default: if an expression could have runtime behavior and elephc cannot prove otherwise with its local summaries, the optimizer prefers to keep it.
 
 ## What the optimizer does not do yet
 
 The current pass is local. It does not yet implement:
 
 - constant propagation across variables and statement boundaries
-- interprocedural optimization
+- richer alias-aware propagation across general locals and merges
+- deeper exception-aware dead-code elimination beyond conservative `try` heuristics
 - backend-specific peephole cleanup
 - runtime dead stripping
 - register allocation

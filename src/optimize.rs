@@ -742,6 +742,18 @@ fn closure_alias_effect(expr: &Expr) -> Option<Effect> {
     }
 }
 
+fn merge_callable_value_effects(
+    effects: impl IntoIterator<Item = Option<Effect>>,
+) -> Option<Effect> {
+    let mut effects = effects.into_iter();
+    let first = effects.next().flatten()?;
+    if effects.all(|effect| effect == Some(first)) {
+        Some(first)
+    } else {
+        None
+    }
+}
+
 fn static_method_call_effect(
     receiver: &crate::parser::ast::StaticReceiver,
     method_name: &str,
@@ -1585,6 +1597,24 @@ fn callable_alias_from_expr(expr: &Expr) -> Option<Effect> {
     match &expr.kind {
         ExprKind::FirstClassCallable(target) => Some(callable_target_call_effect(target)),
         ExprKind::Closure { .. } => closure_alias_effect(expr),
+        ExprKind::Ternary {
+            then_expr,
+            else_expr,
+            ..
+        } => merge_callable_value_effects([
+            callable_alias_from_expr(then_expr),
+            callable_alias_from_expr(else_expr),
+        ]),
+        ExprKind::NullCoalesce { value, default } => merge_callable_value_effects([
+            callable_alias_from_expr(value),
+            callable_alias_from_expr(default),
+        ]),
+        ExprKind::Match { arms, default, .. } => merge_callable_value_effects(
+            arms.iter()
+                .map(|(_, value)| callable_alias_from_expr(value))
+                .chain(default.iter().map(|value| callable_alias_from_expr(value))),
+        ),
+        ExprKind::NamedArg { value, .. } => callable_alias_from_expr(value),
         ExprKind::Variable(name) => ACTIVE_CALLABLE_ALIAS_EFFECTS.with(|slot| {
             slot.borrow()
                 .as_ref()
@@ -3237,6 +3267,176 @@ mod tests {
                             ExprKind::ClosureCall {
                                 var: "f".to_string(),
                                 args: Vec::new(),
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    ),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+        assert_eq!(
+            function_effects.get("relay"),
+            Some(&Effect::PURE.with_side_effects())
+        );
+    }
+
+    #[test]
+    fn test_program_function_effects_track_callable_alias_through_ternary() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "relay".to_string(),
+                params: vec![("flag".to_string(), None, None, false)],
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::Assign {
+                            name: "f".to_string(),
+                            value: Expr::new(
+                                ExprKind::Ternary {
+                                    condition: Box::new(Expr::var("flag")),
+                                    then_expr: Box::new(Expr::new(
+                                        ExprKind::FirstClassCallable(CallableTarget::Function(
+                                            Name::from("strlen"),
+                                        )),
+                                        Span::dummy(),
+                                    )),
+                                    else_expr: Box::new(Expr::new(
+                                        ExprKind::FirstClassCallable(CallableTarget::Function(
+                                            Name::from("strlen"),
+                                        )),
+                                        Span::dummy(),
+                                    )),
+                                },
+                                Span::dummy(),
+                            ),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::ClosureCall {
+                                var: "f".to_string(),
+                                args: vec![Expr::string_lit("abc")],
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    ),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+        assert_eq!(
+            function_effects.get("relay"),
+            Some(&Effect::PURE.with_side_effects())
+        );
+    }
+
+    #[test]
+    fn test_program_function_effects_track_callable_alias_through_match() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "relay".to_string(),
+                params: vec![("flag".to_string(), None, None, false)],
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::Assign {
+                            name: "f".to_string(),
+                            value: Expr::new(
+                                ExprKind::Match {
+                                    subject: Box::new(Expr::var("flag")),
+                                    arms: vec![(
+                                        vec![Expr::int_lit(1)],
+                                        Expr::new(
+                                            ExprKind::FirstClassCallable(
+                                                CallableTarget::Function(Name::from("strlen")),
+                                            ),
+                                            Span::dummy(),
+                                        ),
+                                    )],
+                                    default: Some(Box::new(Expr::new(
+                                        ExprKind::FirstClassCallable(CallableTarget::Function(
+                                            Name::from("strlen"),
+                                        )),
+                                        Span::dummy(),
+                                    ))),
+                                },
+                                Span::dummy(),
+                            ),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::ClosureCall {
+                                var: "f".to_string(),
+                                args: vec![Expr::string_lit("abc")],
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    ),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+        assert_eq!(
+            function_effects.get("relay"),
+            Some(&Effect::PURE.with_side_effects())
+        );
+    }
+
+    #[test]
+    fn test_program_function_effects_track_callable_alias_through_null_coalesce() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "relay".to_string(),
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::Assign {
+                            name: "f".to_string(),
+                            value: Expr::new(
+                                ExprKind::NullCoalesce {
+                                    value: Box::new(Expr::new(
+                                        ExprKind::FirstClassCallable(CallableTarget::Function(
+                                            Name::from("strlen"),
+                                        )),
+                                        Span::dummy(),
+                                    )),
+                                    default: Box::new(Expr::new(
+                                        ExprKind::FirstClassCallable(CallableTarget::Function(
+                                            Name::from("strlen"),
+                                        )),
+                                        Span::dummy(),
+                                    )),
+                                },
+                                Span::dummy(),
+                            ),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::ClosureCall {
+                                var: "f".to_string(),
+                                args: vec![Expr::string_lit("abc")],
                             },
                             Span::dummy(),
                         ))),

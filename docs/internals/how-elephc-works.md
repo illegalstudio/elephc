@@ -112,7 +112,7 @@ Typical examples include:
 - `2 < 3 ? 8 : 9` → `8`
 - `null ?? "fallback"` → `"fallback"`
 
-The pass is deliberately local and side-effect aware. It simplifies scalar computations, but it does not speculate across calls, object/property access, or other expressions that may have runtime behavior.
+The pass is deliberately local and side-effect aware. It simplifies scalar computations, but it does not speculate across arbitrary calls or other expressions that may have runtime behavior. More precise call-side purity and `may_throw` reasoning happens later, after type checking, when elephc has enough context to build conservative effect summaries for known call targets.
 
 In our running example there is nothing to fold yet: the pass does not currently propagate `$x = 10` into the later `$x > 5` comparison.
 
@@ -152,6 +152,8 @@ This pass currently handles cases such as:
 - unreachable statements after `return`, `throw`, `break`, or `continue`
 - dead code after exhaustive `if` / `else` and `switch` + `default` structures
 - pure expression statements and pure dead subexpressions that can be dropped safely
+
+This pass also consults the optimizer's local effect summaries. Those summaries track known pure / non-throwing builtins, user functions, static methods, private `$this` methods, closures, and callable aliases that survive merges through `if`, `switch`, and `try` paths. That extra precision is what lets elephc prove that some `try` regions cannot actually throw and trim dead handlers safely.
 
 This split is intentional: elephc folds obvious scalar expressions early, but waits until after type checking to remove whole blocks, so diagnostics still see the original checked structure.
 
