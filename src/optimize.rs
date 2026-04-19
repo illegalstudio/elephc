@@ -704,9 +704,14 @@ fn function_call_effect(name: &str) -> Effect {
     })
 }
 
+fn closure_body_call_effect(body: &[Stmt]) -> Effect {
+    block_effect(body)
+}
+
 fn expr_call_effect(callee: &Expr) -> Effect {
     match &callee.kind {
         ExprKind::FirstClassCallable(target) => callable_target_call_effect(target),
+        ExprKind::Closure { body, .. } => closure_body_call_effect(body),
         _ => Effect::PURE.with_side_effects().with_may_throw(),
     }
 }
@@ -727,6 +732,13 @@ fn callable_target_call_effect(target: &CallableTarget) -> Effect {
         CallableTarget::Method { object, method } => {
             expr_effect(object).combine(private_instance_method_call_effect(object, method))
         }
+    }
+}
+
+fn closure_alias_effect(expr: &Expr) -> Option<Effect> {
+    match &expr.kind {
+        ExprKind::Closure { body, .. } => Some(closure_body_call_effect(body)),
+        _ => None,
     }
 }
 
@@ -1572,6 +1584,7 @@ fn prune_method_without_context(method: ClassMethod) -> ClassMethod {
 fn callable_alias_from_expr(expr: &Expr) -> Option<Effect> {
     match &expr.kind {
         ExprKind::FirstClassCallable(target) => Some(callable_target_call_effect(target)),
+        ExprKind::Closure { .. } => closure_alias_effect(expr),
         ExprKind::Variable(name) => ACTIVE_CALLABLE_ALIAS_EFFECTS.with(|slot| {
             slot.borrow()
                 .as_ref()
@@ -3149,6 +3162,96 @@ mod tests {
         assert_eq!(
             private_instance_method_effects.get("Util::len3"),
             Some(&Effect::PURE)
+        );
+    }
+
+    #[test]
+    fn test_effect_analysis_tracks_pure_iife_expr_calls() {
+        let expr = Expr::new(
+            ExprKind::ExprCall {
+                callee: Box::new(Expr::new(
+                    ExprKind::Closure {
+                        params: Vec::new(),
+                        variadic: None,
+                        body: vec![Stmt::new(
+                            StmtKind::Return(Some(Expr::new(
+                                ExprKind::FunctionCall {
+                                    name: Name::from("strlen"),
+                                    args: vec![Expr::string_lit("abc")],
+                                },
+                                Span::dummy(),
+                            ))),
+                            Span::dummy(),
+                        )],
+                        is_arrow: false,
+                        captures: Vec::new(),
+                    },
+                    Span::dummy(),
+                )),
+                args: Vec::new(),
+            },
+            Span::dummy(),
+        );
+
+        assert!(!expr_has_side_effects(&expr));
+        assert!(!expr_effect(&expr).may_throw);
+        assert!(!expr_is_observable(&expr));
+    }
+
+    #[test]
+    fn test_program_function_effects_track_closure_alias_locals() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "relay".to_string(),
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::Assign {
+                            name: "f".to_string(),
+                            value: Expr::new(
+                                ExprKind::Closure {
+                                    params: Vec::new(),
+                                    variadic: None,
+                                    body: vec![Stmt::new(
+                                        StmtKind::Return(Some(Expr::new(
+                                            ExprKind::FunctionCall {
+                                                name: Name::from("strlen"),
+                                                args: vec![Expr::string_lit("abc")],
+                                            },
+                                            Span::dummy(),
+                                        ))),
+                                        Span::dummy(),
+                                    )],
+                                    is_arrow: false,
+                                    captures: Vec::new(),
+                                },
+                                Span::dummy(),
+                            ),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::ClosureCall {
+                                var: "f".to_string(),
+                                args: Vec::new(),
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    ),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+        assert_eq!(
+            function_effects.get("relay"),
+            Some(&Effect::PURE.with_side_effects())
         );
     }
 
