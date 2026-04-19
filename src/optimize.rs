@@ -1482,6 +1482,44 @@ fn update_callable_alias(aliases: &mut HashMap<String, Effect>, name: &str, valu
     }
 }
 
+fn simulate_catch_callable_aliases(
+    catch: &crate::parser::ast::CatchClause,
+    mut aliases: HashMap<String, Effect>,
+) -> HashMap<String, Effect> {
+    if let Some(name) = &catch.variable {
+        aliases.remove(name);
+    }
+    simulate_block_callable_aliases(&catch.body, aliases)
+}
+
+fn merge_try_callable_alias_paths(
+    try_body: &[Stmt],
+    catches: &[crate::parser::ast::CatchClause],
+    finally_body: Option<&[Stmt]>,
+    incoming_aliases: &HashMap<String, Effect>,
+) -> HashMap<String, Effect> {
+    let mut fallthrough_paths = Vec::new();
+
+    if matches!(block_terminal_effect(try_body), TerminalEffect::FallsThrough) {
+        fallthrough_paths.push(simulate_block_callable_aliases(try_body, incoming_aliases.clone()));
+    }
+
+    for catch in catches {
+        if matches!(block_terminal_effect(&catch.body), TerminalEffect::FallsThrough) {
+            fallthrough_paths.push(simulate_catch_callable_aliases(catch, incoming_aliases.clone()));
+        }
+    }
+
+    if let Some(finally_body) = finally_body {
+        fallthrough_paths = fallthrough_paths
+            .into_iter()
+            .map(|aliases| simulate_block_callable_aliases(finally_body, aliases))
+            .collect();
+    }
+
+    merge_callable_alias_paths(fallthrough_paths)
+}
+
 fn apply_stmt_callable_aliases(stmt: &Stmt, aliases: &mut HashMap<String, Effect>) {
     match &stmt.kind {
         StmtKind::Assign { name, value } | StmtKind::TypedAssign { name, value, .. } => {
@@ -1546,12 +1584,23 @@ fn apply_stmt_callable_aliases(stmt: &Stmt, aliases: &mut HashMap<String, Effect
             }
             *aliases = merge_callable_alias_paths(fallthrough_paths);
         }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            *aliases = merge_try_callable_alias_paths(
+                try_body,
+                catches,
+                finally_body.as_deref(),
+                aliases,
+            );
+        }
         StmtKind::While { .. }
         | StmtKind::DoWhile { .. }
         | StmtKind::For { .. }
         | StmtKind::Foreach { .. }
         | StmtKind::Switch { .. }
-        | StmtKind::Try { .. }
         | StmtKind::Include { .. } => aliases.clear(),
         _ => {}
     }
@@ -2979,6 +3028,75 @@ mod tests {
                                         Span::dummy(),
                                     ),
                                 },
+                                Span::dummy(),
+                            )]),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::ClosureCall {
+                                var: "g".to_string(),
+                                args: vec![Expr::string_lit("abc")],
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    ),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let (function_effects, _) = compute_program_callable_effects(&program);
+
+        assert_eq!(
+            function_effects.get("relay"),
+            Some(&Effect::PURE.with_side_effects())
+        );
+    }
+
+    #[test]
+    fn test_program_function_effects_merge_callable_aliases_across_try_paths() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "relay".to_string(),
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::Try {
+                            try_body: vec![Stmt::new(
+                                StmtKind::Assign {
+                                    name: "g".to_string(),
+                                    value: Expr::new(
+                                        ExprKind::FirstClassCallable(CallableTarget::Function(
+                                            Name::from("strlen"),
+                                        )),
+                                        Span::dummy(),
+                                    ),
+                                },
+                                Span::dummy(),
+                            )],
+                            catches: vec![crate::parser::ast::CatchClause {
+                                exception_types: vec![Name::from("Exception")],
+                                variable: Some("e".to_string()),
+                                body: vec![Stmt::new(
+                                    StmtKind::Assign {
+                                        name: "g".to_string(),
+                                        value: Expr::new(
+                                            ExprKind::FirstClassCallable(CallableTarget::Function(
+                                                Name::from("strlen"),
+                                            )),
+                                            Span::dummy(),
+                                        ),
+                                    },
+                                    Span::dummy(),
+                                )],
+                            }],
+                            finally_body: Some(vec![Stmt::new(
+                                StmtKind::ExprStmt(Expr::string_lit("done")),
                                 Span::dummy(),
                             )]),
                         },
