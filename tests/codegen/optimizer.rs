@@ -1281,6 +1281,51 @@ try {
 }
 
 #[test]
+fn test_dead_code_elimination_inlines_try_with_callable_alias_switch_merge() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_try_callable_alias_switch_merge");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+switch ($argc) {
+    case 1:
+        $g = strlen(...);
+        break;
+    case 2:
+    default:
+        $g = strlen(...);
+}
+
+try {
+    echo $g("abc");
+} catch (Exception $e) {
+    echo 2 ** 8;
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "merged callable aliases across switch fallthrough paths should let dead catch bodies disappear:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "3");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dead_code_elimination_inlines_non_throwing_try_finally_fallthrough() {
     let out = compile_and_run(
         r#"<?php

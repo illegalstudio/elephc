@@ -1520,6 +1520,81 @@ fn merge_try_callable_alias_paths(
     merge_callable_alias_paths(fallthrough_paths)
 }
 
+enum SwitchAliasPathOutcome {
+    FallsThrough(HashMap<String, Effect>),
+    Breaks(HashMap<String, Effect>),
+    ExitsCurrentBlock,
+}
+
+fn simulate_switch_body_callable_aliases(
+    body: &[Stmt],
+    mut aliases: HashMap<String, Effect>,
+) -> SwitchAliasPathOutcome {
+    for stmt in body {
+        apply_stmt_callable_aliases(stmt, &mut aliases);
+        match stmt_terminal_effect(stmt) {
+            TerminalEffect::FallsThrough => {}
+            TerminalEffect::Breaks => return SwitchAliasPathOutcome::Breaks(aliases),
+            TerminalEffect::ExitsCurrentBlock | TerminalEffect::TerminatesMixed => {
+                return SwitchAliasPathOutcome::ExitsCurrentBlock;
+            }
+        }
+    }
+
+    SwitchAliasPathOutcome::FallsThrough(aliases)
+}
+
+fn simulate_switch_entry_callable_aliases(
+    cases: &[(Vec<Expr>, Vec<Stmt>)],
+    default: Option<&[Stmt]>,
+    entry_case: Option<usize>,
+    incoming_aliases: &HashMap<String, Effect>,
+) -> Option<HashMap<String, Effect>> {
+    let mut aliases = incoming_aliases.clone();
+
+    if let Some(start_index) = entry_case {
+        for (_, body) in cases.iter().skip(start_index) {
+            match simulate_switch_body_callable_aliases(body, aliases) {
+                SwitchAliasPathOutcome::FallsThrough(updated) => aliases = updated,
+                SwitchAliasPathOutcome::Breaks(updated) => return Some(updated),
+                SwitchAliasPathOutcome::ExitsCurrentBlock => return None,
+            }
+        }
+    }
+
+    match default {
+        Some(default_body) => match simulate_switch_body_callable_aliases(default_body, aliases) {
+            SwitchAliasPathOutcome::FallsThrough(updated)
+            | SwitchAliasPathOutcome::Breaks(updated) => Some(updated),
+            SwitchAliasPathOutcome::ExitsCurrentBlock => None,
+        },
+        None => Some(aliases),
+    }
+}
+
+fn merge_switch_callable_alias_paths(
+    cases: &[(Vec<Expr>, Vec<Stmt>)],
+    default: Option<&[Stmt]>,
+    incoming_aliases: &HashMap<String, Effect>,
+) -> HashMap<String, Effect> {
+    let mut fallthrough_paths = Vec::new();
+
+    for case_index in 0..cases.len() {
+        if let Some(aliases) =
+            simulate_switch_entry_callable_aliases(cases, default, Some(case_index), incoming_aliases)
+        {
+            fallthrough_paths.push(aliases);
+        }
+    }
+
+    if let Some(aliases) = simulate_switch_entry_callable_aliases(cases, default, None, incoming_aliases)
+    {
+        fallthrough_paths.push(aliases);
+    }
+
+    merge_callable_alias_paths(fallthrough_paths)
+}
+
 fn apply_stmt_callable_aliases(stmt: &Stmt, aliases: &mut HashMap<String, Effect>) {
     match &stmt.kind {
         StmtKind::Assign { name, value } | StmtKind::TypedAssign { name, value, .. } => {
@@ -1596,11 +1671,13 @@ fn apply_stmt_callable_aliases(stmt: &Stmt, aliases: &mut HashMap<String, Effect
                 aliases,
             );
         }
+        StmtKind::Switch { cases, default, .. } => {
+            *aliases = merge_switch_callable_alias_paths(cases, default.as_deref(), aliases);
+        }
         StmtKind::While { .. }
         | StmtKind::DoWhile { .. }
         | StmtKind::For { .. }
         | StmtKind::Foreach { .. }
-        | StmtKind::Switch { .. }
         | StmtKind::Include { .. } => aliases.clear(),
         _ => {}
     }
@@ -3097,6 +3174,77 @@ mod tests {
                             }],
                             finally_body: Some(vec![Stmt::new(
                                 StmtKind::ExprStmt(Expr::string_lit("done")),
+                                Span::dummy(),
+                            )]),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::ClosureCall {
+                                var: "g".to_string(),
+                                args: vec![Expr::string_lit("abc")],
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    ),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let (function_effects, _) = compute_program_callable_effects(&program);
+
+        assert_eq!(
+            function_effects.get("relay"),
+            Some(&Effect::PURE.with_side_effects())
+        );
+    }
+
+    #[test]
+    fn test_program_function_effects_merge_callable_aliases_across_switch_paths() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "relay".to_string(),
+                params: vec![("flag".to_string(), None, None, false)],
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::Switch {
+                            subject: Expr::var("flag"),
+                            cases: vec![
+                                (
+                                    vec![Expr::int_lit(1)],
+                                    vec![
+                                        Stmt::new(
+                                            StmtKind::Assign {
+                                                name: "g".to_string(),
+                                                value: Expr::new(
+                                                    ExprKind::FirstClassCallable(
+                                                        CallableTarget::Function(Name::from("strlen")),
+                                                    ),
+                                                    Span::dummy(),
+                                                ),
+                                            },
+                                            Span::dummy(),
+                                        ),
+                                        Stmt::new(StmtKind::Break, Span::dummy()),
+                                    ],
+                                ),
+                                (vec![Expr::int_lit(2)], Vec::new()),
+                            ],
+                            default: Some(vec![Stmt::new(
+                                StmtKind::Assign {
+                                    name: "g".to_string(),
+                                    value: Expr::new(
+                                        ExprKind::FirstClassCallable(CallableTarget::Function(
+                                            Name::from("strlen"),
+                                        )),
+                                        Span::dummy(),
+                                    ),
+                                },
                                 Span::dummy(),
                             )]),
                         },
