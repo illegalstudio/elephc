@@ -1115,6 +1115,23 @@ fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
             }
             Some(writes)
         }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            let mut writes = block_local_writes(try_body)?;
+            for catch in catches {
+                if let Some(variable) = &catch.variable {
+                    writes.insert(variable.clone());
+                }
+                writes.extend(block_local_writes(&catch.body)?);
+            }
+            if let Some(finally_body) = finally_body {
+                writes.extend(block_local_writes(finally_body)?);
+            }
+            Some(writes)
+        }
         StmtKind::NamespaceBlock { body, .. } => block_local_writes(body),
         StmtKind::StaticVar { .. }
         | StmtKind::Global { .. }
@@ -1123,7 +1140,6 @@ fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
         | StmtKind::Foreach { .. }
         | StmtKind::Include { .. }
         | StmtKind::Throw(_)
-        | StmtKind::Try { .. }
         | StmtKind::While { .. }
         | StmtKind::DoWhile { .. }
         | StmtKind::For { .. }
@@ -5266,6 +5282,47 @@ mod tests {
                                 ],
                             )],
                             default: Some(vec![Stmt::echo(Expr::var("i"))]),
+                        },
+                        Span::dummy(),
+                    )],
+                },
+                Span::dummy(),
+            ),
+            Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+        ];
+
+        let propagated = propagate_constants(program);
+
+        assert_eq!(
+            propagated[2],
+            Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        );
+    }
+
+    #[test]
+    fn test_propagate_constants_preserves_unmodified_scalar_across_loop_with_try() {
+        let program = vec![
+            Stmt::assign("base", Expr::int_lit(2)),
+            Stmt::new(
+                StmtKind::For {
+                    init: Some(Box::new(Stmt::assign("i", Expr::int_lit(0)))),
+                    condition: Some(Expr::binop(Expr::var("i"), BinOp::Lt, Expr::int_lit(3))),
+                    update: Some(Box::new(Stmt::new(
+                        StmtKind::ExprStmt(Expr::new(
+                            ExprKind::PostIncrement("i".to_string()),
+                            Span::dummy(),
+                        )),
+                        Span::dummy(),
+                    ))),
+                    body: vec![Stmt::new(
+                        StmtKind::Try {
+                            try_body: vec![Stmt::echo(Expr::var("i"))],
+                            catches: vec![crate::parser::ast::CatchClause {
+                                exception_types: vec![Name::from("Exception")],
+                                variable: Some("e".to_string()),
+                                body: vec![Stmt::echo(Expr::int_lit(9))],
+                            }],
+                            finally_body: Some(vec![]),
                         },
                         Span::dummy(),
                     )],

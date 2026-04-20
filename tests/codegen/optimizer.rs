@@ -362,6 +362,47 @@ echo $base ** 3;
 }
 
 #[test]
+fn test_constant_propagation_preserves_scalar_across_loop_with_try() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_loop_try");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$base = 2;
+for ($i = 0; $i < 3; $i++) {
+    try {
+        echo $i;
+    } catch (Exception $e) {
+        echo 9;
+    } finally {
+    }
+}
+echo $base ** 3;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "loop-local try/catch/finally should not kill unrelated scalar constants in user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "0128");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_constant_folding_string_concat_removes_runtime_concat_call() {
     let dir = make_cli_test_dir("elephc_constant_folding_concat");
     let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(

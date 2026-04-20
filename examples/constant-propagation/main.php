@@ -17,3 +17,14 @@ for ($i = 0; $i < 3; $i++) {
     echo $i;
 }
 echo $stable ** 3 . "\n";
+
+$stableTry = 2;
+for ($i = 0; $i < 2; $i++) {
+    try {
+        echo $i;
+    } catch (Exception $e) {
+        echo 9;
+    } finally {
+    }
+}
+echo $stableTry ** 3 . "\n";
