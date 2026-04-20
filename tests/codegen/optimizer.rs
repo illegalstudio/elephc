@@ -1677,6 +1677,33 @@ try {
 }
 
 #[test]
+fn test_dead_code_elimination_accepts_sorted_multi_catch_types() {
+    let out = compile_and_run(
+        r#"<?php
+class Alpha extends Exception {}
+class Mid extends Exception {}
+class Zed extends Exception {}
+function boom($flag) {
+    if ($flag === 1) {
+        throw new Zed("z");
+    }
+    if ($flag === 2) {
+        throw new Alpha("a");
+    }
+    throw new Mid("m");
+}
+try {
+    boom($argc);
+} catch (Zed | Alpha | Mid $e) {
+    echo "ok";
+}
+"#,
+    );
+
+    assert_eq!(out, "ok");
+}
+
+#[test]
 fn test_dead_code_elimination_materializes_constant_switch_match() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_match");
     let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
