@@ -1432,6 +1432,29 @@ if (step("a", false)) {
 }
 
 #[test]
+fn test_dead_code_elimination_merges_identical_if_chain_bodies_with_short_circuit() {
+    let out = compile_and_run(
+        r#"<?php
+function step($label, $ret) {
+    echo $label;
+    return $ret;
+}
+if (step("a", true)) {
+    echo "X";
+} else {
+    if (step("b", true)) {
+        echo "X";
+    } else {
+        echo "Y";
+    }
+}
+"#,
+    );
+
+    assert_eq!(out, "aX");
+}
+
+#[test]
 fn test_dead_code_elimination_normalizes_single_case_switch_with_effectful_subject() {
     let out = compile_and_run(
         r#"<?php

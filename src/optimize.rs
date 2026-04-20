@@ -448,6 +448,18 @@ fn combine_if_conditions(left: Expr, right: Expr) -> Expr {
     ))
 }
 
+fn combine_if_chain_conditions(left: Expr, right: Expr) -> Expr {
+    let span = left.span;
+    prune_expr(Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(left),
+            op: BinOp::Or,
+            right: Box::new(right),
+        },
+        span,
+    ))
+}
+
 fn build_switch_match_condition(subject: &Expr, patterns: &[Expr]) -> Option<Expr> {
     if patterns.is_empty() {
         return None;
@@ -1820,24 +1832,53 @@ fn build_if_stmt(
     else_body: Option<Vec<Stmt>>,
     span: crate::span::Span,
 ) -> Stmt {
-    if elseif_clauses.is_empty() && else_body.is_none() && then_body.len() == 1 {
-        if let StmtKind::If {
-            condition: inner_condition,
-            then_body: inner_then_body,
-            elseif_clauses: inner_elseifs,
-            else_body: inner_else,
-        } = &then_body[0].kind
-        {
-            if inner_elseifs.is_empty() && inner_else.is_none() {
-                return Stmt {
-                    kind: StmtKind::If {
-                        condition: combine_if_conditions(condition, inner_condition.clone()),
-                        then_body: inner_then_body.clone(),
-                        elseif_clauses: Vec::new(),
-                        else_body: None,
-                    },
-                    span,
-                };
+    if elseif_clauses.is_empty() {
+        if let Some(else_body_ref) = else_body.as_ref() {
+            if else_body_ref.len() == 1 {
+                if let StmtKind::If {
+                    condition: inner_condition,
+                    then_body: inner_then_body,
+                    elseif_clauses: inner_elseifs,
+                    else_body: inner_else,
+                } = &else_body_ref[0].kind
+                {
+                    if inner_elseifs.is_empty() && *inner_then_body == then_body {
+                        return Stmt {
+                            kind: StmtKind::If {
+                                condition: combine_if_chain_conditions(
+                                    condition,
+                                    inner_condition.clone(),
+                                ),
+                                then_body,
+                                elseif_clauses: Vec::new(),
+                                else_body: inner_else.clone(),
+                            },
+                            span,
+                        };
+                    }
+                }
+            }
+        }
+
+        if else_body.is_none() && then_body.len() == 1 {
+            if let StmtKind::If {
+                condition: inner_condition,
+                then_body: inner_then_body,
+                elseif_clauses: inner_elseifs,
+                else_body: inner_else,
+            } = &then_body[0].kind
+            {
+                if inner_elseifs.is_empty() && inner_else.is_none() {
+                    return Stmt {
+                        kind: StmtKind::If {
+                            condition: combine_if_conditions(condition, inner_condition.clone()),
+                            then_body: inner_then_body.clone(),
+                            elseif_clauses: Vec::new(),
+                            else_body: None,
+                        },
+                        span,
+                    };
+                }
             }
         }
     }
@@ -7074,6 +7115,56 @@ mod tests {
         assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(2))]);
         assert!(elseif_clauses.is_empty());
         assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(3))]));
+    }
+
+    #[test]
+    fn test_normalize_control_flow_merges_identical_if_chain_bodies_into_or_condition() {
+        let shared_body = vec![Stmt::echo(Expr::int_lit(7))];
+        let program = vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::var("a"),
+                then_body: shared_body.clone(),
+                elseif_clauses: Vec::new(),
+                else_body: Some(vec![Stmt::new(
+                    StmtKind::If {
+                        condition: Expr::var("b"),
+                        then_body: shared_body.clone(),
+                        elseif_clauses: Vec::new(),
+                        else_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+                    },
+                    Span::dummy(),
+                )]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = normalize_control_flow(program);
+
+        assert_eq!(pruned.len(), 1);
+        match &pruned[0].kind {
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            } => {
+                assert_eq!(
+                    *condition,
+                    Expr::new(
+                        ExprKind::BinaryOp {
+                            left: Box::new(Expr::var("a")),
+                            op: BinOp::Or,
+                            right: Box::new(Expr::var("b")),
+                        },
+                        Span::dummy(),
+                    )
+                );
+                assert_eq!(then_body, &shared_body);
+                assert!(elseif_clauses.is_empty());
+                assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
+            }
+            other => panic!("expected normalized if, got {:?}", other),
+        }
     }
 
     #[test]
