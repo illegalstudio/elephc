@@ -78,3 +78,12 @@ for (; $i < 3; $i++) {
     echo $i;
 }
 echo $propertyBase ** 3 . "\n";
+
+$unsetBase = 2;
+$i = 0;
+for (; $i < 3; $i++) {
+    $tmp = 9;
+    unset($tmp);
+    echo $i;
+}
+echo $unsetBase ** 3 . "\n";

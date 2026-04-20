@@ -684,7 +684,11 @@ fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv) {
         StmtKind::Continue => (Stmt::new(StmtKind::Continue, span), env),
         StmtKind::ExprStmt(expr) => {
             let expr = propagate_expr(expr, &env);
-            let next_env = if expr_effect(&expr).has_side_effects {
+            let next_env = if let Some(name) = unset_target_name(&expr) {
+                let mut next_env = env;
+                next_env.remove(&name);
+                next_env
+            } else if expr_effect(&expr).has_side_effects {
                 HashMap::new()
             } else {
                 env
@@ -1321,6 +1325,9 @@ fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
         | ExprKind::PostIncrement(name)
         | ExprKind::PreDecrement(name)
         | ExprKind::PostDecrement(name) => Some(HashSet::from([name.clone()])),
+        ExprKind::FunctionCall { name, args } if name == "unset" && args.len() == 1 => {
+            unset_target_name(expr).map(|name| HashSet::from([name]))
+        }
         ExprKind::FunctionCall { .. }
         | ExprKind::ClosureCall { .. }
         | ExprKind::ExprCall { .. }
@@ -1338,6 +1345,18 @@ fn merge_write_sets<const N: usize>(sets: [HashSet<String>; N]) -> Option<HashSe
         merged.extend(set);
     }
     Some(merged)
+}
+
+fn unset_target_name(expr: &Expr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::FunctionCall { name, args } if name == "unset" && args.len() == 1 => {
+            match &args[0].kind {
+                ExprKind::Variable(name) => Some(name.clone()),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 fn merge_constant_env_paths(mut paths: Vec<ConstantEnv>) -> ConstantEnv {
@@ -5663,6 +5682,32 @@ mod tests {
 
         assert_eq!(
             propagated[2],
+            Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        );
+    }
+
+    #[test]
+    fn test_propagate_constants_preserves_unmodified_scalar_across_unset() {
+        let program = vec![
+            Stmt::assign("base", Expr::int_lit(2)),
+            Stmt::assign("tmp", Expr::int_lit(9)),
+            Stmt::new(
+                StmtKind::ExprStmt(Expr::new(
+                    ExprKind::FunctionCall {
+                        name: "unset".into(),
+                        args: vec![Expr::var("tmp")],
+                    },
+                    Span::dummy(),
+                )),
+                Span::dummy(),
+            ),
+            Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+        ];
+
+        let propagated = propagate_constants(program);
+
+        assert_eq!(
+            propagated[3],
             Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
         );
     }

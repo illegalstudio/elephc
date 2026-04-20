@@ -603,6 +603,45 @@ echo $base ** 3;
 }
 
 #[test]
+fn test_constant_propagation_preserves_scalar_across_unset_and_loop() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_unset");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$base = 2;
+$i = 0;
+for (; $i < 3; $i++) {
+    $tmp = 9;
+    unset($tmp);
+    echo $i;
+}
+echo $base ** 3;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "unsetting an unrelated local inside the loop should not poison scalar constants:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "0128");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_constant_folding_string_concat_removes_runtime_concat_call() {
     let dir = make_cli_test_dir("elephc_constant_folding_concat");
     let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
