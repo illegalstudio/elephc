@@ -41,3 +41,14 @@ for ($exp = 3; $i < 2; $i++) {
     echo $baseInit ** $exp;
 }
 echo $exp . "\n";
+
+$nestedBase = 2;
+$i = 0;
+for (; $i < 2; $i++) {
+    $j = 0;
+    while ($j < 2) {
+        echo $j;
+        $j++;
+    }
+}
+echo $nestedBase ** 3 . "\n";

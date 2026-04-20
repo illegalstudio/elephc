@@ -1120,6 +1120,35 @@ fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
             writes.extend(block_local_writes(body)?);
             Some(writes)
         }
+        StmtKind::While { condition, body } => {
+            let mut writes = expr_local_writes(condition)?;
+            writes.extend(block_local_writes(body)?);
+            Some(writes)
+        }
+        StmtKind::DoWhile { body, condition } => {
+            let mut writes = block_local_writes(body)?;
+            writes.extend(expr_local_writes(condition)?);
+            Some(writes)
+        }
+        StmtKind::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            let mut writes = HashSet::new();
+            if let Some(init) = init {
+                writes.extend(stmt_local_writes(init)?);
+            }
+            if let Some(condition) = condition {
+                writes.extend(expr_local_writes(condition)?);
+            }
+            if let Some(update) = update {
+                writes.extend(stmt_local_writes(update)?);
+            }
+            writes.extend(block_local_writes(body)?);
+            Some(writes)
+        }
         StmtKind::If {
             condition,
             then_body,
@@ -1187,9 +1216,6 @@ fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
         | StmtKind::ArrayPush { .. }
         | StmtKind::Include { .. }
         | StmtKind::Throw(_)
-        | StmtKind::While { .. }
-        | StmtKind::DoWhile { .. }
-        | StmtKind::For { .. }
         | StmtKind::PropertyAssign { .. }
         | StmtKind::PropertyArrayPush { .. }
         | StmtKind::PropertyArrayAssign { .. } => None,
@@ -5458,6 +5484,59 @@ mod tests {
         assert_eq!(
             propagated[3],
             Stmt::echo(Expr::new(ExprKind::IntLiteral(3), Span::dummy()))
+        );
+    }
+
+    #[test]
+    fn test_propagate_constants_preserves_unmodified_scalar_across_nested_loops() {
+        let program = vec![
+            Stmt::assign("base", Expr::int_lit(2)),
+            Stmt::assign("i", Expr::int_lit(0)),
+            Stmt::new(
+                StmtKind::For {
+                    init: None,
+                    condition: Some(Expr::binop(Expr::var("i"), BinOp::Lt, Expr::int_lit(2))),
+                    update: Some(Box::new(Stmt::new(
+                        StmtKind::ExprStmt(Expr::new(
+                            ExprKind::PostIncrement("i".to_string()),
+                            Span::dummy(),
+                        )),
+                        Span::dummy(),
+                    ))),
+                    body: vec![
+                        Stmt::assign("j", Expr::int_lit(0)),
+                        Stmt::new(
+                            StmtKind::While {
+                                condition: Expr::binop(
+                                    Expr::var("j"),
+                                    BinOp::Lt,
+                                    Expr::int_lit(2),
+                                ),
+                                body: vec![
+                                    Stmt::echo(Expr::var("j")),
+                                    Stmt::new(
+                                        StmtKind::ExprStmt(Expr::new(
+                                            ExprKind::PostIncrement("j".to_string()),
+                                            Span::dummy(),
+                                        )),
+                                        Span::dummy(),
+                                    ),
+                                ],
+                            },
+                            Span::dummy(),
+                        ),
+                    ],
+                },
+                Span::dummy(),
+            ),
+            Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+        ];
+
+        let propagated = propagate_constants(program);
+
+        assert_eq!(
+            propagated[3],
+            Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
         );
     }
 
