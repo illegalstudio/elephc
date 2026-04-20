@@ -358,6 +358,22 @@ fn normalize_catch_clauses(
     normalized
 }
 
+fn normalize_switch_cases(cases: Vec<(Vec<Expr>, Vec<Stmt>)>) -> Vec<(Vec<Expr>, Vec<Stmt>)> {
+    let mut normalized: Vec<(Vec<Expr>, Vec<Stmt>)> = Vec::new();
+    for (patterns, body) in cases {
+        if !body.is_empty() {
+            if let Some((last_patterns, last_body)) = normalized.last_mut() {
+                if *last_body == body {
+                    last_patterns.extend(patterns);
+                    continue;
+                }
+            }
+        }
+        normalized.push((patterns, body));
+    }
+    normalized
+}
+
 fn invert_condition(condition: Expr) -> Expr {
     let span = condition.span;
     prune_expr(Expr::new(ExprKind::Not(Box::new(condition)), span))
@@ -3703,10 +3719,14 @@ fn prune_switch_stmt(
     span: crate::span::Span,
 ) -> Vec<Stmt> {
     let subject = prune_expr(subject);
-    let cases: Vec<(Vec<Expr>, Vec<Stmt>)> = cases
-        .into_iter()
-        .map(|(patterns, body)| (patterns.into_iter().map(prune_expr).collect(), prune_block(body)))
-        .collect();
+    let cases = normalize_switch_cases(
+        cases
+            .into_iter()
+            .map(|(patterns, body)| {
+                (patterns.into_iter().map(prune_expr).collect(), prune_block(body))
+            })
+            .collect(),
+    );
     let default = normalize_optional_block(default.map(prune_block));
 
     if cases.iter().all(|(_, body)| body.is_empty()) && default.is_none() {
@@ -7388,6 +7408,52 @@ mod tests {
                 assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
             }
             other => panic!("expected normalized if, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_normalize_control_flow_merges_adjacent_identical_switch_cases() {
+        let shared_body = vec![
+            Stmt::echo(Expr::int_lit(7)),
+            Stmt::new(StmtKind::Break, Span::dummy()),
+        ];
+        let program = vec![Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::var("x"),
+                cases: vec![
+                    (vec![Expr::int_lit(1)], shared_body.clone()),
+                    (vec![Expr::int_lit(2)], shared_body.clone()),
+                    (
+                        vec![Expr::int_lit(3)],
+                        vec![Stmt::echo(Expr::int_lit(9)), Stmt::new(StmtKind::Break, Span::dummy())],
+                    ),
+                ],
+                default: None,
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = normalize_control_flow(program);
+
+        assert_eq!(pruned.len(), 1);
+        match &pruned[0].kind {
+            StmtKind::Switch {
+                subject,
+                cases,
+                default,
+            } => {
+                assert_eq!(*subject, Expr::var("x"));
+                assert_eq!(cases.len(), 2);
+                assert_eq!(cases[0].0, vec![Expr::int_lit(1), Expr::int_lit(2)]);
+                assert_eq!(cases[0].1, shared_body);
+                assert_eq!(cases[1].0, vec![Expr::int_lit(3)]);
+                assert_eq!(
+                    cases[1].1,
+                    vec![Stmt::echo(Expr::int_lit(9)), Stmt::new(StmtKind::Break, Span::dummy())]
+                );
+                assert!(default.is_none());
+            }
+            other => panic!("expected normalized switch, got {:?}", other),
         }
     }
 
