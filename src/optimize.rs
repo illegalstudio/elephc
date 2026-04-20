@@ -342,6 +342,22 @@ fn normalize_optional_block(body: Option<Vec<Stmt>>) -> Option<Vec<Stmt>> {
     body.filter(|body| !body.is_empty())
 }
 
+fn normalize_catch_clauses(
+    catches: Vec<crate::parser::ast::CatchClause>,
+) -> Vec<crate::parser::ast::CatchClause> {
+    let mut normalized: Vec<crate::parser::ast::CatchClause> = Vec::new();
+    for catch in catches {
+        if let Some(last) = normalized.last_mut() {
+            if last.variable == catch.variable && last.body == catch.body {
+                last.exception_types.extend(catch.exception_types);
+                continue;
+            }
+        }
+        normalized.push(catch);
+    }
+    normalized
+}
+
 fn invert_condition(condition: Expr) -> Expr {
     let span = condition.span;
     prune_expr(Expr::new(ExprKind::Not(Box::new(condition)), span))
@@ -2718,14 +2734,14 @@ fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
             finally_body,
         } => {
             let try_body = prune_block(try_body);
-            let catches: Vec<_> = catches
+            let catches = normalize_catch_clauses(catches
                 .into_iter()
                 .map(|catch| crate::parser::ast::CatchClause {
                     exception_types: catch.exception_types,
                     variable: catch.variable,
                     body: prune_block(catch.body),
                 })
-                .collect();
+                .collect());
             let finally_body = normalize_optional_block(finally_body.map(prune_block));
             let (mut hoisted_prefix, try_body) = split_hoistable_try_prefix(try_body);
 
@@ -7167,6 +7183,55 @@ mod tests {
             }
             other => panic!("expected normalized if, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_normalize_control_flow_merges_adjacent_identical_catches() {
+        let program = vec![Stmt::new(
+            StmtKind::Try {
+                try_body: vec![Stmt::new(
+                    StmtKind::ExprStmt(Expr::new(
+                        ExprKind::Throw(Box::new(Expr::new(
+                            ExprKind::NewObject {
+                                class_name: Name::unqualified("Exception"),
+                                args: Vec::new(),
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    )),
+                    Span::dummy(),
+                )],
+                catches: vec![
+                    crate::parser::ast::CatchClause {
+                        exception_types: vec![Name::unqualified("A")],
+                        variable: Some("e".into()),
+                        body: vec![Stmt::echo(Expr::int_lit(7))],
+                    },
+                    crate::parser::ast::CatchClause {
+                        exception_types: vec![Name::unqualified("B")],
+                        variable: Some("e".into()),
+                        body: vec![Stmt::echo(Expr::int_lit(7))],
+                    },
+                ],
+                finally_body: None,
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = normalize_control_flow(program);
+
+        assert_eq!(pruned.len(), 1);
+        let StmtKind::Try { catches, .. } = &pruned[0].kind else {
+            panic!("expected normalized try");
+        };
+        assert_eq!(catches.len(), 1);
+        assert_eq!(
+            catches[0].exception_types,
+            vec![Name::unqualified("A"), Name::unqualified("B")]
+        );
+        assert_eq!(catches[0].variable.as_deref(), Some("e"));
+        assert_eq!(catches[0].body, vec![Stmt::echo(Expr::int_lit(7))]);
     }
 
     #[test]
