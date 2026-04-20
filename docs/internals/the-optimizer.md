@@ -9,12 +9,13 @@ sidebar:
 
 elephc's optimizer is intentionally simple and AST-focused. It does not build a separate IR or run heavyweight SSA passes. Instead, it performs a small set of local rewrites that already pay off in generated assembly quality and compile-time clarity.
 
-Today the optimizer is split into four passes:
+Today the optimizer is split into five passes:
 
 1. `fold_constants(program)` runs before type checking
 2. `propagate_constants(program)` runs after successful type checking
 3. `prune_constant_control_flow(program)` runs after propagation and warning collection
-4. `eliminate_dead_code(program)` runs after pruning and performs cleanup / structural simplification on the already-pruned AST
+4. `normalize_control_flow(program)` runs after pruning and rewrites structurally equivalent control-flow shells into simpler AST shapes
+5. `eliminate_dead_code(program)` runs after normalization and removes leftover unreachable or non-observable statements from the already-normalized AST
 
 That split matters. Some rewrites are always safe on syntax alone, while others should only happen after diagnostics have already seen the checked program.
 
@@ -151,11 +152,11 @@ Current pruning coverage includes:
   - `??`
   - short-circuit `&&` / `||`
 
-## Pass 4: Dead-code elimination and structural cleanup
+## Pass 4: Control-flow normalization
 
-`eliminate_dead_code()` runs after the pruning pass. At this point the AST already has constant-dead branches removed, so the job becomes "clean up the shells and leftovers" rather than "decide which branch is dead".
+`normalize_control_flow()` runs after the pruning pass. At this point the AST already has constant-dead branches removed, so the job becomes "reshape the remaining control flow into simpler but equivalent forms" rather than "decide which branch is dead".
 
-Current cleanup coverage includes:
+Current normalization coverage includes:
 
 - empty `ifdef`, `if`, `switch`, and degenerate `try` shells
 - single-path conditionals such as:
@@ -165,8 +166,6 @@ Current cleanup coverage includes:
 - non-throwing `try` / `catch` simplification
 - safe hoisting of non-throwing, fallthrough prefixes out of `try` blocks
 - conservative flattening of `try` / `finally` when the `try` body cannot throw and the body falls through
-- pure expression statements that are left behind after earlier pruning
-
 ### Example
 
 ```php
@@ -181,6 +180,21 @@ try {
 
 The leading `echo "a";` is known not to throw, so the optimizer can hoist it out of the `try` and leave only the actually-throwing tail protected by the handler.
 
+## Pass 5: Dead-code elimination
+
+`eliminate_dead_code()` now runs after normalization. At this point the AST has already had constant-dead branches removed and redundant control-flow shells compacted, so the job becomes "drop the leftovers" rather than "reshape the program".
+
+Current dead-code-elimination coverage includes:
+
+- unreachable statements after:
+  - `return`
+  - `throw`
+  - `break`
+  - `continue`
+- statements after exhaustive `try/catch` and `try/finally` exits
+- pure expression statements whose result is unused
+- pure expression statements that become exposed by earlier normalization
+
 ### Example
 
 ```php
@@ -192,7 +206,7 @@ if (true) {
 }
 ```
 
-After pruning, the dead branch disappears entirely. That means codegen never emits the `pow` path.
+After pruning and normalization, the dead branch disappears entirely. The final dead-code pass then has less structural noise to inspect, and codegen never emits the `pow` path.
 
 ## Effect summaries: purity and `may_throw`
 

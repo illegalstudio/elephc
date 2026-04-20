@@ -12,10 +12,9 @@ echo "ok";
     )
     .unwrap();
 
-    let output = Command::new(elephc_cli_bin())
+    let output = elephc_cli_command(&dir)
         .arg("--check")
         .arg(&php_path)
-        .current_dir(&dir)
         .output()
         .expect("failed to run elephc CLI with --check");
 
@@ -57,10 +56,9 @@ echo "ok";
     )
     .unwrap();
 
-    let output = Command::new(elephc_cli_bin())
+    let output = elephc_cli_command(&dir)
         .arg("--emit-asm")
         .arg(&php_path)
-        .current_dir(&dir)
         .output()
         .expect("failed to run elephc CLI with --emit-asm");
 
@@ -100,11 +98,10 @@ fn test_cli_rejects_emit_asm_and_check_together() {
     let php_path = dir.join("main.php");
     fs::write(&php_path, "<?php echo 1;").unwrap();
 
-    let output = Command::new(elephc_cli_bin())
+    let output = elephc_cli_command(&dir)
         .arg("--emit-asm")
         .arg("--check")
         .arg(&php_path)
-        .current_dir(&dir)
         .output()
         .expect("failed to run elephc CLI with conflicting flags");
 
@@ -127,11 +124,10 @@ fn test_cli_timings_reports_check_phases() {
     let php_path = dir.join("main.php");
     fs::write(&php_path, "<?php echo 1;").unwrap();
 
-    let output = Command::new(elephc_cli_bin())
+    let output = elephc_cli_command(&dir)
         .arg("--check")
         .arg("--timings")
         .arg(&php_path)
-        .current_dir(&dir)
         .output()
         .expect("failed to run elephc CLI with --timings --check");
 
@@ -157,10 +153,9 @@ fn test_cli_timings_reports_assemble_and_link() {
     let php_path = dir.join("main.php");
     fs::write(&php_path, "<?php echo 1;").unwrap();
 
-    let output = Command::new(elephc_cli_bin())
+    let output = elephc_cli_command(&dir)
         .arg("--timings")
         .arg(&php_path)
-        .current_dir(&dir)
         .output()
         .expect("failed to run elephc CLI with --timings");
 
@@ -251,11 +246,10 @@ echo 1;
     )
     .unwrap();
 
-    let output = Command::new(elephc_cli_bin())
+    let output = elephc_cli_command(&dir)
         .arg("--emit-asm")
         .arg("--source-map")
         .arg(&php_path)
-        .current_dir(&dir)
         .output()
         .expect("failed to run elephc CLI with --source-map");
 

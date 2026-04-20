@@ -22,6 +22,17 @@ pub fn propagate_constants(program: Program) -> Program {
     propagate_block(program, HashMap::new()).0
 }
 
+pub fn normalize_control_flow(program: Program) -> Program {
+    let (function_effects, static_method_effects, private_instance_method_effects) =
+        compute_program_callable_effects(&program);
+    with_callable_effects(
+        function_effects,
+        static_method_effects,
+        private_instance_method_effects,
+        || prune_block(program),
+    )
+}
+
 pub fn prune_constant_control_flow(program: Program) -> Program {
     let (function_effects, static_method_effects, private_instance_method_effects) =
         compute_program_callable_effects(&program);
@@ -42,7 +53,7 @@ pub fn eliminate_dead_code(program: Program) -> Program {
         function_effects,
         static_method_effects,
         private_instance_method_effects,
-        || prune_block(program),
+        || dce_block(program),
     )
 }
 
@@ -2542,6 +2553,21 @@ fn prune_block(body: Vec<Stmt>) -> Vec<Stmt> {
     pruned
 }
 
+fn dce_block(body: Vec<Stmt>) -> Vec<Stmt> {
+    let mut eliminated = Vec::new();
+    for stmt in body {
+        let dce_stmt = dce_stmt(stmt);
+        let stops_here = dce_stmt
+            .last()
+            .is_some_and(|stmt| !matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough));
+        eliminated.extend(dce_stmt);
+        if stops_here {
+            break;
+        }
+    }
+    eliminated
+}
+
 fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
     let span = stmt.span;
     match stmt.kind {
@@ -2821,6 +2847,347 @@ fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
     }
 }
 
+fn dce_stmt(stmt: Stmt) -> Vec<Stmt> {
+    let span = stmt.span;
+    match stmt.kind {
+        StmtKind::Echo(expr) => vec![Stmt {
+            kind: StmtKind::Echo(prune_expr(expr)),
+            span,
+        }],
+        StmtKind::Assign { name, value } => vec![Stmt {
+            kind: StmtKind::Assign {
+                name,
+                value: prune_expr(value),
+            },
+            span,
+        }],
+        StmtKind::TypedAssign {
+            name,
+            type_expr,
+            value,
+        } => vec![Stmt {
+            kind: StmtKind::TypedAssign {
+                name,
+                type_expr,
+                value: prune_expr(value),
+            },
+            span,
+        }],
+        StmtKind::PropertyAssign {
+            object,
+            property,
+            value,
+        } => vec![Stmt {
+            kind: StmtKind::PropertyAssign {
+                object: Box::new(prune_expr(*object)),
+                property,
+                value: prune_expr(value),
+            },
+            span,
+        }],
+        StmtKind::PropertyArrayAssign {
+            object,
+            property,
+            index,
+            value,
+        } => vec![Stmt {
+            kind: StmtKind::PropertyArrayAssign {
+                object: Box::new(prune_expr(*object)),
+                property,
+                index: prune_expr(index),
+                value: prune_expr(value),
+            },
+            span,
+        }],
+        StmtKind::PropertyArrayPush {
+            object,
+            property,
+            value,
+        } => vec![Stmt {
+            kind: StmtKind::PropertyArrayPush {
+                object: Box::new(prune_expr(*object)),
+                property,
+                value: prune_expr(value),
+            },
+            span,
+        }],
+        StmtKind::ArrayAssign { array, index, value } => vec![Stmt {
+            kind: StmtKind::ArrayAssign {
+                array,
+                index: prune_expr(index),
+                value: prune_expr(value),
+            },
+            span,
+        }],
+        StmtKind::ArrayPush { array, value } => vec![Stmt {
+            kind: StmtKind::ArrayPush {
+                array,
+                value: prune_expr(value),
+            },
+            span,
+        }],
+        StmtKind::ListUnpack { vars, value } => vec![Stmt {
+            kind: StmtKind::ListUnpack {
+                vars,
+                value: prune_expr(value),
+            },
+            span,
+        }],
+        StmtKind::StaticVar { name, init } => vec![Stmt {
+            kind: StmtKind::StaticVar {
+                name,
+                init: prune_expr(init),
+            },
+            span,
+        }],
+        StmtKind::ConstDecl { name, value } => vec![Stmt {
+            kind: StmtKind::ConstDecl {
+                name,
+                value: prune_expr(value),
+            },
+            span,
+        }],
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => vec![Stmt {
+            kind: StmtKind::If {
+                condition: prune_expr(condition),
+                then_body: dce_block(then_body),
+                elseif_clauses: elseif_clauses
+                    .into_iter()
+                    .map(|(condition, body)| (prune_expr(condition), dce_block(body)))
+                    .collect(),
+                else_body: normalize_optional_block(else_body.map(dce_block)),
+            },
+            span,
+        }],
+        StmtKind::IfDef {
+            symbol,
+            then_body,
+            else_body,
+        } => {
+            let then_body = dce_block(then_body);
+            let else_body = normalize_optional_block(else_body.map(dce_block));
+            if then_body.is_empty() && else_body.is_none() {
+                Vec::new()
+            } else {
+                vec![Stmt {
+                    kind: StmtKind::IfDef {
+                        symbol,
+                        then_body,
+                        else_body,
+                    },
+                    span,
+                }]
+            }
+        }
+        StmtKind::While { condition, body } => vec![Stmt {
+            kind: StmtKind::While {
+                condition: prune_expr(condition),
+                body: dce_block(body),
+            },
+            span,
+        }],
+        StmtKind::DoWhile { body, condition } => vec![Stmt {
+            kind: StmtKind::DoWhile {
+                body: dce_block(body),
+                condition: prune_expr(condition),
+            },
+            span,
+        }],
+        StmtKind::For {
+            init,
+            condition,
+            update,
+            body,
+        } => vec![Stmt {
+            kind: StmtKind::For {
+                init: init.and_then(|stmt| dce_stmt(*stmt).into_iter().next().map(Box::new)),
+                condition: condition.map(prune_expr),
+                update: update.and_then(|stmt| dce_stmt(*stmt).into_iter().next().map(Box::new)),
+                body: dce_block(body),
+            },
+            span,
+        }],
+        StmtKind::Foreach {
+            array,
+            key_var,
+            value_var,
+            body,
+        } => vec![Stmt {
+            kind: StmtKind::Foreach {
+                array: prune_expr(array),
+                key_var,
+                value_var,
+                body: dce_block(body),
+            },
+            span,
+        }],
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => vec![Stmt {
+            kind: StmtKind::Switch {
+                subject: prune_expr(subject),
+                cases: cases
+                    .into_iter()
+                    .map(|(patterns, body)| {
+                        (
+                            patterns.into_iter().map(prune_expr).collect(),
+                            dce_block(body),
+                        )
+                    })
+                    .collect(),
+                default: normalize_optional_block(default.map(dce_block)),
+            },
+            span,
+        }],
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => vec![Stmt {
+            kind: StmtKind::Try {
+                try_body: dce_block(try_body),
+                catches: catches
+                    .into_iter()
+                    .map(|catch| crate::parser::ast::CatchClause {
+                        exception_types: catch.exception_types,
+                        variable: catch.variable,
+                        body: dce_block(catch.body),
+                    })
+                    .collect(),
+                finally_body: normalize_optional_block(finally_body.map(dce_block)),
+            },
+            span,
+        }],
+        StmtKind::NamespaceBlock { name, body } => vec![Stmt {
+            kind: StmtKind::NamespaceBlock {
+                name,
+                body: dce_block(body),
+            },
+            span,
+        }],
+        StmtKind::FunctionDecl {
+            name,
+            params,
+            variadic,
+            return_type,
+            body,
+        } => vec![Stmt {
+            kind: StmtKind::FunctionDecl {
+                name,
+                params,
+                variadic,
+                return_type,
+                body: dce_block(body),
+            },
+            span,
+        }],
+        StmtKind::Return(expr) => vec![Stmt {
+            kind: StmtKind::Return(expr.map(prune_expr)),
+            span,
+        }],
+        StmtKind::Throw(expr) => vec![Stmt {
+            kind: StmtKind::Throw(prune_expr(expr)),
+            span,
+        }],
+        StmtKind::ClassDecl {
+            name,
+            extends,
+            implements,
+            is_abstract,
+            is_readonly_class,
+            trait_uses,
+            properties,
+            methods,
+        } => {
+            let parent_name = extends.as_ref().map(|parent| parent.as_str().to_string());
+            let methods = methods
+                .into_iter()
+                .map(|method| dce_method(method, &name, parent_name.as_deref()))
+                .collect();
+            vec![Stmt {
+                kind: StmtKind::ClassDecl {
+                    name,
+                    extends,
+                    implements,
+                    is_abstract,
+                    is_readonly_class,
+                    trait_uses,
+                    properties,
+                    methods,
+                },
+                span,
+            }]
+        }
+        StmtKind::ExprStmt(expr) => {
+            let expr = prune_expr(expr);
+            if expr_has_side_effects(&expr) {
+                vec![Stmt {
+                    kind: StmtKind::ExprStmt(expr),
+                    span,
+                }]
+            } else {
+                Vec::new()
+            }
+        }
+        StmtKind::EnumDecl {
+            name,
+            backing_type,
+            cases,
+        } => vec![Stmt {
+            kind: StmtKind::EnumDecl {
+                name,
+                backing_type,
+                cases,
+            },
+            span,
+        }],
+        StmtKind::PackedClassDecl { name, fields } => vec![Stmt {
+            kind: StmtKind::PackedClassDecl { name, fields },
+            span,
+        }],
+        StmtKind::InterfaceDecl {
+            name,
+            extends,
+            methods,
+        } => vec![Stmt {
+            kind: StmtKind::InterfaceDecl {
+                name,
+                extends,
+                methods: methods
+                    .into_iter()
+                    .map(dce_method_without_context)
+                    .collect(),
+            },
+            span,
+        }],
+        StmtKind::TraitDecl {
+            name,
+            trait_uses,
+            properties,
+            methods,
+        } => vec![Stmt {
+            kind: StmtKind::TraitDecl {
+                name,
+                trait_uses,
+                properties,
+                methods: methods
+                    .into_iter()
+                    .map(dce_method_without_context)
+                    .collect(),
+            },
+            span,
+        }],
+        kind => vec![Stmt { kind, span }],
+    }
+}
+
 fn prune_if_chain(
     condition: Expr,
     then_body: Vec<Stmt>,
@@ -2927,6 +3294,24 @@ fn prune_method(
 fn prune_method_without_context(method: ClassMethod) -> ClassMethod {
     ClassMethod {
         body: with_class_effect_context(None, || prune_block(method.body)),
+        ..method
+    }
+}
+
+fn dce_method(method: ClassMethod, class_name: &str, parent_name: Option<&str>) -> ClassMethod {
+    let context = ClassEffectContext {
+        class_name: class_name.to_string(),
+        parent_name: parent_name.map(str::to_string),
+    };
+    ClassMethod {
+        body: with_class_effect_context(Some(context), || dce_block(method.body)),
+        ..method
+    }
+}
+
+fn dce_method_without_context(method: ClassMethod) -> ClassMethod {
+    ClassMethod {
+        body: with_class_effect_context(None, || dce_block(method.body)),
         ..method
     }
 }
@@ -6311,7 +6696,7 @@ mod tests {
             Span::dummy(),
         )];
 
-        let eliminated = eliminate_dead_code(program);
+        let eliminated = eliminate_dead_code(normalize_control_flow(program));
 
         let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
             panic!("expected function");
@@ -6398,7 +6783,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eliminate_dead_code_replaces_empty_if_with_effectful_condition_eval() {
+    fn test_normalize_control_flow_replaces_empty_if_with_effectful_condition_eval() {
         let call = Expr::new(
             ExprKind::FunctionCall {
                 name: Name::unqualified("touch"),
@@ -6416,7 +6801,7 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(
             pruned,
@@ -6425,7 +6810,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eliminate_dead_code_drops_empty_ifdef_shell() {
+    fn test_normalize_control_flow_drops_empty_ifdef_shell() {
         let program = vec![Stmt::new(
             StmtKind::IfDef {
                 symbol: "DEBUG".into(),
@@ -6435,13 +6820,13 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert!(pruned.is_empty());
     }
 
     #[test]
-    fn test_eliminate_dead_code_replaces_empty_switch_with_subject_eval() {
+    fn test_normalize_control_flow_replaces_empty_switch_with_subject_eval() {
         let call = Expr::new(
             ExprKind::FunctionCall {
                 name: Name::unqualified("touch"),
@@ -6458,7 +6843,7 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(
             pruned,
@@ -6467,7 +6852,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eliminate_dead_code_inlines_empty_try_finally_body() {
+    fn test_normalize_control_flow_inlines_empty_try_finally_body() {
         let program = vec![Stmt::new(
             StmtKind::Try {
                 try_body: Vec::new(),
@@ -6481,13 +6866,13 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(9))]);
     }
 
     #[test]
-    fn test_eliminate_dead_code_inverts_single_live_else_branch() {
+    fn test_normalize_control_flow_inverts_single_live_else_branch() {
         let program = vec![Stmt::new(
             StmtKind::If {
                 condition: Expr::var("flag"),
@@ -6498,7 +6883,7 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(
             pruned,
@@ -6518,7 +6903,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eliminate_dead_code_inlines_default_only_switch() {
+    fn test_normalize_control_flow_inlines_default_only_switch() {
         let program = vec![Stmt::new(
             StmtKind::Switch {
                 subject: Expr::var("flag"),
@@ -6528,13 +6913,13 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(9))]);
     }
 
     #[test]
-    fn test_eliminate_dead_code_nests_elseif_chain_after_empty_head() {
+    fn test_normalize_control_flow_nests_elseif_chain_after_empty_head() {
         let program = vec![Stmt::new(
             StmtKind::If {
                 condition: Expr::var("a"),
@@ -6548,7 +6933,7 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(
             pruned,
@@ -6576,7 +6961,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eliminate_dead_code_materializes_constant_switch_match() {
+    fn test_normalize_control_flow_materializes_constant_switch_match() {
         let program = vec![Stmt::new(
             StmtKind::Switch {
                 subject: Expr::int_lit(2),
@@ -6595,13 +6980,13 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7))]);
     }
 
     #[test]
-    fn test_eliminate_dead_code_materializes_constant_switch_fallthrough() {
+    fn test_normalize_control_flow_materializes_constant_switch_fallthrough() {
         let program = vec![Stmt::new(
             StmtKind::Switch {
                 subject: Expr::int_lit(1),
@@ -6617,13 +7002,13 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7))]);
     }
 
     #[test]
-    fn test_eliminate_dead_code_materializes_constant_switch_default() {
+    fn test_normalize_control_flow_materializes_constant_switch_default() {
         let program = vec![Stmt::new(
             StmtKind::Switch {
                 subject: Expr::int_lit(3),
@@ -6636,13 +7021,13 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(9))]);
     }
 
     #[test]
-    fn test_eliminate_dead_code_inlines_non_throwing_try_catch() {
+    fn test_normalize_control_flow_inlines_non_throwing_try_catch() {
         let program = vec![Stmt::new(
             StmtKind::Try {
                 try_body: vec![Stmt::echo(Expr::int_lit(7))],
@@ -6656,13 +7041,13 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7))]);
     }
 
     #[test]
-    fn test_eliminate_dead_code_inlines_non_throwing_try_finally_fallthrough() {
+    fn test_normalize_control_flow_inlines_non_throwing_try_finally_fallthrough() {
         let program = vec![Stmt::new(
             StmtKind::Try {
                 try_body: vec![Stmt::echo(Expr::int_lit(7))],
@@ -6672,13 +7057,13 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7)), Stmt::echo(Expr::int_lit(9))]);
     }
 
     #[test]
-    fn test_eliminate_dead_code_keeps_non_throwing_try_finally_with_return() {
+    fn test_normalize_control_flow_keeps_non_throwing_try_finally_with_return() {
         let program = vec![Stmt::new(
             StmtKind::Try {
                 try_body: vec![Stmt::new(
@@ -6691,14 +7076,14 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(pruned.len(), 1);
         assert!(matches!(pruned[0].kind, StmtKind::Try { .. }));
     }
 
     #[test]
-    fn test_eliminate_dead_code_hoists_non_throwing_try_prefix() {
+    fn test_normalize_control_flow_hoists_non_throwing_try_prefix() {
         let program = vec![Stmt::new(
             StmtKind::Try {
                 try_body: vec![
@@ -6715,7 +7100,7 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(pruned.len(), 2);
         assert_eq!(pruned[0], Stmt::echo(Expr::int_lit(7)));
@@ -6723,7 +7108,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eliminate_dead_code_flattens_nested_single_path_ifs() {
+    fn test_normalize_control_flow_flattens_nested_single_path_ifs() {
         let program = vec![Stmt::new(
             StmtKind::If {
                 condition: Expr::var("a"),
@@ -6742,7 +7127,7 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(pruned.len(), 1);
         match &pruned[0].kind {
