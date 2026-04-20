@@ -62,3 +62,19 @@ for (; $i < 3; $i++) {
     echo $i;
 }
 echo $arrayBase ** 3 . "\n";
+
+class Box {
+    public $last = 0;
+    public $items = [];
+}
+
+$box = new Box();
+$propertyBase = 2;
+$i = 0;
+for (; $i < 3; $i++) {
+    $box->last = $i;
+    $box->items[] = $i;
+    $box->items[0] = $i;
+    echo $i;
+}
+echo $propertyBase ** 3 . "\n";

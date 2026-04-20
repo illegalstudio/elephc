@@ -1082,6 +1082,7 @@ fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
         | StmtKind::ExprStmt(expr)
         | StmtKind::ConstDecl { value: expr, .. }
         | StmtKind::Return(Some(expr)) => expr_local_writes(expr),
+        StmtKind::Throw(expr) => expr_local_writes(expr),
         StmtKind::Return(None)
         | StmtKind::Break
         | StmtKind::Continue
@@ -1225,13 +1226,24 @@ fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
             writes.insert(array.clone());
             Some(writes)
         }
+        StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyArrayPush { object, value, .. } => merge_write_sets([
+            expr_local_writes(object)?,
+            expr_local_writes(value)?,
+        ]),
+        StmtKind::PropertyArrayAssign {
+            object,
+            index,
+            value,
+            ..
+        } => merge_write_sets([
+            expr_local_writes(object)?,
+            expr_local_writes(index)?,
+            expr_local_writes(value)?,
+        ]),
         StmtKind::StaticVar { .. }
         | StmtKind::Global { .. }
-        | StmtKind::Include { .. }
-        | StmtKind::Throw(_)
-        | StmtKind::PropertyAssign { .. }
-        | StmtKind::PropertyArrayPush { .. }
-        | StmtKind::PropertyArrayAssign { .. } => None,
+        | StmtKind::Include { .. } => None,
     }
 }
 
@@ -5579,6 +5591,62 @@ mod tests {
                         Stmt::new(
                             StmtKind::ArrayAssign {
                                 array: "items".to_string(),
+                                index: Expr::int_lit(0),
+                                value: Expr::var("i"),
+                            },
+                            Span::dummy(),
+                        ),
+                    ],
+                },
+                Span::dummy(),
+            ),
+            Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+        ];
+
+        let propagated = propagate_constants(program);
+
+        assert_eq!(
+            propagated[2],
+            Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        );
+    }
+
+    #[test]
+    fn test_propagate_constants_preserves_unmodified_scalar_across_loop_property_writes() {
+        let program = vec![
+            Stmt::assign("base", Expr::int_lit(2)),
+            Stmt::new(
+                StmtKind::For {
+                    init: Some(Box::new(Stmt::assign("i", Expr::int_lit(0)))),
+                    condition: Some(Expr::binop(Expr::var("i"), BinOp::Lt, Expr::int_lit(3))),
+                    update: Some(Box::new(Stmt::new(
+                        StmtKind::ExprStmt(Expr::new(
+                            ExprKind::PostIncrement("i".to_string()),
+                            Span::dummy(),
+                        )),
+                        Span::dummy(),
+                    ))),
+                    body: vec![
+                        Stmt::new(
+                            StmtKind::PropertyAssign {
+                                object: Box::new(Expr::var("box")),
+                                property: "last".to_string(),
+                                value: Expr::var("i"),
+                            },
+                            Span::dummy(),
+                        ),
+                        Stmt::new(
+                            StmtKind::PropertyArrayPush {
+                                object: Box::new(Expr::var("box")),
+                                property: "items".to_string(),
+                                value: Expr::var("i"),
+                            },
+                            Span::dummy(),
+                        ),
+                        Stmt::new(
+                            StmtKind::PropertyArrayAssign {
+                                object: Box::new(Expr::var("box")),
+                                property: "items".to_string(),
                                 index: Expr::int_lit(0),
                                 value: Expr::var("i"),
                             },

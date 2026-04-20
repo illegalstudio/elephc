@@ -557,6 +557,52 @@ echo $base ** 3;
 }
 
 #[test]
+fn test_constant_propagation_preserves_scalar_across_loop_property_writes() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_loop_property_writes");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+class Box {
+    public $last = 0;
+    public $items = [];
+}
+
+$box = new Box();
+$base = 2;
+$i = 0;
+for (; $i < 3; $i++) {
+    $box->last = $i;
+    $box->items[] = $i;
+    $box->items[0] = $i;
+    echo $i;
+}
+echo $base ** 3;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "local property writes inside the loop should not poison unrelated scalar constants:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "0128");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_constant_folding_string_concat_removes_runtime_concat_call() {
     let dir = make_cli_test_dir("elephc_constant_folding_concat");
     let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
