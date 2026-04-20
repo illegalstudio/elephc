@@ -11,3 +11,9 @@ echo $base ** $exp . "\n";
 
 [$left, $right] = [2, 3];
 echo $left ** $right . "\n";
+
+$stable = 2;
+for ($i = 0; $i < 3; $i++) {
+    echo $i;
+}
+echo $stable ** 3 . "\n";

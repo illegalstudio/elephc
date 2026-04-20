@@ -4,7 +4,7 @@ use crate::parser::ast::{
 };
 use crate::termination::{block_terminal_effect, stmt_terminal_effect, TerminalEffect};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 thread_local! {
     static ACTIVE_FUNCTION_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
@@ -494,16 +494,21 @@ fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv) {
             )
         }
         StmtKind::While { condition, body } => {
-            let condition = propagate_expr(condition, &HashMap::new());
-            let (body, _) = propagate_block(body, HashMap::new());
-            (Stmt::new(StmtKind::While { condition, body }, span), HashMap::new())
+            let loop_env = safe_loop_env(&env, std::slice::from_ref(&condition), &body, None);
+            let condition = propagate_expr(condition, &loop_env);
+            let (body, _) = propagate_block(body, loop_env.clone());
+            (
+                Stmt::new(StmtKind::While { condition, body }, span),
+                loop_env,
+            )
         }
         StmtKind::DoWhile { body, condition } => {
-            let (body, _) = propagate_block(body, HashMap::new());
-            let condition = propagate_expr(condition, &HashMap::new());
+            let loop_env = safe_loop_env(&env, std::slice::from_ref(&condition), &body, None);
+            let (body, _) = propagate_block(body, loop_env.clone());
+            let condition = propagate_expr(condition, &loop_env);
             (
                 Stmt::new(StmtKind::DoWhile { body, condition }, span),
-                HashMap::new(),
+                loop_env,
             )
         }
         StmtKind::For {
@@ -513,9 +518,12 @@ fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv) {
             body,
         } => {
             let init = init.map(|stmt| Box::new(propagate_stmt(*stmt, env.clone()).0));
-            let condition = condition.map(|expr| propagate_expr(expr, &HashMap::new()));
-            let update = update.map(|stmt| Box::new(propagate_stmt(*stmt, HashMap::new()).0));
-            let (body, _) = propagate_block(body, HashMap::new());
+            let condition_exprs = condition.iter().cloned().collect::<Vec<_>>();
+            let update_stmt = update.as_deref();
+            let loop_env = safe_loop_env(&env, &condition_exprs, &body, update_stmt);
+            let condition = condition.map(|expr| propagate_expr(expr, &loop_env));
+            let update = update.map(|stmt| Box::new(propagate_stmt(*stmt, loop_env.clone()).0));
+            let (body, _) = propagate_block(body, loop_env.clone());
             (
                 Stmt::new(
                     StmtKind::For {
@@ -526,7 +534,7 @@ fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv) {
                     },
                     span,
                 ),
-                HashMap::new(),
+                loop_env,
             )
         }
         StmtKind::ArrayAssign {
@@ -991,6 +999,215 @@ fn env_after_list_unpack(mut env: ConstantEnv, vars: &[String], value: &Expr) ->
     }
 
     env
+}
+
+fn safe_loop_env(
+    env: &ConstantEnv,
+    conditions: &[Expr],
+    body: &[Stmt],
+    update: Option<&Stmt>,
+) -> ConstantEnv {
+    let mut written = HashSet::new();
+
+    for condition in conditions {
+        let Some(condition_writes) = expr_local_writes(condition) else {
+            return HashMap::new();
+        };
+        written.extend(condition_writes);
+    }
+
+    let Some(body_writes) = block_local_writes(body) else {
+        return HashMap::new();
+    };
+    written.extend(body_writes);
+
+    if let Some(update) = update {
+        let Some(update_writes) = stmt_local_writes(update) else {
+            return HashMap::new();
+        };
+        written.extend(update_writes);
+    }
+
+    env.iter()
+        .filter(|(name, _)| !written.contains(*name))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect()
+}
+
+fn block_local_writes(body: &[Stmt]) -> Option<HashSet<String>> {
+    let mut writes = HashSet::new();
+    for stmt in body {
+        writes.extend(stmt_local_writes(stmt)?);
+    }
+    Some(writes)
+}
+
+fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
+    match &stmt.kind {
+        StmtKind::Echo(expr)
+        | StmtKind::ExprStmt(expr)
+        | StmtKind::ConstDecl { value: expr, .. }
+        | StmtKind::Return(Some(expr)) => expr_local_writes(expr),
+        StmtKind::Return(None)
+        | StmtKind::Break
+        | StmtKind::Continue
+        | StmtKind::NamespaceDecl { .. }
+        | StmtKind::UseDecl { .. }
+        | StmtKind::FunctionDecl { .. }
+        | StmtKind::ClassDecl { .. }
+        | StmtKind::EnumDecl { .. }
+        | StmtKind::PackedClassDecl { .. }
+        | StmtKind::InterfaceDecl { .. }
+        | StmtKind::TraitDecl { .. }
+        | StmtKind::ExternFunctionDecl { .. }
+        | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ExternGlobalDecl { .. } => Some(HashSet::new()),
+        StmtKind::Assign { name, value } | StmtKind::TypedAssign { name, value, .. } => {
+            let mut writes = expr_local_writes(value)?;
+            writes.insert(name.clone());
+            Some(writes)
+        }
+        StmtKind::ListUnpack { vars, value } => {
+            let mut writes = expr_local_writes(value)?;
+            writes.extend(vars.iter().cloned());
+            Some(writes)
+        }
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            let mut writes = expr_local_writes(condition)?;
+            writes.extend(block_local_writes(then_body)?);
+            for (elseif_condition, elseif_body) in elseif_clauses {
+                writes.extend(expr_local_writes(elseif_condition)?);
+                writes.extend(block_local_writes(elseif_body)?);
+            }
+            if let Some(else_body) = else_body {
+                writes.extend(block_local_writes(else_body)?);
+            }
+            Some(writes)
+        }
+        StmtKind::IfDef {
+            then_body, else_body, ..
+        } => {
+            let mut writes = block_local_writes(then_body)?;
+            if let Some(else_body) = else_body {
+                writes.extend(block_local_writes(else_body)?);
+            }
+            Some(writes)
+        }
+        StmtKind::NamespaceBlock { body, .. } => block_local_writes(body),
+        StmtKind::StaticVar { .. }
+        | StmtKind::Global { .. }
+        | StmtKind::ArrayAssign { .. }
+        | StmtKind::ArrayPush { .. }
+        | StmtKind::Foreach { .. }
+        | StmtKind::Switch { .. }
+        | StmtKind::Include { .. }
+        | StmtKind::Throw(_)
+        | StmtKind::Try { .. }
+        | StmtKind::While { .. }
+        | StmtKind::DoWhile { .. }
+        | StmtKind::For { .. }
+        | StmtKind::PropertyAssign { .. }
+        | StmtKind::PropertyArrayPush { .. }
+        | StmtKind::PropertyArrayAssign { .. } => None,
+    }
+}
+
+fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
+    match &expr.kind {
+        ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::Variable(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::ConstRef(_)
+        | ExprKind::EnumCase { .. }
+        | ExprKind::This
+        | ExprKind::FirstClassCallable(_)
+        | ExprKind::Closure { .. } => Some(HashSet::new()),
+        ExprKind::Negate(inner)
+        | ExprKind::Not(inner)
+        | ExprKind::BitNot(inner)
+        | ExprKind::Throw(inner)
+        | ExprKind::Spread(inner)
+        | ExprKind::PtrCast { expr: inner, .. }
+        | ExprKind::Cast { expr: inner, .. } => expr_local_writes(inner),
+        ExprKind::BinaryOp { left, right, .. } => merge_write_sets([
+            expr_local_writes(left)?,
+            expr_local_writes(right)?,
+        ]),
+        ExprKind::NullCoalesce { value, default } => merge_write_sets([
+            expr_local_writes(value)?,
+            expr_local_writes(default)?,
+        ]),
+        ExprKind::ArrayLiteral(items) => items.iter().try_fold(HashSet::new(), |mut acc, item| {
+            acc.extend(expr_local_writes(item)?);
+            Some(acc)
+        }),
+        ExprKind::ArrayLiteralAssoc(items) => {
+            items.iter().try_fold(HashSet::new(), |mut acc, (key, value)| {
+                acc.extend(expr_local_writes(key)?);
+                acc.extend(expr_local_writes(value)?);
+                Some(acc)
+            })
+        }
+        ExprKind::Match {
+            subject,
+            arms,
+            default,
+        } => {
+            let mut writes = expr_local_writes(subject)?;
+            for (patterns, value) in arms {
+                for pattern in patterns {
+                    writes.extend(expr_local_writes(pattern)?);
+                }
+                writes.extend(expr_local_writes(value)?);
+            }
+            if let Some(default) = default {
+                writes.extend(expr_local_writes(default)?);
+            }
+            Some(writes)
+        }
+        ExprKind::ArrayAccess { array, index } => merge_write_sets([
+            expr_local_writes(array)?,
+            expr_local_writes(index)?,
+        ]),
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => merge_write_sets([
+            expr_local_writes(condition)?,
+            expr_local_writes(then_expr)?,
+            expr_local_writes(else_expr)?,
+        ]),
+        ExprKind::NamedArg { value, .. } => expr_local_writes(value),
+        ExprKind::PreIncrement(name)
+        | ExprKind::PostIncrement(name)
+        | ExprKind::PreDecrement(name)
+        | ExprKind::PostDecrement(name) => Some(HashSet::from([name.clone()])),
+        ExprKind::FunctionCall { .. }
+        | ExprKind::ClosureCall { .. }
+        | ExprKind::ExprCall { .. }
+        | ExprKind::NewObject { .. }
+        | ExprKind::MethodCall { .. }
+        | ExprKind::StaticMethodCall { .. }
+        | ExprKind::BufferNew { .. } => None,
+        ExprKind::PropertyAccess { object, .. } => expr_local_writes(object),
+    }
+}
+
+fn merge_write_sets<const N: usize>(sets: [HashSet<String>; N]) -> Option<HashSet<String>> {
+    let mut merged = HashSet::new();
+    for set in sets {
+        merged.extend(set);
+    }
+    Some(merged)
 }
 
 fn merge_constant_env_paths(mut paths: Vec<ConstantEnv>) -> ConstantEnv {
@@ -4938,6 +5155,71 @@ mod tests {
 
         assert_eq!(
             propagated[1],
+            Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        );
+    }
+
+    #[test]
+    fn test_propagate_constants_preserves_unmodified_scalar_across_for_loop() {
+        let program = vec![
+            Stmt::assign("base", Expr::int_lit(2)),
+            Stmt::new(
+                StmtKind::For {
+                    init: Some(Box::new(Stmt::assign("i", Expr::int_lit(0)))),
+                    condition: Some(Expr::binop(Expr::var("i"), BinOp::Lt, Expr::int_lit(3))),
+                    update: Some(Box::new(Stmt::new(
+                        StmtKind::ExprStmt(Expr::new(
+                            ExprKind::PostIncrement("i".to_string()),
+                            Span::dummy(),
+                        )),
+                        Span::dummy(),
+                    ))),
+                    body: vec![Stmt::echo(Expr::var("i"))],
+                },
+                Span::dummy(),
+            ),
+            Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+        ];
+
+        let propagated = propagate_constants(program);
+
+        assert_eq!(
+            propagated[2],
+            Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        );
+    }
+
+    #[test]
+    fn test_propagate_constants_preserves_unmodified_scalar_inside_while_loop_body() {
+        let program = vec![
+            Stmt::assign("base", Expr::int_lit(2)),
+            Stmt::assign("i", Expr::int_lit(0)),
+            Stmt::new(
+                StmtKind::While {
+                    condition: Expr::binop(Expr::var("i"), BinOp::Lt, Expr::int_lit(2)),
+                    body: vec![
+                        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+                        Stmt::new(
+                            StmtKind::ExprStmt(Expr::new(
+                                ExprKind::PostIncrement("i".to_string()),
+                                Span::dummy(),
+                            )),
+                            Span::dummy(),
+                        ),
+                    ],
+                },
+                Span::dummy(),
+            ),
+        ];
+
+        let propagated = propagate_constants(program);
+
+        let StmtKind::While { body, .. } = &propagated[2].kind else {
+            panic!("expected while");
+        };
+
+        assert_eq!(
+            body[0],
             Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
         );
     }

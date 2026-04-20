@@ -100,6 +100,7 @@ This pass is still intentionally local and conservative. Today it focuses on:
 - conservative `try` / `catch` merges when every fallthrough handler path agrees on the same scalar value
 - recognizing uniform scalar assignment outcomes from local merge expressions such as `?:` and `match`
 - recognizing scalar locals introduced by destructuring fixed scalar array literals with `list(...)` / `[...] = [...]`
+- preserving untouched scalar locals across simple loops when a conservative local write analysis can prove the loop only mutates other variables
 - re-running constant folding on expressions after substitutions are made
 - propagating into nested bodies conservatively without trying to solve full data-flow across loops or general path-sensitive CFGs
 
