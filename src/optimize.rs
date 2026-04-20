@@ -586,18 +586,25 @@ fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv) {
             default,
         } => {
             let subject = propagate_expr(subject, &env);
-            let cases = cases
+            let base_env = if expr_effect(&subject).has_side_effects {
+                HashMap::new()
+            } else {
+                env
+            };
+            let cases: Vec<_> = cases
                 .into_iter()
                 .map(|(patterns, body)| {
                     let patterns = patterns
                         .into_iter()
-                        .map(|pattern| propagate_expr(pattern, &env))
+                        .map(|pattern| propagate_expr(pattern, &base_env))
                         .collect();
-                    let (body, _) = propagate_block(body, env.clone());
+                    let (body, _) = propagate_block(body, base_env.clone());
                     (patterns, body)
                 })
                 .collect();
-            let default = default.map(|body| propagate_block(body, env).0);
+            let default = default.map(|body| propagate_block(body, base_env.clone()).0);
+            let next_env =
+                merge_switch_constant_env_paths(&cases, default.as_deref(), &base_env);
             (
                 Stmt::new(
                     StmtKind::Switch {
@@ -607,7 +614,7 @@ fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv) {
                     },
                     span,
                 ),
-                HashMap::new(),
+                next_env,
             )
         }
         StmtKind::Include {
@@ -635,7 +642,7 @@ fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv) {
             finally_body,
         } => {
             let (try_body, _) = propagate_block(try_body, env.clone());
-            let catches = catches
+            let catches: Vec<_> = catches
                 .into_iter()
                 .map(|catch| crate::parser::ast::CatchClause {
                     exception_types: catch.exception_types,
@@ -644,6 +651,8 @@ fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv) {
                 })
                 .collect();
             let finally_body = finally_body.map(|body| propagate_block(body, HashMap::new()).0);
+            let next_env =
+                merge_try_constant_env_paths(&try_body, &catches, finally_body.as_deref(), &env);
             (
                 Stmt::new(
                     StmtKind::Try {
@@ -653,7 +662,7 @@ fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv) {
                     },
                     span,
                 ),
-                HashMap::new(),
+                next_env,
             )
         }
         StmtKind::Break => (Stmt::new(StmtKind::Break, span), env),
@@ -976,6 +985,132 @@ fn merge_constant_env_paths(mut paths: Vec<ConstantEnv>) -> ConstantEnv {
         .into_iter()
         .filter(|(name, value)| paths.iter().all(|path| path.get(name) == Some(value)))
         .collect()
+}
+
+fn simulate_block_constant_env(body: &[Stmt], mut env: ConstantEnv) -> ConstantEnv {
+    for stmt in body {
+        env = propagate_stmt(stmt.clone(), env).1;
+        if !matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough) {
+            break;
+        }
+    }
+    env
+}
+
+fn simulate_catch_constant_env(
+    catch: &crate::parser::ast::CatchClause,
+    mut env: ConstantEnv,
+) -> ConstantEnv {
+    if let Some(name) = &catch.variable {
+        env.remove(name);
+    }
+    simulate_block_constant_env(&catch.body, env)
+}
+
+fn merge_try_constant_env_paths(
+    try_body: &[Stmt],
+    catches: &[crate::parser::ast::CatchClause],
+    finally_body: Option<&[Stmt]>,
+    incoming_env: &ConstantEnv,
+) -> ConstantEnv {
+    let mut fallthrough_paths = Vec::new();
+
+    if matches!(block_terminal_effect(try_body), TerminalEffect::FallsThrough) {
+        fallthrough_paths.push(simulate_block_constant_env(try_body, incoming_env.clone()));
+    }
+
+    for catch in catches {
+        if matches!(block_terminal_effect(&catch.body), TerminalEffect::FallsThrough) {
+            fallthrough_paths.push(simulate_catch_constant_env(catch, incoming_env.clone()));
+        }
+    }
+
+    match finally_body {
+        Some(finally_body) if matches!(block_terminal_effect(finally_body), TerminalEffect::FallsThrough) => {
+            merge_constant_env_paths(
+                fallthrough_paths
+                    .into_iter()
+                    .map(|env| simulate_block_constant_env(finally_body, env))
+                    .collect(),
+            )
+        }
+        Some(_) => HashMap::new(),
+        None => merge_constant_env_paths(fallthrough_paths),
+    }
+}
+
+enum SwitchConstantPathOutcome {
+    FallsThrough(ConstantEnv),
+    Breaks(ConstantEnv),
+    ExitsCurrentBlock,
+}
+
+fn simulate_switch_body_constant_env(
+    body: &[Stmt],
+    mut env: ConstantEnv,
+) -> SwitchConstantPathOutcome {
+    for stmt in body {
+        env = propagate_stmt(stmt.clone(), env).1;
+        match stmt_terminal_effect(stmt) {
+            TerminalEffect::FallsThrough => {}
+            TerminalEffect::Breaks => return SwitchConstantPathOutcome::Breaks(env),
+            TerminalEffect::ExitsCurrentBlock | TerminalEffect::TerminatesMixed => {
+                return SwitchConstantPathOutcome::ExitsCurrentBlock;
+            }
+        }
+    }
+
+    SwitchConstantPathOutcome::FallsThrough(env)
+}
+
+fn simulate_switch_entry_constant_env(
+    cases: &[(Vec<Expr>, Vec<Stmt>)],
+    default: Option<&[Stmt]>,
+    entry_case: Option<usize>,
+    incoming_env: &ConstantEnv,
+) -> Option<ConstantEnv> {
+    let mut env = incoming_env.clone();
+
+    if let Some(start_index) = entry_case {
+        for (_, body) in cases.iter().skip(start_index) {
+            match simulate_switch_body_constant_env(body, env) {
+                SwitchConstantPathOutcome::FallsThrough(updated) => env = updated,
+                SwitchConstantPathOutcome::Breaks(updated) => return Some(updated),
+                SwitchConstantPathOutcome::ExitsCurrentBlock => return None,
+            }
+        }
+    }
+
+    match default {
+        Some(default_body) => match simulate_switch_body_constant_env(default_body, env) {
+            SwitchConstantPathOutcome::FallsThrough(updated)
+            | SwitchConstantPathOutcome::Breaks(updated) => Some(updated),
+            SwitchConstantPathOutcome::ExitsCurrentBlock => None,
+        },
+        None => Some(env),
+    }
+}
+
+fn merge_switch_constant_env_paths(
+    cases: &[(Vec<Expr>, Vec<Stmt>)],
+    default: Option<&[Stmt]>,
+    incoming_env: &ConstantEnv,
+) -> ConstantEnv {
+    let mut fallthrough_paths = Vec::new();
+
+    for case_index in 0..cases.len() {
+        if let Some(env) =
+            simulate_switch_entry_constant_env(cases, default, Some(case_index), incoming_env)
+        {
+            fallthrough_paths.push(env);
+        }
+    }
+
+    if let Some(env) = simulate_switch_entry_constant_env(cases, default, None, incoming_env) {
+        fallthrough_paths.push(env);
+    }
+
+    merge_constant_env_paths(fallthrough_paths)
 }
 
 fn propagate_params(
@@ -4638,6 +4773,60 @@ mod tests {
         assert_eq!(
             propagated[2],
             Stmt::echo(Expr::binop(Expr::var("x"), BinOp::Add, Expr::int_lit(1)))
+        );
+    }
+
+    #[test]
+    fn test_propagate_constants_merges_identical_switch_assignments() {
+        let program = vec![
+            Stmt::new(
+                StmtKind::Switch {
+                    subject: Expr::var("flag"),
+                    cases: vec![(
+                        vec![Expr::int_lit(1)],
+                        vec![
+                            Stmt::assign("base", Expr::int_lit(2)),
+                            Stmt::new(StmtKind::Break, Span::dummy()),
+                        ],
+                    )],
+                    default: Some(vec![Stmt::assign("base", Expr::int_lit(2))]),
+                },
+                Span::dummy(),
+            ),
+            Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+        ];
+
+        let propagated = propagate_constants(program);
+
+        assert_eq!(
+            propagated[1],
+            Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        );
+    }
+
+    #[test]
+    fn test_propagate_constants_merges_identical_try_catch_assignments() {
+        let program = vec![
+            Stmt::new(
+                StmtKind::Try {
+                    try_body: vec![Stmt::assign("base", Expr::int_lit(2))],
+                    catches: vec![crate::parser::ast::CatchClause {
+                        exception_types: vec![Name::from("Exception")],
+                        variable: Some("e".to_string()),
+                        body: vec![Stmt::assign("base", Expr::int_lit(2))],
+                    }],
+                    finally_body: None,
+                },
+                Span::dummy(),
+            ),
+            Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+        ];
+
+        let propagated = propagate_constants(program);
+
+        assert_eq!(
+            propagated[1],
+            Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
         );
     }
 

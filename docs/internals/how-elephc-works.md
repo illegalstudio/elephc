@@ -148,6 +148,7 @@ This pass is still conservative, but it can already:
 
 - forward scalar locals through straight-line code
 - merge identical scalar values across simple `if` fallthrough paths
+- merge identical scalar values across conservative `switch` and `try` / `catch` fallthrough paths
 - re-run folding after substitutions so expressions like `$x ** $y` can collapse to a literal
 
 In our running example, this still does not change the program, because `$x = 10` at the statement level is not yet propagated into the later comparison shape that would let the whole `if` collapse.

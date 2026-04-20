@@ -96,8 +96,10 @@ This pass is still intentionally local and conservative. Today it focuses on:
   - `$y = 3;`
   - `echo $x ** $y;`
 - simple `if` merges where every fallthrough branch agrees on the same scalar value
+- conservative `switch` merges when all surviving exit paths agree on the same scalar value
+- conservative `try` / `catch` merges when every fallthrough handler path agrees on the same scalar value
 - re-running constant folding on expressions after substitutions are made
-- propagating into nested bodies conservatively without trying to solve full data-flow across loops, `switch`, or `try`
+- propagating into nested bodies conservatively without trying to solve full data-flow across loops or general path-sensitive CFGs
 
 ### Example
 
