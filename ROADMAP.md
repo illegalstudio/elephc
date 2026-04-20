@@ -305,7 +305,7 @@ Proper type system for PHP compatibility.
 - [x] Split `src/codegen/stmt.rs` into a slim dispatcher plus smaller focused helpers
 - [x] Target support matrix: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
 
-## v0.19.x — Tooling and compiler throughput
+## v0.19.x — Tooling, compiler throughput, and optimization
 
 - [x] Runtime object cache — pre-assemble the runtime into `~/.cache/elephc/runtime-<version>.o` and reuse across compilations, invalidating on compiler version change. Cuts repeated compile time by ~50%.
 - [x] Benchmark suite (vs C, vs PHP interpreter)
@@ -313,16 +313,10 @@ Proper type system for PHP compatibility.
 - [x] Compiler timing / profiling output for parse, typecheck, codegen, assemble, and link phases
 - [ ] Source maps v2 — richer mappings for functions / expressions / labels and a more stable machine-readable schema for external tooling
 - [ ] Benchmark automation — run the benchmark harness in CI or release verification so performance regressions are tracked continuously
-
-## v0.20.x — Early optimization pass
-
 - [x] Constant folding (`2 + 3` → `5` at compile time)
 - [x] Dead code elimination
 - [ ] Peephole optimization (redundant load/store elimination)
 - [x] Add regression benchmarks so optimization work is measured instead of anecdotal
-
-## v0.21.x — Code quality and performance validation
-
 - [x] Constant propagation across locals / statement boundaries
 - [ ] Dead code elimination v2 (CFG/basic-block aware pass beyond local AST pruning)
 - [x] Purity / may-throw analysis so AST optimizations can reason more precisely about safe hoisting and branch removal
@@ -337,13 +331,10 @@ Proper type system for PHP compatibility.
 - [ ] Tail-call optimization
 - [ ] Performance within 2x of C -O0 on compute benchmarks
 - [ ] Real-world CLI tools compiled as validation
-
-## v0.22.x — Release engineering and distribution
-
 - [ ] Apple notarization for direct downloads (codesign + notarytool)
 - [ ] Installation / packaging documentation for the supported host platforms
 
-## v0.23.x — Shared and static libraries (C ABI)
+## v0.20.x — Shared and static libraries (C ABI)
 
 - [ ] `--lib` flag, export PHP functions as C-callable symbols
 - [ ] `.dylib` / `.so` / `.a` output
@@ -351,21 +342,21 @@ Proper type system for PHP compatibility.
 - [ ] Null-terminated string convention for C interop
 - [ ] FFI documentation for C, Rust, Python, Go
 
-## v0.24.x — Library ecosystem
+## v0.21.x — Library ecosystem
 
 - [ ] `--export` flag for symbol selection
 - [ ] Multi-file library compilation
 - [ ] Symbol visibility control
 - [ ] `pkg-config` generation
 
-## v0.25.x — WebAssembly target
+## v0.22.x — WebAssembly target
 
 - [ ] WASM codegen backend
 - [ ] `.wat` / `.wasm` emission
 - [ ] WASI support for I/O
 - [ ] NPM package generation
 
-## v0.26.x — PHP extension bridge (experimental)
+## v0.23.x — PHP extension bridge (experimental)
 
 - [ ] `zval` pack/unpack routines (convert elephc values ↔ PHP `zval` structs)
 - [ ] Link against PHP extension `.so`/`.dylib` shared libraries
