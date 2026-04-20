@@ -968,7 +968,7 @@ fn env_after_scalar_assign(mut env: ConstantEnv, name: &str, value: &Expr) -> Co
     if expr_effect(value).has_side_effects {
         env.clear();
     }
-    if let Some(value) = scalar_value(value) {
+    if let Some(value) = assigned_scalar_value(value) {
         env.insert(name.to_string(), value);
     } else {
         env.remove(name);
@@ -3687,6 +3687,27 @@ fn scalar_value(expr: &Expr) -> Option<ScalarValue> {
     }
 }
 
+fn assigned_scalar_value(expr: &Expr) -> Option<ScalarValue> {
+    scalar_value(expr).or_else(|| match &expr.kind {
+        ExprKind::Ternary {
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            let then_value = assigned_scalar_value(then_expr)?;
+            let else_value = assigned_scalar_value(else_expr)?;
+            (then_value == else_value).then_some(then_value)
+        }
+        ExprKind::Match { arms, default, .. } => {
+            let default = default.as_ref()?;
+            let default_value = assigned_scalar_value(default)?;
+            arms.iter().all(|(_, value)| assigned_scalar_value(value) == Some(default_value.clone()))
+                .then_some(default_value)
+        }
+        _ => None,
+    })
+}
+
 fn strict_eq(left: &Expr, right: &Expr) -> Option<bool> {
     let left = scalar_value(left)?;
     let right = scalar_value(right)?;
@@ -4818,6 +4839,56 @@ mod tests {
                     finally_body: None,
                 },
                 Span::dummy(),
+            ),
+            Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+        ];
+
+        let propagated = propagate_constants(program);
+
+        assert_eq!(
+            propagated[1],
+            Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        );
+    }
+
+    #[test]
+    fn test_propagate_constants_tracks_uniform_ternary_assignment() {
+        let program = vec![
+            Stmt::assign(
+                "base",
+                Expr::new(
+                    ExprKind::Ternary {
+                        condition: Box::new(Expr::var("flag")),
+                        then_expr: Box::new(Expr::int_lit(2)),
+                        else_expr: Box::new(Expr::int_lit(2)),
+                    },
+                    Span::dummy(),
+                ),
+            ),
+            Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+        ];
+
+        let propagated = propagate_constants(program);
+
+        assert_eq!(
+            propagated[1],
+            Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        );
+    }
+
+    #[test]
+    fn test_propagate_constants_tracks_uniform_match_assignment() {
+        let program = vec![
+            Stmt::assign(
+                "base",
+                Expr::new(
+                    ExprKind::Match {
+                        subject: Box::new(Expr::var("flag")),
+                        arms: vec![(vec![Expr::int_lit(1)], Expr::int_lit(2))],
+                        default: Some(Box::new(Expr::int_lit(2))),
+                    },
+                    Span::dummy(),
+                ),
             ),
             Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
         ];
