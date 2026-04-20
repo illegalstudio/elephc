@@ -360,7 +360,19 @@ fn normalize_catch_clauses(
 
 fn normalize_switch_cases(cases: Vec<(Vec<Expr>, Vec<Stmt>)>) -> Vec<(Vec<Expr>, Vec<Stmt>)> {
     let mut normalized: Vec<(Vec<Expr>, Vec<Stmt>)> = Vec::new();
-    for (patterns, body) in cases {
+    let mut pending_fallthrough_patterns: Vec<Expr> = Vec::new();
+    for (mut patterns, body) in cases {
+        if body.is_empty() {
+            pending_fallthrough_patterns.extend(patterns);
+            continue;
+        }
+
+        if !pending_fallthrough_patterns.is_empty() {
+            pending_fallthrough_patterns.append(&mut patterns);
+            patterns = pending_fallthrough_patterns;
+            pending_fallthrough_patterns = Vec::new();
+        }
+
         if !body.is_empty() {
             if let Some((last_patterns, last_body)) = normalized.last_mut() {
                 if *last_body == body {
@@ -371,6 +383,11 @@ fn normalize_switch_cases(cases: Vec<(Vec<Expr>, Vec<Stmt>)>) -> Vec<(Vec<Expr>,
         }
         normalized.push((patterns, body));
     }
+
+    if !pending_fallthrough_patterns.is_empty() {
+        normalized.push((pending_fallthrough_patterns, Vec::new()));
+    }
+
     normalized
 }
 
@@ -7454,6 +7471,74 @@ mod tests {
                 assert!(default.is_none());
             }
             other => panic!("expected normalized switch, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_normalize_control_flow_merges_fallthrough_switch_labels_into_next_case() {
+        let shared_body = vec![
+            Stmt::echo(Expr::int_lit(7)),
+            Stmt::new(StmtKind::Break, Span::dummy()),
+        ];
+        let program = vec![Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::var("x"),
+                cases: vec![
+                    (vec![Expr::int_lit(1)], Vec::new()),
+                    (vec![Expr::int_lit(2)], Vec::new()),
+                    (vec![Expr::int_lit(3)], shared_body.clone()),
+                ],
+                default: None,
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = normalize_control_flow(program);
+
+        assert_eq!(pruned.len(), 1);
+        match &pruned[0].kind {
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            } => {
+                assert_eq!(
+                    *condition,
+                    combine_if_chain_conditions(
+                        combine_if_chain_conditions(
+                            Expr::new(
+                                ExprKind::BinaryOp {
+                                    left: Box::new(Expr::var("x")),
+                                    op: BinOp::Eq,
+                                    right: Box::new(Expr::int_lit(1)),
+                                },
+                                Span::dummy(),
+                            ),
+                            Expr::new(
+                                ExprKind::BinaryOp {
+                                    left: Box::new(Expr::var("x")),
+                                    op: BinOp::Eq,
+                                    right: Box::new(Expr::int_lit(2)),
+                                },
+                                Span::dummy(),
+                            ),
+                        ),
+                        Expr::new(
+                            ExprKind::BinaryOp {
+                                left: Box::new(Expr::var("x")),
+                                op: BinOp::Eq,
+                                right: Box::new(Expr::int_lit(3)),
+                            },
+                            Span::dummy(),
+                        ),
+                    )
+                );
+                assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(7))]);
+                assert!(elseif_clauses.is_empty());
+                assert!(else_body.is_none());
+            }
+            other => panic!("expected normalized if, got {:?}", other),
         }
     }
 

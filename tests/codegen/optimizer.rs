@@ -1574,6 +1574,29 @@ switch (step("s", 2)) {
 }
 
 #[test]
+fn test_dead_code_elimination_merges_fallthrough_switch_labels_into_next_case() {
+    let out = compile_and_run(
+        r#"<?php
+function step($label, $ret) {
+    echo $label;
+    return $ret;
+}
+switch (step("s", 2)) {
+    case 1:
+    case 2:
+    case 3:
+        echo "A";
+        break;
+    default:
+        echo "D";
+}
+"#,
+    );
+
+    assert_eq!(out, "sA");
+}
+
+#[test]
 fn test_dead_code_elimination_merges_identical_adjacent_catches() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_merge_identical_catches");
     let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
