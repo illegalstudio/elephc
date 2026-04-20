@@ -1411,6 +1411,27 @@ echo "?";
 }
 
 #[test]
+fn test_dead_code_elimination_preserves_regular_elseif_order_after_normalization() {
+    let out = compile_and_run(
+        r#"<?php
+function step($label, $ret) {
+    echo $label;
+    return $ret;
+}
+if (step("a", false)) {
+    echo "A";
+} elseif (step("b", true)) {
+    echo "B";
+} else {
+    echo "C";
+}
+"#,
+    );
+
+    assert_eq!(out, "abB");
+}
+
+#[test]
 fn test_dead_code_elimination_materializes_constant_switch_match() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_match");
     let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(

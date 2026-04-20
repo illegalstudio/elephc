@@ -162,6 +162,7 @@ Current normalization coverage includes:
 - single-path conditionals such as:
   - `if ($cond) {} else { ... }` → `if (!$cond) { ... }`
   - nested single-path `if` chains collapsed into one condition with `&&`
+- `elseif` chains canonicalized into nested `else { if (...) { ... } }` form
 - constant `switch` execution materialized into the exact statement tail that would run, preserving fallthrough and `break`
 - non-throwing `try` / `catch` simplification
 - safe hoisting of non-throwing, fallthrough prefixes out of `try` blocks
