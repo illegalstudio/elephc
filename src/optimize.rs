@@ -3393,6 +3393,12 @@ fn prune_if_chain(
             let canonical_else_body =
                 normalize_optional_block(Some(build_if_chain_body(kept_elseifs, kept_else)));
 
+            if canonical_else_body.as_ref() == Some(&then_body) {
+                let mut stmts = expr_to_effect_stmt(condition);
+                stmts.extend(then_body);
+                return stmts;
+            }
+
             vec![build_if_stmt(
                 condition,
                 then_body,
@@ -7924,5 +7930,43 @@ mod tests {
             }
             other => panic!("expected flattened if, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_normalize_control_flow_collapses_identical_if_branches_to_condition_effects_plus_body() {
+        let program = vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::new(
+                    ExprKind::FunctionCall {
+                        name: Name::unqualified("tick"),
+                        args: Vec::new(),
+                    },
+                    Span::dummy(),
+                ),
+                then_body: vec![Stmt::echo(Expr::int_lit(7))],
+                elseif_clauses: Vec::new(),
+                else_body: Some(vec![Stmt::echo(Expr::int_lit(7))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = normalize_control_flow(program);
+
+        assert_eq!(
+            pruned,
+            vec![
+                Stmt::new(
+                    StmtKind::ExprStmt(Expr::new(
+                        ExprKind::FunctionCall {
+                            name: Name::unqualified("tick"),
+                            args: Vec::new(),
+                        },
+                        Span::dummy(),
+                    )),
+                    Span::dummy(),
+                ),
+                Stmt::echo(Expr::int_lit(7))
+            ]
+        );
     }
 }

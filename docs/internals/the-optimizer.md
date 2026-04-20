@@ -162,6 +162,7 @@ Current normalization coverage includes:
 - single-path conditionals such as:
   - `if ($cond) {} else { ... }` → `if (!$cond) { ... }`
   - nested single-path `if` chains collapsed into one condition with `&&`
+- `if` statements whose `then` and `else` bodies normalize to the same block collapsed into “evaluate the condition only if observable, then run the shared block once”
 - `elseif` chains canonicalized into nested `else { if (...) { ... } }` form
 - adjacent `if` chain heads with identical bodies merged into one `if ($a || $b) { ... }` shape
 - adjacent `if` chain tails with identical fallback merged into one `if (!$a && $b) { ... } else { ... }` shape

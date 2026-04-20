@@ -1359,6 +1359,25 @@ if ($flag) {
 }
 
 #[test]
+fn test_dead_code_elimination_collapses_identical_if_branches() {
+    let out = compile_and_run(
+        r#"<?php
+function step($label, $ret) {
+    echo $label;
+    return $ret;
+}
+if (step("c", false)) {
+    echo "X";
+} else {
+    echo "X";
+}
+"#,
+    );
+
+    assert_eq!(out, "cX");
+}
+
+#[test]
 fn test_dead_code_elimination_inlines_default_only_switch() {
     let out = compile_and_run(
         r#"<?php
