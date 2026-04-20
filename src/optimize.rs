@@ -714,10 +714,7 @@ fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv) {
         }
         StmtKind::ListUnpack { vars, value } => {
             let value = propagate_expr(value, &env);
-            let mut next_env = env;
-            for var in &vars {
-                next_env.remove(var);
-            }
+            let next_env = env_after_list_unpack(env, &vars, &value);
             (
                 Stmt::new(StmtKind::ListUnpack { vars, value }, span),
                 next_env,
@@ -973,6 +970,26 @@ fn env_after_scalar_assign(mut env: ConstantEnv, name: &str, value: &Expr) -> Co
     } else {
         env.remove(name);
     }
+    env
+}
+
+fn env_after_list_unpack(mut env: ConstantEnv, vars: &[String], value: &Expr) -> ConstantEnv {
+    if expr_effect(value).has_side_effects {
+        env.clear();
+    }
+
+    for var in vars {
+        env.remove(var);
+    }
+
+    if let ExprKind::ArrayLiteral(items) = &value.kind {
+        for (var, item) in vars.iter().zip(items.iter()) {
+            if let Some(value) = assigned_scalar_value(item) {
+                env.insert(var.clone(), value);
+            }
+        }
+    }
+
     env
 }
 
@@ -4891,6 +4908,30 @@ mod tests {
                 ),
             ),
             Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+        ];
+
+        let propagated = propagate_constants(program);
+
+        assert_eq!(
+            propagated[1],
+            Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        );
+    }
+
+    #[test]
+    fn test_propagate_constants_tracks_scalar_list_unpack() {
+        let program = vec![
+            Stmt::new(
+                StmtKind::ListUnpack {
+                    vars: vec!["base".to_string(), "exp".to_string()],
+                    value: Expr::new(
+                        ExprKind::ArrayLiteral(vec![Expr::int_lit(2), Expr::int_lit(3)]),
+                        Span::dummy(),
+                    ),
+                },
+                Span::dummy(),
+            ),
+            Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::var("exp"))),
         ];
 
         let propagated = propagate_constants(program);

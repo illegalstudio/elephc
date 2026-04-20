@@ -8,3 +8,6 @@ if ($argc > 1) {
 
 $exp = 3;
 echo $base ** $exp . "\n";
+
+[$left, $right] = [2, 3];
+echo $left ** $right . "\n";
