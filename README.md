@@ -264,8 +264,9 @@ elephc already performs a small but useful AST-level optimization pipeline befor
 - **Constant folding before type checking**: folds scalar arithmetic, bitwise ops, comparisons, logical ops, string-literal concatenation, scalar casts, ternaries, and null coalescing when the result is statically known.
 - **Control-flow pruning after type checking**: removes constant-dead `if` / `elseif` / `while (false)` / `for (...; false; ...)` branches, materializes constant `switch` execution, prunes `match` arms, and trims unreachable statements after terminating constructs such as `return`, `throw`, `break`, and `continue`.
 - **Dead-code elimination after pruning**: removes empty control shells, simplifies single-path conditionals, hoists safe non-throwing `try` prefixes, and drops unused pure expression statements and dead pure subexpressions when the surrounding expression already determines the result.
+- **Local effect summaries for purity / may-throw reasoning**: tracks known pure and non-throwing builtins, user functions, static methods, private `$this` methods, closures, first-class callables, and merged callable aliases through `if` / `switch` / `try` control flow so the optimizer can simplify `try` regions and prune dead handlers more precisely.
 
-The optimizer is intentionally conservative. It does not yet do global constant propagation, interprocedural optimization, or assembly-level peephole rewriting.
+The optimizer is intentionally conservative. It does not yet do global constant propagation, aggressive whole-program optimization, or assembly-level peephole rewriting, but it does compute lightweight effect summaries for known call targets so AST rewrites can stay more precise without becoming risky.
 
 ### Type system
 

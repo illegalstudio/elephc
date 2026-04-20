@@ -434,6 +434,39 @@ echo 7;
 }
 
 #[test]
+fn test_dead_code_elimination_prunes_pure_builtin_expr_statement() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_pure_builtin_expr_stmt");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+strlen("abc");
+echo 7;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("strlen()"),
+        "pure builtin expr statements should disappear from user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "7");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_constant_folding_prunes_dead_statements_after_break_from_user_assembly() {
     let dir = make_cli_test_dir("elephc_constant_folding_break_dce");
     let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
@@ -917,6 +950,545 @@ try {
         &[],
     );
     assert_eq!(out, "7");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dead_code_elimination_inlines_try_with_pure_builtin_call() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_try_pure_builtin");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+try {
+    echo strlen("abc");
+} catch (Exception $e) {
+    echo 2 ** 8;
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "pure non-throwing builtin calls should let dead catch bodies disappear:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "3");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dead_code_elimination_inlines_try_with_pure_user_function_call() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_try_pure_user_function");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+function len3() {
+    return strlen("abc");
+}
+
+try {
+    echo len3();
+} catch (Exception $e) {
+    echo 2 ** 8;
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "pure non-throwing user functions should let dead catch bodies disappear:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "3");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dead_code_elimination_inlines_try_with_pure_static_method_call() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_try_pure_static_method");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+class Util {
+    public static function len3() {
+        return strlen("abc");
+    }
+}
+
+try {
+    echo Util::len3();
+} catch (Exception $e) {
+    echo 2 ** 8;
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "pure non-throwing static methods should let dead catch bodies disappear:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "3");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dead_code_elimination_inlines_try_with_pure_self_static_method_call() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_try_pure_self_static_method");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+class Util {
+    public static function len3() {
+        return strlen("abc");
+    }
+
+    public static function relay() {
+        return self::len3();
+    }
+}
+
+try {
+    echo Util::relay();
+} catch (Exception $e) {
+    echo 2 ** 8;
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "self:: pure static methods should let dead catch bodies disappear:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "3");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dead_code_elimination_inlines_try_with_pure_private_instance_method_call() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_try_pure_private_instance_method");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+class Util {
+    private function len3() {
+        return strlen("abc");
+    }
+
+    public function relay() {
+        try {
+            return $this->len3();
+        } catch (Exception $e) {
+            return 2 ** 8;
+        }
+    }
+}
+
+$util = new Util();
+echo $util->relay();
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "pure private instance methods on $this should let dead catch bodies disappear:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "3");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dead_code_elimination_inlines_try_with_pure_closure_alias() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_try_pure_closure_alias");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$f = function () {
+    return strlen("abc");
+};
+
+try {
+    echo $f();
+} catch (Exception $e) {
+    echo 2 ** 8;
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "pure closure aliases should let dead catch bodies disappear:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "3");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dead_code_elimination_inlines_try_with_ternary_callable_alias() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_try_ternary_callable_alias");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$flag = true;
+$f = $flag ? strlen(...) : strlen(...);
+
+try {
+    echo $f("abc");
+} catch (Exception $e) {
+    echo 2 ** 8;
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "ternary-selected callable aliases should let dead catch bodies disappear:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "3");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dead_code_elimination_inlines_try_with_match_callable_alias() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_try_match_callable_alias");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$mode = 1;
+$f = match ($mode) {
+    1 => strlen(...),
+    default => strlen(...),
+};
+
+try {
+    echo $f("abc");
+} catch (Exception $e) {
+    echo 2 ** 8;
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "match-selected callable aliases should let dead catch bodies disappear:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "3");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dead_code_elimination_inlines_try_with_named_first_class_callable_expr_call() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_try_named_first_class_expr_call");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+try {
+    echo (strlen(...))("abc");
+} catch (Exception $e) {
+    echo 2 ** 8;
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "named first-class callable expr calls should let dead catch bodies disappear:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "3");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dead_code_elimination_inlines_try_with_callable_alias_chain() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_try_callable_alias_chain");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$f = strlen(...);
+$g = $f;
+
+try {
+    echo $g("abc");
+} catch (Exception $e) {
+    echo 2 ** 8;
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "callable alias chains should let dead catch bodies disappear:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "3");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dead_code_elimination_inlines_try_with_callable_alias_if_merge() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_try_callable_alias_if_merge");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$flag = true;
+if ($flag) {
+    $g = strlen(...);
+} else {
+    $g = strlen(...);
+}
+
+try {
+    echo $g("abc");
+} catch (Exception $e) {
+    echo 2 ** 8;
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "merged callable aliases across if paths should let dead catch bodies disappear:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "3");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dead_code_elimination_inlines_try_with_callable_alias_try_merge() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_try_callable_alias_try_merge");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+try {
+    $g = strlen(...);
+} catch (Exception $e) {
+    $g = strlen(...);
+} finally {
+    strlen("done");
+}
+
+try {
+    echo $g("abc");
+} catch (Exception $e) {
+    echo 2 ** 8;
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "merged callable aliases across try/catch/finally should let dead catch bodies disappear:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "3");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dead_code_elimination_inlines_try_with_callable_alias_switch_merge() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_try_callable_alias_switch_merge");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+switch ($argc) {
+    case 1:
+        $g = strlen(...);
+        break;
+    case 2:
+    default:
+        $g = strlen(...);
+}
+
+try {
+    echo $g("abc");
+} catch (Exception $e) {
+    echo 2 ** 8;
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "merged callable aliases across switch fallthrough paths should let dead catch bodies disappear:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "3");
 
     let _ = fs::remove_dir_all(&dir);
 }

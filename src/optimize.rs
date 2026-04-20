@@ -3,22 +3,318 @@ use crate::parser::ast::{
     Program, Stmt, StmtKind,
 };
 use crate::termination::{block_terminal_effect, stmt_terminal_effect, TerminalEffect};
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+thread_local! {
+    static ACTIVE_FUNCTION_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
+    static ACTIVE_STATIC_METHOD_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
+    static ACTIVE_PRIVATE_INSTANCE_METHOD_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
+    static ACTIVE_CLASS_EFFECT_CONTEXT: RefCell<Option<ClassEffectContext>> = const { RefCell::new(None) };
+    static ACTIVE_CALLABLE_ALIAS_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
+}
 
 pub fn fold_constants(program: Program) -> Program {
     program.into_iter().map(fold_stmt).collect()
 }
 
 pub fn prune_constant_control_flow(program: Program) -> Program {
-    prune_block(program)
+    let (function_effects, static_method_effects, private_instance_method_effects) =
+        compute_program_callable_effects(&program);
+    with_callable_effects(
+        function_effects,
+        static_method_effects,
+        private_instance_method_effects,
+        || prune_block(program),
+    )
 }
 
 pub fn eliminate_dead_code(program: Program) -> Program {
-    prune_block(program)
+    let (function_effects, static_method_effects, private_instance_method_effects) =
+        compute_program_callable_effects(&program);
+    with_callable_effects(
+        function_effects,
+        static_method_effects,
+        private_instance_method_effects,
+        || prune_block(program),
+    )
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Effect {
+    has_side_effects: bool,
+    may_throw: bool,
+}
+
+impl Effect {
+    const PURE: Self = Self {
+        has_side_effects: false,
+        may_throw: false,
+    };
+
+    fn with_side_effects(mut self) -> Self {
+        self.has_side_effects = true;
+        self
+    }
+
+    fn with_may_throw(mut self) -> Self {
+        self.may_throw = true;
+        self
+    }
+
+    fn combine(self, other: Self) -> Self {
+        Self {
+            has_side_effects: self.has_side_effects || other.has_side_effects,
+            may_throw: self.may_throw || other.may_throw,
+        }
+    }
+
+    fn is_observable(self) -> bool {
+        self.has_side_effects || self.may_throw
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ClassEffectContext {
+    class_name: String,
+    parent_name: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct StaticMethodBody {
+    context: ClassEffectContext,
+    body: Vec<Stmt>,
+}
+
+fn with_callable_effects<R>(
+    function_effects: HashMap<String, Effect>,
+    static_method_effects: HashMap<String, Effect>,
+    private_instance_method_effects: HashMap<String, Effect>,
+    f: impl FnOnce() -> R,
+) -> R {
+    ACTIVE_FUNCTION_EFFECTS.with(|function_slot| {
+        ACTIVE_STATIC_METHOD_EFFECTS.with(|static_slot| {
+            ACTIVE_PRIVATE_INSTANCE_METHOD_EFFECTS.with(|instance_slot| {
+                let previous_functions = function_slot.replace(Some(function_effects));
+                let previous_static_methods = static_slot.replace(Some(static_method_effects));
+                let previous_instance_methods =
+                    instance_slot.replace(Some(private_instance_method_effects));
+                let result = f();
+                instance_slot.replace(previous_instance_methods);
+                static_slot.replace(previous_static_methods);
+                function_slot.replace(previous_functions);
+                result
+            })
+        })
+    })
+}
+
+fn with_class_effect_context<R>(context: Option<ClassEffectContext>, f: impl FnOnce() -> R) -> R {
+    ACTIVE_CLASS_EFFECT_CONTEXT.with(|slot| {
+        let previous = slot.replace(context);
+        let result = f();
+        slot.replace(previous);
+        result
+    })
+}
+
+fn with_callable_alias_effects<R>(
+    alias_effects: HashMap<String, Effect>,
+    f: impl FnOnce() -> R,
+) -> R {
+    ACTIVE_CALLABLE_ALIAS_EFFECTS.with(|slot| {
+        let previous = slot.replace(Some(alias_effects));
+        let result = f();
+        slot.replace(previous);
+        result
+    })
+}
+
+fn current_callable_alias_effects() -> HashMap<String, Effect> {
+    ACTIVE_CALLABLE_ALIAS_EFFECTS.with(|slot| slot.borrow().clone().unwrap_or_default())
+}
+
+fn compute_program_callable_effects(
+    program: &[Stmt],
+) -> (
+    HashMap<String, Effect>,
+    HashMap<String, Effect>,
+    HashMap<String, Effect>,
+) {
+    let mut function_bodies = HashMap::new();
+    collect_program_function_bodies(program, &mut function_bodies);
+    let mut static_method_bodies = HashMap::new();
+    collect_program_static_method_bodies(program, &mut static_method_bodies);
+    let mut private_instance_method_bodies = HashMap::new();
+    collect_program_private_instance_method_bodies(program, &mut private_instance_method_bodies);
+
+    let mut function_effects: HashMap<String, Effect> = function_bodies
+        .keys()
+        .cloned()
+        .map(|name| (name, Effect::PURE))
+        .collect();
+    let mut static_method_effects: HashMap<String, Effect> = static_method_bodies
+        .keys()
+        .cloned()
+        .map(|name| (name, Effect::PURE))
+        .collect();
+    let mut private_instance_method_effects: HashMap<String, Effect> = private_instance_method_bodies
+        .keys()
+        .cloned()
+        .map(|name| (name, Effect::PURE))
+        .collect();
+
+    loop {
+        let function_snapshot = function_effects.clone();
+        let static_method_snapshot = static_method_effects.clone();
+        let private_instance_method_snapshot = private_instance_method_effects.clone();
+        let mut changed = false;
+
+        ACTIVE_FUNCTION_EFFECTS.with(|function_slot| {
+            ACTIVE_STATIC_METHOD_EFFECTS.with(|static_slot| {
+                ACTIVE_PRIVATE_INSTANCE_METHOD_EFFECTS.with(|instance_slot| {
+                    let previous_functions = function_slot.replace(Some(function_snapshot));
+                    let previous_static_methods = static_slot.replace(Some(static_method_snapshot));
+                    let previous_instance_methods =
+                        instance_slot.replace(Some(private_instance_method_snapshot));
+
+                    for (name, body) in &function_bodies {
+                        let effect = block_effect(body);
+                        if function_effects.get(name).copied() != Some(effect) {
+                            function_effects.insert(name.clone(), effect);
+                            changed = true;
+                        }
+                    }
+
+                    for (name, method) in &static_method_bodies {
+                        let effect = with_class_effect_context(Some(method.context.clone()), || {
+                            block_effect(&method.body)
+                        });
+                        if static_method_effects.get(name).copied() != Some(effect) {
+                            static_method_effects.insert(name.clone(), effect);
+                            changed = true;
+                        }
+                    }
+
+                    for (name, method) in &private_instance_method_bodies {
+                        let effect = with_class_effect_context(Some(method.context.clone()), || {
+                            block_effect(&method.body)
+                        });
+                        if private_instance_method_effects.get(name).copied() != Some(effect) {
+                            private_instance_method_effects.insert(name.clone(), effect);
+                            changed = true;
+                        }
+                    }
+
+                    instance_slot.replace(previous_instance_methods);
+                    static_slot.replace(previous_static_methods);
+                    function_slot.replace(previous_functions);
+                });
+            });
+        });
+
+        if !changed {
+            return (
+                function_effects,
+                static_method_effects,
+                private_instance_method_effects,
+            );
+        }
+    }
+}
+
+fn collect_program_function_bodies(stmts: &[Stmt], out: &mut HashMap<String, Vec<Stmt>>) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::FunctionDecl { name, body, .. } => {
+                out.insert(name.clone(), body.clone());
+            }
+            StmtKind::NamespaceBlock { body, .. } => collect_program_function_bodies(body, out),
+            _ => {}
+        }
+    }
+}
+
+fn collect_program_static_method_bodies(
+    stmts: &[Stmt],
+    out: &mut HashMap<String, StaticMethodBody>,
+) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::ClassDecl {
+                name,
+                extends,
+                methods,
+                ..
+            } => {
+                let context = ClassEffectContext {
+                    class_name: name.clone(),
+                    parent_name: extends.as_ref().map(|parent| parent.as_str().to_string()),
+                };
+                for method in methods {
+                    if method.is_static && method.has_body {
+                        out.insert(
+                            method_effect_key(name, &method.name),
+                            StaticMethodBody {
+                                context: context.clone(),
+                                body: method.body.clone(),
+                            },
+                        );
+                    }
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. } => collect_program_static_method_bodies(body, out),
+            _ => {}
+        }
+    }
+}
+
+fn collect_program_private_instance_method_bodies(
+    stmts: &[Stmt],
+    out: &mut HashMap<String, StaticMethodBody>,
+) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::ClassDecl {
+                name,
+                extends,
+                methods,
+                ..
+            } => {
+                let context = ClassEffectContext {
+                    class_name: name.clone(),
+                    parent_name: extends.as_ref().map(|parent| parent.as_str().to_string()),
+                };
+                for method in methods {
+                    if !method.is_static
+                        && method.has_body
+                        && matches!(method.visibility, crate::parser::ast::Visibility::Private)
+                    {
+                        out.insert(
+                            method_effect_key(name, &method.name),
+                            StaticMethodBody {
+                                context: context.clone(),
+                                body: method.body.clone(),
+                            },
+                        );
+                    }
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. } => {
+                collect_program_private_instance_method_bodies(body, out)
+            }
+            _ => {}
+        }
+    }
+}
+
+fn method_effect_key(class_name: &str, method_name: &str) -> String {
+    format!("{class_name}::{method_name}")
 }
 
 fn expr_to_effect_stmt(expr: Expr) -> Vec<Stmt> {
     let span = expr.span;
-    if expr_has_side_effects(&expr) {
+    if expr_is_observable(&expr) {
         vec![Stmt::new(StmtKind::ExprStmt(expr), span)]
     } else {
         Vec::new()
@@ -156,83 +452,121 @@ fn build_if_stmt(
 }
 
 fn block_may_throw(stmts: &[Stmt]) -> bool {
-    stmts.iter().any(stmt_may_throw)
+    block_effect(stmts).may_throw
 }
 
 fn stmt_may_throw(stmt: &Stmt) -> bool {
+    stmt_effect(stmt).may_throw
+}
+
+fn stmt_effect(stmt: &Stmt) -> Effect {
     match &stmt.kind {
-        StmtKind::Echo(expr)
-        | StmtKind::ExprStmt(expr)
+        StmtKind::Echo(expr) => expr_effect(expr).with_side_effects(),
+        StmtKind::ExprStmt(expr)
         | StmtKind::ConstDecl { value: expr, .. }
         | StmtKind::StaticVar { init: expr, .. }
         | StmtKind::ListUnpack { value: expr, .. }
-        | StmtKind::Return(Some(expr)) => expr_may_throw(expr),
-        StmtKind::Throw(_) => true,
+        | StmtKind::Return(Some(expr)) => expr_effect(expr),
+        StmtKind::Throw(expr) => expr_effect(expr).with_side_effects().with_may_throw(),
         StmtKind::Assign { value, .. }
         | StmtKind::TypedAssign { value, .. }
-        | StmtKind::ArrayPush { value, .. } => expr_may_throw(value),
+        | StmtKind::ArrayPush { value, .. } => expr_effect(value).with_side_effects(),
         StmtKind::ArrayAssign { index, value, .. }
         | StmtKind::PropertyArrayAssign { index, value, .. } => {
-            expr_may_throw(index) || expr_may_throw(value)
+            expr_effect(index)
+                .combine(expr_effect(value))
+                .with_side_effects()
         }
         StmtKind::PropertyAssign { object, value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
-            expr_may_throw(object) || expr_may_throw(value)
+            expr_effect(object)
+                .combine(expr_effect(value))
+                .with_side_effects()
         }
         StmtKind::If {
             condition,
             then_body,
             elseif_clauses,
             else_body,
-        } => {
-            expr_may_throw(condition)
-                || block_may_throw(then_body)
-                || elseif_clauses
-                    .iter()
-                    .any(|(condition, body)| expr_may_throw(condition) || block_may_throw(body))
-                || else_body.as_ref().is_some_and(|body| block_may_throw(body))
-        }
+        } => expr_effect(condition)
+            .combine(block_effect(then_body))
+            .combine(combine_effects(
+                elseif_clauses.iter().map(|(condition, body)| {
+                    expr_effect(condition).combine(block_effect(body))
+                }),
+            ))
+            .combine(
+                else_body
+                    .as_ref()
+                    .map(|body| block_effect(body))
+                    .unwrap_or(Effect::PURE),
+            ),
         StmtKind::IfDef {
             then_body,
             else_body,
             ..
-        } => block_may_throw(then_body) || else_body.as_ref().is_some_and(|body| block_may_throw(body)),
+        } => block_effect(then_body).combine(
+            else_body
+                .as_ref()
+                .map(|body| block_effect(body))
+                .unwrap_or(Effect::PURE),
+        ),
         StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
-            expr_may_throw(condition) || block_may_throw(body)
+            expr_effect(condition).combine(block_effect(body))
         }
         StmtKind::For {
             init,
             condition,
             update,
             body,
-        } => {
-            init.as_ref().is_some_and(|stmt| stmt_may_throw(stmt))
-                || condition.as_ref().is_some_and(expr_may_throw)
-                || update.as_ref().is_some_and(|stmt| stmt_may_throw(stmt))
-                || block_may_throw(body)
-        }
-        StmtKind::Foreach { array, body, .. } => expr_may_throw(array) || block_may_throw(body),
+        } => init
+            .as_ref()
+            .map(|stmt| stmt_effect(stmt))
+            .unwrap_or(Effect::PURE)
+            .combine(
+                condition
+                    .as_ref()
+                    .map(|expr| expr_effect(expr))
+                    .unwrap_or(Effect::PURE),
+            )
+            .combine(
+                update
+                    .as_ref()
+                    .map(|stmt| stmt_effect(stmt))
+                    .unwrap_or(Effect::PURE),
+            )
+            .combine(block_effect(body)),
+        StmtKind::Foreach { array, body, .. } => expr_effect(array)
+            .combine(block_effect(body))
+            .with_side_effects(),
         StmtKind::Switch {
             subject,
             cases,
             default,
-        } => {
-            expr_may_throw(subject)
-                || cases.iter().any(|(patterns, body)| {
-                    patterns.iter().any(expr_may_throw) || block_may_throw(body)
-                })
-                || default.as_ref().is_some_and(|body| block_may_throw(body))
-        }
+        } => expr_effect(subject).combine(combine_effects(cases.iter().map(|(patterns, body)| {
+            combine_effects(patterns.iter().map(expr_effect)).combine(block_effect(body))
+        })))
+        .combine(
+            default
+                .as_ref()
+                .map(|body| block_effect(body))
+                .unwrap_or(Effect::PURE),
+        ),
         StmtKind::Try {
             try_body,
             catches,
             finally_body,
-        } => {
-            block_may_throw(try_body)
-                || catches.iter().any(|catch| block_may_throw(&catch.body))
-                || finally_body.as_ref().is_some_and(|body| block_may_throw(body))
-        }
-        StmtKind::NamespaceBlock { body, .. } => block_may_throw(body),
+        } => block_effect(try_body)
+            .combine(combine_effects(
+                catches.iter().map(|catch| block_effect(&catch.body)),
+            ))
+            .combine(
+                finally_body
+                    .as_ref()
+                    .map(|body| block_effect(body))
+                    .unwrap_or(Effect::PURE),
+            ),
+        StmtKind::NamespaceBlock { body, .. } => block_effect(body),
         StmtKind::FunctionDecl { .. }
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
@@ -247,12 +581,16 @@ fn stmt_may_throw(stmt: &Stmt) -> bool {
         | StmtKind::Continue
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
-        | StmtKind::ExternGlobalDecl { .. } => false,
-        StmtKind::Include { .. } => true,
+        | StmtKind::ExternGlobalDecl { .. } => Effect::PURE,
+        StmtKind::Include { .. } => Effect::PURE.with_side_effects().with_may_throw(),
     }
 }
 
-fn expr_may_throw(expr: &Expr) -> bool {
+fn expr_is_observable(expr: &Expr) -> bool {
+    expr_effect(expr).is_observable()
+}
+
+fn expr_effect(expr: &Expr) -> Effect {
     match &expr.kind {
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
@@ -262,56 +600,330 @@ fn expr_may_throw(expr: &Expr) -> bool {
         | ExprKind::Null
         | ExprKind::ConstRef(_)
         | ExprKind::EnumCase { .. }
-        | ExprKind::This => false,
+        | ExprKind::This => Effect::PURE,
         ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Cast { expr: inner, .. }
         | ExprKind::PtrCast { expr: inner, .. }
-        | ExprKind::Spread(inner) => expr_may_throw(inner),
-        ExprKind::BinaryOp { left, right, .. } => expr_may_throw(left) || expr_may_throw(right),
-        ExprKind::Throw(_) => true,
-        ExprKind::NullCoalesce { value, default } => expr_may_throw(value) || expr_may_throw(default),
+        | ExprKind::Spread(inner) => expr_effect(inner),
+        ExprKind::BinaryOp { left, right, .. } => expr_effect(left).combine(expr_effect(right)),
+        ExprKind::Throw(inner) => expr_effect(inner).with_side_effects().with_may_throw(),
+        ExprKind::NullCoalesce { value, default } => expr_effect(value).combine(expr_effect(default)),
         ExprKind::PreIncrement(_)
         | ExprKind::PostIncrement(_)
         | ExprKind::PreDecrement(_)
-        | ExprKind::PostDecrement(_) => false,
-        ExprKind::FunctionCall { .. }
-        | ExprKind::ClosureCall { .. }
-        | ExprKind::ExprCall { .. }
-        | ExprKind::NewObject { .. }
-        | ExprKind::MethodCall { .. }
-        | ExprKind::StaticMethodCall { .. } => true,
-        ExprKind::ArrayLiteral(items) => items.iter().any(expr_may_throw),
-        ExprKind::ArrayLiteralAssoc(items) => {
-            items.iter().any(|(key, value)| expr_may_throw(key) || expr_may_throw(value))
-        }
+        | ExprKind::PostDecrement(_) => Effect::PURE.with_side_effects(),
+        ExprKind::FunctionCall { name, args } => combine_effects(args.iter().map(expr_effect))
+            .combine(function_call_effect(name.as_str())),
+        ExprKind::ClosureCall { var, args } => combine_effects(args.iter().map(expr_effect))
+            .combine(callable_alias_effect(var)),
+        ExprKind::ExprCall { callee, args } => expr_effect(callee)
+            .combine(combine_effects(args.iter().map(expr_effect)))
+            .combine(expr_call_effect(callee)),
+        ExprKind::NewObject { args, .. } => combine_effects(args.iter().map(expr_effect))
+            .with_side_effects()
+            .with_may_throw(),
+        ExprKind::MethodCall { object, method, args } => expr_effect(object)
+            .combine(combine_effects(args.iter().map(expr_effect)))
+            .combine(private_instance_method_call_effect(object, method)),
+        ExprKind::StaticMethodCall {
+            receiver,
+            method,
+            args,
+        } => combine_effects(args.iter().map(expr_effect))
+            .combine(static_method_call_effect(receiver, method)),
+        ExprKind::ArrayLiteral(items) => combine_effects(items.iter().map(expr_effect)),
+        ExprKind::ArrayLiteralAssoc(items) => combine_effects(
+            items
+                .iter()
+                .map(|(key, value)| expr_effect(key).combine(expr_effect(value))),
+        ),
         ExprKind::Match {
             subject,
             arms,
             default,
-        } => {
-            expr_may_throw(subject)
-                || arms.iter().any(|(patterns, value)| {
-                    patterns.iter().any(expr_may_throw) || expr_may_throw(value)
-                })
-                || default.as_ref().is_some_and(|expr| expr_may_throw(expr))
-        }
-        ExprKind::ArrayAccess { array, index } => expr_may_throw(array) || expr_may_throw(index),
+        } => expr_effect(subject)
+            .combine(combine_effects(arms.iter().map(|(patterns, value)| {
+                combine_effects(patterns.iter().map(expr_effect)).combine(expr_effect(value))
+            })))
+            .combine(
+                default
+                    .as_ref()
+                    .map(|expr| expr_effect(expr))
+                    .unwrap_or(Effect::PURE),
+            ),
+        ExprKind::ArrayAccess { array, index } => expr_effect(array).combine(expr_effect(index)),
         ExprKind::Ternary {
             condition,
             then_expr,
             else_expr,
-        } => expr_may_throw(condition) || expr_may_throw(then_expr) || expr_may_throw(else_expr),
-        ExprKind::Closure { .. } => false,
-        ExprKind::NamedArg { value, .. } => expr_may_throw(value),
-        ExprKind::PropertyAccess { object, .. } => expr_may_throw(object) || true,
-        ExprKind::FirstClassCallable(target) => match target {
-            CallableTarget::Function(_) | CallableTarget::StaticMethod { .. } => false,
-            CallableTarget::Method { object, .. } => expr_may_throw(object),
-        },
-        ExprKind::BufferNew { len, .. } => expr_may_throw(len),
+        } => expr_effect(condition)
+            .combine(expr_effect(then_expr))
+            .combine(expr_effect(else_expr)),
+        ExprKind::Closure { .. } => Effect::PURE,
+        ExprKind::NamedArg { value, .. } => expr_effect(value),
+        ExprKind::PropertyAccess { object, .. } => expr_effect(object),
+        ExprKind::FirstClassCallable(target) => callable_target_effect(target),
+        ExprKind::BufferNew { len, .. } => expr_effect(len).with_side_effects(),
     }
+}
+
+fn block_effect(stmts: &[Stmt]) -> Effect {
+    let mut aliases = current_callable_alias_effects();
+    let mut effect = Effect::PURE;
+    for stmt in stmts {
+        let stmt_effect = with_callable_alias_effects(aliases.clone(), || stmt_effect(stmt));
+        effect = effect.combine(stmt_effect);
+        apply_stmt_callable_aliases(stmt, &mut aliases);
+        if !matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough) {
+            break;
+        }
+    }
+    effect
+}
+
+fn combine_effects(effects: impl IntoIterator<Item = Effect>) -> Effect {
+    effects
+        .into_iter()
+        .fold(Effect::PURE, |acc, effect| acc.combine(effect))
+}
+
+fn function_call_effect(name: &str) -> Effect {
+    ACTIVE_FUNCTION_EFFECTS.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|effects| effects.get(name).copied())
+    })
+    .unwrap_or_else(|| {
+        if is_pure_non_throwing_builtin(name) {
+            Effect::PURE
+        } else {
+            Effect::PURE.with_side_effects().with_may_throw()
+        }
+    })
+}
+
+fn closure_body_call_effect(body: &[Stmt]) -> Effect {
+    block_effect(body)
+}
+
+fn expr_call_effect(callee: &Expr) -> Effect {
+    match &callee.kind {
+        ExprKind::FirstClassCallable(target) => callable_target_call_effect(target),
+        ExprKind::Closure { body, .. } => closure_body_call_effect(body),
+        _ => Effect::PURE.with_side_effects().with_may_throw(),
+    }
+}
+
+fn callable_alias_effect(name: &str) -> Effect {
+    ACTIVE_CALLABLE_ALIAS_EFFECTS.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|effects| effects.get(name).copied())
+    })
+    .unwrap_or_else(|| Effect::PURE.with_side_effects().with_may_throw())
+}
+
+fn callable_target_call_effect(target: &CallableTarget) -> Effect {
+    match target {
+        CallableTarget::Function(name) => function_call_effect(name.as_str()),
+        CallableTarget::StaticMethod { receiver, method } => static_method_call_effect(receiver, method),
+        CallableTarget::Method { object, method } => {
+            expr_effect(object).combine(private_instance_method_call_effect(object, method))
+        }
+    }
+}
+
+fn closure_alias_effect(expr: &Expr) -> Option<Effect> {
+    match &expr.kind {
+        ExprKind::Closure { body, .. } => Some(closure_body_call_effect(body)),
+        _ => None,
+    }
+}
+
+fn merge_callable_value_effects(
+    effects: impl IntoIterator<Item = Option<Effect>>,
+) -> Option<Effect> {
+    let mut effects = effects.into_iter();
+    let first = effects.next().flatten()?;
+    if effects.all(|effect| effect == Some(first)) {
+        Some(first)
+    } else {
+        None
+    }
+}
+
+fn static_method_call_effect(
+    receiver: &crate::parser::ast::StaticReceiver,
+    method_name: &str,
+) -> Effect {
+    let Some(class_name) = resolve_static_receiver_class(receiver) else {
+        return Effect::PURE.with_side_effects().with_may_throw();
+    };
+
+    ACTIVE_STATIC_METHOD_EFFECTS.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|effects| effects.get(&method_effect_key(&class_name, method_name)).copied())
+    })
+    .unwrap_or_else(|| Effect::PURE.with_side_effects().with_may_throw())
+}
+
+fn private_instance_method_call_effect(object: &Expr, method_name: &str) -> Effect {
+    if !matches!(object.kind, ExprKind::This) {
+        return Effect::PURE.with_side_effects().with_may_throw();
+    }
+
+    let Some(class_name) = ACTIVE_CLASS_EFFECT_CONTEXT
+        .with(|slot| slot.borrow().as_ref().map(|context| context.class_name.clone()))
+    else {
+        return Effect::PURE.with_side_effects().with_may_throw();
+    };
+
+    ACTIVE_PRIVATE_INSTANCE_METHOD_EFFECTS.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|effects| effects.get(&method_effect_key(&class_name, method_name)).copied())
+    })
+    .unwrap_or_else(|| Effect::PURE.with_side_effects().with_may_throw())
+}
+
+fn resolve_static_receiver_class(receiver: &crate::parser::ast::StaticReceiver) -> Option<String> {
+    match receiver {
+        crate::parser::ast::StaticReceiver::Named(class_name) => Some(class_name.as_str().to_string()),
+        crate::parser::ast::StaticReceiver::Self_ => ACTIVE_CLASS_EFFECT_CONTEXT
+            .with(|slot| slot.borrow().as_ref().map(|context| context.class_name.clone())),
+        crate::parser::ast::StaticReceiver::Parent => ACTIVE_CLASS_EFFECT_CONTEXT.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .and_then(|context| context.parent_name.clone())
+        }),
+        crate::parser::ast::StaticReceiver::Static => None,
+    }
+}
+
+fn is_pure_non_throwing_builtin(name: &str) -> bool {
+    matches!(
+        name,
+        "strlen"
+            | "count"
+            | "intval"
+            | "floatval"
+            | "boolval"
+            | "gettype"
+            | "is_array"
+            | "is_bool"
+            | "is_float"
+            | "is_int"
+            | "is_null"
+            | "is_numeric"
+            | "is_string"
+            | "abs"
+            | "min"
+            | "max"
+            | "floor"
+            | "ceil"
+            | "round"
+            | "sqrt"
+            | "pow"
+            | "fmod"
+            | "fdiv"
+            | "sin"
+            | "cos"
+            | "tan"
+            | "asin"
+            | "acos"
+            | "atan"
+            | "atan2"
+            | "deg2rad"
+            | "rad2deg"
+            | "sinh"
+            | "cosh"
+            | "tanh"
+            | "log"
+            | "log2"
+            | "log10"
+            | "exp"
+            | "hypot"
+            | "pi"
+            | "number_format"
+            | "substr"
+            | "strpos"
+            | "strrpos"
+            | "strstr"
+            | "str_replace"
+            | "str_ireplace"
+            | "substr_replace"
+            | "strtolower"
+            | "strtoupper"
+            | "ucfirst"
+            | "lcfirst"
+            | "ucwords"
+            | "trim"
+            | "ltrim"
+            | "rtrim"
+            | "str_repeat"
+            | "strrev"
+            | "str_pad"
+            | "explode"
+            | "implode"
+            | "str_split"
+            | "strcmp"
+            | "strcasecmp"
+            | "str_contains"
+            | "str_starts_with"
+            | "str_ends_with"
+            | "ord"
+            | "chr"
+            | "nl2br"
+            | "wordwrap"
+            | "addslashes"
+            | "stripslashes"
+            | "htmlspecialchars"
+            | "htmlentities"
+            | "html_entity_decode"
+            | "urlencode"
+            | "urldecode"
+            | "rawurlencode"
+            | "rawurldecode"
+            | "md5"
+            | "sha1"
+            | "hash"
+            | "base64_encode"
+            | "base64_decode"
+            | "bin2hex"
+            | "hex2bin"
+            | "ctype_alpha"
+            | "ctype_digit"
+            | "ctype_alnum"
+            | "ctype_space"
+            | "array_key_exists"
+            | "array_search"
+            | "array_keys"
+            | "array_values"
+            | "array_merge"
+            | "array_slice"
+            | "array_combine"
+            | "array_flip"
+            | "array_reverse"
+            | "array_unique"
+            | "array_column"
+            | "array_sum"
+            | "array_product"
+            | "array_chunk"
+            | "array_pad"
+            | "array_fill"
+            | "array_fill_keys"
+            | "array_diff"
+            | "array_intersect"
+            | "array_diff_key"
+            | "array_intersect_key"
+            | "range"
+            | "json_encode"
+            | "json_decode"
+            | "json_last_error"
+    )
 }
 
 fn fold_stmt(stmt: Stmt) -> Stmt {
@@ -788,19 +1400,26 @@ fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
             trait_uses,
             properties,
             methods,
-        } => vec![Stmt {
-            kind: StmtKind::ClassDecl {
-                name,
-                extends,
-                implements,
-                is_abstract,
-                is_readonly_class,
-                trait_uses,
-                properties,
-                methods: methods.into_iter().map(prune_method).collect(),
-            },
-            span,
-        }],
+        } => {
+            let parent_name = extends.as_ref().map(|parent| parent.as_str().to_string());
+            let methods = methods
+                .into_iter()
+                .map(|method| prune_method(method, &name, parent_name.as_deref()))
+                .collect();
+            vec![Stmt {
+                kind: StmtKind::ClassDecl {
+                    name,
+                    extends,
+                    implements,
+                    is_abstract,
+                    is_readonly_class,
+                    trait_uses,
+                    properties,
+                    methods,
+                },
+                span,
+            }]
+        }
         StmtKind::ExprStmt(expr) => {
             let expr = prune_expr(expr);
             if expr_has_side_effects(&expr) {
@@ -836,7 +1455,10 @@ fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
             kind: StmtKind::InterfaceDecl {
                 name,
                 extends,
-                methods: methods.into_iter().map(prune_method).collect(),
+                methods: methods
+                    .into_iter()
+                    .map(prune_method_without_context)
+                    .collect(),
             },
             span,
         }],
@@ -850,7 +1472,10 @@ fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                 name,
                 trait_uses,
                 properties,
-                methods: methods.into_iter().map(prune_method).collect(),
+                methods: methods
+                    .into_iter()
+                    .map(prune_method_without_context)
+                    .collect(),
             },
             span,
         }],
@@ -946,11 +1571,294 @@ fn prune_remaining_elseif_chain(
     (kept, normalize_optional_block(else_body.map(prune_block)))
 }
 
-fn prune_method(method: ClassMethod) -> ClassMethod {
+fn prune_method(
+    method: ClassMethod,
+    class_name: &str,
+    parent_name: Option<&str>,
+) -> ClassMethod {
+    let context = ClassEffectContext {
+        class_name: class_name.to_string(),
+        parent_name: parent_name.map(str::to_string),
+    };
     ClassMethod {
-        body: prune_block(method.body),
+        body: with_class_effect_context(Some(context), || prune_block(method.body)),
         ..method
     }
+}
+
+fn prune_method_without_context(method: ClassMethod) -> ClassMethod {
+    ClassMethod {
+        body: with_class_effect_context(None, || prune_block(method.body)),
+        ..method
+    }
+}
+
+fn callable_alias_from_expr(expr: &Expr) -> Option<Effect> {
+    match &expr.kind {
+        ExprKind::FirstClassCallable(target) => Some(callable_target_call_effect(target)),
+        ExprKind::Closure { .. } => closure_alias_effect(expr),
+        ExprKind::Ternary {
+            then_expr,
+            else_expr,
+            ..
+        } => merge_callable_value_effects([
+            callable_alias_from_expr(then_expr),
+            callable_alias_from_expr(else_expr),
+        ]),
+        ExprKind::NullCoalesce { value, default } => merge_callable_value_effects([
+            callable_alias_from_expr(value),
+            callable_alias_from_expr(default),
+        ]),
+        ExprKind::Match { arms, default, .. } => merge_callable_value_effects(
+            arms.iter()
+                .map(|(_, value)| callable_alias_from_expr(value))
+                .chain(default.iter().map(|value| callable_alias_from_expr(value))),
+        ),
+        ExprKind::NamedArg { value, .. } => callable_alias_from_expr(value),
+        ExprKind::Variable(name) => ACTIVE_CALLABLE_ALIAS_EFFECTS.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .and_then(|effects| effects.get(name).copied())
+        }),
+        _ => None,
+    }
+}
+
+fn update_callable_alias(aliases: &mut HashMap<String, Effect>, name: &str, value: &Expr) {
+    if let Some(effect) = callable_alias_from_expr(value) {
+        aliases.insert(name.to_string(), effect);
+    } else {
+        aliases.remove(name);
+    }
+}
+
+fn simulate_catch_callable_aliases(
+    catch: &crate::parser::ast::CatchClause,
+    mut aliases: HashMap<String, Effect>,
+) -> HashMap<String, Effect> {
+    if let Some(name) = &catch.variable {
+        aliases.remove(name);
+    }
+    simulate_block_callable_aliases(&catch.body, aliases)
+}
+
+fn merge_try_callable_alias_paths(
+    try_body: &[Stmt],
+    catches: &[crate::parser::ast::CatchClause],
+    finally_body: Option<&[Stmt]>,
+    incoming_aliases: &HashMap<String, Effect>,
+) -> HashMap<String, Effect> {
+    let mut fallthrough_paths = Vec::new();
+
+    if matches!(block_terminal_effect(try_body), TerminalEffect::FallsThrough) {
+        fallthrough_paths.push(simulate_block_callable_aliases(try_body, incoming_aliases.clone()));
+    }
+
+    for catch in catches {
+        if matches!(block_terminal_effect(&catch.body), TerminalEffect::FallsThrough) {
+            fallthrough_paths.push(simulate_catch_callable_aliases(catch, incoming_aliases.clone()));
+        }
+    }
+
+    if let Some(finally_body) = finally_body {
+        fallthrough_paths = fallthrough_paths
+            .into_iter()
+            .map(|aliases| simulate_block_callable_aliases(finally_body, aliases))
+            .collect();
+    }
+
+    merge_callable_alias_paths(fallthrough_paths)
+}
+
+enum SwitchAliasPathOutcome {
+    FallsThrough(HashMap<String, Effect>),
+    Breaks(HashMap<String, Effect>),
+    ExitsCurrentBlock,
+}
+
+fn simulate_switch_body_callable_aliases(
+    body: &[Stmt],
+    mut aliases: HashMap<String, Effect>,
+) -> SwitchAliasPathOutcome {
+    for stmt in body {
+        apply_stmt_callable_aliases(stmt, &mut aliases);
+        match stmt_terminal_effect(stmt) {
+            TerminalEffect::FallsThrough => {}
+            TerminalEffect::Breaks => return SwitchAliasPathOutcome::Breaks(aliases),
+            TerminalEffect::ExitsCurrentBlock | TerminalEffect::TerminatesMixed => {
+                return SwitchAliasPathOutcome::ExitsCurrentBlock;
+            }
+        }
+    }
+
+    SwitchAliasPathOutcome::FallsThrough(aliases)
+}
+
+fn simulate_switch_entry_callable_aliases(
+    cases: &[(Vec<Expr>, Vec<Stmt>)],
+    default: Option<&[Stmt]>,
+    entry_case: Option<usize>,
+    incoming_aliases: &HashMap<String, Effect>,
+) -> Option<HashMap<String, Effect>> {
+    let mut aliases = incoming_aliases.clone();
+
+    if let Some(start_index) = entry_case {
+        for (_, body) in cases.iter().skip(start_index) {
+            match simulate_switch_body_callable_aliases(body, aliases) {
+                SwitchAliasPathOutcome::FallsThrough(updated) => aliases = updated,
+                SwitchAliasPathOutcome::Breaks(updated) => return Some(updated),
+                SwitchAliasPathOutcome::ExitsCurrentBlock => return None,
+            }
+        }
+    }
+
+    match default {
+        Some(default_body) => match simulate_switch_body_callable_aliases(default_body, aliases) {
+            SwitchAliasPathOutcome::FallsThrough(updated)
+            | SwitchAliasPathOutcome::Breaks(updated) => Some(updated),
+            SwitchAliasPathOutcome::ExitsCurrentBlock => None,
+        },
+        None => Some(aliases),
+    }
+}
+
+fn merge_switch_callable_alias_paths(
+    cases: &[(Vec<Expr>, Vec<Stmt>)],
+    default: Option<&[Stmt]>,
+    incoming_aliases: &HashMap<String, Effect>,
+) -> HashMap<String, Effect> {
+    let mut fallthrough_paths = Vec::new();
+
+    for case_index in 0..cases.len() {
+        if let Some(aliases) =
+            simulate_switch_entry_callable_aliases(cases, default, Some(case_index), incoming_aliases)
+        {
+            fallthrough_paths.push(aliases);
+        }
+    }
+
+    if let Some(aliases) = simulate_switch_entry_callable_aliases(cases, default, None, incoming_aliases)
+    {
+        fallthrough_paths.push(aliases);
+    }
+
+    merge_callable_alias_paths(fallthrough_paths)
+}
+
+fn apply_stmt_callable_aliases(stmt: &Stmt, aliases: &mut HashMap<String, Effect>) {
+    match &stmt.kind {
+        StmtKind::Assign { name, value } | StmtKind::TypedAssign { name, value, .. } => {
+            let effect = with_callable_alias_effects(aliases.clone(), || callable_alias_from_expr(value));
+            if let Some(effect) = effect {
+                aliases.insert(name.clone(), effect);
+            } else {
+                aliases.remove(name);
+            }
+        }
+        StmtKind::StaticVar { name, init } => update_callable_alias(aliases, name, init),
+        StmtKind::Global { vars } => {
+            for var in vars {
+                aliases.remove(var);
+            }
+        }
+        StmtKind::ArrayAssign { array, .. } | StmtKind::ArrayPush { array, .. } => {
+            aliases.remove(array);
+        }
+        StmtKind::ListUnpack { vars, .. } => {
+            for var in vars {
+                aliases.remove(var);
+            }
+        }
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            let mut fallthrough_paths = Vec::new();
+            if matches!(block_terminal_effect(then_body), TerminalEffect::FallsThrough) {
+                fallthrough_paths.push(simulate_block_callable_aliases(then_body, aliases.clone()));
+            }
+            for (_, body) in elseif_clauses {
+                if matches!(block_terminal_effect(body), TerminalEffect::FallsThrough) {
+                    fallthrough_paths.push(simulate_block_callable_aliases(body, aliases.clone()));
+                }
+            }
+            if let Some(body) = else_body {
+                if matches!(block_terminal_effect(body), TerminalEffect::FallsThrough) {
+                    fallthrough_paths.push(simulate_block_callable_aliases(body, aliases.clone()));
+                }
+            } else {
+                fallthrough_paths.push(aliases.clone());
+            }
+            *aliases = merge_callable_alias_paths(fallthrough_paths);
+        }
+        StmtKind::IfDef {
+            then_body, else_body, ..
+        } => {
+            let mut fallthrough_paths = Vec::new();
+            if matches!(block_terminal_effect(then_body), TerminalEffect::FallsThrough) {
+                fallthrough_paths.push(simulate_block_callable_aliases(then_body, aliases.clone()));
+            }
+            match else_body {
+                Some(body) if matches!(block_terminal_effect(body), TerminalEffect::FallsThrough) => {
+                    fallthrough_paths.push(simulate_block_callable_aliases(body, aliases.clone()));
+                }
+                None => fallthrough_paths.push(aliases.clone()),
+                _ => {}
+            }
+            *aliases = merge_callable_alias_paths(fallthrough_paths);
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            *aliases = merge_try_callable_alias_paths(
+                try_body,
+                catches,
+                finally_body.as_deref(),
+                aliases,
+            );
+        }
+        StmtKind::Switch { cases, default, .. } => {
+            *aliases = merge_switch_callable_alias_paths(cases, default.as_deref(), aliases);
+        }
+        StmtKind::While { .. }
+        | StmtKind::DoWhile { .. }
+        | StmtKind::For { .. }
+        | StmtKind::Foreach { .. }
+        | StmtKind::Include { .. } => aliases.clear(),
+        _ => {}
+    }
+}
+
+fn simulate_block_callable_aliases(
+    body: &[Stmt],
+    mut aliases: HashMap<String, Effect>,
+) -> HashMap<String, Effect> {
+    for stmt in body {
+        apply_stmt_callable_aliases(stmt, &mut aliases);
+        if !matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough) {
+            break;
+        }
+    }
+    aliases
+}
+
+fn merge_callable_alias_paths(
+    mut paths: Vec<HashMap<String, Effect>>,
+) -> HashMap<String, Effect> {
+    let Some(first) = paths.pop() else {
+        return HashMap::new();
+    };
+    first
+        .into_iter()
+        .filter(|(name, effect)| {
+            paths.iter()
+                .all(|path| path.get(name).copied() == Some(*effect))
+        })
+        .collect()
 }
 
 fn prune_for_clause(stmt: Option<Box<Stmt>>) -> Option<Box<Stmt>> {
@@ -1171,75 +2079,13 @@ fn prune_expr(expr: Expr) -> Expr {
 }
 
 fn expr_has_side_effects(expr: &Expr) -> bool {
-    match &expr.kind {
-        ExprKind::StringLiteral(_)
-        | ExprKind::IntLiteral(_)
-        | ExprKind::FloatLiteral(_)
-        | ExprKind::Variable(_)
-        | ExprKind::BoolLiteral(_)
-        | ExprKind::Null
-        | ExprKind::ConstRef(_)
-        | ExprKind::EnumCase { .. }
-        | ExprKind::This => false,
-        ExprKind::Negate(inner)
-        | ExprKind::Not(inner)
-        | ExprKind::BitNot(inner)
-        | ExprKind::Spread(inner) => expr_has_side_effects(inner),
-        ExprKind::BinaryOp { left, right, .. } => {
-            expr_has_side_effects(left) || expr_has_side_effects(right)
-        }
-        ExprKind::Throw(_)
-        | ExprKind::PreIncrement(_)
-        | ExprKind::PostIncrement(_)
-        | ExprKind::PreDecrement(_)
-        | ExprKind::PostDecrement(_)
-        | ExprKind::FunctionCall { .. }
-        | ExprKind::ClosureCall { .. }
-        | ExprKind::ExprCall { .. }
-        | ExprKind::NewObject { .. }
-        | ExprKind::MethodCall { .. }
-        | ExprKind::StaticMethodCall { .. }
-        | ExprKind::PropertyAccess { .. }
-        | ExprKind::ArrayAccess { .. }
-        | ExprKind::BufferNew { .. } => true,
-        ExprKind::NullCoalesce { value, default } => {
-            expr_has_side_effects(value) || expr_has_side_effects(default)
-        }
-        ExprKind::ArrayLiteral(items) => items.iter().any(expr_has_side_effects),
-        ExprKind::ArrayLiteralAssoc(items) => items
-            .iter()
-            .any(|(key, value)| expr_has_side_effects(key) || expr_has_side_effects(value)),
-        ExprKind::Match {
-            subject,
-            arms,
-            default,
-        } => {
-            expr_has_side_effects(subject)
-                || arms.iter().any(|(patterns, value)| {
-                    patterns.iter().any(expr_has_side_effects) || expr_has_side_effects(value)
-                })
-                || default.as_ref().is_some_and(|expr| expr_has_side_effects(expr))
-        }
-        ExprKind::Ternary {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            expr_has_side_effects(condition)
-                || expr_has_side_effects(then_expr)
-                || expr_has_side_effects(else_expr)
-        }
-        ExprKind::Cast { expr, .. } | ExprKind::PtrCast { expr, .. } => expr_has_side_effects(expr),
-        ExprKind::Closure { .. } => false,
-        ExprKind::NamedArg { value, .. } => expr_has_side_effects(value),
-        ExprKind::FirstClassCallable(target) => callable_target_has_side_effects(target),
-    }
+    expr_effect(expr).has_side_effects
 }
 
-fn callable_target_has_side_effects(target: &CallableTarget) -> bool {
+fn callable_target_effect(target: &CallableTarget) -> Effect {
     match target {
-        CallableTarget::Function(_) | CallableTarget::StaticMethod { .. } => false,
-        CallableTarget::Method { .. } => true,
+        CallableTarget::Function(_) | CallableTarget::StaticMethod { .. } => Effect::PURE,
+        CallableTarget::Method { object, .. } => expr_effect(object),
     }
 }
 
@@ -1994,8 +2840,892 @@ fn parse_string_cast_float(value: &str) -> Option<f64> {
 mod tests {
     use super::*;
     use crate::names::Name;
-    use crate::parser::ast::{ClassProperty, Visibility};
+    use crate::parser::ast::{ClassProperty, StaticReceiver, Visibility};
     use crate::span::Span;
+
+    #[test]
+    fn test_effect_analysis_recognizes_pure_builtin_calls() {
+        let expr = Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::from("strlen"),
+                args: vec![Expr::string_lit("abc")],
+            },
+            Span::dummy(),
+        );
+
+        assert!(!expr_has_side_effects(&expr));
+        assert!(!expr_effect(&expr).may_throw);
+        assert!(!expr_is_observable(&expr));
+    }
+
+    #[test]
+    fn test_effect_analysis_treats_property_and_array_reads_as_pure() {
+        let property = Expr::new(
+            ExprKind::PropertyAccess {
+                object: Box::new(Expr::var("entry")),
+                property: "name".to_string(),
+            },
+            Span::dummy(),
+        );
+        let array = Expr::new(
+            ExprKind::ArrayAccess {
+                array: Box::new(Expr::var("items")),
+                index: Box::new(Expr::int_lit(0)),
+            },
+            Span::dummy(),
+        );
+
+        assert!(!expr_has_side_effects(&property));
+        assert!(!expr_effect(&property).may_throw);
+        assert!(!expr_has_side_effects(&array));
+        assert!(!expr_effect(&array).may_throw);
+    }
+
+    #[test]
+    fn test_program_function_effects_recognize_pure_user_functions() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "len3".to_string(),
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![Stmt::new(
+                    StmtKind::Return(Some(Expr::new(
+                        ExprKind::FunctionCall {
+                            name: Name::from("strlen"),
+                            args: vec![Expr::string_lit("abc")],
+                        },
+                        Span::dummy(),
+                    ))),
+                    Span::dummy(),
+                )],
+            },
+            Span::dummy(),
+        )];
+
+        let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+        assert_eq!(function_effects.get("len3"), Some(&Effect::PURE));
+    }
+
+    #[test]
+    fn test_program_function_effects_propagate_throwing_calls() {
+        let program = vec![
+            Stmt::new(
+                StmtKind::FunctionDecl {
+                    name: "boom".to_string(),
+                    params: Vec::new(),
+                    variadic: None,
+                    return_type: None,
+                    body: vec![Stmt::new(
+                        StmtKind::Throw(Expr::new(
+                            ExprKind::NewObject {
+                                class_name: Name::from("Exception"),
+                                args: Vec::new(),
+                            },
+                            Span::dummy(),
+                        )),
+                        Span::dummy(),
+                    )],
+                },
+                Span::dummy(),
+            ),
+            Stmt::new(
+                StmtKind::FunctionDecl {
+                    name: "wrapper".to_string(),
+                    params: Vec::new(),
+                    variadic: None,
+                    return_type: None,
+                    body: vec![Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::FunctionCall {
+                                name: Name::from("boom"),
+                                args: Vec::new(),
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    )],
+                },
+                Span::dummy(),
+            ),
+        ];
+
+        let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+        assert_eq!(
+            function_effects.get("wrapper"),
+            Some(&Effect::PURE.with_side_effects().with_may_throw())
+        );
+    }
+
+    #[test]
+    fn test_program_static_method_effects_recognize_pure_static_methods() {
+        let program = vec![Stmt::new(
+            StmtKind::ClassDecl {
+                name: "Util".to_string(),
+                extends: None,
+                implements: Vec::new(),
+                is_abstract: false,
+                is_readonly_class: false,
+                trait_uses: Vec::new(),
+                properties: Vec::new(),
+                methods: vec![ClassMethod {
+                    name: "len3".to_string(),
+                    visibility: Visibility::Public,
+                    is_static: true,
+                    is_abstract: false,
+                    has_body: true,
+                    params: Vec::new(),
+                    variadic: None,
+                    return_type: None,
+                    body: vec![Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::FunctionCall {
+                                name: Name::from("strlen"),
+                                args: vec![Expr::string_lit("abc")],
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    )],
+                    span: Span::dummy(),
+                }],
+            },
+            Span::dummy(),
+        )];
+
+        let (_, static_method_effects, _) = compute_program_callable_effects(&program);
+
+        assert_eq!(
+            static_method_effects.get("Util::len3"),
+            Some(&Effect::PURE)
+        );
+    }
+
+    #[test]
+    fn test_program_static_method_effects_resolve_self_receiver() {
+        let program = vec![Stmt::new(
+            StmtKind::ClassDecl {
+                name: "Util".to_string(),
+                extends: None,
+                implements: Vec::new(),
+                is_abstract: false,
+                is_readonly_class: false,
+                trait_uses: Vec::new(),
+                properties: Vec::new(),
+                methods: vec![
+                    ClassMethod {
+                        name: "len3".to_string(),
+                        visibility: Visibility::Public,
+                        is_static: true,
+                        is_abstract: false,
+                        has_body: true,
+                        params: Vec::new(),
+                        variadic: None,
+                        return_type: None,
+                        body: vec![Stmt::new(
+                            StmtKind::Return(Some(Expr::new(
+                                ExprKind::FunctionCall {
+                                    name: Name::from("strlen"),
+                                    args: vec![Expr::string_lit("abc")],
+                                },
+                                Span::dummy(),
+                            ))),
+                            Span::dummy(),
+                        )],
+                        span: Span::dummy(),
+                    },
+                    ClassMethod {
+                        name: "relay".to_string(),
+                        visibility: Visibility::Public,
+                        is_static: true,
+                        is_abstract: false,
+                        has_body: true,
+                        params: Vec::new(),
+                        variadic: None,
+                        return_type: None,
+                        body: vec![Stmt::new(
+                            StmtKind::Return(Some(Expr::new(
+                                ExprKind::StaticMethodCall {
+                                    receiver: StaticReceiver::Self_,
+                                    method: "len3".to_string(),
+                                    args: Vec::new(),
+                                },
+                                Span::dummy(),
+                            ))),
+                            Span::dummy(),
+                        )],
+                        span: Span::dummy(),
+                    },
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let (_, static_method_effects, _) = compute_program_callable_effects(&program);
+
+        assert_eq!(
+            static_method_effects.get("Util::relay"),
+            Some(&Effect::PURE)
+        );
+    }
+
+    #[test]
+    fn test_program_static_method_effects_resolve_parent_receiver() {
+        let program = vec![
+            Stmt::new(
+                StmtKind::ClassDecl {
+                    name: "Base".to_string(),
+                    extends: None,
+                    implements: Vec::new(),
+                    is_abstract: false,
+                    is_readonly_class: false,
+                    trait_uses: Vec::new(),
+                    properties: Vec::new(),
+                    methods: vec![ClassMethod {
+                        name: "len3".to_string(),
+                        visibility: Visibility::Public,
+                        is_static: true,
+                        is_abstract: false,
+                        has_body: true,
+                        params: Vec::new(),
+                        variadic: None,
+                        return_type: None,
+                        body: vec![Stmt::new(
+                            StmtKind::Return(Some(Expr::new(
+                                ExprKind::FunctionCall {
+                                    name: Name::from("strlen"),
+                                    args: vec![Expr::string_lit("abc")],
+                                },
+                                Span::dummy(),
+                            ))),
+                            Span::dummy(),
+                        )],
+                        span: Span::dummy(),
+                    }],
+                },
+                Span::dummy(),
+            ),
+            Stmt::new(
+                StmtKind::ClassDecl {
+                    name: "Child".to_string(),
+                    extends: Some(Name::from("Base")),
+                    implements: Vec::new(),
+                    is_abstract: false,
+                    is_readonly_class: false,
+                    trait_uses: Vec::new(),
+                    properties: Vec::new(),
+                    methods: vec![ClassMethod {
+                        name: "relay".to_string(),
+                        visibility: Visibility::Public,
+                        is_static: true,
+                        is_abstract: false,
+                        has_body: true,
+                        params: Vec::new(),
+                        variadic: None,
+                        return_type: None,
+                        body: vec![Stmt::new(
+                            StmtKind::Return(Some(Expr::new(
+                                ExprKind::StaticMethodCall {
+                                    receiver: StaticReceiver::Parent,
+                                    method: "len3".to_string(),
+                                    args: Vec::new(),
+                                },
+                                Span::dummy(),
+                            ))),
+                            Span::dummy(),
+                        )],
+                        span: Span::dummy(),
+                    }],
+                },
+                Span::dummy(),
+            ),
+        ];
+
+        let (_, static_method_effects, _) = compute_program_callable_effects(&program);
+
+        assert_eq!(
+            static_method_effects.get("Child::relay"),
+            Some(&Effect::PURE)
+        );
+    }
+
+    #[test]
+    fn test_program_private_instance_method_effects_recognize_private_methods() {
+        let program = vec![Stmt::new(
+            StmtKind::ClassDecl {
+                name: "Util".to_string(),
+                extends: None,
+                implements: Vec::new(),
+                is_abstract: false,
+                is_readonly_class: false,
+                trait_uses: Vec::new(),
+                properties: Vec::new(),
+                methods: vec![ClassMethod {
+                    name: "len3".to_string(),
+                    visibility: Visibility::Private,
+                    is_static: false,
+                    is_abstract: false,
+                    has_body: true,
+                    params: Vec::new(),
+                    variadic: None,
+                    return_type: None,
+                    body: vec![Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::FunctionCall {
+                                name: Name::from("strlen"),
+                                args: vec![Expr::string_lit("abc")],
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    )],
+                    span: Span::dummy(),
+                }],
+            },
+            Span::dummy(),
+        )];
+
+        let (_, _, private_instance_method_effects) = compute_program_callable_effects(&program);
+
+        assert_eq!(
+            private_instance_method_effects.get("Util::len3"),
+            Some(&Effect::PURE)
+        );
+    }
+
+    #[test]
+    fn test_effect_analysis_tracks_pure_iife_expr_calls() {
+        let expr = Expr::new(
+            ExprKind::ExprCall {
+                callee: Box::new(Expr::new(
+                    ExprKind::Closure {
+                        params: Vec::new(),
+                        variadic: None,
+                        body: vec![Stmt::new(
+                            StmtKind::Return(Some(Expr::new(
+                                ExprKind::FunctionCall {
+                                    name: Name::from("strlen"),
+                                    args: vec![Expr::string_lit("abc")],
+                                },
+                                Span::dummy(),
+                            ))),
+                            Span::dummy(),
+                        )],
+                        is_arrow: false,
+                        captures: Vec::new(),
+                    },
+                    Span::dummy(),
+                )),
+                args: Vec::new(),
+            },
+            Span::dummy(),
+        );
+
+        assert!(!expr_has_side_effects(&expr));
+        assert!(!expr_effect(&expr).may_throw);
+        assert!(!expr_is_observable(&expr));
+    }
+
+    #[test]
+    fn test_program_function_effects_track_closure_alias_locals() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "relay".to_string(),
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::Assign {
+                            name: "f".to_string(),
+                            value: Expr::new(
+                                ExprKind::Closure {
+                                    params: Vec::new(),
+                                    variadic: None,
+                                    body: vec![Stmt::new(
+                                        StmtKind::Return(Some(Expr::new(
+                                            ExprKind::FunctionCall {
+                                                name: Name::from("strlen"),
+                                                args: vec![Expr::string_lit("abc")],
+                                            },
+                                            Span::dummy(),
+                                        ))),
+                                        Span::dummy(),
+                                    )],
+                                    is_arrow: false,
+                                    captures: Vec::new(),
+                                },
+                                Span::dummy(),
+                            ),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::ClosureCall {
+                                var: "f".to_string(),
+                                args: Vec::new(),
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    ),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+        assert_eq!(
+            function_effects.get("relay"),
+            Some(&Effect::PURE.with_side_effects())
+        );
+    }
+
+    #[test]
+    fn test_program_function_effects_track_callable_alias_through_ternary() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "relay".to_string(),
+                params: vec![("flag".to_string(), None, None, false)],
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::Assign {
+                            name: "f".to_string(),
+                            value: Expr::new(
+                                ExprKind::Ternary {
+                                    condition: Box::new(Expr::var("flag")),
+                                    then_expr: Box::new(Expr::new(
+                                        ExprKind::FirstClassCallable(CallableTarget::Function(
+                                            Name::from("strlen"),
+                                        )),
+                                        Span::dummy(),
+                                    )),
+                                    else_expr: Box::new(Expr::new(
+                                        ExprKind::FirstClassCallable(CallableTarget::Function(
+                                            Name::from("strlen"),
+                                        )),
+                                        Span::dummy(),
+                                    )),
+                                },
+                                Span::dummy(),
+                            ),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::ClosureCall {
+                                var: "f".to_string(),
+                                args: vec![Expr::string_lit("abc")],
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    ),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+        assert_eq!(
+            function_effects.get("relay"),
+            Some(&Effect::PURE.with_side_effects())
+        );
+    }
+
+    #[test]
+    fn test_program_function_effects_track_callable_alias_through_match() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "relay".to_string(),
+                params: vec![("flag".to_string(), None, None, false)],
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::Assign {
+                            name: "f".to_string(),
+                            value: Expr::new(
+                                ExprKind::Match {
+                                    subject: Box::new(Expr::var("flag")),
+                                    arms: vec![(
+                                        vec![Expr::int_lit(1)],
+                                        Expr::new(
+                                            ExprKind::FirstClassCallable(
+                                                CallableTarget::Function(Name::from("strlen")),
+                                            ),
+                                            Span::dummy(),
+                                        ),
+                                    )],
+                                    default: Some(Box::new(Expr::new(
+                                        ExprKind::FirstClassCallable(CallableTarget::Function(
+                                            Name::from("strlen"),
+                                        )),
+                                        Span::dummy(),
+                                    ))),
+                                },
+                                Span::dummy(),
+                            ),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::ClosureCall {
+                                var: "f".to_string(),
+                                args: vec![Expr::string_lit("abc")],
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    ),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+        assert_eq!(
+            function_effects.get("relay"),
+            Some(&Effect::PURE.with_side_effects())
+        );
+    }
+
+    #[test]
+    fn test_program_function_effects_track_callable_alias_through_null_coalesce() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "relay".to_string(),
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::Assign {
+                            name: "f".to_string(),
+                            value: Expr::new(
+                                ExprKind::NullCoalesce {
+                                    value: Box::new(Expr::new(
+                                        ExprKind::FirstClassCallable(CallableTarget::Function(
+                                            Name::from("strlen"),
+                                        )),
+                                        Span::dummy(),
+                                    )),
+                                    default: Box::new(Expr::new(
+                                        ExprKind::FirstClassCallable(CallableTarget::Function(
+                                            Name::from("strlen"),
+                                        )),
+                                        Span::dummy(),
+                                    )),
+                                },
+                                Span::dummy(),
+                            ),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::ClosureCall {
+                                var: "f".to_string(),
+                                args: vec![Expr::string_lit("abc")],
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    ),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+        assert_eq!(
+            function_effects.get("relay"),
+            Some(&Effect::PURE.with_side_effects())
+        );
+    }
+
+    #[test]
+    fn test_effect_analysis_tracks_named_first_class_callable_expr_calls() {
+        let expr = Expr::new(
+            ExprKind::ExprCall {
+                callee: Box::new(Expr::new(
+                    ExprKind::FirstClassCallable(CallableTarget::Function(Name::from("strlen"))),
+                    Span::dummy(),
+                )),
+                args: vec![Expr::string_lit("abc")],
+            },
+            Span::dummy(),
+        );
+
+        assert!(!expr_has_side_effects(&expr));
+        assert!(!expr_effect(&expr).may_throw);
+        assert!(!expr_is_observable(&expr));
+    }
+
+    #[test]
+    fn test_program_function_effects_track_callable_alias_locals() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "relay".to_string(),
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::Assign {
+                            name: "f".to_string(),
+                            value: Expr::new(
+                                ExprKind::FirstClassCallable(CallableTarget::Function(Name::from(
+                                    "strlen",
+                                ))),
+                                Span::dummy(),
+                            ),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::new(
+                        StmtKind::Assign {
+                            name: "g".to_string(),
+                            value: Expr::var("f"),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::ClosureCall {
+                                var: "g".to_string(),
+                                args: vec![Expr::string_lit("abc")],
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    ),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+        assert_eq!(
+            function_effects.get("relay"),
+            Some(&Effect::PURE.with_side_effects())
+        );
+    }
+
+    #[test]
+    fn test_program_function_effects_merge_callable_aliases_across_if_paths() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "relay".to_string(),
+                params: vec![("flag".to_string(), None, None, false)],
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::If {
+                            condition: Expr::var("flag"),
+                            then_body: vec![Stmt::new(
+                                StmtKind::Assign {
+                                    name: "g".to_string(),
+                                    value: Expr::new(
+                                        ExprKind::FirstClassCallable(CallableTarget::Function(
+                                            Name::from("strlen"),
+                                        )),
+                                        Span::dummy(),
+                                    ),
+                                },
+                                Span::dummy(),
+                            )],
+                            elseif_clauses: Vec::new(),
+                            else_body: Some(vec![Stmt::new(
+                                StmtKind::Assign {
+                                    name: "g".to_string(),
+                                    value: Expr::new(
+                                        ExprKind::FirstClassCallable(CallableTarget::Function(
+                                            Name::from("strlen"),
+                                        )),
+                                        Span::dummy(),
+                                    ),
+                                },
+                                Span::dummy(),
+                            )]),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::ClosureCall {
+                                var: "g".to_string(),
+                                args: vec![Expr::string_lit("abc")],
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    ),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+        assert_eq!(
+            function_effects.get("relay"),
+            Some(&Effect::PURE.with_side_effects())
+        );
+    }
+
+    #[test]
+    fn test_program_function_effects_merge_callable_aliases_across_try_paths() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "relay".to_string(),
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::Try {
+                            try_body: vec![Stmt::new(
+                                StmtKind::Assign {
+                                    name: "g".to_string(),
+                                    value: Expr::new(
+                                        ExprKind::FirstClassCallable(CallableTarget::Function(
+                                            Name::from("strlen"),
+                                        )),
+                                        Span::dummy(),
+                                    ),
+                                },
+                                Span::dummy(),
+                            )],
+                            catches: vec![crate::parser::ast::CatchClause {
+                                exception_types: vec![Name::from("Exception")],
+                                variable: Some("e".to_string()),
+                                body: vec![Stmt::new(
+                                    StmtKind::Assign {
+                                        name: "g".to_string(),
+                                        value: Expr::new(
+                                            ExprKind::FirstClassCallable(CallableTarget::Function(
+                                                Name::from("strlen"),
+                                            )),
+                                            Span::dummy(),
+                                        ),
+                                    },
+                                    Span::dummy(),
+                                )],
+                            }],
+                            finally_body: Some(vec![Stmt::new(
+                                StmtKind::ExprStmt(Expr::string_lit("done")),
+                                Span::dummy(),
+                            )]),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::ClosureCall {
+                                var: "g".to_string(),
+                                args: vec![Expr::string_lit("abc")],
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    ),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+        assert_eq!(
+            function_effects.get("relay"),
+            Some(&Effect::PURE.with_side_effects())
+        );
+    }
+
+    #[test]
+    fn test_program_function_effects_merge_callable_aliases_across_switch_paths() {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "relay".to_string(),
+                params: vec![("flag".to_string(), None, None, false)],
+                variadic: None,
+                return_type: None,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::Switch {
+                            subject: Expr::var("flag"),
+                            cases: vec![
+                                (
+                                    vec![Expr::int_lit(1)],
+                                    vec![
+                                        Stmt::new(
+                                            StmtKind::Assign {
+                                                name: "g".to_string(),
+                                                value: Expr::new(
+                                                    ExprKind::FirstClassCallable(
+                                                        CallableTarget::Function(Name::from("strlen")),
+                                                    ),
+                                                    Span::dummy(),
+                                                ),
+                                            },
+                                            Span::dummy(),
+                                        ),
+                                        Stmt::new(StmtKind::Break, Span::dummy()),
+                                    ],
+                                ),
+                                (vec![Expr::int_lit(2)], Vec::new()),
+                            ],
+                            default: Some(vec![Stmt::new(
+                                StmtKind::Assign {
+                                    name: "g".to_string(),
+                                    value: Expr::new(
+                                        ExprKind::FirstClassCallable(CallableTarget::Function(
+                                            Name::from("strlen"),
+                                        )),
+                                        Span::dummy(),
+                                    ),
+                                },
+                                Span::dummy(),
+                            )]),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::ClosureCall {
+                                var: "g".to_string(),
+                                args: vec![Expr::string_lit("abc")],
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    ),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+        assert_eq!(
+            function_effects.get("relay"),
+            Some(&Effect::PURE.with_side_effects())
+        );
+    }
 
     #[test]
     fn test_fold_nested_integer_arithmetic() {
