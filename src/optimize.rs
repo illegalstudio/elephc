@@ -517,10 +517,16 @@ fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv) {
             update,
             body,
         } => {
-            let init = init.map(|stmt| Box::new(propagate_stmt(*stmt, env.clone()).0));
+            let (init, init_env) = match init {
+                Some(stmt) => {
+                    let (stmt, next_env) = propagate_stmt(*stmt, env);
+                    (Some(Box::new(stmt)), next_env)
+                }
+                None => (None, env),
+            };
             let condition_exprs = condition.iter().cloned().collect::<Vec<_>>();
             let update_stmt = update.as_deref();
-            let loop_env = safe_loop_env(&env, &condition_exprs, &body, update_stmt);
+            let loop_env = safe_loop_env(&init_env, &condition_exprs, &body, update_stmt);
             let condition = condition.map(|expr| propagate_expr(expr, &loop_env));
             let update = update.map(|stmt| Box::new(propagate_stmt(*stmt, loop_env.clone()).0));
             let (body, _) = propagate_block(body, loop_env.clone());
@@ -5409,6 +5415,49 @@ mod tests {
         assert_eq!(
             propagated[2],
             Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        );
+    }
+
+    #[test]
+    fn test_propagate_constants_tracks_stable_for_init_assignments() {
+        let program = vec![
+            Stmt::assign("base", Expr::int_lit(2)),
+            Stmt::assign("i", Expr::int_lit(0)),
+            Stmt::new(
+                StmtKind::For {
+                    init: Some(Box::new(Stmt::assign("exp", Expr::int_lit(3)))),
+                    condition: Some(Expr::binop(Expr::var("i"), BinOp::Lt, Expr::int_lit(2))),
+                    update: Some(Box::new(Stmt::new(
+                        StmtKind::ExprStmt(Expr::new(
+                            ExprKind::PostIncrement("i".to_string()),
+                            Span::dummy(),
+                        )),
+                        Span::dummy(),
+                    ))),
+                    body: vec![Stmt::echo(Expr::binop(
+                        Expr::var("base"),
+                        BinOp::Pow,
+                        Expr::var("exp"),
+                    ))],
+                },
+                Span::dummy(),
+            ),
+            Stmt::echo(Expr::var("exp")),
+        ];
+
+        let propagated = propagate_constants(program);
+
+        let StmtKind::For { body, .. } = &propagated[2].kind else {
+            panic!("expected for");
+        };
+
+        assert_eq!(
+            body[0],
+            Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        );
+        assert_eq!(
+            propagated[3],
+            Stmt::echo(Expr::new(ExprKind::IntLiteral(3), Span::dummy()))
         );
     }
 

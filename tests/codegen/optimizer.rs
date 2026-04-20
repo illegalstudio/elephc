@@ -439,6 +439,43 @@ echo $base ** 3;
 }
 
 #[test]
+fn test_constant_propagation_tracks_stable_for_init_assignments() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_for_init");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$base = 2;
+$i = 0;
+for ($exp = 3; $i < 2; $i++) {
+    echo $base ** $exp;
+}
+echo $exp;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "stable for-init assignments should let pow disappear from user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "883");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_constant_folding_string_concat_removes_runtime_concat_call() {
     let dir = make_cli_test_dir("elephc_constant_folding_concat");
     let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(

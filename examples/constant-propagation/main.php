@@ -34,3 +34,10 @@ foreach ([1, 2, 3] as $k => $value) {
     echo $value;
 }
 echo $stableForeach ** 3 . "\n";
+
+$baseInit = 2;
+$i = 0;
+for ($exp = 3; $i < 2; $i++) {
+    echo $baseInit ** $exp;
+}
+echo $exp . "\n";
