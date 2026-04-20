@@ -432,6 +432,39 @@ fn combine_if_conditions(left: Expr, right: Expr) -> Expr {
     ))
 }
 
+fn build_switch_match_condition(subject: &Expr, patterns: &[Expr]) -> Option<Expr> {
+    if patterns.is_empty() {
+        return None;
+    }
+
+    if patterns.len() > 1 && expr_is_observable(subject) {
+        return None;
+    }
+
+    let mut comparisons = patterns.iter().cloned().map(|pattern| {
+        Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(subject.clone()),
+                op: BinOp::Eq,
+                right: Box::new(pattern),
+            },
+            subject.span,
+        )
+    });
+    let mut condition = comparisons.next()?;
+    for comparison in comparisons {
+        condition = Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(condition),
+                op: BinOp::Or,
+                right: Box::new(comparison),
+            },
+            subject.span,
+        );
+    }
+    Some(prune_expr(condition))
+}
+
 fn propagate_block(body: Vec<Stmt>, mut env: ConstantEnv) -> (Vec<Stmt>, ConstantEnv) {
     let mut propagated = Vec::new();
     for stmt in body {
@@ -3624,6 +3657,16 @@ fn prune_switch_stmt(
     }
 
     let Some(subject_value) = scalar_value(&subject) else {
+        if cases.len() == 1 {
+            let (patterns, _) = &cases[0];
+            if let Some(condition) = build_switch_match_condition(&subject, patterns) {
+                let then_body = materialize_switch_execution(&cases, &default, Some(0));
+                let else_body =
+                    normalize_optional_block(Some(materialize_switch_execution(&cases, &default, None)));
+                return prune_if_chain(condition, then_body, Vec::new(), else_body);
+            }
+        }
+
         return vec![Stmt {
             kind: StmtKind::Switch {
                 subject,
@@ -6582,8 +6625,8 @@ mod tests {
             panic!("expected function");
         };
         assert_eq!(body.len(), 1);
-        let StmtKind::Switch { .. } = &body[0].kind else {
-            panic!("expected switch");
+        let StmtKind::If { .. } = &body[0].kind else {
+            panic!("expected normalized if");
         };
     }
 
@@ -7081,6 +7124,49 @@ mod tests {
         let pruned = normalize_control_flow(program);
 
         assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(9))]);
+    }
+
+    #[test]
+    fn test_normalize_control_flow_rewrites_single_case_switch_to_if() {
+        let program = vec![Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::var("x"),
+                cases: vec![(
+                    vec![Expr::int_lit(1)],
+                    vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+                )],
+                default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = normalize_control_flow(program);
+
+        assert_eq!(pruned.len(), 1);
+        match &pruned[0].kind {
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            } => {
+                assert!(elseif_clauses.is_empty());
+                assert_eq!(
+                    *condition,
+                    Expr::new(
+                        ExprKind::BinaryOp {
+                            left: Box::new(Expr::var("x")),
+                            op: BinOp::Eq,
+                            right: Box::new(Expr::int_lit(1)),
+                        },
+                        Span::dummy(),
+                    )
+                );
+                assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(7))]);
+                assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
+            }
+            other => panic!("expected normalized if, got {:?}", other),
+        }
     }
 
     #[test]

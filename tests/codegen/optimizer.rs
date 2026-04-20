@@ -1432,6 +1432,27 @@ if (step("a", false)) {
 }
 
 #[test]
+fn test_dead_code_elimination_normalizes_single_case_switch_with_effectful_subject() {
+    let out = compile_and_run(
+        r#"<?php
+function step($label, $ret) {
+    echo $label;
+    return $ret;
+}
+switch (step("s", 1)) {
+    case step("a", 1):
+        echo "A";
+        break;
+    default:
+        echo "D";
+}
+"#,
+    );
+
+    assert_eq!(out, "saA");
+}
+
+#[test]
 fn test_dead_code_elimination_materializes_constant_switch_match() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_match");
     let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
