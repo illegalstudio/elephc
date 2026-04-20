@@ -1856,6 +1856,21 @@ fn build_if_stmt(
                             span,
                         };
                     }
+
+                    if inner_elseifs.is_empty() && inner_else.as_ref() == Some(&then_body) {
+                        return Stmt {
+                            kind: StmtKind::If {
+                                condition: combine_if_conditions(
+                                    invert_condition(condition),
+                                    inner_condition.clone(),
+                                ),
+                                then_body: inner_then_body.clone(),
+                                elseif_clauses: Vec::new(),
+                                else_body: Some(then_body),
+                            },
+                            span,
+                        };
+                    }
                 }
             }
         }
@@ -7162,6 +7177,59 @@ mod tests {
                 assert_eq!(then_body, &shared_body);
                 assert!(elseif_clauses.is_empty());
                 assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
+            }
+            other => panic!("expected normalized if, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_normalize_control_flow_merges_identical_if_chain_tail_into_inverted_and() {
+        let shared_tail = vec![Stmt::echo(Expr::int_lit(9))];
+        let program = vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::var("a"),
+                then_body: shared_tail.clone(),
+                elseif_clauses: Vec::new(),
+                else_body: Some(vec![Stmt::new(
+                    StmtKind::If {
+                        condition: Expr::var("b"),
+                        then_body: vec![Stmt::echo(Expr::int_lit(7))],
+                        elseif_clauses: Vec::new(),
+                        else_body: Some(shared_tail.clone()),
+                    },
+                    Span::dummy(),
+                )]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = normalize_control_flow(program);
+
+        assert_eq!(pruned.len(), 1);
+        match &pruned[0].kind {
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            } => {
+                assert_eq!(
+                    *condition,
+                    Expr::new(
+                        ExprKind::BinaryOp {
+                            left: Box::new(Expr::new(
+                                ExprKind::Not(Box::new(Expr::var("a"))),
+                                Span::dummy(),
+                            )),
+                            op: BinOp::And,
+                            right: Box::new(Expr::var("b")),
+                        },
+                        Span::dummy(),
+                    )
+                );
+                assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(7))]);
+                assert!(elseif_clauses.is_empty());
+                assert_eq!(else_body, &Some(shared_tail));
             }
             other => panic!("expected normalized if, got {:?}", other),
         }

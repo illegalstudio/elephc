@@ -1455,6 +1455,39 @@ if (step("a", true)) {
 }
 
 #[test]
+fn test_dead_code_elimination_merges_identical_if_chain_tail_with_short_circuit() {
+    let out = compile_and_run(
+        r#"<?php
+function step($label, $ret) {
+    echo $label;
+    return $ret;
+}
+if (step("a", true)) {
+    echo "X";
+} else {
+    if (step("b", true)) {
+        echo "Y";
+    } else {
+        echo "X";
+    }
+}
+echo "|";
+if (step("c", false)) {
+    echo "X";
+} else {
+    if (step("d", true)) {
+        echo "Y";
+    } else {
+        echo "X";
+    }
+}
+"#,
+    );
+
+    assert_eq!(out, "aX|cdY");
+}
+
+#[test]
 fn test_dead_code_elimination_normalizes_single_case_switch_with_effectful_subject() {
     let out = compile_and_run(
         r#"<?php
