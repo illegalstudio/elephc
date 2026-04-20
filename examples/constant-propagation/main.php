@@ -52,3 +52,13 @@ for (; $i < 2; $i++) {
     }
 }
 echo $nestedBase ** 3 . "\n";
+
+$arrayBase = 2;
+$items = [];
+$i = 0;
+for (; $i < 3; $i++) {
+    $items[] = $i;
+    $items[0] = $i;
+    echo $i;
+}
+echo $arrayBase ** 3 . "\n";

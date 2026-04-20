@@ -1210,10 +1210,23 @@ fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
             Some(writes)
         }
         StmtKind::NamespaceBlock { body, .. } => block_local_writes(body),
+        StmtKind::ArrayAssign {
+            array,
+            index,
+            value,
+        } => {
+            let mut writes = expr_local_writes(index)?;
+            writes.extend(expr_local_writes(value)?);
+            writes.insert(array.clone());
+            Some(writes)
+        }
+        StmtKind::ArrayPush { array, value } => {
+            let mut writes = expr_local_writes(value)?;
+            writes.insert(array.clone());
+            Some(writes)
+        }
         StmtKind::StaticVar { .. }
         | StmtKind::Global { .. }
-        | StmtKind::ArrayAssign { .. }
-        | StmtKind::ArrayPush { .. }
         | StmtKind::Include { .. }
         | StmtKind::Throw(_)
         | StmtKind::PropertyAssign { .. }
@@ -5536,6 +5549,52 @@ mod tests {
 
         assert_eq!(
             propagated[3],
+            Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        );
+    }
+
+    #[test]
+    fn test_propagate_constants_preserves_unmodified_scalar_across_loop_local_array_writes() {
+        let program = vec![
+            Stmt::assign("base", Expr::int_lit(2)),
+            Stmt::new(
+                StmtKind::For {
+                    init: Some(Box::new(Stmt::assign("i", Expr::int_lit(0)))),
+                    condition: Some(Expr::binop(Expr::var("i"), BinOp::Lt, Expr::int_lit(3))),
+                    update: Some(Box::new(Stmt::new(
+                        StmtKind::ExprStmt(Expr::new(
+                            ExprKind::PostIncrement("i".to_string()),
+                            Span::dummy(),
+                        )),
+                        Span::dummy(),
+                    ))),
+                    body: vec![
+                        Stmt::new(
+                            StmtKind::ArrayPush {
+                                array: "items".to_string(),
+                                value: Expr::var("i"),
+                            },
+                            Span::dummy(),
+                        ),
+                        Stmt::new(
+                            StmtKind::ArrayAssign {
+                                array: "items".to_string(),
+                                index: Expr::int_lit(0),
+                                value: Expr::var("i"),
+                            },
+                            Span::dummy(),
+                        ),
+                    ],
+                },
+                Span::dummy(),
+            ),
+            Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+        ];
+
+        let propagated = propagate_constants(program);
+
+        assert_eq!(
+            propagated[2],
             Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
         );
     }
