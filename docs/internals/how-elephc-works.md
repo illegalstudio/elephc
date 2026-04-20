@@ -138,7 +138,21 @@ If you tried `$x = "hello"` after `$x = 10`, the type checker would reject it �
 
 On successful type checking, elephc also runs a warning pass that reports issues such as unused variables and unreachable code. On failing compilations, the parser and checker both try to recover conservatively so they can often report more than one independent error in a single run.
 
-## Phase 8: Post-typecheck control-flow pruning
+## Phase 8: Post-typecheck constant propagation
+
+**File:** `src/optimize.rs`
+
+After the checker succeeds, elephc runs a local constant-propagation pass.
+
+This pass is still conservative, but it can already:
+
+- forward scalar locals through straight-line code
+- merge identical scalar values across simple `if` fallthrough paths
+- re-run folding after substitutions so expressions like `$x ** $y` can collapse to a literal
+
+In our running example, this still does not change the program, because `$x = 10` at the statement level is not yet propagated into the later comparison shape that would let the whole `if` collapse.
+
+## Phase 9: Post-typecheck control-flow pruning
 
 **File:** `src/optimize.rs`
 
@@ -157,9 +171,9 @@ This pass also consults the optimizer's local effect summaries. Those summaries 
 
 This split is intentional: elephc folds obvious scalar expressions early, but waits until after type checking to remove whole blocks, so diagnostics still see the original checked structure.
 
-In our running example there is still nothing to prune, because `$x > 5` is not a compile-time constant at the AST level.
+In our running example there is still nothing to prune, because `$x > 5` is not yet a compile-time constant at the AST level.
 
-## Phase 9: Dead-code elimination and structural cleanup
+## Phase 10: Dead-code elimination and structural cleanup
 
 **File:** `src/optimize.rs`
 
@@ -175,7 +189,7 @@ This pass currently handles cases such as:
 
 This is also where the optimizer does its final local dead-code cleanup before codegen sees the AST.
 
-## Phase 10: Code generation
+## Phase 11: Code generation
 
 **File:** `src/codegen/` — See [The Code Generator](the-codegen.md) for details.
 
@@ -225,7 +239,7 @@ Key observations:
 - `echo "big\n"` → load string address + length, then `svc` to write to stdout
 - The string literal lives in the `.data` section, referenced by label `_str_0`
 
-## Phase 11: Runtime preparation, assembly, and linking
+## Phase 12: Runtime preparation, assembly, and linking
 
 **Tools:** native `as` and `ld` (or the equivalent system toolchain)
 
@@ -293,7 +307,13 @@ The binary runs directly on the CPU. There is no PHP interpreter or VM at runtim
                     ▼ Type Checker
     { x: Int } — all types consistent ✓
                     │
+                    ▼ Optimizer (constant propagation, no-op here)
+    [Assign{x, 10}, If{Gt(Var(x), 5), [Echo("big\n")]}]
+                    │
                     ▼ Optimizer (prune dead control flow, no-op here)
+    [Assign{x, 10}, If{Gt(Var(x), 5), [Echo("big\n")]}]
+                    │
+                    ▼ Optimizer (dead-code elimination, no-op here)
     [Assign{x, 10}, If{Gt(Var(x), 5), [Echo("big\n")]}]
                     │
                     ▼ Code Generator

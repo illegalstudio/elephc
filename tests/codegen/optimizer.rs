@@ -32,6 +32,78 @@ fn test_constant_folding_pow_removes_pow_call_from_user_assembly() {
 }
 
 #[test]
+fn test_constant_propagation_removes_pow_call_from_user_assembly() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_pow");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$x = 2;
+$y = 3;
+echo $x ** $y;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "constant-propagated pow expression should not leave a pow call in user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "8");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_constant_propagation_merges_identical_if_constants() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_if_merge");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+if ($argc > 0) {
+    $base = 2;
+} else {
+    $base = 2;
+}
+
+echo $base ** 3;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "merged if constants should let pow disappear from user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "8");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_constant_folding_string_concat_removes_runtime_concat_call() {
     let dir = make_cli_test_dir("elephc_constant_folding_concat");
     let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(

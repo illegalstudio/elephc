@@ -307,7 +307,7 @@ fn main() {
 
     let phase_started = Instant::now();
     let ast = optimize::fold_constants(ast);
-    timings.record_since("optimize", phase_started);
+    timings.record_since("opt-fold", phase_started);
 
     let phase_started = Instant::now();
     let check_result = match types::check_with_target(&ast, target) {
@@ -335,6 +335,10 @@ fn main() {
         println!("Checked '{}'", filename);
         return;
     }
+
+    let phase_started = Instant::now();
+    let ast = optimize::propagate_constants(ast);
+    timings.record_since("opt-prop", phase_started);
 
     let phase_started = Instant::now();
     let ast = optimize::prune_constant_control_flow(ast);

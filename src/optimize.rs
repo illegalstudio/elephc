@@ -18,6 +18,10 @@ pub fn fold_constants(program: Program) -> Program {
     program.into_iter().map(fold_stmt).collect()
 }
 
+pub fn propagate_constants(program: Program) -> Program {
+    propagate_block(program, HashMap::new()).0
+}
+
 pub fn prune_constant_control_flow(program: Program) -> Program {
     let (function_effects, static_method_effects, private_instance_method_effects) =
         compute_program_callable_effects(&program);
@@ -28,6 +32,8 @@ pub fn prune_constant_control_flow(program: Program) -> Program {
         || prune_block(program),
     )
 }
+
+type ConstantEnv = HashMap<String, ScalarValue>;
 
 pub fn eliminate_dead_code(program: Program) -> Program {
     let (function_effects, static_method_effects, private_instance_method_effects) =
@@ -409,6 +415,820 @@ fn combine_if_conditions(left: Expr, right: Expr) -> Expr {
         },
         span,
     ))
+}
+
+fn propagate_block(body: Vec<Stmt>, mut env: ConstantEnv) -> (Vec<Stmt>, ConstantEnv) {
+    let mut propagated = Vec::new();
+    for stmt in body {
+        let (stmt, next_env) = propagate_stmt(stmt, env);
+        let stops_here = !matches!(stmt_terminal_effect(&stmt), TerminalEffect::FallsThrough);
+        propagated.push(stmt);
+        env = next_env;
+        if stops_here {
+            break;
+        }
+    }
+    (propagated, env)
+}
+
+fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv) {
+    let span = stmt.span;
+    match stmt.kind {
+        StmtKind::Echo(expr) => {
+            let expr = propagate_expr(expr, &env);
+            (Stmt::new(StmtKind::Echo(expr), span), env)
+        }
+        StmtKind::Assign { name, value } => {
+            let value = propagate_expr(value, &env);
+            let mut next_env = env_after_scalar_assign(env, &name, &value);
+            (Stmt::new(StmtKind::Assign { name, value }, span), std::mem::take(&mut next_env))
+        }
+        StmtKind::TypedAssign {
+            type_expr,
+            name,
+            value,
+        } => {
+            let value = propagate_expr(value, &env);
+            let mut next_env = env_after_scalar_assign(env, &name, &value);
+            (
+                Stmt::new(
+                    StmtKind::TypedAssign {
+                        type_expr,
+                        name,
+                        value,
+                    },
+                    span,
+                ),
+                std::mem::take(&mut next_env),
+            )
+        }
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => propagate_if_stmt(condition, then_body, elseif_clauses, else_body, span, env),
+        StmtKind::IfDef {
+            symbol,
+            then_body,
+            else_body,
+        } => {
+            let (then_body, then_env) = propagate_block(then_body, env.clone());
+            let (else_body, next_env) = match else_body {
+                Some(body) => {
+                    let (body, else_env) = propagate_block(body, env);
+                    (Some(body), merge_constant_env_paths(vec![then_env, else_env]))
+                }
+                None => (None, merge_constant_env_paths(vec![then_env, env])),
+            };
+            (
+                Stmt::new(
+                    StmtKind::IfDef {
+                        symbol,
+                        then_body,
+                        else_body,
+                    },
+                    span,
+                ),
+                next_env,
+            )
+        }
+        StmtKind::While { condition, body } => {
+            let condition = propagate_expr(condition, &HashMap::new());
+            let (body, _) = propagate_block(body, HashMap::new());
+            (Stmt::new(StmtKind::While { condition, body }, span), HashMap::new())
+        }
+        StmtKind::DoWhile { body, condition } => {
+            let (body, _) = propagate_block(body, HashMap::new());
+            let condition = propagate_expr(condition, &HashMap::new());
+            (
+                Stmt::new(StmtKind::DoWhile { body, condition }, span),
+                HashMap::new(),
+            )
+        }
+        StmtKind::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            let init = init.map(|stmt| Box::new(propagate_stmt(*stmt, env.clone()).0));
+            let condition = condition.map(|expr| propagate_expr(expr, &HashMap::new()));
+            let update = update.map(|stmt| Box::new(propagate_stmt(*stmt, HashMap::new()).0));
+            let (body, _) = propagate_block(body, HashMap::new());
+            (
+                Stmt::new(
+                    StmtKind::For {
+                        init,
+                        condition,
+                        update,
+                        body,
+                    },
+                    span,
+                ),
+                HashMap::new(),
+            )
+        }
+        StmtKind::ArrayAssign {
+            array,
+            index,
+            value,
+        } => {
+            let index = propagate_expr(index, &env);
+            let value = propagate_expr(value, &env);
+            let mut next_env = env;
+            next_env.remove(&array);
+            (
+                Stmt::new(
+                    StmtKind::ArrayAssign {
+                        array,
+                        index,
+                        value,
+                    },
+                    span,
+                ),
+                next_env,
+            )
+        }
+        StmtKind::ArrayPush { array, value } => {
+            let value = propagate_expr(value, &env);
+            let mut next_env = env;
+            next_env.remove(&array);
+            (
+                Stmt::new(StmtKind::ArrayPush { array, value }, span),
+                next_env,
+            )
+        }
+        StmtKind::Foreach {
+            array,
+            key_var,
+            value_var,
+            body,
+        } => {
+            let array = propagate_expr(array, &env);
+            let (body, _) = propagate_block(body, HashMap::new());
+            (
+                Stmt::new(
+                    StmtKind::Foreach {
+                        array,
+                        key_var,
+                        value_var,
+                        body,
+                    },
+                    span,
+                ),
+                HashMap::new(),
+            )
+        }
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => {
+            let subject = propagate_expr(subject, &env);
+            let cases = cases
+                .into_iter()
+                .map(|(patterns, body)| {
+                    let patterns = patterns
+                        .into_iter()
+                        .map(|pattern| propagate_expr(pattern, &env))
+                        .collect();
+                    let (body, _) = propagate_block(body, env.clone());
+                    (patterns, body)
+                })
+                .collect();
+            let default = default.map(|body| propagate_block(body, env).0);
+            (
+                Stmt::new(
+                    StmtKind::Switch {
+                        subject,
+                        cases,
+                        default,
+                    },
+                    span,
+                ),
+                HashMap::new(),
+            )
+        }
+        StmtKind::Include {
+            path,
+            once,
+            required,
+        } => (
+            Stmt::new(
+                StmtKind::Include {
+                    path,
+                    once,
+                    required,
+                },
+                span,
+            ),
+            HashMap::new(),
+        ),
+        StmtKind::Throw(expr) => {
+            let expr = propagate_expr(expr, &env);
+            (Stmt::new(StmtKind::Throw(expr), span), HashMap::new())
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            let (try_body, _) = propagate_block(try_body, env.clone());
+            let catches = catches
+                .into_iter()
+                .map(|catch| crate::parser::ast::CatchClause {
+                    exception_types: catch.exception_types,
+                    variable: catch.variable,
+                    body: propagate_block(catch.body, env.clone()).0,
+                })
+                .collect();
+            let finally_body = finally_body.map(|body| propagate_block(body, HashMap::new()).0);
+            (
+                Stmt::new(
+                    StmtKind::Try {
+                        try_body,
+                        catches,
+                        finally_body,
+                    },
+                    span,
+                ),
+                HashMap::new(),
+            )
+        }
+        StmtKind::Break => (Stmt::new(StmtKind::Break, span), env),
+        StmtKind::Continue => (Stmt::new(StmtKind::Continue, span), env),
+        StmtKind::ExprStmt(expr) => {
+            let expr = propagate_expr(expr, &env);
+            let next_env = if expr_effect(&expr).has_side_effects {
+                HashMap::new()
+            } else {
+                env
+            };
+            (Stmt::new(StmtKind::ExprStmt(expr), span), next_env)
+        }
+        StmtKind::NamespaceDecl { name } => (Stmt::new(StmtKind::NamespaceDecl { name }, span), env),
+        StmtKind::NamespaceBlock { name, body } => {
+            let (body, _) = propagate_block(body, HashMap::new());
+            (
+                Stmt::new(StmtKind::NamespaceBlock { name, body }, span),
+                env,
+            )
+        }
+        StmtKind::UseDecl { imports } => (Stmt::new(StmtKind::UseDecl { imports }, span), env),
+        StmtKind::FunctionDecl {
+            name,
+            params,
+            variadic,
+            return_type,
+            body,
+        } => (
+            Stmt::new(
+                StmtKind::FunctionDecl {
+                    name,
+                    params: propagate_params(params),
+                    variadic,
+                    return_type,
+                    body: propagate_block(body, HashMap::new()).0,
+                },
+                span,
+            ),
+            env,
+        ),
+        StmtKind::Return(expr) => {
+            let expr = expr.map(|expr| propagate_expr(expr, &env));
+            (Stmt::new(StmtKind::Return(expr), span), env)
+        }
+        StmtKind::ConstDecl { name, value } => {
+            let value = propagate_expr(value, &env);
+            (Stmt::new(StmtKind::ConstDecl { name, value }, span), env)
+        }
+        StmtKind::ListUnpack { vars, value } => {
+            let value = propagate_expr(value, &env);
+            let mut next_env = env;
+            for var in &vars {
+                next_env.remove(var);
+            }
+            (
+                Stmt::new(StmtKind::ListUnpack { vars, value }, span),
+                next_env,
+            )
+        }
+        StmtKind::Global { vars } => {
+            let mut next_env = env;
+            for var in &vars {
+                next_env.remove(var);
+            }
+            (Stmt::new(StmtKind::Global { vars }, span), next_env)
+        }
+        StmtKind::StaticVar { name, init } => {
+            let init = propagate_expr(init, &env);
+            let mut next_env = env;
+            next_env.remove(&name);
+            (
+                Stmt::new(StmtKind::StaticVar { name, init }, span),
+                next_env,
+            )
+        }
+        StmtKind::ClassDecl {
+            name,
+            extends,
+            implements,
+            is_abstract,
+            is_readonly_class,
+            trait_uses,
+            properties,
+            methods,
+        } => (
+            Stmt::new(
+                StmtKind::ClassDecl {
+                    name,
+                    extends,
+                    implements,
+                    is_abstract,
+                    is_readonly_class,
+                    trait_uses,
+                    properties: properties.into_iter().map(propagate_property).collect(),
+                    methods: methods.into_iter().map(propagate_method).collect(),
+                },
+                span,
+            ),
+            env,
+        ),
+        StmtKind::EnumDecl {
+            name,
+            backing_type,
+            cases,
+        } => (
+            Stmt::new(
+                StmtKind::EnumDecl {
+                    name,
+                    backing_type,
+                    cases: cases.into_iter().map(propagate_enum_case).collect(),
+                },
+                span,
+            ),
+            env,
+        ),
+        StmtKind::PackedClassDecl { name, fields } => {
+            (Stmt::new(StmtKind::PackedClassDecl { name, fields }, span), env)
+        }
+        StmtKind::InterfaceDecl {
+            name,
+            extends,
+            methods,
+        } => (
+            Stmt::new(
+                StmtKind::InterfaceDecl {
+                    name,
+                    extends,
+                    methods: methods.into_iter().map(propagate_method).collect(),
+                },
+                span,
+            ),
+            env,
+        ),
+        StmtKind::TraitDecl {
+            name,
+            trait_uses,
+            properties,
+            methods,
+        } => (
+            Stmt::new(
+                StmtKind::TraitDecl {
+                    name,
+                    trait_uses,
+                    properties: properties.into_iter().map(propagate_property).collect(),
+                    methods: methods.into_iter().map(propagate_method).collect(),
+                },
+                span,
+            ),
+            env,
+        ),
+        StmtKind::PropertyAssign {
+            object,
+            property,
+            value,
+        } => (
+            Stmt::new(
+                StmtKind::PropertyAssign {
+                    object: Box::new(propagate_expr(*object, &env)),
+                    property,
+                    value: propagate_expr(value, &env),
+                },
+                span,
+            ),
+            env,
+        ),
+        StmtKind::PropertyArrayPush {
+            object,
+            property,
+            value,
+        } => (
+            Stmt::new(
+                StmtKind::PropertyArrayPush {
+                    object: Box::new(propagate_expr(*object, &env)),
+                    property,
+                    value: propagate_expr(value, &env),
+                },
+                span,
+            ),
+            env,
+        ),
+        StmtKind::PropertyArrayAssign {
+            object,
+            property,
+            index,
+            value,
+        } => (
+            Stmt::new(
+                StmtKind::PropertyArrayAssign {
+                    object: Box::new(propagate_expr(*object, &env)),
+                    property,
+                    index: propagate_expr(index, &env),
+                    value: propagate_expr(value, &env),
+                },
+                span,
+            ),
+            env,
+        ),
+        StmtKind::ExternFunctionDecl {
+            name,
+            params,
+            return_type,
+            library,
+        } => (
+            Stmt::new(
+                StmtKind::ExternFunctionDecl {
+                    name,
+                    params,
+                    return_type,
+                    library,
+                },
+                span,
+            ),
+            env,
+        ),
+        StmtKind::ExternClassDecl { name, fields } => (
+            Stmt::new(StmtKind::ExternClassDecl { name, fields }, span),
+            env,
+        ),
+        StmtKind::ExternGlobalDecl { name, c_type } => (
+            Stmt::new(StmtKind::ExternGlobalDecl { name, c_type }, span),
+            env,
+        ),
+    }
+}
+
+fn propagate_if_stmt(
+    condition: Expr,
+    then_body: Vec<Stmt>,
+    elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
+    else_body: Option<Vec<Stmt>>,
+    span: crate::span::Span,
+    env: ConstantEnv,
+) -> (Stmt, ConstantEnv) {
+    let condition = propagate_expr(condition, &env);
+    let base_env = if expr_effect(&condition).has_side_effects {
+        HashMap::new()
+    } else {
+        env
+    };
+
+    let (then_body, then_env) = propagate_block(then_body, base_env.clone());
+    let mut propagated_elseifs = Vec::new();
+    let mut elseif_envs = Vec::new();
+    for (condition, body) in elseif_clauses {
+        let condition = propagate_expr(condition, &base_env);
+        let branch_env = if expr_effect(&condition).has_side_effects {
+            HashMap::new()
+        } else {
+            base_env.clone()
+        };
+        let (body, env_after_body) = propagate_block(body, branch_env);
+        if matches!(block_terminal_effect(&body), TerminalEffect::FallsThrough) {
+            elseif_envs.push(env_after_body.clone());
+        }
+        propagated_elseifs.push((condition, body));
+    }
+
+    let (else_body, else_env) = match else_body {
+        Some(body) => {
+            let (body, env_after_body) = propagate_block(body, base_env.clone());
+            (Some(body), Some(env_after_body))
+        }
+        None => (None, Some(base_env.clone())),
+    };
+
+    let next_env = match scalar_value(&condition) {
+        Some(value) if value.truthy() => then_env,
+        Some(_) => else_env.unwrap_or_default(),
+        None => {
+            let mut paths = Vec::new();
+            if matches!(block_terminal_effect(&then_body), TerminalEffect::FallsThrough) {
+                paths.push(then_env);
+            }
+            paths.extend(elseif_envs);
+            if let Some(else_env) = else_env {
+                if else_body
+                    .as_ref()
+                    .is_none_or(|body| matches!(block_terminal_effect(body), TerminalEffect::FallsThrough))
+                {
+                    paths.push(else_env);
+                }
+            }
+            merge_constant_env_paths(paths)
+        }
+    };
+
+    (
+        Stmt::new(
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses: propagated_elseifs,
+                else_body,
+            },
+            span,
+        ),
+        next_env,
+    )
+}
+
+fn env_after_scalar_assign(mut env: ConstantEnv, name: &str, value: &Expr) -> ConstantEnv {
+    if expr_effect(value).has_side_effects {
+        env.clear();
+    }
+    if let Some(value) = scalar_value(value) {
+        env.insert(name.to_string(), value);
+    } else {
+        env.remove(name);
+    }
+    env
+}
+
+fn merge_constant_env_paths(mut paths: Vec<ConstantEnv>) -> ConstantEnv {
+    let Some(first) = paths.pop() else {
+        return HashMap::new();
+    };
+
+    first
+        .into_iter()
+        .filter(|(name, value)| paths.iter().all(|path| path.get(name) == Some(value)))
+        .collect()
+}
+
+fn propagate_params(
+    params: Vec<(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)>,
+) -> Vec<(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)> {
+    params
+        .into_iter()
+        .map(|(name, type_expr, default, is_ref)| {
+            (
+                name,
+                type_expr,
+                default.map(|expr| propagate_expr(expr, &HashMap::new())),
+                is_ref,
+            )
+        })
+        .collect()
+}
+
+fn propagate_property(property: ClassProperty) -> ClassProperty {
+    ClassProperty {
+        name: property.name,
+        visibility: property.visibility,
+        readonly: property.readonly,
+        default: property
+            .default
+            .map(|expr| propagate_expr(expr, &HashMap::new())),
+        span: property.span,
+    }
+}
+
+fn propagate_method(method: ClassMethod) -> ClassMethod {
+    ClassMethod {
+        params: propagate_params(method.params),
+        body: propagate_block(method.body, HashMap::new()).0,
+        ..method
+    }
+}
+
+fn propagate_enum_case(case: EnumCaseDecl) -> EnumCaseDecl {
+    EnumCaseDecl {
+        name: case.name,
+        value: case
+            .value
+            .map(|expr| propagate_expr(expr, &HashMap::new())),
+        span: case.span,
+    }
+}
+
+fn captured_constant_env(captures: &[String], env: &ConstantEnv) -> ConstantEnv {
+    captures
+        .iter()
+        .filter_map(|name| env.get(name).cloned().map(|value| (name.clone(), value)))
+        .collect()
+}
+
+fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
+    let span = expr.span;
+    let kind = match expr.kind {
+        ExprKind::StringLiteral(value) => ExprKind::StringLiteral(value),
+        ExprKind::IntLiteral(value) => ExprKind::IntLiteral(value),
+        ExprKind::FloatLiteral(value) => ExprKind::FloatLiteral(value),
+        ExprKind::Variable(name) => match env.get(&name) {
+            Some(value) => value.clone().into_expr_kind(),
+            None => ExprKind::Variable(name),
+        },
+        ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
+            left: Box::new(propagate_expr(*left, env)),
+            op,
+            right: Box::new(propagate_expr(*right, env)),
+        },
+        ExprKind::BoolLiteral(value) => ExprKind::BoolLiteral(value),
+        ExprKind::Null => ExprKind::Null,
+        ExprKind::Negate(inner) => ExprKind::Negate(Box::new(propagate_expr(*inner, env))),
+        ExprKind::Not(inner) => ExprKind::Not(Box::new(propagate_expr(*inner, env))),
+        ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(propagate_expr(*inner, env))),
+        ExprKind::Throw(inner) => ExprKind::Throw(Box::new(propagate_expr(*inner, env))),
+        ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce {
+            value: Box::new(propagate_expr(*value, env)),
+            default: Box::new(propagate_expr(*default, env)),
+        },
+        ExprKind::PreIncrement(name) => ExprKind::PreIncrement(name),
+        ExprKind::PostIncrement(name) => ExprKind::PostIncrement(name),
+        ExprKind::PreDecrement(name) => ExprKind::PreDecrement(name),
+        ExprKind::PostDecrement(name) => ExprKind::PostDecrement(name),
+        ExprKind::FunctionCall { name, args } => {
+            let arg_env = (!function_call_effect(name.as_str()).has_side_effects).then_some(env);
+            ExprKind::FunctionCall {
+                name,
+                args: propagate_args(args, arg_env),
+            }
+        }
+        ExprKind::ArrayLiteral(items) => {
+            ExprKind::ArrayLiteral(items.into_iter().map(|item| propagate_expr(item, env)).collect())
+        }
+        ExprKind::ArrayLiteralAssoc(items) => ExprKind::ArrayLiteralAssoc(
+            items.into_iter()
+                .map(|(key, value)| (propagate_expr(key, env), propagate_expr(value, env)))
+                .collect(),
+        ),
+        ExprKind::Match {
+            subject,
+            arms,
+            default,
+        } => ExprKind::Match {
+            subject: Box::new(propagate_expr(*subject, env)),
+            arms: arms
+                .into_iter()
+                .map(|(patterns, value)| {
+                    (
+                        patterns
+                            .into_iter()
+                            .map(|pattern| propagate_expr(pattern, env))
+                            .collect(),
+                        propagate_expr(value, env),
+                    )
+                })
+                .collect(),
+            default: default.map(|expr| Box::new(propagate_expr(*expr, env))),
+        },
+        ExprKind::ArrayAccess { array, index } => ExprKind::ArrayAccess {
+            array: Box::new(propagate_expr(*array, env)),
+            index: Box::new(propagate_expr(*index, env)),
+        },
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => ExprKind::Ternary {
+            condition: Box::new(propagate_expr(*condition, env)),
+            then_expr: Box::new(propagate_expr(*then_expr, env)),
+            else_expr: Box::new(propagate_expr(*else_expr, env)),
+        },
+        ExprKind::Cast { target, expr } => ExprKind::Cast {
+            target,
+            expr: Box::new(propagate_expr(*expr, env)),
+        },
+        ExprKind::Closure {
+            params,
+            variadic,
+            body,
+            is_arrow,
+            captures,
+        } => ExprKind::Closure {
+            params: propagate_params(params),
+            variadic,
+            body: propagate_block(body, captured_constant_env(&captures, env)).0,
+            is_arrow,
+            captures,
+        },
+        ExprKind::NamedArg { name, value } => ExprKind::NamedArg {
+            name,
+            value: Box::new(propagate_expr(*value, env)),
+        },
+        ExprKind::Spread(inner) => ExprKind::Spread(Box::new(propagate_expr(*inner, env))),
+        ExprKind::ClosureCall { var, args } => {
+            let arg_env = (!callable_alias_effect(&var).has_side_effects).then_some(env);
+            ExprKind::ClosureCall {
+                var,
+                args: propagate_args(args, arg_env),
+            }
+        }
+        ExprKind::ExprCall { callee, args } => {
+            let callee = propagate_expr(*callee, env);
+            let arg_env = (!expr_call_effect(&callee).has_side_effects).then_some(env);
+            ExprKind::ExprCall {
+                callee: Box::new(callee),
+                args: propagate_args(args, arg_env),
+            }
+        }
+        ExprKind::ConstRef(name) => ExprKind::ConstRef(name),
+        ExprKind::EnumCase {
+            enum_name,
+            case_name,
+        } => ExprKind::EnumCase {
+            enum_name,
+            case_name,
+        },
+        ExprKind::NewObject { class_name, args } => ExprKind::NewObject {
+            class_name,
+            args: propagate_args(args, None),
+        },
+        ExprKind::PropertyAccess { object, property } => ExprKind::PropertyAccess {
+            object: Box::new(propagate_expr(*object, env)),
+            property,
+        },
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+        } => {
+            let object = propagate_expr(*object, env);
+            let arg_env =
+                (!private_instance_method_call_effect(&object, &method).has_side_effects)
+                    .then_some(env);
+            ExprKind::MethodCall {
+                object: Box::new(object),
+                method,
+                args: propagate_args(args, arg_env),
+            }
+        }
+        ExprKind::StaticMethodCall {
+            receiver,
+            method,
+            args,
+        } => {
+            let arg_env =
+                (!static_method_call_effect(&receiver, &method).has_side_effects).then_some(env);
+            ExprKind::StaticMethodCall {
+                receiver,
+                method,
+                args: propagate_args(args, arg_env),
+            }
+        }
+        ExprKind::FirstClassCallable(target) => {
+            ExprKind::FirstClassCallable(propagate_callable_target(target, env))
+        }
+        ExprKind::This => ExprKind::This,
+        ExprKind::PtrCast { target_type, expr } => ExprKind::PtrCast {
+            target_type,
+            expr: Box::new(propagate_expr(*expr, env)),
+        },
+        ExprKind::BufferNew { element_type, len } => ExprKind::BufferNew {
+            element_type,
+            len: Box::new(propagate_expr(*len, env)),
+        },
+    };
+
+    fold_expr(Expr { kind, span })
+}
+
+fn propagate_callable_target(target: CallableTarget, env: &ConstantEnv) -> CallableTarget {
+    match target {
+        CallableTarget::Function(name) => CallableTarget::Function(name),
+        CallableTarget::StaticMethod { receiver, method } => {
+            CallableTarget::StaticMethod { receiver, method }
+        }
+        CallableTarget::Method { object, method } => CallableTarget::Method {
+            object: Box::new(propagate_expr(*object, env)),
+            method,
+        },
+    }
+}
+
+fn propagate_args(args: Vec<Expr>, env: Option<&ConstantEnv>) -> Vec<Expr> {
+    match env {
+        Some(env) => args.into_iter().map(|arg| propagate_expr(arg, env)).collect(),
+        None => {
+            let empty_env = HashMap::new();
+            args.into_iter()
+                .map(|arg| propagate_expr(arg, &empty_env))
+                .collect()
+        }
+    }
 }
 
 fn build_if_stmt(
@@ -3751,6 +4571,74 @@ mod tests {
         let folded = fold_constants(program);
 
         assert_eq!(folded, vec![Stmt::echo(Expr::int_lit(20))]);
+    }
+
+    #[test]
+    fn test_propagate_constants_through_straight_line_locals() {
+        let program = vec![
+            Stmt::assign("x", Expr::int_lit(2)),
+            Stmt::assign("y", Expr::int_lit(3)),
+            Stmt::echo(Expr::binop(Expr::var("x"), BinOp::Pow, Expr::var("y"))),
+        ];
+
+        let propagated = propagate_constants(program);
+
+        assert_eq!(
+            propagated,
+            vec![
+                Stmt::assign("x", Expr::int_lit(2)),
+                Stmt::assign("y", Expr::int_lit(3)),
+                Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy())),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_propagate_constants_merges_identical_if_assignments() {
+        let program = vec![
+            Stmt::new(
+                StmtKind::If {
+                    condition: Expr::var("flag"),
+                    then_body: vec![Stmt::assign("base", Expr::int_lit(2))],
+                    elseif_clauses: Vec::new(),
+                    else_body: Some(vec![Stmt::assign("base", Expr::int_lit(2))]),
+                },
+                Span::dummy(),
+            ),
+            Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+        ];
+
+        let propagated = propagate_constants(program);
+
+        assert_eq!(
+            propagated[1],
+            Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        );
+    }
+
+    #[test]
+    fn test_propagate_constants_invalidates_non_scalar_reassignment() {
+        let program = vec![
+            Stmt::assign("x", Expr::int_lit(2)),
+            Stmt::assign(
+                "x",
+                Expr::new(
+                    ExprKind::FunctionCall {
+                        name: Name::from("strlen"),
+                        args: vec![Expr::string_lit("abc")],
+                    },
+                    Span::dummy(),
+                ),
+            ),
+            Stmt::echo(Expr::binop(Expr::var("x"), BinOp::Add, Expr::int_lit(1))),
+        ];
+
+        let propagated = propagate_constants(program);
+
+        assert_eq!(
+            propagated[2],
+            Stmt::echo(Expr::binop(Expr::var("x"), BinOp::Add, Expr::int_lit(1)))
+        );
     }
 
     #[test]

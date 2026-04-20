@@ -132,7 +132,8 @@ pub(crate) fn compile_and_run_files_with_defines(
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
-    let optimized = elephc::optimize::prune_constant_control_flow(resolved);
+    let optimized = elephc::optimize::propagate_constants(resolved);
+    let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
     let (user_asm, _runtime_asm) = elephc::codegen::generate(
         &optimized,
@@ -222,7 +223,8 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");
-    let optimized = elephc::optimize::prune_constant_control_flow(resolved);
+    let optimized = elephc::optimize::propagate_constants(resolved);
+    let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
     let (user_asm, _runtime_asm) = elephc::codegen::generate(
         &optimized,
@@ -317,7 +319,8 @@ pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBu
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");
-    let optimized = elephc::optimize::prune_constant_control_flow(resolved);
+    let optimized = elephc::optimize::propagate_constants(resolved);
+    let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
     let (user_asm, _runtime_asm) = elephc::codegen::generate(
         &optimized,
