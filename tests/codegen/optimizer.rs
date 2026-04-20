@@ -1635,6 +1635,48 @@ try {
 }
 
 #[test]
+fn test_dead_code_elimination_deduplicates_merged_catch_types() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_dedup_catch_types");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+class A extends Exception {}
+class B extends Exception {}
+class C extends Exception {}
+function boom($flag) {
+    if ($flag === 1) {
+        throw new A("a");
+    }
+    if ($flag === 2) {
+        throw new B("b");
+    }
+    throw new C("c");
+}
+try {
+    boom($argc);
+} catch (A | B $e) {
+    echo pow(2, 3);
+} catch (B | C $e) {
+    echo pow(2, 3);
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    assert_eq!(out, "8");
+}
+
+#[test]
 fn test_dead_code_elimination_materializes_constant_switch_match() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_match");
     let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(

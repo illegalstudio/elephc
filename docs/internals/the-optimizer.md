@@ -169,7 +169,7 @@ Current normalization coverage includes:
 - adjacent `switch` cases with identical bodies merged into a single multi-pattern case
 - pure fallthrough `switch` labels folded into the next non-empty case body
 - single live `switch` cases rewritten to `if` when the loose comparison can be reconstructed safely
-- adjacent `catch` clauses with the same body and variable merged into a single multi-type catch
+- adjacent `catch` clauses with the same body and variable merged into a single deduplicated multi-type catch
 - constant `switch` execution materialized into the exact statement tail that would run, preserving fallthrough and `break`
 - non-throwing `try` / `catch` simplification
 - safe hoisting of non-throwing, fallthrough prefixes out of `try` blocks
