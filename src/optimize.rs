@@ -2839,6 +2839,25 @@ fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
                 })
                 .collect());
             let finally_body = normalize_optional_block(finally_body.map(prune_block));
+
+            if catches.is_empty() && finally_body.is_some() && try_body.len() == 1 {
+                if let StmtKind::Try {
+                    try_body: inner_try_body,
+                    catches: inner_catches,
+                    finally_body: None,
+                } = &try_body[0].kind
+                {
+                    return vec![Stmt {
+                        kind: StmtKind::Try {
+                            try_body: inner_try_body.clone(),
+                            catches: inner_catches.clone(),
+                            finally_body,
+                        },
+                        span,
+                    }];
+                }
+            }
+
             let (mut hoisted_prefix, try_body) = split_hoistable_try_prefix(try_body);
 
             let mut remaining = if try_body.is_empty() {
@@ -7760,6 +7779,77 @@ mod tests {
 
         assert_eq!(pruned.len(), 1);
         assert!(matches!(pruned[0].kind, StmtKind::Try { .. }));
+    }
+
+    #[test]
+    fn test_normalize_control_flow_folds_outer_finally_into_single_inner_try() {
+        let program = vec![Stmt::new(
+            StmtKind::Try {
+                try_body: vec![Stmt::new(
+                    StmtKind::Try {
+                        try_body: vec![Stmt::new(
+                            StmtKind::ExprStmt(Expr::new(
+                                ExprKind::Throw(Box::new(Expr::new(
+                                    ExprKind::NewObject {
+                                        class_name: Name::unqualified("A"),
+                                        args: Vec::new(),
+                                    },
+                                    Span::dummy(),
+                                ))),
+                                Span::dummy(),
+                            )),
+                            Span::dummy(),
+                        )],
+                        catches: vec![crate::parser::ast::CatchClause {
+                            exception_types: vec![Name::unqualified("A")],
+                            variable: Some("e".into()),
+                            body: vec![Stmt::echo(Expr::int_lit(7))],
+                        }],
+                        finally_body: None,
+                    },
+                    Span::dummy(),
+                )],
+                catches: Vec::new(),
+                finally_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = normalize_control_flow(program);
+
+        assert_eq!(pruned.len(), 1);
+        let StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } = &pruned[0].kind
+        else {
+            panic!("expected normalized try");
+        };
+        assert_eq!(
+            try_body,
+            &vec![Stmt::new(
+                StmtKind::ExprStmt(Expr::new(
+                    ExprKind::Throw(Box::new(Expr::new(
+                        ExprKind::NewObject {
+                            class_name: Name::unqualified("A"),
+                            args: Vec::new(),
+                        },
+                        Span::dummy(),
+                    ))),
+                    Span::dummy(),
+                )),
+                Span::dummy(),
+            )]
+        );
+        assert_eq!(catches.len(), 1);
+        assert_eq!(
+            catches[0].exception_types,
+            vec![Name::unqualified("A")]
+        );
+        assert_eq!(catches[0].variable.as_deref(), Some("e"));
+        assert_eq!(catches[0].body, vec![Stmt::echo(Expr::int_lit(7))]);
+        assert_eq!(finally_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
     }
 
     #[test]

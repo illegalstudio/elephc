@@ -1704,6 +1704,29 @@ try {
 }
 
 #[test]
+fn test_dead_code_elimination_folds_outer_finally_into_single_inner_try() {
+    let out = compile_and_run(
+        r#"<?php
+class A extends Exception {}
+function boom() {
+    throw new A("a");
+}
+try {
+    try {
+        boom();
+    } catch (A $e) {
+        echo 7;
+    }
+} finally {
+    echo 9;
+}
+"#,
+    );
+
+    assert_eq!(out, "79");
+}
+
+#[test]
 fn test_dead_code_elimination_materializes_constant_switch_match() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_match");
     let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(

@@ -172,6 +172,7 @@ Current normalization coverage includes:
 - adjacent `catch` clauses with the same body and variable merged into a single deduplicated, stably ordered multi-type catch
 - constant `switch` execution materialized into the exact statement tail that would run, preserving fallthrough and `break`
 - non-throwing `try` / `catch` simplification
+- outer `finally` blocks folded into a single inner `try` when they wrap exactly one inner `try` that does not already have its own `finally`
 - safe hoisting of non-throwing, fallthrough prefixes out of `try` blocks
 - conservative flattening of `try` / `finally` when the `try` body cannot throw and the body falls through
 ### Example
