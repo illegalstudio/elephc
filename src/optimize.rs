@@ -1843,33 +1843,26 @@ fn build_if_stmt(
                 } = &else_body_ref[0].kind
                 {
                     if inner_elseifs.is_empty() && *inner_then_body == then_body {
-                        return Stmt {
-                            kind: StmtKind::If {
-                                condition: combine_if_chain_conditions(
-                                    condition,
-                                    inner_condition.clone(),
-                                ),
-                                then_body,
-                                elseif_clauses: Vec::new(),
-                                else_body: inner_else.clone(),
-                            },
+                        return build_if_stmt(
+                            combine_if_chain_conditions(condition, inner_condition.clone()),
+                            then_body,
+                            Vec::new(),
+                            inner_else.clone(),
                             span,
-                        };
+                        );
                     }
 
                     if inner_elseifs.is_empty() && inner_else.as_ref() == Some(&then_body) {
-                        return Stmt {
-                            kind: StmtKind::If {
-                                condition: combine_if_conditions(
-                                    invert_condition(condition),
-                                    inner_condition.clone(),
-                                ),
-                                then_body: inner_then_body.clone(),
-                                elseif_clauses: Vec::new(),
-                                else_body: Some(then_body),
-                            },
+                        return build_if_stmt(
+                            combine_if_conditions(
+                                invert_condition(condition),
+                                inner_condition.clone(),
+                            ),
+                            inner_then_body.clone(),
+                            Vec::new(),
+                            Some(then_body),
                             span,
-                        };
+                        );
                     }
                 }
             }
@@ -7230,6 +7223,60 @@ mod tests {
                 assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(7))]);
                 assert!(elseif_clauses.is_empty());
                 assert_eq!(else_body, &Some(shared_tail));
+            }
+            other => panic!("expected normalized if, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_normalize_control_flow_recursively_merges_longer_if_chain_heads() {
+        let shared_body = vec![Stmt::echo(Expr::int_lit(7))];
+        let program = vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::var("a"),
+                then_body: shared_body.clone(),
+                elseif_clauses: Vec::new(),
+                else_body: Some(vec![Stmt::new(
+                    StmtKind::If {
+                        condition: Expr::var("b"),
+                        then_body: shared_body.clone(),
+                        elseif_clauses: Vec::new(),
+                        else_body: Some(vec![Stmt::new(
+                            StmtKind::If {
+                                condition: Expr::var("c"),
+                                then_body: shared_body.clone(),
+                                elseif_clauses: Vec::new(),
+                                else_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+                            },
+                            Span::dummy(),
+                        )]),
+                    },
+                    Span::dummy(),
+                )]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = normalize_control_flow(program);
+
+        assert_eq!(pruned.len(), 1);
+        match &pruned[0].kind {
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            } => {
+                assert_eq!(
+                    *condition,
+                    combine_if_chain_conditions(
+                        Expr::var("a"),
+                        combine_if_chain_conditions(Expr::var("b"), Expr::var("c")),
+                    )
+                );
+                assert_eq!(then_body, &shared_body);
+                assert!(elseif_clauses.is_empty());
+                assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
             }
             other => panic!("expected normalized if, got {:?}", other),
         }

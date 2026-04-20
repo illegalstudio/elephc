@@ -1488,6 +1488,47 @@ if (step("c", false)) {
 }
 
 #[test]
+fn test_dead_code_elimination_recursively_merges_longer_if_chains() {
+    let out = compile_and_run(
+        r#"<?php
+function step($label, $ret) {
+    echo $label;
+    return $ret;
+}
+if (step("a", false)) {
+    echo "X";
+} else {
+    if (step("b", false)) {
+        echo "X";
+    } else {
+        if (step("c", true)) {
+            echo "X";
+        } else {
+            echo "Y";
+        }
+    }
+}
+echo "|";
+if (step("d", false)) {
+    echo "X";
+} else {
+    if (step("e", false)) {
+        echo "Y";
+    } else {
+        if (step("f", true)) {
+            echo "Y";
+        } else {
+            echo "X";
+        }
+    }
+}
+"#,
+    );
+
+    assert_eq!(out, "abcX|defY");
+}
+
+#[test]
 fn test_dead_code_elimination_normalizes_single_case_switch_with_effectful_subject() {
     let out = compile_and_run(
         r#"<?php

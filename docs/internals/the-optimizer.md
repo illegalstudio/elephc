@@ -165,6 +165,7 @@ Current normalization coverage includes:
 - `elseif` chains canonicalized into nested `else { if (...) { ... } }` form
 - adjacent `if` chain heads with identical bodies merged into one `if ($a || $b) { ... }` shape
 - adjacent `if` chain tails with identical fallback merged into one `if (!$a && $b) { ... } else { ... }` shape
+- longer `if` chains repeatedly normalized until these shapes saturate
 - single live `switch` cases rewritten to `if` when the loose comparison can be reconstructed safely
 - adjacent `catch` clauses with the same body and variable merged into a single multi-type catch
 - constant `switch` execution materialized into the exact statement tail that would run, preserving fallthrough and `break`
