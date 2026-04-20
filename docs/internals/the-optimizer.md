@@ -9,15 +9,16 @@ sidebar:
 
 elephc's optimizer is intentionally simple and AST-focused. It does not build a separate IR or run heavyweight SSA passes. Instead, it performs a small set of local rewrites that already pay off in generated assembly quality and compile-time clarity.
 
-Today the optimizer is split into three passes:
+Today the optimizer is split into four passes:
 
 1. `fold_constants(program)` runs before type checking
-2. `prune_constant_control_flow(program)` runs after successful type checking and warning collection
-3. `eliminate_dead_code(program)` runs after pruning and performs cleanup / structural simplification on the already-pruned AST
+2. `propagate_constants(program)` runs after successful type checking
+3. `prune_constant_control_flow(program)` runs after propagation and warning collection
+4. `eliminate_dead_code(program)` runs after pruning and performs cleanup / structural simplification on the already-pruned AST
 
 That split matters. Some rewrites are always safe on syntax alone, while others should only happen after diagnostics have already seen the checked program.
 
-Alongside those three passes, the optimizer also builds lightweight local **effect summaries**. These summaries answer two questions conservatively:
+Alongside those four passes, the optimizer also builds lightweight local **effect summaries**. These summaries answer two questions conservatively:
 
 - does this expression have observable side effects?
 - can this expression throw?
@@ -84,7 +85,48 @@ $x = 8;
 echo $x . "\n";
 ```
 
-## Pass 2: Post-check control-flow pruning
+## Pass 2: Local constant propagation
+
+`propagate_constants()` runs after type checking, when the checker has already validated the original program structure.
+
+This pass is still intentionally local and conservative. Today it focuses on:
+
+- straight-line scalar local assignments such as:
+  - `$x = 2;`
+  - `$y = 3;`
+  - `echo $x ** $y;`
+- simple `if` merges where every fallthrough branch agrees on the same scalar value
+- conservative `switch` merges when all surviving exit paths agree on the same scalar value
+- conservative `try` / `catch` merges when every fallthrough handler path agrees on the same scalar value
+- recognizing uniform scalar assignment outcomes from local merge expressions such as `?:` and `match`
+- recognizing scalar locals introduced by destructuring fixed scalar array literals with `list(...)` / `[...] = [...]`
+- preserving untouched scalar locals across simple loops when a conservative local write analysis can prove the loop only mutates other variables, including simple nested `switch`, `try/catch/finally`, `foreach`, other simple nested loop statements, local array writes like `$items[] = $i` / `$items[0] = $i`, local property writes like `$box->last = $i` / `$box->items[] = $i`, and targeted invalidations like `unset($tmp)`, while also retaining stable scalar values introduced by `for` init clauses
+- re-running constant folding on expressions after substitutions are made
+- propagating into nested bodies conservatively without trying to solve full data-flow across loops or general path-sensitive CFGs
+
+### Example
+
+```php
+<?php
+if ($argc > 0) {
+    $base = 2;
+} else {
+    $base = 2;
+}
+
+echo $base ** 3;
+```
+
+After propagation, the later `echo` effectively becomes:
+
+```php
+<?php
+echo 8.0;
+```
+
+That means later passes never need to emit the runtime `pow` path.
+
+## Pass 3: Post-check control-flow pruning
 
 `prune_constant_control_flow()` runs only after type checking succeeds. This pass is allowed to remove dead branches and dead statements because diagnostics have already seen the checked structure.
 
@@ -109,7 +151,7 @@ Current pruning coverage includes:
   - `??`
   - short-circuit `&&` / `||`
 
-## Pass 3: Dead-code elimination and structural cleanup
+## Pass 4: Dead-code elimination and structural cleanup
 
 `eliminate_dead_code()` runs after the pruning pass. At this point the AST already has constant-dead branches removed, so the job becomes "clean up the shells and leftovers" rather than "decide which branch is dead".
 
@@ -194,7 +236,7 @@ try {
 
 Because every `match` arm produces the same known pure / non-throwing callable, the optimizer can prove that the `catch` path is dead and avoid emitting the `pow` branch at all.
 
-## Why there are three passes
+## Why there are four passes
 
 If elephc removed whole branches before type checking, it could accidentally hide useful diagnostics.
 
@@ -213,8 +255,9 @@ From an optimization point of view that block is dead. From a compiler UX point 
 So the current rule is:
 
 - fold obvious pure scalar expressions early
+- propagate known scalar locals only after checking
 - prune larger dead control-flow only after checking
-- run structural dead-code cleanup only after those two earlier passes have already simplified the tree
+- run structural dead-code cleanup only after those earlier passes have already simplified the tree
 
 ## Conservatism and side effects
 

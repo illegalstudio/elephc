@@ -32,7 +32,8 @@ pub(crate) fn compile_source_to_asm_with_defines(
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");
-    let optimized = elephc::optimize::prune_constant_control_flow(resolved);
+    let optimized = elephc::optimize::propagate_constants(resolved);
+    let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
     let (user_asm, runtime_asm) = elephc::codegen::generate(
         &optimized,

@@ -32,6 +32,616 @@ fn test_constant_folding_pow_removes_pow_call_from_user_assembly() {
 }
 
 #[test]
+fn test_constant_propagation_removes_pow_call_from_user_assembly() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_pow");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$x = 2;
+$y = 3;
+echo $x ** $y;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "constant-propagated pow expression should not leave a pow call in user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "8");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_constant_propagation_merges_identical_if_constants() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_if_merge");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+if ($argc > 0) {
+    $base = 2;
+} else {
+    $base = 2;
+}
+
+echo $base ** 3;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "merged if constants should let pow disappear from user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "8");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_constant_propagation_merges_identical_switch_constants() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_switch_merge");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+switch ($argc) {
+    case 1:
+        $base = 2;
+        break;
+    default:
+        $base = 2;
+}
+
+echo $base ** 3;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "merged switch constants should let pow disappear from user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "8");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_constant_propagation_merges_identical_try_catch_constants() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_try_merge");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+try {
+    $base = 2;
+} catch (Exception $e) {
+    $base = 2;
+}
+
+echo $base ** 3;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "merged try/catch constants should let pow disappear from user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "8");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_constant_propagation_tracks_uniform_ternary_assignment() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_ternary_uniform");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$base = ($argc > 0) ? 2 : 2;
+echo $base ** 3;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "uniform ternary assignment should let pow disappear from user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "8");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_constant_propagation_tracks_uniform_match_assignment() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_match_uniform");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$base = match ($argc) {
+    1 => 2,
+    default => 2,
+};
+echo $base ** 3;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "uniform match assignment should let pow disappear from user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "8");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_constant_propagation_tracks_scalar_list_unpack() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_list_unpack");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+[$base, $exp] = [2, 3];
+echo $base ** $exp;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "scalar list unpack should let pow disappear from user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "8");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_constant_propagation_preserves_scalar_across_simple_for_loop() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_for_loop");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$base = 2;
+for ($i = 0; $i < 3; $i++) {
+    echo $i;
+}
+echo $base ** 3;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "simple loop should preserve unrelated scalar constants in user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "0128");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_constant_propagation_preserves_scalar_across_loop_with_switch() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_loop_switch");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$base = 2;
+for ($i = 0; $i < 3; $i++) {
+    switch ($i) {
+        case 1:
+            echo $i;
+            break;
+        default:
+            echo $i;
+    }
+}
+echo $base ** 3;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "loop-local switch should not kill unrelated scalar constants in user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "0128");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_constant_propagation_preserves_scalar_across_loop_with_try() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_loop_try");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$base = 2;
+for ($i = 0; $i < 3; $i++) {
+    try {
+        echo $i;
+    } catch (Exception $e) {
+        echo 9;
+    } finally {
+    }
+}
+echo $base ** 3;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "loop-local try/catch/finally should not kill unrelated scalar constants in user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "0128");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_constant_propagation_preserves_scalar_across_foreach_loop() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_foreach");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$base = 2;
+foreach ([1, 2, 3] as $k => $value) {
+    echo $value;
+}
+echo $base ** 3;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "simple foreach should preserve unrelated scalar constants in user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "1238");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_constant_propagation_tracks_stable_for_init_assignments() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_for_init");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$base = 2;
+$i = 0;
+for ($exp = 3; $i < 2; $i++) {
+    echo $base ** $exp;
+}
+echo $exp;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "stable for-init assignments should let pow disappear from user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "883");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_constant_propagation_preserves_scalar_across_nested_loops() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_nested_loops");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$base = 2;
+$i = 0;
+for (; $i < 2; $i++) {
+    $j = 0;
+    while ($j < 2) {
+        echo $j;
+        $j++;
+    }
+}
+echo $base ** 3;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "nested simple loops should preserve unrelated scalar constants in user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "01018");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_constant_propagation_preserves_scalar_across_loop_local_array_writes() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_loop_array_writes");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$base = 2;
+$items = [];
+$i = 0;
+for (; $i < 3; $i++) {
+    $items[] = $i;
+    $items[0] = $i;
+    echo $i;
+}
+echo $base ** 3;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "local array writes inside the loop should not poison unrelated scalar constants:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "0128");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_constant_propagation_preserves_scalar_across_loop_property_writes() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_loop_property_writes");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+class Box {
+    public $last = 0;
+    public $items = [];
+}
+
+$box = new Box();
+$base = 2;
+$i = 0;
+for (; $i < 3; $i++) {
+    $box->last = $i;
+    $box->items[] = $i;
+    $box->items[0] = $i;
+    echo $i;
+}
+echo $base ** 3;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "local property writes inside the loop should not poison unrelated scalar constants:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "0128");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_constant_propagation_preserves_scalar_across_unset_and_loop() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_unset");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$base = 2;
+$i = 0;
+for (; $i < 3; $i++) {
+    $tmp = 9;
+    unset($tmp);
+    echo $i;
+}
+echo $base ** 3;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "unsetting an unrelated local inside the loop should not poison scalar constants:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "0128");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_constant_folding_string_concat_removes_runtime_concat_call() {
     let dir = make_cli_test_dir("elephc_constant_folding_concat");
     let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(

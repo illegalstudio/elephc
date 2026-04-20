@@ -127,6 +127,7 @@ pub fn emit(
 
                 emitter.label(&found_label);
                 abi::emit_pop_reg_pair(emitter, "x1", "x2");                        // return the matching associative-array key as the searched string result
+                abi::emit_call_label(emitter, "__rt_str_persist");                  // materialize an owned string result so array_search() does not leak a borrowed hash-key alias
                 emitter.instruction(&format!("b {}", skip_label));              // jump to the common associative-array cleanup once a match is found
 
                 emitter.label(&end_label);
@@ -189,6 +190,7 @@ pub fn emit(
 
                 emitter.label(&found_label);
                 abi::emit_pop_reg_pair(emitter, "rax", "rdx");                      // return the matching associative-array key through the standard x86_64 string result registers
+                abi::emit_call_label(emitter, "__rt_str_persist");                  // materialize an owned string result so array_search() does not leak a borrowed hash-key alias
                 emitter.instruction(&format!("jmp {}", skip_label));            // jump to the common associative-array cleanup once a match is found
 
                 emitter.label(&end_label);
