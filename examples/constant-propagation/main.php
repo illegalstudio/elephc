@@ -28,3 +28,9 @@ for ($i = 0; $i < 2; $i++) {
     }
 }
 echo $stableTry ** 3 . "\n";
+
+$stableForeach = 2;
+foreach ([1, 2, 3] as $k => $value) {
+    echo $value;
+}
+echo $stableForeach ** 3 . "\n";

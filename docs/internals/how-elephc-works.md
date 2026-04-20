@@ -151,7 +151,7 @@ This pass is still conservative, but it can already:
 - merge identical scalar values across conservative `switch` and `try` / `catch` fallthrough paths
 - infer uniform scalar outcomes from assignments using local `?:` and `match` expressions
 - infer scalar locals from fixed destructuring assignments such as `[$a, $b] = [2, 3]`
-- preserve unrelated scalar locals across simple loops when the loop's local writes are conservatively known, including simple nested `switch` and `try/catch/finally` shapes
+- preserve unrelated scalar locals across simple loops when the loop's local writes are conservatively known, including simple nested `switch`, `try/catch/finally`, and `foreach` shapes
 - re-run folding after substitutions so expressions like `$x ** $y` can collapse to a literal
 
 In our running example, this still does not change the program, because `$x = 10` at the statement level is not yet propagated into the later comparison shape that would let the whole `if` collapse.

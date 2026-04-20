@@ -573,8 +573,9 @@ fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv) {
             value_var,
             body,
         } => {
+            let loop_env = safe_foreach_env(&env, &array, key_var.as_deref(), &value_var, &body);
             let array = propagate_expr(array, &env);
-            let (body, _) = propagate_block(body, HashMap::new());
+            let (body, _) = propagate_block(body, loop_env.clone());
             (
                 Stmt::new(
                     StmtKind::Foreach {
@@ -585,7 +586,7 @@ fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv) {
                     },
                     span,
                 ),
-                HashMap::new(),
+                loop_env,
             )
         }
         StmtKind::Switch {
@@ -1034,6 +1035,33 @@ fn safe_loop_env(
         .collect()
 }
 
+fn safe_foreach_env(
+    env: &ConstantEnv,
+    array: &Expr,
+    key_var: Option<&str>,
+    value_var: &str,
+    body: &[Stmt],
+) -> ConstantEnv {
+    let Some(mut written) = expr_local_writes(array) else {
+        return HashMap::new();
+    };
+
+    written.insert(value_var.to_string());
+    if let Some(key_var) = key_var {
+        written.insert(key_var.to_string());
+    }
+
+    let Some(body_writes) = block_local_writes(body) else {
+        return HashMap::new();
+    };
+    written.extend(body_writes);
+
+    env.iter()
+        .filter(|(name, _)| !written.contains(*name))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect()
+}
+
 fn block_local_writes(body: &[Stmt]) -> Option<HashSet<String>> {
     let mut writes = HashSet::new();
     for stmt in body {
@@ -1070,6 +1098,20 @@ fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
         StmtKind::ListUnpack { vars, value } => {
             let mut writes = expr_local_writes(value)?;
             writes.extend(vars.iter().cloned());
+            Some(writes)
+        }
+        StmtKind::Foreach {
+            array,
+            key_var,
+            value_var,
+            body,
+        } => {
+            let mut writes = expr_local_writes(array)?;
+            writes.insert(value_var.clone());
+            if let Some(key_var) = key_var {
+                writes.insert(key_var.clone());
+            }
+            writes.extend(block_local_writes(body)?);
             Some(writes)
         }
         StmtKind::If {
@@ -1137,7 +1179,6 @@ fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
         | StmtKind::Global { .. }
         | StmtKind::ArrayAssign { .. }
         | StmtKind::ArrayPush { .. }
-        | StmtKind::Foreach { .. }
         | StmtKind::Include { .. }
         | StmtKind::Throw(_)
         | StmtKind::While { .. }
@@ -5326,6 +5367,37 @@ mod tests {
                         },
                         Span::dummy(),
                     )],
+                },
+                Span::dummy(),
+            ),
+            Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+        ];
+
+        let propagated = propagate_constants(program);
+
+        assert_eq!(
+            propagated[2],
+            Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        );
+    }
+
+    #[test]
+    fn test_propagate_constants_preserves_unmodified_scalar_across_foreach_loop() {
+        let program = vec![
+            Stmt::assign("base", Expr::int_lit(2)),
+            Stmt::new(
+                StmtKind::Foreach {
+                    array: Expr::new(
+                        ExprKind::ArrayLiteral(vec![
+                            Expr::int_lit(1),
+                            Expr::int_lit(2),
+                            Expr::int_lit(3),
+                        ]),
+                        Span::dummy(),
+                    ),
+                    key_var: Some("k".to_string()),
+                    value_var: "value".to_string(),
+                    body: vec![Stmt::echo(Expr::var("value"))],
                 },
                 Span::dummy(),
             ),
