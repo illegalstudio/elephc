@@ -1329,6 +1329,67 @@ echo "!";
 }
 
 #[test]
+fn test_dead_code_elimination_collapses_empty_switch_shell_after_branch_dce() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_empty_switch_shell");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+function touch() {
+    echo "s";
+    return 1;
+}
+
+switch (touch()) {
+    case 1:
+        strlen("abc");
+        break;
+}
+
+echo "!";
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("switch_end"),
+        "empty switch shells should not survive user assembly after DCE:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "s!");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dead_code_elimination_collapses_empty_try_shell_after_branch_dce() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    strlen("abc");
+} catch (Exception $e) {
+    strlen("def");
+} finally {
+    echo "f";
+}
+echo "!";
+"#,
+    );
+
+    assert_eq!(out, "f!");
+}
+
+#[test]
 fn test_dead_code_elimination_inlines_empty_try_finally() {
     let out = compile_and_run(
         r#"<?php

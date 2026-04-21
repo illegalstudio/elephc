@@ -15,6 +15,162 @@ pub(crate) fn dce_block(body: Vec<Stmt>) -> Vec<Stmt> {
     eliminated
 }
 
+fn dce_if_stmt(
+    condition: Expr,
+    then_body: Vec<Stmt>,
+    elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
+    else_body: Option<Vec<Stmt>>,
+    span: crate::span::Span,
+) -> Vec<Stmt> {
+    let condition = prune_expr(condition);
+    let then_body = dce_block(then_body);
+    let elseif_clauses: Vec<_> = elseif_clauses
+        .into_iter()
+        .map(|(condition, body)| (prune_expr(condition), dce_block(body)))
+        .collect();
+    let else_body = normalize_optional_block(else_body.map(dce_block));
+
+    if elseif_clauses.is_empty() {
+        if then_body.is_empty() && else_body.is_none() {
+            return expr_to_effect_stmt(condition);
+        }
+
+        if then_body.is_empty() {
+            if let Some(else_body) = else_body {
+                return vec![build_if_stmt(
+                    invert_condition(condition),
+                    else_body,
+                    Vec::new(),
+                    None,
+                    span,
+                )];
+            }
+        }
+
+        if else_body.as_ref() == Some(&then_body) {
+            let mut stmts = expr_to_effect_stmt(condition);
+            stmts.extend(then_body);
+            return stmts;
+        }
+    }
+
+    vec![Stmt::new(
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        },
+        span,
+    )]
+}
+
+fn dce_switch_stmt(
+    subject: Expr,
+    cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
+    default: Option<Vec<Stmt>>,
+    span: crate::span::Span,
+) -> Vec<Stmt> {
+    let trim_switch_noop_break = |body: Vec<Stmt>| {
+        if body.len() == 1 && matches!(body[0].kind, StmtKind::Break) {
+            Vec::new()
+        } else {
+            body
+        }
+    };
+    let subject = prune_expr(subject);
+    let cases = normalize_switch_cases(
+        cases
+            .into_iter()
+            .map(|(patterns, body)| {
+                (
+                    patterns.into_iter().map(prune_expr).collect(),
+                    trim_switch_noop_break(dce_block(body)),
+                )
+            })
+            .collect(),
+    );
+    let default = normalize_optional_block(default.map(dce_block));
+
+    if cases.iter().all(|(_, body)| body.is_empty()) && default.is_none() {
+        return expr_to_effect_stmt(subject);
+    }
+
+    if cases.is_empty() {
+        let mut stmts = expr_to_effect_stmt(subject);
+        if let Some(default_body) = default {
+            stmts.extend(default_body);
+        }
+        return stmts;
+    }
+
+    vec![Stmt::new(
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        },
+        span,
+    )]
+}
+
+fn dce_try_stmt(
+    try_body: Vec<Stmt>,
+    catches: Vec<crate::parser::ast::CatchClause>,
+    finally_body: Option<Vec<Stmt>>,
+    span: crate::span::Span,
+) -> Vec<Stmt> {
+    let try_body = dce_block(try_body);
+    let catches: Vec<_> = catches
+        .into_iter()
+        .map(|catch| crate::parser::ast::CatchClause {
+            exception_types: catch.exception_types,
+            variable: catch.variable,
+            body: dce_block(catch.body),
+        })
+        .collect();
+    let catches = normalize_catch_clauses(catches);
+    let finally_body = normalize_optional_block(finally_body.map(dce_block));
+
+    if try_body.is_empty() {
+        return finally_body.unwrap_or_default();
+    }
+
+    if catches.is_empty() && finally_body.is_none() {
+        return try_body;
+    }
+
+    if catches.is_empty() {
+        if let Some(finally_body) = finally_body {
+            if !block_may_throw(&try_body)
+                && matches!(block_terminal_effect(&try_body), TerminalEffect::FallsThrough)
+            {
+                let mut stmts = try_body;
+                stmts.extend(finally_body);
+                return stmts;
+            }
+
+            return vec![Stmt::new(
+                StmtKind::Try {
+                    try_body,
+                    catches: Vec::new(),
+                    finally_body: Some(finally_body),
+                },
+                span,
+            )];
+        }
+    }
+
+    vec![Stmt::new(
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        },
+        span,
+    )]
+}
+
 pub(crate) fn dce_stmt(stmt: Stmt) -> Vec<Stmt> {
     let span = stmt.span;
     match stmt.kind {
@@ -120,18 +276,7 @@ pub(crate) fn dce_stmt(stmt: Stmt) -> Vec<Stmt> {
             then_body,
             elseif_clauses,
             else_body,
-        } => vec![Stmt {
-            kind: StmtKind::If {
-                condition: prune_expr(condition),
-                then_body: dce_block(then_body),
-                elseif_clauses: elseif_clauses
-                    .into_iter()
-                    .map(|(condition, body)| (prune_expr(condition), dce_block(body)))
-                    .collect(),
-                else_body: normalize_optional_block(else_body.map(dce_block)),
-            },
-            span,
-        }],
+        } => dce_if_stmt(condition, then_body, elseif_clauses, else_body, span),
         StmtKind::IfDef {
             symbol,
             then_body,
@@ -198,41 +343,12 @@ pub(crate) fn dce_stmt(stmt: Stmt) -> Vec<Stmt> {
             subject,
             cases,
             default,
-        } => vec![Stmt {
-            kind: StmtKind::Switch {
-                subject: prune_expr(subject),
-                cases: cases
-                    .into_iter()
-                    .map(|(patterns, body)| {
-                        (
-                            patterns.into_iter().map(prune_expr).collect(),
-                            dce_block(body),
-                        )
-                    })
-                    .collect(),
-                default: normalize_optional_block(default.map(dce_block)),
-            },
-            span,
-        }],
+        } => dce_switch_stmt(subject, cases, default, span),
         StmtKind::Try {
             try_body,
             catches,
             finally_body,
-        } => vec![Stmt {
-            kind: StmtKind::Try {
-                try_body: dce_block(try_body),
-                catches: catches
-                    .into_iter()
-                    .map(|catch| crate::parser::ast::CatchClause {
-                        exception_types: catch.exception_types,
-                        variable: catch.variable,
-                        body: dce_block(catch.body),
-                    })
-                    .collect(),
-                finally_body: normalize_optional_block(finally_body.map(dce_block)),
-            },
-            span,
-        }],
+        } => dce_try_stmt(try_body, catches, finally_body, span),
         StmtKind::NamespaceBlock { name, body } => vec![Stmt {
             kind: StmtKind::NamespaceBlock {
                 name,

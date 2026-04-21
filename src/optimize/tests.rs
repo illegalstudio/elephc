@@ -2199,6 +2199,144 @@ fn test_eliminate_dead_code_keeps_statements_after_fallthrough_try() {
 }
 
 #[test]
+fn test_eliminate_dead_code_drops_empty_switch_shell_created_by_branch_dce() {
+    let touch = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("touch"),
+            args: Vec::new(),
+        },
+        Span::dummy(),
+    );
+    let pure_builtin = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("strlen"),
+            args: vec![Expr::string_lit("abc")],
+        },
+        Span::dummy(),
+    );
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![Stmt::new(
+                StmtKind::Switch {
+                    subject: touch.clone(),
+                    cases: vec![(
+                        vec![Expr::int_lit(1)],
+                        vec![
+                            Stmt::new(StmtKind::ExprStmt(pure_builtin), Span::dummy()),
+                            Stmt::new(StmtKind::Break, Span::dummy()),
+                        ],
+                    )],
+                    default: None,
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    assert_eq!(body.len(), 1);
+    assert_eq!(
+        body[0],
+        Stmt::new(StmtKind::ExprStmt(touch), Span::dummy()),
+    );
+}
+
+#[test]
+fn test_eliminate_dead_code_drops_empty_try_shell_created_by_branch_dce() {
+    let pure_builtin = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("strlen"),
+            args: vec![Expr::string_lit("abc")],
+        },
+        Span::dummy(),
+    );
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![Stmt::new(
+                StmtKind::Try {
+                    try_body: vec![Stmt::new(StmtKind::ExprStmt(pure_builtin.clone()), Span::dummy())],
+                    catches: vec![crate::parser::ast::CatchClause {
+                        exception_types: vec!["Exception".into()],
+                        variable: Some("e".into()),
+                        body: vec![Stmt::new(StmtKind::ExprStmt(pure_builtin), Span::dummy())],
+                    }],
+                    finally_body: None,
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    assert!(body.is_empty());
+}
+
+#[test]
+fn test_eliminate_dead_code_reduces_empty_if_to_effectful_condition_eval() {
+    let touch = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("touch"),
+            args: Vec::new(),
+        },
+        Span::dummy(),
+    );
+    let pure_builtin = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("strlen"),
+            args: vec![Expr::string_lit("abc")],
+        },
+        Span::dummy(),
+    );
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![Stmt::new(
+                StmtKind::If {
+                    condition: touch.clone(),
+                    then_body: vec![Stmt::new(StmtKind::ExprStmt(pure_builtin.clone()), Span::dummy())],
+                    elseif_clauses: Vec::new(),
+                    else_body: Some(vec![Stmt::new(StmtKind::ExprStmt(pure_builtin), Span::dummy())]),
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    assert_eq!(body.len(), 1);
+    assert_eq!(
+        body[0],
+        Stmt::new(StmtKind::ExprStmt(touch), Span::dummy()),
+    );
+}
+
+#[test]
 fn test_normalize_control_flow_replaces_empty_if_with_effectful_condition_eval() {
     let call = Expr::new(
         ExprKind::FunctionCall {
