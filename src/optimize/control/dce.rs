@@ -129,7 +129,11 @@ fn dce_try_stmt(
             body: dce_block(catch.body),
         })
         .collect();
-    let catches = normalize_catch_clauses(catches);
+    let catches = if block_may_throw(&try_body) {
+        normalize_catch_clauses(catches)
+    } else {
+        Vec::new()
+    };
     let finally_body = normalize_optional_block(finally_body.map(dce_block));
 
     if try_body.is_empty() {

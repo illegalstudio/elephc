@@ -1390,6 +1390,40 @@ echo "!";
 }
 
 #[test]
+fn test_dead_code_elimination_drops_unreachable_catch_after_non_throwing_try() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    echo "t";
+} catch (Exception $e) {
+    echo "c";
+}
+echo "!";
+"#,
+    );
+
+    assert_eq!(out, "t!");
+}
+
+#[test]
+fn test_dead_code_elimination_drops_unreachable_catch_before_finally() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    echo "t";
+} catch (Exception $e) {
+    echo "c";
+} finally {
+    echo "f";
+}
+echo "!";
+"#,
+    );
+
+    assert_eq!(out, "tf!");
+}
+
+#[test]
 fn test_dead_code_elimination_inlines_empty_try_finally() {
     let out = compile_and_run(
         r#"<?php

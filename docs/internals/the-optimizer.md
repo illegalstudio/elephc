@@ -202,6 +202,7 @@ Current dead-code-elimination coverage includes:
   - `break`
   - `continue`
 - statements after exhaustive `try/catch` and `try/finally` exits
+- unreachable `catch` paths when the post-DCE `try` body can no longer throw
 - pure expression statements whose result is unused
 - pure expression statements that become exposed by earlier normalization
 

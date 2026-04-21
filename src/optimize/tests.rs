@@ -2290,6 +2290,70 @@ fn test_eliminate_dead_code_drops_empty_try_shell_created_by_branch_dce() {
 }
 
 #[test]
+fn test_eliminate_dead_code_drops_unreachable_catches_after_non_throwing_try() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![Stmt::new(
+                StmtKind::Try {
+                    try_body: vec![Stmt::echo(Expr::int_lit(7))],
+                    catches: vec![crate::parser::ast::CatchClause {
+                        exception_types: vec!["Exception".into()],
+                        variable: Some("e".into()),
+                        body: vec![Stmt::echo(Expr::int_lit(9))],
+                    }],
+                    finally_body: None,
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    assert_eq!(body, &vec![Stmt::echo(Expr::int_lit(7))]);
+}
+
+#[test]
+fn test_eliminate_dead_code_drops_unreachable_catches_before_finally() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![Stmt::new(
+                StmtKind::Try {
+                    try_body: vec![Stmt::echo(Expr::int_lit(7))],
+                    catches: vec![crate::parser::ast::CatchClause {
+                        exception_types: vec!["Exception".into()],
+                        variable: Some("e".into()),
+                        body: vec![Stmt::echo(Expr::int_lit(9))],
+                    }],
+                    finally_body: Some(vec![Stmt::echo(Expr::int_lit(8))]),
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    assert_eq!(body, &vec![Stmt::echo(Expr::int_lit(7)), Stmt::echo(Expr::int_lit(8))]);
+}
+
+#[test]
 fn test_eliminate_dead_code_reduces_empty_if_to_effectful_condition_eval() {
     let touch = Expr::new(
         ExprKind::FunctionCall {
