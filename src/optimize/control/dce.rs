@@ -5,13 +5,6 @@ enum TailSinkTarget {
     FallsThrough,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum TryTailSinkPlan {
-    LeaveOutside,
-    IntoTryPaths,
-    IntoFinally,
-}
-
 pub(crate) fn dce_block(body: Vec<Stmt>) -> Vec<Stmt> {
     let mut eliminated = Vec::new();
     let mut stmts = body.into_iter().peekable();
@@ -40,7 +33,7 @@ pub(crate) fn dce_block(body: Vec<Stmt>) -> Vec<Stmt> {
 }
 
 fn append_tail_to_fallthrough_path(mut body: Vec<Stmt>, tail: Vec<Stmt>) -> Vec<Stmt> {
-    if matches!(block_terminal_effect(&body), TerminalEffect::FallsThrough) {
+    if block_reaches_following_stmt(&body) {
         body.extend(tail);
     }
     body
@@ -70,8 +63,7 @@ fn sink_tail_into_terminal_stmt(stmt: Stmt, tail: Vec<Stmt>, target: TailSinkTar
             else_body,
         } => {
             let rewrite_branch = |body: Vec<Stmt>, target: TailSinkTarget, tail: &Vec<Stmt>| {
-                let effect = block_terminal_effect(&body);
-                if matches!(effect, TerminalEffect::FallsThrough) {
+                if block_reaches_following_stmt(&body) {
                     sink_tail_into_terminal_path(body, tail.clone(), target)
                 } else {
                     body
@@ -98,13 +90,13 @@ fn sink_tail_into_terminal_stmt(stmt: Stmt, tail: Vec<Stmt>, target: TailSinkTar
             then_body,
             else_body,
         } => {
-            let then_body = if matches!(block_terminal_effect(&then_body), TerminalEffect::FallsThrough) {
+            let then_body = if block_reaches_following_stmt(&then_body) {
                 sink_tail_into_terminal_path(then_body, tail.clone(), target)
             } else {
                 then_body
             };
             let else_body = else_body.map(|body| {
-                if matches!(block_terminal_effect(&body), TerminalEffect::FallsThrough) {
+                if block_reaches_following_stmt(&body) {
                     sink_tail_into_terminal_path(body, tail.clone(), target)
                 } else {
                     body
@@ -124,7 +116,7 @@ fn sink_tail_into_terminal_stmt(stmt: Stmt, tail: Vec<Stmt>, target: TailSinkTar
             catches,
             finally_body,
         } => {
-            let try_body = if matches!(block_terminal_effect(&try_body), TerminalEffect::FallsThrough) {
+            let try_body = if block_reaches_following_stmt(&try_body) {
                 sink_tail_into_terminal_path(try_body, tail.clone(), target)
             } else {
                 try_body
@@ -132,7 +124,7 @@ fn sink_tail_into_terminal_stmt(stmt: Stmt, tail: Vec<Stmt>, target: TailSinkTar
             let catches = catches
                 .into_iter()
                 .map(|catch| crate::parser::ast::CatchClause {
-                    body: if matches!(block_terminal_effect(&catch.body), TerminalEffect::FallsThrough) {
+                    body: if block_reaches_following_stmt(&catch.body) {
                         sink_tail_into_terminal_path(catch.body, tail.clone(), target)
                     } else {
                         catch.body
@@ -358,50 +350,33 @@ fn dce_switch_stmt_with_tail(
         return dce_switch_stmt(subject, cases, default, span);
     }
 
-    let has_break_exit = cases
-        .iter()
-        .any(|(_, body)| matches!(block_terminal_effect(body), TerminalEffect::Breaks))
-        || default
-            .as_ref()
-            .is_some_and(|body| matches!(block_terminal_effect(body), TerminalEffect::Breaks));
-    if has_break_exit {
+    let reachability = analyze_switch_tail_paths(&cases, &default);
+    if reachability.has_break_exit {
         let mut stmts = dce_switch_stmt(subject, cases, default, span);
         stmts.extend(tail);
         return stmts;
     }
 
-    let mut suffix_reaches_after_switch = false;
     if let Some(body) = default.as_mut() {
-        match block_terminal_effect(body) {
-            TerminalEffect::FallsThrough => {
-                *body = sink_tail_into_terminal_path(
-                    std::mem::take(body),
-                    tail.clone(),
-                    TailSinkTarget::FallsThrough,
-                );
-                suffix_reaches_after_switch = true;
-            }
-            TerminalEffect::Breaks | TerminalEffect::ExitsCurrentBlock | TerminalEffect::TerminatesMixed => {}
+        if reachability.default_sinks_tail {
+            *body = sink_tail_into_terminal_path(
+                std::mem::take(body),
+                tail.clone(),
+                TailSinkTarget::FallsThrough,
+            );
         }
     }
 
-    let last_case_index = cases.len().checked_sub(1);
-    for (index, (_, body)) in cases.iter_mut().enumerate().rev() {
-        match block_terminal_effect(body) {
-            TerminalEffect::FallsThrough if suffix_reaches_after_switch || Some(index) == last_case_index => {
-                if !suffix_reaches_after_switch {
-                    *body = sink_tail_into_terminal_path(
-                        std::mem::take(body),
-                        tail.clone(),
-                        TailSinkTarget::FallsThrough,
-                    );
-                }
-                suffix_reaches_after_switch = true;
-            }
-            TerminalEffect::FallsThrough => {}
-            TerminalEffect::Breaks | TerminalEffect::ExitsCurrentBlock | TerminalEffect::TerminatesMixed => {
-                suffix_reaches_after_switch = false;
-            }
+    for ((_, body), reaches_tail) in cases
+        .iter_mut()
+        .zip(reachability.case_sinks_tail.into_iter())
+    {
+        if reaches_tail {
+            *body = sink_tail_into_terminal_path(
+                std::mem::take(body),
+                tail.clone(),
+                TailSinkTarget::FallsThrough,
+            );
         }
     }
 
@@ -469,25 +444,6 @@ fn dce_try_stmt(
     )]
 }
 
-fn plan_try_tail_sink(
-    try_body: &[Stmt],
-    catches: &[crate::parser::ast::CatchClause],
-    finally_body: &Option<Vec<Stmt>>,
-) -> TryTailSinkPlan {
-    match finally_body {
-        None => TryTailSinkPlan::IntoTryPaths,
-        Some(finally_body)
-            if catches.is_empty()
-                && !block_may_throw(try_body)
-                && matches!(block_terminal_effect(try_body), TerminalEffect::FallsThrough)
-                && matches!(block_terminal_effect(finally_body), TerminalEffect::FallsThrough) =>
-        {
-            TryTailSinkPlan::IntoFinally
-        }
-        Some(_) => TryTailSinkPlan::LeaveOutside,
-    }
-}
-
 fn dce_try_stmt_with_tail(
     try_body: Vec<Stmt>,
     catches: Vec<crate::parser::ast::CatchClause>,
@@ -516,7 +472,7 @@ fn dce_try_stmt_with_tail(
         return dce_try_stmt(try_body, catches, finally_body, span);
     }
 
-    match plan_try_tail_sink(&try_body, &catches, &finally_body) {
+    match analyze_try_tail_plan(&try_body, &catches, &finally_body) {
         TryTailSinkPlan::IntoTryPaths => {
             let try_body = append_tail_to_fallthrough_path(try_body, tail.clone());
             let catches = catches

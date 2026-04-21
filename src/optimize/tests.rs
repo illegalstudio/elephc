@@ -2814,6 +2814,42 @@ fn test_eliminate_dead_code_sinks_tail_into_safe_finally_path() {
 }
 
 #[test]
+fn test_switch_tail_reachability_tracks_suffix_paths() {
+    let cases = vec![
+        (vec![Expr::int_lit(1)], vec![Stmt::echo(Expr::int_lit(7))]),
+        (vec![Expr::int_lit(2)], vec![Stmt::echo(Expr::int_lit(8))]),
+    ];
+    let default = Some(vec![Stmt::echo(Expr::int_lit(9))]);
+
+    let reachability = analyze_switch_tail_paths(&cases, &default);
+
+    assert_eq!(reachability.case_sinks_tail, vec![false, false]);
+    assert!(reachability.default_sinks_tail);
+    assert!(!reachability.has_break_exit);
+}
+
+#[test]
+fn test_try_tail_plan_prefers_finally_only_when_safe() {
+    let safe_try = vec![Stmt::echo(Expr::int_lit(7))];
+    let safe_finally = Some(vec![Stmt::echo(Expr::int_lit(8))]);
+
+    assert_eq!(
+        analyze_try_tail_plan(&safe_try, &Vec::new(), &safe_finally),
+        TryTailSinkPlan::IntoFinally
+    );
+
+    let catch_body = vec![crate::parser::ast::CatchClause {
+        exception_types: vec!["Exception".into()],
+        variable: Some("e".into()),
+        body: vec![Stmt::new(StmtKind::Return(Some(Expr::int_lit(9))), Span::dummy())],
+    }];
+    assert_eq!(
+        analyze_try_tail_plan(&safe_try, &catch_body, &safe_finally),
+        TryTailSinkPlan::LeaveOutside
+    );
+}
+
+#[test]
 fn test_eliminate_dead_code_reduces_empty_if_to_effectful_condition_eval() {
     let touch = Expr::new(
         ExprKind::FunctionCall {
