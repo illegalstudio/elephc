@@ -9,16 +9,17 @@ sidebar:
 
 elephc's optimizer is intentionally simple and AST-focused. It does not build a separate IR or run heavyweight SSA passes. Instead, it performs a small set of local rewrites that already pay off in generated assembly quality and compile-time clarity.
 
-Today the optimizer is split into four passes:
+Today the optimizer is split into five passes:
 
 1. `fold_constants(program)` runs before type checking
 2. `propagate_constants(program)` runs after successful type checking
 3. `prune_constant_control_flow(program)` runs after propagation and warning collection
-4. `eliminate_dead_code(program)` runs after pruning and performs cleanup / structural simplification on the already-pruned AST
+4. `normalize_control_flow(program)` runs after pruning and rewrites structurally equivalent control-flow shells into simpler AST shapes
+5. `eliminate_dead_code(program)` runs after normalization and removes leftover unreachable or non-observable statements from the already-normalized AST
 
 That split matters. Some rewrites are always safe on syntax alone, while others should only happen after diagnostics have already seen the checked program.
 
-Alongside those four passes, the optimizer also builds lightweight local **effect summaries**. These summaries answer two questions conservatively:
+Alongside those five passes, the optimizer also builds lightweight local **effect summaries**. These summaries answer two questions conservatively:
 
 - does this expression have observable side effects?
 - can this expression throw?
@@ -151,22 +152,30 @@ Current pruning coverage includes:
   - `??`
   - short-circuit `&&` / `||`
 
-## Pass 4: Dead-code elimination and structural cleanup
+## Pass 4: Control-flow normalization
 
-`eliminate_dead_code()` runs after the pruning pass. At this point the AST already has constant-dead branches removed, so the job becomes "clean up the shells and leftovers" rather than "decide which branch is dead".
+`normalize_control_flow()` runs after the pruning pass. At this point the AST already has constant-dead branches removed, so the job becomes "reshape the remaining control flow into simpler but equivalent forms" rather than "decide which branch is dead".
 
-Current cleanup coverage includes:
+Current normalization coverage includes:
 
 - empty `ifdef`, `if`, `switch`, and degenerate `try` shells
 - single-path conditionals such as:
   - `if ($cond) {} else { ... }` → `if (!$cond) { ... }`
   - nested single-path `if` chains collapsed into one condition with `&&`
+- `if` statements whose `then` and `else` bodies normalize to the same block collapsed into “evaluate the condition only if observable, then run the shared block once”
+- `elseif` chains canonicalized into nested `else { if (...) { ... } }` form
+- adjacent `if` chain heads with identical bodies merged into one `if ($a || $b) { ... }` shape
+- adjacent `if` chain tails with identical fallback merged into one `if (!$a && $b) { ... } else { ... }` shape
+- longer `if` chains repeatedly normalized until these shapes saturate
+- adjacent `switch` cases with identical bodies merged into a single multi-pattern case
+- pure fallthrough `switch` labels folded into the next non-empty case body
+- single live `switch` cases rewritten to `if` when the loose comparison can be reconstructed safely
+- adjacent `catch` clauses with the same body and variable merged into a single deduplicated, stably ordered multi-type catch
 - constant `switch` execution materialized into the exact statement tail that would run, preserving fallthrough and `break`
 - non-throwing `try` / `catch` simplification
+- outer `finally` blocks folded into a single inner `try` when they wrap exactly one inner `try` that does not already have its own `finally`
 - safe hoisting of non-throwing, fallthrough prefixes out of `try` blocks
 - conservative flattening of `try` / `finally` when the `try` body cannot throw and the body falls through
-- pure expression statements that are left behind after earlier pruning
-
 ### Example
 
 ```php
@@ -181,6 +190,21 @@ try {
 
 The leading `echo "a";` is known not to throw, so the optimizer can hoist it out of the `try` and leave only the actually-throwing tail protected by the handler.
 
+## Pass 5: Dead-code elimination
+
+`eliminate_dead_code()` now runs after normalization. At this point the AST has already had constant-dead branches removed and redundant control-flow shells compacted, so the job becomes "drop the leftovers" rather than "reshape the program".
+
+Current dead-code-elimination coverage includes:
+
+- unreachable statements after:
+  - `return`
+  - `throw`
+  - `break`
+  - `continue`
+- statements after exhaustive `try/catch` and `try/finally` exits
+- pure expression statements whose result is unused
+- pure expression statements that become exposed by earlier normalization
+
 ### Example
 
 ```php
@@ -192,7 +216,7 @@ if (true) {
 }
 ```
 
-After pruning, the dead branch disappears entirely. That means codegen never emits the `pow` path.
+After pruning and normalization, the dead branch disappears entirely. The final dead-code pass then has less structural noise to inspect, and codegen never emits the `pow` path.
 
 ## Effect summaries: purity and `may_throw`
 
@@ -236,7 +260,7 @@ try {
 
 Because every `match` arm produces the same known pure / non-throwing callable, the optimizer can prove that the `catch` path is dead and avoid emitting the `pow` branch at all.
 
-## Why there are four passes
+## Why there are five passes
 
 If elephc removed whole branches before type checking, it could accidentally hide useful diagnostics.
 
@@ -257,6 +281,7 @@ So the current rule is:
 - fold obvious pure scalar expressions early
 - propagate known scalar locals only after checking
 - prune larger dead control-flow only after checking
+- normalize the remaining control-flow into simpler equivalent shapes
 - run structural dead-code cleanup only after those earlier passes have already simplified the tree
 
 ## Conservatism and side effects
@@ -277,11 +302,12 @@ That conservatism is why the pass is safe to run by default: if an expression co
 
 ## What the optimizer does not do yet
 
-The current pass is local. It does not yet implement:
+The current optimizer is still intentionally local. It does not yet implement:
 
-- constant propagation across variables and statement boundaries
-- richer alias-aware propagation across general locals and merges
+- CFG-aware or fixed-point constant propagation across wider loops and general path merges
+- richer memory-model-aware propagation across heap-backed locals and broader aliasing situations
 - deeper exception-aware dead-code elimination beyond conservative `try` heuristics
+- broader control-flow normalization beyond the current local AST shell rewrites
 - backend-specific peephole cleanup
 - runtime dead stripping
 - register allocation

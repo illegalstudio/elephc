@@ -20,6 +20,13 @@ pub(crate) fn elephc_cli_bin() -> String {
     })
 }
 
+pub(crate) fn elephc_cli_command(dir: &Path) -> Command {
+    let mut cmd = Command::new(elephc_cli_bin());
+    cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.current_dir(dir);
+    cmd
+}
+
 pub(crate) fn compile_and_run_with_defines(source: &str, defines: &[&str]) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
@@ -49,11 +56,11 @@ pub(crate) fn compile_cli_file_and_run(source: &str, defines: &[&str]) -> String
     let php_path = dir.join("main.php");
     fs::write(&php_path, source).unwrap();
 
-    let mut compile_cmd = Command::new(elephc_cli_bin());
+    let mut compile_cmd = elephc_cli_command(&dir);
     for define in defines {
         compile_cmd.arg("--define").arg(define);
     }
-    compile_cmd.arg(&php_path).current_dir(&dir);
+    compile_cmd.arg(&php_path);
     let compile_out = compile_cmd.output().expect("failed to run elephc CLI");
     assert!(
         compile_out.status.success(),
@@ -134,6 +141,7 @@ pub(crate) fn compile_and_run_files_with_defines(
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized = elephc::optimize::propagate_constants(resolved);
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
+    let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
     let (user_asm, _runtime_asm) = elephc::codegen::generate(
         &optimized,
@@ -225,6 +233,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized = elephc::optimize::propagate_constants(resolved);
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
+    let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
     let (user_asm, _runtime_asm) = elephc::codegen::generate(
         &optimized,
@@ -321,6 +330,7 @@ pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBu
     let check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized = elephc::optimize::propagate_constants(resolved);
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
+    let optimized = elephc::optimize::normalize_control_flow(optimized);
     let optimized = elephc::optimize::eliminate_dead_code(optimized);
     let (user_asm, _runtime_asm) = elephc::codegen::generate(
         &optimized,

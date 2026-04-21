@@ -208,11 +208,13 @@ Warnings are returned through `CheckResult` and printed by the CLI without faili
 
 ## Where the checker sits in the optimizer pipeline
 
-The type checker sits between an early folding pass and two post-check cleanup passes in `src/optimize.rs`:
+The type checker sits between an early folding pass and four post-check cleanup passes in `src/optimize.rs`:
 
 - `fold_constants()` runs first and simplifies scalar expressions that are already statically decidable.
+- `propagate_constants()` runs after successful checking and pushes known scalar locals through conservative straight-line and merge shapes.
 - `prune_constant_control_flow()` runs only after successful checking and warning collection, so dead branches can be removed without suppressing type errors or warnings that should still be reported.
-- `eliminate_dead_code()` runs after pruning and performs structural cleanup on the already-checked, already-pruned AST.
+- `normalize_control_flow()` runs after pruning and rewrites structurally equivalent control-flow shells into simpler AST shapes.
+- `eliminate_dead_code()` runs after normalization and removes the leftover unreachable or non-observable statements.
 
 That ordering is intentional. elephc is happy to rewrite `2 + 3` into `5` before checking, but it does not want an optimization pass to make broken code look valid by deleting it too early.
 

@@ -2,6 +2,7 @@ use crate::parser::ast::{
     BinOp, CallableTarget, CastType, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
     Program, Stmt, StmtKind,
 };
+use crate::names::Name;
 use crate::termination::{block_terminal_effect, stmt_terminal_effect, TerminalEffect};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -20,6 +21,17 @@ pub fn fold_constants(program: Program) -> Program {
 
 pub fn propagate_constants(program: Program) -> Program {
     propagate_block(program, HashMap::new()).0
+}
+
+pub fn normalize_control_flow(program: Program) -> Program {
+    let (function_effects, static_method_effects, private_instance_method_effects) =
+        compute_program_callable_effects(&program);
+    with_callable_effects(
+        function_effects,
+        static_method_effects,
+        private_instance_method_effects,
+        || prune_block(program),
+    )
 }
 
 pub fn prune_constant_control_flow(program: Program) -> Program {
@@ -42,7 +54,7 @@ pub fn eliminate_dead_code(program: Program) -> Program {
         function_effects,
         static_method_effects,
         private_instance_method_effects,
-        || prune_block(program),
+        || dce_block(program),
     )
 }
 
@@ -331,6 +343,68 @@ fn normalize_optional_block(body: Option<Vec<Stmt>>) -> Option<Vec<Stmt>> {
     body.filter(|body| !body.is_empty())
 }
 
+fn normalize_exception_types(exception_types: Vec<Name>) -> Vec<Name> {
+    let mut normalized = Vec::new();
+    for exception_type in exception_types {
+        if !normalized.contains(&exception_type) {
+            normalized.push(exception_type);
+        }
+    }
+    normalized.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+    normalized
+}
+
+fn normalize_catch_clauses(
+    catches: Vec<crate::parser::ast::CatchClause>,
+) -> Vec<crate::parser::ast::CatchClause> {
+    let mut normalized: Vec<crate::parser::ast::CatchClause> = Vec::new();
+    for mut catch in catches {
+        catch.exception_types = normalize_exception_types(catch.exception_types);
+        if let Some(last) = normalized.last_mut() {
+            if last.variable == catch.variable && last.body == catch.body {
+                last.exception_types.extend(catch.exception_types);
+                last.exception_types = normalize_exception_types(std::mem::take(&mut last.exception_types));
+                continue;
+            }
+        }
+        normalized.push(catch);
+    }
+    normalized
+}
+
+fn normalize_switch_cases(cases: Vec<(Vec<Expr>, Vec<Stmt>)>) -> Vec<(Vec<Expr>, Vec<Stmt>)> {
+    let mut normalized: Vec<(Vec<Expr>, Vec<Stmt>)> = Vec::new();
+    let mut pending_fallthrough_patterns: Vec<Expr> = Vec::new();
+    for (mut patterns, body) in cases {
+        if body.is_empty() {
+            pending_fallthrough_patterns.extend(patterns);
+            continue;
+        }
+
+        if !pending_fallthrough_patterns.is_empty() {
+            pending_fallthrough_patterns.append(&mut patterns);
+            patterns = pending_fallthrough_patterns;
+            pending_fallthrough_patterns = Vec::new();
+        }
+
+        if !body.is_empty() {
+            if let Some((last_patterns, last_body)) = normalized.last_mut() {
+                if *last_body == body {
+                    last_patterns.extend(patterns);
+                    continue;
+                }
+            }
+        }
+        normalized.push((patterns, body));
+    }
+
+    if !pending_fallthrough_patterns.is_empty() {
+        normalized.push((pending_fallthrough_patterns, Vec::new()));
+    }
+
+    normalized
+}
+
 fn invert_condition(condition: Expr) -> Expr {
     let span = condition.span;
     prune_expr(Expr::new(ExprKind::Not(Box::new(condition)), span))
@@ -341,12 +415,16 @@ fn build_if_chain_body(
     else_body: Option<Vec<Stmt>>,
 ) -> Vec<Stmt> {
     if let Some(((condition, then_body), rest)) = elseif_clauses.split_first() {
+        let nested_else_body = normalize_optional_block(Some(build_if_chain_body(
+            rest.to_vec(),
+            else_body,
+        )));
         vec![Stmt::new(
             StmtKind::If {
                 condition: condition.clone(),
                 then_body: then_body.clone(),
-                elseif_clauses: rest.to_vec(),
-                else_body,
+                elseif_clauses: Vec::new(),
+                else_body: nested_else_body,
             },
             condition.span,
         )]
@@ -415,6 +493,51 @@ fn combine_if_conditions(left: Expr, right: Expr) -> Expr {
         },
         span,
     ))
+}
+
+fn combine_if_chain_conditions(left: Expr, right: Expr) -> Expr {
+    let span = left.span;
+    prune_expr(Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(left),
+            op: BinOp::Or,
+            right: Box::new(right),
+        },
+        span,
+    ))
+}
+
+fn build_switch_match_condition(subject: &Expr, patterns: &[Expr]) -> Option<Expr> {
+    if patterns.is_empty() {
+        return None;
+    }
+
+    if patterns.len() > 1 && expr_is_observable(subject) {
+        return None;
+    }
+
+    let mut comparisons = patterns.iter().cloned().map(|pattern| {
+        Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(subject.clone()),
+                op: BinOp::Eq,
+                right: Box::new(pattern),
+            },
+            subject.span,
+        )
+    });
+    let mut condition = comparisons.next()?;
+    for comparison in comparisons {
+        condition = Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(condition),
+                op: BinOp::Or,
+                right: Box::new(comparison),
+            },
+            subject.span,
+        );
+    }
+    Some(prune_expr(condition))
 }
 
 fn propagate_block(body: Vec<Stmt>, mut env: ConstantEnv) -> (Vec<Stmt>, ConstantEnv) {
@@ -1756,24 +1879,61 @@ fn build_if_stmt(
     else_body: Option<Vec<Stmt>>,
     span: crate::span::Span,
 ) -> Stmt {
-    if elseif_clauses.is_empty() && else_body.is_none() && then_body.len() == 1 {
-        if let StmtKind::If {
-            condition: inner_condition,
-            then_body: inner_then_body,
-            elseif_clauses: inner_elseifs,
-            else_body: inner_else,
-        } = &then_body[0].kind
-        {
-            if inner_elseifs.is_empty() && inner_else.is_none() {
-                return Stmt {
-                    kind: StmtKind::If {
-                        condition: combine_if_conditions(condition, inner_condition.clone()),
-                        then_body: inner_then_body.clone(),
-                        elseif_clauses: Vec::new(),
-                        else_body: None,
-                    },
-                    span,
-                };
+    if elseif_clauses.is_empty() {
+        if let Some(else_body_ref) = else_body.as_ref() {
+            if else_body_ref.len() == 1 {
+                if let StmtKind::If {
+                    condition: inner_condition,
+                    then_body: inner_then_body,
+                    elseif_clauses: inner_elseifs,
+                    else_body: inner_else,
+                } = &else_body_ref[0].kind
+                {
+                    if inner_elseifs.is_empty() && *inner_then_body == then_body {
+                        return build_if_stmt(
+                            combine_if_chain_conditions(condition, inner_condition.clone()),
+                            then_body,
+                            Vec::new(),
+                            inner_else.clone(),
+                            span,
+                        );
+                    }
+
+                    if inner_elseifs.is_empty() && inner_else.as_ref() == Some(&then_body) {
+                        return build_if_stmt(
+                            combine_if_conditions(
+                                invert_condition(condition),
+                                inner_condition.clone(),
+                            ),
+                            inner_then_body.clone(),
+                            Vec::new(),
+                            Some(then_body),
+                            span,
+                        );
+                    }
+                }
+            }
+        }
+
+        if else_body.is_none() && then_body.len() == 1 {
+            if let StmtKind::If {
+                condition: inner_condition,
+                then_body: inner_then_body,
+                elseif_clauses: inner_elseifs,
+                else_body: inner_else,
+            } = &then_body[0].kind
+            {
+                if inner_elseifs.is_empty() && inner_else.is_none() {
+                    return Stmt {
+                        kind: StmtKind::If {
+                            condition: combine_if_conditions(condition, inner_condition.clone()),
+                            then_body: inner_then_body.clone(),
+                            elseif_clauses: Vec::new(),
+                            else_body: None,
+                        },
+                        span,
+                    };
+                }
             }
         }
     }
@@ -2542,6 +2702,21 @@ fn prune_block(body: Vec<Stmt>) -> Vec<Stmt> {
     pruned
 }
 
+fn dce_block(body: Vec<Stmt>) -> Vec<Stmt> {
+    let mut eliminated = Vec::new();
+    for stmt in body {
+        let dce_stmt = dce_stmt(stmt);
+        let stops_here = dce_stmt
+            .last()
+            .is_some_and(|stmt| !matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough));
+        eliminated.extend(dce_stmt);
+        if stops_here {
+            break;
+        }
+    }
+    eliminated
+}
+
 fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
     let span = stmt.span;
     match stmt.kind {
@@ -2655,15 +2830,34 @@ fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
             finally_body,
         } => {
             let try_body = prune_block(try_body);
-            let catches: Vec<_> = catches
+            let catches = normalize_catch_clauses(catches
                 .into_iter()
                 .map(|catch| crate::parser::ast::CatchClause {
                     exception_types: catch.exception_types,
                     variable: catch.variable,
                     body: prune_block(catch.body),
                 })
-                .collect();
+                .collect());
             let finally_body = normalize_optional_block(finally_body.map(prune_block));
+
+            if catches.is_empty() && finally_body.is_some() && try_body.len() == 1 {
+                if let StmtKind::Try {
+                    try_body: inner_try_body,
+                    catches: inner_catches,
+                    finally_body: None,
+                } = &try_body[0].kind
+                {
+                    return vec![Stmt {
+                        kind: StmtKind::Try {
+                            try_body: inner_try_body.clone(),
+                            catches: inner_catches.clone(),
+                            finally_body,
+                        },
+                        span,
+                    }];
+                }
+            }
+
             let (mut hoisted_prefix, try_body) = split_hoistable_try_prefix(try_body);
 
             let mut remaining = if try_body.is_empty() {
@@ -2821,6 +3015,347 @@ fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
     }
 }
 
+fn dce_stmt(stmt: Stmt) -> Vec<Stmt> {
+    let span = stmt.span;
+    match stmt.kind {
+        StmtKind::Echo(expr) => vec![Stmt {
+            kind: StmtKind::Echo(prune_expr(expr)),
+            span,
+        }],
+        StmtKind::Assign { name, value } => vec![Stmt {
+            kind: StmtKind::Assign {
+                name,
+                value: prune_expr(value),
+            },
+            span,
+        }],
+        StmtKind::TypedAssign {
+            name,
+            type_expr,
+            value,
+        } => vec![Stmt {
+            kind: StmtKind::TypedAssign {
+                name,
+                type_expr,
+                value: prune_expr(value),
+            },
+            span,
+        }],
+        StmtKind::PropertyAssign {
+            object,
+            property,
+            value,
+        } => vec![Stmt {
+            kind: StmtKind::PropertyAssign {
+                object: Box::new(prune_expr(*object)),
+                property,
+                value: prune_expr(value),
+            },
+            span,
+        }],
+        StmtKind::PropertyArrayAssign {
+            object,
+            property,
+            index,
+            value,
+        } => vec![Stmt {
+            kind: StmtKind::PropertyArrayAssign {
+                object: Box::new(prune_expr(*object)),
+                property,
+                index: prune_expr(index),
+                value: prune_expr(value),
+            },
+            span,
+        }],
+        StmtKind::PropertyArrayPush {
+            object,
+            property,
+            value,
+        } => vec![Stmt {
+            kind: StmtKind::PropertyArrayPush {
+                object: Box::new(prune_expr(*object)),
+                property,
+                value: prune_expr(value),
+            },
+            span,
+        }],
+        StmtKind::ArrayAssign { array, index, value } => vec![Stmt {
+            kind: StmtKind::ArrayAssign {
+                array,
+                index: prune_expr(index),
+                value: prune_expr(value),
+            },
+            span,
+        }],
+        StmtKind::ArrayPush { array, value } => vec![Stmt {
+            kind: StmtKind::ArrayPush {
+                array,
+                value: prune_expr(value),
+            },
+            span,
+        }],
+        StmtKind::ListUnpack { vars, value } => vec![Stmt {
+            kind: StmtKind::ListUnpack {
+                vars,
+                value: prune_expr(value),
+            },
+            span,
+        }],
+        StmtKind::StaticVar { name, init } => vec![Stmt {
+            kind: StmtKind::StaticVar {
+                name,
+                init: prune_expr(init),
+            },
+            span,
+        }],
+        StmtKind::ConstDecl { name, value } => vec![Stmt {
+            kind: StmtKind::ConstDecl {
+                name,
+                value: prune_expr(value),
+            },
+            span,
+        }],
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => vec![Stmt {
+            kind: StmtKind::If {
+                condition: prune_expr(condition),
+                then_body: dce_block(then_body),
+                elseif_clauses: elseif_clauses
+                    .into_iter()
+                    .map(|(condition, body)| (prune_expr(condition), dce_block(body)))
+                    .collect(),
+                else_body: normalize_optional_block(else_body.map(dce_block)),
+            },
+            span,
+        }],
+        StmtKind::IfDef {
+            symbol,
+            then_body,
+            else_body,
+        } => {
+            let then_body = dce_block(then_body);
+            let else_body = normalize_optional_block(else_body.map(dce_block));
+            if then_body.is_empty() && else_body.is_none() {
+                Vec::new()
+            } else {
+                vec![Stmt {
+                    kind: StmtKind::IfDef {
+                        symbol,
+                        then_body,
+                        else_body,
+                    },
+                    span,
+                }]
+            }
+        }
+        StmtKind::While { condition, body } => vec![Stmt {
+            kind: StmtKind::While {
+                condition: prune_expr(condition),
+                body: dce_block(body),
+            },
+            span,
+        }],
+        StmtKind::DoWhile { body, condition } => vec![Stmt {
+            kind: StmtKind::DoWhile {
+                body: dce_block(body),
+                condition: prune_expr(condition),
+            },
+            span,
+        }],
+        StmtKind::For {
+            init,
+            condition,
+            update,
+            body,
+        } => vec![Stmt {
+            kind: StmtKind::For {
+                init: init.and_then(|stmt| dce_stmt(*stmt).into_iter().next().map(Box::new)),
+                condition: condition.map(prune_expr),
+                update: update.and_then(|stmt| dce_stmt(*stmt).into_iter().next().map(Box::new)),
+                body: dce_block(body),
+            },
+            span,
+        }],
+        StmtKind::Foreach {
+            array,
+            key_var,
+            value_var,
+            body,
+        } => vec![Stmt {
+            kind: StmtKind::Foreach {
+                array: prune_expr(array),
+                key_var,
+                value_var,
+                body: dce_block(body),
+            },
+            span,
+        }],
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => vec![Stmt {
+            kind: StmtKind::Switch {
+                subject: prune_expr(subject),
+                cases: cases
+                    .into_iter()
+                    .map(|(patterns, body)| {
+                        (
+                            patterns.into_iter().map(prune_expr).collect(),
+                            dce_block(body),
+                        )
+                    })
+                    .collect(),
+                default: normalize_optional_block(default.map(dce_block)),
+            },
+            span,
+        }],
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => vec![Stmt {
+            kind: StmtKind::Try {
+                try_body: dce_block(try_body),
+                catches: catches
+                    .into_iter()
+                    .map(|catch| crate::parser::ast::CatchClause {
+                        exception_types: catch.exception_types,
+                        variable: catch.variable,
+                        body: dce_block(catch.body),
+                    })
+                    .collect(),
+                finally_body: normalize_optional_block(finally_body.map(dce_block)),
+            },
+            span,
+        }],
+        StmtKind::NamespaceBlock { name, body } => vec![Stmt {
+            kind: StmtKind::NamespaceBlock {
+                name,
+                body: dce_block(body),
+            },
+            span,
+        }],
+        StmtKind::FunctionDecl {
+            name,
+            params,
+            variadic,
+            return_type,
+            body,
+        } => vec![Stmt {
+            kind: StmtKind::FunctionDecl {
+                name,
+                params,
+                variadic,
+                return_type,
+                body: dce_block(body),
+            },
+            span,
+        }],
+        StmtKind::Return(expr) => vec![Stmt {
+            kind: StmtKind::Return(expr.map(prune_expr)),
+            span,
+        }],
+        StmtKind::Throw(expr) => vec![Stmt {
+            kind: StmtKind::Throw(prune_expr(expr)),
+            span,
+        }],
+        StmtKind::ClassDecl {
+            name,
+            extends,
+            implements,
+            is_abstract,
+            is_readonly_class,
+            trait_uses,
+            properties,
+            methods,
+        } => {
+            let parent_name = extends.as_ref().map(|parent| parent.as_str().to_string());
+            let methods = methods
+                .into_iter()
+                .map(|method| dce_method(method, &name, parent_name.as_deref()))
+                .collect();
+            vec![Stmt {
+                kind: StmtKind::ClassDecl {
+                    name,
+                    extends,
+                    implements,
+                    is_abstract,
+                    is_readonly_class,
+                    trait_uses,
+                    properties,
+                    methods,
+                },
+                span,
+            }]
+        }
+        StmtKind::ExprStmt(expr) => {
+            let expr = prune_expr(expr);
+            if expr_has_side_effects(&expr) {
+                vec![Stmt {
+                    kind: StmtKind::ExprStmt(expr),
+                    span,
+                }]
+            } else {
+                Vec::new()
+            }
+        }
+        StmtKind::EnumDecl {
+            name,
+            backing_type,
+            cases,
+        } => vec![Stmt {
+            kind: StmtKind::EnumDecl {
+                name,
+                backing_type,
+                cases,
+            },
+            span,
+        }],
+        StmtKind::PackedClassDecl { name, fields } => vec![Stmt {
+            kind: StmtKind::PackedClassDecl { name, fields },
+            span,
+        }],
+        StmtKind::InterfaceDecl {
+            name,
+            extends,
+            methods,
+        } => vec![Stmt {
+            kind: StmtKind::InterfaceDecl {
+                name,
+                extends,
+                methods: methods
+                    .into_iter()
+                    .map(dce_method_without_context)
+                    .collect(),
+            },
+            span,
+        }],
+        StmtKind::TraitDecl {
+            name,
+            trait_uses,
+            properties,
+            methods,
+        } => vec![Stmt {
+            kind: StmtKind::TraitDecl {
+                name,
+                trait_uses,
+                properties,
+                methods: methods
+                    .into_iter()
+                    .map(dce_method_without_context)
+                    .collect(),
+            },
+            span,
+        }],
+        kind => vec![Stmt { kind, span }],
+    }
+}
+
 fn prune_if_chain(
     condition: Expr,
     then_body: Vec<Stmt>,
@@ -2855,11 +3390,20 @@ fn prune_if_chain(
                 }
             }
 
+            let canonical_else_body =
+                normalize_optional_block(Some(build_if_chain_body(kept_elseifs, kept_else)));
+
+            if canonical_else_body.as_ref() == Some(&then_body) {
+                let mut stmts = expr_to_effect_stmt(condition);
+                stmts.extend(then_body);
+                return stmts;
+            }
+
             vec![build_if_stmt(
                 condition,
                 then_body,
-                kept_elseifs,
-                kept_else,
+                Vec::new(),
+                canonical_else_body,
                 span,
             )]
         }
@@ -2880,11 +3424,13 @@ fn prune_else_if_chain(
                 let span = condition.span;
                 let remaining: Vec<_> = clauses.collect();
                 let (kept_elseifs, kept_else) = prune_remaining_elseif_chain(remaining, else_body);
+                let canonical_else_body =
+                    normalize_optional_block(Some(build_if_chain_body(kept_elseifs, kept_else)));
                 return vec![build_if_stmt(
                     condition,
                     prune_block(body),
-                    kept_elseifs,
-                    kept_else,
+                    Vec::new(),
+                    canonical_else_body,
                     span,
                 )];
             }
@@ -2927,6 +3473,24 @@ fn prune_method(
 fn prune_method_without_context(method: ClassMethod) -> ClassMethod {
     ClassMethod {
         body: with_class_effect_context(None, || prune_block(method.body)),
+        ..method
+    }
+}
+
+fn dce_method(method: ClassMethod, class_name: &str, parent_name: Option<&str>) -> ClassMethod {
+    let context = ClassEffectContext {
+        class_name: class_name.to_string(),
+        parent_name: parent_name.map(str::to_string),
+    };
+    ClassMethod {
+        body: with_class_effect_context(Some(context), || dce_block(method.body)),
+        ..method
+    }
+}
+
+fn dce_method_without_context(method: ClassMethod) -> ClassMethod {
+    ClassMethod {
+        body: with_class_effect_context(None, || dce_block(method.body)),
         ..method
     }
 }
@@ -3211,10 +3775,14 @@ fn prune_switch_stmt(
     span: crate::span::Span,
 ) -> Vec<Stmt> {
     let subject = prune_expr(subject);
-    let cases: Vec<(Vec<Expr>, Vec<Stmt>)> = cases
-        .into_iter()
-        .map(|(patterns, body)| (patterns.into_iter().map(prune_expr).collect(), prune_block(body)))
-        .collect();
+    let cases = normalize_switch_cases(
+        cases
+            .into_iter()
+            .map(|(patterns, body)| {
+                (patterns.into_iter().map(prune_expr).collect(), prune_block(body))
+            })
+            .collect(),
+    );
     let default = normalize_optional_block(default.map(prune_block));
 
     if cases.iter().all(|(_, body)| body.is_empty()) && default.is_none() {
@@ -3230,6 +3798,16 @@ fn prune_switch_stmt(
     }
 
     let Some(subject_value) = scalar_value(&subject) else {
+        if cases.len() == 1 {
+            let (patterns, _) = &cases[0];
+            if let Some(condition) = build_switch_match_condition(&subject, patterns) {
+                let then_body = materialize_switch_execution(&cases, &default, Some(0));
+                let else_body =
+                    normalize_optional_block(Some(materialize_switch_execution(&cases, &default, None)));
+                return prune_if_chain(condition, then_body, Vec::new(), else_body);
+            }
+        }
+
         return vec![Stmt {
             kind: StmtKind::Switch {
                 subject,
@@ -6188,8 +6766,8 @@ mod tests {
             panic!("expected function");
         };
         assert_eq!(body.len(), 1);
-        let StmtKind::Switch { .. } = &body[0].kind else {
-            panic!("expected switch");
+        let StmtKind::If { .. } = &body[0].kind else {
+            panic!("expected normalized if");
         };
     }
 
@@ -6311,7 +6889,7 @@ mod tests {
             Span::dummy(),
         )];
 
-        let eliminated = eliminate_dead_code(program);
+        let eliminated = eliminate_dead_code(normalize_control_flow(program));
 
         let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
             panic!("expected function");
@@ -6398,7 +6976,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eliminate_dead_code_replaces_empty_if_with_effectful_condition_eval() {
+    fn test_normalize_control_flow_replaces_empty_if_with_effectful_condition_eval() {
         let call = Expr::new(
             ExprKind::FunctionCall {
                 name: Name::unqualified("touch"),
@@ -6416,7 +6994,7 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(
             pruned,
@@ -6425,7 +7003,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eliminate_dead_code_drops_empty_ifdef_shell() {
+    fn test_normalize_control_flow_drops_empty_ifdef_shell() {
         let program = vec![Stmt::new(
             StmtKind::IfDef {
                 symbol: "DEBUG".into(),
@@ -6435,13 +7013,13 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert!(pruned.is_empty());
     }
 
     #[test]
-    fn test_eliminate_dead_code_replaces_empty_switch_with_subject_eval() {
+    fn test_normalize_control_flow_replaces_empty_switch_with_subject_eval() {
         let call = Expr::new(
             ExprKind::FunctionCall {
                 name: Name::unqualified("touch"),
@@ -6458,7 +7036,7 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(
             pruned,
@@ -6467,7 +7045,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eliminate_dead_code_inlines_empty_try_finally_body() {
+    fn test_normalize_control_flow_inlines_empty_try_finally_body() {
         let program = vec![Stmt::new(
             StmtKind::Try {
                 try_body: Vec::new(),
@@ -6481,13 +7059,13 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(9))]);
     }
 
     #[test]
-    fn test_eliminate_dead_code_inverts_single_live_else_branch() {
+    fn test_normalize_control_flow_inverts_single_live_else_branch() {
         let program = vec![Stmt::new(
             StmtKind::If {
                 condition: Expr::var("flag"),
@@ -6498,7 +7076,7 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(
             pruned,
@@ -6518,7 +7096,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eliminate_dead_code_inlines_default_only_switch() {
+    fn test_normalize_control_flow_inlines_default_only_switch() {
         let program = vec![Stmt::new(
             StmtKind::Switch {
                 subject: Expr::var("flag"),
@@ -6528,13 +7106,13 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(9))]);
     }
 
     #[test]
-    fn test_eliminate_dead_code_nests_elseif_chain_after_empty_head() {
+    fn test_normalize_control_flow_nests_elseif_chain_after_empty_head() {
         let program = vec![Stmt::new(
             StmtKind::If {
                 condition: Expr::var("a"),
@@ -6548,7 +7126,7 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(
             pruned,
@@ -6576,7 +7154,212 @@ mod tests {
     }
 
     #[test]
-    fn test_eliminate_dead_code_materializes_constant_switch_match() {
+    fn test_normalize_control_flow_canonicalizes_elseif_chain_into_nested_else_if() {
+        let program = vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::var("a"),
+                then_body: vec![Stmt::echo(Expr::int_lit(1))],
+                elseif_clauses: vec![(
+                    Expr::var("b"),
+                    vec![Stmt::echo(Expr::int_lit(2))],
+                )],
+                else_body: Some(vec![Stmt::echo(Expr::int_lit(3))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = normalize_control_flow(program);
+
+        assert_eq!(pruned.len(), 1);
+        let StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } = &pruned[0].kind
+        else {
+            panic!("expected if");
+        };
+        assert_eq!(*condition, Expr::var("a"));
+        assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(1))]);
+        assert!(elseif_clauses.is_empty());
+
+        let else_body = else_body.as_ref().expect("expected nested else body");
+        assert_eq!(else_body.len(), 1);
+        let StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } = &else_body[0].kind
+        else {
+            panic!("expected nested if");
+        };
+        assert_eq!(*condition, Expr::var("b"));
+        assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(2))]);
+        assert!(elseif_clauses.is_empty());
+        assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(3))]));
+    }
+
+    #[test]
+    fn test_normalize_control_flow_merges_identical_if_chain_bodies_into_or_condition() {
+        let shared_body = vec![Stmt::echo(Expr::int_lit(7))];
+        let program = vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::var("a"),
+                then_body: shared_body.clone(),
+                elseif_clauses: Vec::new(),
+                else_body: Some(vec![Stmt::new(
+                    StmtKind::If {
+                        condition: Expr::var("b"),
+                        then_body: shared_body.clone(),
+                        elseif_clauses: Vec::new(),
+                        else_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+                    },
+                    Span::dummy(),
+                )]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = normalize_control_flow(program);
+
+        assert_eq!(pruned.len(), 1);
+        match &pruned[0].kind {
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            } => {
+                assert_eq!(
+                    *condition,
+                    Expr::new(
+                        ExprKind::BinaryOp {
+                            left: Box::new(Expr::var("a")),
+                            op: BinOp::Or,
+                            right: Box::new(Expr::var("b")),
+                        },
+                        Span::dummy(),
+                    )
+                );
+                assert_eq!(then_body, &shared_body);
+                assert!(elseif_clauses.is_empty());
+                assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
+            }
+            other => panic!("expected normalized if, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_normalize_control_flow_merges_identical_if_chain_tail_into_inverted_and() {
+        let shared_tail = vec![Stmt::echo(Expr::int_lit(9))];
+        let program = vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::var("a"),
+                then_body: shared_tail.clone(),
+                elseif_clauses: Vec::new(),
+                else_body: Some(vec![Stmt::new(
+                    StmtKind::If {
+                        condition: Expr::var("b"),
+                        then_body: vec![Stmt::echo(Expr::int_lit(7))],
+                        elseif_clauses: Vec::new(),
+                        else_body: Some(shared_tail.clone()),
+                    },
+                    Span::dummy(),
+                )]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = normalize_control_flow(program);
+
+        assert_eq!(pruned.len(), 1);
+        match &pruned[0].kind {
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            } => {
+                assert_eq!(
+                    *condition,
+                    Expr::new(
+                        ExprKind::BinaryOp {
+                            left: Box::new(Expr::new(
+                                ExprKind::Not(Box::new(Expr::var("a"))),
+                                Span::dummy(),
+                            )),
+                            op: BinOp::And,
+                            right: Box::new(Expr::var("b")),
+                        },
+                        Span::dummy(),
+                    )
+                );
+                assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(7))]);
+                assert!(elseif_clauses.is_empty());
+                assert_eq!(else_body, &Some(shared_tail));
+            }
+            other => panic!("expected normalized if, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_normalize_control_flow_recursively_merges_longer_if_chain_heads() {
+        let shared_body = vec![Stmt::echo(Expr::int_lit(7))];
+        let program = vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::var("a"),
+                then_body: shared_body.clone(),
+                elseif_clauses: Vec::new(),
+                else_body: Some(vec![Stmt::new(
+                    StmtKind::If {
+                        condition: Expr::var("b"),
+                        then_body: shared_body.clone(),
+                        elseif_clauses: Vec::new(),
+                        else_body: Some(vec![Stmt::new(
+                            StmtKind::If {
+                                condition: Expr::var("c"),
+                                then_body: shared_body.clone(),
+                                elseif_clauses: Vec::new(),
+                                else_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+                            },
+                            Span::dummy(),
+                        )]),
+                    },
+                    Span::dummy(),
+                )]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = normalize_control_flow(program);
+
+        assert_eq!(pruned.len(), 1);
+        match &pruned[0].kind {
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            } => {
+                assert_eq!(
+                    *condition,
+                    combine_if_chain_conditions(
+                        Expr::var("a"),
+                        combine_if_chain_conditions(Expr::var("b"), Expr::var("c")),
+                    )
+                );
+                assert_eq!(then_body, &shared_body);
+                assert!(elseif_clauses.is_empty());
+                assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
+            }
+            other => panic!("expected normalized if, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_normalize_control_flow_materializes_constant_switch_match() {
         let program = vec![Stmt::new(
             StmtKind::Switch {
                 subject: Expr::int_lit(2),
@@ -6595,13 +7378,13 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7))]);
     }
 
     #[test]
-    fn test_eliminate_dead_code_materializes_constant_switch_fallthrough() {
+    fn test_normalize_control_flow_materializes_constant_switch_fallthrough() {
         let program = vec![Stmt::new(
             StmtKind::Switch {
                 subject: Expr::int_lit(1),
@@ -6617,13 +7400,13 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7))]);
     }
 
     #[test]
-    fn test_eliminate_dead_code_materializes_constant_switch_default() {
+    fn test_normalize_control_flow_materializes_constant_switch_default() {
         let program = vec![Stmt::new(
             StmtKind::Switch {
                 subject: Expr::int_lit(3),
@@ -6636,13 +7419,320 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(9))]);
     }
 
     #[test]
-    fn test_eliminate_dead_code_inlines_non_throwing_try_catch() {
+    fn test_normalize_control_flow_rewrites_single_case_switch_to_if() {
+        let program = vec![Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::var("x"),
+                cases: vec![(
+                    vec![Expr::int_lit(1)],
+                    vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+                )],
+                default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = normalize_control_flow(program);
+
+        assert_eq!(pruned.len(), 1);
+        match &pruned[0].kind {
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            } => {
+                assert!(elseif_clauses.is_empty());
+                assert_eq!(
+                    *condition,
+                    Expr::new(
+                        ExprKind::BinaryOp {
+                            left: Box::new(Expr::var("x")),
+                            op: BinOp::Eq,
+                            right: Box::new(Expr::int_lit(1)),
+                        },
+                        Span::dummy(),
+                    )
+                );
+                assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(7))]);
+                assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
+            }
+            other => panic!("expected normalized if, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_normalize_control_flow_merges_adjacent_identical_switch_cases() {
+        let shared_body = vec![
+            Stmt::echo(Expr::int_lit(7)),
+            Stmt::new(StmtKind::Break, Span::dummy()),
+        ];
+        let program = vec![Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::var("x"),
+                cases: vec![
+                    (vec![Expr::int_lit(1)], shared_body.clone()),
+                    (vec![Expr::int_lit(2)], shared_body.clone()),
+                    (
+                        vec![Expr::int_lit(3)],
+                        vec![Stmt::echo(Expr::int_lit(9)), Stmt::new(StmtKind::Break, Span::dummy())],
+                    ),
+                ],
+                default: None,
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = normalize_control_flow(program);
+
+        assert_eq!(pruned.len(), 1);
+        match &pruned[0].kind {
+            StmtKind::Switch {
+                subject,
+                cases,
+                default,
+            } => {
+                assert_eq!(*subject, Expr::var("x"));
+                assert_eq!(cases.len(), 2);
+                assert_eq!(cases[0].0, vec![Expr::int_lit(1), Expr::int_lit(2)]);
+                assert_eq!(cases[0].1, shared_body);
+                assert_eq!(cases[1].0, vec![Expr::int_lit(3)]);
+                assert_eq!(
+                    cases[1].1,
+                    vec![Stmt::echo(Expr::int_lit(9)), Stmt::new(StmtKind::Break, Span::dummy())]
+                );
+                assert!(default.is_none());
+            }
+            other => panic!("expected normalized switch, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_normalize_control_flow_merges_fallthrough_switch_labels_into_next_case() {
+        let shared_body = vec![
+            Stmt::echo(Expr::int_lit(7)),
+            Stmt::new(StmtKind::Break, Span::dummy()),
+        ];
+        let program = vec![Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::var("x"),
+                cases: vec![
+                    (vec![Expr::int_lit(1)], Vec::new()),
+                    (vec![Expr::int_lit(2)], Vec::new()),
+                    (vec![Expr::int_lit(3)], shared_body.clone()),
+                ],
+                default: None,
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = normalize_control_flow(program);
+
+        assert_eq!(pruned.len(), 1);
+        match &pruned[0].kind {
+            StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            } => {
+                assert_eq!(
+                    *condition,
+                    combine_if_chain_conditions(
+                        combine_if_chain_conditions(
+                            Expr::new(
+                                ExprKind::BinaryOp {
+                                    left: Box::new(Expr::var("x")),
+                                    op: BinOp::Eq,
+                                    right: Box::new(Expr::int_lit(1)),
+                                },
+                                Span::dummy(),
+                            ),
+                            Expr::new(
+                                ExprKind::BinaryOp {
+                                    left: Box::new(Expr::var("x")),
+                                    op: BinOp::Eq,
+                                    right: Box::new(Expr::int_lit(2)),
+                                },
+                                Span::dummy(),
+                            ),
+                        ),
+                        Expr::new(
+                            ExprKind::BinaryOp {
+                                left: Box::new(Expr::var("x")),
+                                op: BinOp::Eq,
+                                right: Box::new(Expr::int_lit(3)),
+                            },
+                            Span::dummy(),
+                        ),
+                    )
+                );
+                assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(7))]);
+                assert!(elseif_clauses.is_empty());
+                assert!(else_body.is_none());
+            }
+            other => panic!("expected normalized if, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_normalize_control_flow_merges_adjacent_identical_catches() {
+        let program = vec![Stmt::new(
+            StmtKind::Try {
+                try_body: vec![Stmt::new(
+                    StmtKind::ExprStmt(Expr::new(
+                        ExprKind::Throw(Box::new(Expr::new(
+                            ExprKind::NewObject {
+                                class_name: Name::unqualified("Exception"),
+                                args: Vec::new(),
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    )),
+                    Span::dummy(),
+                )],
+                catches: vec![
+                    crate::parser::ast::CatchClause {
+                        exception_types: vec![Name::unqualified("A")],
+                        variable: Some("e".into()),
+                        body: vec![Stmt::echo(Expr::int_lit(7))],
+                    },
+                    crate::parser::ast::CatchClause {
+                        exception_types: vec![Name::unqualified("B")],
+                        variable: Some("e".into()),
+                        body: vec![Stmt::echo(Expr::int_lit(7))],
+                    },
+                ],
+                finally_body: None,
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = normalize_control_flow(program);
+
+        assert_eq!(pruned.len(), 1);
+        let StmtKind::Try { catches, .. } = &pruned[0].kind else {
+            panic!("expected normalized try");
+        };
+        assert_eq!(catches.len(), 1);
+        assert_eq!(
+            catches[0].exception_types,
+            vec![Name::unqualified("A"), Name::unqualified("B")]
+        );
+        assert_eq!(catches[0].variable.as_deref(), Some("e"));
+        assert_eq!(catches[0].body, vec![Stmt::echo(Expr::int_lit(7))]);
+    }
+
+    #[test]
+    fn test_normalize_control_flow_deduplicates_merged_catch_exception_types() {
+        let program = vec![Stmt::new(
+            StmtKind::Try {
+                try_body: vec![Stmt::new(
+                    StmtKind::ExprStmt(Expr::new(
+                        ExprKind::Throw(Box::new(Expr::new(
+                            ExprKind::NewObject {
+                                class_name: Name::unqualified("Exception"),
+                                args: Vec::new(),
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    )),
+                    Span::dummy(),
+                )],
+                catches: vec![
+                    crate::parser::ast::CatchClause {
+                        exception_types: vec![Name::unqualified("A"), Name::unqualified("B")],
+                        variable: Some("e".into()),
+                        body: vec![Stmt::echo(Expr::int_lit(7))],
+                    },
+                    crate::parser::ast::CatchClause {
+                        exception_types: vec![Name::unqualified("B"), Name::unqualified("C")],
+                        variable: Some("e".into()),
+                        body: vec![Stmt::echo(Expr::int_lit(7))],
+                    },
+                ],
+                finally_body: None,
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = normalize_control_flow(program);
+
+        assert_eq!(pruned.len(), 1);
+        let StmtKind::Try { catches, .. } = &pruned[0].kind else {
+            panic!("expected normalized try");
+        };
+        assert_eq!(catches.len(), 1);
+        assert_eq!(
+            catches[0].exception_types,
+            vec![
+                Name::unqualified("A"),
+                Name::unqualified("B"),
+                Name::unqualified("C")
+            ]
+        );
+        assert_eq!(catches[0].variable.as_deref(), Some("e"));
+        assert_eq!(catches[0].body, vec![Stmt::echo(Expr::int_lit(7))]);
+    }
+
+    #[test]
+    fn test_normalize_control_flow_sorts_catch_exception_types() {
+        let program = vec![Stmt::new(
+            StmtKind::Try {
+                try_body: vec![Stmt::new(
+                    StmtKind::ExprStmt(Expr::new(
+                        ExprKind::Throw(Box::new(Expr::new(
+                            ExprKind::NewObject {
+                                class_name: Name::unqualified("Exception"),
+                                args: Vec::new(),
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    )),
+                    Span::dummy(),
+                )],
+                catches: vec![crate::parser::ast::CatchClause {
+                    exception_types: vec![
+                        Name::unqualified("Zed"),
+                        Name::unqualified("Alpha"),
+                        Name::unqualified("Mid"),
+                    ],
+                    variable: Some("e".into()),
+                    body: vec![Stmt::echo(Expr::int_lit(7))],
+                }],
+                finally_body: None,
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = normalize_control_flow(program);
+
+        assert_eq!(pruned.len(), 1);
+        let StmtKind::Try { catches, .. } = &pruned[0].kind else {
+            panic!("expected normalized try");
+        };
+        assert_eq!(catches.len(), 1);
+        assert_eq!(
+            catches[0].exception_types,
+            vec![
+                Name::unqualified("Alpha"),
+                Name::unqualified("Mid"),
+                Name::unqualified("Zed")
+            ]
+        );
+    }
+
+    #[test]
+    fn test_normalize_control_flow_inlines_non_throwing_try_catch() {
         let program = vec![Stmt::new(
             StmtKind::Try {
                 try_body: vec![Stmt::echo(Expr::int_lit(7))],
@@ -6656,13 +7746,13 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7))]);
     }
 
     #[test]
-    fn test_eliminate_dead_code_inlines_non_throwing_try_finally_fallthrough() {
+    fn test_normalize_control_flow_inlines_non_throwing_try_finally_fallthrough() {
         let program = vec![Stmt::new(
             StmtKind::Try {
                 try_body: vec![Stmt::echo(Expr::int_lit(7))],
@@ -6672,13 +7762,13 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7)), Stmt::echo(Expr::int_lit(9))]);
     }
 
     #[test]
-    fn test_eliminate_dead_code_keeps_non_throwing_try_finally_with_return() {
+    fn test_normalize_control_flow_keeps_non_throwing_try_finally_with_return() {
         let program = vec![Stmt::new(
             StmtKind::Try {
                 try_body: vec![Stmt::new(
@@ -6691,14 +7781,85 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(pruned.len(), 1);
         assert!(matches!(pruned[0].kind, StmtKind::Try { .. }));
     }
 
     #[test]
-    fn test_eliminate_dead_code_hoists_non_throwing_try_prefix() {
+    fn test_normalize_control_flow_folds_outer_finally_into_single_inner_try() {
+        let program = vec![Stmt::new(
+            StmtKind::Try {
+                try_body: vec![Stmt::new(
+                    StmtKind::Try {
+                        try_body: vec![Stmt::new(
+                            StmtKind::ExprStmt(Expr::new(
+                                ExprKind::Throw(Box::new(Expr::new(
+                                    ExprKind::NewObject {
+                                        class_name: Name::unqualified("A"),
+                                        args: Vec::new(),
+                                    },
+                                    Span::dummy(),
+                                ))),
+                                Span::dummy(),
+                            )),
+                            Span::dummy(),
+                        )],
+                        catches: vec![crate::parser::ast::CatchClause {
+                            exception_types: vec![Name::unqualified("A")],
+                            variable: Some("e".into()),
+                            body: vec![Stmt::echo(Expr::int_lit(7))],
+                        }],
+                        finally_body: None,
+                    },
+                    Span::dummy(),
+                )],
+                catches: Vec::new(),
+                finally_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = normalize_control_flow(program);
+
+        assert_eq!(pruned.len(), 1);
+        let StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } = &pruned[0].kind
+        else {
+            panic!("expected normalized try");
+        };
+        assert_eq!(
+            try_body,
+            &vec![Stmt::new(
+                StmtKind::ExprStmt(Expr::new(
+                    ExprKind::Throw(Box::new(Expr::new(
+                        ExprKind::NewObject {
+                            class_name: Name::unqualified("A"),
+                            args: Vec::new(),
+                        },
+                        Span::dummy(),
+                    ))),
+                    Span::dummy(),
+                )),
+                Span::dummy(),
+            )]
+        );
+        assert_eq!(catches.len(), 1);
+        assert_eq!(
+            catches[0].exception_types,
+            vec![Name::unqualified("A")]
+        );
+        assert_eq!(catches[0].variable.as_deref(), Some("e"));
+        assert_eq!(catches[0].body, vec![Stmt::echo(Expr::int_lit(7))]);
+        assert_eq!(finally_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
+    }
+
+    #[test]
+    fn test_normalize_control_flow_hoists_non_throwing_try_prefix() {
         let program = vec![Stmt::new(
             StmtKind::Try {
                 try_body: vec![
@@ -6715,7 +7876,7 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(pruned.len(), 2);
         assert_eq!(pruned[0], Stmt::echo(Expr::int_lit(7)));
@@ -6723,7 +7884,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eliminate_dead_code_flattens_nested_single_path_ifs() {
+    fn test_normalize_control_flow_flattens_nested_single_path_ifs() {
         let program = vec![Stmt::new(
             StmtKind::If {
                 condition: Expr::var("a"),
@@ -6742,7 +7903,7 @@ mod tests {
             Span::dummy(),
         )];
 
-        let pruned = eliminate_dead_code(program);
+        let pruned = normalize_control_flow(program);
 
         assert_eq!(pruned.len(), 1);
         match &pruned[0].kind {
@@ -6769,5 +7930,43 @@ mod tests {
             }
             other => panic!("expected flattened if, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_normalize_control_flow_collapses_identical_if_branches_to_condition_effects_plus_body() {
+        let program = vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::new(
+                    ExprKind::FunctionCall {
+                        name: Name::unqualified("tick"),
+                        args: Vec::new(),
+                    },
+                    Span::dummy(),
+                ),
+                then_body: vec![Stmt::echo(Expr::int_lit(7))],
+                elseif_clauses: Vec::new(),
+                else_body: Some(vec![Stmt::echo(Expr::int_lit(7))]),
+            },
+            Span::dummy(),
+        )];
+
+        let pruned = normalize_control_flow(program);
+
+        assert_eq!(
+            pruned,
+            vec![
+                Stmt::new(
+                    StmtKind::ExprStmt(Expr::new(
+                        ExprKind::FunctionCall {
+                            name: Name::unqualified("tick"),
+                            args: Vec::new(),
+                        },
+                        Span::dummy(),
+                    )),
+                    Span::dummy(),
+                ),
+                Stmt::echo(Expr::int_lit(7))
+            ]
+        );
     }
 }

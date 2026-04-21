@@ -345,6 +345,10 @@ fn main() {
     timings.record_since("opt-post", phase_started);
 
     let phase_started = Instant::now();
+    let ast = optimize::normalize_control_flow(ast);
+    timings.record_since("opt-norm", phase_started);
+
+    let phase_started = Instant::now();
     let ast = optimize::eliminate_dead_code(ast);
     timings.record_since("dce", phase_started);
 

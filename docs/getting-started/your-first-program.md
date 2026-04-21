@@ -112,7 +112,7 @@ elephc --timings hello.php
 elephc --emit-asm --source-map hello.php
 ```
 
-`--timings` reports phases such as lexing, parsing, early optimization, type checking, post-check pruning, runtime-cache preparation, code generation, assembling, and linking.
+`--timings` reports phases such as lexing, parsing, early optimization, type checking, constant propagation, post-check pruning, control-flow normalization, dead-code elimination, runtime-cache preparation, code generation, assembling, and linking.
 
 `--source-map` writes a `hello.map` JSON file next to `hello.s`. The map records which emitted assembly lines came from which PHP source lines and columns.
 

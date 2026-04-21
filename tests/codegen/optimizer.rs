@@ -1359,6 +1359,25 @@ if ($flag) {
 }
 
 #[test]
+fn test_dead_code_elimination_collapses_identical_if_branches() {
+    let out = compile_and_run(
+        r#"<?php
+function step($label, $ret) {
+    echo $label;
+    return $ret;
+}
+if (step("c", false)) {
+    echo "X";
+} else {
+    echo "X";
+}
+"#,
+    );
+
+    assert_eq!(out, "cX");
+}
+
+#[test]
 fn test_dead_code_elimination_inlines_default_only_switch() {
     let out = compile_and_run(
         r#"<?php
@@ -1408,6 +1427,322 @@ echo "?";
     );
 
     assert_eq!(out, "a?");
+}
+
+#[test]
+fn test_dead_code_elimination_preserves_regular_elseif_order_after_normalization() {
+    let out = compile_and_run(
+        r#"<?php
+function step($label, $ret) {
+    echo $label;
+    return $ret;
+}
+if (step("a", false)) {
+    echo "A";
+} elseif (step("b", true)) {
+    echo "B";
+} else {
+    echo "C";
+}
+"#,
+    );
+
+    assert_eq!(out, "abB");
+}
+
+#[test]
+fn test_dead_code_elimination_merges_identical_if_chain_bodies_with_short_circuit() {
+    let out = compile_and_run(
+        r#"<?php
+function step($label, $ret) {
+    echo $label;
+    return $ret;
+}
+if (step("a", true)) {
+    echo "X";
+} else {
+    if (step("b", true)) {
+        echo "X";
+    } else {
+        echo "Y";
+    }
+}
+"#,
+    );
+
+    assert_eq!(out, "aX");
+}
+
+#[test]
+fn test_dead_code_elimination_merges_identical_if_chain_tail_with_short_circuit() {
+    let out = compile_and_run(
+        r#"<?php
+function step($label, $ret) {
+    echo $label;
+    return $ret;
+}
+if (step("a", true)) {
+    echo "X";
+} else {
+    if (step("b", true)) {
+        echo "Y";
+    } else {
+        echo "X";
+    }
+}
+echo "|";
+if (step("c", false)) {
+    echo "X";
+} else {
+    if (step("d", true)) {
+        echo "Y";
+    } else {
+        echo "X";
+    }
+}
+"#,
+    );
+
+    assert_eq!(out, "aX|cdY");
+}
+
+#[test]
+fn test_dead_code_elimination_recursively_merges_longer_if_chains() {
+    let out = compile_and_run(
+        r#"<?php
+function step($label, $ret) {
+    echo $label;
+    return $ret;
+}
+if (step("a", false)) {
+    echo "X";
+} else {
+    if (step("b", false)) {
+        echo "X";
+    } else {
+        if (step("c", true)) {
+            echo "X";
+        } else {
+            echo "Y";
+        }
+    }
+}
+echo "|";
+if (step("d", false)) {
+    echo "X";
+} else {
+    if (step("e", false)) {
+        echo "Y";
+    } else {
+        if (step("f", true)) {
+            echo "Y";
+        } else {
+            echo "X";
+        }
+    }
+}
+"#,
+    );
+
+    assert_eq!(out, "abcX|defY");
+}
+
+#[test]
+fn test_dead_code_elimination_normalizes_single_case_switch_with_effectful_subject() {
+    let out = compile_and_run(
+        r#"<?php
+function step($label, $ret) {
+    echo $label;
+    return $ret;
+}
+switch (step("s", 1)) {
+    case step("a", 1):
+        echo "A";
+        break;
+    default:
+        echo "D";
+}
+"#,
+    );
+
+    assert_eq!(out, "saA");
+}
+
+#[test]
+fn test_dead_code_elimination_merges_identical_adjacent_switch_cases() {
+    let out = compile_and_run(
+        r#"<?php
+function step($label, $ret) {
+    echo $label;
+    return $ret;
+}
+switch (step("s", 2)) {
+    case 1:
+        echo "A";
+        break;
+    case 2:
+        echo "A";
+        break;
+    default:
+        echo "D";
+}
+"#,
+    );
+
+    assert_eq!(out, "sA");
+}
+
+#[test]
+fn test_dead_code_elimination_merges_fallthrough_switch_labels_into_next_case() {
+    let out = compile_and_run(
+        r#"<?php
+function step($label, $ret) {
+    echo $label;
+    return $ret;
+}
+switch (step("s", 2)) {
+    case 1:
+    case 2:
+    case 3:
+        echo "A";
+        break;
+    default:
+        echo "D";
+}
+"#,
+    );
+
+    assert_eq!(out, "sA");
+}
+
+#[test]
+fn test_dead_code_elimination_merges_identical_adjacent_catches() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_merge_identical_catches");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+class A extends Exception {}
+class B extends Exception {}
+function boom($flag) {
+    if ($flag) {
+        throw new A("a");
+    }
+    throw new B("b");
+}
+try {
+    boom($argc > 1);
+} catch (A $e) {
+    echo pow($argc, 3);
+} catch (B $e) {
+    echo pow($argc, 3);
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    assert_eq!(out, "1");
+}
+
+#[test]
+fn test_dead_code_elimination_deduplicates_merged_catch_types() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_dedup_catch_types");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+class A extends Exception {}
+class B extends Exception {}
+class C extends Exception {}
+function boom($flag) {
+    if ($flag === 1) {
+        throw new A("a");
+    }
+    if ($flag === 2) {
+        throw new B("b");
+    }
+    throw new C("c");
+}
+try {
+    boom($argc);
+} catch (A | B $e) {
+    echo pow(2, 3);
+} catch (B | C $e) {
+    echo pow(2, 3);
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    assert_eq!(out, "8");
+}
+
+#[test]
+fn test_dead_code_elimination_accepts_sorted_multi_catch_types() {
+    let out = compile_and_run(
+        r#"<?php
+class Alpha extends Exception {}
+class Mid extends Exception {}
+class Zed extends Exception {}
+function boom($flag) {
+    if ($flag === 1) {
+        throw new Zed("z");
+    }
+    if ($flag === 2) {
+        throw new Alpha("a");
+    }
+    throw new Mid("m");
+}
+try {
+    boom($argc);
+} catch (Zed | Alpha | Mid $e) {
+    echo "ok";
+}
+"#,
+    );
+
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn test_dead_code_elimination_folds_outer_finally_into_single_inner_try() {
+    let out = compile_and_run(
+        r#"<?php
+class A extends Exception {}
+function boom() {
+    throw new A("a");
+}
+try {
+    try {
+        boom();
+    } catch (A $e) {
+        echo 7;
+    }
+} finally {
+    echo 9;
+}
+"#,
+    );
+
+    assert_eq!(out, "79");
 }
 
 #[test]
