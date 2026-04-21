@@ -1726,6 +1726,52 @@ echo "!";
 }
 
 #[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_outer_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function run($flag) {
+    if ($flag) {
+        if (!$flag) {
+            echo "bad";
+        } else {
+            echo "a";
+        }
+    } else {
+        echo "b";
+    }
+}
+
+run(true);
+run(false);
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
+fn test_dead_code_elimination_invalidates_outer_guard_after_local_write() {
+    let out = compile_and_run(
+        r#"<?php
+function run($flag) {
+    if ($flag) {
+        $flag = false;
+        if ($flag) {
+            echo "bad";
+        } else {
+            echo "a";
+        }
+    }
+}
+
+run(true);
+"#,
+    );
+
+    assert_eq!(out, "a");
+}
+
+#[test]
 fn test_dead_code_elimination_sinks_tail_into_safe_finally_path() {
     let out = compile_and_run(
         r#"<?php

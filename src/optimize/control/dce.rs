@@ -6,7 +6,17 @@ enum TailSinkTarget {
     Breaks,
 }
 
+#[derive(Clone, Default)]
+struct GuardState {
+    truthy_vars: Vec<String>,
+    falsy_vars: Vec<String>,
+}
+
 pub(crate) fn dce_block(body: Vec<Stmt>) -> Vec<Stmt> {
+    dce_block_with_guards(body, GuardState::default())
+}
+
+fn dce_block_with_guards(body: Vec<Stmt>, mut guards: GuardState) -> Vec<Stmt> {
     let mut eliminated = Vec::new();
     let mut stmts = body.into_iter().peekable();
     while let Some(stmt) = stmts.next() {
@@ -18,13 +28,16 @@ pub(crate) fn dce_block(body: Vec<Stmt>) -> Vec<Stmt> {
             );
         let dce_stmt = if use_tail_sink {
             let tail: Vec<Stmt> = stmts.clone().collect();
-            dce_stmt_with_tail(stmt, tail)
+            dce_stmt_with_tail(stmt, tail, &guards)
         } else {
-            dce_stmt(stmt)
+            dce_stmt_with_guards(stmt, &guards)
         };
         let stops_here = dce_stmt
             .last()
             .is_some_and(|stmt| !matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough));
+        for stmt in &dce_stmt {
+            invalidate_guards_for_stmt(stmt, &mut guards);
+        }
         eliminated.extend(dce_stmt);
         if stops_here {
             break;
@@ -211,14 +224,29 @@ fn dce_if_stmt(
     elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
     else_body: Option<Vec<Stmt>>,
     span: crate::span::Span,
+    guards: &GuardState,
 ) -> Vec<Stmt> {
     let condition = prune_expr(condition);
-    let then_body = dce_block(then_body);
+    if let Some(true) = known_condition_value(&condition, guards) {
+        return dce_block_with_guards(then_body, extend_guards(guards, &condition, true));
+    }
+
+    if let Some(false) = known_condition_value(&condition, guards) {
+        return dce_if_false_path(condition, elseif_clauses, else_body, span, guards);
+    }
+
+    let then_body = dce_block_with_guards(then_body, extend_guards(guards, &condition, true));
+    let false_guards = extend_guards(guards, &condition, false);
     let elseif_clauses: Vec<_> = elseif_clauses
         .into_iter()
-        .map(|(condition, body)| (prune_expr(condition), dce_block(body)))
+        .map(|(condition, body)| {
+            let condition = prune_expr(condition);
+            let body = dce_block_with_guards(body, extend_guards(&false_guards, &condition, true));
+            (condition, body)
+        })
         .collect();
-    let else_body = normalize_optional_block(else_body.map(dce_block));
+    let else_body =
+        normalize_optional_block(else_body.map(|body| dce_block_with_guards(body, false_guards)));
     let tail = dce_if_tail(elseif_clauses.clone(), else_body.clone(), span);
 
     if tail.is_empty() {
@@ -280,11 +308,30 @@ fn dce_if_stmt(
     )]
 }
 
+fn dce_if_false_path(
+    condition: Expr,
+    mut elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
+    else_body: Option<Vec<Stmt>>,
+    span: crate::span::Span,
+    guards: &GuardState,
+) -> Vec<Stmt> {
+    let false_guards = extend_guards(guards, &condition, false);
+    if let Some((condition, body)) = elseif_clauses.first().cloned() {
+        elseif_clauses.remove(0);
+        dce_if_stmt(condition, body, elseif_clauses, else_body, span, &false_guards)
+    } else {
+        else_body
+            .map(|body| dce_block_with_guards(body, false_guards))
+            .unwrap_or_default()
+    }
+}
+
 fn dce_switch_stmt(
     subject: Expr,
     cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
     default: Option<Vec<Stmt>>,
     span: crate::span::Span,
+    guards: &GuardState,
 ) -> Vec<Stmt> {
     let trim_switch_noop_break = |body: Vec<Stmt>| {
         if body.len() == 1 && matches!(body[0].kind, StmtKind::Break) {
@@ -300,7 +347,7 @@ fn dce_switch_stmt(
             .map(|(patterns, body)| {
                 (
                     patterns.into_iter().map(prune_expr).collect(),
-                    trim_switch_noop_break(dce_block(body)),
+                    trim_switch_noop_break(dce_block_with_guards(body, guards.clone())),
                 )
             })
             .collect(),
@@ -309,7 +356,8 @@ fn dce_switch_stmt(
     while cases.last().is_some_and(|(_, body)| body.is_empty()) {
         cases.pop();
     }
-    let default = normalize_optional_block(default.map(dce_block));
+    let default =
+        normalize_optional_block(default.map(|body| dce_block_with_guards(body, guards.clone())));
 
     if cases.iter().all(|(_, body)| body.is_empty()) && default.is_none() {
         return expr_to_effect_stmt(subject);
@@ -339,6 +387,7 @@ fn dce_switch_stmt_with_tail(
     default: Option<Vec<Stmt>>,
     tail: Vec<Stmt>,
     span: crate::span::Span,
+    guards: &GuardState,
 ) -> Vec<Stmt> {
     let trim_switch_noop_break = |body: Vec<Stmt>| {
         if body.len() == 1 && matches!(body[0].kind, StmtKind::Break) {
@@ -348,14 +397,14 @@ fn dce_switch_stmt_with_tail(
         }
     };
     let subject = prune_expr(subject);
-    let tail = dce_block(tail);
+    let tail = dce_block_with_guards(tail, guards.clone());
     let mut cases = normalize_switch_cases(drop_shadowed_switch_patterns(normalize_switch_cases(
         cases
             .into_iter()
             .map(|(patterns, body)| {
                 (
                     patterns.into_iter().map(prune_expr).collect(),
-                    trim_switch_noop_break(dce_block(body)),
+                    trim_switch_noop_break(dce_block_with_guards(body, guards.clone())),
                 )
             })
             .collect(),
@@ -363,10 +412,11 @@ fn dce_switch_stmt_with_tail(
     while cases.last().is_some_and(|(_, body)| body.is_empty()) {
         cases.pop();
     }
-    let mut default = normalize_optional_block(default.map(dce_block));
+    let mut default =
+        normalize_optional_block(default.map(|body| dce_block_with_guards(body, guards.clone())));
 
     if tail.is_empty() {
-        return dce_switch_stmt(subject, cases, default, span);
+        return dce_switch_stmt(subject, cases, default, span, guards);
     }
 
     let reachability = analyze_switch_tail_paths(&cases, &default);
@@ -377,7 +427,7 @@ fn dce_switch_stmt_with_tail(
         .chain(reachability.default_tail_path)
         .any(|path| matches!(path, TailPathKind::Unknown))
     {
-        let mut stmts = dce_switch_stmt(subject, cases, default, span);
+        let mut stmts = dce_switch_stmt(subject, cases, default, span, guards);
         stmts.extend(tail);
         return stmts;
     }
@@ -430,7 +480,7 @@ fn dce_switch_stmt_with_tail(
         }
     }
 
-    dce_switch_stmt(subject, cases, default, span)
+    dce_switch_stmt(subject, cases, default, span, guards)
 }
 
 fn dce_try_stmt(
@@ -438,14 +488,15 @@ fn dce_try_stmt(
     catches: Vec<crate::parser::ast::CatchClause>,
     finally_body: Option<Vec<Stmt>>,
     span: crate::span::Span,
+    guards: &GuardState,
 ) -> Vec<Stmt> {
-    let try_body = dce_block(try_body);
+    let try_body = dce_block_with_guards(try_body, guards.clone());
     let catches: Vec<_> = catches
         .into_iter()
         .map(|catch| crate::parser::ast::CatchClause {
             exception_types: catch.exception_types,
             variable: catch.variable,
-            body: dce_block(catch.body),
+            body: dce_block_with_guards(catch.body, guards.clone()),
         })
         .collect();
     let catches = if block_may_throw(&try_body) {
@@ -453,7 +504,8 @@ fn dce_try_stmt(
     } else {
         Vec::new()
     };
-    let finally_body = normalize_optional_block(finally_body.map(dce_block));
+    let finally_body =
+        normalize_optional_block(finally_body.map(|body| dce_block_with_guards(body, guards.clone())));
 
     if try_body.is_empty() {
         return finally_body.unwrap_or_default();
@@ -500,14 +552,15 @@ fn dce_try_stmt_with_tail(
     finally_body: Option<Vec<Stmt>>,
     tail: Vec<Stmt>,
     span: crate::span::Span,
+    guards: &GuardState,
 ) -> Vec<Stmt> {
-    let try_body = dce_block(try_body);
+    let try_body = dce_block_with_guards(try_body, guards.clone());
     let catches: Vec<_> = catches
         .into_iter()
         .map(|catch| crate::parser::ast::CatchClause {
             exception_types: catch.exception_types,
             variable: catch.variable,
-            body: dce_block(catch.body),
+            body: dce_block_with_guards(catch.body, guards.clone()),
         })
         .collect();
     let catches = if block_may_throw(&try_body) {
@@ -515,11 +568,12 @@ fn dce_try_stmt_with_tail(
     } else {
         Vec::new()
     };
-    let finally_body = normalize_optional_block(finally_body.map(dce_block));
-    let tail = dce_block(tail);
+    let finally_body =
+        normalize_optional_block(finally_body.map(|body| dce_block_with_guards(body, guards.clone())));
+    let tail = dce_block_with_guards(tail, guards.clone());
 
     if tail.is_empty() {
-        return dce_try_stmt(try_body, catches, finally_body, span);
+        return dce_try_stmt(try_body, catches, finally_body, span, guards);
     }
 
     let reachability = analyze_try_tail_paths(&try_body, &catches, &finally_body);
@@ -544,17 +598,17 @@ fn dce_try_stmt_with_tail(
                     ..catch.0
                 })
                 .collect();
-            return dce_try_stmt(try_body, catches, finally_body, span);
+            return dce_try_stmt(try_body, catches, finally_body, span, guards);
         }
     }
 
     if reachability.can_sink_into_finally {
         let finally_body =
             normalize_optional_block(finally_body.map(|body| append_tail_to_fallthrough_path(body, tail)));
-        return dce_try_stmt(try_body, catches, finally_body, span);
+        return dce_try_stmt(try_body, catches, finally_body, span, guards);
     }
 
-    let mut stmts = dce_try_stmt(try_body, catches, finally_body, span);
+    let mut stmts = dce_try_stmt(try_body, catches, finally_body, span, guards);
     if stmts
         .last()
         .is_some_and(|stmt| matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough))
@@ -564,7 +618,7 @@ fn dce_try_stmt_with_tail(
     stmts
 }
 
-fn dce_stmt_with_tail(stmt: Stmt, tail: Vec<Stmt>) -> Vec<Stmt> {
+fn dce_stmt_with_tail(stmt: Stmt, tail: Vec<Stmt>, guards: &GuardState) -> Vec<Stmt> {
     let span = stmt.span;
     match stmt.kind {
         StmtKind::If {
@@ -597,7 +651,7 @@ fn dce_stmt_with_tail(stmt: Stmt, tail: Vec<Stmt>) -> Vec<Stmt> {
                 None if reachability.implicit_else_sinks_tail => Some(tail),
                 None => None,
             };
-            dce_if_stmt(condition, then_body, elseif_clauses, else_body, span)
+            dce_if_stmt(condition, then_body, elseif_clauses, else_body, span, guards)
         }
         StmtKind::IfDef {
             symbol,
@@ -616,32 +670,32 @@ fn dce_stmt_with_tail(stmt: Stmt, tail: Vec<Stmt>) -> Vec<Stmt> {
                 None if reachability.implicit_else_sinks_tail => Some(tail),
                 None => None,
             };
-            dce_stmt(Stmt::new(
+            dce_stmt_with_guards(Stmt::new(
                 StmtKind::IfDef {
                     symbol,
                     then_body,
                     else_body,
                 },
                 span,
-            ))
+            ), guards)
         }
         StmtKind::Switch {
             subject,
             cases,
             default,
-        } => dce_switch_stmt_with_tail(subject, cases, default, tail, span),
+        } => dce_switch_stmt_with_tail(subject, cases, default, tail, span, guards),
         StmtKind::Try {
             try_body,
             catches,
             finally_body,
-        } => dce_try_stmt_with_tail(try_body, catches, finally_body, tail, span),
+        } => dce_try_stmt_with_tail(try_body, catches, finally_body, tail, span, guards),
         _ => {
-            let mut stmts = dce_stmt(stmt);
+            let mut stmts = dce_stmt_with_guards(stmt, guards);
             if stmts
                 .last()
                 .is_some_and(|stmt| matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough))
             {
-                stmts.extend(dce_block(tail));
+                stmts.extend(dce_block_with_guards(tail, guards.clone()));
             }
             stmts
         }
@@ -649,6 +703,10 @@ fn dce_stmt_with_tail(stmt: Stmt, tail: Vec<Stmt>) -> Vec<Stmt> {
 }
 
 pub(crate) fn dce_stmt(stmt: Stmt) -> Vec<Stmt> {
+    dce_stmt_with_guards(stmt, &GuardState::default())
+}
+
+fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
     let span = stmt.span;
     match stmt.kind {
         StmtKind::Echo(expr) => vec![Stmt {
@@ -753,14 +811,15 @@ pub(crate) fn dce_stmt(stmt: Stmt) -> Vec<Stmt> {
             then_body,
             elseif_clauses,
             else_body,
-        } => dce_if_stmt(condition, then_body, elseif_clauses, else_body, span),
+        } => dce_if_stmt(condition, then_body, elseif_clauses, else_body, span, guards),
         StmtKind::IfDef {
             symbol,
             then_body,
             else_body,
         } => {
-            let then_body = dce_block(then_body);
-            let else_body = normalize_optional_block(else_body.map(dce_block));
+            let then_body = dce_block_with_guards(then_body, guards.clone());
+            let else_body =
+                normalize_optional_block(else_body.map(|body| dce_block_with_guards(body, guards.clone())));
             if then_body.is_empty() && else_body.is_none() {
                 Vec::new()
             } else {
@@ -777,13 +836,13 @@ pub(crate) fn dce_stmt(stmt: Stmt) -> Vec<Stmt> {
         StmtKind::While { condition, body } => vec![Stmt {
             kind: StmtKind::While {
                 condition: prune_expr(condition),
-                body: dce_block(body),
+                body: dce_block_with_guards(body, guards.clone()),
             },
             span,
         }],
         StmtKind::DoWhile { body, condition } => vec![Stmt {
             kind: StmtKind::DoWhile {
-                body: dce_block(body),
+                body: dce_block_with_guards(body, guards.clone()),
                 condition: prune_expr(condition),
             },
             span,
@@ -798,7 +857,7 @@ pub(crate) fn dce_stmt(stmt: Stmt) -> Vec<Stmt> {
                 init: init.and_then(|stmt| dce_stmt(*stmt).into_iter().next().map(Box::new)),
                 condition: condition.map(prune_expr),
                 update: update.and_then(|stmt| dce_stmt(*stmt).into_iter().next().map(Box::new)),
-                body: dce_block(body),
+                body: dce_block_with_guards(body, guards.clone()),
             },
             span,
         }],
@@ -812,7 +871,7 @@ pub(crate) fn dce_stmt(stmt: Stmt) -> Vec<Stmt> {
                 array: prune_expr(array),
                 key_var,
                 value_var,
-                body: dce_block(body),
+                body: dce_block_with_guards(body, guards.clone()),
             },
             span,
         }],
@@ -820,16 +879,16 @@ pub(crate) fn dce_stmt(stmt: Stmt) -> Vec<Stmt> {
             subject,
             cases,
             default,
-        } => dce_switch_stmt(subject, cases, default, span),
+        } => dce_switch_stmt(subject, cases, default, span, guards),
         StmtKind::Try {
             try_body,
             catches,
             finally_body,
-        } => dce_try_stmt(try_body, catches, finally_body, span),
+        } => dce_try_stmt(try_body, catches, finally_body, span, guards),
         StmtKind::NamespaceBlock { name, body } => vec![Stmt {
             kind: StmtKind::NamespaceBlock {
                 name,
-                body: dce_block(body),
+                body: dce_block_with_guards(body, guards.clone()),
             },
             span,
         }],
@@ -845,7 +904,7 @@ pub(crate) fn dce_stmt(stmt: Stmt) -> Vec<Stmt> {
                 params,
                 variadic,
                 return_type,
-                body: dce_block(body),
+                body: dce_block_with_guards(body, GuardState::default()),
             },
             span,
         }],
@@ -946,6 +1005,184 @@ pub(crate) fn dce_stmt(stmt: Stmt) -> Vec<Stmt> {
             span,
         }],
         kind => vec![Stmt { kind, span }],
+    }
+}
+
+fn guard_variable_name(condition: &Expr) -> Option<(&str, bool)> {
+    match &condition.kind {
+        ExprKind::Variable(name) => Some((name.as_str(), true)),
+        ExprKind::Not(inner) => match &inner.kind {
+            ExprKind::Variable(name) => Some((name.as_str(), false)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn known_condition_value(condition: &Expr, guards: &GuardState) -> Option<bool> {
+    let (name, truthy_if_true) = guard_variable_name(condition)?;
+    if guards.truthy_vars.iter().any(|known| known == name) {
+        Some(truthy_if_true)
+    } else if guards.falsy_vars.iter().any(|known| known == name) {
+        Some(!truthy_if_true)
+    } else {
+        None
+    }
+}
+
+fn extend_guards(guards: &GuardState, condition: &Expr, branch_taken: bool) -> GuardState {
+    let Some((name, truthy_if_true)) = guard_variable_name(condition) else {
+        return guards.clone();
+    };
+
+    let mut next = guards.clone();
+    next.truthy_vars.retain(|known| known != name);
+    next.falsy_vars.retain(|known| known != name);
+
+    let known_truthy = if branch_taken {
+        truthy_if_true
+    } else {
+        !truthy_if_true
+    };
+
+    if known_truthy {
+        next.truthy_vars.push(name.to_string());
+    } else {
+        next.falsy_vars.push(name.to_string());
+    }
+
+    next
+}
+
+fn invalidate_guards_for_stmt(stmt: &Stmt, guards: &mut GuardState) {
+    let mut written = Vec::new();
+    collect_written_names(stmt, &mut written);
+    if written.is_empty() {
+        return;
+    }
+
+    guards
+        .truthy_vars
+        .retain(|name| !written.iter().any(|written_name| written_name == name));
+    guards
+        .falsy_vars
+        .retain(|name| !written.iter().any(|written_name| written_name == name));
+}
+
+fn collect_written_names(stmt: &Stmt, written: &mut Vec<String>) {
+    match &stmt.kind {
+        StmtKind::Assign { name, .. }
+        | StmtKind::TypedAssign { name, .. }
+        | StmtKind::StaticVar { name, .. } => push_written_name(written, name),
+        StmtKind::ArrayAssign { array, .. } | StmtKind::ArrayPush { array, .. } => {
+            push_written_name(written, array)
+        }
+        StmtKind::ListUnpack { vars, .. } => {
+            for name in vars {
+                push_written_name(written, name);
+            }
+        }
+        StmtKind::ExprStmt(expr) => collect_expr_written_names(expr, written),
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            collect_written_names_in_block(then_body, written);
+            for (_, body) in elseif_clauses {
+                collect_written_names_in_block(body, written);
+            }
+            if let Some(body) = else_body {
+                collect_written_names_in_block(body, written);
+            }
+        }
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => {
+            collect_written_names_in_block(then_body, written);
+            if let Some(body) = else_body {
+                collect_written_names_in_block(body, written);
+            }
+        }
+        StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. }
+        | StmtKind::NamespaceBlock { body, .. } => collect_written_names_in_block(body, written),
+        StmtKind::For {
+            init,
+            update,
+            body,
+            ..
+        } => {
+            if let Some(stmt) = init {
+                collect_written_names(stmt, written);
+            }
+            if let Some(stmt) = update {
+                collect_written_names(stmt, written);
+            }
+            collect_written_names_in_block(body, written);
+        }
+        StmtKind::Foreach {
+            key_var,
+            value_var,
+            body,
+            ..
+        } => {
+            if let Some(name) = key_var {
+                push_written_name(written, name);
+            }
+            push_written_name(written, value_var);
+            collect_written_names_in_block(body, written);
+        }
+        StmtKind::Switch { cases, default, .. } => {
+            for (_, body) in cases {
+                collect_written_names_in_block(body, written);
+            }
+            if let Some(body) = default {
+                collect_written_names_in_block(body, written);
+            }
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            collect_written_names_in_block(try_body, written);
+            for catch in catches {
+                if let Some(name) = &catch.variable {
+                    push_written_name(written, name);
+                }
+                collect_written_names_in_block(&catch.body, written);
+            }
+            if let Some(body) = finally_body {
+                collect_written_names_in_block(body, written);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_written_names_in_block(stmts: &[Stmt], written: &mut Vec<String>) {
+    for stmt in stmts {
+        collect_written_names(stmt, written);
+    }
+}
+
+fn collect_expr_written_names(expr: &Expr, written: &mut Vec<String>) {
+    match &expr.kind {
+        ExprKind::PreIncrement(name)
+        | ExprKind::PostIncrement(name)
+        | ExprKind::PreDecrement(name)
+        | ExprKind::PostDecrement(name) => push_written_name(written, name),
+        _ => {}
+    }
+}
+
+fn push_written_name(written: &mut Vec<String>, name: &str) {
+    if !written.iter().any(|known| known == name) {
+        written.push(name.to_string());
     }
 }
 
