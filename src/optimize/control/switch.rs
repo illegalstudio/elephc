@@ -7,14 +7,14 @@ pub(crate) fn prune_switch_stmt(
     span: crate::span::Span,
 ) -> Vec<Stmt> {
     let subject = prune_expr(subject);
-    let cases = normalize_switch_cases(
+    let cases = normalize_switch_cases(drop_shadowed_switch_patterns(normalize_switch_cases(
         cases
             .into_iter()
             .map(|(patterns, body)| {
                 (patterns.into_iter().map(prune_expr).collect(), prune_block(body))
             })
             .collect(),
-    );
+    )));
     let default = normalize_optional_block(default.map(prune_block));
 
     if cases.iter().all(|(_, body)| body.is_empty()) && default.is_none() {
@@ -81,6 +81,7 @@ pub(crate) fn try_prune_match_expr(
     arms: Vec<(Vec<Expr>, Expr)>,
     default: Option<Box<Expr>>,
 ) -> ExprKind {
+    let arms = drop_shadowed_match_arms(arms);
     let Some(subject_value) = scalar_value(&subject) else {
         return ExprKind::Match {
             subject: Box::new(subject),
@@ -112,6 +113,30 @@ pub(crate) fn try_prune_match_expr(
             default: None,
         }
     }
+}
+
+fn drop_shadowed_match_arms(arms: Vec<(Vec<Expr>, Expr)>) -> Vec<(Vec<Expr>, Expr)> {
+    let mut normalized = Vec::new();
+    let mut seen_patterns: Vec<Expr> = Vec::new();
+
+    for (mut patterns, value) in arms {
+        patterns.retain(|pattern| {
+            if seen_patterns.iter().any(|seen| seen == pattern) {
+                false
+            } else {
+                seen_patterns.push(pattern.clone());
+                true
+            }
+        });
+
+        if patterns.is_empty() {
+            continue;
+        }
+
+        normalized.push((patterns, value));
+    }
+
+    normalized
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

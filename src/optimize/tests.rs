@@ -2058,6 +2058,72 @@ fn test_prune_match_uses_strict_case_comparison() {
 }
 
 #[test]
+fn test_prune_match_drops_fully_shadowed_duplicate_arm() {
+    let program = vec![Stmt::assign(
+        "x",
+        Expr::new(
+            ExprKind::Match {
+                subject: Box::new(Expr::var("value")),
+                arms: vec![
+                    (vec![Expr::int_lit(1)], Expr::int_lit(10)),
+                    (vec![Expr::int_lit(1)], Expr::int_lit(20)),
+                ],
+                default: Some(Box::new(Expr::int_lit(30))),
+            },
+            Span::dummy(),
+        ),
+    )];
+
+    let pruned = prune_constant_control_flow(program);
+
+    let StmtKind::Assign { value, .. } = &pruned[0].kind else {
+        panic!("expected assign");
+    };
+    let ExprKind::Match { arms, default, .. } = &value.kind else {
+        panic!("expected match");
+    };
+    assert_eq!(arms.len(), 1);
+    assert_eq!(arms[0].0, vec![Expr::int_lit(1)]);
+    assert_eq!(arms[0].1, Expr::int_lit(10));
+    assert_eq!(default.as_deref(), Some(&Expr::int_lit(30)));
+}
+
+#[test]
+fn test_prune_match_drops_shadowed_patterns_from_later_arm() {
+    let program = vec![Stmt::assign(
+        "x",
+        Expr::new(
+            ExprKind::Match {
+                subject: Box::new(Expr::var("value")),
+                arms: vec![
+                    (vec![Expr::int_lit(1)], Expr::int_lit(10)),
+                    (
+                        vec![Expr::int_lit(1), Expr::int_lit(2)],
+                        Expr::int_lit(20),
+                    ),
+                ],
+                default: Some(Box::new(Expr::int_lit(30))),
+            },
+            Span::dummy(),
+        ),
+    )];
+
+    let pruned = prune_constant_control_flow(program);
+
+    let StmtKind::Assign { value, .. } = &pruned[0].kind else {
+        panic!("expected assign");
+    };
+    let ExprKind::Match { arms, default, .. } = &value.kind else {
+        panic!("expected match");
+    };
+    assert_eq!(arms.len(), 2);
+    assert_eq!(arms[0].0, vec![Expr::int_lit(1)]);
+    assert_eq!(arms[1].0, vec![Expr::int_lit(2)]);
+    assert_eq!(arms[1].1, Expr::int_lit(20));
+    assert_eq!(default.as_deref(), Some(&Expr::int_lit(30)));
+}
+
+#[test]
 fn test_prune_switch_drops_leading_non_matching_cases() {
     let program = vec![Stmt::new(
         StmtKind::Switch {

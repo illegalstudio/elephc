@@ -138,6 +138,7 @@ Current pruning coverage includes:
 - `do { ... } while (false)` reduced to a single execution of the body
 - `for (...; false; ...)`, preserving the `init` clause but removing dead loop/update work
 - `match` expressions whose subject and patterns are statically decidable
+- shadowed `match` arms and duplicate arm patterns removed when earlier arms already own the same exact pattern entries
 - `switch` pruning when early case prefixes are provably impossible
 - unreachable statements after:
   - `return`
