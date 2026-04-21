@@ -1451,6 +1451,35 @@ echo "!";
 }
 
 #[test]
+fn test_dead_code_elimination_rebuilds_empty_elseif_tail_as_needed_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function touch() {
+    echo "a";
+    return false;
+}
+
+function tap() {
+    echo "b";
+    return true;
+}
+
+if (touch()) {
+    echo "x";
+} elseif (tap()) {
+    strlen("abc");
+} else {
+    echo "z";
+}
+
+echo "!";
+"#,
+    );
+
+    assert_eq!(out, "ab!");
+}
+
+#[test]
 fn test_dead_code_elimination_inlines_empty_try_finally() {
     let out = compile_and_run(
         r#"<?php

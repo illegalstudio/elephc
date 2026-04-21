@@ -15,25 +15,35 @@ pub(crate) fn dce_block(body: Vec<Stmt>) -> Vec<Stmt> {
     eliminated
 }
 
-fn dce_condition_only_if_chain(
-    condition: Expr,
+fn dce_if_tail(
     mut elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
+    else_body: Option<Vec<Stmt>>,
     span: crate::span::Span,
 ) -> Vec<Stmt> {
-    if elseif_clauses.is_empty() {
-        return expr_to_effect_stmt(condition);
-    }
+    let Some((condition, body)) = elseif_clauses.first().cloned() else {
+        return else_body.unwrap_or_default();
+    };
+    elseif_clauses.remove(0);
+    let rest = dce_if_tail(elseif_clauses, else_body, span);
 
-    let (next_condition, _) = elseif_clauses.remove(0);
-    let rest = dce_condition_only_if_chain(next_condition, elseif_clauses, span);
-    if rest.is_empty() {
-        expr_to_effect_stmt(condition)
+    if body.is_empty() {
+        if rest.is_empty() {
+            expr_to_effect_stmt(condition)
+        } else {
+            vec![build_if_stmt(
+                invert_condition(condition),
+                rest,
+                Vec::new(),
+                None,
+                span,
+            )]
+        }
     } else {
         vec![build_if_stmt(
-            invert_condition(condition),
-            rest,
+            condition,
+            body,
             Vec::new(),
-            None,
+            normalize_optional_block(Some(rest)),
             span,
         )]
     }
@@ -53,6 +63,21 @@ fn dce_if_stmt(
         .map(|(condition, body)| (prune_expr(condition), dce_block(body)))
         .collect();
     let else_body = normalize_optional_block(else_body.map(dce_block));
+    let tail = dce_if_tail(elseif_clauses.clone(), else_body.clone(), span);
+
+    if tail.is_empty() {
+        if then_body.is_empty() {
+            return expr_to_effect_stmt(condition);
+        }
+
+        return vec![build_if_stmt(
+            condition,
+            then_body,
+            Vec::new(),
+            None,
+            span,
+        )];
+    }
 
     if elseif_clauses.is_empty() {
         if then_body.is_empty() && else_body.is_none() {
@@ -71,26 +96,29 @@ fn dce_if_stmt(
             }
         }
 
-        if else_body.as_ref() == Some(&then_body) {
+        if tail == then_body {
             let mut stmts = expr_to_effect_stmt(condition);
             stmts.extend(then_body);
             return stmts;
         }
     }
 
-    if then_body.is_empty()
-        && elseif_clauses.iter().all(|(_, body)| body.is_empty())
-        && else_body.is_none()
-    {
-        return dce_condition_only_if_chain(condition, elseif_clauses, span);
+    if then_body.is_empty() {
+        return vec![build_if_stmt(
+            invert_condition(condition),
+            tail,
+            Vec::new(),
+            None,
+            span,
+        )];
     }
 
     vec![Stmt::new(
         StmtKind::If {
             condition,
             then_body,
-            elseif_clauses,
-            else_body,
+            elseif_clauses: Vec::new(),
+            else_body: normalize_optional_block(Some(tail)),
         },
         span,
     )]
