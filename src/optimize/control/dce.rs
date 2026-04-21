@@ -10,6 +10,8 @@ enum TailSinkTarget {
 struct GuardState {
     truthy_vars: Vec<String>,
     falsy_vars: Vec<String>,
+    bool_true_vars: Vec<String>,
+    bool_false_vars: Vec<String>,
 }
 
 pub(crate) fn dce_block(body: Vec<Stmt>) -> Vec<Stmt> {
@@ -1019,37 +1021,106 @@ fn guard_variable_name(condition: &Expr) -> Option<(&str, bool)> {
     }
 }
 
+fn strict_bool_guard(condition: &Expr) -> Option<(&str, bool, bool)> {
+    let ExprKind::BinaryOp { left, op, right } = &condition.kind else {
+        return None;
+    };
+
+    let (name, value) = match (&left.kind, &right.kind) {
+        (ExprKind::Variable(name), ExprKind::BoolLiteral(value))
+        | (ExprKind::BoolLiteral(value), ExprKind::Variable(name)) => (name.as_str(), *value),
+        _ => return None,
+    };
+
+    match op {
+        BinOp::StrictEq => Some((name, value, true)),
+        BinOp::StrictNotEq => Some((name, value, false)),
+        _ => None,
+    }
+}
+
 fn known_condition_value(condition: &Expr, guards: &GuardState) -> Option<bool> {
-    let (name, truthy_if_true) = guard_variable_name(condition)?;
-    if guards.truthy_vars.iter().any(|known| known == name) {
-        Some(truthy_if_true)
-    } else if guards.falsy_vars.iter().any(|known| known == name) {
-        Some(!truthy_if_true)
+    if let Some((name, truthy_if_true)) = guard_variable_name(condition) {
+        if guards.bool_true_vars.iter().any(|known| known == name)
+            || guards.truthy_vars.iter().any(|known| known == name)
+        {
+            return Some(truthy_if_true);
+        }
+        if guards.bool_false_vars.iter().any(|known| known == name)
+            || guards.falsy_vars.iter().any(|known| known == name)
+        {
+            return Some(!truthy_if_true);
+        }
+    }
+
+    if let Some((name, compared_bool, expects_equal)) = strict_bool_guard(condition) {
+        if guards.bool_true_vars.iter().any(|known| known == name) {
+            return Some((true == compared_bool) == expects_equal);
+        }
+        if guards.bool_false_vars.iter().any(|known| known == name) {
+            return Some((false == compared_bool) == expects_equal);
+        }
+    }
+
+    None
+}
+
+fn clear_guards_for_name(guards: &mut GuardState, name: &str) {
+    guards.truthy_vars.retain(|known| known != name);
+    guards.falsy_vars.retain(|known| known != name);
+    guards.bool_true_vars.retain(|known| known != name);
+    guards.bool_false_vars.retain(|known| known != name);
+}
+
+fn push_guard_name(names: &mut Vec<String>, name: &str) {
+    if !names.iter().any(|known| known == name) {
+        names.push(name.to_string());
+    }
+}
+
+fn record_truthy_guard(guards: &mut GuardState, name: &str, known_truthy: bool) {
+    guards.truthy_vars.retain(|known| known != name);
+    guards.falsy_vars.retain(|known| known != name);
+    if known_truthy {
+        push_guard_name(&mut guards.truthy_vars, name);
     } else {
-        None
+        push_guard_name(&mut guards.falsy_vars, name);
+    }
+}
+
+fn record_exact_bool_guard(guards: &mut GuardState, name: &str, value: bool) {
+    clear_guards_for_name(guards, name);
+    if value {
+        push_guard_name(&mut guards.bool_true_vars, name);
+    } else {
+        push_guard_name(&mut guards.bool_false_vars, name);
+    }
+    record_truthy_guard(guards, name, value);
+}
+
+fn exact_bool_from_guard_branch(condition: &Expr, branch_taken: bool) -> Option<(&str, bool)> {
+    let (name, compared_bool, expects_equal) = strict_bool_guard(condition)?;
+    match (expects_equal, branch_taken) {
+        (true, true) => Some((name, compared_bool)),
+        (false, false) => Some((name, compared_bool)),
+        _ => None,
     }
 }
 
 fn extend_guards(guards: &GuardState, condition: &Expr, branch_taken: bool) -> GuardState {
-    let Some((name, truthy_if_true)) = guard_variable_name(condition) else {
-        return guards.clone();
-    };
-
     let mut next = guards.clone();
-    next.truthy_vars.retain(|known| known != name);
-    next.falsy_vars.retain(|known| known != name);
 
-    let known_truthy = if branch_taken {
-        truthy_if_true
-    } else {
-        !truthy_if_true
+    if let Some((name, exact_bool)) = exact_bool_from_guard_branch(condition, branch_taken) {
+        record_exact_bool_guard(&mut next, name, exact_bool);
+        return next;
+    }
+
+    let Some((name, truthy_if_true)) = guard_variable_name(condition) else {
+        return next;
     };
 
-    if known_truthy {
-        next.truthy_vars.push(name.to_string());
-    } else {
-        next.falsy_vars.push(name.to_string());
-    }
+    let known_truthy = if branch_taken { truthy_if_true } else { !truthy_if_true };
+    record_truthy_guard(&mut next, name, known_truthy);
 
     next
 }
@@ -1066,6 +1137,12 @@ fn invalidate_guards_for_stmt(stmt: &Stmt, guards: &mut GuardState) {
         .retain(|name| !written.iter().any(|written_name| written_name == name));
     guards
         .falsy_vars
+        .retain(|name| !written.iter().any(|written_name| written_name == name));
+    guards
+        .bool_true_vars
+        .retain(|name| !written.iter().any(|written_name| written_name == name));
+    guards
+        .bool_false_vars
         .retain(|name| !written.iter().any(|written_name| written_name == name));
 }
 
