@@ -294,7 +294,7 @@ fn dce_switch_stmt(
         }
     };
     let subject = prune_expr(subject);
-    let cases = normalize_switch_cases(
+    let cases = normalize_switch_cases(drop_shadowed_switch_patterns(normalize_switch_cases(
         cases
             .into_iter()
             .map(|(patterns, body)| {
@@ -304,7 +304,7 @@ fn dce_switch_stmt(
                 )
             })
             .collect(),
-    );
+    )));
     let mut cases = cases;
     while cases.last().is_some_and(|(_, body)| body.is_empty()) {
         cases.pop();
@@ -349,7 +349,7 @@ fn dce_switch_stmt_with_tail(
     };
     let subject = prune_expr(subject);
     let tail = dce_block(tail);
-    let mut cases = normalize_switch_cases(
+    let mut cases = normalize_switch_cases(drop_shadowed_switch_patterns(normalize_switch_cases(
         cases
             .into_iter()
             .map(|(patterns, body)| {
@@ -359,7 +359,7 @@ fn dce_switch_stmt_with_tail(
                 )
             })
             .collect(),
-    );
+    )));
     while cases.last().is_some_and(|(_, body)| body.is_empty()) {
         cases.pop();
     }

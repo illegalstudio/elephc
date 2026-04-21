@@ -204,6 +204,7 @@ Current dead-code-elimination coverage includes:
 - statements after exhaustive `try/catch` and `try/finally` exits
 - unreachable `catch` paths when the post-DCE `try` body can no longer throw
 - shadowed `catch` clauses whose exception types are already fully covered by earlier handlers, including all later handlers after `catch (Throwable ...)`
+- shadowed `switch` patterns whose match points are already covered by earlier case labels, including full-case removal or fallthrough-body merging when no entry pattern remains
 - condition-only empty `if` / `elseif` chains reduced to just the observable condition checks that still matter
 - empty `elseif` bodies in the middle of a live chain folded into the minimum negated guard needed for later branches
 - trailing block tails sunk into `if` and `ifdef` fallthrough branches, so later statements are only retained on paths that can still reach them

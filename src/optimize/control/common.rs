@@ -118,6 +118,37 @@ pub(crate) fn normalize_switch_cases(cases: Vec<(Vec<Expr>, Vec<Stmt>)>) -> Vec<
     normalized
 }
 
+pub(crate) fn drop_shadowed_switch_patterns(
+    cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
+) -> Vec<(Vec<Expr>, Vec<Stmt>)> {
+    let mut normalized: Vec<(Vec<Expr>, Vec<Stmt>)> = Vec::new();
+    let mut seen_patterns: Vec<Expr> = Vec::new();
+
+    for (mut patterns, body) in cases {
+        patterns.retain(|pattern| {
+            if seen_patterns.iter().any(|seen| seen == pattern) {
+                false
+            } else {
+                seen_patterns.push(pattern.clone());
+                true
+            }
+        });
+
+        if patterns.is_empty() {
+            if let Some((_, previous_body)) = normalized.last_mut() {
+                if matches!(block_terminal_effect(previous_body), TerminalEffect::FallsThrough) {
+                    previous_body.extend(body);
+                }
+            }
+            continue;
+        }
+
+        normalized.push((patterns, body));
+    }
+
+    normalized
+}
+
 pub(crate) fn invert_condition(condition: Expr) -> Expr {
     let span = condition.span;
     prune_expr(Expr::new(ExprKind::Not(Box::new(condition)), span))
