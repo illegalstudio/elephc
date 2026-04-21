@@ -15,6 +15,30 @@ pub(crate) fn dce_block(body: Vec<Stmt>) -> Vec<Stmt> {
     eliminated
 }
 
+fn dce_condition_only_if_chain(
+    condition: Expr,
+    mut elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
+    span: crate::span::Span,
+) -> Vec<Stmt> {
+    if elseif_clauses.is_empty() {
+        return expr_to_effect_stmt(condition);
+    }
+
+    let (next_condition, _) = elseif_clauses.remove(0);
+    let rest = dce_condition_only_if_chain(next_condition, elseif_clauses, span);
+    if rest.is_empty() {
+        expr_to_effect_stmt(condition)
+    } else {
+        vec![build_if_stmt(
+            invert_condition(condition),
+            rest,
+            Vec::new(),
+            None,
+            span,
+        )]
+    }
+}
+
 fn dce_if_stmt(
     condition: Expr,
     then_body: Vec<Stmt>,
@@ -54,6 +78,13 @@ fn dce_if_stmt(
         }
     }
 
+    if then_body.is_empty()
+        && elseif_clauses.iter().all(|(_, body)| body.is_empty())
+        && else_body.is_none()
+    {
+        return dce_condition_only_if_chain(condition, elseif_clauses, span);
+    }
+
     vec![Stmt::new(
         StmtKind::If {
             condition,
@@ -90,6 +121,10 @@ fn dce_switch_stmt(
             })
             .collect(),
     );
+    let mut cases = cases;
+    while cases.last().is_some_and(|(_, body)| body.is_empty()) {
+        cases.pop();
+    }
     let default = normalize_optional_block(default.map(dce_block));
 
     if cases.iter().all(|(_, body)| body.is_empty()) && default.is_none() {

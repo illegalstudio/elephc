@@ -203,6 +203,8 @@ Current dead-code-elimination coverage includes:
   - `continue`
 - statements after exhaustive `try/catch` and `try/finally` exits
 - unreachable `catch` paths when the post-DCE `try` body can no longer throw
+- condition-only empty `if` / `elseif` chains reduced to just the observable condition checks that still matter
+- trailing empty `switch` labels dropped when they no longer lead to reachable work
 - pure expression statements whose result is unused
 - pure expression statements that become exposed by earlier normalization
 

@@ -1424,6 +1424,33 @@ echo "!";
 }
 
 #[test]
+fn test_dead_code_elimination_reduces_empty_if_chain_to_needed_condition_checks() {
+    let out = compile_and_run(
+        r#"<?php
+function touch() {
+    echo "a";
+    return false;
+}
+
+function tap() {
+    echo "b";
+    return false;
+}
+
+if (touch()) {
+    strlen("abc");
+} elseif (tap()) {
+    strlen("def");
+}
+
+echo "!";
+"#,
+    );
+
+    assert_eq!(out, "ab!");
+}
+
+#[test]
 fn test_dead_code_elimination_inlines_empty_try_finally() {
     let out = compile_and_run(
         r#"<?php
