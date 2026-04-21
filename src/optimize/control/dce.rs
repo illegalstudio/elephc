@@ -449,7 +449,7 @@ fn dce_try_stmt(
         })
         .collect();
     let catches = if block_may_throw(&try_body) {
-        normalize_catch_clauses(catches)
+        drop_shadowed_catch_clauses(normalize_catch_clauses(catches))
     } else {
         Vec::new()
     };
@@ -511,7 +511,7 @@ fn dce_try_stmt_with_tail(
         })
         .collect();
     let catches = if block_may_throw(&try_body) {
-        normalize_catch_clauses(catches)
+        drop_shadowed_catch_clauses(normalize_catch_clauses(catches))
     } else {
         Vec::new()
     };

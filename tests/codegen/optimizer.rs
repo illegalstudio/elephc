@@ -1604,6 +1604,45 @@ echo "!";
 }
 
 #[test]
+fn test_dead_code_elimination_drops_shadowed_throwable_catch_from_user_assembly() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_shadowed_throwable_catch");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+try {
+    throw new Exception("boom");
+} catch (Throwable $t) {
+    echo "a";
+} catch (Exception $e) {
+    echo "shadowed";
+}
+echo "!";
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("shadowed"),
+        "shadowed catch body should not remain in user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "a!");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_dead_code_elimination_sinks_tail_into_safe_finally_path() {
     let out = compile_and_run(
         r#"<?php

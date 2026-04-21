@@ -42,6 +42,49 @@ pub(crate) fn normalize_catch_clauses(
     normalized
 }
 
+pub(crate) fn drop_shadowed_catch_clauses(
+    catches: Vec<crate::parser::ast::CatchClause>,
+) -> Vec<crate::parser::ast::CatchClause> {
+    let mut normalized = Vec::new();
+    let mut seen_types: Vec<String> = Vec::new();
+    let mut catches_all_throwables = false;
+
+    for mut catch in catches {
+        if catches_all_throwables {
+            break;
+        }
+
+        catch.exception_types.retain(|exception_type| {
+            !seen_types
+                .iter()
+                .any(|seen| seen == exception_type.as_str())
+        });
+
+        if catch.exception_types.is_empty() {
+            continue;
+        }
+
+        if catch
+            .exception_types
+            .iter()
+            .any(|exception_type| exception_type.as_str() == "Throwable")
+        {
+            catches_all_throwables = true;
+        }
+
+        for exception_type in &catch.exception_types {
+            let exception_type = exception_type.as_str().to_string();
+            if !seen_types.contains(&exception_type) {
+                seen_types.push(exception_type);
+            }
+        }
+
+        normalized.push(catch);
+    }
+
+    normalized
+}
+
 pub(crate) fn normalize_switch_cases(cases: Vec<(Vec<Expr>, Vec<Stmt>)>) -> Vec<(Vec<Expr>, Vec<Stmt>)> {
     let mut normalized: Vec<(Vec<Expr>, Vec<Stmt>)> = Vec::new();
     let mut pending_fallthrough_patterns: Vec<Expr> = Vec::new();
