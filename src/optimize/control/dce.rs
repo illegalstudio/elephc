@@ -5,13 +5,20 @@ enum TailSinkTarget {
     FallsThrough,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TryTailSinkPlan {
+    LeaveOutside,
+    IntoTryPaths,
+    IntoFinally,
+}
+
 pub(crate) fn dce_block(body: Vec<Stmt>) -> Vec<Stmt> {
     let mut eliminated = Vec::new();
     let mut stmts = body.into_iter().peekable();
     while let Some(stmt) = stmts.next() {
         let has_tail = stmts.peek().is_some();
         let use_tail_sink = has_tail
-            && matches!(stmt.kind, StmtKind::If { .. } | StmtKind::Switch { .. });
+            && matches!(stmt.kind, StmtKind::If { .. } | StmtKind::Switch { .. } | StmtKind::Try { .. });
         let dce_stmt = if use_tail_sink {
             let tail: Vec<Stmt> = stmts.clone().collect();
             dce_stmt_with_tail(stmt, tail)
@@ -462,6 +469,83 @@ fn dce_try_stmt(
     )]
 }
 
+fn plan_try_tail_sink(
+    try_body: &[Stmt],
+    catches: &[crate::parser::ast::CatchClause],
+    finally_body: &Option<Vec<Stmt>>,
+) -> TryTailSinkPlan {
+    match finally_body {
+        None => TryTailSinkPlan::IntoTryPaths,
+        Some(finally_body)
+            if catches.is_empty()
+                && !block_may_throw(try_body)
+                && matches!(block_terminal_effect(try_body), TerminalEffect::FallsThrough)
+                && matches!(block_terminal_effect(finally_body), TerminalEffect::FallsThrough) =>
+        {
+            TryTailSinkPlan::IntoFinally
+        }
+        Some(_) => TryTailSinkPlan::LeaveOutside,
+    }
+}
+
+fn dce_try_stmt_with_tail(
+    try_body: Vec<Stmt>,
+    catches: Vec<crate::parser::ast::CatchClause>,
+    finally_body: Option<Vec<Stmt>>,
+    tail: Vec<Stmt>,
+    span: crate::span::Span,
+) -> Vec<Stmt> {
+    let try_body = dce_block(try_body);
+    let catches: Vec<_> = catches
+        .into_iter()
+        .map(|catch| crate::parser::ast::CatchClause {
+            exception_types: catch.exception_types,
+            variable: catch.variable,
+            body: dce_block(catch.body),
+        })
+        .collect();
+    let catches = if block_may_throw(&try_body) {
+        normalize_catch_clauses(catches)
+    } else {
+        Vec::new()
+    };
+    let finally_body = normalize_optional_block(finally_body.map(dce_block));
+    let tail = dce_block(tail);
+
+    if tail.is_empty() {
+        return dce_try_stmt(try_body, catches, finally_body, span);
+    }
+
+    match plan_try_tail_sink(&try_body, &catches, &finally_body) {
+        TryTailSinkPlan::IntoTryPaths => {
+            let try_body = append_tail_to_fallthrough_path(try_body, tail.clone());
+            let catches = catches
+                .into_iter()
+                .map(|catch| crate::parser::ast::CatchClause {
+                    body: append_tail_to_fallthrough_path(catch.body, tail.clone()),
+                    ..catch
+                })
+                .collect();
+            dce_try_stmt(try_body, catches, finally_body, span)
+        }
+        TryTailSinkPlan::IntoFinally => {
+            let finally_body =
+                normalize_optional_block(finally_body.map(|body| append_tail_to_fallthrough_path(body, tail)));
+            dce_try_stmt(try_body, catches, finally_body, span)
+        }
+        TryTailSinkPlan::LeaveOutside => {
+            let mut stmts = dce_try_stmt(try_body, catches, finally_body, span);
+            if stmts
+                .last()
+                .is_some_and(|stmt| matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough))
+            {
+                stmts.extend(tail);
+            }
+            stmts
+        }
+    }
+}
+
 fn dce_stmt_with_tail(stmt: Stmt, tail: Vec<Stmt>) -> Vec<Stmt> {
     let span = stmt.span;
     match stmt.kind {
@@ -487,6 +571,11 @@ fn dce_stmt_with_tail(stmt: Stmt, tail: Vec<Stmt>) -> Vec<Stmt> {
             cases,
             default,
         } => dce_switch_stmt_with_tail(subject, cases, default, tail, span),
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => dce_try_stmt_with_tail(try_body, catches, finally_body, tail, span),
         _ => {
             let mut stmts = dce_stmt(stmt);
             if stmts

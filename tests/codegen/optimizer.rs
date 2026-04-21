@@ -1528,6 +1528,47 @@ run(3);
 }
 
 #[test]
+fn test_dead_code_elimination_sinks_tail_into_try_fallthrough_paths() {
+    let out = compile_and_run(
+        r#"<?php
+function run(bool $flag) {
+    try {
+        if ($flag) {
+            throw new Exception("boom");
+        }
+        echo "a";
+    } catch (Exception $e) {
+        return;
+    }
+    echo "b";
+}
+
+run(false);
+run(true);
+echo "!";
+"#,
+    );
+
+    assert_eq!(out, "ab!");
+}
+
+#[test]
+fn test_dead_code_elimination_sinks_tail_into_safe_finally_path() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    echo "a";
+} finally {
+    echo "b";
+}
+echo "c";
+"#,
+    );
+
+    assert_eq!(out, "abc");
+}
+
+#[test]
 fn test_dead_code_elimination_inlines_empty_try_finally() {
     let out = compile_and_run(
         r#"<?php
