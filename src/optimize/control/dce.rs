@@ -1,9 +1,23 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+enum TailSinkTarget {
+    FallsThrough,
+}
+
 pub(crate) fn dce_block(body: Vec<Stmt>) -> Vec<Stmt> {
     let mut eliminated = Vec::new();
-    for stmt in body {
-        let dce_stmt = dce_stmt(stmt);
+    let mut stmts = body.into_iter().peekable();
+    while let Some(stmt) = stmts.next() {
+        let has_tail = stmts.peek().is_some();
+        let use_tail_sink = has_tail
+            && matches!(stmt.kind, StmtKind::If { .. } | StmtKind::Switch { .. });
+        let dce_stmt = if use_tail_sink {
+            let tail: Vec<Stmt> = stmts.clone().collect();
+            dce_stmt_with_tail(stmt, tail)
+        } else {
+            dce_stmt(stmt)
+        };
         let stops_here = dce_stmt
             .last()
             .is_some_and(|stmt| !matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough));
@@ -11,8 +25,132 @@ pub(crate) fn dce_block(body: Vec<Stmt>) -> Vec<Stmt> {
         if stops_here {
             break;
         }
+        if use_tail_sink {
+            break;
+        }
     }
     eliminated
+}
+
+fn append_tail_to_fallthrough_path(mut body: Vec<Stmt>, tail: Vec<Stmt>) -> Vec<Stmt> {
+    if matches!(block_terminal_effect(&body), TerminalEffect::FallsThrough) {
+        body.extend(tail);
+    }
+    body
+}
+
+fn sink_tail_into_terminal_path(
+    mut body: Vec<Stmt>,
+    tail: Vec<Stmt>,
+    target: TailSinkTarget,
+) -> Vec<Stmt> {
+    let Some(stmt) = body.pop() else {
+        return tail;
+    };
+
+    let rewritten = sink_tail_into_terminal_stmt(stmt, tail, target);
+    body.extend(rewritten);
+    body
+}
+
+fn sink_tail_into_terminal_stmt(stmt: Stmt, tail: Vec<Stmt>, target: TailSinkTarget) -> Vec<Stmt> {
+    let span = stmt.span;
+    match stmt.kind {
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            let rewrite_branch = |body: Vec<Stmt>, target: TailSinkTarget, tail: &Vec<Stmt>| {
+                let effect = block_terminal_effect(&body);
+                if matches!(effect, TerminalEffect::FallsThrough) {
+                    sink_tail_into_terminal_path(body, tail.clone(), target)
+                } else {
+                    body
+                }
+            };
+            let then_body = rewrite_branch(then_body, target, &tail);
+            let elseif_clauses: Vec<_> = elseif_clauses
+                .into_iter()
+                .map(|(condition, body)| (condition, rewrite_branch(body, target, &tail)))
+                .collect();
+            let else_body = else_body.map(|body| rewrite_branch(body, target, &tail));
+            vec![Stmt::new(
+                StmtKind::If {
+                    condition,
+                    then_body,
+                    elseif_clauses,
+                    else_body,
+                },
+                span,
+            )]
+        }
+        StmtKind::IfDef {
+            symbol,
+            then_body,
+            else_body,
+        } => {
+            let then_body = if matches!(block_terminal_effect(&then_body), TerminalEffect::FallsThrough) {
+                sink_tail_into_terminal_path(then_body, tail.clone(), target)
+            } else {
+                then_body
+            };
+            let else_body = else_body.map(|body| {
+                if matches!(block_terminal_effect(&body), TerminalEffect::FallsThrough) {
+                    sink_tail_into_terminal_path(body, tail.clone(), target)
+                } else {
+                    body
+                }
+            });
+            vec![Stmt::new(
+                StmtKind::IfDef {
+                    symbol,
+                    then_body,
+                    else_body,
+                },
+                span,
+            )]
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            let try_body = if matches!(block_terminal_effect(&try_body), TerminalEffect::FallsThrough) {
+                sink_tail_into_terminal_path(try_body, tail.clone(), target)
+            } else {
+                try_body
+            };
+            let catches = catches
+                .into_iter()
+                .map(|catch| crate::parser::ast::CatchClause {
+                    body: if matches!(block_terminal_effect(&catch.body), TerminalEffect::FallsThrough) {
+                        sink_tail_into_terminal_path(catch.body, tail.clone(), target)
+                    } else {
+                        catch.body
+                    },
+                    ..catch
+                })
+                .collect();
+            vec![Stmt::new(
+                StmtKind::Try {
+                    try_body,
+                    catches,
+                    finally_body,
+                },
+                span,
+            )]
+        }
+        _ if matches!(target, TailSinkTarget::FallsThrough)
+            && matches!(stmt_terminal_effect(&stmt), TerminalEffect::FallsThrough) =>
+        {
+            let mut stmts = vec![stmt];
+            stmts.extend(tail);
+            stmts
+        }
+        _ => vec![stmt],
+    }
 }
 
 fn dce_if_tail(
@@ -177,6 +315,92 @@ fn dce_switch_stmt(
     )]
 }
 
+fn dce_switch_stmt_with_tail(
+    subject: Expr,
+    cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
+    default: Option<Vec<Stmt>>,
+    tail: Vec<Stmt>,
+    span: crate::span::Span,
+) -> Vec<Stmt> {
+    let trim_switch_noop_break = |body: Vec<Stmt>| {
+        if body.len() == 1 && matches!(body[0].kind, StmtKind::Break) {
+            Vec::new()
+        } else {
+            body
+        }
+    };
+    let subject = prune_expr(subject);
+    let tail = dce_block(tail);
+    let mut cases = normalize_switch_cases(
+        cases
+            .into_iter()
+            .map(|(patterns, body)| {
+                (
+                    patterns.into_iter().map(prune_expr).collect(),
+                    trim_switch_noop_break(dce_block(body)),
+                )
+            })
+            .collect(),
+    );
+    while cases.last().is_some_and(|(_, body)| body.is_empty()) {
+        cases.pop();
+    }
+    let mut default = normalize_optional_block(default.map(dce_block));
+
+    if tail.is_empty() {
+        return dce_switch_stmt(subject, cases, default, span);
+    }
+
+    let has_break_exit = cases
+        .iter()
+        .any(|(_, body)| matches!(block_terminal_effect(body), TerminalEffect::Breaks))
+        || default
+            .as_ref()
+            .is_some_and(|body| matches!(block_terminal_effect(body), TerminalEffect::Breaks));
+    if has_break_exit {
+        let mut stmts = dce_switch_stmt(subject, cases, default, span);
+        stmts.extend(tail);
+        return stmts;
+    }
+
+    let mut suffix_reaches_after_switch = false;
+    if let Some(body) = default.as_mut() {
+        match block_terminal_effect(body) {
+            TerminalEffect::FallsThrough => {
+                *body = sink_tail_into_terminal_path(
+                    std::mem::take(body),
+                    tail.clone(),
+                    TailSinkTarget::FallsThrough,
+                );
+                suffix_reaches_after_switch = true;
+            }
+            TerminalEffect::Breaks | TerminalEffect::ExitsCurrentBlock | TerminalEffect::TerminatesMixed => {}
+        }
+    }
+
+    let last_case_index = cases.len().checked_sub(1);
+    for (index, (_, body)) in cases.iter_mut().enumerate().rev() {
+        match block_terminal_effect(body) {
+            TerminalEffect::FallsThrough if suffix_reaches_after_switch || Some(index) == last_case_index => {
+                if !suffix_reaches_after_switch {
+                    *body = sink_tail_into_terminal_path(
+                        std::mem::take(body),
+                        tail.clone(),
+                        TailSinkTarget::FallsThrough,
+                    );
+                }
+                suffix_reaches_after_switch = true;
+            }
+            TerminalEffect::FallsThrough => {}
+            TerminalEffect::Breaks | TerminalEffect::ExitsCurrentBlock | TerminalEffect::TerminatesMixed => {
+                suffix_reaches_after_switch = false;
+            }
+        }
+    }
+
+    dce_switch_stmt(subject, cases, default, span)
+}
+
 fn dce_try_stmt(
     try_body: Vec<Stmt>,
     catches: Vec<crate::parser::ast::CatchClause>,
@@ -236,6 +460,44 @@ fn dce_try_stmt(
         },
         span,
     )]
+}
+
+fn dce_stmt_with_tail(stmt: Stmt, tail: Vec<Stmt>) -> Vec<Stmt> {
+    let span = stmt.span;
+    match stmt.kind {
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            let then_body = append_tail_to_fallthrough_path(then_body, tail.clone());
+            let elseif_clauses: Vec<_> = elseif_clauses
+                .into_iter()
+                .map(|(condition, body)| (condition, append_tail_to_fallthrough_path(body, tail.clone())))
+                .collect();
+            let else_body = Some(match else_body {
+                Some(body) => append_tail_to_fallthrough_path(body, tail),
+                None => tail,
+            });
+            dce_if_stmt(condition, then_body, elseif_clauses, else_body, span)
+        }
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => dce_switch_stmt_with_tail(subject, cases, default, tail, span),
+        _ => {
+            let mut stmts = dce_stmt(stmt);
+            if stmts
+                .last()
+                .is_some_and(|stmt| matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough))
+            {
+                stmts.extend(dce_block(tail));
+            }
+            stmts
+        }
+    }
 }
 
 pub(crate) fn dce_stmt(stmt: Stmt) -> Vec<Stmt> {

@@ -1480,6 +1480,54 @@ echo "!";
 }
 
 #[test]
+fn test_dead_code_elimination_sinks_tail_into_if_fallthrough_branch() {
+    let out = compile_and_run(
+        r#"<?php
+function run(bool $flag) {
+    if ($flag) {
+        echo "a";
+        return;
+    } else {
+        echo "b";
+    }
+    echo "c";
+}
+
+run(true);
+run(false);
+echo "!";
+"#,
+    );
+
+    assert_eq!(out, "abc!");
+}
+
+#[test]
+fn test_dead_code_elimination_sinks_tail_into_switch_exit_paths() {
+    let out = compile_and_run(
+        r#"<?php
+function run(int $flag) {
+    switch ($flag) {
+        case 1:
+            echo "a";
+        case 2:
+            echo "b";
+        default:
+            echo "c";
+    }
+    echo "!";
+}
+
+run(1);
+run(2);
+run(3);
+"#,
+    );
+
+    assert_eq!(out, "abc!bc!c!");
+}
+
+#[test]
 fn test_dead_code_elimination_inlines_empty_try_finally() {
     let out = compile_and_run(
         r#"<?php

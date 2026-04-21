@@ -2560,6 +2560,151 @@ fn test_eliminate_dead_code_rebuilds_empty_elseif_tail_as_needed_guard() {
 }
 
 #[test]
+fn test_eliminate_dead_code_sinks_tail_into_if_fallthrough_branch() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![
+                Stmt::new(
+                    StmtKind::If {
+                        condition: Expr::var("flag"),
+                        then_body: vec![Stmt::new(
+                            StmtKind::Return(Some(Expr::int_lit(7))),
+                            Span::dummy(),
+                        )],
+                        elseif_clauses: Vec::new(),
+                        else_body: Some(vec![Stmt::echo(Expr::int_lit(8))]),
+                    },
+                    Span::dummy(),
+                ),
+                Stmt::echo(Expr::int_lit(9)),
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    assert_eq!(
+        body,
+        &vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::var("flag"),
+                then_body: vec![Stmt::new(
+                    StmtKind::Return(Some(Expr::int_lit(7))),
+                    Span::dummy(),
+                )],
+                elseif_clauses: Vec::new(),
+                else_body: Some(vec![Stmt::echo(Expr::int_lit(8)), Stmt::echo(Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        )]
+    );
+}
+
+#[test]
+fn test_eliminate_dead_code_sinks_tail_into_implicit_else_path() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![
+                Stmt::new(
+                    StmtKind::If {
+                        condition: Expr::var("flag"),
+                        then_body: vec![Stmt::new(
+                            StmtKind::Return(Some(Expr::int_lit(7))),
+                            Span::dummy(),
+                        )],
+                        elseif_clauses: Vec::new(),
+                        else_body: None,
+                    },
+                    Span::dummy(),
+                ),
+                Stmt::echo(Expr::int_lit(9)),
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    assert_eq!(
+        body,
+        &vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::var("flag"),
+                then_body: vec![Stmt::new(
+                    StmtKind::Return(Some(Expr::int_lit(7))),
+                    Span::dummy(),
+                )],
+                elseif_clauses: Vec::new(),
+                else_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        )]
+    );
+}
+
+#[test]
+fn test_eliminate_dead_code_sinks_tail_into_switch_exit_paths() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![
+                Stmt::new(
+                    StmtKind::Switch {
+                        subject: Expr::var("flag"),
+                        cases: vec![
+                            (vec![Expr::int_lit(1)], vec![Stmt::echo(Expr::int_lit(7))]),
+                            (vec![Expr::int_lit(2)], vec![Stmt::echo(Expr::int_lit(8))]),
+                        ],
+                        default: Some(vec![Stmt::echo(Expr::int_lit(6))]),
+                    },
+                    Span::dummy(),
+                ),
+                Stmt::echo(Expr::int_lit(9)),
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    assert_eq!(
+        body,
+        &vec![Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::var("flag"),
+                cases: vec![
+                    (vec![Expr::int_lit(1)], vec![Stmt::echo(Expr::int_lit(7))]),
+                    (vec![Expr::int_lit(2)], vec![Stmt::echo(Expr::int_lit(8))]),
+                ],
+                default: Some(vec![Stmt::echo(Expr::int_lit(6)), Stmt::echo(Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        )]
+    );
+}
+
+#[test]
 fn test_eliminate_dead_code_reduces_empty_if_to_effectful_condition_eval() {
     let touch = Expr::new(
         ExprKind::FunctionCall {

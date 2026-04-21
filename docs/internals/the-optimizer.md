@@ -205,6 +205,8 @@ Current dead-code-elimination coverage includes:
 - unreachable `catch` paths when the post-DCE `try` body can no longer throw
 - condition-only empty `if` / `elseif` chains reduced to just the observable condition checks that still matter
 - empty `elseif` bodies in the middle of a live chain folded into the minimum negated guard needed for later branches
+- trailing block tails sunk into `if` fallthrough branches, so later statements are only retained on paths that can still reach them
+- trailing block tails sunk into `switch` fallthrough suffixes when the switch can only reach later code by falling off its final reachable path
 - trailing empty `switch` labels dropped when they no longer lead to reachable work
 - pure expression statements whose result is unused
 - pure expression statements that become exposed by earlier normalization
