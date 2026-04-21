@@ -19,7 +19,7 @@ Today the optimizer is split into five passes:
 
 That split matters. Some rewrites are always safe on syntax alone, while others should only happen after diagnostics have already seen the checked program.
 
-Alongside those four passes, the optimizer also builds lightweight local **effect summaries**. These summaries answer two questions conservatively:
+Alongside those five passes, the optimizer also builds lightweight local **effect summaries**. These summaries answer two questions conservatively:
 
 - does this expression have observable side effects?
 - can this expression throw?
@@ -260,7 +260,7 @@ try {
 
 Because every `match` arm produces the same known pure / non-throwing callable, the optimizer can prove that the `catch` path is dead and avoid emitting the `pow` branch at all.
 
-## Why there are four passes
+## Why there are five passes
 
 If elephc removed whole branches before type checking, it could accidentally hide useful diagnostics.
 
@@ -281,6 +281,7 @@ So the current rule is:
 - fold obvious pure scalar expressions early
 - propagate known scalar locals only after checking
 - prune larger dead control-flow only after checking
+- normalize the remaining control-flow into simpler equivalent shapes
 - run structural dead-code cleanup only after those earlier passes have already simplified the tree
 
 ## Conservatism and side effects
@@ -301,11 +302,12 @@ That conservatism is why the pass is safe to run by default: if an expression co
 
 ## What the optimizer does not do yet
 
-The current pass is local. It does not yet implement:
+The current optimizer is still intentionally local. It does not yet implement:
 
-- constant propagation across variables and statement boundaries
-- richer alias-aware propagation across general locals and merges
+- CFG-aware or fixed-point constant propagation across wider loops and general path merges
+- richer memory-model-aware propagation across heap-backed locals and broader aliasing situations
 - deeper exception-aware dead-code elimination beyond conservative `try` heuristics
+- broader control-flow normalization beyond the current local AST shell rewrites
 - backend-specific peephole cleanup
 - runtime dead stripping
 - register allocation

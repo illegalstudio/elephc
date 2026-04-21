@@ -154,7 +154,15 @@ This pass is still conservative, but it can already:
 - preserve unrelated scalar locals across simple loops when the loop's local writes are conservatively known, including simple nested `switch`, `try/catch/finally`, `foreach`, other simple nested loop shapes, local array writes such as `$items[] = $i` / `$items[0] = $i`, local property writes such as `$box->last = $i` / `$box->items[] = $i`, and targeted local invalidations like `unset($tmp)`, while also keeping stable scalar values introduced by `for` init clauses
 - re-run folding after substitutions so expressions like `$x ** $y` can collapse to a literal
 
-In our running example, this still does not change the program, because `$x = 10` at the statement level is not yet propagated into the later comparison shape that would let the whole `if` collapse.
+In our running example, this *does* change the program. The pass can forward `$x = 10` into the later comparison, re-run folding, and effectively turn the condition into `true`:
+
+```php
+<?php
+$x = 10;
+if (true) {
+    echo "big\n";
+}
+```
 
 ## Phase 9: Post-typecheck control-flow pruning
 
@@ -175,29 +183,51 @@ This pass also consults the optimizer's local effect summaries. Those summaries 
 
 This split is intentional: elephc folds obvious scalar expressions early, but waits until after type checking to remove whole blocks, so diagnostics still see the original checked structure.
 
-In our running example there is still nothing to prune, because `$x > 5` is not yet a compile-time constant at the AST level.
+In our running example, the `if (true)` shell is now pruned away:
 
-## Phase 10: Dead-code elimination and structural cleanup
+```php
+<?php
+$x = 10;
+echo "big\n";
+```
+
+## Phase 10: Control-flow normalization
 
 **File:** `src/optimize.rs`
 
-After control-flow pruning, elephc runs a final AST cleanup pass. This pass does not try to prove new constants; instead, it simplifies the shapes left behind by earlier rewrites.
+After control-flow pruning, elephc canonicalizes the remaining control-flow shells. This pass does not try to prove new constants; it rewrites structurally equivalent shapes into simpler, more uniform AST forms so later passes see fewer special cases.
+
+This pass currently handles cases such as:
+
+- canonicalizing `elseif` chains into nested `else { if (...) { ... } }`
+- merging compatible `if` heads/tails and collapsing identical `if` branches
+- merging identical adjacent `switch` cases and folding pure fallthrough labels
+- rewriting safe single-case `switch` shells to `if`
+- merging adjacent identical `catch` handlers into canonical multi-catch clauses with deduplicated, stably ordered type lists
+- folding an outer `finally` into an inner `try` when the wrapper is structurally redundant
+
+## Phase 11: Dead-code elimination
+
+**File:** `src/optimize.rs`
+
+After normalization, elephc runs a final dead-code-elimination pass over the already-canonical AST.
 
 This pass currently handles cases such as:
 
 - removing empty `if`, `switch`, `ifdef`, and degenerate `try` shells
-- collapsing single-path conditionals such as `if ($a) { if ($b) { ... } }`
+- trimming unreachable statements after `return`, `throw`, `break`, or `continue`
 - materializing constant `switch` execution into the exact statement tail that would run
 - hoisting safe non-throwing prefixes out of `try` blocks
 - simplifying non-throwing `try` / `catch` and some non-throwing `try` / `finally` fallthrough cases
+- dropping pure expression statements and other leftover non-observable statements exposed by earlier passes
 
-This is also where the optimizer does its final local dead-code cleanup before codegen sees the AST.
+In our running example there is nothing else to remove: the remaining assignment and `echo` stay as they are.
 
-## Phase 11: Code generation
+## Phase 12: Code generation
 
 **File:** `src/codegen/` — See [The Code Generator](the-codegen.md) for details.
 
-The code generator walks the typed AST and emits assembly for the selected target. For ordinary control flow this is mostly straight-line branches and labels; for `try` / `catch` / `finally`, the compiler additionally emits handler records and resume labels around `_setjmp` / `_longjmp`-based exception unwinding. The walkthrough below shows the AArch64 form of our simple example (simplified, with comments):
+The code generator walks the typed AST and emits assembly for the selected target. For ordinary control flow this is mostly straight-line branches and labels; for `try` / `catch` / `finally`, the compiler additionally emits handler records and resume labels around `_setjmp` / `_longjmp`-based exception unwinding. By this point our running example has already lost the `if` shell, so the AArch64 form is simpler than the original source (simplified, with comments):
 
 ```asm
 .global _main
@@ -213,20 +243,13 @@ _main:
     mov x0, #10
     stur x0, [x29, #-8]
 
-    ; -- if ($x > 5) --
-    ldur x0, [x29, #-8]         ; load $x
-    cmp x0, #5                   ; compare with 5
-    b.le _end_if_1               ; skip body if $x <= 5
-
-    ; -- echo "big\n" --
+    ; -- echo "big\n" (the if shell was pruned earlier) --
     adrp x1, _str_0@PAGE
     add x1, x1, _str_0@PAGEOFF
     mov x2, #4                   ; length = 4 ("big" + newline)
     mov x0, #1                   ; fd = stdout
     mov x16, #4                  ; syscall = write
     svc #0x80                    ; call kernel
-
-_end_if_1:
     ; -- epilogue: exit(0) --
     mov x0, #0
     mov x16, #1
@@ -239,11 +262,11 @@ _str_0: .ascii "big\n"
 Key observations:
 
 - `$x = 10` → `mov x0, #10` then `stur` to the stack at offset -8 from the frame pointer
-- `if ($x > 5)` → `cmp` + `b.le` (branch if **not** greater — the condition is inverted)
+- the `if ($x > 5)` check no longer exists by codegen time because propagation + pruning removed it
 - `echo "big\n"` → load string address + length, then `svc` to write to stdout
 - The string literal lives in the `.data` section, referenced by label `_str_0`
 
-## Phase 12: Runtime preparation, assembly, and linking
+## Phase 13: Runtime preparation, assembly, and linking
 
 **Tools:** native `as` and `ld` (or the equivalent system toolchain)
 
@@ -279,7 +302,7 @@ On Linux, elephc invokes the native assembler/linker for the requested target.
 
 The `.o` file is deleted after linking. The result is a standalone executable.
 
-## Phase 12: Execution
+## Phase 14: Execution
 
 ```bash
 ./file
@@ -311,17 +334,20 @@ The binary runs directly on the CPU. There is no PHP interpreter or VM at runtim
                     ▼ Type Checker
     { x: Int } — all types consistent ✓
                     │
-                    ▼ Optimizer (constant propagation, no-op here)
-    [Assign{x, 10}, If{Gt(Var(x), 5), [Echo("big\n")]}]
+                    ▼ Optimizer (constant propagation)
+    [Assign{x, 10}, If{true, [Echo("big\n")]}]
                     │
-                    ▼ Optimizer (prune dead control flow, no-op here)
-    [Assign{x, 10}, If{Gt(Var(x), 5), [Echo("big\n")]}]
+                    ▼ Optimizer (prune dead control flow)
+    [Assign{x, 10}, Echo("big\n")]
+                    │
+                    ▼ Optimizer (normalize control flow, no-op here)
+    [Assign{x, 10}, Echo("big\n")]
                     │
                     ▼ Optimizer (dead-code elimination, no-op here)
-    [Assign{x, 10}, If{Gt(Var(x), 5), [Echo("big\n")]}]
+    [Assign{x, 10}, Echo("big\n")]
                     │
                     ▼ Code Generator
-    "sub sp, sp, #32 / stp x29, x30, ... / mov x0, #10 / ..."
+    "sub sp, sp, #32 / stp x29, x30, ... / mov x0, #10 / adrp x1, _str_0 / ..."
                     │
                     ▼ Runtime Cache
     ~/.cache/elephc/runtime-v<version>-<target>-heap<size>.o
