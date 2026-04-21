@@ -2829,6 +2829,46 @@ fn test_switch_tail_reachability_tracks_suffix_paths() {
 }
 
 #[test]
+fn test_if_tail_reachability_tracks_fallthrough_and_implicit_else() {
+    let elseif_clauses = vec![
+        (
+            Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
+            vec![Stmt::new(StmtKind::Return(Some(Expr::int_lit(7))), Span::dummy())],
+        ),
+        (
+            Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
+            vec![Stmt::echo(Expr::int_lit(8))],
+        ),
+    ];
+
+    let reachability = analyze_if_tail_paths(
+        &[Stmt::new(StmtKind::Return(Some(Expr::int_lit(1))), Span::dummy())],
+        &elseif_clauses,
+        &None,
+    );
+
+    assert!(!reachability.then_sinks_tail);
+    assert_eq!(reachability.elseif_sinks_tail, vec![false, true]);
+    assert!(!reachability.else_sinks_tail);
+    assert!(reachability.implicit_else_sinks_tail);
+}
+
+#[test]
+fn test_ifdef_tail_reachability_tracks_implicit_else() {
+    let reachability = analyze_ifdef_tail_paths(
+        &[Stmt::echo(Expr::int_lit(7))],
+        &Some(vec![Stmt::new(
+            StmtKind::Return(Some(Expr::int_lit(8))),
+            Span::dummy(),
+        )]),
+    );
+
+    assert!(reachability.then_sinks_tail);
+    assert!(!reachability.else_sinks_tail);
+    assert!(!reachability.implicit_else_sinks_tail);
+}
+
+#[test]
 fn test_try_tail_plan_prefers_finally_only_when_safe() {
     let safe_try = vec![Stmt::echo(Expr::int_lit(7))];
     let safe_finally = Some(vec![Stmt::echo(Expr::int_lit(8))]);
@@ -2846,6 +2886,53 @@ fn test_try_tail_plan_prefers_finally_only_when_safe() {
     assert_eq!(
         analyze_try_tail_plan(&safe_try, &catch_body, &safe_finally),
         TryTailSinkPlan::LeaveOutside
+    );
+}
+
+#[test]
+fn test_eliminate_dead_code_sinks_tail_into_ifdef_fallthrough_paths() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![
+                Stmt::new(
+                    StmtKind::IfDef {
+                        symbol: "DEBUG".into(),
+                        then_body: vec![Stmt::echo(Expr::int_lit(7))],
+                        else_body: Some(vec![Stmt::new(
+                            StmtKind::Return(Some(Expr::int_lit(8))),
+                            Span::dummy(),
+                        )]),
+                    },
+                    Span::dummy(),
+                ),
+                Stmt::echo(Expr::int_lit(9)),
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    assert_eq!(
+        body,
+        &vec![Stmt::new(
+            StmtKind::IfDef {
+                symbol: "DEBUG".into(),
+                then_body: vec![Stmt::echo(Expr::int_lit(7)), Stmt::echo(Expr::int_lit(9))],
+                else_body: Some(vec![Stmt::new(
+                    StmtKind::Return(Some(Expr::int_lit(8))),
+                    Span::dummy(),
+                )]),
+            },
+            Span::dummy(),
+        )]
     );
 }
 

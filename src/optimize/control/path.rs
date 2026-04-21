@@ -1,6 +1,21 @@
 use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct IfTailReachability {
+    pub(crate) then_sinks_tail: bool,
+    pub(crate) elseif_sinks_tail: Vec<bool>,
+    pub(crate) else_sinks_tail: bool,
+    pub(crate) implicit_else_sinks_tail: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct IfDefTailReachability {
+    pub(crate) then_sinks_tail: bool,
+    pub(crate) else_sinks_tail: bool,
+    pub(crate) implicit_else_sinks_tail: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SwitchTailReachability {
     pub(crate) case_sinks_tail: Vec<bool>,
     pub(crate) default_sinks_tail: bool,
@@ -16,6 +31,37 @@ pub(crate) enum TryTailSinkPlan {
 
 pub(crate) fn block_reaches_following_stmt(stmts: &[Stmt]) -> bool {
     matches!(block_terminal_effect(stmts), TerminalEffect::FallsThrough)
+}
+
+pub(crate) fn analyze_if_tail_paths(
+    then_body: &[Stmt],
+    elseif_clauses: &[(Expr, Vec<Stmt>)],
+    else_body: &Option<Vec<Stmt>>,
+) -> IfTailReachability {
+    IfTailReachability {
+        then_sinks_tail: block_reaches_following_stmt(then_body),
+        elseif_sinks_tail: elseif_clauses
+            .iter()
+            .map(|(_, body)| block_reaches_following_stmt(body))
+            .collect(),
+        else_sinks_tail: else_body
+            .as_ref()
+            .is_some_and(|body| block_reaches_following_stmt(body)),
+        implicit_else_sinks_tail: else_body.is_none(),
+    }
+}
+
+pub(crate) fn analyze_ifdef_tail_paths(
+    then_body: &[Stmt],
+    else_body: &Option<Vec<Stmt>>,
+) -> IfDefTailReachability {
+    IfDefTailReachability {
+        then_sinks_tail: block_reaches_following_stmt(then_body),
+        else_sinks_tail: else_body
+            .as_ref()
+            .is_some_and(|body| block_reaches_following_stmt(body)),
+        implicit_else_sinks_tail: else_body.is_none(),
+    }
 }
 
 pub(crate) fn analyze_switch_tail_paths(
