@@ -1,0 +1,3194 @@
+use super::*;
+use crate::names::Name;
+use crate::parser::ast::{ClassProperty, StaticReceiver, Visibility};
+use crate::span::Span;
+
+#[test]
+fn test_effect_analysis_recognizes_pure_builtin_calls() {
+    let expr = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::from("strlen"),
+            args: vec![Expr::string_lit("abc")],
+        },
+        Span::dummy(),
+    );
+
+    assert!(!expr_has_side_effects(&expr));
+    assert!(!expr_effect(&expr).may_throw);
+    assert!(!expr_is_observable(&expr));
+}
+
+#[test]
+fn test_effect_analysis_treats_property_and_array_reads_as_pure() {
+    let property = Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(Expr::var("entry")),
+            property: "name".to_string(),
+        },
+        Span::dummy(),
+    );
+    let array = Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(Expr::var("items")),
+            index: Box::new(Expr::int_lit(0)),
+        },
+        Span::dummy(),
+    );
+
+    assert!(!expr_has_side_effects(&property));
+    assert!(!expr_effect(&property).may_throw);
+    assert!(!expr_has_side_effects(&array));
+    assert!(!expr_effect(&array).may_throw);
+}
+
+#[test]
+fn test_program_function_effects_recognize_pure_user_functions() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "len3".to_string(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![Stmt::new(
+                StmtKind::Return(Some(Expr::new(
+                    ExprKind::FunctionCall {
+                        name: Name::from("strlen"),
+                        args: vec![Expr::string_lit("abc")],
+                    },
+                    Span::dummy(),
+                ))),
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+    assert_eq!(function_effects.get("len3"), Some(&Effect::PURE));
+}
+
+#[test]
+fn test_program_function_effects_propagate_throwing_calls() {
+    let program = vec![
+        Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "boom".to_string(),
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![Stmt::new(
+                    StmtKind::Throw(Expr::new(
+                        ExprKind::NewObject {
+                            class_name: Name::from("Exception"),
+                            args: Vec::new(),
+                        },
+                        Span::dummy(),
+                    )),
+                    Span::dummy(),
+                )],
+            },
+            Span::dummy(),
+        ),
+        Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "wrapper".to_string(),
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![Stmt::new(
+                    StmtKind::Return(Some(Expr::new(
+                        ExprKind::FunctionCall {
+                            name: Name::from("boom"),
+                            args: Vec::new(),
+                        },
+                        Span::dummy(),
+                    ))),
+                    Span::dummy(),
+                )],
+            },
+            Span::dummy(),
+        ),
+    ];
+
+    let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+    assert_eq!(
+        function_effects.get("wrapper"),
+        Some(&Effect::PURE.with_side_effects().with_may_throw())
+    );
+}
+
+#[test]
+fn test_program_static_method_effects_recognize_pure_static_methods() {
+    let program = vec![Stmt::new(
+        StmtKind::ClassDecl {
+            name: "Util".to_string(),
+            extends: None,
+            implements: Vec::new(),
+            is_abstract: false,
+            is_readonly_class: false,
+            trait_uses: Vec::new(),
+            properties: Vec::new(),
+            methods: vec![ClassMethod {
+                name: "len3".to_string(),
+                visibility: Visibility::Public,
+                is_static: true,
+                is_abstract: false,
+                has_body: true,
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![Stmt::new(
+                    StmtKind::Return(Some(Expr::new(
+                        ExprKind::FunctionCall {
+                            name: Name::from("strlen"),
+                            args: vec![Expr::string_lit("abc")],
+                        },
+                        Span::dummy(),
+                    ))),
+                    Span::dummy(),
+                )],
+                span: Span::dummy(),
+            }],
+        },
+        Span::dummy(),
+    )];
+
+    let (_, static_method_effects, _) = compute_program_callable_effects(&program);
+
+    assert_eq!(
+        static_method_effects.get("Util::len3"),
+        Some(&Effect::PURE)
+    );
+}
+
+#[test]
+fn test_program_static_method_effects_resolve_self_receiver() {
+    let program = vec![Stmt::new(
+        StmtKind::ClassDecl {
+            name: "Util".to_string(),
+            extends: None,
+            implements: Vec::new(),
+            is_abstract: false,
+            is_readonly_class: false,
+            trait_uses: Vec::new(),
+            properties: Vec::new(),
+            methods: vec![
+                ClassMethod {
+                    name: "len3".to_string(),
+                    visibility: Visibility::Public,
+                    is_static: true,
+                    is_abstract: false,
+                    has_body: true,
+                    params: Vec::new(),
+                    variadic: None,
+                    return_type: None,
+                    body: vec![Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::FunctionCall {
+                                name: Name::from("strlen"),
+                                args: vec![Expr::string_lit("abc")],
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    )],
+                    span: Span::dummy(),
+                },
+                ClassMethod {
+                    name: "relay".to_string(),
+                    visibility: Visibility::Public,
+                    is_static: true,
+                    is_abstract: false,
+                    has_body: true,
+                    params: Vec::new(),
+                    variadic: None,
+                    return_type: None,
+                    body: vec![Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::StaticMethodCall {
+                                receiver: StaticReceiver::Self_,
+                                method: "len3".to_string(),
+                                args: Vec::new(),
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    )],
+                    span: Span::dummy(),
+                },
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let (_, static_method_effects, _) = compute_program_callable_effects(&program);
+
+    assert_eq!(
+        static_method_effects.get("Util::relay"),
+        Some(&Effect::PURE)
+    );
+}
+
+#[test]
+fn test_program_static_method_effects_resolve_parent_receiver() {
+    let program = vec![
+        Stmt::new(
+            StmtKind::ClassDecl {
+                name: "Base".to_string(),
+                extends: None,
+                implements: Vec::new(),
+                is_abstract: false,
+                is_readonly_class: false,
+                trait_uses: Vec::new(),
+                properties: Vec::new(),
+                methods: vec![ClassMethod {
+                    name: "len3".to_string(),
+                    visibility: Visibility::Public,
+                    is_static: true,
+                    is_abstract: false,
+                    has_body: true,
+                    params: Vec::new(),
+                    variadic: None,
+                    return_type: None,
+                    body: vec![Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::FunctionCall {
+                                name: Name::from("strlen"),
+                                args: vec![Expr::string_lit("abc")],
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    )],
+                    span: Span::dummy(),
+                }],
+            },
+            Span::dummy(),
+        ),
+        Stmt::new(
+            StmtKind::ClassDecl {
+                name: "Child".to_string(),
+                extends: Some(Name::from("Base")),
+                implements: Vec::new(),
+                is_abstract: false,
+                is_readonly_class: false,
+                trait_uses: Vec::new(),
+                properties: Vec::new(),
+                methods: vec![ClassMethod {
+                    name: "relay".to_string(),
+                    visibility: Visibility::Public,
+                    is_static: true,
+                    is_abstract: false,
+                    has_body: true,
+                    params: Vec::new(),
+                    variadic: None,
+                    return_type: None,
+                    body: vec![Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::StaticMethodCall {
+                                receiver: StaticReceiver::Parent,
+                                method: "len3".to_string(),
+                                args: Vec::new(),
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    )],
+                    span: Span::dummy(),
+                }],
+            },
+            Span::dummy(),
+        ),
+    ];
+
+    let (_, static_method_effects, _) = compute_program_callable_effects(&program);
+
+    assert_eq!(
+        static_method_effects.get("Child::relay"),
+        Some(&Effect::PURE)
+    );
+}
+
+#[test]
+fn test_program_private_instance_method_effects_recognize_private_methods() {
+    let program = vec![Stmt::new(
+        StmtKind::ClassDecl {
+            name: "Util".to_string(),
+            extends: None,
+            implements: Vec::new(),
+            is_abstract: false,
+            is_readonly_class: false,
+            trait_uses: Vec::new(),
+            properties: Vec::new(),
+            methods: vec![ClassMethod {
+                name: "len3".to_string(),
+                visibility: Visibility::Private,
+                is_static: false,
+                is_abstract: false,
+                has_body: true,
+                params: Vec::new(),
+                variadic: None,
+                return_type: None,
+                body: vec![Stmt::new(
+                    StmtKind::Return(Some(Expr::new(
+                        ExprKind::FunctionCall {
+                            name: Name::from("strlen"),
+                            args: vec![Expr::string_lit("abc")],
+                        },
+                        Span::dummy(),
+                    ))),
+                    Span::dummy(),
+                )],
+                span: Span::dummy(),
+            }],
+        },
+        Span::dummy(),
+    )];
+
+    let (_, _, private_instance_method_effects) = compute_program_callable_effects(&program);
+
+    assert_eq!(
+        private_instance_method_effects.get("Util::len3"),
+        Some(&Effect::PURE)
+    );
+}
+
+#[test]
+fn test_effect_analysis_tracks_pure_iife_expr_calls() {
+    let expr = Expr::new(
+        ExprKind::ExprCall {
+            callee: Box::new(Expr::new(
+                ExprKind::Closure {
+                    params: Vec::new(),
+                    variadic: None,
+                    body: vec![Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::FunctionCall {
+                                name: Name::from("strlen"),
+                                args: vec![Expr::string_lit("abc")],
+                            },
+                            Span::dummy(),
+                        ))),
+                        Span::dummy(),
+                    )],
+                    is_arrow: false,
+                    captures: Vec::new(),
+                },
+                Span::dummy(),
+            )),
+            args: Vec::new(),
+        },
+        Span::dummy(),
+    );
+
+    assert!(!expr_has_side_effects(&expr));
+    assert!(!expr_effect(&expr).may_throw);
+    assert!(!expr_is_observable(&expr));
+}
+
+#[test]
+fn test_program_function_effects_track_closure_alias_locals() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "relay".to_string(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![
+                Stmt::new(
+                    StmtKind::Assign {
+                        name: "f".to_string(),
+                        value: Expr::new(
+                            ExprKind::Closure {
+                                params: Vec::new(),
+                                variadic: None,
+                                body: vec![Stmt::new(
+                                    StmtKind::Return(Some(Expr::new(
+                                        ExprKind::FunctionCall {
+                                            name: Name::from("strlen"),
+                                            args: vec![Expr::string_lit("abc")],
+                                        },
+                                        Span::dummy(),
+                                    ))),
+                                    Span::dummy(),
+                                )],
+                                is_arrow: false,
+                                captures: Vec::new(),
+                            },
+                            Span::dummy(),
+                        ),
+                    },
+                    Span::dummy(),
+                ),
+                Stmt::new(
+                    StmtKind::Return(Some(Expr::new(
+                        ExprKind::ClosureCall {
+                            var: "f".to_string(),
+                            args: Vec::new(),
+                        },
+                        Span::dummy(),
+                    ))),
+                    Span::dummy(),
+                ),
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+    assert_eq!(
+        function_effects.get("relay"),
+        Some(&Effect::PURE.with_side_effects())
+    );
+}
+
+#[test]
+fn test_program_function_effects_track_callable_alias_through_ternary() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "relay".to_string(),
+            params: vec![("flag".to_string(), None, None, false)],
+            variadic: None,
+            return_type: None,
+            body: vec![
+                Stmt::new(
+                    StmtKind::Assign {
+                        name: "f".to_string(),
+                        value: Expr::new(
+                            ExprKind::Ternary {
+                                condition: Box::new(Expr::var("flag")),
+                                then_expr: Box::new(Expr::new(
+                                    ExprKind::FirstClassCallable(CallableTarget::Function(
+                                        Name::from("strlen"),
+                                    )),
+                                    Span::dummy(),
+                                )),
+                                else_expr: Box::new(Expr::new(
+                                    ExprKind::FirstClassCallable(CallableTarget::Function(
+                                        Name::from("strlen"),
+                                    )),
+                                    Span::dummy(),
+                                )),
+                            },
+                            Span::dummy(),
+                        ),
+                    },
+                    Span::dummy(),
+                ),
+                Stmt::new(
+                    StmtKind::Return(Some(Expr::new(
+                        ExprKind::ClosureCall {
+                            var: "f".to_string(),
+                            args: vec![Expr::string_lit("abc")],
+                        },
+                        Span::dummy(),
+                    ))),
+                    Span::dummy(),
+                ),
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+    assert_eq!(
+        function_effects.get("relay"),
+        Some(&Effect::PURE.with_side_effects())
+    );
+}
+
+#[test]
+fn test_program_function_effects_track_callable_alias_through_match() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "relay".to_string(),
+            params: vec![("flag".to_string(), None, None, false)],
+            variadic: None,
+            return_type: None,
+            body: vec![
+                Stmt::new(
+                    StmtKind::Assign {
+                        name: "f".to_string(),
+                        value: Expr::new(
+                            ExprKind::Match {
+                                subject: Box::new(Expr::var("flag")),
+                                arms: vec![(
+                                    vec![Expr::int_lit(1)],
+                                    Expr::new(
+                                        ExprKind::FirstClassCallable(
+                                            CallableTarget::Function(Name::from("strlen")),
+                                        ),
+                                        Span::dummy(),
+                                    ),
+                                )],
+                                default: Some(Box::new(Expr::new(
+                                    ExprKind::FirstClassCallable(CallableTarget::Function(
+                                        Name::from("strlen"),
+                                    )),
+                                    Span::dummy(),
+                                ))),
+                            },
+                            Span::dummy(),
+                        ),
+                    },
+                    Span::dummy(),
+                ),
+                Stmt::new(
+                    StmtKind::Return(Some(Expr::new(
+                        ExprKind::ClosureCall {
+                            var: "f".to_string(),
+                            args: vec![Expr::string_lit("abc")],
+                        },
+                        Span::dummy(),
+                    ))),
+                    Span::dummy(),
+                ),
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+    assert_eq!(
+        function_effects.get("relay"),
+        Some(&Effect::PURE.with_side_effects())
+    );
+}
+
+#[test]
+fn test_program_function_effects_track_callable_alias_through_null_coalesce() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "relay".to_string(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![
+                Stmt::new(
+                    StmtKind::Assign {
+                        name: "f".to_string(),
+                        value: Expr::new(
+                            ExprKind::NullCoalesce {
+                                value: Box::new(Expr::new(
+                                    ExprKind::FirstClassCallable(CallableTarget::Function(
+                                        Name::from("strlen"),
+                                    )),
+                                    Span::dummy(),
+                                )),
+                                default: Box::new(Expr::new(
+                                    ExprKind::FirstClassCallable(CallableTarget::Function(
+                                        Name::from("strlen"),
+                                    )),
+                                    Span::dummy(),
+                                )),
+                            },
+                            Span::dummy(),
+                        ),
+                    },
+                    Span::dummy(),
+                ),
+                Stmt::new(
+                    StmtKind::Return(Some(Expr::new(
+                        ExprKind::ClosureCall {
+                            var: "f".to_string(),
+                            args: vec![Expr::string_lit("abc")],
+                        },
+                        Span::dummy(),
+                    ))),
+                    Span::dummy(),
+                ),
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+    assert_eq!(
+        function_effects.get("relay"),
+        Some(&Effect::PURE.with_side_effects())
+    );
+}
+
+#[test]
+fn test_effect_analysis_tracks_named_first_class_callable_expr_calls() {
+    let expr = Expr::new(
+        ExprKind::ExprCall {
+            callee: Box::new(Expr::new(
+                ExprKind::FirstClassCallable(CallableTarget::Function(Name::from("strlen"))),
+                Span::dummy(),
+            )),
+            args: vec![Expr::string_lit("abc")],
+        },
+        Span::dummy(),
+    );
+
+    assert!(!expr_has_side_effects(&expr));
+    assert!(!expr_effect(&expr).may_throw);
+    assert!(!expr_is_observable(&expr));
+}
+
+#[test]
+fn test_program_function_effects_track_callable_alias_locals() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "relay".to_string(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![
+                Stmt::new(
+                    StmtKind::Assign {
+                        name: "f".to_string(),
+                        value: Expr::new(
+                            ExprKind::FirstClassCallable(CallableTarget::Function(Name::from(
+                                "strlen",
+                            ))),
+                            Span::dummy(),
+                        ),
+                    },
+                    Span::dummy(),
+                ),
+                Stmt::new(
+                    StmtKind::Assign {
+                        name: "g".to_string(),
+                        value: Expr::var("f"),
+                    },
+                    Span::dummy(),
+                ),
+                Stmt::new(
+                    StmtKind::Return(Some(Expr::new(
+                        ExprKind::ClosureCall {
+                            var: "g".to_string(),
+                            args: vec![Expr::string_lit("abc")],
+                        },
+                        Span::dummy(),
+                    ))),
+                    Span::dummy(),
+                ),
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+    assert_eq!(
+        function_effects.get("relay"),
+        Some(&Effect::PURE.with_side_effects())
+    );
+}
+
+#[test]
+fn test_program_function_effects_merge_callable_aliases_across_if_paths() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "relay".to_string(),
+            params: vec![("flag".to_string(), None, None, false)],
+            variadic: None,
+            return_type: None,
+            body: vec![
+                Stmt::new(
+                    StmtKind::If {
+                        condition: Expr::var("flag"),
+                        then_body: vec![Stmt::new(
+                            StmtKind::Assign {
+                                name: "g".to_string(),
+                                value: Expr::new(
+                                    ExprKind::FirstClassCallable(CallableTarget::Function(
+                                        Name::from("strlen"),
+                                    )),
+                                    Span::dummy(),
+                                ),
+                            },
+                            Span::dummy(),
+                        )],
+                        elseif_clauses: Vec::new(),
+                        else_body: Some(vec![Stmt::new(
+                            StmtKind::Assign {
+                                name: "g".to_string(),
+                                value: Expr::new(
+                                    ExprKind::FirstClassCallable(CallableTarget::Function(
+                                        Name::from("strlen"),
+                                    )),
+                                    Span::dummy(),
+                                ),
+                            },
+                            Span::dummy(),
+                        )]),
+                    },
+                    Span::dummy(),
+                ),
+                Stmt::new(
+                    StmtKind::Return(Some(Expr::new(
+                        ExprKind::ClosureCall {
+                            var: "g".to_string(),
+                            args: vec![Expr::string_lit("abc")],
+                        },
+                        Span::dummy(),
+                    ))),
+                    Span::dummy(),
+                ),
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+    assert_eq!(
+        function_effects.get("relay"),
+        Some(&Effect::PURE.with_side_effects())
+    );
+}
+
+#[test]
+fn test_program_function_effects_merge_callable_aliases_across_try_paths() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "relay".to_string(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![
+                Stmt::new(
+                    StmtKind::Try {
+                        try_body: vec![Stmt::new(
+                            StmtKind::Assign {
+                                name: "g".to_string(),
+                                value: Expr::new(
+                                    ExprKind::FirstClassCallable(CallableTarget::Function(
+                                        Name::from("strlen"),
+                                    )),
+                                    Span::dummy(),
+                                ),
+                            },
+                            Span::dummy(),
+                        )],
+                        catches: vec![crate::parser::ast::CatchClause {
+                            exception_types: vec![Name::from("Exception")],
+                            variable: Some("e".to_string()),
+                            body: vec![Stmt::new(
+                                StmtKind::Assign {
+                                    name: "g".to_string(),
+                                    value: Expr::new(
+                                        ExprKind::FirstClassCallable(CallableTarget::Function(
+                                            Name::from("strlen"),
+                                        )),
+                                        Span::dummy(),
+                                    ),
+                                },
+                                Span::dummy(),
+                            )],
+                        }],
+                        finally_body: Some(vec![Stmt::new(
+                            StmtKind::ExprStmt(Expr::string_lit("done")),
+                            Span::dummy(),
+                        )]),
+                    },
+                    Span::dummy(),
+                ),
+                Stmt::new(
+                    StmtKind::Return(Some(Expr::new(
+                        ExprKind::ClosureCall {
+                            var: "g".to_string(),
+                            args: vec![Expr::string_lit("abc")],
+                        },
+                        Span::dummy(),
+                    ))),
+                    Span::dummy(),
+                ),
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+    assert_eq!(
+        function_effects.get("relay"),
+        Some(&Effect::PURE.with_side_effects())
+    );
+}
+
+#[test]
+fn test_program_function_effects_merge_callable_aliases_across_switch_paths() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "relay".to_string(),
+            params: vec![("flag".to_string(), None, None, false)],
+            variadic: None,
+            return_type: None,
+            body: vec![
+                Stmt::new(
+                    StmtKind::Switch {
+                        subject: Expr::var("flag"),
+                        cases: vec![
+                            (
+                                vec![Expr::int_lit(1)],
+                                vec![
+                                    Stmt::new(
+                                        StmtKind::Assign {
+                                            name: "g".to_string(),
+                                            value: Expr::new(
+                                                ExprKind::FirstClassCallable(
+                                                    CallableTarget::Function(Name::from("strlen")),
+                                                ),
+                                                Span::dummy(),
+                                            ),
+                                        },
+                                        Span::dummy(),
+                                    ),
+                                    Stmt::new(StmtKind::Break, Span::dummy()),
+                                ],
+                            ),
+                            (vec![Expr::int_lit(2)], Vec::new()),
+                        ],
+                        default: Some(vec![Stmt::new(
+                            StmtKind::Assign {
+                                name: "g".to_string(),
+                                value: Expr::new(
+                                    ExprKind::FirstClassCallable(CallableTarget::Function(
+                                        Name::from("strlen"),
+                                    )),
+                                    Span::dummy(),
+                                ),
+                            },
+                            Span::dummy(),
+                        )]),
+                    },
+                    Span::dummy(),
+                ),
+                Stmt::new(
+                    StmtKind::Return(Some(Expr::new(
+                        ExprKind::ClosureCall {
+                            var: "g".to_string(),
+                            args: vec![Expr::string_lit("abc")],
+                        },
+                        Span::dummy(),
+                    ))),
+                    Span::dummy(),
+                ),
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+    assert_eq!(
+        function_effects.get("relay"),
+        Some(&Effect::PURE.with_side_effects())
+    );
+}
+
+#[test]
+fn test_fold_nested_integer_arithmetic() {
+    let program = vec![Stmt::new(
+        StmtKind::Echo(Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(Expr::new(
+                    ExprKind::BinaryOp {
+                        left: Box::new(Expr::int_lit(2)),
+                        op: BinOp::Add,
+                        right: Box::new(Expr::int_lit(3)),
+                    },
+                    Span::dummy(),
+                )),
+                op: BinOp::Mul,
+                right: Box::new(Expr::int_lit(4)),
+            },
+            Span::dummy(),
+        )),
+        Span::dummy(),
+    )];
+
+    let folded = fold_constants(program);
+
+    assert_eq!(folded, vec![Stmt::echo(Expr::int_lit(20))]);
+}
+
+#[test]
+fn test_propagate_constants_through_straight_line_locals() {
+    let program = vec![
+        Stmt::assign("x", Expr::int_lit(2)),
+        Stmt::assign("y", Expr::int_lit(3)),
+        Stmt::echo(Expr::binop(Expr::var("x"), BinOp::Pow, Expr::var("y"))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated,
+        vec![
+            Stmt::assign("x", Expr::int_lit(2)),
+            Stmt::assign("y", Expr::int_lit(3)),
+            Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy())),
+        ]
+    );
+}
+
+#[test]
+fn test_propagate_constants_merges_identical_if_assignments() {
+    let program = vec![
+        Stmt::new(
+            StmtKind::If {
+                condition: Expr::var("flag"),
+                then_body: vec![Stmt::assign("base", Expr::int_lit(2))],
+                elseif_clauses: Vec::new(),
+                else_body: Some(vec![Stmt::assign("base", Expr::int_lit(2))]),
+            },
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[1],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
+fn test_propagate_constants_invalidates_non_scalar_reassignment() {
+    let program = vec![
+        Stmt::assign("x", Expr::int_lit(2)),
+        Stmt::assign(
+            "x",
+            Expr::new(
+                ExprKind::FunctionCall {
+                    name: Name::from("strlen"),
+                    args: vec![Expr::string_lit("abc")],
+                },
+                Span::dummy(),
+            ),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("x"), BinOp::Add, Expr::int_lit(1))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[2],
+        Stmt::echo(Expr::binop(Expr::var("x"), BinOp::Add, Expr::int_lit(1)))
+    );
+}
+
+#[test]
+fn test_propagate_constants_merges_identical_switch_assignments() {
+    let program = vec![
+        Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::var("flag"),
+                cases: vec![(
+                    vec![Expr::int_lit(1)],
+                    vec![
+                        Stmt::assign("base", Expr::int_lit(2)),
+                        Stmt::new(StmtKind::Break, Span::dummy()),
+                    ],
+                )],
+                default: Some(vec![Stmt::assign("base", Expr::int_lit(2))]),
+            },
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[1],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
+fn test_propagate_constants_merges_identical_try_catch_assignments() {
+    let program = vec![
+        Stmt::new(
+            StmtKind::Try {
+                try_body: vec![Stmt::assign("base", Expr::int_lit(2))],
+                catches: vec![crate::parser::ast::CatchClause {
+                    exception_types: vec![Name::from("Exception")],
+                    variable: Some("e".to_string()),
+                    body: vec![Stmt::assign("base", Expr::int_lit(2))],
+                }],
+                finally_body: None,
+            },
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[1],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
+fn test_propagate_constants_tracks_uniform_ternary_assignment() {
+    let program = vec![
+        Stmt::assign(
+            "base",
+            Expr::new(
+                ExprKind::Ternary {
+                    condition: Box::new(Expr::var("flag")),
+                    then_expr: Box::new(Expr::int_lit(2)),
+                    else_expr: Box::new(Expr::int_lit(2)),
+                },
+                Span::dummy(),
+            ),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[1],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
+fn test_propagate_constants_tracks_uniform_match_assignment() {
+    let program = vec![
+        Stmt::assign(
+            "base",
+            Expr::new(
+                ExprKind::Match {
+                    subject: Box::new(Expr::var("flag")),
+                    arms: vec![(vec![Expr::int_lit(1)], Expr::int_lit(2))],
+                    default: Some(Box::new(Expr::int_lit(2))),
+                },
+                Span::dummy(),
+            ),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[1],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
+fn test_propagate_constants_tracks_scalar_list_unpack() {
+    let program = vec![
+        Stmt::new(
+            StmtKind::ListUnpack {
+                vars: vec!["base".to_string(), "exp".to_string()],
+                value: Expr::new(
+                    ExprKind::ArrayLiteral(vec![Expr::int_lit(2), Expr::int_lit(3)]),
+                    Span::dummy(),
+                ),
+            },
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::var("exp"))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[1],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
+fn test_propagate_constants_preserves_unmodified_scalar_across_for_loop() {
+    let program = vec![
+        Stmt::assign("base", Expr::int_lit(2)),
+        Stmt::new(
+            StmtKind::For {
+                init: Some(Box::new(Stmt::assign("i", Expr::int_lit(0)))),
+                condition: Some(Expr::binop(Expr::var("i"), BinOp::Lt, Expr::int_lit(3))),
+                update: Some(Box::new(Stmt::new(
+                    StmtKind::ExprStmt(Expr::new(
+                        ExprKind::PostIncrement("i".to_string()),
+                        Span::dummy(),
+                    )),
+                    Span::dummy(),
+                ))),
+                body: vec![Stmt::echo(Expr::var("i"))],
+            },
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[2],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
+fn test_propagate_constants_preserves_unmodified_scalar_inside_while_loop_body() {
+    let program = vec![
+        Stmt::assign("base", Expr::int_lit(2)),
+        Stmt::assign("i", Expr::int_lit(0)),
+        Stmt::new(
+            StmtKind::While {
+                condition: Expr::binop(Expr::var("i"), BinOp::Lt, Expr::int_lit(2)),
+                body: vec![
+                    Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+                    Stmt::new(
+                        StmtKind::ExprStmt(Expr::new(
+                            ExprKind::PostIncrement("i".to_string()),
+                            Span::dummy(),
+                        )),
+                        Span::dummy(),
+                    ),
+                ],
+            },
+            Span::dummy(),
+        ),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    let StmtKind::While { body, .. } = &propagated[2].kind else {
+        panic!("expected while");
+    };
+
+    assert_eq!(
+        body[0],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
+fn test_propagate_constants_preserves_unmodified_scalar_across_loop_with_switch() {
+    let program = vec![
+        Stmt::assign("base", Expr::int_lit(2)),
+        Stmt::new(
+            StmtKind::For {
+                init: Some(Box::new(Stmt::assign("i", Expr::int_lit(0)))),
+                condition: Some(Expr::binop(Expr::var("i"), BinOp::Lt, Expr::int_lit(3))),
+                update: Some(Box::new(Stmt::new(
+                    StmtKind::ExprStmt(Expr::new(
+                        ExprKind::PostIncrement("i".to_string()),
+                        Span::dummy(),
+                    )),
+                    Span::dummy(),
+                ))),
+                body: vec![Stmt::new(
+                    StmtKind::Switch {
+                        subject: Expr::var("i"),
+                        cases: vec![(
+                            vec![Expr::int_lit(1)],
+                            vec![
+                                Stmt::echo(Expr::var("i")),
+                                Stmt::new(StmtKind::Break, Span::dummy()),
+                            ],
+                        )],
+                        default: Some(vec![Stmt::echo(Expr::var("i"))]),
+                    },
+                    Span::dummy(),
+                )],
+            },
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[2],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
+fn test_propagate_constants_preserves_unmodified_scalar_across_loop_with_try() {
+    let program = vec![
+        Stmt::assign("base", Expr::int_lit(2)),
+        Stmt::new(
+            StmtKind::For {
+                init: Some(Box::new(Stmt::assign("i", Expr::int_lit(0)))),
+                condition: Some(Expr::binop(Expr::var("i"), BinOp::Lt, Expr::int_lit(3))),
+                update: Some(Box::new(Stmt::new(
+                    StmtKind::ExprStmt(Expr::new(
+                        ExprKind::PostIncrement("i".to_string()),
+                        Span::dummy(),
+                    )),
+                    Span::dummy(),
+                ))),
+                body: vec![Stmt::new(
+                    StmtKind::Try {
+                        try_body: vec![Stmt::echo(Expr::var("i"))],
+                        catches: vec![crate::parser::ast::CatchClause {
+                            exception_types: vec![Name::from("Exception")],
+                            variable: Some("e".to_string()),
+                            body: vec![Stmt::echo(Expr::int_lit(9))],
+                        }],
+                        finally_body: Some(vec![]),
+                    },
+                    Span::dummy(),
+                )],
+            },
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[2],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
+fn test_propagate_constants_preserves_unmodified_scalar_across_foreach_loop() {
+    let program = vec![
+        Stmt::assign("base", Expr::int_lit(2)),
+        Stmt::new(
+            StmtKind::Foreach {
+                array: Expr::new(
+                    ExprKind::ArrayLiteral(vec![
+                        Expr::int_lit(1),
+                        Expr::int_lit(2),
+                        Expr::int_lit(3),
+                    ]),
+                    Span::dummy(),
+                ),
+                key_var: Some("k".to_string()),
+                value_var: "value".to_string(),
+                body: vec![Stmt::echo(Expr::var("value"))],
+            },
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[2],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
+fn test_propagate_constants_tracks_stable_for_init_assignments() {
+    let program = vec![
+        Stmt::assign("base", Expr::int_lit(2)),
+        Stmt::assign("i", Expr::int_lit(0)),
+        Stmt::new(
+            StmtKind::For {
+                init: Some(Box::new(Stmt::assign("exp", Expr::int_lit(3)))),
+                condition: Some(Expr::binop(Expr::var("i"), BinOp::Lt, Expr::int_lit(2))),
+                update: Some(Box::new(Stmt::new(
+                    StmtKind::ExprStmt(Expr::new(
+                        ExprKind::PostIncrement("i".to_string()),
+                        Span::dummy(),
+                    )),
+                    Span::dummy(),
+                ))),
+                body: vec![Stmt::echo(Expr::binop(
+                    Expr::var("base"),
+                    BinOp::Pow,
+                    Expr::var("exp"),
+                ))],
+            },
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::var("exp")),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    let StmtKind::For { body, .. } = &propagated[2].kind else {
+        panic!("expected for");
+    };
+
+    assert_eq!(
+        body[0],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+    assert_eq!(
+        propagated[3],
+        Stmt::echo(Expr::new(ExprKind::IntLiteral(3), Span::dummy()))
+    );
+}
+
+#[test]
+fn test_propagate_constants_preserves_unmodified_scalar_across_nested_loops() {
+    let program = vec![
+        Stmt::assign("base", Expr::int_lit(2)),
+        Stmt::assign("i", Expr::int_lit(0)),
+        Stmt::new(
+            StmtKind::For {
+                init: None,
+                condition: Some(Expr::binop(Expr::var("i"), BinOp::Lt, Expr::int_lit(2))),
+                update: Some(Box::new(Stmt::new(
+                    StmtKind::ExprStmt(Expr::new(
+                        ExprKind::PostIncrement("i".to_string()),
+                        Span::dummy(),
+                    )),
+                    Span::dummy(),
+                ))),
+                body: vec![
+                    Stmt::assign("j", Expr::int_lit(0)),
+                    Stmt::new(
+                        StmtKind::While {
+                            condition: Expr::binop(
+                                Expr::var("j"),
+                                BinOp::Lt,
+                                Expr::int_lit(2),
+                            ),
+                            body: vec![
+                                Stmt::echo(Expr::var("j")),
+                                Stmt::new(
+                                    StmtKind::ExprStmt(Expr::new(
+                                        ExprKind::PostIncrement("j".to_string()),
+                                        Span::dummy(),
+                                    )),
+                                    Span::dummy(),
+                                ),
+                            ],
+                        },
+                        Span::dummy(),
+                    ),
+                ],
+            },
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[3],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
+fn test_propagate_constants_preserves_unmodified_scalar_across_loop_local_array_writes() {
+    let program = vec![
+        Stmt::assign("base", Expr::int_lit(2)),
+        Stmt::new(
+            StmtKind::For {
+                init: Some(Box::new(Stmt::assign("i", Expr::int_lit(0)))),
+                condition: Some(Expr::binop(Expr::var("i"), BinOp::Lt, Expr::int_lit(3))),
+                update: Some(Box::new(Stmt::new(
+                    StmtKind::ExprStmt(Expr::new(
+                        ExprKind::PostIncrement("i".to_string()),
+                        Span::dummy(),
+                    )),
+                    Span::dummy(),
+                ))),
+                body: vec![
+                    Stmt::new(
+                        StmtKind::ArrayPush {
+                            array: "items".to_string(),
+                            value: Expr::var("i"),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::new(
+                        StmtKind::ArrayAssign {
+                            array: "items".to_string(),
+                            index: Expr::int_lit(0),
+                            value: Expr::var("i"),
+                        },
+                        Span::dummy(),
+                    ),
+                ],
+            },
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[2],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
+fn test_propagate_constants_preserves_unmodified_scalar_across_loop_property_writes() {
+    let program = vec![
+        Stmt::assign("base", Expr::int_lit(2)),
+        Stmt::new(
+            StmtKind::For {
+                init: Some(Box::new(Stmt::assign("i", Expr::int_lit(0)))),
+                condition: Some(Expr::binop(Expr::var("i"), BinOp::Lt, Expr::int_lit(3))),
+                update: Some(Box::new(Stmt::new(
+                    StmtKind::ExprStmt(Expr::new(
+                        ExprKind::PostIncrement("i".to_string()),
+                        Span::dummy(),
+                    )),
+                    Span::dummy(),
+                ))),
+                body: vec![
+                    Stmt::new(
+                        StmtKind::PropertyAssign {
+                            object: Box::new(Expr::var("box")),
+                            property: "last".to_string(),
+                            value: Expr::var("i"),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::new(
+                        StmtKind::PropertyArrayPush {
+                            object: Box::new(Expr::var("box")),
+                            property: "items".to_string(),
+                            value: Expr::var("i"),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::new(
+                        StmtKind::PropertyArrayAssign {
+                            object: Box::new(Expr::var("box")),
+                            property: "items".to_string(),
+                            index: Expr::int_lit(0),
+                            value: Expr::var("i"),
+                        },
+                        Span::dummy(),
+                    ),
+                ],
+            },
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[2],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
+fn test_propagate_constants_preserves_unmodified_scalar_across_unset() {
+    let program = vec![
+        Stmt::assign("base", Expr::int_lit(2)),
+        Stmt::assign("tmp", Expr::int_lit(9)),
+        Stmt::new(
+            StmtKind::ExprStmt(Expr::new(
+                ExprKind::FunctionCall {
+                    name: "unset".into(),
+                    args: vec![Expr::var("tmp")],
+                },
+                Span::dummy(),
+            )),
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[3],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
+fn test_fold_constant_pow_to_float_literal() {
+    let program = vec![Stmt::echo(Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(Expr::int_lit(2)),
+            op: BinOp::Pow,
+            right: Box::new(Expr::int_lit(3)),
+        },
+        Span::dummy(),
+    ))];
+
+    let folded = fold_constants(program);
+
+    assert_eq!(
+        folded,
+        vec![Stmt::echo(Expr::new(
+            ExprKind::FloatLiteral(8.0),
+            Span::dummy(),
+        ))]
+    );
+}
+
+#[test]
+fn test_skip_division_by_zero_fold() {
+    let expr = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(Expr::int_lit(5)),
+            op: BinOp::Div,
+            right: Box::new(Expr::int_lit(0)),
+        },
+        Span::dummy(),
+    );
+
+    let folded = fold_constants(vec![Stmt::echo(expr.clone())]);
+
+    assert_eq!(folded, vec![Stmt::echo(expr)]);
+}
+
+#[test]
+fn test_fold_string_concat_and_property_default() {
+    let property = ClassProperty {
+        name: "label".to_string(),
+        visibility: Visibility::Public,
+        readonly: false,
+        default: Some(Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(Expr::string_lit("hello ")),
+                op: BinOp::Concat,
+                right: Box::new(Expr::string_lit("world")),
+            },
+            Span::dummy(),
+        )),
+        span: Span::dummy(),
+    };
+
+    let folded = fold_constants(vec![Stmt::new(
+        StmtKind::ClassDecl {
+            name: "Greeter".to_string(),
+            extends: None,
+            implements: Vec::new(),
+            is_abstract: false,
+            is_readonly_class: false,
+            trait_uses: Vec::new(),
+            properties: vec![property],
+            methods: Vec::new(),
+        },
+        Span::dummy(),
+    )]);
+
+    let StmtKind::ClassDecl { properties, .. } = &folded[0].kind else {
+        panic!("expected class declaration");
+    };
+    assert_eq!(
+        properties[0].default,
+        Some(Expr::string_lit("hello world"))
+    );
+}
+
+#[test]
+fn test_fold_strict_and_numeric_comparisons() {
+    let program = vec![
+        Stmt::echo(Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(Expr::int_lit(2)),
+                op: BinOp::StrictEq,
+                right: Box::new(Expr::int_lit(2)),
+            },
+            Span::dummy(),
+        )),
+        Stmt::echo(Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(Expr::float_lit(2.5)),
+                op: BinOp::Lt,
+                right: Box::new(Expr::float_lit(3.0)),
+            },
+            Span::dummy(),
+        )),
+        Stmt::echo(Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(Expr::int_lit(2)),
+                op: BinOp::Spaceship,
+                right: Box::new(Expr::int_lit(3)),
+            },
+            Span::dummy(),
+        )),
+    ];
+
+    let folded = fold_constants(program);
+
+    assert_eq!(
+        folded,
+        vec![
+            Stmt::echo(Expr::new(ExprKind::BoolLiteral(true), Span::dummy())),
+            Stmt::echo(Expr::new(ExprKind::BoolLiteral(true), Span::dummy())),
+            Stmt::echo(Expr::int_lit(-1)),
+        ]
+    );
+}
+
+#[test]
+fn test_fold_null_coalesce_and_ternary_only_for_scalar_constants() {
+    let program = vec![
+        Stmt::echo(Expr::new(
+            ExprKind::NullCoalesce {
+                value: Box::new(Expr::new(ExprKind::Null, Span::dummy())),
+                default: Box::new(Expr::string_lit("fallback")),
+            },
+            Span::dummy(),
+        )),
+        Stmt::echo(Expr::new(
+            ExprKind::Ternary {
+                condition: Box::new(Expr::string_lit("0")),
+                then_expr: Box::new(Expr::int_lit(10)),
+                else_expr: Box::new(Expr::int_lit(20)),
+            },
+            Span::dummy(),
+        )),
+    ];
+
+    let folded = fold_constants(program);
+
+    assert_eq!(
+        folded,
+        vec![
+            Stmt::echo(Expr::string_lit("fallback")),
+            Stmt::echo(Expr::int_lit(20)),
+        ]
+    );
+}
+
+#[test]
+fn test_fold_logical_ops_and_not_using_php_truthiness() {
+    let program = vec![
+        Stmt::echo(Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(Expr::string_lit("0")),
+                op: BinOp::Or,
+                right: Box::new(Expr::string_lit("hello")),
+            },
+            Span::dummy(),
+        )),
+        Stmt::echo(Expr::new(
+            ExprKind::Not(Box::new(Expr::string_lit("0"))),
+            Span::dummy(),
+        )),
+    ];
+
+    let folded = fold_constants(program);
+
+    assert_eq!(
+        folded,
+        vec![
+            Stmt::echo(Expr::new(ExprKind::BoolLiteral(true), Span::dummy())),
+            Stmt::echo(Expr::new(ExprKind::BoolLiteral(true), Span::dummy())),
+        ]
+    );
+}
+
+#[test]
+fn test_fold_scalar_casts_when_result_is_unambiguous() {
+    let program = vec![
+        Stmt::echo(Expr::new(
+            ExprKind::Cast {
+                target: CastType::Int,
+                expr: Box::new(Expr::float_lit(3.7)),
+            },
+            Span::dummy(),
+        )),
+        Stmt::echo(Expr::new(
+            ExprKind::Cast {
+                target: CastType::Float,
+                expr: Box::new(Expr::string_lit("3.14")),
+            },
+            Span::dummy(),
+        )),
+        Stmt::echo(Expr::new(
+            ExprKind::Cast {
+                target: CastType::Bool,
+                expr: Box::new(Expr::string_lit("0")),
+            },
+            Span::dummy(),
+        )),
+        Stmt::echo(Expr::new(
+            ExprKind::Cast {
+                target: CastType::String,
+                expr: Box::new(Expr::int_lit(42)),
+            },
+            Span::dummy(),
+        )),
+    ];
+
+    let folded = fold_constants(program);
+
+    assert_eq!(
+        folded,
+        vec![
+            Stmt::echo(Expr::int_lit(3)),
+            Stmt::echo(Expr::float_lit(3.14)),
+            Stmt::echo(Expr::new(ExprKind::BoolLiteral(false), Span::dummy())),
+            Stmt::echo(Expr::string_lit("42")),
+        ]
+    );
+}
+
+#[test]
+fn test_keep_ambiguous_string_casts_unfolded() {
+    let expr = Expr::new(
+        ExprKind::Cast {
+            target: CastType::Int,
+            expr: Box::new(Expr::string_lit("42abc")),
+        },
+        Span::dummy(),
+    );
+
+    let folded = fold_constants(vec![Stmt::echo(expr.clone())]);
+
+    assert_eq!(folded, vec![Stmt::echo(expr)]);
+}
+
+#[test]
+fn test_prune_constant_if_chain() {
+    let program = vec![Stmt::new(
+        StmtKind::If {
+            condition: Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
+            then_body: vec![Stmt::echo(Expr::int_lit(1))],
+            elseif_clauses: vec![
+                (
+                    Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
+                    vec![Stmt::echo(Expr::int_lit(2))],
+                ),
+                (
+                    Expr::new(ExprKind::BoolLiteral(true), Span::dummy()),
+                    vec![Stmt::echo(Expr::int_lit(3))],
+                ),
+            ],
+            else_body: Some(vec![Stmt::echo(Expr::int_lit(4))]),
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = prune_constant_control_flow(program);
+
+    assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(3))]);
+}
+
+#[test]
+fn test_prune_while_false_and_do_while_false() {
+    let program = vec![
+        Stmt::new(
+            StmtKind::While {
+                condition: Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
+                body: vec![Stmt::echo(Expr::int_lit(1))],
+            },
+            Span::dummy(),
+        ),
+        Stmt::new(
+            StmtKind::DoWhile {
+                body: vec![Stmt::echo(Expr::int_lit(2))],
+                condition: Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
+            },
+            Span::dummy(),
+        ),
+    ];
+
+    let pruned = prune_constant_control_flow(program);
+
+    assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(2))]);
+}
+
+#[test]
+fn test_prune_for_false_keeps_init_only() {
+    let program = vec![Stmt::new(
+        StmtKind::For {
+            init: Some(Box::new(Stmt::assign("i", Expr::int_lit(1)))),
+            condition: Some(Expr::new(ExprKind::BoolLiteral(false), Span::dummy())),
+            update: Some(Box::new(Stmt::assign("i", Expr::int_lit(2)))),
+            body: vec![Stmt::echo(Expr::int_lit(3))],
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = prune_constant_control_flow(program);
+
+    assert_eq!(pruned, vec![Stmt::assign("i", Expr::int_lit(1))]);
+}
+
+#[test]
+fn test_prune_block_drops_statements_after_return() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "answer".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![
+                Stmt::new(StmtKind::Return(Some(Expr::int_lit(7))), Span::dummy()),
+                Stmt::echo(Expr::int_lit(9)),
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = prune_constant_control_flow(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &pruned[0].kind else {
+        panic!("expected function");
+    };
+    assert_eq!(body.len(), 1);
+    assert!(matches!(body[0].kind, StmtKind::Return(_)));
+}
+
+#[test]
+fn test_prune_drops_pure_expr_stmt() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "answer".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![
+                Stmt::new(
+                    StmtKind::ExprStmt(Expr::binop(Expr::int_lit(2), BinOp::Pow, Expr::int_lit(8))),
+                    Span::dummy(),
+                ),
+                Stmt::echo(Expr::int_lit(7)),
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = prune_constant_control_flow(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &pruned[0].kind else {
+        panic!("expected function");
+    };
+    assert_eq!(body.len(), 1);
+    assert_eq!(body[0], Stmt::echo(Expr::int_lit(7)));
+}
+
+#[test]
+fn test_prune_ternary_drops_unused_pure_branch() {
+    let program = vec![Stmt::assign(
+        "x",
+        Expr::new(
+            ExprKind::Ternary {
+                condition: Box::new(Expr::new(ExprKind::BoolLiteral(true), Span::dummy())),
+                then_expr: Box::new(Expr::var("answer")),
+                else_expr: Box::new(Expr::binop(Expr::int_lit(2), BinOp::Pow, Expr::int_lit(8))),
+            },
+            Span::dummy(),
+        ),
+    )];
+
+    let pruned = prune_constant_control_flow(program);
+
+    assert_eq!(pruned, vec![Stmt::assign("x", Expr::var("answer"))]);
+}
+
+#[test]
+fn test_prune_short_circuit_drops_unused_pure_rhs() {
+    let program = vec![Stmt::echo(Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(Expr::new(ExprKind::BoolLiteral(true), Span::dummy())),
+            op: BinOp::Or,
+            right: Box::new(Expr::binop(Expr::int_lit(2), BinOp::Pow, Expr::int_lit(8))),
+        },
+        Span::dummy(),
+    ))];
+
+    let pruned = prune_constant_control_flow(program);
+
+    assert_eq!(
+        pruned,
+        vec![Stmt::echo(Expr::new(ExprKind::BoolLiteral(true), Span::dummy()))]
+    );
+}
+
+#[test]
+fn test_prune_block_drops_statements_after_exhaustive_if() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "answer".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![
+                Stmt::new(
+                    StmtKind::If {
+                        condition: Expr::var("flag"),
+                        then_body: vec![Stmt::new(
+                            StmtKind::Return(Some(Expr::int_lit(7))),
+                            Span::dummy(),
+                        )],
+                        elseif_clauses: Vec::new(),
+                        else_body: Some(vec![Stmt::new(
+                            StmtKind::Return(Some(Expr::int_lit(8))),
+                            Span::dummy(),
+                        )]),
+                    },
+                    Span::dummy(),
+                ),
+                Stmt::echo(Expr::int_lit(9)),
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = prune_constant_control_flow(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &pruned[0].kind else {
+        panic!("expected function");
+    };
+    assert_eq!(body.len(), 1);
+    let StmtKind::If { .. } = &body[0].kind else {
+        panic!("expected if");
+    };
+}
+
+#[test]
+fn test_prune_block_drops_statements_after_exhaustive_switch() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "answer".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![
+                Stmt::new(
+                    StmtKind::Switch {
+                        subject: Expr::var("flag"),
+                        cases: vec![(
+                            vec![Expr::int_lit(1)],
+                            vec![Stmt::new(
+                                StmtKind::Return(Some(Expr::int_lit(7))),
+                                Span::dummy(),
+                            )],
+                        )],
+                        default: Some(vec![Stmt::new(
+                            StmtKind::Return(Some(Expr::int_lit(8))),
+                            Span::dummy(),
+                        )]),
+                    },
+                    Span::dummy(),
+                ),
+                Stmt::echo(Expr::int_lit(9)),
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = prune_constant_control_flow(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &pruned[0].kind else {
+        panic!("expected function");
+    };
+    assert_eq!(body.len(), 1);
+    let StmtKind::If { .. } = &body[0].kind else {
+        panic!("expected normalized if");
+    };
+}
+
+#[test]
+fn test_prune_switch_case_body_drops_statements_after_break() {
+    let program = vec![Stmt::new(
+        StmtKind::Switch {
+            subject: Expr::int_lit(1),
+            cases: vec![(
+                vec![Expr::int_lit(1)],
+                vec![
+                    Stmt::new(StmtKind::Break, Span::dummy()),
+                    Stmt::echo(Expr::int_lit(9)),
+                ],
+            )],
+            default: None,
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = prune_constant_control_flow(program);
+
+    assert!(pruned.is_empty());
+}
+
+#[test]
+fn test_prune_match_expr_to_selected_arm() {
+    let program = vec![Stmt::assign(
+        "x",
+        Expr::new(
+            ExprKind::Match {
+                subject: Box::new(Expr::int_lit(3)),
+                arms: vec![
+                    (vec![Expr::int_lit(1)], Expr::int_lit(10)),
+                    (vec![Expr::int_lit(3)], Expr::int_lit(20)),
+                ],
+                default: Some(Box::new(Expr::int_lit(30))),
+            },
+            Span::dummy(),
+        ),
+    )];
+
+    let pruned = prune_constant_control_flow(program);
+
+    assert_eq!(pruned, vec![Stmt::assign("x", Expr::int_lit(20))]);
+}
+
+#[test]
+fn test_prune_match_uses_strict_case_comparison() {
+    let program = vec![Stmt::assign(
+        "x",
+        Expr::new(
+            ExprKind::Match {
+                subject: Box::new(Expr::new(ExprKind::BoolLiteral(true), Span::dummy())),
+                arms: vec![(vec![Expr::int_lit(1)], Expr::int_lit(10))],
+                default: Some(Box::new(Expr::int_lit(20))),
+            },
+            Span::dummy(),
+        ),
+    )];
+
+    let pruned = prune_constant_control_flow(program);
+
+    assert_eq!(pruned, vec![Stmt::assign("x", Expr::int_lit(20))]);
+}
+
+#[test]
+fn test_prune_switch_drops_leading_non_matching_cases() {
+    let program = vec![Stmt::new(
+        StmtKind::Switch {
+            subject: Expr::int_lit(3),
+            cases: vec![
+                (vec![Expr::int_lit(1)], vec![Stmt::echo(Expr::int_lit(10))]),
+                (
+                    vec![Expr::int_lit(3)],
+                    vec![Stmt::echo(Expr::int_lit(20)), Stmt::new(StmtKind::Break, Span::dummy())],
+                ),
+            ],
+            default: Some(vec![Stmt::echo(Expr::int_lit(30))]),
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = prune_constant_control_flow(program);
+
+    assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(20))]);
+}
+
+#[test]
+fn test_eliminate_dead_code_drops_statements_after_exhaustive_try_catch() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "answer".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![
+                Stmt::new(
+                    StmtKind::Try {
+                        try_body: vec![Stmt::new(
+                            StmtKind::Return(Some(Expr::int_lit(7))),
+                            Span::dummy(),
+                        )],
+                        catches: vec![crate::parser::ast::CatchClause {
+                            exception_types: vec!["Exception".into()],
+                            variable: Some("e".into()),
+                            body: vec![Stmt::new(
+                                StmtKind::Return(Some(Expr::int_lit(8))),
+                                Span::dummy(),
+                            )],
+                        }],
+                        finally_body: None,
+                    },
+                    Span::dummy(),
+                ),
+                Stmt::echo(Expr::int_lit(9)),
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(normalize_control_flow(program));
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    assert_eq!(body.len(), 1);
+    assert!(matches!(body[0].kind, StmtKind::Return(_)));
+}
+
+#[test]
+fn test_eliminate_dead_code_drops_statements_after_try_finally_exit() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "answer".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![
+                Stmt::new(
+                    StmtKind::Try {
+                        try_body: vec![Stmt::new(
+                            StmtKind::Return(Some(Expr::int_lit(7))),
+                            Span::dummy(),
+                        )],
+                        catches: Vec::new(),
+                        finally_body: Some(vec![Stmt::new(
+                            StmtKind::Return(Some(Expr::int_lit(8))),
+                            Span::dummy(),
+                        )]),
+                    },
+                    Span::dummy(),
+                ),
+                Stmt::echo(Expr::int_lit(9)),
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    assert_eq!(body.len(), 1);
+    assert!(matches!(body[0].kind, StmtKind::Try { .. }));
+}
+
+#[test]
+fn test_eliminate_dead_code_keeps_statements_after_fallthrough_try() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "answer".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![
+                Stmt::new(
+                    StmtKind::Try {
+                        try_body: vec![Stmt::echo(Expr::int_lit(7))],
+                        catches: vec![crate::parser::ast::CatchClause {
+                            exception_types: vec!["Exception".into()],
+                            variable: Some("e".into()),
+                            body: vec![Stmt::new(
+                                StmtKind::Return(Some(Expr::int_lit(8))),
+                                Span::dummy(),
+                            )],
+                        }],
+                        finally_body: None,
+                    },
+                    Span::dummy(),
+                ),
+                Stmt::echo(Expr::int_lit(9)),
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    assert_eq!(body.len(), 2);
+    assert_eq!(body[1], Stmt::echo(Expr::int_lit(9)));
+}
+
+#[test]
+fn test_normalize_control_flow_replaces_empty_if_with_effectful_condition_eval() {
+    let call = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("touch"),
+            args: Vec::new(),
+        },
+        Span::dummy(),
+    );
+    let program = vec![Stmt::new(
+        StmtKind::If {
+            condition: call.clone(),
+            then_body: Vec::new(),
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(
+        pruned,
+        vec![Stmt::new(StmtKind::ExprStmt(call), Span::dummy())]
+    );
+}
+
+#[test]
+fn test_normalize_control_flow_drops_empty_ifdef_shell() {
+    let program = vec![Stmt::new(
+        StmtKind::IfDef {
+            symbol: "DEBUG".into(),
+            then_body: Vec::new(),
+            else_body: Some(Vec::new()),
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert!(pruned.is_empty());
+}
+
+#[test]
+fn test_normalize_control_flow_replaces_empty_switch_with_subject_eval() {
+    let call = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("touch"),
+            args: Vec::new(),
+        },
+        Span::dummy(),
+    );
+    let program = vec![Stmt::new(
+        StmtKind::Switch {
+            subject: call.clone(),
+            cases: Vec::new(),
+            default: None,
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(
+        pruned,
+        vec![Stmt::new(StmtKind::ExprStmt(call), Span::dummy())]
+    );
+}
+
+#[test]
+fn test_normalize_control_flow_inlines_empty_try_finally_body() {
+    let program = vec![Stmt::new(
+        StmtKind::Try {
+            try_body: Vec::new(),
+            catches: vec![crate::parser::ast::CatchClause {
+                exception_types: vec![Name::unqualified("Exception")],
+                variable: Some("e".into()),
+                body: vec![Stmt::echo(Expr::int_lit(7))],
+            }],
+            finally_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(9))]);
+}
+
+#[test]
+fn test_normalize_control_flow_inverts_single_live_else_branch() {
+    let program = vec![Stmt::new(
+        StmtKind::If {
+            condition: Expr::var("flag"),
+            then_body: Vec::new(),
+            elseif_clauses: Vec::new(),
+            else_body: Some(vec![Stmt::echo(Expr::int_lit(7))]),
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(
+        pruned,
+        vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::new(
+                    ExprKind::Not(Box::new(Expr::var("flag"))),
+                    Span::dummy(),
+                ),
+                then_body: vec![Stmt::echo(Expr::int_lit(7))],
+                elseif_clauses: Vec::new(),
+                else_body: None,
+            },
+            Span::dummy(),
+        )]
+    );
+}
+
+#[test]
+fn test_normalize_control_flow_inlines_default_only_switch() {
+    let program = vec![Stmt::new(
+        StmtKind::Switch {
+            subject: Expr::var("flag"),
+            cases: Vec::new(),
+            default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(9))]);
+}
+
+#[test]
+fn test_normalize_control_flow_nests_elseif_chain_after_empty_head() {
+    let program = vec![Stmt::new(
+        StmtKind::If {
+            condition: Expr::var("a"),
+            then_body: Vec::new(),
+            elseif_clauses: vec![(
+                Expr::var("b"),
+                vec![Stmt::echo(Expr::int_lit(7))],
+            )],
+            else_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(
+        pruned,
+        vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::new(
+                    ExprKind::Not(Box::new(Expr::var("a"))),
+                    Span::dummy(),
+                ),
+                then_body: vec![Stmt::new(
+                    StmtKind::If {
+                        condition: Expr::var("b"),
+                        then_body: vec![Stmt::echo(Expr::int_lit(7))],
+                        elseif_clauses: Vec::new(),
+                        else_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+                    },
+                    Span::dummy(),
+                )],
+                elseif_clauses: Vec::new(),
+                else_body: None,
+            },
+            Span::dummy(),
+        )]
+    );
+}
+
+#[test]
+fn test_normalize_control_flow_canonicalizes_elseif_chain_into_nested_else_if() {
+    let program = vec![Stmt::new(
+        StmtKind::If {
+            condition: Expr::var("a"),
+            then_body: vec![Stmt::echo(Expr::int_lit(1))],
+            elseif_clauses: vec![(
+                Expr::var("b"),
+                vec![Stmt::echo(Expr::int_lit(2))],
+            )],
+            else_body: Some(vec![Stmt::echo(Expr::int_lit(3))]),
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(pruned.len(), 1);
+    let StmtKind::If {
+        condition,
+        then_body,
+        elseif_clauses,
+        else_body,
+    } = &pruned[0].kind
+    else {
+        panic!("expected if");
+    };
+    assert_eq!(*condition, Expr::var("a"));
+    assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(1))]);
+    assert!(elseif_clauses.is_empty());
+
+    let else_body = else_body.as_ref().expect("expected nested else body");
+    assert_eq!(else_body.len(), 1);
+    let StmtKind::If {
+        condition,
+        then_body,
+        elseif_clauses,
+        else_body,
+    } = &else_body[0].kind
+    else {
+        panic!("expected nested if");
+    };
+    assert_eq!(*condition, Expr::var("b"));
+    assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(2))]);
+    assert!(elseif_clauses.is_empty());
+    assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(3))]));
+}
+
+#[test]
+fn test_normalize_control_flow_merges_identical_if_chain_bodies_into_or_condition() {
+    let shared_body = vec![Stmt::echo(Expr::int_lit(7))];
+    let program = vec![Stmt::new(
+        StmtKind::If {
+            condition: Expr::var("a"),
+            then_body: shared_body.clone(),
+            elseif_clauses: Vec::new(),
+            else_body: Some(vec![Stmt::new(
+                StmtKind::If {
+                    condition: Expr::var("b"),
+                    then_body: shared_body.clone(),
+                    elseif_clauses: Vec::new(),
+                    else_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+                },
+                Span::dummy(),
+            )]),
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(pruned.len(), 1);
+    match &pruned[0].kind {
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            assert_eq!(
+                *condition,
+                Expr::new(
+                    ExprKind::BinaryOp {
+                        left: Box::new(Expr::var("a")),
+                        op: BinOp::Or,
+                        right: Box::new(Expr::var("b")),
+                    },
+                    Span::dummy(),
+                )
+            );
+            assert_eq!(then_body, &shared_body);
+            assert!(elseif_clauses.is_empty());
+            assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
+        }
+        other => panic!("expected normalized if, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_normalize_control_flow_merges_identical_if_chain_tail_into_inverted_and() {
+    let shared_tail = vec![Stmt::echo(Expr::int_lit(9))];
+    let program = vec![Stmt::new(
+        StmtKind::If {
+            condition: Expr::var("a"),
+            then_body: shared_tail.clone(),
+            elseif_clauses: Vec::new(),
+            else_body: Some(vec![Stmt::new(
+                StmtKind::If {
+                    condition: Expr::var("b"),
+                    then_body: vec![Stmt::echo(Expr::int_lit(7))],
+                    elseif_clauses: Vec::new(),
+                    else_body: Some(shared_tail.clone()),
+                },
+                Span::dummy(),
+            )]),
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(pruned.len(), 1);
+    match &pruned[0].kind {
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            assert_eq!(
+                *condition,
+                Expr::new(
+                    ExprKind::BinaryOp {
+                        left: Box::new(Expr::new(
+                            ExprKind::Not(Box::new(Expr::var("a"))),
+                            Span::dummy(),
+                        )),
+                        op: BinOp::And,
+                        right: Box::new(Expr::var("b")),
+                    },
+                    Span::dummy(),
+                )
+            );
+            assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(7))]);
+            assert!(elseif_clauses.is_empty());
+            assert_eq!(else_body, &Some(shared_tail));
+        }
+        other => panic!("expected normalized if, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_normalize_control_flow_recursively_merges_longer_if_chain_heads() {
+    let shared_body = vec![Stmt::echo(Expr::int_lit(7))];
+    let program = vec![Stmt::new(
+        StmtKind::If {
+            condition: Expr::var("a"),
+            then_body: shared_body.clone(),
+            elseif_clauses: Vec::new(),
+            else_body: Some(vec![Stmt::new(
+                StmtKind::If {
+                    condition: Expr::var("b"),
+                    then_body: shared_body.clone(),
+                    elseif_clauses: Vec::new(),
+                    else_body: Some(vec![Stmt::new(
+                        StmtKind::If {
+                            condition: Expr::var("c"),
+                            then_body: shared_body.clone(),
+                            elseif_clauses: Vec::new(),
+                            else_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+                        },
+                        Span::dummy(),
+                    )]),
+                },
+                Span::dummy(),
+            )]),
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(pruned.len(), 1);
+    match &pruned[0].kind {
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            assert_eq!(
+                *condition,
+                combine_if_chain_conditions(
+                    Expr::var("a"),
+                    combine_if_chain_conditions(Expr::var("b"), Expr::var("c")),
+                )
+            );
+            assert_eq!(then_body, &shared_body);
+            assert!(elseif_clauses.is_empty());
+            assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
+        }
+        other => panic!("expected normalized if, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_normalize_control_flow_materializes_constant_switch_match() {
+    let program = vec![Stmt::new(
+        StmtKind::Switch {
+            subject: Expr::int_lit(2),
+            cases: vec![
+                (
+                    vec![Expr::int_lit(1)],
+                    vec![Stmt::echo(Expr::int_lit(5)), Stmt::new(StmtKind::Break, Span::dummy())],
+                ),
+                (
+                    vec![Expr::int_lit(2)],
+                    vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+                ),
+            ],
+            default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7))]);
+}
+
+#[test]
+fn test_normalize_control_flow_materializes_constant_switch_fallthrough() {
+    let program = vec![Stmt::new(
+        StmtKind::Switch {
+            subject: Expr::int_lit(1),
+            cases: vec![
+                (vec![Expr::int_lit(1)], Vec::new()),
+                (
+                    vec![Expr::int_lit(2)],
+                    vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+                ),
+            ],
+            default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7))]);
+}
+
+#[test]
+fn test_normalize_control_flow_materializes_constant_switch_default() {
+    let program = vec![Stmt::new(
+        StmtKind::Switch {
+            subject: Expr::int_lit(3),
+            cases: vec![(
+                vec![Expr::int_lit(1)],
+                vec![Stmt::echo(Expr::int_lit(5)), Stmt::new(StmtKind::Break, Span::dummy())],
+            )],
+            default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(9))]);
+}
+
+#[test]
+fn test_normalize_control_flow_rewrites_single_case_switch_to_if() {
+    let program = vec![Stmt::new(
+        StmtKind::Switch {
+            subject: Expr::var("x"),
+            cases: vec![(
+                vec![Expr::int_lit(1)],
+                vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+            )],
+            default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(pruned.len(), 1);
+    match &pruned[0].kind {
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            assert!(elseif_clauses.is_empty());
+            assert_eq!(
+                *condition,
+                Expr::new(
+                    ExprKind::BinaryOp {
+                        left: Box::new(Expr::var("x")),
+                        op: BinOp::Eq,
+                        right: Box::new(Expr::int_lit(1)),
+                    },
+                    Span::dummy(),
+                )
+            );
+            assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(7))]);
+            assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
+        }
+        other => panic!("expected normalized if, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_normalize_control_flow_merges_adjacent_identical_switch_cases() {
+    let shared_body = vec![
+        Stmt::echo(Expr::int_lit(7)),
+        Stmt::new(StmtKind::Break, Span::dummy()),
+    ];
+    let program = vec![Stmt::new(
+        StmtKind::Switch {
+            subject: Expr::var("x"),
+            cases: vec![
+                (vec![Expr::int_lit(1)], shared_body.clone()),
+                (vec![Expr::int_lit(2)], shared_body.clone()),
+                (
+                    vec![Expr::int_lit(3)],
+                    vec![Stmt::echo(Expr::int_lit(9)), Stmt::new(StmtKind::Break, Span::dummy())],
+                ),
+            ],
+            default: None,
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(pruned.len(), 1);
+    match &pruned[0].kind {
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => {
+            assert_eq!(*subject, Expr::var("x"));
+            assert_eq!(cases.len(), 2);
+            assert_eq!(cases[0].0, vec![Expr::int_lit(1), Expr::int_lit(2)]);
+            assert_eq!(cases[0].1, shared_body);
+            assert_eq!(cases[1].0, vec![Expr::int_lit(3)]);
+            assert_eq!(
+                cases[1].1,
+                vec![Stmt::echo(Expr::int_lit(9)), Stmt::new(StmtKind::Break, Span::dummy())]
+            );
+            assert!(default.is_none());
+        }
+        other => panic!("expected normalized switch, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_normalize_control_flow_merges_fallthrough_switch_labels_into_next_case() {
+    let shared_body = vec![
+        Stmt::echo(Expr::int_lit(7)),
+        Stmt::new(StmtKind::Break, Span::dummy()),
+    ];
+    let program = vec![Stmt::new(
+        StmtKind::Switch {
+            subject: Expr::var("x"),
+            cases: vec![
+                (vec![Expr::int_lit(1)], Vec::new()),
+                (vec![Expr::int_lit(2)], Vec::new()),
+                (vec![Expr::int_lit(3)], shared_body.clone()),
+            ],
+            default: None,
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(pruned.len(), 1);
+    match &pruned[0].kind {
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            assert_eq!(
+                *condition,
+                combine_if_chain_conditions(
+                    combine_if_chain_conditions(
+                        Expr::new(
+                            ExprKind::BinaryOp {
+                                left: Box::new(Expr::var("x")),
+                                op: BinOp::Eq,
+                                right: Box::new(Expr::int_lit(1)),
+                            },
+                            Span::dummy(),
+                        ),
+                        Expr::new(
+                            ExprKind::BinaryOp {
+                                left: Box::new(Expr::var("x")),
+                                op: BinOp::Eq,
+                                right: Box::new(Expr::int_lit(2)),
+                            },
+                            Span::dummy(),
+                        ),
+                    ),
+                    Expr::new(
+                        ExprKind::BinaryOp {
+                            left: Box::new(Expr::var("x")),
+                            op: BinOp::Eq,
+                            right: Box::new(Expr::int_lit(3)),
+                        },
+                        Span::dummy(),
+                    ),
+                )
+            );
+            assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(7))]);
+            assert!(elseif_clauses.is_empty());
+            assert!(else_body.is_none());
+        }
+        other => panic!("expected normalized if, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_normalize_control_flow_merges_adjacent_identical_catches() {
+    let program = vec![Stmt::new(
+        StmtKind::Try {
+            try_body: vec![Stmt::new(
+                StmtKind::ExprStmt(Expr::new(
+                    ExprKind::Throw(Box::new(Expr::new(
+                        ExprKind::NewObject {
+                            class_name: Name::unqualified("Exception"),
+                            args: Vec::new(),
+                        },
+                        Span::dummy(),
+                    ))),
+                    Span::dummy(),
+                )),
+                Span::dummy(),
+            )],
+            catches: vec![
+                crate::parser::ast::CatchClause {
+                    exception_types: vec![Name::unqualified("A")],
+                    variable: Some("e".into()),
+                    body: vec![Stmt::echo(Expr::int_lit(7))],
+                },
+                crate::parser::ast::CatchClause {
+                    exception_types: vec![Name::unqualified("B")],
+                    variable: Some("e".into()),
+                    body: vec![Stmt::echo(Expr::int_lit(7))],
+                },
+            ],
+            finally_body: None,
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(pruned.len(), 1);
+    let StmtKind::Try { catches, .. } = &pruned[0].kind else {
+        panic!("expected normalized try");
+    };
+    assert_eq!(catches.len(), 1);
+    assert_eq!(
+        catches[0].exception_types,
+        vec![Name::unqualified("A"), Name::unqualified("B")]
+    );
+    assert_eq!(catches[0].variable.as_deref(), Some("e"));
+    assert_eq!(catches[0].body, vec![Stmt::echo(Expr::int_lit(7))]);
+}
+
+#[test]
+fn test_normalize_control_flow_deduplicates_merged_catch_exception_types() {
+    let program = vec![Stmt::new(
+        StmtKind::Try {
+            try_body: vec![Stmt::new(
+                StmtKind::ExprStmt(Expr::new(
+                    ExprKind::Throw(Box::new(Expr::new(
+                        ExprKind::NewObject {
+                            class_name: Name::unqualified("Exception"),
+                            args: Vec::new(),
+                        },
+                        Span::dummy(),
+                    ))),
+                    Span::dummy(),
+                )),
+                Span::dummy(),
+            )],
+            catches: vec![
+                crate::parser::ast::CatchClause {
+                    exception_types: vec![Name::unqualified("A"), Name::unqualified("B")],
+                    variable: Some("e".into()),
+                    body: vec![Stmt::echo(Expr::int_lit(7))],
+                },
+                crate::parser::ast::CatchClause {
+                    exception_types: vec![Name::unqualified("B"), Name::unqualified("C")],
+                    variable: Some("e".into()),
+                    body: vec![Stmt::echo(Expr::int_lit(7))],
+                },
+            ],
+            finally_body: None,
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(pruned.len(), 1);
+    let StmtKind::Try { catches, .. } = &pruned[0].kind else {
+        panic!("expected normalized try");
+    };
+    assert_eq!(catches.len(), 1);
+    assert_eq!(
+        catches[0].exception_types,
+        vec![
+            Name::unqualified("A"),
+            Name::unqualified("B"),
+            Name::unqualified("C")
+        ]
+    );
+    assert_eq!(catches[0].variable.as_deref(), Some("e"));
+    assert_eq!(catches[0].body, vec![Stmt::echo(Expr::int_lit(7))]);
+}
+
+#[test]
+fn test_normalize_control_flow_sorts_catch_exception_types() {
+    let program = vec![Stmt::new(
+        StmtKind::Try {
+            try_body: vec![Stmt::new(
+                StmtKind::ExprStmt(Expr::new(
+                    ExprKind::Throw(Box::new(Expr::new(
+                        ExprKind::NewObject {
+                            class_name: Name::unqualified("Exception"),
+                            args: Vec::new(),
+                        },
+                        Span::dummy(),
+                    ))),
+                    Span::dummy(),
+                )),
+                Span::dummy(),
+            )],
+            catches: vec![crate::parser::ast::CatchClause {
+                exception_types: vec![
+                    Name::unqualified("Zed"),
+                    Name::unqualified("Alpha"),
+                    Name::unqualified("Mid"),
+                ],
+                variable: Some("e".into()),
+                body: vec![Stmt::echo(Expr::int_lit(7))],
+            }],
+            finally_body: None,
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(pruned.len(), 1);
+    let StmtKind::Try { catches, .. } = &pruned[0].kind else {
+        panic!("expected normalized try");
+    };
+    assert_eq!(catches.len(), 1);
+    assert_eq!(
+        catches[0].exception_types,
+        vec![
+            Name::unqualified("Alpha"),
+            Name::unqualified("Mid"),
+            Name::unqualified("Zed")
+        ]
+    );
+}
+
+#[test]
+fn test_normalize_control_flow_inlines_non_throwing_try_catch() {
+    let program = vec![Stmt::new(
+        StmtKind::Try {
+            try_body: vec![Stmt::echo(Expr::int_lit(7))],
+            catches: vec![crate::parser::ast::CatchClause {
+                exception_types: vec![Name::unqualified("Exception")],
+                variable: Some("e".into()),
+                body: vec![Stmt::echo(Expr::int_lit(9))],
+            }],
+            finally_body: None,
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7))]);
+}
+
+#[test]
+fn test_normalize_control_flow_inlines_non_throwing_try_finally_fallthrough() {
+    let program = vec![Stmt::new(
+        StmtKind::Try {
+            try_body: vec![Stmt::echo(Expr::int_lit(7))],
+            catches: Vec::new(),
+            finally_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7)), Stmt::echo(Expr::int_lit(9))]);
+}
+
+#[test]
+fn test_normalize_control_flow_keeps_non_throwing_try_finally_with_return() {
+    let program = vec![Stmt::new(
+        StmtKind::Try {
+            try_body: vec![Stmt::new(
+                StmtKind::Return(Some(Expr::int_lit(7))),
+                Span::dummy(),
+            )],
+            catches: Vec::new(),
+            finally_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(pruned.len(), 1);
+    assert!(matches!(pruned[0].kind, StmtKind::Try { .. }));
+}
+
+#[test]
+fn test_normalize_control_flow_folds_outer_finally_into_single_inner_try() {
+    let program = vec![Stmt::new(
+        StmtKind::Try {
+            try_body: vec![Stmt::new(
+                StmtKind::Try {
+                    try_body: vec![Stmt::new(
+                        StmtKind::ExprStmt(Expr::new(
+                            ExprKind::Throw(Box::new(Expr::new(
+                                ExprKind::NewObject {
+                                    class_name: Name::unqualified("A"),
+                                    args: Vec::new(),
+                                },
+                                Span::dummy(),
+                            ))),
+                            Span::dummy(),
+                        )),
+                        Span::dummy(),
+                    )],
+                    catches: vec![crate::parser::ast::CatchClause {
+                        exception_types: vec![Name::unqualified("A")],
+                        variable: Some("e".into()),
+                        body: vec![Stmt::echo(Expr::int_lit(7))],
+                    }],
+                    finally_body: None,
+                },
+                Span::dummy(),
+            )],
+            catches: Vec::new(),
+            finally_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(pruned.len(), 1);
+    let StmtKind::Try {
+        try_body,
+        catches,
+        finally_body,
+    } = &pruned[0].kind
+    else {
+        panic!("expected normalized try");
+    };
+    assert_eq!(
+        try_body,
+        &vec![Stmt::new(
+            StmtKind::ExprStmt(Expr::new(
+                ExprKind::Throw(Box::new(Expr::new(
+                    ExprKind::NewObject {
+                        class_name: Name::unqualified("A"),
+                        args: Vec::new(),
+                    },
+                    Span::dummy(),
+                ))),
+                Span::dummy(),
+            )),
+            Span::dummy(),
+        )]
+    );
+    assert_eq!(catches.len(), 1);
+    assert_eq!(
+        catches[0].exception_types,
+        vec![Name::unqualified("A")]
+    );
+    assert_eq!(catches[0].variable.as_deref(), Some("e"));
+    assert_eq!(catches[0].body, vec![Stmt::echo(Expr::int_lit(7))]);
+    assert_eq!(finally_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
+}
+
+#[test]
+fn test_normalize_control_flow_hoists_non_throwing_try_prefix() {
+    let program = vec![Stmt::new(
+        StmtKind::Try {
+            try_body: vec![
+                Stmt::echo(Expr::int_lit(7)),
+                Stmt::new(StmtKind::Throw(Expr::var("boom")), Span::dummy()),
+            ],
+            catches: vec![crate::parser::ast::CatchClause {
+                exception_types: vec![Name::unqualified("Exception")],
+                variable: Some("e".into()),
+                body: vec![Stmt::echo(Expr::int_lit(9))],
+            }],
+            finally_body: None,
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(pruned.len(), 2);
+    assert_eq!(pruned[0], Stmt::echo(Expr::int_lit(7)));
+    assert!(matches!(pruned[1].kind, StmtKind::Try { .. }));
+}
+
+#[test]
+fn test_normalize_control_flow_flattens_nested_single_path_ifs() {
+    let program = vec![Stmt::new(
+        StmtKind::If {
+            condition: Expr::var("a"),
+            then_body: vec![Stmt::new(
+                StmtKind::If {
+                    condition: Expr::var("b"),
+                    then_body: vec![Stmt::echo(Expr::int_lit(7))],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                Span::dummy(),
+            )],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(pruned.len(), 1);
+    match &pruned[0].kind {
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            assert!(elseif_clauses.is_empty());
+            assert!(else_body.is_none());
+            assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(7))]);
+            assert_eq!(
+                *condition,
+                Expr::new(
+                    ExprKind::BinaryOp {
+                        left: Box::new(Expr::var("a")),
+                        op: BinOp::And,
+                        right: Box::new(Expr::var("b")),
+                    },
+                    Span::dummy(),
+                )
+            );
+        }
+        other => panic!("expected flattened if, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_normalize_control_flow_collapses_identical_if_branches_to_condition_effects_plus_body() {
+    let program = vec![Stmt::new(
+        StmtKind::If {
+            condition: Expr::new(
+                ExprKind::FunctionCall {
+                    name: Name::unqualified("tick"),
+                    args: Vec::new(),
+                },
+                Span::dummy(),
+            ),
+            then_body: vec![Stmt::echo(Expr::int_lit(7))],
+            elseif_clauses: Vec::new(),
+            else_body: Some(vec![Stmt::echo(Expr::int_lit(7))]),
+        },
+        Span::dummy(),
+    )];
+
+    let pruned = normalize_control_flow(program);
+
+    assert_eq!(
+        pruned,
+        vec![
+            Stmt::new(
+                StmtKind::ExprStmt(Expr::new(
+                    ExprKind::FunctionCall {
+                        name: Name::unqualified("tick"),
+                        args: Vec::new(),
+                    },
+                    Span::dummy(),
+                )),
+                Span::dummy(),
+            ),
+            Stmt::echo(Expr::int_lit(7))
+        ]
+    );
+}
