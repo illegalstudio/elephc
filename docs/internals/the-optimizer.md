@@ -212,7 +212,7 @@ Current dead-code-elimination coverage includes:
 - pure expression statements whose result is unused
 - pure expression statements that become exposed by earlier normalization
 
-The current DCE v2 work uses small path-outcome helpers for `if`, `ifdef`, `switch`, and `try` so tail-sinking and shell collapsing can share one reachability model instead of duplicating ad-hoc logic per statement shape.
+The current DCE v2 work uses small path-outcome helpers for `if`, `ifdef`, `switch`, and `try`, all speaking the same local tail-path vocabulary (`falls through`, `breaks`, `no tail`, `unknown`). That lets tail-sinking and shell collapsing share one reachability model instead of duplicating ad-hoc logic per statement shape.
 
 ### Example
 

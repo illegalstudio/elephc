@@ -522,34 +522,41 @@ fn dce_try_stmt_with_tail(
         return dce_try_stmt(try_body, catches, finally_body, span);
     }
 
-    match analyze_try_tail_plan(&try_body, &catches, &finally_body) {
-        TryTailSinkPlan::IntoTryPaths => {
+    let reachability = analyze_try_tail_paths(&try_body, &catches, &finally_body);
+
+    if finally_body.is_none() {
+        if matches!(reachability.try_tail_path, TailPathKind::FallsThrough) {
             let try_body = append_tail_to_fallthrough_path(try_body, tail.clone());
             let catches = catches
                 .into_iter()
+                .zip(reachability.catch_tail_paths)
                 .map(|catch| crate::parser::ast::CatchClause {
-                    body: append_tail_to_fallthrough_path(catch.body, tail.clone()),
-                    ..catch
+                    body: if matches!(catch.1, TailPathKind::FallsThrough) {
+                        append_tail_to_fallthrough_path(catch.0.body, tail.clone())
+                    } else {
+                        catch.0.body
+                    },
+                    ..catch.0
                 })
                 .collect();
-            dce_try_stmt(try_body, catches, finally_body, span)
-        }
-        TryTailSinkPlan::IntoFinally => {
-            let finally_body =
-                normalize_optional_block(finally_body.map(|body| append_tail_to_fallthrough_path(body, tail)));
-            dce_try_stmt(try_body, catches, finally_body, span)
-        }
-        TryTailSinkPlan::LeaveOutside => {
-            let mut stmts = dce_try_stmt(try_body, catches, finally_body, span);
-            if stmts
-                .last()
-                .is_some_and(|stmt| matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough))
-            {
-                stmts.extend(tail);
-            }
-            stmts
+            return dce_try_stmt(try_body, catches, finally_body, span);
         }
     }
+
+    if reachability.can_sink_into_finally {
+        let finally_body =
+            normalize_optional_block(finally_body.map(|body| append_tail_to_fallthrough_path(body, tail)));
+        return dce_try_stmt(try_body, catches, finally_body, span);
+    }
+
+    let mut stmts = dce_try_stmt(try_body, catches, finally_body, span);
+    if stmts
+        .last()
+        .is_some_and(|stmt| matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough))
+    {
+        stmts.extend(tail);
+    }
+    stmts
 }
 
 fn dce_stmt_with_tail(stmt: Stmt, tail: Vec<Stmt>) -> Vec<Stmt> {

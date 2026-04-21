@@ -2915,24 +2915,55 @@ fn test_ifdef_tail_reachability_tracks_implicit_else() {
 }
 
 #[test]
-fn test_try_tail_plan_prefers_finally_only_when_safe() {
+fn test_try_tail_reachability_prefers_finally_only_when_safe() {
     let safe_try = vec![Stmt::echo(Expr::int_lit(7))];
     let safe_finally = Some(vec![Stmt::echo(Expr::int_lit(8))]);
 
-    assert_eq!(
-        analyze_try_tail_plan(&safe_try, &Vec::new(), &safe_finally),
-        TryTailSinkPlan::IntoFinally
-    );
+    let safe = analyze_try_tail_paths(&safe_try, &Vec::new(), &safe_finally);
+    assert_eq!(safe.try_tail_path, TailPathKind::FallsThrough);
+    assert_eq!(safe.finally_tail_path, Some(TailPathKind::FallsThrough));
+    assert!(safe.can_sink_into_finally);
 
     let catch_body = vec![crate::parser::ast::CatchClause {
         exception_types: vec!["Exception".into()],
         variable: Some("e".into()),
         body: vec![Stmt::new(StmtKind::Return(Some(Expr::int_lit(9))), Span::dummy())],
     }];
-    assert_eq!(
-        analyze_try_tail_plan(&safe_try, &catch_body, &safe_finally),
-        TryTailSinkPlan::LeaveOutside
+    let with_catch = analyze_try_tail_paths(&safe_try, &catch_body, &safe_finally);
+    assert_eq!(with_catch.try_tail_path, TailPathKind::FallsThrough);
+    assert_eq!(with_catch.catch_tail_paths, vec![TailPathKind::NoTail]);
+    assert_eq!(with_catch.finally_tail_path, Some(TailPathKind::FallsThrough));
+    assert!(!with_catch.can_sink_into_finally);
+}
+
+#[test]
+fn test_try_tail_reachability_tracks_catch_fallthrough_without_finally() {
+    let catches = vec![
+        crate::parser::ast::CatchClause {
+            exception_types: vec!["Exception".into()],
+            variable: Some("e".into()),
+            body: vec![Stmt::echo(Expr::int_lit(8))],
+        },
+        crate::parser::ast::CatchClause {
+            exception_types: vec!["RuntimeException".into()],
+            variable: Some("e".into()),
+            body: vec![Stmt::new(StmtKind::Return(Some(Expr::int_lit(9))), Span::dummy())],
+        },
+    ];
+
+    let reachability = analyze_try_tail_paths(
+        &[Stmt::echo(Expr::int_lit(7))],
+        &catches,
+        &None,
     );
+
+    assert_eq!(reachability.try_tail_path, TailPathKind::FallsThrough);
+    assert_eq!(
+        reachability.catch_tail_paths,
+        vec![TailPathKind::FallsThrough, TailPathKind::NoTail]
+    );
+    assert_eq!(reachability.finally_tail_path, None);
+    assert!(!reachability.can_sink_into_finally);
 }
 
 #[test]

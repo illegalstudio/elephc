@@ -29,11 +29,12 @@ pub(crate) struct SwitchTailReachability {
     pub(crate) default_tail_path: Option<TailPathKind>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TryTailSinkPlan {
-    LeaveOutside,
-    IntoTryPaths,
-    IntoFinally,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TryTailReachability {
+    pub(crate) try_tail_path: TailPathKind,
+    pub(crate) catch_tail_paths: Vec<TailPathKind>,
+    pub(crate) finally_tail_path: Option<TailPathKind>,
+    pub(crate) can_sink_into_finally: bool,
 }
 
 pub(crate) fn block_reaches_following_stmt(stmts: &[Stmt]) -> bool {
@@ -97,22 +98,28 @@ pub(crate) fn analyze_switch_tail_paths(
     }
 }
 
-pub(crate) fn analyze_try_tail_plan(
+pub(crate) fn analyze_try_tail_paths(
     try_body: &[Stmt],
     catches: &[crate::parser::ast::CatchClause],
     finally_body: &Option<Vec<Stmt>>,
-) -> TryTailSinkPlan {
-    match finally_body {
-        None => TryTailSinkPlan::IntoTryPaths,
-        Some(finally_body)
-            if catches.is_empty()
-                && !block_may_throw(try_body)
-                && block_reaches_following_stmt(try_body)
-                && block_reaches_following_stmt(finally_body) =>
-        {
-            TryTailSinkPlan::IntoFinally
-        }
-        Some(_) => TryTailSinkPlan::LeaveOutside,
+) -> TryTailReachability {
+    let try_tail_path = terminal_effect_tail_path(block_terminal_effect(try_body));
+    let catch_tail_paths = catches
+        .iter()
+        .map(|catch| terminal_effect_tail_path(block_terminal_effect(&catch.body)))
+        .collect();
+    let finally_tail_path = finally_body
+        .as_ref()
+        .map(|body| terminal_effect_tail_path(block_terminal_effect(body)));
+
+    TryTailReachability {
+        try_tail_path,
+        catch_tail_paths,
+        finally_tail_path,
+        can_sink_into_finally: catches.is_empty()
+            && !block_may_throw(try_body)
+            && matches!(try_tail_path, TailPathKind::FallsThrough)
+            && matches!(finally_tail_path, Some(TailPathKind::FallsThrough)),
     }
 }
 
