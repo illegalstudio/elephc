@@ -2091,7 +2091,18 @@ fn test_eliminate_dead_code_drops_statements_after_exhaustive_try_catch() {
                 Stmt::new(
                     StmtKind::Try {
                         try_body: vec![Stmt::new(
-                            StmtKind::Return(Some(Expr::int_lit(7))),
+                            StmtKind::If {
+                                condition: Expr::var("flag"),
+                                then_body: vec![Stmt::new(
+                                    StmtKind::Throw(Expr::string_lit("boom")),
+                                    Span::dummy(),
+                                )],
+                                elseif_clauses: Vec::new(),
+                                else_body: Some(vec![Stmt::new(
+                                    StmtKind::Return(Some(Expr::int_lit(7))),
+                                    Span::dummy(),
+                                )]),
+                            },
                             Span::dummy(),
                         )],
                         catches: vec![crate::parser::ast::CatchClause {
@@ -2118,7 +2129,7 @@ fn test_eliminate_dead_code_drops_statements_after_exhaustive_try_catch() {
         panic!("expected function");
     };
     assert_eq!(body.len(), 1);
-    assert!(matches!(body[0].kind, StmtKind::Return(_)));
+    assert!(matches!(body[0].kind, StmtKind::Try { .. }));
 }
 
 #[test]

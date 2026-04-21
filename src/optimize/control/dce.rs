@@ -525,7 +525,12 @@ fn dce_try_stmt_with_tail(
     let reachability = analyze_try_tail_paths(&try_body, &catches, &finally_body);
 
     if finally_body.is_none() {
-        if matches!(reachability.try_tail_path, TailPathKind::FallsThrough) {
+        if matches!(reachability.try_tail_path, TailPathKind::FallsThrough)
+            || reachability
+                .catch_tail_paths
+                .iter()
+                .any(|path| matches!(path, TailPathKind::FallsThrough))
+        {
             let try_body = append_tail_to_fallthrough_path(try_body, tail.clone());
             let catches = catches
                 .into_iter()
