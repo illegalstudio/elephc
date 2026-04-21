@@ -1528,6 +1528,32 @@ run(3);
 }
 
 #[test]
+fn test_dead_code_elimination_sinks_tail_into_switch_break_paths() {
+    let out = compile_and_run(
+        r#"<?php
+function run(int $flag) {
+    switch ($flag) {
+        case 1:
+            echo "a";
+            break;
+        case 2:
+            echo "b";
+        default:
+            echo "c";
+    }
+    echo "!";
+}
+
+run(1);
+run(2);
+run(3);
+"#,
+    );
+
+    assert_eq!(out, "a!bc!c!");
+}
+
+#[test]
 fn test_dead_code_elimination_sinks_tail_into_try_fallthrough_paths() {
     let out = compile_and_run(
         r#"<?php

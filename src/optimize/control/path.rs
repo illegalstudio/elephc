@@ -1,5 +1,13 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TailPathKind {
+    NoTail,
+    FallsThrough,
+    Breaks,
+    Unknown,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct IfTailReachability {
     pub(crate) then_sinks_tail: bool,
@@ -17,9 +25,8 @@ pub(crate) struct IfDefTailReachability {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SwitchTailReachability {
-    pub(crate) case_sinks_tail: Vec<bool>,
-    pub(crate) default_sinks_tail: bool,
-    pub(crate) has_break_exit: bool,
+    pub(crate) case_tail_paths: Vec<TailPathKind>,
+    pub(crate) default_tail_path: Option<TailPathKind>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,38 +75,25 @@ pub(crate) fn analyze_switch_tail_paths(
     cases: &[(Vec<Expr>, Vec<Stmt>)],
     default: &Option<Vec<Stmt>>,
 ) -> SwitchTailReachability {
-    let has_break_exit = cases
-        .iter()
-        .any(|(_, body)| matches!(block_terminal_effect(body), TerminalEffect::Breaks))
-        || default
-            .as_ref()
-            .is_some_and(|body| matches!(block_terminal_effect(body), TerminalEffect::Breaks));
+    let mut case_tail_paths = vec![TailPathKind::NoTail; cases.len()];
+    let default_tail_path = default
+        .as_ref()
+        .map(|body| terminal_effect_tail_path(block_terminal_effect(body)));
 
-    let mut case_sinks_tail = vec![false; cases.len()];
-    let mut default_sinks_tail = false;
+    let mut next_tail_path = default_tail_path.unwrap_or(TailPathKind::FallsThrough);
 
-    if has_break_exit {
-        return SwitchTailReachability {
-            case_sinks_tail,
-            default_sinks_tail,
-            has_break_exit,
+    for (index, (_, body)) in cases.iter().enumerate().rev() {
+        let case_tail_path = match block_terminal_effect(body) {
+            TerminalEffect::FallsThrough => next_tail_path,
+            effect => terminal_effect_tail_path(effect),
         };
-    }
-
-    if let Some(default_body) = default.as_ref() {
-        if block_reaches_following_stmt(default_body) {
-            default_sinks_tail = true;
-        }
-    } else if let Some((_, body)) = cases.last() {
-        if block_reaches_following_stmt(body) {
-            case_sinks_tail[cases.len() - 1] = true;
-        }
+        case_tail_paths[index] = case_tail_path;
+        next_tail_path = case_tail_path;
     }
 
     SwitchTailReachability {
-        case_sinks_tail,
-        default_sinks_tail,
-        has_break_exit,
+        case_tail_paths,
+        default_tail_path,
     }
 }
 
@@ -119,5 +113,14 @@ pub(crate) fn analyze_try_tail_plan(
             TryTailSinkPlan::IntoFinally
         }
         Some(_) => TryTailSinkPlan::LeaveOutside,
+    }
+}
+
+fn terminal_effect_tail_path(effect: TerminalEffect) -> TailPathKind {
+    match effect {
+        TerminalEffect::FallsThrough => TailPathKind::FallsThrough,
+        TerminalEffect::Breaks => TailPathKind::Breaks,
+        TerminalEffect::ExitsCurrentBlock => TailPathKind::NoTail,
+        TerminalEffect::TerminatesMixed => TailPathKind::Unknown,
     }
 }

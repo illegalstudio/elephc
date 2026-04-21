@@ -3,6 +3,7 @@ use super::*;
 #[derive(Clone, Copy)]
 enum TailSinkTarget {
     FallsThrough,
+    Breaks,
 }
 
 pub(crate) fn dce_block(body: Vec<Stmt>) -> Vec<Stmt> {
@@ -42,6 +43,14 @@ fn append_tail_to_fallthrough_path(mut body: Vec<Stmt>, tail: Vec<Stmt>) -> Vec<
     body
 }
 
+fn block_matches_tail_target(body: &[Stmt], target: TailSinkTarget) -> bool {
+    matches!(
+        (block_terminal_effect(body), target),
+        (TerminalEffect::FallsThrough, TailSinkTarget::FallsThrough)
+            | (TerminalEffect::Breaks, TailSinkTarget::Breaks)
+    )
+}
+
 fn sink_tail_into_terminal_path(
     mut body: Vec<Stmt>,
     tail: Vec<Stmt>,
@@ -66,7 +75,7 @@ fn sink_tail_into_terminal_stmt(stmt: Stmt, tail: Vec<Stmt>, target: TailSinkTar
             else_body,
         } => {
             let rewrite_branch = |body: Vec<Stmt>, target: TailSinkTarget, tail: &Vec<Stmt>| {
-                if block_reaches_following_stmt(&body) {
+                if block_matches_tail_target(&body, target) {
                     sink_tail_into_terminal_path(body, tail.clone(), target)
                 } else {
                     body
@@ -93,13 +102,13 @@ fn sink_tail_into_terminal_stmt(stmt: Stmt, tail: Vec<Stmt>, target: TailSinkTar
             then_body,
             else_body,
         } => {
-            let then_body = if block_reaches_following_stmt(&then_body) {
+            let then_body = if block_matches_tail_target(&then_body, target) {
                 sink_tail_into_terminal_path(then_body, tail.clone(), target)
             } else {
                 then_body
             };
             let else_body = else_body.map(|body| {
-                if block_reaches_following_stmt(&body) {
+                if block_matches_tail_target(&body, target) {
                     sink_tail_into_terminal_path(body, tail.clone(), target)
                 } else {
                     body
@@ -119,7 +128,7 @@ fn sink_tail_into_terminal_stmt(stmt: Stmt, tail: Vec<Stmt>, target: TailSinkTar
             catches,
             finally_body,
         } => {
-            let try_body = if block_reaches_following_stmt(&try_body) {
+            let try_body = if block_matches_tail_target(&try_body, target) {
                 sink_tail_into_terminal_path(try_body, tail.clone(), target)
             } else {
                 try_body
@@ -127,7 +136,7 @@ fn sink_tail_into_terminal_stmt(stmt: Stmt, tail: Vec<Stmt>, target: TailSinkTar
             let catches = catches
                 .into_iter()
                 .map(|catch| crate::parser::ast::CatchClause {
-                    body: if block_reaches_following_stmt(&catch.body) {
+                    body: if block_matches_tail_target(&catch.body, target) {
                         sink_tail_into_terminal_path(catch.body, tail.clone(), target)
                     } else {
                         catch.body
@@ -149,6 +158,13 @@ fn sink_tail_into_terminal_stmt(stmt: Stmt, tail: Vec<Stmt>, target: TailSinkTar
         {
             let mut stmts = vec![stmt];
             stmts.extend(tail);
+            stmts
+        }
+        StmtKind::Break if matches!(target, TailSinkTarget::Breaks) => {
+            let mut stmts = tail;
+            if block_reaches_following_stmt(&stmts) {
+                stmts.push(Stmt::new(StmtKind::Break, span));
+            }
             stmts
         }
         _ => vec![stmt],
@@ -354,32 +370,63 @@ fn dce_switch_stmt_with_tail(
     }
 
     let reachability = analyze_switch_tail_paths(&cases, &default);
-    if reachability.has_break_exit {
+    if reachability
+        .case_tail_paths
+        .iter()
+        .copied()
+        .chain(reachability.default_tail_path)
+        .any(|path| matches!(path, TailPathKind::Unknown))
+    {
         let mut stmts = dce_switch_stmt(subject, cases, default, span);
         stmts.extend(tail);
         return stmts;
     }
 
     if let Some(body) = default.as_mut() {
-        if reachability.default_sinks_tail {
-            *body = sink_tail_into_terminal_path(
-                std::mem::take(body),
-                tail.clone(),
-                TailSinkTarget::FallsThrough,
-            );
+        match block_terminal_effect(body) {
+            TerminalEffect::Breaks => {
+                *body = sink_tail_into_terminal_path(
+                    std::mem::take(body),
+                    tail.clone(),
+                    TailSinkTarget::Breaks,
+                );
+            }
+            TerminalEffect::FallsThrough
+                if matches!(reachability.default_tail_path, Some(TailPathKind::FallsThrough)) =>
+            {
+                *body = sink_tail_into_terminal_path(
+                    std::mem::take(body),
+                    tail.clone(),
+                    TailSinkTarget::FallsThrough,
+                );
+            }
+            _ => {}
         }
     }
 
-    for ((_, body), reaches_tail) in cases
-        .iter_mut()
-        .zip(reachability.case_sinks_tail.into_iter())
-    {
-        if reaches_tail {
-            *body = sink_tail_into_terminal_path(
-                std::mem::take(body),
-                tail.clone(),
-                TailSinkTarget::FallsThrough,
-            );
+    let no_default = default.is_none();
+    let case_count = cases.len();
+    for (index, (_, body)) in cases.iter_mut().enumerate() {
+        match block_terminal_effect(body) {
+            TerminalEffect::Breaks => {
+                *body = sink_tail_into_terminal_path(
+                    std::mem::take(body),
+                    tail.clone(),
+                    TailSinkTarget::Breaks,
+                );
+            }
+            TerminalEffect::FallsThrough
+                if no_default
+                    && index + 1 == case_count
+                    && matches!(reachability.case_tail_paths[index], TailPathKind::FallsThrough) =>
+            {
+                *body = sink_tail_into_terminal_path(
+                    std::mem::take(body),
+                    tail.clone(),
+                    TailSinkTarget::FallsThrough,
+                );
+            }
+            _ => {}
         }
     }
 

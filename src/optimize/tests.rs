@@ -2823,9 +2823,55 @@ fn test_switch_tail_reachability_tracks_suffix_paths() {
 
     let reachability = analyze_switch_tail_paths(&cases, &default);
 
-    assert_eq!(reachability.case_sinks_tail, vec![false, false]);
-    assert!(reachability.default_sinks_tail);
-    assert!(!reachability.has_break_exit);
+    assert_eq!(
+        reachability.case_tail_paths,
+        vec![TailPathKind::FallsThrough, TailPathKind::FallsThrough]
+    );
+    assert_eq!(reachability.default_tail_path, Some(TailPathKind::FallsThrough));
+}
+
+#[test]
+fn test_switch_tail_reachability_tracks_break_and_fallthrough_paths() {
+    let cases = vec![
+        (
+            vec![Expr::int_lit(1)],
+            vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+        ),
+        (vec![Expr::int_lit(2)], vec![Stmt::echo(Expr::int_lit(8))]),
+    ];
+    let default = Some(vec![Stmt::echo(Expr::int_lit(9))]);
+
+    let reachability = analyze_switch_tail_paths(&cases, &default);
+
+    assert_eq!(
+        reachability.case_tail_paths,
+        vec![TailPathKind::Breaks, TailPathKind::FallsThrough]
+    );
+    assert_eq!(reachability.default_tail_path, Some(TailPathKind::FallsThrough));
+}
+
+#[test]
+fn test_switch_tail_reachability_marks_mixed_break_paths_unknown() {
+    let cases = vec![(
+        vec![Expr::int_lit(1)],
+        vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::var("flag"),
+                then_body: vec![Stmt::new(StmtKind::Break, Span::dummy())],
+                elseif_clauses: Vec::new(),
+                else_body: Some(vec![Stmt::new(
+                    StmtKind::Return(Some(Expr::int_lit(7))),
+                    Span::dummy(),
+                )]),
+            },
+            Span::dummy(),
+        )],
+    )];
+
+    let reachability = analyze_switch_tail_paths(&cases, &None);
+
+    assert_eq!(reachability.case_tail_paths, vec![TailPathKind::Unknown]);
+    assert_eq!(reachability.default_tail_path, None);
 }
 
 #[test]
@@ -2934,6 +2980,65 @@ fn test_eliminate_dead_code_sinks_tail_into_ifdef_fallthrough_paths() {
             Span::dummy(),
         )]
     );
+}
+
+#[test]
+fn test_eliminate_dead_code_sinks_tail_into_switch_break_paths() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![
+                Stmt::new(
+                    StmtKind::Switch {
+                        subject: Expr::var("flag"),
+                        cases: vec![
+                            (
+                                vec![Expr::int_lit(1)],
+                                vec![
+                                    Stmt::echo(Expr::int_lit(7)),
+                                    Stmt::new(StmtKind::Break, Span::dummy()),
+                                ],
+                            ),
+                            (vec![Expr::int_lit(2)], vec![Stmt::echo(Expr::int_lit(8))]),
+                        ],
+                        default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+                    },
+                    Span::dummy(),
+                ),
+                Stmt::echo(Expr::int_lit(10)),
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    let StmtKind::Switch { cases, default, .. } = &body[0].kind else {
+        panic!("expected switch");
+    };
+    assert_eq!(
+        cases[0].1,
+        vec![
+            Stmt::echo(Expr::int_lit(7)),
+            Stmt::echo(Expr::int_lit(10)),
+            Stmt::new(StmtKind::Break, Span::dummy()),
+        ]
+    );
+    assert_eq!(
+        cases[1].1,
+        vec![Stmt::echo(Expr::int_lit(8))]
+    );
+    assert_eq!(
+        default.as_ref(),
+        Some(&vec![Stmt::echo(Expr::int_lit(9)), Stmt::echo(Expr::int_lit(10))])
+    );
+    assert_eq!(body.len(), 1);
 }
 
 #[test]
