@@ -2322,6 +2322,80 @@ run(2);
 }
 
 #[test]
+fn test_dead_code_elimination_prunes_exhaustive_negated_and_switch_true_default() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_true_negated_and");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$a = $argc > 1;
+$b = $argc > 2;
+switch (true) {
+    case $a && $b:
+        echo "A";
+        break;
+    case !($a && $b):
+        echo "B";
+        break;
+    default:
+        echo "dead-default";
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    assert_eq!(out, "B");
+    assert!(!user_asm.contains("dead-default"));
+}
+
+#[test]
+fn test_dead_code_elimination_prunes_exhaustive_negated_or_switch_true_default() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_true_negated_or");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$a = $argc > 1;
+$b = $argc > 2;
+switch (true) {
+    case $a || $b:
+        echo "A";
+        break;
+    case !($a || $b):
+        echo "B";
+        break;
+    default:
+        echo "dead-default";
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    assert_eq!(out, "B");
+    assert!(!user_asm.contains("dead-default"));
+}
+
+#[test]
 fn test_dead_code_elimination_drops_switch_true_suffix_after_exhaustive_multi_pattern_case() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_true_multi_pattern");
     let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(

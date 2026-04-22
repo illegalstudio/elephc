@@ -14,12 +14,20 @@ struct GuardState {
     bool_false_vars: Vec<String>,
     exact_guards: Vec<ExactGuard>,
     excluded_guards: Vec<ExactGuard>,
+    condition_guards: Vec<ConditionGuard>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
 struct ExactGuard {
     name: String,
     value: GuardLiteral,
+}
+
+#[derive(Clone)]
+struct ConditionGuard {
+    condition: Expr,
+    value: bool,
+    names: Vec<String>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -1504,6 +1512,15 @@ fn has_excluded_guard(guards: &GuardState, name: &str, value: &GuardLiteral) -> 
 }
 
 fn known_condition_value(condition: &Expr, guards: &GuardState) -> Option<bool> {
+    if let Some(value) = guards
+        .condition_guards
+        .iter()
+        .find(|known| known.condition == *condition)
+        .map(|known| known.value)
+    {
+        return Some(value);
+    }
+
     if let ExprKind::Not(inner) = &condition.kind {
         return known_condition_value(inner, guards).map(|value| !value);
     }
@@ -1565,6 +1582,9 @@ fn clear_guards_for_name(guards: &mut GuardState, name: &str) {
     guards.bool_false_vars.retain(|known| known != name);
     guards.exact_guards.retain(|known| known.name != name);
     guards.excluded_guards.retain(|known| known.name != name);
+    guards
+        .condition_guards
+        .retain(|known| !known.names.iter().any(|known_name| known_name == name));
 }
 
 fn push_guard_name(names: &mut Vec<String>, name: &str) {
@@ -1631,6 +1651,56 @@ fn record_excluded_literal_guard(guards: &mut GuardState, name: &str, value: Gua
             value,
         });
     }
+}
+
+fn collect_trackable_condition_names(expr: &Expr, names: &mut Vec<String>) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(name) => {
+            push_guard_name(names, name);
+            true
+        }
+        ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::StringLiteral(_) => true,
+        ExprKind::Not(inner) | ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
+            collect_trackable_condition_names(inner, names)
+        }
+        ExprKind::BinaryOp { left, right, .. } => {
+            collect_trackable_condition_names(left, names)
+                && collect_trackable_condition_names(right, names)
+        }
+        _ => false,
+    }
+}
+
+fn record_condition_guard(guards: &mut GuardState, condition: &Expr, value: bool) {
+    let effect = expr_effect(condition);
+    if effect.has_side_effects || effect.may_throw {
+        return;
+    }
+
+    let mut names = Vec::new();
+    if !collect_trackable_condition_names(condition, &mut names) {
+        return;
+    }
+
+    if let Some(existing) = guards
+        .condition_guards
+        .iter_mut()
+        .find(|known| known.condition == *condition)
+    {
+        existing.value = value;
+        existing.names = names;
+        return;
+    }
+
+    guards.condition_guards.push(ConditionGuard {
+        condition: condition.clone(),
+        value,
+        names,
+    });
 }
 
 fn extend_guards_for_switch_case(subject: &Expr, patterns: &[Expr], guards: &GuardState) -> GuardState {
@@ -1737,6 +1807,8 @@ fn extend_guards(guards: &GuardState, condition: &Expr, branch_taken: bool) -> G
         record_excluded_literal_guard(&mut next, name, excluded_value);
         return next;
     }
+
+    record_condition_guard(&mut next, condition, branch_taken);
 
     let Some((name, truthy_if_true)) = guard_variable_name(condition) else {
         return next;
@@ -1940,6 +2012,9 @@ fn invalidate_guards_for_written_names(guards: &mut GuardState, written: &[Strin
     guards
         .excluded_guards
         .retain(|known| !written.iter().any(|written_name| written_name == &known.name));
+    guards
+        .condition_guards
+        .retain(|known| !known.names.iter().any(|name| written.iter().any(|written_name| written_name == name)));
 }
 
 fn collect_written_names(stmt: &Stmt, written: &mut Vec<String>) {
