@@ -13,6 +13,7 @@ struct GuardState {
     bool_true_vars: Vec<String>,
     bool_false_vars: Vec<String>,
     exact_guards: Vec<ExactGuard>,
+    excluded_guards: Vec<ExactGuard>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -1101,6 +1102,13 @@ fn known_exact_guard<'a>(guards: &'a GuardState, name: &str) -> Option<&'a Guard
         .map(|known| &known.value)
 }
 
+fn has_excluded_guard(guards: &GuardState, name: &str, value: &GuardLiteral) -> bool {
+    guards
+        .excluded_guards
+        .iter()
+        .any(|known| known.name == name && known.value == *value)
+}
+
 fn known_condition_value(condition: &Expr, guards: &GuardState) -> Option<bool> {
     if let ExprKind::BinaryOp { left, op, right } = &condition.kind {
         match op {
@@ -1144,6 +1152,9 @@ fn known_condition_value(condition: &Expr, guards: &GuardState) -> Option<bool> 
         if let Some(known) = known_exact_guard(guards, name) {
             return Some((known == &compared_value) == expects_equal);
         }
+        if has_excluded_guard(guards, name, &compared_value) {
+            return Some(!expects_equal);
+        }
     }
 
     None
@@ -1155,6 +1166,7 @@ fn clear_guards_for_name(guards: &mut GuardState, name: &str) {
     guards.bool_true_vars.retain(|known| known != name);
     guards.bool_false_vars.retain(|known| known != name);
     guards.exact_guards.retain(|known| known.name != name);
+    guards.excluded_guards.retain(|known| known.name != name);
 }
 
 fn push_guard_name(names: &mut Vec<String>, name: &str) {
@@ -1195,6 +1207,32 @@ fn exact_literal_from_guard_branch(condition: &Expr, branch_taken: bool) -> Opti
         (true, true) => Some((name, compared_value)),
         (false, false) => Some((name, compared_value)),
         _ => None,
+    }
+}
+
+fn excluded_literal_from_guard_branch(
+    condition: &Expr,
+    branch_taken: bool,
+) -> Option<(&str, GuardLiteral)> {
+    let (name, compared_value, expects_equal) = strict_scalar_guard(condition)?;
+    match (expects_equal, branch_taken) {
+        (true, false) => Some((name, compared_value)),
+        (false, true) => Some((name, compared_value)),
+        _ => None,
+    }
+}
+
+fn record_excluded_literal_guard(guards: &mut GuardState, name: &str, value: GuardLiteral) {
+    guards.exact_guards.retain(|known| known.name != name);
+    if !guards
+        .excluded_guards
+        .iter()
+        .any(|known| known.name == name && known.value == value)
+    {
+        guards.excluded_guards.push(ExactGuard {
+            name: name.to_string(),
+            value,
+        });
     }
 }
 
@@ -1240,6 +1278,11 @@ fn extend_guards(guards: &GuardState, condition: &Expr, branch_taken: bool) -> G
 
     if let Some((name, exact_value)) = exact_literal_from_guard_branch(condition, branch_taken) {
         record_exact_literal_guard(&mut next, name, exact_value);
+        return next;
+    }
+
+    if let Some((name, excluded_value)) = excluded_literal_from_guard_branch(condition, branch_taken) {
+        record_excluded_literal_guard(&mut next, name, excluded_value);
         return next;
     }
 
@@ -1441,6 +1484,9 @@ fn invalidate_guards_for_written_names(guards: &mut GuardState, written: &[Strin
         .retain(|name| !written.iter().any(|written_name| written_name == name));
     guards
         .exact_guards
+        .retain(|known| !written.iter().any(|written_name| written_name == &known.name));
+    guards
+        .excluded_guards
         .retain(|known| !written.iter().any(|written_name| written_name == &known.name));
 }
 
