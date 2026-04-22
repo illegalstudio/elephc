@@ -12,6 +12,21 @@ struct GuardState {
     falsy_vars: Vec<String>,
     bool_true_vars: Vec<String>,
     bool_false_vars: Vec<String>,
+    exact_guards: Vec<ExactGuard>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct ExactGuard {
+    name: String,
+    value: GuardLiteral,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum GuardLiteral {
+    Bool(bool),
+    Null,
+    Int(i64),
+    String(String),
 }
 
 pub(crate) fn dce_block(body: Vec<Stmt>) -> Vec<Stmt> {
@@ -1041,14 +1056,24 @@ fn guard_variable_name(condition: &Expr) -> Option<(&str, bool)> {
     }
 }
 
-fn strict_bool_guard(condition: &Expr) -> Option<(&str, bool, bool)> {
+fn scalar_guard_value(expr: &Expr) -> Option<GuardLiteral> {
+    match &expr.kind {
+        ExprKind::BoolLiteral(value) => Some(GuardLiteral::Bool(*value)),
+        ExprKind::Null => Some(GuardLiteral::Null),
+        ExprKind::IntLiteral(value) => Some(GuardLiteral::Int(*value)),
+        ExprKind::StringLiteral(value) => Some(GuardLiteral::String(value.clone())),
+        _ => None,
+    }
+}
+
+fn strict_scalar_guard(condition: &Expr) -> Option<(&str, GuardLiteral, bool)> {
     let ExprKind::BinaryOp { left, op, right } = &condition.kind else {
         return None;
     };
 
     let (name, value) = match (&left.kind, &right.kind) {
-        (ExprKind::Variable(name), ExprKind::BoolLiteral(value))
-        | (ExprKind::BoolLiteral(value), ExprKind::Variable(name)) => (name.as_str(), *value),
+        (ExprKind::Variable(name), _) => (name.as_str(), scalar_guard_value(right)?),
+        (_, ExprKind::Variable(name)) => (name.as_str(), scalar_guard_value(left)?),
         _ => return None,
     };
 
@@ -1057,6 +1082,23 @@ fn strict_bool_guard(condition: &Expr) -> Option<(&str, bool, bool)> {
         BinOp::StrictNotEq => Some((name, value, false)),
         _ => None,
     }
+}
+
+fn guard_literal_truthy(value: &GuardLiteral) -> bool {
+    match value {
+        GuardLiteral::Bool(value) => *value,
+        GuardLiteral::Null => false,
+        GuardLiteral::Int(value) => *value != 0,
+        GuardLiteral::String(value) => !value.is_empty() && value != "0",
+    }
+}
+
+fn known_exact_guard<'a>(guards: &'a GuardState, name: &str) -> Option<&'a GuardLiteral> {
+    guards
+        .exact_guards
+        .iter()
+        .find(|known| known.name == name)
+        .map(|known| &known.value)
 }
 
 fn known_condition_value(condition: &Expr, guards: &GuardState) -> Option<bool> {
@@ -1083,6 +1125,9 @@ fn known_condition_value(condition: &Expr, guards: &GuardState) -> Option<bool> 
     }
 
     if let Some((name, truthy_if_true)) = guard_variable_name(condition) {
+        if let Some(value) = known_exact_guard(guards, name) {
+            return Some(guard_literal_truthy(value) == truthy_if_true);
+        }
         if guards.bool_true_vars.iter().any(|known| known == name)
             || guards.truthy_vars.iter().any(|known| known == name)
         {
@@ -1095,12 +1140,9 @@ fn known_condition_value(condition: &Expr, guards: &GuardState) -> Option<bool> 
         }
     }
 
-    if let Some((name, compared_bool, expects_equal)) = strict_bool_guard(condition) {
-        if guards.bool_true_vars.iter().any(|known| known == name) {
-            return Some((true == compared_bool) == expects_equal);
-        }
-        if guards.bool_false_vars.iter().any(|known| known == name) {
-            return Some((false == compared_bool) == expects_equal);
+    if let Some((name, compared_value, expects_equal)) = strict_scalar_guard(condition) {
+        if let Some(known) = known_exact_guard(guards, name) {
+            return Some((known == &compared_value) == expects_equal);
         }
     }
 
@@ -1112,6 +1154,7 @@ fn clear_guards_for_name(guards: &mut GuardState, name: &str) {
     guards.falsy_vars.retain(|known| known != name);
     guards.bool_true_vars.retain(|known| known != name);
     guards.bool_false_vars.retain(|known| known != name);
+    guards.exact_guards.retain(|known| known.name != name);
 }
 
 fn push_guard_name(names: &mut Vec<String>, name: &str) {
@@ -1130,21 +1173,27 @@ fn record_truthy_guard(guards: &mut GuardState, name: &str, known_truthy: bool) 
     }
 }
 
-fn record_exact_bool_guard(guards: &mut GuardState, name: &str, value: bool) {
+fn record_exact_literal_guard(guards: &mut GuardState, name: &str, value: GuardLiteral) {
     clear_guards_for_name(guards, name);
-    if value {
-        push_guard_name(&mut guards.bool_true_vars, name);
-    } else {
-        push_guard_name(&mut guards.bool_false_vars, name);
+    if let GuardLiteral::Bool(value) = &value {
+        if *value {
+            push_guard_name(&mut guards.bool_true_vars, name);
+        } else {
+            push_guard_name(&mut guards.bool_false_vars, name);
+        }
     }
-    record_truthy_guard(guards, name, value);
+    guards.exact_guards.push(ExactGuard {
+        name: name.to_string(),
+        value: value.clone(),
+    });
+    record_truthy_guard(guards, name, guard_literal_truthy(&value));
 }
 
-fn exact_bool_from_guard_branch(condition: &Expr, branch_taken: bool) -> Option<(&str, bool)> {
-    let (name, compared_bool, expects_equal) = strict_bool_guard(condition)?;
+fn exact_literal_from_guard_branch(condition: &Expr, branch_taken: bool) -> Option<(&str, GuardLiteral)> {
+    let (name, compared_value, expects_equal) = strict_scalar_guard(condition)?;
     match (expects_equal, branch_taken) {
-        (true, true) => Some((name, compared_bool)),
-        (false, false) => Some((name, compared_bool)),
+        (true, true) => Some((name, compared_value)),
+        (false, false) => Some((name, compared_value)),
         _ => None,
     }
 }
@@ -1189,8 +1238,8 @@ fn extend_guards(guards: &GuardState, condition: &Expr, branch_taken: bool) -> G
 
     let mut next = guards.clone();
 
-    if let Some((name, exact_bool)) = exact_bool_from_guard_branch(condition, branch_taken) {
-        record_exact_bool_guard(&mut next, name, exact_bool);
+    if let Some((name, exact_value)) = exact_literal_from_guard_branch(condition, branch_taken) {
+        record_exact_literal_guard(&mut next, name, exact_value);
         return next;
     }
 
@@ -1390,6 +1439,9 @@ fn invalidate_guards_for_written_names(guards: &mut GuardState, written: &[Strin
     guards
         .bool_false_vars
         .retain(|name| !written.iter().any(|written_name| written_name == name));
+    guards
+        .exact_guards
+        .retain(|known| !written.iter().any(|written_name| written_name == &known.name));
 }
 
 fn collect_written_names(stmt: &Stmt, written: &mut Vec<String>) {

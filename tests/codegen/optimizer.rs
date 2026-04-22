@@ -1866,6 +1866,64 @@ run(false, false);
 }
 
 #[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_outer_null_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function runNull() {
+    $value = null;
+    if ($value === null) {
+        if ($value !== null) {
+            echo "bad";
+        } else {
+            echo "a";
+        }
+    } else {
+        echo "b";
+    }
+}
+
+function runInt() {
+    $value = 1;
+    if ($value === null) {
+        echo "bad";
+    } else {
+        echo "b";
+    }
+}
+
+runNull();
+runInt();
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_outer_zero_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function run($value) {
+    if ($value === 0) {
+        if ($value) {
+            echo "bad";
+        } else {
+            echo "a";
+        }
+    } else {
+        echo "b";
+    }
+}
+
+run(0);
+run(1);
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_switch_bool_guard_case() {
     let out = compile_and_run(
         r#"<?php
