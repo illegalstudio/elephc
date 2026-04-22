@@ -319,7 +319,7 @@ Proper type system for PHP compatibility.
 - [x] Add regression benchmarks so optimization work is measured instead of anecdotal
 - [x] Constant propagation across locals / statement boundaries
 - [x] Path-aware dead code elimination foundations — shared reachability/tail-path analysis for `if` / `ifdef` / `switch` / `try`, shadowed handler/pattern removal, and guard-aware nested region pruning
-- [ ] Dead code elimination v2 (full CFG/basic-block aware pass beyond the current path-aware AST pruning)
+- [ ] Dead code elimination v3 (full CFG/basic-block aware pass beyond the current path-aware AST pruning)
 - [x] Purity / may-throw analysis so AST optimizations can reason more precisely about safe hoisting and branch removal
 - [ ] Exception-aware dead code elimination beyond conservative `try` / `catch` / `finally` heuristics
 - [x] Control-flow normalization pass for flattening redundant nested `if` / `switch` / `try` shells after pruning
