@@ -138,6 +138,7 @@ Current pruning coverage includes:
 - `do { ... } while (false)` reduced to a single execution of the body
 - `for (...; false; ...)`, preserving the `init` clause but removing dead loop/update work
 - `match` expressions whose subject and patterns are statically decidable
+- shadowed `match` arms and duplicate arm patterns removed when earlier arms already own the same exact pattern entries
 - `switch` pruning when early case prefixes are provably impossible
 - unreachable statements after:
   - `return`
@@ -202,8 +203,27 @@ Current dead-code-elimination coverage includes:
   - `break`
   - `continue`
 - statements after exhaustive `try/catch` and `try/finally` exits
+- unreachable `catch` paths when the post-DCE `try` body can no longer throw
+- shadowed `catch` clauses whose exception types are already fully covered by earlier handlers, including all later handlers after `catch (Throwable ...)`
+- shadowed `switch` patterns whose match points are already covered by earlier case labels, including full-case removal or fallthrough-body merging when no entry pattern remains
+- internal `if` regions pruned when outer pure variable guards or strict boolean checks already determine a nested branch outcome, with guard invalidation on relevant local writes to stay conservative
+- guard-based pruning now also understands simple pure `&&` / `||` combinations, so contradictions like `if ($a && $b) { if (!$a || !$b) ... }` can be removed without needing constant folding first
+- strict scalar guards now feed the same pruning: after checks like `$x === null`, `$x === 0`, or `$x === ""`, nested regions that contradict the exact known value can be removed
+- negative branches of strict scalar checks now contribute exclusion facts too, so `else` paths after checks like `$x === 0` or the true path of `$x !== null` can prune nested contradictions without needing a full exact replacement value
+- the same strict scalar guard machinery now covers exact floats as well as PHP-falsy strings like `""` and `"0"`, so nested truthiness checks and strict literal contradictions can be pruned when those values are already known or excluded
+- `switch (true|false)` cases using single guard-like patterns can feed the same internal region pruning inside the selected case body, again with local-write invalidation to stay conservative
+- `catch` and `finally` bodies now invalidate outer guard facts only for locals written on the relevant pre-handler paths, so nested pruning there stays sound without discarding unrelated guard facts
+- catch-side guard invalidation is now path-aware: writes that only happen on non-throwing `try` paths no longer block pruning inside the `catch`
+- condition-only empty `if` / `elseif` chains reduced to just the observable condition checks that still matter
+- empty `elseif` bodies in the middle of a live chain folded into the minimum negated guard needed for later branches
+- trailing block tails sunk into `if` and `ifdef` fallthrough branches, so later statements are only retained on paths that can still reach them
+- trailing block tails sunk into `switch` suffixes when later code is reached deterministically either by falling off the final reachable path or by exiting a case via `break`
+- trailing block tails sunk into `try` / `catch` fallthrough paths, and into `finally` only in the conservative case where every pre-finally path must still fall through
+- trailing empty `switch` labels dropped when they no longer lead to reachable work
 - pure expression statements whose result is unused
 - pure expression statements that become exposed by earlier normalization
+
+The current path-aware DCE work uses small path-outcome helpers for `if`, `ifdef`, `switch`, and `try`, all speaking the same local tail-path vocabulary (`falls through`, `breaks`, `no tail`, `unknown`). That lets tail-sinking and shell collapsing share one reachability model instead of duplicating ad-hoc logic per statement shape.
 
 ### Example
 

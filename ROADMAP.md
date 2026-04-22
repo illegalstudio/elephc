@@ -318,7 +318,8 @@ Proper type system for PHP compatibility.
 - [ ] Peephole optimization (redundant load/store elimination)
 - [x] Add regression benchmarks so optimization work is measured instead of anecdotal
 - [x] Constant propagation across locals / statement boundaries
-- [ ] Dead code elimination v2 (CFG/basic-block aware pass beyond local AST pruning)
+- [x] Path-aware dead code elimination foundations — shared reachability/tail-path analysis for `if` / `ifdef` / `switch` / `try`, shadowed handler/pattern removal, and guard-aware nested region pruning
+- [ ] Dead code elimination v3 (full CFG/basic-block aware pass beyond the current path-aware AST pruning)
 - [x] Purity / may-throw analysis so AST optimizations can reason more precisely about safe hoisting and branch removal
 - [ ] Exception-aware dead code elimination beyond conservative `try` / `catch` / `finally` heuristics
 - [x] Control-flow normalization pass for flattening redundant nested `if` / `switch` / `try` shells after pruning
@@ -326,6 +327,7 @@ Proper type system for PHP compatibility.
 - [ ] Constant propagation v2 — fixed-point / CFG-aware propagation through loops and wider control-flow beyond the current conservative local env model
 - [ ] Memory-model-aware propagation for heap-backed locals and targeted runtime invalidations beyond `unset($var)` and the currently modeled local writes
 - [ ] Purity / may-throw v2 for dynamic instance dispatch, richer property/array reads, and less pessimistic builtin modeling
+- [ ] Guard reasoning v2 for dead-code elimination — broader contradiction tracking across relational/loose comparisons and multi-variable facts beyond current strict-scalar and boolean guards
 - [ ] Control-flow normalization v2 — broader canonicalization of nested block/control shells before CFG-aware optimization passes
 - [ ] Register allocation (reduce stack spills)
 - [ ] Inline small functions

@@ -1329,6 +1329,974 @@ echo "!";
 }
 
 #[test]
+fn test_dead_code_elimination_collapses_empty_switch_shell_after_branch_dce() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_empty_switch_shell");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+function touch() {
+    echo "s";
+    return 1;
+}
+
+switch (touch()) {
+    case 1:
+        strlen("abc");
+        break;
+}
+
+echo "!";
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("switch_end"),
+        "empty switch shells should not survive user assembly after DCE:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "s!");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dead_code_elimination_collapses_empty_try_shell_after_branch_dce() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    strlen("abc");
+} catch (Exception $e) {
+    strlen("def");
+} finally {
+    echo "f";
+}
+echo "!";
+"#,
+    );
+
+    assert_eq!(out, "f!");
+}
+
+#[test]
+fn test_dead_code_elimination_drops_unreachable_catch_after_non_throwing_try() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    echo "t";
+} catch (Exception $e) {
+    echo "c";
+}
+echo "!";
+"#,
+    );
+
+    assert_eq!(out, "t!");
+}
+
+#[test]
+fn test_dead_code_elimination_drops_unreachable_catch_before_finally() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    echo "t";
+} catch (Exception $e) {
+    echo "c";
+} finally {
+    echo "f";
+}
+echo "!";
+"#,
+    );
+
+    assert_eq!(out, "tf!");
+}
+
+#[test]
+fn test_dead_code_elimination_reduces_empty_if_chain_to_needed_condition_checks() {
+    let out = compile_and_run(
+        r#"<?php
+function touch() {
+    echo "a";
+    return false;
+}
+
+function tap() {
+    echo "b";
+    return false;
+}
+
+if (touch()) {
+    strlen("abc");
+} elseif (tap()) {
+    strlen("def");
+}
+
+echo "!";
+"#,
+    );
+
+    assert_eq!(out, "ab!");
+}
+
+#[test]
+fn test_dead_code_elimination_rebuilds_empty_elseif_tail_as_needed_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function touch() {
+    echo "a";
+    return false;
+}
+
+function tap() {
+    echo "b";
+    return true;
+}
+
+if (touch()) {
+    echo "x";
+} elseif (tap()) {
+    strlen("abc");
+} else {
+    echo "z";
+}
+
+echo "!";
+"#,
+    );
+
+    assert_eq!(out, "ab!");
+}
+
+#[test]
+fn test_dead_code_elimination_sinks_tail_into_if_fallthrough_branch() {
+    let out = compile_and_run(
+        r#"<?php
+function run(bool $flag) {
+    if ($flag) {
+        echo "a";
+        return;
+    } else {
+        echo "b";
+    }
+    echo "c";
+}
+
+run(true);
+run(false);
+echo "!";
+"#,
+    );
+
+    assert_eq!(out, "abc!");
+}
+
+#[test]
+fn test_dead_code_elimination_sinks_tail_into_switch_exit_paths() {
+    let out = compile_and_run(
+        r#"<?php
+function run(int $flag) {
+    switch ($flag) {
+        case 1:
+            echo "a";
+        case 2:
+            echo "b";
+        default:
+            echo "c";
+    }
+    echo "!";
+}
+
+run(1);
+run(2);
+run(3);
+"#,
+    );
+
+    assert_eq!(out, "abc!bc!c!");
+}
+
+#[test]
+fn test_dead_code_elimination_sinks_tail_into_switch_break_paths() {
+    let out = compile_and_run(
+        r#"<?php
+function run(int $flag) {
+    switch ($flag) {
+        case 1:
+            echo "a";
+            break;
+        case 2:
+            echo "b";
+        default:
+            echo "c";
+    }
+    echo "!";
+}
+
+run(1);
+run(2);
+run(3);
+"#,
+    );
+
+    assert_eq!(out, "a!bc!c!");
+}
+
+#[test]
+fn test_dead_code_elimination_sinks_tail_into_try_fallthrough_paths() {
+    let out = compile_and_run(
+        r#"<?php
+function run(bool $flag) {
+    try {
+        if ($flag) {
+            throw new Exception("boom");
+        }
+        echo "a";
+    } catch (Exception $e) {
+        return;
+    }
+    echo "b";
+}
+
+run(false);
+run(true);
+echo "!";
+"#,
+    );
+
+    assert_eq!(out, "ab!");
+}
+
+#[test]
+fn test_dead_code_elimination_sinks_tail_into_try_catch_only_fallthrough_paths() {
+    let out = compile_and_run(
+        r#"<?php
+function run(bool $flag) {
+    try {
+        if ($flag) {
+            throw new Exception("boom");
+        }
+        return;
+    } catch (Exception $e) {
+        echo "a";
+    }
+    echo "b";
+}
+
+run(true);
+run(false);
+echo "!";
+"#,
+    );
+
+    assert_eq!(out, "ab!");
+}
+
+#[test]
+fn test_dead_code_elimination_drops_shadowed_throwable_catch_from_user_assembly() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_shadowed_throwable_catch");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+try {
+    throw new Exception("boom");
+} catch (Throwable $t) {
+    echo "a";
+} catch (Exception $e) {
+    echo "shadowed";
+}
+echo "!";
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("shadowed"),
+        "shadowed catch body should not remain in user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "a!");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dead_code_elimination_drops_shadowed_switch_case_from_user_assembly() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_shadowed_switch_case");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+switch (1) {
+    case 1:
+        echo "a";
+        break;
+    case 1:
+        echo "shadowed";
+        break;
+    default:
+        echo "z";
+}
+echo "!";
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("shadowed"),
+        "shadowed switch case body should not remain in user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "a!");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dead_code_elimination_drops_shadowed_match_arm_from_user_assembly() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_shadowed_match_arm");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+function id($value) {
+    return $value;
+}
+
+echo match (id(1)) {
+    1 => "a",
+    1 => "shadowed",
+    default => "z",
+};
+echo "!";
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("shadowed"),
+        "shadowed match arm should not remain in user assembly:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "a!");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_outer_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function run($flag) {
+    if ($flag) {
+        if (!$flag) {
+            echo "bad";
+        } else {
+            echo "a";
+        }
+    } else {
+        echo "b";
+    }
+}
+
+run(true);
+run(false);
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
+fn test_dead_code_elimination_invalidates_outer_guard_after_local_write() {
+    let out = compile_and_run(
+        r#"<?php
+function run($flag) {
+    if ($flag) {
+        $flag = false;
+        if ($flag) {
+            echo "bad";
+        } else {
+            echo "a";
+        }
+    }
+}
+
+run(true);
+"#,
+    );
+
+    assert_eq!(out, "a");
+}
+
+#[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_outer_strict_bool_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function run($flag) {
+    if ($flag === true) {
+        if ($flag === false) {
+            echo "bad";
+        } else {
+            echo "a";
+        }
+    } else {
+        echo "b";
+    }
+}
+
+run(true);
+run(false);
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
+fn test_dead_code_elimination_invalidates_outer_strict_bool_guard_after_local_write() {
+    let out = compile_and_run(
+        r#"<?php
+function run($flag) {
+    if ($flag === true) {
+        $flag = false;
+        if ($flag === true) {
+            echo "bad";
+        } else {
+            echo "a";
+        }
+    }
+}
+
+run(true);
+"#,
+    );
+
+    assert_eq!(out, "a");
+}
+
+#[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_outer_and_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function run($a, $b) {
+    if ($a && $b) {
+        if (!$a || !$b) {
+            echo "bad";
+        } else {
+            echo "a";
+        }
+    } else {
+        echo "b";
+    }
+}
+
+run(true, true);
+run(true, false);
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_outer_or_false_branch() {
+    let out = compile_and_run(
+        r#"<?php
+function run($a, $b) {
+    if (!$a || $b) {
+        echo "b";
+    } else {
+        if ($a && !$b) {
+            echo "a";
+        } else {
+            echo "bad";
+        }
+    }
+}
+
+run(true, false);
+run(false, false);
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_outer_null_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function runNull() {
+    $value = null;
+    if ($value === null) {
+        if ($value !== null) {
+            echo "bad";
+        } else {
+            echo "a";
+        }
+    } else {
+        echo "b";
+    }
+}
+
+function runInt() {
+    $value = 1;
+    if ($value === null) {
+        echo "bad";
+    } else {
+        echo "b";
+    }
+}
+
+runNull();
+runInt();
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_outer_zero_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function run($value) {
+    if ($value === 0) {
+        if ($value) {
+            echo "bad";
+        } else {
+            echo "a";
+        }
+    } else {
+        echo "b";
+    }
+}
+
+run(0);
+run(1);
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_excluded_zero_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function run($value) {
+    if ($value === 0) {
+        echo "b";
+    } else {
+        if ($value === 0) {
+            echo "bad";
+        } else {
+            echo "a";
+        }
+    }
+}
+
+run(1);
+run(0);
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_excluded_null_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function runNotNull() {
+    $value = 1;
+    if ($value !== null) {
+        if ($value === null) {
+            echo "bad";
+        } else {
+            echo "a";
+        }
+    } else {
+        echo "b";
+    }
+}
+
+function runNull() {
+    $value = null;
+    if ($value !== null) {
+        echo "bad";
+    } else {
+        echo "b";
+    }
+}
+
+runNotNull();
+runNull();
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_outer_empty_string_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function run($value) {
+    if ($value === "") {
+        if ($value) {
+            echo "bad";
+        } else {
+            echo "a";
+        }
+    } else {
+        echo "b";
+    }
+}
+
+run("");
+run("x");
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_excluded_empty_string_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function run($value) {
+    if ($value === "") {
+        echo "b";
+    } else {
+        if ($value === "") {
+            echo "bad";
+        } else {
+            echo "a";
+        }
+    }
+}
+
+run("x");
+run("");
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_outer_string_zero_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function run($value) {
+    if ($value === "0") {
+        if ($value) {
+            echo "bad";
+        } else {
+            echo "a";
+        }
+    } else {
+        echo "b";
+    }
+}
+
+run("0");
+run("1");
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_excluded_string_zero_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function run($value) {
+    if ($value === "0") {
+        echo "b";
+    } else {
+        if ($value === "0") {
+            echo "bad";
+        } else {
+            echo "a";
+        }
+    }
+}
+
+run("1");
+run("0");
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_outer_zero_float_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function run($value) {
+    if ($value === 0.0) {
+        if ($value) {
+            echo "bad";
+        } else {
+            echo "a";
+        }
+    } else {
+        echo "b";
+    }
+}
+
+run(0.0);
+run(1.5);
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_excluded_float_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function run($value) {
+    if ($value === 1.5) {
+        echo "b";
+    } else {
+        if ($value === 1.5) {
+            echo "bad";
+        } else {
+            echo "a";
+        }
+    }
+}
+
+run(2.5);
+run(1.5);
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_switch_bool_guard_case() {
+    let out = compile_and_run(
+        r#"<?php
+function run($flag) {
+    switch (true) {
+        case $flag === true:
+            if ($flag === false) {
+                echo "bad";
+            } else {
+                echo "a";
+            }
+            break;
+        default:
+            echo "b";
+    }
+}
+
+run(true);
+run(false);
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
+fn test_dead_code_elimination_invalidates_switch_bool_guard_after_local_write() {
+    let out = compile_and_run(
+        r#"<?php
+function run($flag) {
+    switch (true) {
+        case $flag === true:
+            $flag = false;
+            if ($flag === true) {
+                echo "bad";
+            } else {
+                echo "a";
+            }
+            break;
+    }
+}
+
+run(true);
+"#,
+    );
+
+    assert_eq!(out, "a");
+}
+
+#[test]
+fn test_dead_code_elimination_invalidates_outer_guard_before_catch_body() {
+    let out = compile_and_run(
+        r#"<?php
+function run($flag) {
+    if ($flag) {
+        try {
+            $flag = false;
+            throw new Exception("boom");
+        } catch (Exception $e) {
+            if ($flag) {
+                echo "bad";
+            } else {
+                echo "a";
+            }
+        }
+    }
+}
+
+run(true);
+"#,
+    );
+
+    assert_eq!(out, "a");
+}
+
+#[test]
+fn test_dead_code_elimination_invalidates_outer_guard_before_finally_body() {
+    let out = compile_and_run(
+        r#"<?php
+function run($flag) {
+    if ($flag) {
+        try {
+            $flag = false;
+        } finally {
+            if ($flag) {
+                echo "bad";
+            } else {
+                echo "a";
+            }
+        }
+    }
+}
+
+run(true);
+"#,
+    );
+
+    assert_eq!(out, "a");
+}
+
+#[test]
+fn test_dead_code_elimination_preserves_outer_guard_for_finally_when_only_other_locals_change() {
+    let out = compile_and_run(
+        r#"<?php
+function run($flag) {
+    if ($flag) {
+        try {
+            $other = 1;
+        } finally {
+            if ($flag) {
+                echo "a";
+            } else {
+                echo "bad";
+            }
+        }
+    }
+}
+
+run(true);
+"#,
+    );
+
+    assert_eq!(out, "a");
+}
+
+#[test]
+fn test_dead_code_elimination_preserves_outer_guard_for_catch_when_only_non_throw_path_writes() {
+    let out = compile_and_run(
+        r#"<?php
+function run($flag, $other) {
+    if ($flag) {
+        try {
+            if ($other) {
+                $flag = false;
+            } else {
+                throw new Exception("boom");
+            }
+        } catch (Exception $e) {
+            if ($flag) {
+                echo "a";
+            } else {
+                echo "bad";
+            }
+        }
+    }
+}
+
+run(true, false);
+"#,
+    );
+
+    assert_eq!(out, "a");
+}
+
+#[test]
+fn test_dead_code_elimination_sinks_tail_into_safe_finally_path() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    echo "a";
+} finally {
+    echo "b";
+}
+echo "c";
+"#,
+    );
+
+    assert_eq!(out, "abc");
+}
+
+#[test]
 fn test_dead_code_elimination_inlines_empty_try_finally() {
     let out = compile_and_run(
         r#"<?php
