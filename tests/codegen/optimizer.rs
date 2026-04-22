@@ -2203,6 +2203,47 @@ run(0, true);
 }
 
 #[test]
+fn test_dead_code_elimination_drops_unreachable_elseif_suffix_from_cumulative_guards() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_elseif_guard_prune");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+function tap($label, $ret) {
+    echo $label;
+    return $ret;
+}
+
+$flag = $argc > 1;
+if ($flag) {
+    echo "A";
+} elseif (!$flag) {
+    echo "B";
+} elseif (tap("dead-elseif", true)) {
+    echo "C";
+} else {
+    echo "dead-else";
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    assert_eq!(out, "B");
+    assert!(!user_asm.contains("dead-elseif"));
+    assert!(!user_asm.contains("dead-else"));
+}
+
+#[test]
 fn test_dead_code_elimination_invalidates_switch_bool_guard_after_local_write() {
     let out = compile_and_run(
         r#"<?php

@@ -3559,7 +3559,7 @@ fn test_eliminate_dead_code_drops_impossible_switch_cases_from_outer_exact_guard
     assert_eq!(cases.len(), 1);
     assert_eq!(cases[0].0, vec![Expr::int_lit(0)]);
     assert_eq!(cases[0].1, vec![Stmt::echo(Expr::int_lit(8))]);
-    assert!(default.is_none());
+    assert_eq!(default, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
 }
 
 #[test]
@@ -4075,6 +4075,64 @@ fn test_eliminate_dead_code_rebuilds_empty_elseif_tail_as_needed_guard() {
             },
             Span::dummy(),
         )]
+    );
+}
+
+#[test]
+fn test_eliminate_dead_code_prunes_unreachable_elseif_suffix_from_cumulative_false_guards() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![Stmt::new(
+                StmtKind::If {
+                    condition: Expr::var("flag"),
+                    then_body: vec![Stmt::echo(Expr::int_lit(1))],
+                    elseif_clauses: vec![
+                        (
+                            Expr::new(ExprKind::Not(Box::new(Expr::var("flag"))), Span::dummy()),
+                            vec![Stmt::echo(Expr::int_lit(2))],
+                        ),
+                        (Expr::var("flag"), vec![Stmt::echo(Expr::int_lit(3))]),
+                    ],
+                    else_body: Some(vec![Stmt::echo(Expr::int_lit(4))]),
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    let StmtKind::If {
+        condition,
+        then_body,
+        elseif_clauses,
+        else_body,
+    } = &body[0].kind
+    else {
+        panic!("expected if");
+    };
+    assert_eq!(*condition, Expr::var("flag"));
+    assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(1))]);
+    assert!(elseif_clauses.is_empty());
+    assert_eq!(
+        else_body,
+        &Some(vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::new(ExprKind::Not(Box::new(Expr::var("flag"))), Span::dummy()),
+                then_body: vec![Stmt::echo(Expr::int_lit(2))],
+                elseif_clauses: Vec::new(),
+                else_body: None,
+            },
+            Span::dummy(),
+        )])
     );
 }
 
