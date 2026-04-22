@@ -494,6 +494,26 @@ fn direct_switch_entry_blocks(
         return ((0..cases.len()).collect(), has_default);
     };
 
+    if matches!(subject_value, ScalarValue::Bool(_)) {
+        let mut no_match_guards = guards.clone();
+        let mut entry_blocks = Vec::new();
+
+        for (index, (patterns, _)) in cases.iter().enumerate() {
+            match classify_switch_patterns_with_guards(&subject_value, patterns, &no_match_guards) {
+                CaseMatch::Matches => {
+                    entry_blocks.push(index);
+                    return (entry_blocks, false);
+                }
+                CaseMatch::Unknown => entry_blocks.push(index),
+                CaseMatch::NoMatch => {}
+            }
+            no_match_guards =
+                extend_guards_for_switch_case_no_match(&subject_value, patterns, &no_match_guards);
+        }
+
+        return (entry_blocks, has_default);
+    }
+
     for (index, (patterns, _)) in cases.iter().enumerate() {
         match classify_switch_patterns_with_guards(&subject_value, patterns, guards) {
             CaseMatch::Matches => return (vec![index], false),
@@ -1456,6 +1476,20 @@ fn extend_guards_for_switch_case(subject: &Expr, patterns: &[Expr], guards: &Gua
     };
 
     extend_guards(guards, pattern, subject_bool)
+}
+
+fn extend_guards_for_switch_case_no_match(
+    subject_value: &ScalarValue,
+    patterns: &[Expr],
+    guards: &GuardState,
+) -> GuardState {
+    let ScalarValue::Bool(subject_bool) = subject_value else {
+        return guards.clone();
+    };
+
+    patterns.iter().fold(guards.clone(), |guards, pattern| {
+        extend_guards(&guards, pattern, !subject_bool)
+    })
 }
 
 fn extend_guards(guards: &GuardState, condition: &Expr, branch_taken: bool) -> GuardState {

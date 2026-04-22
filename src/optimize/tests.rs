@@ -3749,6 +3749,58 @@ fn test_eliminate_dead_code_invalidates_outer_guard_before_catch_body() {
 }
 
 #[test]
+fn test_eliminate_dead_code_prunes_exhaustive_switch_true_default_from_cumulative_guards() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![Stmt::new(
+                StmtKind::Switch {
+                    subject: Expr::new(ExprKind::BoolLiteral(true), Span::dummy()),
+                    cases: vec![
+                        (
+                            vec![Expr::var("flag")],
+                            vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+                        ),
+                        (
+                            vec![Expr::new(
+                                ExprKind::Not(Box::new(Expr::var("flag"))),
+                                Span::dummy(),
+                            )],
+                            vec![Stmt::echo(Expr::int_lit(8)), Stmt::new(StmtKind::Break, Span::dummy())],
+                        ),
+                    ],
+                    default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    let StmtKind::Switch { cases, default, .. } = &body[0].kind else {
+        panic!("expected switch");
+    };
+    assert_eq!(cases.len(), 2);
+    assert_eq!(cases[0].0, vec![Expr::var("flag")]);
+    assert_eq!(
+        cases[1].0,
+        vec![Expr::new(
+            ExprKind::Not(Box::new(Expr::var("flag"))),
+            Span::dummy(),
+        )]
+    );
+    assert!(default.is_none());
+}
+
+#[test]
 fn test_eliminate_dead_code_preserves_outer_guard_for_catch_when_only_non_throw_path_writes() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
