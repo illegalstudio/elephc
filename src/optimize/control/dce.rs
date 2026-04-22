@@ -451,6 +451,37 @@ fn known_scalar_subject_value(subject: &Expr, guards: &GuardState) -> Option<Sca
     })
 }
 
+fn known_subject_truthiness(subject: &Expr, guards: &GuardState) -> Option<bool> {
+    if let Some(subject_value) = known_scalar_subject_value(subject, guards) {
+        let guard_literal = match subject_value {
+            ScalarValue::Bool(value) => GuardLiteral::Bool(value),
+            ScalarValue::Null => GuardLiteral::Null,
+            ScalarValue::Int(value) => GuardLiteral::Int(value),
+            ScalarValue::Float(value) => GuardLiteral::Float(value.to_bits()),
+            ScalarValue::String(value) => GuardLiteral::String(value),
+        };
+        return Some(guard_literal_truthy(&guard_literal));
+    }
+
+    let ExprKind::Variable(name) = &subject.kind else {
+        return None;
+    };
+
+    if guards.bool_true_vars.iter().any(|known| known == name)
+        || guards.truthy_vars.iter().any(|known| known == name)
+    {
+        return Some(true);
+    }
+
+    if guards.bool_false_vars.iter().any(|known| known == name)
+        || guards.falsy_vars.iter().any(|known| known == name)
+    {
+        return Some(false);
+    }
+
+    None
+}
+
 fn classify_switch_patterns_for_exact_scalar(
     subject_value: &ScalarValue,
     patterns: &[Expr],
@@ -499,6 +530,15 @@ fn classify_switch_patterns_with_guards(
 
     let mut has_unknown = false;
     for pattern in patterns {
+        if let ExprKind::BoolLiteral(pattern_bool) = pattern.kind {
+            if let Some(subject_truthy) = known_subject_truthiness(subject, guards) {
+                if subject_truthy == pattern_bool {
+                    return CaseMatch::Matches;
+                }
+                continue;
+            }
+        }
+
         let Some(pattern_value) = scalar_guard_value(pattern) else {
             has_unknown = true;
             continue;
@@ -555,13 +595,16 @@ fn direct_switch_entry_blocks(
     }
 
     if matches!(subject.kind, ExprKind::Variable(_)) {
+        let mut no_match_guards = guards.clone();
         let mut entry_blocks = Vec::new();
         for (index, (patterns, _)) in cases.iter().enumerate() {
-            match classify_switch_patterns_with_guards(subject, patterns, guards) {
+            match classify_switch_patterns_with_guards(subject, patterns, &no_match_guards) {
                 CaseMatch::Matches => return (vec![index], false),
                 CaseMatch::Unknown => entry_blocks.push(index),
                 CaseMatch::NoMatch => {}
             }
+            no_match_guards =
+                extend_guards_for_switch_case_no_match_subject(subject, patterns, &no_match_guards);
         }
         return (entry_blocks, has_default);
     }
@@ -623,12 +666,6 @@ fn prune_switch_patterns_with_guards(
     default: Option<Vec<Stmt>>,
     guards: &GuardState,
 ) -> (Vec<(Vec<Expr>, Vec<Stmt>)>, Option<Vec<Stmt>>) {
-    let cumulative_subject_value = match known_scalar_subject_value(subject, guards) {
-        Some(ScalarValue::Bool(value)) => Some(ScalarValue::Bool(value)),
-        _ => None,
-    };
-    let uses_cumulative_no_match_guards = cumulative_subject_value.is_some();
-
     let mut no_match_guards = guards.clone();
     let mut direct_entries_possible = true;
     let mut pruned_cases = Vec::with_capacity(cases.len());
@@ -654,28 +691,24 @@ fn prune_switch_patterns_with_guards(
                     break;
                 }
                 CaseMatch::Unknown => {
-                    if let Some(subject_value) = &cumulative_subject_value {
-                        local_no_match_guards = extend_guards_for_switch_case_no_match(
-                            subject_value,
-                            std::slice::from_ref(&pattern),
-                            &local_no_match_guards,
-                        );
-                    }
+                    local_no_match_guards = extend_guards_for_switch_case_no_match_subject(
+                        subject,
+                        std::slice::from_ref(&pattern),
+                        &local_no_match_guards,
+                    );
                     kept_patterns.push(pattern);
                 }
                 CaseMatch::NoMatch => {
-                    if let Some(subject_value) = &cumulative_subject_value {
-                        local_no_match_guards = extend_guards_for_switch_case_no_match(
-                            subject_value,
-                            std::slice::from_ref(&pattern),
-                            &local_no_match_guards,
-                        );
-                    }
+                    local_no_match_guards = extend_guards_for_switch_case_no_match_subject(
+                        subject,
+                        std::slice::from_ref(&pattern),
+                        &local_no_match_guards,
+                    );
                 }
             }
         }
 
-        if direct_entries_possible && uses_cumulative_no_match_guards {
+        if direct_entries_possible {
             no_match_guards = local_no_match_guards;
         }
 
@@ -1575,7 +1608,6 @@ fn excluded_literal_from_guard_branch(
 }
 
 fn record_excluded_literal_guard(guards: &mut GuardState, name: &str, value: GuardLiteral) {
-    guards.exact_guards.retain(|known| known.name != name);
     if !guards
         .excluded_guards
         .iter()
@@ -1589,14 +1621,21 @@ fn record_excluded_literal_guard(guards: &mut GuardState, name: &str, value: Gua
 }
 
 fn extend_guards_for_switch_case(subject: &Expr, patterns: &[Expr], guards: &GuardState) -> GuardState {
-    let ExprKind::BoolLiteral(subject_bool) = subject.kind else {
-        return guards.clone();
-    };
     let [pattern] = patterns else {
         return guards.clone();
     };
 
-    extend_guards(guards, pattern, subject_bool)
+    match &subject.kind {
+        ExprKind::BoolLiteral(subject_bool) => extend_guards(guards, pattern, *subject_bool),
+        ExprKind::Variable(name) => {
+            let mut next = guards.clone();
+            if let ExprKind::BoolLiteral(pattern_bool) = pattern.kind {
+                record_truthy_guard(&mut next, name, pattern_bool);
+            }
+            next
+        }
+        _ => guards.clone(),
+    }
 }
 
 fn extend_guards_for_switch_case_no_match(
@@ -1610,6 +1649,36 @@ fn extend_guards_for_switch_case_no_match(
 
     patterns.iter().fold(guards.clone(), |guards, pattern| {
         extend_guards(&guards, pattern, !subject_bool)
+    })
+}
+
+fn extend_guards_for_switch_case_no_match_subject(
+    subject: &Expr,
+    patterns: &[Expr],
+    guards: &GuardState,
+) -> GuardState {
+    if let Some(subject_value) = known_scalar_subject_value(subject, guards) {
+        if matches!(subject_value, ScalarValue::Bool(_)) {
+            return extend_guards_for_switch_case_no_match(&subject_value, patterns, guards);
+        }
+    }
+
+    let ExprKind::Variable(name) = &subject.kind else {
+        return guards.clone();
+    };
+
+    patterns.iter().fold(guards.clone(), |mut guards, pattern| {
+        match &pattern.kind {
+            ExprKind::BoolLiteral(pattern_bool) => {
+                record_truthy_guard(&mut guards, name, !pattern_bool);
+            }
+            _ => {
+                if let Some(pattern_value) = scalar_guard_value(pattern) {
+                    record_excluded_literal_guard(&mut guards, name, pattern_value);
+                }
+            }
+        }
+        guards
     })
 }
 
