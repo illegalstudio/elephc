@@ -27,6 +27,7 @@ enum GuardLiteral {
     Bool(bool),
     Null,
     Int(i64),
+    Float(u64),
     String(String),
 }
 
@@ -1062,6 +1063,7 @@ fn scalar_guard_value(expr: &Expr) -> Option<GuardLiteral> {
         ExprKind::BoolLiteral(value) => Some(GuardLiteral::Bool(*value)),
         ExprKind::Null => Some(GuardLiteral::Null),
         ExprKind::IntLiteral(value) => Some(GuardLiteral::Int(*value)),
+        ExprKind::FloatLiteral(value) => Some(GuardLiteral::Float(value.to_bits())),
         ExprKind::StringLiteral(value) => Some(GuardLiteral::String(value.clone())),
         _ => None,
     }
@@ -1090,6 +1092,7 @@ fn guard_literal_truthy(value: &GuardLiteral) -> bool {
         GuardLiteral::Bool(value) => *value,
         GuardLiteral::Null => false,
         GuardLiteral::Int(value) => *value != 0,
+        GuardLiteral::Float(bits) => f64::from_bits(*bits) != 0.0,
         GuardLiteral::String(value) => !value.is_empty() && value != "0",
     }
 }

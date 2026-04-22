@@ -2078,6 +2078,54 @@ run("0");
 }
 
 #[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_outer_zero_float_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function run($value) {
+    if ($value === 0.0) {
+        if ($value) {
+            echo "bad";
+        } else {
+            echo "a";
+        }
+    } else {
+        echo "b";
+    }
+}
+
+run(0.0);
+run(1.5);
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_excluded_float_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function run($value) {
+    if ($value === 1.5) {
+        echo "b";
+    } else {
+        if ($value === 1.5) {
+            echo "bad";
+        } else {
+            echo "a";
+        }
+    }
+}
+
+run(2.5);
+run(1.5);
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_switch_bool_guard_case() {
     let out = compile_and_run(
         r#"<?php
