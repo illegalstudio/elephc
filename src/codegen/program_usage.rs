@@ -48,6 +48,9 @@ fn collect_required_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<Stri
             StmtKind::NamespaceBlock { body, .. } => {
                 collect_required_class_names_in_body(body, names);
             }
+            StmtKind::FunctionDecl { body, .. } => {
+                collect_required_class_names_in_body(body, names);
+            }
             StmtKind::IfDef {
                 then_body,
                 else_body,
