@@ -3077,7 +3077,7 @@ fn test_eliminate_dead_code_invalidates_outer_guard_before_catch_body() {
 }
 
 #[test]
-fn test_eliminate_dead_code_invalidates_outer_guard_before_finally_body() {
+fn test_eliminate_dead_code_preserves_outer_guard_for_catch_when_only_non_throw_path_writes() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
@@ -3089,20 +3089,41 @@ fn test_eliminate_dead_code_invalidates_outer_guard_before_finally_body() {
                     condition: Expr::var("flag"),
                     then_body: vec![Stmt::new(
                         StmtKind::Try {
-                            try_body: vec![Stmt::assign(
-                                "flag",
-                                Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
-                            )],
-                            catches: Vec::new(),
-                            finally_body: Some(vec![Stmt::new(
+                            try_body: vec![Stmt::new(
                                 StmtKind::If {
-                                    condition: Expr::var("flag"),
-                                    then_body: vec![Stmt::echo(Expr::int_lit(8))],
+                                    condition: Expr::var("other"),
+                                    then_body: vec![Stmt::assign(
+                                        "flag",
+                                        Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
+                                    )],
                                     elseif_clauses: Vec::new(),
-                                    else_body: Some(vec![Stmt::echo(Expr::int_lit(7))]),
+                                    else_body: Some(vec![Stmt::new(
+                                        StmtKind::Throw(Expr::new(
+                                            ExprKind::NewObject {
+                                                class_name: Name::unqualified("Exception"),
+                                                args: vec![Expr::string_lit("boom")],
+                                            },
+                                            Span::dummy(),
+                                        )),
+                                        Span::dummy(),
+                                    )]),
                                 },
                                 Span::dummy(),
-                            )]),
+                            )],
+                            catches: vec![crate::parser::ast::CatchClause {
+                                exception_types: vec![Name::unqualified("Exception")],
+                                variable: Some("e".into()),
+                                body: vec![Stmt::new(
+                                    StmtKind::If {
+                                        condition: Expr::var("flag"),
+                                        then_body: vec![Stmt::echo(Expr::int_lit(7))],
+                                        elseif_clauses: Vec::new(),
+                                        else_body: Some(vec![Stmt::echo(Expr::int_lit(8))]),
+                                    },
+                                    Span::dummy(),
+                                )],
+                            }],
+                            finally_body: None,
                         },
                         Span::dummy(),
                     )],
@@ -3123,12 +3144,10 @@ fn test_eliminate_dead_code_invalidates_outer_guard_before_finally_body() {
     let StmtKind::If { then_body, .. } = &body[0].kind else {
         panic!("expected if");
     };
-    assert!(
-        then_body
-            .iter()
-            .any(|stmt| matches!(stmt.kind, StmtKind::If { .. })),
-        "expected inner if to remain after try/finally write invalidation"
-    );
+    let StmtKind::Try { catches, .. } = &then_body[0].kind else {
+        panic!("expected try");
+    };
+    assert_eq!(catches[0].body, vec![Stmt::echo(Expr::int_lit(7))]);
 }
 
 #[test]

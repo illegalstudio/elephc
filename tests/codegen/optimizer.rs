@@ -1919,6 +1919,35 @@ run(true);
 }
 
 #[test]
+fn test_dead_code_elimination_preserves_outer_guard_for_catch_when_only_non_throw_path_writes() {
+    let out = compile_and_run(
+        r#"<?php
+function run($flag, $other) {
+    if ($flag) {
+        try {
+            if ($other) {
+                $flag = false;
+            } else {
+                throw new Exception("boom");
+            }
+        } catch (Exception $e) {
+            if ($flag) {
+                echo "a";
+            } else {
+                echo "bad";
+            }
+        }
+    }
+}
+
+run(true, false);
+"#,
+    );
+
+    assert_eq!(out, "a");
+}
+
+#[test]
 fn test_dead_code_elimination_sinks_tail_into_safe_finally_path() {
     let out = compile_and_run(
         r#"<?php
