@@ -1842,6 +1842,30 @@ run(true, false);
 }
 
 #[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_outer_negated_and_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function run($a, $b) {
+    if (!($a && $b)) {
+        if ($a && $b) {
+            echo "bad";
+        } else {
+            echo "a";
+        }
+    } else {
+        echo "b";
+    }
+}
+
+run(true, false);
+run(true, true);
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_outer_or_false_branch() {
     let out = compile_and_run(
         r#"<?php
@@ -2239,6 +2263,51 @@ if ($flag) {
     );
 
     assert_eq!(out, "B");
+    assert!(!user_asm.contains("dead-elseif"));
+    assert!(!user_asm.contains("dead-else"));
+}
+
+#[test]
+fn test_dead_code_elimination_drops_unreachable_elseif_suffix_from_negated_composite_guards() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_negated_elseif_guard_prune");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+function tap($label, $ret) {
+    echo $label;
+    return $ret;
+}
+
+function run($a, $b) {
+    if ($a || $b) {
+        echo "A";
+    } elseif (!($a || $b)) {
+        echo "B";
+    } elseif (tap("dead-elseif", true)) {
+        echo "C";
+    } else {
+        echo "dead-else";
+    }
+}
+
+run(true, false);
+run(false, false);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    assert_eq!(out, "AB");
     assert!(!user_asm.contains("dead-elseif"));
     assert!(!user_asm.contains("dead-else"));
 }
