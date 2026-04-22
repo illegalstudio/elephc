@@ -2448,6 +2448,49 @@ run(true);
 }
 
 #[test]
+fn test_dead_code_elimination_keeps_unknown_truthy_switch_entry_before_matching_case() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_truthy_switch_unknown_entry");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+function run($flag, $other) {
+    if ($flag) {
+        switch ($flag) {
+            case $other:
+            case false:
+                echo "maybe-first";
+                break;
+            case true:
+                echo "A";
+                break;
+            default:
+                echo "dead-default";
+        }
+    }
+}
+
+run(true, false);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    assert_eq!(out, "A");
+    assert!(user_asm.contains("maybe-first"));
+    assert!(!user_asm.contains("dead-default"));
+}
+
+#[test]
 fn test_dead_code_elimination_invalidates_switch_bool_guard_after_local_write() {
     let out = compile_and_run(
         r#"<?php

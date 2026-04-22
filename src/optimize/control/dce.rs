@@ -599,7 +599,10 @@ fn direct_switch_entry_blocks(
         let mut entry_blocks = Vec::new();
         for (index, (patterns, _)) in cases.iter().enumerate() {
             match classify_switch_patterns_with_guards(subject, patterns, &no_match_guards) {
-                CaseMatch::Matches => return (vec![index], false),
+                CaseMatch::Matches => {
+                    entry_blocks.push(index);
+                    return (entry_blocks, false);
+                }
                 CaseMatch::Unknown => entry_blocks.push(index),
                 CaseMatch::NoMatch => {}
             }
