@@ -225,6 +225,8 @@ Current dead-code-elimination coverage includes:
 
 The current path-aware DCE work uses small path-outcome helpers for `if`, `ifdef`, `switch`, and `try`, all speaking the same local tail-path vocabulary (`falls through`, `breaks`, `no tail`, `unknown`). That lets tail-sinking and shell collapsing share one reachability model instead of duplicating ad-hoc logic per statement shape.
 
+The first `dead-code-elimination v3` slice also starts moving some of that reasoning onto a tiny CFG-lite layer. Today that shows up first in `switch` handling: case/default bodies are lowered to a small basic-block graph and their tail reachability is classified from successor edges instead of only from hand-written reverse scans. It is still AST-local, not a full function CFG, but it is the first step toward block-aware DCE.
+
 ### Example
 
 ```php

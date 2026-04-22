@@ -4240,6 +4240,60 @@ fn test_switch_tail_reachability_tracks_suffix_paths() {
 }
 
 #[test]
+fn test_build_switch_cfg_tracks_case_successors() {
+    let cases = vec![
+        (vec![Expr::int_lit(1)], Vec::new()),
+        (
+            vec![Expr::int_lit(2)],
+            vec![Stmt::new(StmtKind::Break, Span::dummy())],
+        ),
+    ];
+    let default = Some(vec![Stmt::echo(Expr::int_lit(9))]);
+
+    let cfg = build_switch_cfg(&cases, &default);
+
+    assert_eq!(cfg.case_entries, vec![0, 1]);
+    assert_eq!(cfg.default_entry, Some(2));
+    assert_eq!(
+        cfg.blocks,
+        vec![
+            BasicBlock {
+                successors: vec![BasicBlockSuccessor::Block(1)],
+            },
+            BasicBlock {
+                successors: vec![BasicBlockSuccessor::Breaks],
+            },
+            BasicBlock {
+                successors: vec![BasicBlockSuccessor::FallsThrough],
+            },
+        ]
+    );
+}
+
+#[test]
+fn test_classify_switch_cfg_paths_follows_fallthrough_chain() {
+    let cases = vec![
+        (vec![Expr::int_lit(1)], Vec::new()),
+        (vec![Expr::int_lit(2)], Vec::new()),
+    ];
+    let default = Some(vec![Stmt::echo(Expr::int_lit(9))]);
+
+    let cfg = build_switch_cfg(&cases, &default);
+
+    assert_eq!(
+        classify_switch_cfg_paths(&cfg),
+        vec![
+            BasicBlockSuccessor::FallsThrough,
+            BasicBlockSuccessor::FallsThrough,
+        ]
+    );
+    assert_eq!(
+        classify_cfg_successor(&cfg.blocks, BasicBlockSuccessor::Block(cfg.default_entry.unwrap())),
+        BasicBlockSuccessor::FallsThrough
+    );
+}
+
+#[test]
 fn test_switch_tail_reachability_tracks_break_and_fallthrough_paths() {
     let cases = vec![
         (

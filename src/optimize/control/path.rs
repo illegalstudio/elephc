@@ -76,21 +76,14 @@ pub(crate) fn analyze_switch_tail_paths(
     cases: &[(Vec<Expr>, Vec<Stmt>)],
     default: &Option<Vec<Stmt>>,
 ) -> SwitchTailReachability {
-    let mut case_tail_paths = vec![TailPathKind::NoTail; cases.len()];
-    let default_tail_path = default
-        .as_ref()
-        .map(|body| terminal_effect_tail_path(block_terminal_effect(body)));
-
-    let mut next_tail_path = default_tail_path.unwrap_or(TailPathKind::FallsThrough);
-
-    for (index, (_, body)) in cases.iter().enumerate().rev() {
-        let case_tail_path = match block_terminal_effect(body) {
-            TerminalEffect::FallsThrough => next_tail_path,
-            effect => terminal_effect_tail_path(effect),
-        };
-        case_tail_paths[index] = case_tail_path;
-        next_tail_path = case_tail_path;
-    }
+    let cfg = build_switch_cfg(cases, default);
+    let case_tail_paths = classify_switch_cfg_paths(&cfg)
+        .into_iter()
+        .map(cfg_successor_tail_path)
+        .collect();
+    let default_tail_path = cfg
+        .default_entry
+        .map(|entry| cfg_successor_tail_path(classify_cfg_successor(&cfg.blocks, BasicBlockSuccessor::Block(entry))));
 
     SwitchTailReachability {
         case_tail_paths,
@@ -129,5 +122,14 @@ fn terminal_effect_tail_path(effect: TerminalEffect) -> TailPathKind {
         TerminalEffect::Breaks => TailPathKind::Breaks,
         TerminalEffect::ExitsCurrentBlock => TailPathKind::NoTail,
         TerminalEffect::TerminatesMixed => TailPathKind::Unknown,
+    }
+}
+
+fn cfg_successor_tail_path(successor: BasicBlockSuccessor) -> TailPathKind {
+    match successor {
+        BasicBlockSuccessor::FallsThrough => TailPathKind::FallsThrough,
+        BasicBlockSuccessor::Breaks => TailPathKind::Breaks,
+        BasicBlockSuccessor::Exits => TailPathKind::NoTail,
+        BasicBlockSuccessor::Unknown | BasicBlockSuccessor::Block(_) => TailPathKind::Unknown,
     }
 }
