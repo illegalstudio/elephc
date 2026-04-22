@@ -582,9 +582,7 @@ fn prune_switch_patterns_with_guards(
     let Some(subject_value) = known_scalar_subject_value(subject, guards) else {
         return (cases, default);
     };
-    let ScalarValue::Bool(_) = subject_value else {
-        return (cases, default);
-    };
+    let uses_cumulative_no_match_guards = matches!(subject_value, ScalarValue::Bool(_));
 
     let mut no_match_guards = guards.clone();
     let mut direct_entries_possible = true;
@@ -611,24 +609,28 @@ fn prune_switch_patterns_with_guards(
                     break;
                 }
                 CaseMatch::Unknown => {
-                    local_no_match_guards = extend_guards_for_switch_case_no_match(
-                        &subject_value,
-                        std::slice::from_ref(&pattern),
-                        &local_no_match_guards,
-                    );
+                    if uses_cumulative_no_match_guards {
+                        local_no_match_guards = extend_guards_for_switch_case_no_match(
+                            &subject_value,
+                            std::slice::from_ref(&pattern),
+                            &local_no_match_guards,
+                        );
+                    }
                     kept_patterns.push(pattern);
                 }
                 CaseMatch::NoMatch => {
-                    local_no_match_guards = extend_guards_for_switch_case_no_match(
-                        &subject_value,
-                        std::slice::from_ref(&pattern),
-                        &local_no_match_guards,
-                    );
+                    if uses_cumulative_no_match_guards {
+                        local_no_match_guards = extend_guards_for_switch_case_no_match(
+                            &subject_value,
+                            std::slice::from_ref(&pattern),
+                            &local_no_match_guards,
+                        );
+                    }
                 }
             }
         }
 
-        if direct_entries_possible {
+        if direct_entries_possible && uses_cumulative_no_match_guards {
             no_match_guards = local_no_match_guards;
         }
 

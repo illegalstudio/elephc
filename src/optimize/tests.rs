@@ -3559,7 +3559,7 @@ fn test_eliminate_dead_code_drops_impossible_switch_cases_from_outer_exact_guard
     assert_eq!(cases.len(), 1);
     assert_eq!(cases[0].0, vec![Expr::int_lit(0)]);
     assert_eq!(cases[0].1, vec![Stmt::echo(Expr::int_lit(8))]);
-    assert_eq!(default, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
+    assert!(default.is_none());
 }
 
 #[test]
@@ -3840,6 +3840,71 @@ fn test_eliminate_dead_code_prunes_switch_true_suffix_after_exhaustive_multi_pat
     };
     assert_eq!(cases.len(), 1);
     assert_eq!(cases[0].0, exhaustive_patterns);
+    assert_eq!(
+        cases[0].1,
+        vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())]
+    );
+    assert!(default.is_none());
+}
+
+#[test]
+fn test_eliminate_dead_code_prunes_scalar_switch_suffix_after_exhaustive_multi_pattern_case() {
+    let exhaustive_patterns = vec![Expr::int_lit(1), Expr::int_lit(2)];
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![Stmt::new(
+                StmtKind::If {
+                    condition: Expr::new(
+                        ExprKind::BinaryOp {
+                            left: Box::new(Expr::var("x")),
+                            op: BinOp::StrictEq,
+                            right: Box::new(Expr::int_lit(2)),
+                        },
+                        Span::dummy(),
+                    ),
+                    then_body: vec![Stmt::new(
+                        StmtKind::Switch {
+                            subject: Expr::var("x"),
+                            cases: vec![
+                                (
+                                    exhaustive_patterns.clone(),
+                                    vec![
+                                        Stmt::echo(Expr::int_lit(7)),
+                                        Stmt::new(StmtKind::Break, Span::dummy()),
+                                    ],
+                                ),
+                                (vec![Expr::int_lit(3)], vec![Stmt::echo(Expr::int_lit(8))]),
+                            ],
+                            default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+                        },
+                        Span::dummy(),
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    let StmtKind::If { then_body, .. } = &body[0].kind else {
+        panic!("expected if");
+    };
+    let StmtKind::Switch { cases, default, .. } = &then_body[0].kind else {
+        panic!("expected switch");
+    };
+    assert_eq!(cases.len(), 1);
+    assert_eq!(cases[0].0, vec![Expr::int_lit(2)]);
     assert_eq!(
         cases[0].1,
         vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())]
