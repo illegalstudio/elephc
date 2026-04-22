@@ -345,6 +345,76 @@ fn dce_if_false_path(
     }
 }
 
+fn guard_literal_to_scalar(value: &GuardLiteral) -> ScalarValue {
+    match value {
+        GuardLiteral::Bool(value) => ScalarValue::Bool(*value),
+        GuardLiteral::Null => ScalarValue::Null,
+        GuardLiteral::Int(value) => ScalarValue::Int(*value),
+        GuardLiteral::Float(bits) => ScalarValue::Float(f64::from_bits(*bits)),
+        GuardLiteral::String(value) => ScalarValue::String(value.clone()),
+    }
+}
+
+fn known_scalar_subject_value(subject: &Expr, guards: &GuardState) -> Option<ScalarValue> {
+    scalar_value(subject).or_else(|| match &subject.kind {
+        ExprKind::Variable(name) => known_exact_guard(guards, name).map(guard_literal_to_scalar),
+        _ => None,
+    })
+}
+
+fn classify_switch_patterns_with_guards(
+    subject_value: &ScalarValue,
+    patterns: &[Expr],
+    guards: &GuardState,
+) -> CaseMatch {
+    let mut has_unknown = false;
+    for pattern in patterns {
+        if let Some(matches) = pattern_matches_scalar(subject_value, pattern, CaseComparison::LooseSwitch) {
+            if matches {
+                return CaseMatch::Matches;
+            }
+            continue;
+        }
+
+        if let ScalarValue::Bool(subject_bool) = subject_value {
+            if let Some(pattern_bool) = known_condition_value(pattern, guards) {
+                if pattern_bool == *subject_bool {
+                    return CaseMatch::Matches;
+                }
+                continue;
+            }
+        }
+
+        has_unknown = true;
+    }
+
+    if has_unknown {
+        CaseMatch::Unknown
+    } else {
+        CaseMatch::NoMatch
+    }
+}
+
+fn prune_unreachable_switch_entries(
+    subject: &Expr,
+    cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
+    default: Option<Vec<Stmt>>,
+    guards: &GuardState,
+) -> (Vec<(Vec<Expr>, Vec<Stmt>)>, Option<Vec<Stmt>>) {
+    let Some(subject_value) = known_scalar_subject_value(subject, guards) else {
+        return (cases, default);
+    };
+
+    for (index, (patterns, _)) in cases.iter().enumerate() {
+        match classify_switch_patterns_with_guards(&subject_value, patterns, guards) {
+            CaseMatch::Matches | CaseMatch::Unknown => return (cases[index..].to_vec(), default),
+            CaseMatch::NoMatch => {}
+        }
+    }
+
+    (Vec::new(), default)
+}
+
 fn dce_switch_stmt(
     subject: Expr,
     cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
@@ -373,12 +443,11 @@ fn dce_switch_stmt(
             })
             .collect(),
     )));
-    let mut cases = cases;
+    let (mut cases, default) = prune_unreachable_switch_entries(&subject, cases, default, guards);
     while cases.last().is_some_and(|(_, body)| body.is_empty()) {
         cases.pop();
     }
-    let default =
-        normalize_optional_block(default.map(|body| dce_block_with_guards(body, guards.clone())));
+    let default = normalize_optional_block(default.map(|body| dce_block_with_guards(body, guards.clone())));
 
     if cases.iter().all(|(_, body)| body.is_empty()) && default.is_none() {
         return expr_to_effect_stmt(subject);
@@ -419,7 +488,7 @@ fn dce_switch_stmt_with_tail(
     };
     let subject = prune_expr(subject);
     let tail = dce_block_with_guards(tail, guards.clone());
-    let mut cases = normalize_switch_cases(drop_shadowed_switch_patterns(normalize_switch_cases(
+    let cases = normalize_switch_cases(drop_shadowed_switch_patterns(normalize_switch_cases(
         cases
             .into_iter()
             .map(|(patterns, body)| {
@@ -432,11 +501,12 @@ fn dce_switch_stmt_with_tail(
             })
             .collect(),
     )));
+    let (cases, default) = prune_unreachable_switch_entries(&subject, cases, default, guards);
+    let mut cases = cases;
     while cases.last().is_some_and(|(_, body)| body.is_empty()) {
         cases.pop();
     }
-    let mut default =
-        normalize_optional_block(default.map(|body| dce_block_with_guards(body, guards.clone())));
+    let mut default = normalize_optional_block(default.map(|body| dce_block_with_guards(body, guards.clone())));
 
     if tail.is_empty() {
         return dce_switch_stmt(subject, cases, default, span, guards);

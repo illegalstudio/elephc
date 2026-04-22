@@ -211,6 +211,7 @@ Current dead-code-elimination coverage includes:
 - strict scalar guards now feed the same pruning: after checks like `$x === null`, `$x === 0`, or `$x === ""`, nested regions that contradict the exact known value can be removed
 - negative branches of strict scalar checks now contribute exclusion facts too, so `else` paths after checks like `$x === 0` or the true path of `$x !== null` can prune nested contradictions without needing a full exact replacement value
 - the same strict scalar guard machinery now covers exact floats as well as PHP-falsy strings like `""` and `"0"`, so nested truthiness checks and strict literal contradictions can be pruned when those values are already known or excluded
+- outer exact scalar guards can now also prune impossible `switch` entries: when a `switch ($x)` subject or a `switch (true|false)` guard pattern is already decided by surrounding strict checks, leading dead cases are dropped before the remaining switch body is analyzed
 - `switch (true|false)` cases using single guard-like patterns can feed the same internal region pruning inside the selected case body, again with local-write invalidation to stay conservative
 - `catch` and `finally` bodies now invalidate outer guard facts only for locals written on the relevant pre-handler paths, so nested pruning there stays sound without discarding unrelated guard facts
 - catch-side guard invalidation is now path-aware: writes that only happen on non-throwing `try` paths no longer block pruning inside the `catch`
