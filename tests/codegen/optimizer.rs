@@ -1868,6 +1868,57 @@ run(true);
 }
 
 #[test]
+fn test_dead_code_elimination_invalidates_outer_guard_before_catch_body() {
+    let out = compile_and_run(
+        r#"<?php
+function run($flag) {
+    if ($flag) {
+        try {
+            $flag = false;
+            throw new Exception("boom");
+        } catch (Exception $e) {
+            if ($flag) {
+                echo "bad";
+            } else {
+                echo "a";
+            }
+        }
+    }
+}
+
+run(true);
+"#,
+    );
+
+    assert_eq!(out, "a");
+}
+
+#[test]
+fn test_dead_code_elimination_invalidates_outer_guard_before_finally_body() {
+    let out = compile_and_run(
+        r#"<?php
+function run($flag) {
+    if ($flag) {
+        try {
+            $flag = false;
+        } finally {
+            if ($flag) {
+                echo "bad";
+            } else {
+                echo "a";
+            }
+        }
+    }
+}
+
+run(true);
+"#,
+    );
+
+    assert_eq!(out, "a");
+}
+
+#[test]
 fn test_dead_code_elimination_sinks_tail_into_safe_finally_path() {
     let out = compile_and_run(
         r#"<?php

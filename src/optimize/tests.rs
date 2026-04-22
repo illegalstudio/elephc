@@ -3009,6 +3009,129 @@ fn test_eliminate_dead_code_invalidates_switch_bool_guard_after_local_write() {
 }
 
 #[test]
+fn test_eliminate_dead_code_invalidates_outer_guard_before_catch_body() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![Stmt::new(
+                StmtKind::If {
+                    condition: Expr::var("flag"),
+                    then_body: vec![Stmt::new(
+                        StmtKind::Try {
+                            try_body: vec![
+                                Stmt::assign("flag", Expr::new(ExprKind::BoolLiteral(false), Span::dummy())),
+                                Stmt::new(
+                                    StmtKind::Throw(Expr::new(
+                                        ExprKind::NewObject {
+                                            class_name: Name::unqualified("Exception"),
+                                            args: vec![Expr::string_lit("boom")],
+                                        },
+                                        Span::dummy(),
+                                    )),
+                                    Span::dummy(),
+                                ),
+                            ],
+                            catches: vec![crate::parser::ast::CatchClause {
+                                exception_types: vec![Name::unqualified("Exception")],
+                                variable: Some("e".into()),
+                                body: vec![Stmt::new(
+                                    StmtKind::If {
+                                        condition: Expr::var("flag"),
+                                        then_body: vec![Stmt::echo(Expr::int_lit(8))],
+                                        elseif_clauses: Vec::new(),
+                                        else_body: Some(vec![Stmt::echo(Expr::int_lit(7))]),
+                                    },
+                                    Span::dummy(),
+                                )],
+                            }],
+                            finally_body: None,
+                        },
+                        Span::dummy(),
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    let StmtKind::If { then_body, .. } = &body[0].kind else {
+        panic!("expected if");
+    };
+    let StmtKind::Try { catches, .. } = &then_body[0].kind else {
+        panic!("expected try");
+    };
+    let StmtKind::If { .. } = &catches[0].body[0].kind else {
+        panic!("expected catch inner if to remain after try write invalidation");
+    };
+}
+
+#[test]
+fn test_eliminate_dead_code_invalidates_outer_guard_before_finally_body() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![Stmt::new(
+                StmtKind::If {
+                    condition: Expr::var("flag"),
+                    then_body: vec![Stmt::new(
+                        StmtKind::Try {
+                            try_body: vec![Stmt::assign(
+                                "flag",
+                                Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
+                            )],
+                            catches: Vec::new(),
+                            finally_body: Some(vec![Stmt::new(
+                                StmtKind::If {
+                                    condition: Expr::var("flag"),
+                                    then_body: vec![Stmt::echo(Expr::int_lit(8))],
+                                    elseif_clauses: Vec::new(),
+                                    else_body: Some(vec![Stmt::echo(Expr::int_lit(7))]),
+                                },
+                                Span::dummy(),
+                            )]),
+                        },
+                        Span::dummy(),
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    let StmtKind::If { then_body, .. } = &body[0].kind else {
+        panic!("expected if");
+    };
+    assert!(
+        then_body
+            .iter()
+            .any(|stmt| matches!(stmt.kind, StmtKind::If { .. })),
+        "expected inner if to remain after try/finally write invalidation"
+    );
+}
+
+#[test]
 fn test_eliminate_dead_code_reduces_empty_if_chain_to_needed_condition_checks() {
     let touch = Expr::new(
         ExprKind::FunctionCall {

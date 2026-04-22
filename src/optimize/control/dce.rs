@@ -497,12 +497,19 @@ fn dce_try_stmt(
     guards: &GuardState,
 ) -> Vec<Stmt> {
     let try_body = dce_block_with_guards(try_body, guards.clone());
+    let catch_guards = invalidated_guards_for_block(guards, &try_body);
     let catches: Vec<_> = catches
         .into_iter()
-        .map(|catch| crate::parser::ast::CatchClause {
-            exception_types: catch.exception_types,
-            variable: catch.variable,
-            body: dce_block_with_guards(catch.body, guards.clone()),
+        .map(|catch| {
+            let mut body_guards = catch_guards.clone();
+            if let Some(variable) = catch.variable.as_deref() {
+                clear_guards_for_name(&mut body_guards, variable);
+            }
+            crate::parser::ast::CatchClause {
+                exception_types: catch.exception_types,
+                variable: catch.variable,
+                body: dce_block_with_guards(catch.body, body_guards),
+            }
         })
         .collect();
     let catches = if block_may_throw(&try_body) {
@@ -510,8 +517,15 @@ fn dce_try_stmt(
     } else {
         Vec::new()
     };
+    let mut finally_guards = catch_guards.clone();
+    for catch in &catches {
+        finally_guards = invalidated_guards_for_block(&finally_guards, &catch.body);
+        if let Some(variable) = catch.variable.as_deref() {
+            clear_guards_for_name(&mut finally_guards, variable);
+        }
+    }
     let finally_body =
-        normalize_optional_block(finally_body.map(|body| dce_block_with_guards(body, guards.clone())));
+        normalize_optional_block(finally_body.map(|body| dce_block_with_guards(body, finally_guards)));
 
     if try_body.is_empty() {
         return finally_body.unwrap_or_default();
@@ -561,12 +575,19 @@ fn dce_try_stmt_with_tail(
     guards: &GuardState,
 ) -> Vec<Stmt> {
     let try_body = dce_block_with_guards(try_body, guards.clone());
+    let catch_guards = invalidated_guards_for_block(guards, &try_body);
     let catches: Vec<_> = catches
         .into_iter()
-        .map(|catch| crate::parser::ast::CatchClause {
-            exception_types: catch.exception_types,
-            variable: catch.variable,
-            body: dce_block_with_guards(catch.body, guards.clone()),
+        .map(|catch| {
+            let mut body_guards = catch_guards.clone();
+            if let Some(variable) = catch.variable.as_deref() {
+                clear_guards_for_name(&mut body_guards, variable);
+            }
+            crate::parser::ast::CatchClause {
+                exception_types: catch.exception_types,
+                variable: catch.variable,
+                body: dce_block_with_guards(catch.body, body_guards),
+            }
         })
         .collect();
     let catches = if block_may_throw(&try_body) {
@@ -574,8 +595,15 @@ fn dce_try_stmt_with_tail(
     } else {
         Vec::new()
     };
+    let mut finally_guards = catch_guards.clone();
+    for catch in &catches {
+        finally_guards = invalidated_guards_for_block(&finally_guards, &catch.body);
+        if let Some(variable) = catch.variable.as_deref() {
+            clear_guards_for_name(&mut finally_guards, variable);
+        }
+    }
     let finally_body =
-        normalize_optional_block(finally_body.map(|body| dce_block_with_guards(body, guards.clone())));
+        normalize_optional_block(finally_body.map(|body| dce_block_with_guards(body, finally_guards)));
     let tail = dce_block_with_guards(tail, guards.clone());
 
     if tail.is_empty() {
@@ -1147,6 +1175,22 @@ fn invalidate_guards_for_stmt(stmt: &Stmt, guards: &mut GuardState) {
         return;
     }
 
+    invalidate_guards_for_written_names(guards, &written);
+}
+
+fn invalidated_guards_for_block(guards: &GuardState, stmts: &[Stmt]) -> GuardState {
+    let mut written = Vec::new();
+    collect_written_names_in_block(stmts, &mut written);
+    if written.is_empty() {
+        return guards.clone();
+    }
+
+    let mut next = guards.clone();
+    invalidate_guards_for_written_names(&mut next, &written);
+    next
+}
+
+fn invalidate_guards_for_written_names(guards: &mut GuardState, written: &[String]) {
     guards
         .truthy_vars
         .retain(|name| !written.iter().any(|written_name| written_name == name));
