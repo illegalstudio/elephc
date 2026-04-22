@@ -573,6 +573,72 @@ fn prune_unreachable_switch_entries(
     (cases[first_entry..].to_vec(), default)
 }
 
+fn prune_switch_patterns_with_guards(
+    subject: &Expr,
+    cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
+    default: Option<Vec<Stmt>>,
+    guards: &GuardState,
+) -> (Vec<(Vec<Expr>, Vec<Stmt>)>, Option<Vec<Stmt>>) {
+    let Some(subject_value) = known_scalar_subject_value(subject, guards) else {
+        return (cases, default);
+    };
+    let ScalarValue::Bool(_) = subject_value else {
+        return (cases, default);
+    };
+
+    let mut no_match_guards = guards.clone();
+    let mut direct_entries_possible = true;
+    let mut pruned_cases = Vec::with_capacity(cases.len());
+
+    for (patterns, body) in cases {
+        if !direct_entries_possible {
+            pruned_cases.push((Vec::new(), body));
+            continue;
+        }
+
+        let mut kept_patterns = Vec::new();
+        let mut local_no_match_guards = no_match_guards.clone();
+
+        for pattern in patterns {
+            match classify_switch_patterns_with_guards(
+                &subject_value,
+                std::slice::from_ref(&pattern),
+                &local_no_match_guards,
+            ) {
+                CaseMatch::Matches => {
+                    kept_patterns.push(pattern);
+                    direct_entries_possible = false;
+                    break;
+                }
+                CaseMatch::Unknown => {
+                    local_no_match_guards = extend_guards_for_switch_case_no_match(
+                        &subject_value,
+                        std::slice::from_ref(&pattern),
+                        &local_no_match_guards,
+                    );
+                    kept_patterns.push(pattern);
+                }
+                CaseMatch::NoMatch => {
+                    local_no_match_guards = extend_guards_for_switch_case_no_match(
+                        &subject_value,
+                        std::slice::from_ref(&pattern),
+                        &local_no_match_guards,
+                    );
+                }
+            }
+        }
+
+        if direct_entries_possible {
+            no_match_guards = local_no_match_guards;
+        }
+
+        pruned_cases.push((kept_patterns, body));
+    }
+
+    let default = if direct_entries_possible { default } else { None };
+    (pruned_cases, default)
+}
+
 fn dce_switch_stmt(
     subject: Expr,
     cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
@@ -588,7 +654,8 @@ fn dce_switch_stmt(
         }
     };
     let subject = prune_expr(subject);
-    let cases = normalize_switch_cases(drop_shadowed_switch_patterns(normalize_switch_cases(
+    let (cases, default) = prune_switch_patterns_with_guards(
+        &subject,
         cases
             .into_iter()
             .map(|(patterns, body)| {
@@ -600,7 +667,10 @@ fn dce_switch_stmt(
                 )
             })
             .collect(),
-    )));
+        default,
+        guards,
+    );
+    let cases = normalize_switch_cases(drop_shadowed_switch_patterns(normalize_switch_cases(cases)));
     let (mut cases, default) = prune_unreachable_switch_entries(&subject, cases, default, guards);
     while cases.last().is_some_and(|(_, body)| body.is_empty()) {
         cases.pop();
@@ -646,7 +716,8 @@ fn dce_switch_stmt_with_tail(
     };
     let subject = prune_expr(subject);
     let tail = dce_block_with_guards(tail, guards.clone());
-    let cases = normalize_switch_cases(drop_shadowed_switch_patterns(normalize_switch_cases(
+    let (cases, default) = prune_switch_patterns_with_guards(
+        &subject,
         cases
             .into_iter()
             .map(|(patterns, body)| {
@@ -658,7 +729,10 @@ fn dce_switch_stmt_with_tail(
                 )
             })
             .collect(),
-    )));
+        default,
+        guards,
+    );
+    let cases = normalize_switch_cases(drop_shadowed_switch_patterns(normalize_switch_cases(cases)));
     let (cases, default) = prune_unreachable_switch_entries(&subject, cases, default, guards);
     let mut cases = cases;
     while cases.last().is_some_and(|(_, body)| body.is_empty()) {
