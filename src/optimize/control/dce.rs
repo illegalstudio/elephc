@@ -1060,6 +1060,28 @@ fn strict_bool_guard(condition: &Expr) -> Option<(&str, bool, bool)> {
 }
 
 fn known_condition_value(condition: &Expr, guards: &GuardState) -> Option<bool> {
+    if let ExprKind::BinaryOp { left, op, right } = &condition.kind {
+        match op {
+            BinOp::And => match (
+                known_condition_value(left, guards),
+                known_condition_value(right, guards),
+            ) {
+                (Some(false), _) | (_, Some(false)) => return Some(false),
+                (Some(true), Some(true)) => return Some(true),
+                _ => {}
+            },
+            BinOp::Or => match (
+                known_condition_value(left, guards),
+                known_condition_value(right, guards),
+            ) {
+                (Some(true), _) | (_, Some(true)) => return Some(true),
+                (Some(false), Some(false)) => return Some(false),
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
     if let Some((name, truthy_if_true)) = guard_variable_name(condition) {
         if guards.bool_true_vars.iter().any(|known| known == name)
             || guards.truthy_vars.iter().any(|known| known == name)
@@ -1139,6 +1161,32 @@ fn extend_guards_for_switch_case(subject: &Expr, patterns: &[Expr], guards: &Gua
 }
 
 fn extend_guards(guards: &GuardState, condition: &Expr, branch_taken: bool) -> GuardState {
+    if let ExprKind::BinaryOp { left, op, right } = &condition.kind {
+        match (op, branch_taken) {
+            (BinOp::And, true) => {
+                let left_true = extend_guards(guards, left, true);
+                return extend_guards(&left_true, right, true);
+            }
+            (BinOp::And, false) => {
+                if matches!(known_condition_value(left, guards), Some(true)) {
+                    let left_true = extend_guards(guards, left, true);
+                    return extend_guards(&left_true, right, false);
+                }
+            }
+            (BinOp::Or, false) => {
+                let left_false = extend_guards(guards, left, false);
+                return extend_guards(&left_false, right, false);
+            }
+            (BinOp::Or, true) => {
+                if matches!(known_condition_value(left, guards), Some(false)) {
+                    let left_false = extend_guards(guards, left, false);
+                    return extend_guards(&left_false, right, true);
+                }
+            }
+            _ => {}
+        }
+    }
+
     let mut next = guards.clone();
 
     if let Some((name, exact_bool)) = exact_bool_from_guard_branch(condition, branch_taken) {

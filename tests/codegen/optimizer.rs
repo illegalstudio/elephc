@@ -1818,6 +1818,54 @@ run(true);
 }
 
 #[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_outer_and_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function run($a, $b) {
+    if ($a && $b) {
+        if (!$a || !$b) {
+            echo "bad";
+        } else {
+            echo "a";
+        }
+    } else {
+        echo "b";
+    }
+}
+
+run(true, true);
+run(true, false);
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_outer_or_false_branch() {
+    let out = compile_and_run(
+        r#"<?php
+function run($a, $b) {
+    if (!$a || $b) {
+        echo "b";
+    } else {
+        if ($a && !$b) {
+            echo "a";
+        } else {
+            echo "bad";
+        }
+    }
+}
+
+run(true, false);
+run(false, false);
+"#,
+    );
+
+    assert_eq!(out, "ab");
+}
+
+#[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_switch_bool_guard_case() {
     let out = compile_and_run(
         r#"<?php
