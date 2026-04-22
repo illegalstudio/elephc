@@ -2359,6 +2359,48 @@ if ($x === 2) {
 }
 
 #[test]
+fn test_dead_code_elimination_drops_excluded_scalar_switch_case_from_outer_guard() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_excluded_scalar_case");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+function run($value) {
+    if ($value !== 1) {
+        switch ($value) {
+            case 1:
+                echo "dead-case";
+                break;
+            case 2:
+                echo "A";
+                break;
+            default:
+                echo "live-default";
+        }
+    }
+}
+
+run(2);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    assert_eq!(out, "A");
+    assert!(!user_asm.contains("dead-case"));
+    assert!(user_asm.contains("live-default"));
+}
+
+#[test]
 fn test_dead_code_elimination_invalidates_switch_bool_guard_after_local_write() {
     let out = compile_and_run(
         r#"<?php

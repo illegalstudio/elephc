@@ -216,6 +216,7 @@ Current dead-code-elimination coverage includes:
 - `switch (true|false)` now applies the same cumulative guard idea across case fallthrough: later guard-like cases and the `default` can be pruned when earlier no-match paths already force an exhaustive outcome
 - multi-pattern `switch (true|false)` cases now participate in that same cumulative reasoning, so an exhaustive label set inside one case can remove later dead cases and the `default`
 - exact scalar guards now drive the same pruning inside ordinary `switch ($x)` multi-pattern cases: impossible labels inside one case are dropped, and if a surviving later label is guaranteed to match, later dead cases and `default` are removed as well
+- excluded scalar guards now also prune ordinary `switch ($x)` entries, so outer facts like `$x !== 1` can remove dead `case 1:` labels even when the exact runtime value of `$x` is still unknown
 - `switch (true|false)` cases using single guard-like patterns can feed the same internal region pruning inside the selected case body, again with local-write invalidation to stay conservative
 - `catch` and `finally` bodies now invalidate outer guard facts only for locals written on the relevant pre-handler paths, so nested pruning there stays sound without discarding unrelated guard facts
 - catch-side guard invalidation is now path-aware: writes that only happen on non-throwing `try` paths no longer block pruning inside the `catch`

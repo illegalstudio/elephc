@@ -451,7 +451,7 @@ fn known_scalar_subject_value(subject: &Expr, guards: &GuardState) -> Option<Sca
     })
 }
 
-fn classify_switch_patterns_with_guards(
+fn classify_switch_patterns_for_exact_scalar(
     subject_value: &ScalarValue,
     patterns: &[Expr],
     guards: &GuardState,
@@ -484,45 +484,89 @@ fn classify_switch_patterns_with_guards(
     }
 }
 
+fn classify_switch_patterns_with_guards(
+    subject: &Expr,
+    patterns: &[Expr],
+    guards: &GuardState,
+) -> CaseMatch {
+    if let Some(subject_value) = known_scalar_subject_value(subject, guards) {
+        return classify_switch_patterns_for_exact_scalar(&subject_value, patterns, guards);
+    }
+
+    let ExprKind::Variable(name) = &subject.kind else {
+        return CaseMatch::Unknown;
+    };
+
+    let mut has_unknown = false;
+    for pattern in patterns {
+        let Some(pattern_value) = scalar_guard_value(pattern) else {
+            has_unknown = true;
+            continue;
+        };
+
+        if has_excluded_guard(guards, name, &pattern_value) {
+            continue;
+        }
+
+        has_unknown = true;
+    }
+
+    if has_unknown {
+        CaseMatch::Unknown
+    } else {
+        CaseMatch::NoMatch
+    }
+}
+
 fn direct_switch_entry_blocks(
     subject: &Expr,
     cases: &[(Vec<Expr>, Vec<Stmt>)],
     has_default: bool,
     guards: &GuardState,
 ) -> (Vec<usize>, bool) {
-    let Some(subject_value) = known_scalar_subject_value(subject, guards) else {
-        return ((0..cases.len()).collect(), has_default);
-    };
+    if let Some(subject_value) = known_scalar_subject_value(subject, guards) {
+        if matches!(subject_value, ScalarValue::Bool(_)) {
+            let mut no_match_guards = guards.clone();
+            let mut entry_blocks = Vec::new();
 
-    if matches!(subject_value, ScalarValue::Bool(_)) {
-        let mut no_match_guards = guards.clone();
-        let mut entry_blocks = Vec::new();
+            for (index, (patterns, _)) in cases.iter().enumerate() {
+                match classify_switch_patterns_for_exact_scalar(&subject_value, patterns, &no_match_guards) {
+                    CaseMatch::Matches => {
+                        entry_blocks.push(index);
+                        return (entry_blocks, false);
+                    }
+                    CaseMatch::Unknown => entry_blocks.push(index),
+                    CaseMatch::NoMatch => {}
+                }
+                no_match_guards =
+                    extend_guards_for_switch_case_no_match(&subject_value, patterns, &no_match_guards);
+            }
+
+            return (entry_blocks, has_default);
+        }
 
         for (index, (patterns, _)) in cases.iter().enumerate() {
-            match classify_switch_patterns_with_guards(&subject_value, patterns, &no_match_guards) {
-                CaseMatch::Matches => {
-                    entry_blocks.push(index);
-                    return (entry_blocks, false);
-                }
+            match classify_switch_patterns_for_exact_scalar(&subject_value, patterns, guards) {
+                CaseMatch::Matches => return (vec![index], false),
+                CaseMatch::Unknown => return ((index..cases.len()).collect(), has_default),
+                CaseMatch::NoMatch => {}
+            }
+        }
+    }
+
+    if matches!(subject.kind, ExprKind::Variable(_)) {
+        let mut entry_blocks = Vec::new();
+        for (index, (patterns, _)) in cases.iter().enumerate() {
+            match classify_switch_patterns_with_guards(subject, patterns, guards) {
+                CaseMatch::Matches => return (vec![index], false),
                 CaseMatch::Unknown => entry_blocks.push(index),
                 CaseMatch::NoMatch => {}
             }
-            no_match_guards =
-                extend_guards_for_switch_case_no_match(&subject_value, patterns, &no_match_guards);
         }
-
         return (entry_blocks, has_default);
     }
 
-    for (index, (patterns, _)) in cases.iter().enumerate() {
-        match classify_switch_patterns_with_guards(&subject_value, patterns, guards) {
-            CaseMatch::Matches => return (vec![index], false),
-            CaseMatch::Unknown => return ((index..cases.len()).collect(), has_default),
-            CaseMatch::NoMatch => {}
-        }
-    }
-
-    (Vec::new(), has_default)
+    ((0..cases.len()).collect(), has_default)
 }
 
 fn prune_unreachable_switch_blocks(
@@ -579,10 +623,11 @@ fn prune_switch_patterns_with_guards(
     default: Option<Vec<Stmt>>,
     guards: &GuardState,
 ) -> (Vec<(Vec<Expr>, Vec<Stmt>)>, Option<Vec<Stmt>>) {
-    let Some(subject_value) = known_scalar_subject_value(subject, guards) else {
-        return (cases, default);
+    let cumulative_subject_value = match known_scalar_subject_value(subject, guards) {
+        Some(ScalarValue::Bool(value)) => Some(ScalarValue::Bool(value)),
+        _ => None,
     };
-    let uses_cumulative_no_match_guards = matches!(subject_value, ScalarValue::Bool(_));
+    let uses_cumulative_no_match_guards = cumulative_subject_value.is_some();
 
     let mut no_match_guards = guards.clone();
     let mut direct_entries_possible = true;
@@ -599,7 +644,7 @@ fn prune_switch_patterns_with_guards(
 
         for pattern in patterns {
             match classify_switch_patterns_with_guards(
-                &subject_value,
+                subject,
                 std::slice::from_ref(&pattern),
                 &local_no_match_guards,
             ) {
@@ -609,9 +654,9 @@ fn prune_switch_patterns_with_guards(
                     break;
                 }
                 CaseMatch::Unknown => {
-                    if uses_cumulative_no_match_guards {
+                    if let Some(subject_value) = &cumulative_subject_value {
                         local_no_match_guards = extend_guards_for_switch_case_no_match(
-                            &subject_value,
+                            subject_value,
                             std::slice::from_ref(&pattern),
                             &local_no_match_guards,
                         );
@@ -619,9 +664,9 @@ fn prune_switch_patterns_with_guards(
                     kept_patterns.push(pattern);
                 }
                 CaseMatch::NoMatch => {
-                    if uses_cumulative_no_match_guards {
+                    if let Some(subject_value) = &cumulative_subject_value {
                         local_no_match_guards = extend_guards_for_switch_case_no_match(
-                            &subject_value,
+                            subject_value,
                             std::slice::from_ref(&pattern),
                             &local_no_match_guards,
                         );
