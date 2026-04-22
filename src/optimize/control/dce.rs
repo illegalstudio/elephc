@@ -395,24 +395,73 @@ fn classify_switch_patterns_with_guards(
     }
 }
 
+fn direct_switch_entry_blocks(
+    subject: &Expr,
+    cases: &[(Vec<Expr>, Vec<Stmt>)],
+    has_default: bool,
+    guards: &GuardState,
+) -> (Vec<usize>, bool) {
+    let Some(subject_value) = known_scalar_subject_value(subject, guards) else {
+        return ((0..cases.len()).collect(), has_default);
+    };
+
+    for (index, (patterns, _)) in cases.iter().enumerate() {
+        match classify_switch_patterns_with_guards(&subject_value, patterns, guards) {
+            CaseMatch::Matches => return (vec![index], false),
+            CaseMatch::Unknown => return ((index..cases.len()).collect(), has_default),
+            CaseMatch::NoMatch => {}
+        }
+    }
+
+    (Vec::new(), has_default)
+}
+
+fn prune_unreachable_switch_blocks(
+    subject: &Expr,
+    cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
+    default: Option<Vec<Stmt>>,
+    guards: &GuardState,
+) -> (Vec<(Vec<Expr>, Vec<Stmt>)>, Option<Vec<Stmt>>) {
+    let (direct_case_entries, direct_default_entry) =
+        direct_switch_entry_blocks(subject, &cases, default.is_some(), guards);
+    let cfg = build_switch_cfg(&cases, &default);
+    let mut entry_blocks = direct_case_entries;
+    if direct_default_entry {
+        if let Some(default_entry) = cfg.default_entry {
+            entry_blocks.push(default_entry);
+        }
+    }
+    let reachable = collect_reachable_cfg_blocks(&cfg.blocks, &entry_blocks);
+    let default_reachable = cfg.default_entry.is_some_and(|entry| reachable[entry]);
+    let cases = cases
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, case)| reachable[index].then_some(case))
+        .collect();
+    let default = if default_reachable { default } else { None };
+
+    (cases, default)
+}
+
 fn prune_unreachable_switch_entries(
     subject: &Expr,
     cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
     default: Option<Vec<Stmt>>,
     guards: &GuardState,
 ) -> (Vec<(Vec<Expr>, Vec<Stmt>)>, Option<Vec<Stmt>>) {
-    let Some(subject_value) = known_scalar_subject_value(subject, guards) else {
+    let (cases, default) = prune_unreachable_switch_blocks(subject, cases, default, guards);
+    if known_scalar_subject_value(subject, guards).is_none() {
         return (cases, default);
-    };
-
-    for (index, (patterns, _)) in cases.iter().enumerate() {
-        match classify_switch_patterns_with_guards(&subject_value, patterns, guards) {
-            CaseMatch::Matches | CaseMatch::Unknown => return (cases[index..].to_vec(), default),
-            CaseMatch::NoMatch => {}
-        }
     }
 
-    (Vec::new(), default)
+    let (direct_case_entries, direct_default_entry) =
+        direct_switch_entry_blocks(subject, &cases, default.is_some(), guards);
+    if direct_case_entries.is_empty() {
+        return (Vec::new(), direct_default_entry.then_some(()).and(default));
+    }
+
+    let first_entry = direct_case_entries[0];
+    (cases[first_entry..].to_vec(), default)
 }
 
 fn dce_switch_stmt(

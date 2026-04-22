@@ -3553,12 +3553,13 @@ fn test_eliminate_dead_code_drops_impossible_switch_cases_from_outer_exact_guard
     let StmtKind::If { then_body, .. } = &body[0].kind else {
         panic!("expected if");
     };
-    let StmtKind::Switch { cases, .. } = &then_body[0].kind else {
+    let StmtKind::Switch { cases, default, .. } = &then_body[0].kind else {
         panic!("expected switch");
     };
     assert_eq!(cases.len(), 1);
     assert_eq!(cases[0].0, vec![Expr::int_lit(0)]);
     assert_eq!(cases[0].1, vec![Stmt::echo(Expr::int_lit(8))]);
+    assert!(default.is_none());
 }
 
 #[test]
@@ -4400,6 +4401,23 @@ fn test_classify_switch_cfg_paths_follows_fallthrough_chain() {
         classify_cfg_successor(&cfg.blocks, BasicBlockSuccessor::Block(cfg.default_entry.unwrap())),
         BasicBlockSuccessor::FallsThrough
     );
+}
+
+#[test]
+fn test_collect_reachable_switch_cfg_blocks_follows_only_reachable_suffix() {
+    let cases = vec![
+        (
+            vec![Expr::int_lit(1)],
+            vec![Stmt::new(StmtKind::Break, Span::dummy())],
+        ),
+        (vec![Expr::int_lit(2)], vec![Stmt::echo(Expr::int_lit(8))]),
+    ];
+    let default = Some(vec![Stmt::echo(Expr::int_lit(9))]);
+
+    let cfg = build_switch_cfg(&cases, &default);
+    let reachable = collect_reachable_cfg_blocks(&cfg.blocks, &[0]);
+
+    assert_eq!(reachable, vec![true, false, false]);
 }
 
 #[test]

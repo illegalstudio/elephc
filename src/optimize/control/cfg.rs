@@ -209,6 +209,32 @@ pub(crate) fn classify_cfg_successor(
     classify_cfg_successor_with_visited(blocks, successor, &mut Vec::new())
 }
 
+pub(crate) fn collect_reachable_cfg_blocks(blocks: &[BasicBlock], entry_blocks: &[usize]) -> Vec<bool> {
+    let mut reachable = vec![false; blocks.len()];
+    let mut stack: Vec<usize> = entry_blocks
+        .iter()
+        .copied()
+        .filter(|entry| *entry < blocks.len())
+        .collect();
+
+    while let Some(index) = stack.pop() {
+        if reachable[index] {
+            continue;
+        }
+        reachable[index] = true;
+
+        for successor in &blocks[index].successors {
+            if let BasicBlockSuccessor::Block(next) = successor {
+                if *next < blocks.len() {
+                    stack.push(*next);
+                }
+            }
+        }
+    }
+
+    reachable
+}
+
 fn classify_cfg_successor_with_visited(
     blocks: &[BasicBlock],
     successor: BasicBlockSuccessor,
