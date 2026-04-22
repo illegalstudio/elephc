@@ -347,9 +347,11 @@ fn dce_switch_stmt(
         cases
             .into_iter()
             .map(|(patterns, body)| {
+                let patterns: Vec<_> = patterns.into_iter().map(prune_expr).collect();
+                let case_guards = extend_guards_for_switch_case(&subject, &patterns, guards);
                 (
-                    patterns.into_iter().map(prune_expr).collect(),
-                    trim_switch_noop_break(dce_block_with_guards(body, guards.clone())),
+                    patterns,
+                    trim_switch_noop_break(dce_block_with_guards(body, case_guards)),
                 )
             })
             .collect(),
@@ -404,9 +406,11 @@ fn dce_switch_stmt_with_tail(
         cases
             .into_iter()
             .map(|(patterns, body)| {
+                let patterns: Vec<_> = patterns.into_iter().map(prune_expr).collect();
+                let case_guards = extend_guards_for_switch_case(&subject, &patterns, guards);
                 (
-                    patterns.into_iter().map(prune_expr).collect(),
-                    trim_switch_noop_break(dce_block_with_guards(body, guards.clone())),
+                    patterns,
+                    trim_switch_noop_break(dce_block_with_guards(body, case_guards)),
                 )
             })
             .collect(),
@@ -1105,6 +1109,17 @@ fn exact_bool_from_guard_branch(condition: &Expr, branch_taken: bool) -> Option<
         (false, false) => Some((name, compared_bool)),
         _ => None,
     }
+}
+
+fn extend_guards_for_switch_case(subject: &Expr, patterns: &[Expr], guards: &GuardState) -> GuardState {
+    let ExprKind::BoolLiteral(subject_bool) = subject.kind else {
+        return guards.clone();
+    };
+    let [pattern] = patterns else {
+        return guards.clone();
+    };
+
+    extend_guards(guards, pattern, subject_bool)
 }
 
 fn extend_guards(guards: &GuardState, condition: &Expr, branch_taken: bool) -> GuardState {

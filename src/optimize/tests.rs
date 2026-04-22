@@ -2888,6 +2888,127 @@ fn test_eliminate_dead_code_invalidates_outer_strict_bool_guard_after_local_writ
 }
 
 #[test]
+fn test_eliminate_dead_code_prunes_nested_if_region_from_switch_bool_guard_case() {
+    let strict_true = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(Expr::var("flag")),
+            op: BinOp::StrictEq,
+            right: Box::new(Expr::new(ExprKind::BoolLiteral(true), Span::dummy())),
+        },
+        Span::dummy(),
+    );
+    let strict_false = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(Expr::var("flag")),
+            op: BinOp::StrictEq,
+            right: Box::new(Expr::new(ExprKind::BoolLiteral(false), Span::dummy())),
+        },
+        Span::dummy(),
+    );
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![Stmt::new(
+                StmtKind::Switch {
+                    subject: Expr::new(ExprKind::BoolLiteral(true), Span::dummy()),
+                    cases: vec![(
+                        vec![strict_true],
+                        vec![
+                            Stmt::new(
+                                StmtKind::If {
+                                    condition: strict_false,
+                                    then_body: vec![Stmt::echo(Expr::int_lit(8))],
+                                    elseif_clauses: Vec::new(),
+                                    else_body: Some(vec![Stmt::echo(Expr::int_lit(7))]),
+                                },
+                                Span::dummy(),
+                            ),
+                            Stmt::new(StmtKind::Break, Span::dummy()),
+                        ],
+                    )],
+                    default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    let StmtKind::Switch { cases, default, .. } = &body[0].kind else {
+        panic!("expected switch");
+    };
+    assert_eq!(
+        cases[0].1,
+        vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())]
+    );
+    assert_eq!(default, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
+}
+
+#[test]
+fn test_eliminate_dead_code_invalidates_switch_bool_guard_after_local_write() {
+    let strict_true = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(Expr::var("flag")),
+            op: BinOp::StrictEq,
+            right: Box::new(Expr::new(ExprKind::BoolLiteral(true), Span::dummy())),
+        },
+        Span::dummy(),
+    );
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![Stmt::new(
+                StmtKind::Switch {
+                    subject: Expr::new(ExprKind::BoolLiteral(true), Span::dummy()),
+                    cases: vec![(
+                        vec![strict_true.clone()],
+                        vec![
+                            Stmt::assign("flag", Expr::new(ExprKind::BoolLiteral(false), Span::dummy())),
+                            Stmt::new(
+                                StmtKind::If {
+                                    condition: strict_true,
+                                    then_body: vec![Stmt::echo(Expr::int_lit(8))],
+                                    elseif_clauses: Vec::new(),
+                                    else_body: Some(vec![Stmt::echo(Expr::int_lit(7))]),
+                                },
+                                Span::dummy(),
+                            ),
+                            Stmt::new(StmtKind::Break, Span::dummy()),
+                        ],
+                    )],
+                    default: None,
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    let StmtKind::Switch { cases, .. } = &body[0].kind else {
+        panic!("expected switch");
+    };
+    let StmtKind::If { .. } = &cases[0].1[1].kind else {
+        panic!("expected inner if to remain after switch guard invalidation");
+    };
+}
+
+#[test]
 fn test_eliminate_dead_code_reduces_empty_if_chain_to_needed_condition_checks() {
     let touch = Expr::new(
         ExprKind::FunctionCall {
