@@ -2581,6 +2581,52 @@ run(true);
 }
 
 #[test]
+fn test_dead_code_elimination_prunes_dead_label_inside_live_mixed_switch_case() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_live_case_label_prune");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+function run($value) {
+    if ($value) {
+        if ($value !== 1) {
+            switch ($value) {
+                case 0:
+                    echo "dead-first-case";
+                    break;
+                case 1:
+                case 2:
+                case true:
+                    echo "A";
+                    break;
+                default:
+                    echo "dead-default";
+            }
+        }
+    }
+}
+
+run(true);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    assert_eq!(out, "A");
+    assert!(!user_asm.contains("dead-first-case"));
+    assert!(!user_asm.contains("dead-default"));
+}
+
+#[test]
 fn test_dead_code_elimination_invalidates_switch_bool_guard_after_local_write() {
     let out = compile_and_run(
         r#"<?php
