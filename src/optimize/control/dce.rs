@@ -517,13 +517,7 @@ fn dce_try_stmt(
     } else {
         Vec::new()
     };
-    let mut finally_guards = catch_guards.clone();
-    for catch in &catches {
-        finally_guards = invalidated_guards_for_block(&finally_guards, &catch.body);
-        if let Some(variable) = catch.variable.as_deref() {
-            clear_guards_for_name(&mut finally_guards, variable);
-        }
-    }
+    let finally_guards = invalidated_guards_for_finally_paths(guards, &try_body, &catches);
     let finally_body =
         normalize_optional_block(finally_body.map(|body| dce_block_with_guards(body, finally_guards)));
 
@@ -595,13 +589,7 @@ fn dce_try_stmt_with_tail(
     } else {
         Vec::new()
     };
-    let mut finally_guards = catch_guards.clone();
-    for catch in &catches {
-        finally_guards = invalidated_guards_for_block(&finally_guards, &catch.body);
-        if let Some(variable) = catch.variable.as_deref() {
-            clear_guards_for_name(&mut finally_guards, variable);
-        }
-    }
+    let finally_guards = invalidated_guards_for_finally_paths(guards, &try_body, &catches);
     let finally_body =
         normalize_optional_block(finally_body.map(|body| dce_block_with_guards(body, finally_guards)));
     let tail = dce_block_with_guards(tail, guards.clone());
@@ -1203,6 +1191,21 @@ fn invalidated_guards_for_throw_paths(guards: &GuardState, stmts: &[Stmt]) -> Gu
 
     let mut next = guards.clone();
     invalidate_guards_for_written_names(&mut next, &written);
+    next
+}
+
+fn invalidated_guards_for_finally_paths(
+    guards: &GuardState,
+    try_body: &[Stmt],
+    catches: &[crate::parser::ast::CatchClause],
+) -> GuardState {
+    let mut next = invalidated_guards_for_block(guards, try_body);
+    for catch in catches {
+        next = invalidated_guards_for_block(&next, &catch.body);
+        if let Some(variable) = catch.variable.as_deref() {
+            clear_guards_for_name(&mut next, variable);
+        }
+    }
     next
 }
 

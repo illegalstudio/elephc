@@ -1919,6 +1919,31 @@ run(true);
 }
 
 #[test]
+fn test_dead_code_elimination_preserves_outer_guard_for_finally_when_only_other_locals_change() {
+    let out = compile_and_run(
+        r#"<?php
+function run($flag) {
+    if ($flag) {
+        try {
+            $other = 1;
+        } finally {
+            if ($flag) {
+                echo "a";
+            } else {
+                echo "bad";
+            }
+        }
+    }
+}
+
+run(true);
+"#,
+    );
+
+    assert_eq!(out, "a");
+}
+
+#[test]
 fn test_dead_code_elimination_preserves_outer_guard_for_catch_when_only_non_throw_path_writes() {
     let out = compile_and_run(
         r#"<?php
