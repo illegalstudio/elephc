@@ -1504,6 +1504,10 @@ fn has_excluded_guard(guards: &GuardState, name: &str, value: &GuardLiteral) -> 
 }
 
 fn known_condition_value(condition: &Expr, guards: &GuardState) -> Option<bool> {
+    if let ExprKind::Not(inner) = &condition.kind {
+        return known_condition_value(inner, guards).map(|value| !value);
+    }
+
     if let ExprKind::BinaryOp { left, op, right } = &condition.kind {
         match op {
             BinOp::And => match (
@@ -1692,6 +1696,10 @@ fn extend_guards_for_switch_case_no_match_subject(
 }
 
 fn extend_guards(guards: &GuardState, condition: &Expr, branch_taken: bool) -> GuardState {
+    if let ExprKind::Not(inner) = &condition.kind {
+        return extend_guards(guards, inner, !branch_taken);
+    }
+
     if let ExprKind::BinaryOp { left, op, right } = &condition.kind {
         match (op, branch_taken) {
             (BinOp::And, true) => {
