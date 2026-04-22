@@ -219,6 +219,7 @@ Current dead-code-elimination coverage includes:
 - excluded scalar guards now also prune ordinary `switch ($x)` entries, so outer facts like `$x !== 1` can remove dead `case 1:` labels even when the exact runtime value of `$x` is still unknown
 - truthiness facts now also feed ordinary `switch ($x)` pruning for `case true` / `case false`: cumulative no-match paths can eliminate dead boolean cases and even remove a dead `default` once the remaining truthiness paths are fully covered
 - that same truthiness pruning now preserves earlier `Unknown` multi-pattern entries as reachable CFG entry points, so we do not over-prune preceding case bodies while still removing dead boolean suffixes and `default`
+- truthiness facts also prune scalar literal labels of the opposite truthiness in ordinary `switch ($x)`, so truthy/falsy outer guards can remove dead `case 0`, `case ""`, `case null`, or analogous truthy literal labels inside mixed multi-pattern switches
 - `switch (true|false)` cases using single guard-like patterns can feed the same internal region pruning inside the selected case body, again with local-write invalidation to stay conservative
 - `catch` and `finally` bodies now invalidate outer guard facts only for locals written on the relevant pre-handler paths, so nested pruning there stays sound without discarding unrelated guard facts
 - catch-side guard invalidation is now path-aware: writes that only happen on non-throwing `try` paths no longer block pruning inside the `catch`

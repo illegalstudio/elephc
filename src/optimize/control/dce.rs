@@ -530,12 +530,18 @@ fn classify_switch_patterns_with_guards(
 
     let mut has_unknown = false;
     for pattern in patterns {
-        if let ExprKind::BoolLiteral(pattern_bool) = pattern.kind {
-            if let Some(subject_truthy) = known_subject_truthiness(subject, guards) {
+        if let Some(subject_truthy) = known_subject_truthiness(subject, guards) {
+            if let ExprKind::BoolLiteral(pattern_bool) = pattern.kind {
                 if subject_truthy == pattern_bool {
                     return CaseMatch::Matches;
                 }
                 continue;
+            }
+
+            if let Some(pattern_value) = scalar_guard_value(pattern) {
+                if guard_literal_truthy(&pattern_value) != subject_truthy {
+                    continue;
+                }
             }
         }
 

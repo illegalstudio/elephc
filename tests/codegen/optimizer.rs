@@ -2491,6 +2491,50 @@ run(true, false);
 }
 
 #[test]
+fn test_dead_code_elimination_prunes_falsy_scalar_labels_from_truthy_switch_subject() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_truthy_switch_scalar_labels");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+function run($flag, $other) {
+    if ($flag) {
+        switch ($flag) {
+            case 0:
+            case "":
+                echo "dead-falsy-case";
+                break;
+            case $other:
+            case true:
+                echo "A";
+                break;
+            default:
+                echo "dead-default";
+        }
+    }
+}
+
+run(true, false);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    assert_eq!(out, "A");
+    assert!(!user_asm.contains("dead-falsy-case"));
+    assert!(!user_asm.contains("dead-default"));
+}
+
+#[test]
 fn test_dead_code_elimination_invalidates_switch_bool_guard_after_local_write() {
     let out = compile_and_run(
         r#"<?php

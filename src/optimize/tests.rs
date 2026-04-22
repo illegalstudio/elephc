@@ -3804,6 +3804,66 @@ fn test_eliminate_dead_code_keeps_unknown_truthy_switch_entry_before_matching_ca
 }
 
 #[test]
+fn test_eliminate_dead_code_prunes_falsy_scalar_labels_from_truthy_switch_subject() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![Stmt::new(
+                StmtKind::If {
+                    condition: Expr::var("flag"),
+                    then_body: vec![Stmt::new(
+                        StmtKind::Switch {
+                            subject: Expr::var("flag"),
+                            cases: vec![
+                                (
+                                    vec![Expr::int_lit(0), Expr::string_lit("")],
+                                    vec![Stmt::echo(Expr::int_lit(7)), Stmt::new(StmtKind::Break, Span::dummy())],
+                                ),
+                                (
+                                    vec![
+                                        Expr::var("other"),
+                                        Expr::new(ExprKind::BoolLiteral(true), Span::dummy()),
+                                    ],
+                                    vec![Stmt::echo(Expr::int_lit(8))],
+                                ),
+                            ],
+                            default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+                        },
+                        Span::dummy(),
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    let StmtKind::If { then_body, .. } = &body[0].kind else {
+        panic!("expected if");
+    };
+    let StmtKind::Switch { cases, default, .. } = &then_body[0].kind else {
+        panic!("expected switch");
+    };
+    assert_eq!(cases.len(), 1);
+    assert_eq!(
+        cases[0].0,
+        vec![Expr::var("other"), Expr::new(ExprKind::BoolLiteral(true), Span::dummy())]
+    );
+    assert_eq!(cases[0].1, vec![Stmt::echo(Expr::int_lit(8))]);
+    assert!(default.is_none());
+}
+
+#[test]
 fn test_eliminate_dead_code_invalidates_switch_bool_guard_after_local_write() {
     let strict_true = Expr::new(
         ExprKind::BinaryOp {
