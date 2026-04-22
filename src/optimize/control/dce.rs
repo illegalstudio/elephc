@@ -1675,6 +1675,76 @@ fn collect_trackable_condition_names(expr: &Expr, names: &mut Vec<String>) -> bo
     }
 }
 
+fn equivalent_condition_forms(condition: &Expr) -> Vec<Expr> {
+    let mut forms = Vec::new();
+
+    match &condition.kind {
+        ExprKind::Not(inner) => {
+            if let ExprKind::BinaryOp { left, op, right } = &inner.kind {
+                let de_morgan_op = match op {
+                    BinOp::And => Some(BinOp::Or),
+                    BinOp::Or => Some(BinOp::And),
+                    _ => None,
+                };
+
+                if let Some(de_morgan_op) = de_morgan_op {
+                    forms.push(Expr::binop(
+                        invert_condition((**left).clone()),
+                        de_morgan_op,
+                        invert_condition((**right).clone()),
+                    ));
+                }
+            }
+        }
+        ExprKind::BinaryOp { left, op, right } => {
+            let de_morgan_op = match op {
+                BinOp::And => Some(BinOp::Or),
+                BinOp::Or => Some(BinOp::And),
+                _ => None,
+            };
+
+            if let (
+                Some(de_morgan_op),
+                ExprKind::Not(left_inner),
+                ExprKind::Not(right_inner),
+            ) = (de_morgan_op, &left.kind, &right.kind)
+            {
+                forms.push(invert_condition(Expr::binop(
+                    (**left_inner).clone(),
+                    de_morgan_op,
+                    (**right_inner).clone(),
+                )));
+            }
+        }
+        _ => {}
+    }
+
+    forms
+}
+
+fn upsert_condition_guard(
+    guards: &mut GuardState,
+    condition: Expr,
+    value: bool,
+    names: &[String],
+) {
+    if let Some(existing) = guards
+        .condition_guards
+        .iter_mut()
+        .find(|known| known.condition == condition)
+    {
+        existing.value = value;
+        existing.names = names.to_vec();
+        return;
+    }
+
+    guards.condition_guards.push(ConditionGuard {
+        condition,
+        value,
+        names: names.to_vec(),
+    });
+}
+
 fn record_condition_guard(guards: &mut GuardState, condition: &Expr, value: bool) {
     let effect = expr_effect(condition);
     if effect.has_side_effects || effect.may_throw {
@@ -1686,21 +1756,14 @@ fn record_condition_guard(guards: &mut GuardState, condition: &Expr, value: bool
         return;
     }
 
-    if let Some(existing) = guards
-        .condition_guards
-        .iter_mut()
-        .find(|known| known.condition == *condition)
-    {
-        existing.value = value;
-        existing.names = names;
-        return;
+    upsert_condition_guard(guards, condition.clone(), value, &names);
+    for equivalent in equivalent_condition_forms(condition) {
+        let equivalent_effect = expr_effect(&equivalent);
+        if equivalent_effect.has_side_effects || equivalent_effect.may_throw {
+            continue;
+        }
+        upsert_condition_guard(guards, equivalent, value, &names);
     }
-
-    guards.condition_guards.push(ConditionGuard {
-        condition: condition.clone(),
-        value,
-        names,
-    });
 }
 
 fn extend_guards_for_switch_case(subject: &Expr, patterns: &[Expr], guards: &GuardState) -> GuardState {
@@ -1766,56 +1829,54 @@ fn extend_guards_for_switch_case_no_match_subject(
 }
 
 fn extend_guards(guards: &GuardState, condition: &Expr, branch_taken: bool) -> GuardState {
-    if let ExprKind::Not(inner) = &condition.kind {
-        return extend_guards(guards, inner, !branch_taken);
-    }
-
-    if let ExprKind::BinaryOp { left, op, right } = &condition.kind {
+    let mut next = if let ExprKind::Not(inner) = &condition.kind {
+        extend_guards(guards, inner, !branch_taken)
+    } else if let ExprKind::BinaryOp { left, op, right } = &condition.kind {
         match (op, branch_taken) {
             (BinOp::And, true) => {
                 let left_true = extend_guards(guards, left, true);
-                return extend_guards(&left_true, right, true);
+                extend_guards(&left_true, right, true)
             }
             (BinOp::And, false) => {
                 if matches!(known_condition_value(left, guards), Some(true)) {
                     let left_true = extend_guards(guards, left, true);
-                    return extend_guards(&left_true, right, false);
+                    extend_guards(&left_true, right, false)
+                } else {
+                    guards.clone()
                 }
             }
             (BinOp::Or, false) => {
                 let left_false = extend_guards(guards, left, false);
-                return extend_guards(&left_false, right, false);
+                extend_guards(&left_false, right, false)
             }
             (BinOp::Or, true) => {
                 if matches!(known_condition_value(left, guards), Some(false)) {
                     let left_false = extend_guards(guards, left, false);
-                    return extend_guards(&left_false, right, true);
+                    extend_guards(&left_false, right, true)
+                } else {
+                    guards.clone()
                 }
             }
-            _ => {}
+            _ => guards.clone(),
         }
-    }
-
-    let mut next = guards.clone();
+    } else {
+        guards.clone()
+    };
 
     if let Some((name, exact_value)) = exact_literal_from_guard_branch(condition, branch_taken) {
         record_exact_literal_guard(&mut next, name, exact_value);
-        return next;
     }
 
     if let Some((name, excluded_value)) = excluded_literal_from_guard_branch(condition, branch_taken) {
         record_excluded_literal_guard(&mut next, name, excluded_value);
-        return next;
     }
 
     record_condition_guard(&mut next, condition, branch_taken);
 
-    let Some((name, truthy_if_true)) = guard_variable_name(condition) else {
-        return next;
+    if let Some((name, truthy_if_true)) = guard_variable_name(condition) {
+        let known_truthy = if branch_taken { truthy_if_true } else { !truthy_if_true };
+        record_truthy_guard(&mut next, name, known_truthy);
     };
-
-    let known_truthy = if branch_taken { truthy_if_true } else { !truthy_if_true };
-    record_truthy_guard(&mut next, name, known_truthy);
 
     next
 }
