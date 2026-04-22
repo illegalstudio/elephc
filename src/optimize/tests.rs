@@ -4464,6 +4464,84 @@ fn test_try_tail_reachability_prefers_finally_only_when_safe() {
 }
 
 #[test]
+fn test_build_try_cfg_tracks_try_catch_and_finally_successors() {
+    let catches = vec![
+        crate::parser::ast::CatchClause {
+            exception_types: vec!["Exception".into()],
+            variable: Some("e".into()),
+            body: vec![Stmt::new(StmtKind::Break, Span::dummy())],
+        },
+        crate::parser::ast::CatchClause {
+            exception_types: vec!["RuntimeException".into()],
+            variable: Some("e".into()),
+            body: vec![Stmt::new(
+                StmtKind::Return(Some(Expr::int_lit(9))),
+                Span::dummy(),
+            )],
+        },
+    ];
+    let finally_body = Some(vec![Stmt::echo(Expr::int_lit(10))]);
+
+    let cfg = build_try_cfg(&[Stmt::echo(Expr::int_lit(7))], &catches, &finally_body);
+
+    assert_eq!(cfg.try_entry, 0);
+    assert_eq!(cfg.catch_entries, vec![1, 2]);
+    assert_eq!(cfg.finally_entry, Some(3));
+    assert_eq!(
+        cfg.blocks,
+        vec![
+            BasicBlock {
+                successors: vec![BasicBlockSuccessor::Block(3)],
+            },
+            BasicBlock {
+                successors: vec![BasicBlockSuccessor::Breaks],
+            },
+            BasicBlock {
+                successors: vec![BasicBlockSuccessor::Exits],
+            },
+            BasicBlock {
+                successors: vec![BasicBlockSuccessor::FallsThrough],
+            },
+        ]
+    );
+}
+
+#[test]
+fn test_classify_try_cfg_paths_tracks_try_and_catch_bodies() {
+    let catches = vec![
+        crate::parser::ast::CatchClause {
+            exception_types: vec!["Exception".into()],
+            variable: Some("e".into()),
+            body: vec![Stmt::echo(Expr::int_lit(8))],
+        },
+        crate::parser::ast::CatchClause {
+            exception_types: vec!["RuntimeException".into()],
+            variable: Some("e".into()),
+            body: vec![Stmt::new(
+                StmtKind::Return(Some(Expr::int_lit(9))),
+                Span::dummy(),
+            )],
+        },
+    ];
+    let finally_body = Some(vec![Stmt::echo(Expr::int_lit(10))]);
+
+    let cfg = build_try_cfg(&[Stmt::echo(Expr::int_lit(7))], &catches, &finally_body);
+
+    assert_eq!(
+        classify_try_cfg_paths(&cfg),
+        vec![
+            BasicBlockSuccessor::FallsThrough,
+            BasicBlockSuccessor::FallsThrough,
+            BasicBlockSuccessor::Exits,
+        ]
+    );
+    assert_eq!(
+        classify_cfg_successor(&cfg.blocks, BasicBlockSuccessor::Block(cfg.finally_entry.unwrap())),
+        BasicBlockSuccessor::FallsThrough
+    );
+}
+
+#[test]
 fn test_try_tail_reachability_tracks_catch_fallthrough_without_finally() {
     let catches = vec![
         crate::parser::ast::CatchClause {

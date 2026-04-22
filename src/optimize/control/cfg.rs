@@ -29,6 +29,14 @@ pub(crate) struct IfCfg {
     pub(crate) blocks: Vec<BasicBlock>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TryCfg {
+    pub(crate) try_entry: usize,
+    pub(crate) catch_entries: Vec<usize>,
+    pub(crate) finally_entry: Option<usize>,
+    pub(crate) blocks: Vec<BasicBlock>,
+}
+
 pub(crate) fn build_if_cfg(
     then_body: &[Stmt],
     elseif_clauses: &[(Expr, Vec<Stmt>)],
@@ -95,6 +103,59 @@ pub(crate) fn classify_if_cfg_paths(cfg: &IfCfg) -> Vec<BasicBlockSuccessor> {
     cfg.body_entries
         .iter()
         .map(|&entry| classify_cfg_successor(&cfg.blocks, BasicBlockSuccessor::Block(entry)))
+        .collect()
+}
+
+pub(crate) fn build_try_cfg(
+    try_body: &[Stmt],
+    catches: &[crate::parser::ast::CatchClause],
+    finally_body: &Option<Vec<Stmt>>,
+) -> TryCfg {
+    let try_entry = 0;
+    let catch_entries: Vec<usize> = (1..=catches.len()).collect();
+    let finally_entry = finally_body.as_ref().map(|_| catches.len() + 1);
+    let mut blocks = Vec::with_capacity(1 + catches.len() + usize::from(finally_body.is_some()));
+
+    let tail_successor = if let Some(finally_entry) = finally_entry {
+        BasicBlockSuccessor::Block(finally_entry)
+    } else {
+        BasicBlockSuccessor::FallsThrough
+    };
+
+    blocks.push(BasicBlock {
+        successors: vec![successor_for_effect(block_terminal_effect(try_body), tail_successor)],
+    });
+
+    for catch in catches {
+        blocks.push(BasicBlock {
+            successors: vec![successor_for_effect(
+                block_terminal_effect(&catch.body),
+                tail_successor,
+            )],
+        });
+    }
+
+    if let Some(finally_body) = finally_body.as_ref() {
+        blocks.push(BasicBlock {
+            successors: vec![successor_for_effect(
+                block_terminal_effect(finally_body),
+                BasicBlockSuccessor::FallsThrough,
+            )],
+        });
+    }
+
+    TryCfg {
+        try_entry,
+        catch_entries,
+        finally_entry,
+        blocks,
+    }
+}
+
+pub(crate) fn classify_try_cfg_paths(cfg: &TryCfg) -> Vec<BasicBlockSuccessor> {
+    std::iter::once(cfg.try_entry)
+        .chain(cfg.catch_entries.iter().copied())
+        .map(|entry| classify_cfg_successor(&cfg.blocks, BasicBlockSuccessor::Block(entry)))
         .collect()
 }
 

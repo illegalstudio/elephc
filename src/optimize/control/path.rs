@@ -101,14 +101,15 @@ pub(crate) fn analyze_try_tail_paths(
     catches: &[crate::parser::ast::CatchClause],
     finally_body: &Option<Vec<Stmt>>,
 ) -> TryTailReachability {
-    let try_tail_path = terminal_effect_tail_path(block_terminal_effect(try_body));
-    let catch_tail_paths = catches
-        .iter()
-        .map(|catch| terminal_effect_tail_path(block_terminal_effect(&catch.body)))
-        .collect();
-    let finally_tail_path = finally_body
-        .as_ref()
-        .map(|body| terminal_effect_tail_path(block_terminal_effect(body)));
+    let cfg = build_try_cfg(try_body, catches, finally_body);
+    let mut path_iter = classify_try_cfg_paths(&cfg)
+        .into_iter()
+        .map(cfg_successor_tail_path);
+    let try_tail_path = path_iter.next().unwrap_or(TailPathKind::Unknown);
+    let catch_tail_paths: Vec<_> = path_iter.take(catches.len()).collect();
+    let finally_tail_path = cfg.finally_entry.map(|entry| {
+        cfg_successor_tail_path(classify_cfg_successor(&cfg.blocks, BasicBlockSuccessor::Block(entry)))
+    });
 
     TryTailReachability {
         try_tail_path,
@@ -118,15 +119,6 @@ pub(crate) fn analyze_try_tail_paths(
             && !block_may_throw(try_body)
             && matches!(try_tail_path, TailPathKind::FallsThrough)
             && matches!(finally_tail_path, Some(TailPathKind::FallsThrough)),
-    }
-}
-
-fn terminal_effect_tail_path(effect: TerminalEffect) -> TailPathKind {
-    match effect {
-        TerminalEffect::FallsThrough => TailPathKind::FallsThrough,
-        TerminalEffect::Breaks => TailPathKind::Breaks,
-        TerminalEffect::ExitsCurrentBlock => TailPathKind::NoTail,
-        TerminalEffect::TerminatesMixed => TailPathKind::Unknown,
     }
 }
 
