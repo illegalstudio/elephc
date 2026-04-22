@@ -46,16 +46,21 @@ pub(crate) fn analyze_if_tail_paths(
     elseif_clauses: &[(Expr, Vec<Stmt>)],
     else_body: &Option<Vec<Stmt>>,
 ) -> IfTailReachability {
+    let cfg = build_if_cfg(then_body, elseif_clauses, else_body);
+    let body_paths = classify_if_cfg_paths(&cfg);
     IfTailReachability {
-        then_sinks_tail: block_reaches_following_stmt(then_body),
-        elseif_sinks_tail: elseif_clauses
+        then_sinks_tail: matches!(body_paths.first(), Some(BasicBlockSuccessor::FallsThrough)),
+        elseif_sinks_tail: body_paths[1..]
             .iter()
-            .map(|(_, body)| block_reaches_following_stmt(body))
+            .map(|successor| matches!(successor, BasicBlockSuccessor::FallsThrough))
             .collect(),
-        else_sinks_tail: else_body
-            .as_ref()
-            .is_some_and(|body| block_reaches_following_stmt(body)),
-        implicit_else_sinks_tail: else_body.is_none(),
+        else_sinks_tail: cfg.else_entry.is_some_and(|entry| {
+            matches!(
+                classify_cfg_successor(&cfg.blocks, BasicBlockSuccessor::Block(entry)),
+                BasicBlockSuccessor::FallsThrough
+            )
+        }),
+        implicit_else_sinks_tail: matches!(cfg.implicit_else_successor, BasicBlockSuccessor::FallsThrough),
     }
 }
 

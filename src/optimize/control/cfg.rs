@@ -21,6 +21,83 @@ pub(crate) struct SwitchCfg {
     pub(crate) blocks: Vec<BasicBlock>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct IfCfg {
+    pub(crate) body_entries: Vec<usize>,
+    pub(crate) else_entry: Option<usize>,
+    pub(crate) implicit_else_successor: BasicBlockSuccessor,
+    pub(crate) blocks: Vec<BasicBlock>,
+}
+
+pub(crate) fn build_if_cfg(
+    then_body: &[Stmt],
+    elseif_clauses: &[(Expr, Vec<Stmt>)],
+    else_body: &Option<Vec<Stmt>>,
+) -> IfCfg {
+    let branch_bodies: Vec<&[Stmt]> = std::iter::once(then_body)
+        .chain(elseif_clauses.iter().map(|(_, body)| body.as_slice()))
+        .collect();
+    let branch_count = branch_bodies.len();
+    let condition_count = branch_count;
+    let body_entries: Vec<usize> = (condition_count..condition_count + branch_count).collect();
+    let else_entry = else_body.as_ref().map(|_| condition_count + branch_count);
+    let implicit_else_successor = if else_entry.is_some() {
+        BasicBlockSuccessor::Unknown
+    } else {
+        BasicBlockSuccessor::FallsThrough
+    };
+
+    let mut blocks = Vec::with_capacity(condition_count + branch_count + usize::from(else_body.is_some()));
+
+    for condition_index in 0..condition_count {
+        let false_successor = if condition_index + 1 < condition_count {
+            BasicBlockSuccessor::Block(condition_index + 1)
+        } else if let Some(else_entry) = else_entry {
+            BasicBlockSuccessor::Block(else_entry)
+        } else {
+            BasicBlockSuccessor::FallsThrough
+        };
+        blocks.push(BasicBlock {
+            successors: vec![
+                BasicBlockSuccessor::Block(body_entries[condition_index]),
+                false_successor,
+            ],
+        });
+    }
+
+    for body in branch_bodies {
+        blocks.push(BasicBlock {
+            successors: vec![successor_for_effect(
+                block_terminal_effect(body),
+                BasicBlockSuccessor::FallsThrough,
+            )],
+        });
+    }
+
+    if let Some(else_body) = else_body.as_ref() {
+        blocks.push(BasicBlock {
+            successors: vec![successor_for_effect(
+                block_terminal_effect(else_body),
+                BasicBlockSuccessor::FallsThrough,
+            )],
+        });
+    }
+
+    IfCfg {
+        body_entries,
+        else_entry,
+        implicit_else_successor,
+        blocks,
+    }
+}
+
+pub(crate) fn classify_if_cfg_paths(cfg: &IfCfg) -> Vec<BasicBlockSuccessor> {
+    cfg.body_entries
+        .iter()
+        .map(|&entry| classify_cfg_successor(&cfg.blocks, BasicBlockSuccessor::Block(entry)))
+        .collect()
+}
+
 pub(crate) fn build_switch_cfg(
     cases: &[(Vec<Expr>, Vec<Stmt>)],
     default: &Option<Vec<Stmt>>,

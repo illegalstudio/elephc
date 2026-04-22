@@ -4363,6 +4363,70 @@ fn test_if_tail_reachability_tracks_fallthrough_and_implicit_else() {
 }
 
 #[test]
+fn test_build_if_cfg_tracks_condition_and_body_successors() {
+    let elseif_clauses = vec![(
+        Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
+        vec![Stmt::new(StmtKind::Return(Some(Expr::int_lit(7))), Span::dummy())],
+    )];
+    let else_body = Some(vec![Stmt::echo(Expr::int_lit(9))]);
+
+    let cfg = build_if_cfg(
+        &[Stmt::echo(Expr::int_lit(1))],
+        &elseif_clauses,
+        &else_body,
+    );
+
+    assert_eq!(cfg.body_entries, vec![2, 3]);
+    assert_eq!(cfg.else_entry, Some(4));
+    assert_eq!(cfg.implicit_else_successor, BasicBlockSuccessor::Unknown);
+    assert_eq!(
+        cfg.blocks,
+        vec![
+            BasicBlock {
+                successors: vec![
+                    BasicBlockSuccessor::Block(2),
+                    BasicBlockSuccessor::Block(1),
+                ],
+            },
+            BasicBlock {
+                successors: vec![
+                    BasicBlockSuccessor::Block(3),
+                    BasicBlockSuccessor::Block(4),
+                ],
+            },
+            BasicBlock {
+                successors: vec![BasicBlockSuccessor::FallsThrough],
+            },
+            BasicBlock {
+                successors: vec![BasicBlockSuccessor::Exits],
+            },
+            BasicBlock {
+                successors: vec![BasicBlockSuccessor::FallsThrough],
+            },
+        ]
+    );
+}
+
+#[test]
+fn test_classify_if_cfg_paths_tracks_branch_bodies() {
+    let elseif_clauses = vec![(
+        Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
+        vec![Stmt::echo(Expr::int_lit(8))],
+    )];
+
+    let cfg = build_if_cfg(
+        &[Stmt::new(StmtKind::Return(Some(Expr::int_lit(1))), Span::dummy())],
+        &elseif_clauses,
+        &None,
+    );
+
+    assert_eq!(
+        classify_if_cfg_paths(&cfg),
+        vec![BasicBlockSuccessor::Exits, BasicBlockSuccessor::FallsThrough]
+    );
+}
+
+#[test]
 fn test_ifdef_tail_reachability_tracks_implicit_else() {
     let reachability = analyze_ifdef_tail_paths(
         &[Stmt::echo(Expr::int_lit(7))],
