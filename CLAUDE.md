@@ -307,6 +307,7 @@ sidebar:
 ## Conventions
 
 - No `Co-Authored-By` lines in commits
+- Use commit message prefixes such as `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, or `test:`
 - Keep commit messages concise
 - Run `cargo test` before committing — all tests must pass
 - Zero compiler warnings policy (`cargo build` must be clean)
