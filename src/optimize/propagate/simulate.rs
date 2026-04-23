@@ -43,9 +43,11 @@ pub(crate) fn merge_try_constant_env_paths(
         fallthrough_paths.push(simulate_block_constant_env(try_body, incoming_env.clone()));
     }
 
-    for catch in catches {
-        if matches!(block_terminal_effect(&catch.body), TerminalEffect::FallsThrough) {
-            fallthrough_paths.push(simulate_catch_constant_env(catch, incoming_env.clone()));
+    if block_may_throw(try_body) {
+        for catch in catches {
+            if matches!(block_terminal_effect(&catch.body), TerminalEffect::FallsThrough) {
+                fallthrough_paths.push(simulate_catch_constant_env(catch, incoming_env.clone()));
+            }
         }
     }
 
@@ -116,10 +118,15 @@ pub(crate) fn simulate_switch_entry_constant_env(
 }
 
 pub(crate) fn merge_switch_constant_env_paths(
+    subject: &Expr,
     cases: &[(Vec<Expr>, Vec<Stmt>)],
     default: Option<&[Stmt]>,
     incoming_env: &ConstantEnv,
 ) -> ConstantEnv {
+    if let Some(subject_value) = scalar_value(subject) {
+        return merge_known_switch_constant_env_paths(&subject_value, cases, default, incoming_env);
+    }
+
     let mut fallthrough_paths = Vec::new();
 
     for case_index in 0..cases.len() {
@@ -135,4 +142,45 @@ pub(crate) fn merge_switch_constant_env_paths(
     }
 
     merge_constant_env_paths(fallthrough_paths)
+}
+
+fn merge_known_switch_constant_env_paths(
+    subject: &ScalarValue,
+    cases: &[(Vec<Expr>, Vec<Stmt>)],
+    default: Option<&[Stmt]>,
+    incoming_env: &ConstantEnv,
+) -> ConstantEnv {
+    let mut fallthrough_paths = Vec::new();
+    let mut has_unknown_pattern = false;
+
+    for (case_index, (patterns, _)) in cases.iter().enumerate() {
+        match classify_case_patterns(subject, patterns, CaseComparison::LooseSwitch) {
+            CaseMatch::Matches => {
+                if let Some(env) =
+                    simulate_switch_entry_constant_env(cases, default, Some(case_index), incoming_env)
+                {
+                    fallthrough_paths.push(env);
+                }
+                return merge_constant_env_paths(fallthrough_paths);
+            }
+            CaseMatch::Unknown => {
+                has_unknown_pattern = true;
+                if let Some(env) =
+                    simulate_switch_entry_constant_env(cases, default, Some(case_index), incoming_env)
+                {
+                    fallthrough_paths.push(env);
+                }
+            }
+            CaseMatch::NoMatch => {}
+        }
+    }
+
+    if has_unknown_pattern || default.is_some() {
+        if let Some(env) = simulate_switch_entry_constant_env(cases, default, None, incoming_env) {
+            fallthrough_paths.push(env);
+        }
+        return merge_constant_env_paths(fallthrough_paths);
+    }
+
+    incoming_env.clone()
 }
