@@ -61,7 +61,8 @@ Current folding coverage includes:
 - strict comparisons and numeric comparisons
 - logical `&&` / `||` when both sides are scalar constants
 - spaceship `<=>`
-- `??` and ternary when the selected result is already known
+- `??`, ternary, and `match` when the selected result is already known
+- scalar indexed and associative array-literal reads such as `[2, 9][0]` and `["a" => 2]["a"]` when every literal entry is scalar
 - scalar casts such as `(int)"42"` or `(bool)"0"` when the semantics are unambiguous
 - recursive folding inside:
   - function and method bodies
@@ -97,8 +98,10 @@ This pass is still intentionally local and conservative. Today it focuses on:
   - `$y = 3;`
   - `echo $x ** $y;`
 - simple `if` merges where every fallthrough branch agrees on the same scalar value
-- conservative `switch` merges when all surviving exit paths agree on the same scalar value
-- conservative `try` / `catch` merges when every fallthrough handler path agrees on the same scalar value
+- conservative `switch` merges when all possible exit paths agree on the same scalar value
+- known-subject `switch` merges that only simulate the selected entry and its fallthrough suffix
+- conservative `try` / `catch` merges when every reachable fallthrough handler path agrees on the same scalar value
+- non-throwing `try` bodies that keep unreachable `catch` writes out of the post-`try` constant environment
 - recognizing uniform scalar assignment outcomes from local merge expressions such as `?:` and `match`
 - recognizing scalar locals introduced by destructuring fixed scalar array literals with `list(...)` / `[...] = [...]`
 - preserving untouched scalar locals across simple loops when a conservative local write analysis can prove the loop only mutates other variables, including simple nested `switch`, `try/catch/finally`, `foreach`, other simple nested loop statements, local array writes like `$items[] = $i` / `$items[0] = $i`, local property writes like `$box->last = $i` / `$box->items[] = $i`, and targeted invalidations like `unset($tmp)`, while also retaining stable scalar values introduced by `for` init clauses
@@ -338,7 +341,7 @@ That conservatism is why the pass is safe to run by default: if an expression co
 
 The current optimizer is still intentionally local. It does not yet implement:
 
-- CFG-aware or fixed-point constant propagation across wider loops and general path merges
+- full fixed-point/basic-block constant propagation across wider loops and general path merges
 - richer memory-model-aware propagation across heap-backed locals and broader aliasing situations
 - exact exception-type reachability, nested rethrow modeling, and less conservative `finally` invalidation beyond the current path-aware `try` heuristics
 - broader guard reasoning for range facts and multi-variable relationships beyond the current boolean, scalar, loose-comparison, and safe relational-complement facts

@@ -202,7 +202,7 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
                 .collect();
             let default = default.map(|body| propagate_block(body, base_env.clone()).0);
             let next_env =
-                merge_switch_constant_env_paths(&cases, default.as_deref(), &base_env);
+                merge_switch_constant_env_paths(&subject, &cases, default.as_deref(), &base_env);
             (
                 Stmt::new(
                     StmtKind::Switch {

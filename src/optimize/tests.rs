@@ -1010,6 +1010,35 @@ fn test_propagate_constants_merges_identical_switch_assignments() {
 }
 
 #[test]
+fn test_propagate_constants_uses_known_switch_subject_for_merge() {
+    let program = vec![
+        Stmt::assign("mode", Expr::int_lit(1)),
+        Stmt::new(
+            StmtKind::Switch {
+                subject: Expr::var("mode"),
+                cases: vec![(
+                    vec![Expr::int_lit(1)],
+                    vec![
+                        Stmt::assign("base", Expr::int_lit(2)),
+                        Stmt::new(StmtKind::Break, Span::dummy()),
+                    ],
+                )],
+                default: Some(vec![Stmt::assign("base", Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[2],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
 fn test_propagate_constants_merges_identical_try_catch_assignments() {
     let program = vec![
         Stmt::new(
@@ -1019,6 +1048,32 @@ fn test_propagate_constants_merges_identical_try_catch_assignments() {
                     exception_types: vec![Name::from("Exception")],
                     variable: Some("e".to_string()),
                     body: vec![Stmt::assign("base", Expr::int_lit(2))],
+                }],
+                finally_body: None,
+            },
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[1],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
+fn test_propagate_constants_ignores_unreachable_catch_after_non_throwing_try() {
+    let program = vec![
+        Stmt::new(
+            StmtKind::Try {
+                try_body: vec![Stmt::assign("base", Expr::int_lit(2))],
+                catches: vec![crate::parser::ast::CatchClause {
+                    exception_types: vec![Name::from("Exception")],
+                    variable: Some("e".to_string()),
+                    body: vec![Stmt::assign("base", Expr::int_lit(9))],
                 }],
                 finally_body: None,
             },
@@ -1086,6 +1141,33 @@ fn test_propagate_constants_tracks_uniform_match_assignment() {
 }
 
 #[test]
+fn test_propagate_constants_tracks_known_match_assignment() {
+    let program = vec![
+        Stmt::assign("mode", Expr::int_lit(1)),
+        Stmt::assign(
+            "base",
+            Expr::new(
+                ExprKind::Match {
+                    subject: Box::new(Expr::var("mode")),
+                    arms: vec![(vec![Expr::int_lit(1)], Expr::int_lit(2))],
+                    default: Some(Box::new(Expr::int_lit(9))),
+                },
+                Span::dummy(),
+            ),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(propagated[1], Stmt::assign("base", Expr::int_lit(2)));
+    assert_eq!(
+        propagated[2],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
 fn test_propagate_constants_tracks_scalar_list_unpack() {
     let program = vec![
         Stmt::new(
@@ -1103,6 +1185,65 @@ fn test_propagate_constants_tracks_scalar_list_unpack() {
 
     let propagated = propagate_constants(program);
 
+    assert_eq!(
+        propagated[1],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
+fn test_propagate_constants_tracks_scalar_array_literal_access() {
+    let program = vec![
+        Stmt::assign(
+            "base",
+            Expr::new(
+                ExprKind::ArrayAccess {
+                    array: Box::new(Expr::new(
+                        ExprKind::ArrayLiteral(vec![Expr::int_lit(2), Expr::int_lit(9)]),
+                        Span::dummy(),
+                    )),
+                    index: Box::new(Expr::int_lit(0)),
+                },
+                Span::dummy(),
+            ),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(propagated[0], Stmt::assign("base", Expr::int_lit(2)));
+    assert_eq!(
+        propagated[1],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
+fn test_propagate_constants_tracks_scalar_assoc_array_literal_access() {
+    let program = vec![
+        Stmt::assign(
+            "base",
+            Expr::new(
+                ExprKind::ArrayAccess {
+                    array: Box::new(Expr::new(
+                        ExprKind::ArrayLiteralAssoc(vec![
+                            (Expr::string_lit("left"), Expr::int_lit(2)),
+                            (Expr::string_lit("right"), Expr::int_lit(9)),
+                        ]),
+                        Span::dummy(),
+                    )),
+                    index: Box::new(Expr::string_lit("left")),
+                },
+                Span::dummy(),
+            ),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(propagated[0], Stmt::assign("base", Expr::int_lit(2)));
     assert_eq!(
         propagated[1],
         Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))

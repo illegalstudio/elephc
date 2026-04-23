@@ -325,7 +325,8 @@ Proper type system for PHP compatibility.
 - [x] Control-flow normalization pass for flattening redundant nested `if` / `switch` / `try` shells after pruning
 - [x] Alias-aware constant propagation so local callables and scalar values can stay precise across `if` / `switch` / `try` merges
 - [x] Relational and loose-comparison contradiction guards for dead-code elimination
-- [ ] Constant propagation v2 — fixed-point / CFG-aware propagation through loops and wider control-flow beyond the current conservative local env model
+- [x] Constant propagation v2 — known-subject `switch` path merges, non-throwing `try` / unreachable-catch env merges, known `match` folding, and scalar indexed/associative array-literal access folding
+- [ ] Constant propagation v3 — fixed-point / basic-block propagation through loops and wider control-flow beyond the current conservative local env model
 - [ ] Memory-model-aware propagation for heap-backed locals and targeted runtime invalidations beyond `unset($var)` and the currently modeled local writes
 - [ ] Purity / may-throw v2 for dynamic instance dispatch, richer property/array reads, and less pessimistic builtin modeling
 - [ ] Guard reasoning v2 for dead-code elimination — broader range reasoning and multi-variable facts beyond current strict-scalar, boolean, loose-comparison, and safe relational-complement guards
