@@ -208,6 +208,7 @@ Current dead-code-elimination coverage includes:
 - shadowed `switch` patterns whose match points are already covered by earlier case labels, including full-case removal or fallthrough-body merging when no entry pattern remains
 - internal `if` regions pruned when outer pure variable guards or strict boolean checks already determine a nested branch outcome, with guard invalidation on relevant local writes to stay conservative
 - guard-based pruning now also understands simple pure `&&` / `||` combinations, so contradictions like `if ($a && $b) { if (!$a || !$b) ... }` can be removed without needing constant folding first
+- loose equality and safe relational-comparison complements now feed the same guard model, so nested checks like `$x == 0` followed by `$x != 0`, or `$x > 10` followed by `$x <= 10`, can be pruned when the outer branch proves the contradiction
 - strict scalar guards now feed the same pruning: after checks like `$x === null`, `$x === 0`, or `$x === ""`, nested regions that contradict the exact known value can be removed
 - negative branches of strict scalar checks now contribute exclusion facts too, so `else` paths after checks like `$x === 0` or the true path of `$x !== null` can prune nested contradictions without needing a full exact replacement value
 - the same strict scalar guard machinery now covers exact floats as well as PHP-falsy strings like `""` and `"0"`, so nested truthiness checks and strict literal contradictions can be pruned when those values are already known or excluded
@@ -223,6 +224,7 @@ Current dead-code-elimination coverage includes:
 - truthiness facts also prune scalar literal labels of the opposite truthiness in ordinary `switch ($x)`, so truthy/falsy outer guards can remove dead `case 0`, `case ""`, `case null`, or analogous truthy literal labels inside mixed multi-pattern switches
 - `switch (true|false)` cases using single guard-like patterns can feed the same internal region pruning inside the selected case body, again with local-write invalidation to stay conservative
 - `catch` and `finally` bodies now invalidate outer guard facts only for locals written on the relevant pre-handler paths, so nested pruning there stays sound without discarding unrelated guard facts
+- throw-path invalidation for `switch` now consults the CFG-lite reachable block set, so writes in impossible case bodies do not unnecessarily kill catch-body guards, while reachable case writes before a `throw` still invalidate them
 - catch-side guard invalidation is now path-aware: writes that only happen on non-throwing `try` paths no longer block pruning inside the `catch`
 - condition-only empty `if` / `elseif` chains reduced to just the observable condition checks that still matter
 - empty `elseif` bodies in the middle of a live chain folded into the minimum negated guard needed for later branches
