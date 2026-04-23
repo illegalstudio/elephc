@@ -1220,6 +1220,37 @@ fn test_propagate_constants_tracks_scalar_array_literal_access() {
 }
 
 #[test]
+fn test_propagate_constants_tracks_scalar_assoc_array_literal_access() {
+    let program = vec![
+        Stmt::assign(
+            "base",
+            Expr::new(
+                ExprKind::ArrayAccess {
+                    array: Box::new(Expr::new(
+                        ExprKind::ArrayLiteralAssoc(vec![
+                            (Expr::string_lit("left"), Expr::int_lit(2)),
+                            (Expr::string_lit("right"), Expr::int_lit(9)),
+                        ]),
+                        Span::dummy(),
+                    )),
+                    index: Box::new(Expr::string_lit("left")),
+                },
+                Span::dummy(),
+            ),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(propagated[0], Stmt::assign("base", Expr::int_lit(2)));
+    assert_eq!(
+        propagated[1],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
 fn test_propagate_constants_preserves_unmodified_scalar_across_for_loop() {
     let program = vec![
         Stmt::assign("base", Expr::int_lit(2)),

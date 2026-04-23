@@ -413,10 +413,14 @@ pub(super) fn try_fold_ternary(condition: &Expr, then_expr: &Expr, else_expr: &E
 }
 
 pub(super) fn try_fold_array_access(array: &Expr, index: &Expr) -> Option<ExprKind> {
-    let ExprKind::ArrayLiteral(items) = &array.kind else {
-        return None;
-    };
+    match &array.kind {
+        ExprKind::ArrayLiteral(items) => try_fold_indexed_array_access(items, index),
+        ExprKind::ArrayLiteralAssoc(items) => try_fold_assoc_array_access(items, index),
+        _ => None,
+    }
+}
 
+pub(super) fn try_fold_indexed_array_access(items: &[Expr], index: &Expr) -> Option<ExprKind> {
     let ScalarValue::Int(index) = scalar_value(index)? else {
         return None;
     };
@@ -428,6 +432,21 @@ pub(super) fn try_fold_array_access(array: &Expr, index: &Expr) -> Option<ExprKi
         .all(|item| scalar_value(item).is_some())
         .then(|| scalar_value(value).map(ScalarValue::into_expr_kind))
         .flatten()
+}
+
+pub(super) fn try_fold_assoc_array_access(items: &[(Expr, Expr)], index: &Expr) -> Option<ExprKind> {
+    let index = scalar_value(index)?;
+    let mut selected = None;
+
+    for (key, value) in items {
+        let key = scalar_value(key)?;
+        let value = scalar_value(value)?;
+        if key == index {
+            selected = Some(value);
+        }
+    }
+
+    selected.map(ScalarValue::into_expr_kind)
 }
 
 pub(super) fn try_fold_cast(target: &CastType, expr: &Expr) -> Option<ExprKind> {
