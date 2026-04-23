@@ -8,6 +8,8 @@
 
 > 🐦 **[Follow me on X (@nahime0)](https://x.com/nahime0) for updates, new features, and behind-the-scenes development.**
 
+---
+
 A PHP-to-native compiler. Takes a subset of PHP and compiles it directly to native assembly, producing standalone binaries for the currently supported targets: **macOS ARM64**, **Linux ARM64**, and **Linux x86_64**. No interpreter, no VM, no Zend Engine, no opcode fallback.
 
 > **If you like the idea or find it useful, please star the repo** — it helps others discover it and keeps the project going.
