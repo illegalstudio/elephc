@@ -4,4 +4,4 @@ version = 4
 
 [[package]]
 name = "elephc"
-version = "0.19.7"
+version = "0.19.8"
