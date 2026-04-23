@@ -1890,6 +1890,50 @@ run(true, true);
 }
 
 #[test]
+fn test_dead_code_elimination_prunes_nested_elseif_from_composite_guard_refinement() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_composite_guard_refinement");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+function run($a, $b, $c) {
+    if (($a && $b) || $c) {
+        if (!$c) {
+            if ($a && $b) {
+                echo "a";
+            } elseif (true) {
+                echo "dead";
+            }
+        } else {
+            echo "c";
+        }
+    } else {
+        echo "x";
+    }
+}
+
+run(true, true, false);
+run(false, false, true);
+run(false, false, false);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    assert_eq!(out, "acx");
+    assert!(!user_asm.contains("dead"));
+}
+
+#[test]
 fn test_dead_code_elimination_prunes_nested_if_region_from_outer_or_false_branch() {
     let out = compile_and_run(
         r#"<?php

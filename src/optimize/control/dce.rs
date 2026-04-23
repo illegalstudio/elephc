@@ -1512,6 +1512,14 @@ fn has_excluded_guard(guards: &GuardState, name: &str, value: &GuardLiteral) -> 
 }
 
 fn known_condition_value(condition: &Expr, guards: &GuardState) -> Option<bool> {
+    if let Some(value) = known_condition_value_base(condition, guards) {
+        return Some(value);
+    }
+
+    infer_condition_value_from_composite_guards(condition, guards)
+}
+
+fn known_condition_value_base(condition: &Expr, guards: &GuardState) -> Option<bool> {
     if let Some(value) = guards
         .condition_guards
         .iter()
@@ -1569,6 +1577,38 @@ fn known_condition_value(condition: &Expr, guards: &GuardState) -> Option<bool> 
         }
         if has_excluded_guard(guards, name, &compared_value) {
             return Some(!expects_equal);
+        }
+    }
+
+    None
+}
+
+fn infer_condition_value_from_composite_guards(condition: &Expr, guards: &GuardState) -> Option<bool> {
+    for known in &guards.condition_guards {
+        let ExprKind::BinaryOp { left, op, right } = &known.condition.kind else {
+            continue;
+        };
+
+        let (requested, sibling) = if **left == *condition {
+            ((**left).clone(), (**right).clone())
+        } else if **right == *condition {
+            ((**right).clone(), (**left).clone())
+        } else {
+            continue;
+        };
+
+        if requested != *condition {
+            continue;
+        }
+
+        let Some(sibling_value) = known_condition_value_base(&sibling, guards) else {
+            continue;
+        };
+
+        match (op, known.value, sibling_value) {
+            (BinOp::And, true, true) | (BinOp::Or, true, false) => return Some(true),
+            (BinOp::And, false, true) | (BinOp::Or, false, false) => return Some(false),
+            _ => {}
         }
     }
 
