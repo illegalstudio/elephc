@@ -103,9 +103,9 @@ pub(super) fn fold_expr(expr: Expr) -> Expr {
             subject,
             arms,
             default,
-        } => ExprKind::Match {
-            subject: Box::new(fold_expr(*subject)),
-            arms: arms
+        } => {
+            let subject = fold_expr(*subject);
+            let arms = arms
                 .into_iter()
                 .map(|(patterns, value)| {
                     (
@@ -113,9 +113,10 @@ pub(super) fn fold_expr(expr: Expr) -> Expr {
                         fold_expr(value),
                     )
                 })
-                .collect(),
-            default: default.map(|expr| Box::new(fold_expr(*expr))),
-        },
+                .collect();
+            let default = default.map(|expr| Box::new(fold_expr(*expr)));
+            try_prune_match_expr(subject, arms, default)
+        }
         ExprKind::ArrayAccess { array, index } => ExprKind::ArrayAccess {
             array: Box::new(fold_expr(*array)),
             index: Box::new(fold_expr(*index)),

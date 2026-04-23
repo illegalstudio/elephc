@@ -330,6 +330,43 @@ echo $base ** 3;
 }
 
 #[test]
+fn test_constant_propagation_tracks_known_match_assignment() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_match_known");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$mode = 1;
+$base = match ($mode) {
+    1 => 2,
+    default => 9,
+};
+echo $base ** 3;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "known match subject should fold before assignment propagation:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "8");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_constant_propagation_tracks_scalar_list_unpack() {
     let dir = make_cli_test_dir("elephc_constant_propagation_list_unpack");
     let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(

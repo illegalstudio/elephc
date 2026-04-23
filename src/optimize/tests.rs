@@ -1141,6 +1141,33 @@ fn test_propagate_constants_tracks_uniform_match_assignment() {
 }
 
 #[test]
+fn test_propagate_constants_tracks_known_match_assignment() {
+    let program = vec![
+        Stmt::assign("mode", Expr::int_lit(1)),
+        Stmt::assign(
+            "base",
+            Expr::new(
+                ExprKind::Match {
+                    subject: Box::new(Expr::var("mode")),
+                    arms: vec![(vec![Expr::int_lit(1)], Expr::int_lit(2))],
+                    default: Some(Box::new(Expr::int_lit(9))),
+                },
+                Span::dummy(),
+            ),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(propagated[1], Stmt::assign("base", Expr::int_lit(2)));
+    assert_eq!(
+        propagated[2],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
 fn test_propagate_constants_tracks_scalar_list_unpack() {
     let program = vec![
         Stmt::new(
