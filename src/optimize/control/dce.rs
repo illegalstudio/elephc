@@ -1512,14 +1512,35 @@ fn has_excluded_guard(guards: &GuardState, name: &str, value: &GuardLiteral) -> 
 }
 
 fn known_condition_value(condition: &Expr, guards: &GuardState) -> Option<bool> {
-    if let Some(value) = known_condition_value_base(condition, guards) {
-        return Some(value);
-    }
-
-    infer_condition_value_from_composite_guards(condition, guards)
+    let mut visiting = Vec::new();
+    known_condition_value_inner(condition, guards, &mut visiting)
 }
 
-fn known_condition_value_base(condition: &Expr, guards: &GuardState) -> Option<bool> {
+fn known_condition_value_inner(
+    condition: &Expr,
+    guards: &GuardState,
+    visiting: &mut Vec<Expr>,
+) -> Option<bool> {
+    if visiting.iter().any(|known| known == condition) {
+        return None;
+    }
+
+    visiting.push(condition.clone());
+    let value = if let Some(value) = known_condition_value_base(condition, guards, visiting) {
+        Some(value)
+    } else {
+        infer_condition_value_from_composite_guards(condition, guards, visiting)
+    };
+    visiting.pop();
+
+    value
+}
+
+fn known_condition_value_base(
+    condition: &Expr,
+    guards: &GuardState,
+    visiting: &mut Vec<Expr>,
+) -> Option<bool> {
     if let Some(value) = guards
         .condition_guards
         .iter()
@@ -1530,22 +1551,22 @@ fn known_condition_value_base(condition: &Expr, guards: &GuardState) -> Option<b
     }
 
     if let ExprKind::Not(inner) = &condition.kind {
-        return known_condition_value(inner, guards).map(|value| !value);
+        return known_condition_value_inner(inner, guards, visiting).map(|value| !value);
     }
 
     if let ExprKind::BinaryOp { left, op, right } = &condition.kind {
         match op {
             BinOp::And => match (
-                known_condition_value(left, guards),
-                known_condition_value(right, guards),
+                known_condition_value_inner(left, guards, visiting),
+                known_condition_value_inner(right, guards, visiting),
             ) {
                 (Some(false), _) | (_, Some(false)) => return Some(false),
                 (Some(true), Some(true)) => return Some(true),
                 _ => {}
             },
             BinOp::Or => match (
-                known_condition_value(left, guards),
-                known_condition_value(right, guards),
+                known_condition_value_inner(left, guards, visiting),
+                known_condition_value_inner(right, guards, visiting),
             ) {
                 (Some(true), _) | (_, Some(true)) => return Some(true),
                 (Some(false), Some(false)) => return Some(false),
@@ -1583,32 +1604,69 @@ fn known_condition_value_base(condition: &Expr, guards: &GuardState) -> Option<b
     None
 }
 
-fn infer_condition_value_from_composite_guards(condition: &Expr, guards: &GuardState) -> Option<bool> {
+fn expr_contains_subexpr(expr: &Expr, target: &Expr) -> bool {
+    if expr == target {
+        return true;
+    }
+
+    match &expr.kind {
+        ExprKind::Not(inner) | ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
+            expr_contains_subexpr(inner, target)
+        }
+        ExprKind::BinaryOp { left, right, .. } => {
+            expr_contains_subexpr(left, target) || expr_contains_subexpr(right, target)
+        }
+        _ => false,
+    }
+}
+
+fn infer_child_value_from_composite_guard(
+    op: BinOp,
+    composite_value: bool,
+    sibling_value: bool,
+) -> Option<bool> {
+    match (op, composite_value, sibling_value) {
+        (BinOp::And, true, true) | (BinOp::Or, true, false) => Some(true),
+        (BinOp::And, false, true) | (BinOp::Or, false, false) => Some(false),
+        _ => None,
+    }
+}
+
+fn infer_condition_value_from_composite_guards(
+    condition: &Expr,
+    guards: &GuardState,
+    visiting: &mut Vec<Expr>,
+) -> Option<bool> {
     for known in &guards.condition_guards {
         let ExprKind::BinaryOp { left, op, right } = &known.condition.kind else {
             continue;
         };
 
-        let (requested, sibling) = if **left == *condition {
-            ((**left).clone(), (**right).clone())
-        } else if **right == *condition {
-            ((**right).clone(), (**left).clone())
-        } else {
-            continue;
-        };
+        for (candidate, sibling) in [((**left).clone(), (**right).clone()), ((**right).clone(), (**left).clone())]
+        {
+            if !expr_contains_subexpr(&candidate, condition) {
+                continue;
+            }
 
-        if requested != *condition {
-            continue;
-        }
+            let Some(sibling_value) = known_condition_value_inner(&sibling, guards, visiting) else {
+                continue;
+            };
 
-        let Some(sibling_value) = known_condition_value_base(&sibling, guards) else {
-            continue;
-        };
+            let Some(candidate_value) =
+                infer_child_value_from_composite_guard(op.clone(), known.value, sibling_value)
+            else {
+                continue;
+            };
 
-        match (op, known.value, sibling_value) {
-            (BinOp::And, true, true) | (BinOp::Or, true, false) => return Some(true),
-            (BinOp::And, false, true) | (BinOp::Or, false, false) => return Some(false),
-            _ => {}
+            if candidate == *condition {
+                return Some(candidate_value);
+            }
+
+            let mut nested_guards = guards.clone();
+            record_condition_guard(&mut nested_guards, &candidate, candidate_value);
+            if let Some(value) = known_condition_value_inner(condition, &nested_guards, visiting) {
+                return Some(value);
+            }
         }
     }
 

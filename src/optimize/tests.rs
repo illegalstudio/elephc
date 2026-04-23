@@ -3082,6 +3082,76 @@ fn test_eliminate_dead_code_prunes_nested_elseif_from_composite_guard_refinement
 }
 
 #[test]
+fn test_eliminate_dead_code_prunes_nested_subexpr_from_composite_guard_refinement() {
+    let ab = Expr::binop(Expr::var("a"), BinOp::And, Expr::var("b"));
+    let left = Expr::binop(ab.clone(), BinOp::Or, Expr::var("c"));
+    let outer = Expr::binop(left, BinOp::And, Expr::var("d"));
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![Stmt::new(
+                StmtKind::If {
+                    condition: outer,
+                    then_body: vec![Stmt::new(
+                        StmtKind::If {
+                            condition: Expr::var("d"),
+                            then_body: vec![Stmt::new(
+                                StmtKind::If {
+                                    condition: Expr::new(
+                                        ExprKind::Not(Box::new(Expr::var("c"))),
+                                        Span::dummy(),
+                                    ),
+                                    then_body: vec![Stmt::new(
+                                        StmtKind::If {
+                                            condition: ab,
+                                            then_body: vec![Stmt::echo(Expr::int_lit(7))],
+                                            elseif_clauses: vec![(
+                                                Expr::new(ExprKind::BoolLiteral(true), Span::dummy()),
+                                                vec![Stmt::echo(Expr::int_lit(8))],
+                                            )],
+                                            else_body: None,
+                                        },
+                                        Span::dummy(),
+                                    )],
+                                    elseif_clauses: Vec::new(),
+                                    else_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+                                },
+                                Span::dummy(),
+                            )],
+                            elseif_clauses: Vec::new(),
+                            else_body: Some(vec![Stmt::echo(Expr::int_lit(10))]),
+                        },
+                        Span::dummy(),
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: Some(vec![Stmt::echo(Expr::int_lit(11))]),
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    let StmtKind::If { then_body, else_body, .. } = &body[0].kind else {
+        panic!("expected outer if");
+    };
+    let StmtKind::If { then_body, else_body: c_else, .. } = &then_body[0].kind else {
+        panic!("expected !c if");
+    };
+    assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(7))]);
+    assert_eq!(c_else, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
+    assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(11))]));
+}
+
+#[test]
 fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_or_false_branch() {
     let outer = Expr::binop(
         Expr::new(ExprKind::Not(Box::new(Expr::var("a"))), Span::dummy()),
