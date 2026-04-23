@@ -117,10 +117,14 @@ pub(super) fn fold_expr(expr: Expr) -> Expr {
             let default = default.map(|expr| Box::new(fold_expr(*expr)));
             try_prune_match_expr(subject, arms, default)
         }
-        ExprKind::ArrayAccess { array, index } => ExprKind::ArrayAccess {
-            array: Box::new(fold_expr(*array)),
-            index: Box::new(fold_expr(*index)),
-        },
+        ExprKind::ArrayAccess { array, index } => {
+            let array = fold_expr(*array);
+            let index = fold_expr(*index);
+            try_fold_array_access(&array, &index).unwrap_or_else(|| ExprKind::ArrayAccess {
+                array: Box::new(array),
+                index: Box::new(index),
+            })
+        }
         ExprKind::Ternary {
             condition,
             then_expr,
@@ -406,6 +410,24 @@ pub(super) fn try_fold_ternary(condition: &Expr, then_expr: &Expr, else_expr: &E
     } else {
         Some(else_expr.into_expr_kind())
     }
+}
+
+pub(super) fn try_fold_array_access(array: &Expr, index: &Expr) -> Option<ExprKind> {
+    let ExprKind::ArrayLiteral(items) = &array.kind else {
+        return None;
+    };
+
+    let ScalarValue::Int(index) = scalar_value(index)? else {
+        return None;
+    };
+    let index = usize::try_from(index).ok()?;
+    let value = items.get(index)?;
+
+    items
+        .iter()
+        .all(|item| scalar_value(item).is_some())
+        .then(|| scalar_value(value).map(ScalarValue::into_expr_kind))
+        .flatten()
 }
 
 pub(super) fn try_fold_cast(target: &CastType, expr: &Expr) -> Option<ExprKind> {

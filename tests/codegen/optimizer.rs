@@ -400,6 +400,39 @@ echo $base ** $exp;
 }
 
 #[test]
+fn test_constant_propagation_tracks_scalar_array_literal_access() {
+    let dir = make_cli_test_dir("elephc_constant_propagation_array_literal_access");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$base = [2, 9][0];
+echo $base ** 3;
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        !user_asm.contains("pow"),
+        "scalar array literal access should fold before assignment propagation:\n{}",
+        user_asm
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "8");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_constant_propagation_preserves_scalar_across_simple_for_loop() {
     let dir = make_cli_test_dir("elephc_constant_propagation_for_loop");
     let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
