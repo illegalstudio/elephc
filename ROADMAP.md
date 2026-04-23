@@ -319,15 +319,17 @@ Proper type system for PHP compatibility.
 - [x] Add regression benchmarks so optimization work is measured instead of anecdotal
 - [x] Constant propagation across locals / statement boundaries
 - [x] Path-aware dead code elimination foundations — shared reachability/tail-path analysis for `if` / `ifdef` / `switch` / `try`, shadowed handler/pattern removal, and guard-aware nested region pruning
-- [ ] Dead code elimination v3 (full CFG/basic-block aware pass beyond the current path-aware AST pruning)
+- [ ] Dead code elimination v3 — CFG-lite is now used for reachable `if` / `switch` pruning and switch throw-path guard invalidation; remaining work is a fuller fixed-point/basic-block pass beyond the current path-aware AST pruning
 - [x] Purity / may-throw analysis so AST optimizations can reason more precisely about safe hoisting and branch removal
-- [ ] Exception-aware dead code elimination beyond conservative `try` / `catch` / `finally` heuristics
+- [x] Exception-aware dead code elimination beyond conservative `try` / `catch` / `finally` heuristics — catch/finally guard invalidation now tracks pre-handler throw paths, including CFG-pruned switch paths
 - [x] Control-flow normalization pass for flattening redundant nested `if` / `switch` / `try` shells after pruning
 - [x] Alias-aware constant propagation so local callables and scalar values can stay precise across `if` / `switch` / `try` merges
+- [x] Relational and loose-comparison contradiction guards for dead-code elimination
 - [ ] Constant propagation v2 — fixed-point / CFG-aware propagation through loops and wider control-flow beyond the current conservative local env model
 - [ ] Memory-model-aware propagation for heap-backed locals and targeted runtime invalidations beyond `unset($var)` and the currently modeled local writes
 - [ ] Purity / may-throw v2 for dynamic instance dispatch, richer property/array reads, and less pessimistic builtin modeling
-- [ ] Guard reasoning v2 for dead-code elimination — broader contradiction tracking across relational/loose comparisons and multi-variable facts beyond current strict-scalar and boolean guards
+- [ ] Guard reasoning v2 for dead-code elimination — broader range reasoning and multi-variable facts beyond current strict-scalar, boolean, loose-comparison, and safe relational-complement guards
+- [ ] Exception-aware DCE v2 — exact thrown-type / handler reachability, nested try rethrow modeling, and less conservative finally-path invalidation
 - [ ] Control-flow normalization v2 — broader canonicalization of nested block/control shells before CFG-aware optimization passes
 - [ ] Register allocation (reduce stack spills)
 - [ ] Inline small functions

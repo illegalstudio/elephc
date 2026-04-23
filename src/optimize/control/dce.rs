@@ -14,12 +14,20 @@ struct GuardState {
     bool_false_vars: Vec<String>,
     exact_guards: Vec<ExactGuard>,
     excluded_guards: Vec<ExactGuard>,
+    condition_guards: Vec<ConditionGuard>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
 struct ExactGuard {
     name: String,
     value: GuardLiteral,
+}
+
+#[derive(Clone)]
+struct ConditionGuard {
+    condition: Expr,
+    value: bool,
+    names: Vec<String>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -255,17 +263,24 @@ fn dce_if_stmt(
     }
 
     let then_body = dce_block_with_guards(then_body, extend_guards(guards, &condition, true));
-    let false_guards = extend_guards(guards, &condition, false);
-    let elseif_clauses: Vec<_> = elseif_clauses
-        .into_iter()
-        .map(|(condition, body)| {
-            let condition = prune_expr(condition);
-            let body = dce_block_with_guards(body, extend_guards(&false_guards, &condition, true));
-            (condition, body)
-        })
-        .collect();
+    let mut false_guards = extend_guards(guards, &condition, false);
+    let mut processed_elseif_clauses = Vec::with_capacity(elseif_clauses.len());
+    for (condition, body) in elseif_clauses.into_iter() {
+        let condition = prune_expr(condition);
+        let body = dce_block_with_guards(body, extend_guards(&false_guards, &condition, true));
+        false_guards = extend_guards(&false_guards, &condition, false);
+        processed_elseif_clauses.push((condition, body));
+    }
     let else_body =
         normalize_optional_block(else_body.map(|body| dce_block_with_guards(body, false_guards)));
+    let (condition, then_body, elseif_clauses, else_body) =
+        prune_unreachable_if_entries(condition, then_body, processed_elseif_clauses, else_body, guards);
+    if matches!(condition.kind, ExprKind::BoolLiteral(false))
+        && then_body.is_empty()
+        && elseif_clauses.is_empty()
+    {
+        return else_body.unwrap_or_default();
+    }
     let tail = dce_if_tail(elseif_clauses.clone(), else_body.clone(), span);
 
     if tail.is_empty() {
@@ -327,6 +342,88 @@ fn dce_if_stmt(
     )]
 }
 
+fn direct_if_entry_blocks(
+    condition: &Expr,
+    elseif_clauses: &[(Expr, Vec<Stmt>)],
+    has_else: bool,
+    guards: &GuardState,
+) -> (Vec<usize>, bool) {
+    let mut false_guards = extend_guards(guards, condition, false);
+    let mut entry_blocks = Vec::new();
+
+    match known_condition_value(condition, guards) {
+        Some(true) => return (vec![0], false),
+        Some(false) => {}
+        None => entry_blocks.push(0),
+    }
+
+    for (index, (condition, _)) in elseif_clauses.iter().enumerate() {
+        match known_condition_value(condition, &false_guards) {
+            Some(true) => return (entry_blocks.into_iter().chain(std::iter::once(index + 1)).collect(), false),
+            Some(false) => {}
+            None => entry_blocks.push(index + 1),
+        }
+        false_guards = extend_guards(&false_guards, condition, false);
+    }
+
+    (entry_blocks, has_else)
+}
+
+fn prune_unreachable_if_entries(
+    condition: Expr,
+    then_body: Vec<Stmt>,
+    elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
+    else_body: Option<Vec<Stmt>>,
+    guards: &GuardState,
+) -> (Expr, Vec<Stmt>, Vec<(Expr, Vec<Stmt>)>, Option<Vec<Stmt>>) {
+    let cfg = build_if_cfg(&then_body, &elseif_clauses, &else_body);
+    let (entry_branches, else_reachable) =
+        direct_if_entry_blocks(&condition, &elseif_clauses, else_body.is_some(), guards);
+    let mut entry_blocks: Vec<_> = entry_branches
+        .into_iter()
+        .filter_map(|index| cfg.body_entries.get(index).copied())
+        .collect();
+    if else_reachable {
+        if let Some(else_entry) = cfg.else_entry {
+            entry_blocks.push(else_entry);
+        }
+    }
+
+    let reachable = collect_reachable_cfg_blocks(&cfg.blocks, &entry_blocks);
+    let mut remaining_clauses = Vec::new();
+    if reachable
+        .get(cfg.body_entries[0])
+        .copied()
+        .unwrap_or_default()
+    {
+        remaining_clauses.push((condition, then_body));
+    }
+    for ((condition, body), &entry) in elseif_clauses.into_iter().zip(cfg.body_entries.iter().skip(1)) {
+        if reachable.get(entry).copied().unwrap_or_default() {
+            remaining_clauses.push((condition, body));
+        }
+    }
+
+    let else_body = else_body.filter(|_| {
+        cfg.else_entry
+            .and_then(|entry| reachable.get(entry))
+            .copied()
+            .unwrap_or(false)
+    });
+
+    if remaining_clauses.is_empty() {
+        return (
+            Expr::new(ExprKind::BoolLiteral(false), crate::span::Span::dummy()),
+            Vec::new(),
+            Vec::new(),
+            else_body,
+        );
+    }
+
+    let (condition, then_body) = remaining_clauses.remove(0);
+    (condition, then_body, remaining_clauses, else_body)
+}
+
 fn dce_if_false_path(
     condition: Expr,
     mut elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
@@ -345,13 +442,305 @@ fn dce_if_false_path(
     }
 }
 
-fn dce_switch_stmt(
-    subject: Expr,
+fn guard_literal_to_scalar(value: &GuardLiteral) -> ScalarValue {
+    match value {
+        GuardLiteral::Bool(value) => ScalarValue::Bool(*value),
+        GuardLiteral::Null => ScalarValue::Null,
+        GuardLiteral::Int(value) => ScalarValue::Int(*value),
+        GuardLiteral::Float(bits) => ScalarValue::Float(f64::from_bits(*bits)),
+        GuardLiteral::String(value) => ScalarValue::String(value.clone()),
+    }
+}
+
+fn known_scalar_subject_value(subject: &Expr, guards: &GuardState) -> Option<ScalarValue> {
+    scalar_value(subject).or_else(|| match &subject.kind {
+        ExprKind::Variable(name) => known_exact_guard(guards, name).map(guard_literal_to_scalar),
+        _ => None,
+    })
+}
+
+fn known_subject_truthiness(subject: &Expr, guards: &GuardState) -> Option<bool> {
+    if let Some(subject_value) = known_scalar_subject_value(subject, guards) {
+        let guard_literal = match subject_value {
+            ScalarValue::Bool(value) => GuardLiteral::Bool(value),
+            ScalarValue::Null => GuardLiteral::Null,
+            ScalarValue::Int(value) => GuardLiteral::Int(value),
+            ScalarValue::Float(value) => GuardLiteral::Float(value.to_bits()),
+            ScalarValue::String(value) => GuardLiteral::String(value),
+        };
+        return Some(guard_literal_truthy(&guard_literal));
+    }
+
+    let ExprKind::Variable(name) = &subject.kind else {
+        return None;
+    };
+
+    if guards.bool_true_vars.iter().any(|known| known == name)
+        || guards.truthy_vars.iter().any(|known| known == name)
+    {
+        return Some(true);
+    }
+
+    if guards.bool_false_vars.iter().any(|known| known == name)
+        || guards.falsy_vars.iter().any(|known| known == name)
+    {
+        return Some(false);
+    }
+
+    None
+}
+
+fn classify_switch_patterns_for_exact_scalar(
+    subject_value: &ScalarValue,
+    patterns: &[Expr],
+    guards: &GuardState,
+) -> CaseMatch {
+    let mut has_unknown = false;
+    for pattern in patterns {
+        if let Some(matches) = pattern_matches_scalar(subject_value, pattern, CaseComparison::LooseSwitch) {
+            if matches {
+                return CaseMatch::Matches;
+            }
+            continue;
+        }
+
+        if let ScalarValue::Bool(subject_bool) = subject_value {
+            if let Some(pattern_bool) = known_condition_value(pattern, guards) {
+                if pattern_bool == *subject_bool {
+                    return CaseMatch::Matches;
+                }
+                continue;
+            }
+        }
+
+        has_unknown = true;
+    }
+
+    if has_unknown {
+        CaseMatch::Unknown
+    } else {
+        CaseMatch::NoMatch
+    }
+}
+
+fn classify_switch_patterns_with_guards(
+    subject: &Expr,
+    patterns: &[Expr],
+    guards: &GuardState,
+) -> CaseMatch {
+    if let Some(subject_value) = known_scalar_subject_value(subject, guards) {
+        return classify_switch_patterns_for_exact_scalar(&subject_value, patterns, guards);
+    }
+
+    let ExprKind::Variable(name) = &subject.kind else {
+        return CaseMatch::Unknown;
+    };
+
+    let mut has_unknown = false;
+    for pattern in patterns {
+        if let Some(subject_truthy) = known_subject_truthiness(subject, guards) {
+            if let ExprKind::BoolLiteral(pattern_bool) = pattern.kind {
+                if subject_truthy == pattern_bool {
+                    return CaseMatch::Matches;
+                }
+                continue;
+            }
+
+            if let Some(pattern_value) = scalar_guard_value(pattern) {
+                if guard_literal_truthy(&pattern_value) != subject_truthy {
+                    continue;
+                }
+            }
+        }
+
+        let Some(pattern_value) = scalar_guard_value(pattern) else {
+            has_unknown = true;
+            continue;
+        };
+
+        if has_excluded_guard(guards, name, &pattern_value) {
+            continue;
+        }
+
+        has_unknown = true;
+    }
+
+    if has_unknown {
+        CaseMatch::Unknown
+    } else {
+        CaseMatch::NoMatch
+    }
+}
+
+fn direct_switch_entry_blocks(
+    subject: &Expr,
+    cases: &[(Vec<Expr>, Vec<Stmt>)],
+    has_default: bool,
+    guards: &GuardState,
+) -> (Vec<usize>, bool) {
+    if let Some(subject_value) = known_scalar_subject_value(subject, guards) {
+        if matches!(subject_value, ScalarValue::Bool(_)) {
+            let mut no_match_guards = guards.clone();
+            let mut entry_blocks = Vec::new();
+
+            for (index, (patterns, _)) in cases.iter().enumerate() {
+                match classify_switch_patterns_for_exact_scalar(&subject_value, patterns, &no_match_guards) {
+                    CaseMatch::Matches => {
+                        entry_blocks.push(index);
+                        return (entry_blocks, false);
+                    }
+                    CaseMatch::Unknown => entry_blocks.push(index),
+                    CaseMatch::NoMatch => {}
+                }
+                no_match_guards =
+                    extend_guards_for_switch_case_no_match(&subject_value, patterns, &no_match_guards);
+            }
+
+            return (entry_blocks, has_default);
+        }
+
+        for (index, (patterns, _)) in cases.iter().enumerate() {
+            match classify_switch_patterns_for_exact_scalar(&subject_value, patterns, guards) {
+                CaseMatch::Matches => return (vec![index], false),
+                CaseMatch::Unknown => return ((index..cases.len()).collect(), has_default),
+                CaseMatch::NoMatch => {}
+            }
+        }
+    }
+
+    if matches!(subject.kind, ExprKind::Variable(_)) {
+        let mut no_match_guards = guards.clone();
+        let mut entry_blocks = Vec::new();
+        for (index, (patterns, _)) in cases.iter().enumerate() {
+            match classify_switch_patterns_with_guards(subject, patterns, &no_match_guards) {
+                CaseMatch::Matches => {
+                    entry_blocks.push(index);
+                    return (entry_blocks, false);
+                }
+                CaseMatch::Unknown => entry_blocks.push(index),
+                CaseMatch::NoMatch => {}
+            }
+            no_match_guards =
+                extend_guards_for_switch_case_no_match_subject(subject, patterns, &no_match_guards);
+        }
+        return (entry_blocks, has_default);
+    }
+
+    ((0..cases.len()).collect(), has_default)
+}
+
+fn prune_unreachable_switch_blocks(
+    subject: &Expr,
     cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
     default: Option<Vec<Stmt>>,
-    span: crate::span::Span,
     guards: &GuardState,
-) -> Vec<Stmt> {
+) -> (Vec<(Vec<Expr>, Vec<Stmt>)>, Option<Vec<Stmt>>) {
+    let (direct_case_entries, direct_default_entry) =
+        direct_switch_entry_blocks(subject, &cases, default.is_some(), guards);
+    let cfg = build_switch_cfg(&cases, &default);
+    let mut entry_blocks = direct_case_entries;
+    if direct_default_entry {
+        if let Some(default_entry) = cfg.default_entry {
+            entry_blocks.push(default_entry);
+        }
+    }
+    let reachable = collect_reachable_cfg_blocks(&cfg.blocks, &entry_blocks);
+    let default_reachable = cfg.default_entry.is_some_and(|entry| reachable[entry]);
+    let cases = cases
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, case)| reachable[index].then_some(case))
+        .collect();
+    let default = if default_reachable { default } else { None };
+
+    (cases, default)
+}
+
+fn prune_unreachable_switch_entries(
+    subject: &Expr,
+    cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
+    default: Option<Vec<Stmt>>,
+    guards: &GuardState,
+) -> (Vec<(Vec<Expr>, Vec<Stmt>)>, Option<Vec<Stmt>>) {
+    let (cases, default) = prune_unreachable_switch_blocks(subject, cases, default, guards);
+    if known_scalar_subject_value(subject, guards).is_none() {
+        return (cases, default);
+    }
+
+    let (direct_case_entries, direct_default_entry) =
+        direct_switch_entry_blocks(subject, &cases, default.is_some(), guards);
+    if direct_case_entries.is_empty() {
+        return (Vec::new(), direct_default_entry.then_some(()).and(default));
+    }
+
+    let first_entry = direct_case_entries[0];
+    (cases[first_entry..].to_vec(), default)
+}
+
+fn prune_switch_patterns_with_guards(
+    subject: &Expr,
+    cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
+    default: Option<Vec<Stmt>>,
+    guards: &GuardState,
+) -> (Vec<(Vec<Expr>, Vec<Stmt>)>, Option<Vec<Stmt>>) {
+    let mut no_match_guards = guards.clone();
+    let mut direct_entries_possible = true;
+    let mut pruned_cases = Vec::with_capacity(cases.len());
+
+    for (patterns, body) in cases {
+        if !direct_entries_possible {
+            pruned_cases.push((Vec::new(), body));
+            continue;
+        }
+
+        let mut kept_patterns = Vec::new();
+        let mut local_no_match_guards = no_match_guards.clone();
+
+        for pattern in patterns {
+            match classify_switch_patterns_with_guards(
+                subject,
+                std::slice::from_ref(&pattern),
+                &local_no_match_guards,
+            ) {
+                CaseMatch::Matches => {
+                    kept_patterns.push(pattern);
+                    direct_entries_possible = false;
+                    break;
+                }
+                CaseMatch::Unknown => {
+                    local_no_match_guards = extend_guards_for_switch_case_no_match_subject(
+                        subject,
+                        std::slice::from_ref(&pattern),
+                        &local_no_match_guards,
+                    );
+                    kept_patterns.push(pattern);
+                }
+                CaseMatch::NoMatch => {
+                    local_no_match_guards = extend_guards_for_switch_case_no_match_subject(
+                        subject,
+                        std::slice::from_ref(&pattern),
+                        &local_no_match_guards,
+                    );
+                }
+            }
+        }
+
+        if direct_entries_possible {
+            no_match_guards = local_no_match_guards;
+        }
+
+        pruned_cases.push((kept_patterns, body));
+    }
+
+    let default = if direct_entries_possible { default } else { None };
+    (pruned_cases, default)
+}
+
+fn dce_switch_cases_with_guards(
+    subject: &Expr,
+    cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
+    guards: &GuardState,
+) -> Vec<(Vec<Expr>, Vec<Stmt>)> {
     let trim_switch_noop_break = |body: Vec<Stmt>| {
         if body.len() == 1 && matches!(body[0].kind, StmtKind::Break) {
             Vec::new()
@@ -359,26 +748,55 @@ fn dce_switch_stmt(
             body
         }
     };
+
+    let mut direct_entry_guards = guards.clone();
+    let mut direct_only = true;
+    let mut processed = Vec::with_capacity(cases.len());
+
+    for (patterns, body) in cases {
+        let patterns: Vec<_> = patterns.into_iter().map(prune_expr).collect();
+        let base_guards = if direct_only {
+            &direct_entry_guards
+        } else {
+            guards
+        };
+        let case_guards = extend_guards_for_switch_case(subject, &patterns, base_guards);
+        let body = trim_switch_noop_break(dce_block_with_guards(body, case_guards));
+        if direct_only {
+            direct_entry_guards =
+                extend_guards_for_switch_case_no_match_subject(subject, &patterns, &direct_entry_guards);
+        }
+        direct_only = direct_only
+            && matches!(
+                block_terminal_effect(&body),
+                TerminalEffect::Breaks | TerminalEffect::ExitsCurrentBlock
+            );
+        processed.push((patterns, body));
+    }
+
+    processed
+}
+
+fn dce_switch_stmt(
+    subject: Expr,
+    cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
+    default: Option<Vec<Stmt>>,
+    span: crate::span::Span,
+    guards: &GuardState,
+) -> Vec<Stmt> {
     let subject = prune_expr(subject);
-    let cases = normalize_switch_cases(drop_shadowed_switch_patterns(normalize_switch_cases(
-        cases
-            .into_iter()
-            .map(|(patterns, body)| {
-                let patterns: Vec<_> = patterns.into_iter().map(prune_expr).collect();
-                let case_guards = extend_guards_for_switch_case(&subject, &patterns, guards);
-                (
-                    patterns,
-                    trim_switch_noop_break(dce_block_with_guards(body, case_guards)),
-                )
-            })
-            .collect(),
-    )));
-    let mut cases = cases;
+    let (cases, default) = prune_switch_patterns_with_guards(
+        &subject,
+        dce_switch_cases_with_guards(&subject, cases, guards),
+        default,
+        guards,
+    );
+    let cases = normalize_switch_cases(drop_shadowed_switch_patterns(normalize_switch_cases(cases)));
+    let (mut cases, default) = prune_unreachable_switch_entries(&subject, cases, default, guards);
     while cases.last().is_some_and(|(_, body)| body.is_empty()) {
         cases.pop();
     }
-    let default =
-        normalize_optional_block(default.map(|body| dce_block_with_guards(body, guards.clone())));
+    let default = normalize_optional_block(default.map(|body| dce_block_with_guards(body, guards.clone())));
 
     if cases.iter().all(|(_, body)| body.is_empty()) && default.is_none() {
         return expr_to_effect_stmt(subject);
@@ -410,33 +828,21 @@ fn dce_switch_stmt_with_tail(
     span: crate::span::Span,
     guards: &GuardState,
 ) -> Vec<Stmt> {
-    let trim_switch_noop_break = |body: Vec<Stmt>| {
-        if body.len() == 1 && matches!(body[0].kind, StmtKind::Break) {
-            Vec::new()
-        } else {
-            body
-        }
-    };
     let subject = prune_expr(subject);
     let tail = dce_block_with_guards(tail, guards.clone());
-    let mut cases = normalize_switch_cases(drop_shadowed_switch_patterns(normalize_switch_cases(
-        cases
-            .into_iter()
-            .map(|(patterns, body)| {
-                let patterns: Vec<_> = patterns.into_iter().map(prune_expr).collect();
-                let case_guards = extend_guards_for_switch_case(&subject, &patterns, guards);
-                (
-                    patterns,
-                    trim_switch_noop_break(dce_block_with_guards(body, case_guards)),
-                )
-            })
-            .collect(),
-    )));
+    let (cases, default) = prune_switch_patterns_with_guards(
+        &subject,
+        dce_switch_cases_with_guards(&subject, cases, guards),
+        default,
+        guards,
+    );
+    let cases = normalize_switch_cases(drop_shadowed_switch_patterns(normalize_switch_cases(cases)));
+    let (cases, default) = prune_unreachable_switch_entries(&subject, cases, default, guards);
+    let mut cases = cases;
     while cases.last().is_some_and(|(_, body)| body.is_empty()) {
         cases.pop();
     }
-    let mut default =
-        normalize_optional_block(default.map(|body| dce_block_with_guards(body, guards.clone())));
+    let mut default = normalize_optional_block(default.map(|body| dce_block_with_guards(body, guards.clone())));
 
     if tail.is_empty() {
         return dce_switch_stmt(subject, cases, default, span, guards);
@@ -1113,19 +1519,61 @@ fn has_excluded_guard(guards: &GuardState, name: &str, value: &GuardLiteral) -> 
 }
 
 fn known_condition_value(condition: &Expr, guards: &GuardState) -> Option<bool> {
+    let mut visiting = Vec::new();
+    known_condition_value_inner(condition, guards, &mut visiting)
+}
+
+fn known_condition_value_inner(
+    condition: &Expr,
+    guards: &GuardState,
+    visiting: &mut Vec<Expr>,
+) -> Option<bool> {
+    if visiting.iter().any(|known| known == condition) {
+        return None;
+    }
+
+    visiting.push(condition.clone());
+    let value = if let Some(value) = known_condition_value_base(condition, guards, visiting) {
+        Some(value)
+    } else {
+        infer_condition_value_from_composite_guards(condition, guards, visiting)
+    };
+    visiting.pop();
+
+    value
+}
+
+fn known_condition_value_base(
+    condition: &Expr,
+    guards: &GuardState,
+    visiting: &mut Vec<Expr>,
+) -> Option<bool> {
+    if let Some(value) = guards
+        .condition_guards
+        .iter()
+        .find(|known| known.condition == *condition)
+        .map(|known| known.value)
+    {
+        return Some(value);
+    }
+
+    if let ExprKind::Not(inner) = &condition.kind {
+        return known_condition_value_inner(inner, guards, visiting).map(|value| !value);
+    }
+
     if let ExprKind::BinaryOp { left, op, right } = &condition.kind {
         match op {
             BinOp::And => match (
-                known_condition_value(left, guards),
-                known_condition_value(right, guards),
+                known_condition_value_inner(left, guards, visiting),
+                known_condition_value_inner(right, guards, visiting),
             ) {
                 (Some(false), _) | (_, Some(false)) => return Some(false),
                 (Some(true), Some(true)) => return Some(true),
                 _ => {}
             },
             BinOp::Or => match (
-                known_condition_value(left, guards),
-                known_condition_value(right, guards),
+                known_condition_value_inner(left, guards, visiting),
+                known_condition_value_inner(right, guards, visiting),
             ) {
                 (Some(true), _) | (_, Some(true)) => return Some(true),
                 (Some(false), Some(false)) => return Some(false),
@@ -1163,6 +1611,109 @@ fn known_condition_value(condition: &Expr, guards: &GuardState) -> Option<bool> 
     None
 }
 
+fn expr_contains_subexpr(expr: &Expr, target: &Expr) -> bool {
+    if expr == target {
+        return true;
+    }
+
+    match &expr.kind {
+        ExprKind::Not(inner) | ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
+            expr_contains_subexpr(inner, target)
+        }
+        ExprKind::BinaryOp { left, right, .. } => {
+            expr_contains_subexpr(left, target) || expr_contains_subexpr(right, target)
+        }
+        _ => false,
+    }
+}
+
+fn infer_child_value_from_composite_guard(
+    op: BinOp,
+    composite_value: bool,
+    sibling_value: Option<bool>,
+) -> Option<bool> {
+    match (op, composite_value, sibling_value) {
+        (BinOp::And, true, _) => Some(true),
+        (BinOp::Or, false, _) => Some(false),
+        (BinOp::And, false, Some(true)) => Some(false),
+        (BinOp::Or, true, Some(false)) => Some(true),
+        _ => None,
+    }
+}
+
+fn infer_condition_value_from_composite_tree(
+    condition: &Expr,
+    composite: &Expr,
+    composite_value: bool,
+    guards: &GuardState,
+    visiting: &mut Vec<Expr>,
+) -> Option<bool> {
+    if composite == condition {
+        return Some(composite_value);
+    }
+
+    if let ExprKind::Not(inner) = &composite.kind {
+        return infer_condition_value_from_composite_tree(
+            condition,
+            inner,
+            !composite_value,
+            guards,
+            visiting,
+        );
+    }
+
+    let ExprKind::BinaryOp { left, op, right } = &composite.kind else {
+        return None;
+    };
+
+    let left_contains = expr_contains_subexpr(left, condition);
+    let right_contains = expr_contains_subexpr(right, condition);
+    let (candidate, sibling) = match (left_contains, right_contains) {
+        (true, false) => (&**left, &**right),
+        (false, true) => (&**right, &**left),
+        _ => return None,
+    };
+
+    let candidate_value =
+        infer_child_value_from_composite_guard(
+            op.clone(),
+            composite_value,
+            known_condition_value_inner(sibling, guards, visiting),
+        )?;
+
+    infer_condition_value_from_composite_tree(
+        condition,
+        candidate,
+        candidate_value,
+        guards,
+        visiting,
+    )
+}
+
+fn infer_condition_value_from_composite_guards(
+    condition: &Expr,
+    guards: &GuardState,
+    visiting: &mut Vec<Expr>,
+) -> Option<bool> {
+    for known in &guards.condition_guards {
+        if !expr_contains_subexpr(&known.condition, condition) {
+            continue;
+        }
+
+        if let Some(value) = infer_condition_value_from_composite_tree(
+            condition,
+            &known.condition,
+            known.value,
+            guards,
+            visiting,
+        ) {
+            return Some(value);
+        }
+    }
+
+    None
+}
+
 fn clear_guards_for_name(guards: &mut GuardState, name: &str) {
     guards.truthy_vars.retain(|known| known != name);
     guards.falsy_vars.retain(|known| known != name);
@@ -1170,6 +1721,9 @@ fn clear_guards_for_name(guards: &mut GuardState, name: &str) {
     guards.bool_false_vars.retain(|known| known != name);
     guards.exact_guards.retain(|known| known.name != name);
     guards.excluded_guards.retain(|known| known.name != name);
+    guards
+        .condition_guards
+        .retain(|known| !known.names.iter().any(|known_name| known_name == name));
 }
 
 fn push_guard_name(names: &mut Vec<String>, name: &str) {
@@ -1226,7 +1780,6 @@ fn excluded_literal_from_guard_branch(
 }
 
 fn record_excluded_literal_guard(guards: &mut GuardState, name: &str, value: GuardLiteral) {
-    guards.exact_guards.retain(|known| known.name != name);
     if !guards
         .excluded_guards
         .iter()
@@ -1239,62 +1792,263 @@ fn record_excluded_literal_guard(guards: &mut GuardState, name: &str, value: Gua
     }
 }
 
+fn collect_trackable_condition_names(expr: &Expr, names: &mut Vec<String>) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(name) => {
+            push_guard_name(names, name);
+            true
+        }
+        ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::StringLiteral(_) => true,
+        ExprKind::Not(inner) | ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
+            collect_trackable_condition_names(inner, names)
+        }
+        ExprKind::BinaryOp { left, right, .. } => {
+            collect_trackable_condition_names(left, names)
+                && collect_trackable_condition_names(right, names)
+        }
+        _ => false,
+    }
+}
+
+fn inverse_comparison_op(op: &BinOp) -> Option<BinOp> {
+    match op {
+        BinOp::Eq => Some(BinOp::NotEq),
+        BinOp::NotEq => Some(BinOp::Eq),
+        BinOp::StrictEq => Some(BinOp::StrictNotEq),
+        BinOp::StrictNotEq => Some(BinOp::StrictEq),
+        BinOp::Lt => Some(BinOp::GtEq),
+        BinOp::Gt => Some(BinOp::LtEq),
+        BinOp::LtEq => Some(BinOp::Gt),
+        BinOp::GtEq => Some(BinOp::Lt),
+        _ => None,
+    }
+}
+
+fn comparison_inverse_is_total(op: &BinOp) -> bool {
+    matches!(op, BinOp::Eq | BinOp::NotEq | BinOp::StrictEq | BinOp::StrictNotEq)
+}
+
+fn condition_guard_forms(condition: &Expr, value: bool) -> Vec<(Expr, bool)> {
+    let mut forms = Vec::new();
+
+    match &condition.kind {
+        ExprKind::Not(inner) => {
+            if let ExprKind::BinaryOp { left, op, right } = &inner.kind {
+                let de_morgan_op = match op {
+                    BinOp::And => Some(BinOp::Or),
+                    BinOp::Or => Some(BinOp::And),
+                    _ => None,
+                };
+
+                if let Some(de_morgan_op) = de_morgan_op {
+                    forms.push((
+                        Expr::binop(
+                            invert_condition((**left).clone()),
+                            de_morgan_op,
+                            invert_condition((**right).clone()),
+                        ),
+                        value,
+                    ));
+                }
+            }
+        }
+        ExprKind::BinaryOp { left, op, right } => {
+            if let Some(inverse_op) = inverse_comparison_op(op) {
+                if value || comparison_inverse_is_total(op) {
+                    forms.push((
+                        Expr::binop((**left).clone(), inverse_op, (**right).clone()),
+                        !value,
+                    ));
+                }
+            }
+
+            let de_morgan_op = match op {
+                BinOp::And => Some(BinOp::Or),
+                BinOp::Or => Some(BinOp::And),
+                _ => None,
+            };
+
+            if let (
+                Some(de_morgan_op),
+                ExprKind::Not(left_inner),
+                ExprKind::Not(right_inner),
+            ) = (de_morgan_op, &left.kind, &right.kind)
+            {
+                forms.push((
+                    invert_condition(Expr::binop(
+                        (**left_inner).clone(),
+                        de_morgan_op,
+                        (**right_inner).clone(),
+                    )),
+                    value,
+                ));
+            }
+        }
+        _ => {}
+    }
+
+    forms
+}
+
+fn upsert_condition_guard(
+    guards: &mut GuardState,
+    condition: Expr,
+    value: bool,
+    names: &[String],
+) {
+    if let Some(existing) = guards
+        .condition_guards
+        .iter_mut()
+        .find(|known| known.condition == condition)
+    {
+        existing.value = value;
+        existing.names = names.to_vec();
+        return;
+    }
+
+    guards.condition_guards.push(ConditionGuard {
+        condition,
+        value,
+        names: names.to_vec(),
+    });
+}
+
+fn record_condition_guard(guards: &mut GuardState, condition: &Expr, value: bool) {
+    let effect = expr_effect(condition);
+    if effect.has_side_effects || effect.may_throw {
+        return;
+    }
+
+    let mut names = Vec::new();
+    if !collect_trackable_condition_names(condition, &mut names) {
+        return;
+    }
+
+    upsert_condition_guard(guards, condition.clone(), value, &names);
+    for (equivalent, equivalent_value) in condition_guard_forms(condition, value) {
+        let equivalent_effect = expr_effect(&equivalent);
+        if equivalent_effect.has_side_effects || equivalent_effect.may_throw {
+            continue;
+        }
+        upsert_condition_guard(guards, equivalent, equivalent_value, &names);
+    }
+}
+
 fn extend_guards_for_switch_case(subject: &Expr, patterns: &[Expr], guards: &GuardState) -> GuardState {
-    let ExprKind::BoolLiteral(subject_bool) = subject.kind else {
-        return guards.clone();
-    };
     let [pattern] = patterns else {
         return guards.clone();
     };
 
-    extend_guards(guards, pattern, subject_bool)
+    match &subject.kind {
+        ExprKind::BoolLiteral(subject_bool) => extend_guards(guards, pattern, *subject_bool),
+        ExprKind::Variable(name) => {
+            let mut next = guards.clone();
+            if let ExprKind::BoolLiteral(pattern_bool) = pattern.kind {
+                record_truthy_guard(&mut next, name, pattern_bool);
+            }
+            next
+        }
+        _ => guards.clone(),
+    }
+}
+
+fn extend_guards_for_switch_case_no_match(
+    subject_value: &ScalarValue,
+    patterns: &[Expr],
+    guards: &GuardState,
+) -> GuardState {
+    let ScalarValue::Bool(subject_bool) = subject_value else {
+        return guards.clone();
+    };
+
+    patterns.iter().fold(guards.clone(), |guards, pattern| {
+        extend_guards(&guards, pattern, !subject_bool)
+    })
+}
+
+fn extend_guards_for_switch_case_no_match_subject(
+    subject: &Expr,
+    patterns: &[Expr],
+    guards: &GuardState,
+) -> GuardState {
+    if let Some(subject_value) = known_scalar_subject_value(subject, guards) {
+        if matches!(subject_value, ScalarValue::Bool(_)) {
+            return extend_guards_for_switch_case_no_match(&subject_value, patterns, guards);
+        }
+    }
+
+    let ExprKind::Variable(name) = &subject.kind else {
+        return guards.clone();
+    };
+
+    patterns.iter().fold(guards.clone(), |mut guards, pattern| {
+        match &pattern.kind {
+            ExprKind::BoolLiteral(pattern_bool) => {
+                record_truthy_guard(&mut guards, name, !pattern_bool);
+            }
+            _ => {
+                if let Some(pattern_value) = scalar_guard_value(pattern) {
+                    record_excluded_literal_guard(&mut guards, name, pattern_value);
+                }
+            }
+        }
+        guards
+    })
 }
 
 fn extend_guards(guards: &GuardState, condition: &Expr, branch_taken: bool) -> GuardState {
-    if let ExprKind::BinaryOp { left, op, right } = &condition.kind {
+    let mut next = if let ExprKind::Not(inner) = &condition.kind {
+        extend_guards(guards, inner, !branch_taken)
+    } else if let ExprKind::BinaryOp { left, op, right } = &condition.kind {
         match (op, branch_taken) {
             (BinOp::And, true) => {
                 let left_true = extend_guards(guards, left, true);
-                return extend_guards(&left_true, right, true);
+                extend_guards(&left_true, right, true)
             }
             (BinOp::And, false) => {
                 if matches!(known_condition_value(left, guards), Some(true)) {
                     let left_true = extend_guards(guards, left, true);
-                    return extend_guards(&left_true, right, false);
+                    extend_guards(&left_true, right, false)
+                } else {
+                    guards.clone()
                 }
             }
             (BinOp::Or, false) => {
                 let left_false = extend_guards(guards, left, false);
-                return extend_guards(&left_false, right, false);
+                extend_guards(&left_false, right, false)
             }
             (BinOp::Or, true) => {
                 if matches!(known_condition_value(left, guards), Some(false)) {
                     let left_false = extend_guards(guards, left, false);
-                    return extend_guards(&left_false, right, true);
+                    extend_guards(&left_false, right, true)
+                } else {
+                    guards.clone()
                 }
             }
-            _ => {}
+            _ => guards.clone(),
         }
-    }
-
-    let mut next = guards.clone();
+    } else {
+        guards.clone()
+    };
 
     if let Some((name, exact_value)) = exact_literal_from_guard_branch(condition, branch_taken) {
         record_exact_literal_guard(&mut next, name, exact_value);
-        return next;
     }
 
     if let Some((name, excluded_value)) = excluded_literal_from_guard_branch(condition, branch_taken) {
         record_excluded_literal_guard(&mut next, name, excluded_value);
-        return next;
     }
 
-    let Some((name, truthy_if_true)) = guard_variable_name(condition) else {
-        return next;
-    };
+    record_condition_guard(&mut next, condition, branch_taken);
 
-    let known_truthy = if branch_taken { truthy_if_true } else { !truthy_if_true };
-    record_truthy_guard(&mut next, name, known_truthy);
+    if let Some((name, truthy_if_true)) = guard_variable_name(condition) {
+        let known_truthy = if branch_taken { truthy_if_true } else { !truthy_if_true };
+        record_truthy_guard(&mut next, name, known_truthy);
+    };
 
     next
 }
@@ -1327,7 +2081,7 @@ fn invalidated_guards_for_throw_paths(guards: &GuardState, stmts: &[Stmt]) -> Gu
     }
 
     let mut written = Vec::new();
-    collect_written_names_on_throw_paths_in_block(stmts, vec![Vec::new()], &mut written);
+    collect_written_names_on_throw_paths_in_block(stmts, vec![Vec::new()], &mut written, guards);
     if written.is_empty() {
         return guards.clone();
     }
@@ -1356,7 +2110,9 @@ fn collect_written_names_on_throw_paths_in_block(
     stmts: &[Stmt],
     mut incoming_paths: Vec<Vec<String>>,
     written: &mut Vec<String>,
+    guards: &GuardState,
 ) -> Vec<Vec<String>> {
+    let mut current_guards = guards.clone();
     for stmt in stmts {
         if incoming_paths.is_empty() {
             break;
@@ -1364,9 +2120,16 @@ fn collect_written_names_on_throw_paths_in_block(
 
         let mut next_paths = Vec::new();
         for path in incoming_paths {
-            collect_written_names_on_throw_paths_in_stmt(stmt, path, written, &mut next_paths);
+            collect_written_names_on_throw_paths_in_stmt(
+                stmt,
+                path,
+                written,
+                &mut next_paths,
+                &current_guards,
+            );
         }
         incoming_paths = next_paths;
+        invalidate_guards_for_stmt(stmt, &mut current_guards);
     }
 
     incoming_paths
@@ -1377,6 +2140,7 @@ fn collect_written_names_on_throw_paths_in_stmt(
     path: Vec<String>,
     written: &mut Vec<String>,
     next_paths: &mut Vec<Vec<String>>,
+    guards: &GuardState,
 ) {
     match &stmt.kind {
         StmtKind::If {
@@ -1392,12 +2156,14 @@ fn collect_written_names_on_throw_paths_in_stmt(
                 then_body,
                 vec![path.clone()],
                 written,
+                &extend_guards(guards, condition, true),
             ));
             next_paths.extend(collect_written_names_on_throw_paths_in_if_false_path(
                 elseif_clauses,
                 else_body,
                 path,
                 written,
+                &extend_guards(guards, condition, false),
             ));
             return;
         }
@@ -1410,15 +2176,133 @@ fn collect_written_names_on_throw_paths_in_stmt(
                 then_body,
                 vec![path.clone()],
                 written,
+                guards,
             ));
             if let Some(body) = else_body {
                 next_paths.extend(collect_written_names_on_throw_paths_in_block(
                     body,
                     vec![path],
                     written,
+                    guards,
                 ));
             } else {
                 next_paths.push(path);
+            }
+            return;
+        }
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => {
+            let (direct_case_entries, direct_default_entry) =
+                direct_switch_entry_blocks(subject, cases, default.is_some(), guards);
+            let cfg = build_switch_cfg(cases, default);
+            let mut entry_blocks = direct_case_entries.clone();
+            if direct_default_entry {
+                if let Some(default_entry) = cfg.default_entry {
+                    entry_blocks.push(default_entry);
+                }
+            }
+            let reachable = collect_reachable_cfg_blocks(&cfg.blocks, &entry_blocks);
+
+            if expr_effect(subject).may_throw {
+                merge_written_path(written, &path);
+            }
+
+            let mut fallthrough_paths = Vec::new();
+            for (index, (patterns, body)) in cases.iter().enumerate() {
+                let direct_entry = direct_case_entries.contains(&index);
+                if !reachable.get(index).copied().unwrap_or_default() {
+                    fallthrough_paths.clear();
+                    continue;
+                }
+
+                if direct_entry {
+                    for pattern in patterns {
+                        if expr_effect(pattern).may_throw {
+                            merge_written_path(written, &path);
+                        }
+                    }
+                }
+
+                let mut incoming = Vec::new();
+                if direct_entry {
+                    incoming.push(path.clone());
+                }
+                incoming.extend(fallthrough_paths);
+                if incoming.is_empty() {
+                    fallthrough_paths = Vec::new();
+                } else {
+                    fallthrough_paths = collect_written_names_on_throw_paths_in_block(
+                        body,
+                        incoming,
+                        written,
+                        guards,
+                    );
+                }
+            }
+
+            if let Some(body) = default {
+                let default_entry = cfg.default_entry.unwrap();
+                if reachable.get(default_entry).copied().unwrap_or_default() {
+                    let mut incoming = Vec::new();
+                    if direct_default_entry {
+                        incoming.push(path.clone());
+                    }
+                    incoming.extend(fallthrough_paths);
+                    if !incoming.is_empty() {
+                        let _ = collect_written_names_on_throw_paths_in_block(
+                            body,
+                            incoming,
+                            written,
+                            guards,
+                        );
+                    }
+                }
+            }
+
+            if matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough) {
+                let mut fallthrough = path;
+                collect_written_names(stmt, &mut fallthrough);
+                next_paths.push(fallthrough);
+            }
+            return;
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            next_paths.extend(collect_written_names_on_throw_paths_in_block(
+                try_body,
+                vec![path.clone()],
+                written,
+                guards,
+            ));
+            for catch in catches {
+                let mut catch_path = path.clone();
+                if let Some(variable) = catch.variable.as_deref() {
+                    push_written_name(&mut catch_path, variable);
+                }
+                next_paths.extend(collect_written_names_on_throw_paths_in_block(
+                    &catch.body,
+                    vec![catch_path],
+                    written,
+                    guards,
+                ));
+            }
+            if let Some(body) = finally_body {
+                next_paths.extend(collect_written_names_on_throw_paths_in_block(
+                    body,
+                    vec![path],
+                    written,
+                    guards,
+                ));
+            } else if matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough) {
+                let mut fallthrough = path;
+                collect_written_names(stmt, &mut fallthrough);
+                next_paths.push(fallthrough);
             }
             return;
         }
@@ -1441,12 +2325,13 @@ fn collect_written_names_on_throw_paths_in_if_false_path(
     else_body: &Option<Vec<Stmt>>,
     path: Vec<String>,
     written: &mut Vec<String>,
+    guards: &GuardState,
 ) -> Vec<Vec<String>> {
     let Some((condition, body)) = elseif_clauses.first() else {
         return else_body
             .as_ref()
             .map(|body| {
-                collect_written_names_on_throw_paths_in_block(body, vec![path.clone()], written)
+                collect_written_names_on_throw_paths_in_block(body, vec![path.clone()], written, guards)
             })
             .unwrap_or_else(|| vec![path]);
     };
@@ -1455,13 +2340,18 @@ fn collect_written_names_on_throw_paths_in_if_false_path(
         merge_written_path(written, &path);
     }
 
-    let mut next_paths =
-        collect_written_names_on_throw_paths_in_block(body, vec![path.clone()], written);
+    let mut next_paths = collect_written_names_on_throw_paths_in_block(
+        body,
+        vec![path.clone()],
+        written,
+        &extend_guards(guards, condition, true),
+    );
     next_paths.extend(collect_written_names_on_throw_paths_in_if_false_path(
         &elseif_clauses[1..],
         else_body,
         path,
         written,
+        &extend_guards(guards, condition, false),
     ));
     next_paths
 }
@@ -1491,6 +2381,9 @@ fn invalidate_guards_for_written_names(guards: &mut GuardState, written: &[Strin
     guards
         .excluded_guards
         .retain(|known| !written.iter().any(|written_name| written_name == &known.name));
+    guards
+        .condition_guards
+        .retain(|known| !known.names.iter().any(|name| written.iter().any(|written_name| written_name == name)));
 }
 
 fn collect_written_names(stmt: &Stmt, written: &mut Vec<String>) {

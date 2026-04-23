@@ -208,11 +208,23 @@ Current dead-code-elimination coverage includes:
 - shadowed `switch` patterns whose match points are already covered by earlier case labels, including full-case removal or fallthrough-body merging when no entry pattern remains
 - internal `if` regions pruned when outer pure variable guards or strict boolean checks already determine a nested branch outcome, with guard invalidation on relevant local writes to stay conservative
 - guard-based pruning now also understands simple pure `&&` / `||` combinations, so contradictions like `if ($a && $b) { if (!$a || !$b) ... }` can be removed without needing constant folding first
+- loose equality and safe relational-comparison complements now feed the same guard model, so nested checks like `$x == 0` followed by `$x != 0`, or `$x > 10` followed by `$x <= 10`, can be pruned when the outer branch proves the contradiction
 - strict scalar guards now feed the same pruning: after checks like `$x === null`, `$x === 0`, or `$x === ""`, nested regions that contradict the exact known value can be removed
 - negative branches of strict scalar checks now contribute exclusion facts too, so `else` paths after checks like `$x === 0` or the true path of `$x !== null` can prune nested contradictions without needing a full exact replacement value
 - the same strict scalar guard machinery now covers exact floats as well as PHP-falsy strings like `""` and `"0"`, so nested truthiness checks and strict literal contradictions can be pruned when those values are already known or excluded
+- outer exact scalar guards can now also prune impossible `switch` entries: when a `switch ($x)` subject or a `switch (true|false)` guard pattern is already decided by surrounding strict checks, dead leading cases are dropped before the remaining switch body is analyzed, and the CFG-lite pass can also drop later `switch` blocks that no longer have any reachable predecessor after an exact entry is chosen
+- cumulative false guards in `if` / `elseif` chains can now prune later impossible branches and unreachable `else` suffixes before codegen, instead of carrying logically dead tails through the rest of the pipeline
+- `switch (true|false)` now applies the same cumulative guard idea across case fallthrough: later guard-like cases and the `default` can be pruned when earlier no-match paths already force an exhaustive outcome
+- direct-entry `switch (true|false)` case bodies can also inherit cumulative no-match guards from earlier non-fallthrough cases, so nested contradictions inside later case bodies are pruned while fallthrough remains conservative
+- multi-pattern `switch (true|false)` cases now participate in that same cumulative reasoning, so an exhaustive label set inside one case can remove later dead cases and the `default`
+- exact scalar guards now drive the same pruning inside ordinary `switch ($x)` multi-pattern cases: impossible labels inside one case are dropped, and if a surviving later label is guaranteed to match, later dead cases and `default` are removed as well
+- excluded scalar guards now also prune ordinary `switch ($x)` entries, so outer facts like `$x !== 1` can remove dead `case 1:` labels even when the exact runtime value of `$x` is still unknown
+- truthiness facts now also feed ordinary `switch ($x)` pruning for `case true` / `case false`: cumulative no-match paths can eliminate dead boolean cases and even remove a dead `default` once the remaining truthiness paths are fully covered
+- that same truthiness pruning now preserves earlier `Unknown` multi-pattern entries as reachable CFG entry points, so we do not over-prune preceding case bodies while still removing dead boolean suffixes and `default`
+- truthiness facts also prune scalar literal labels of the opposite truthiness in ordinary `switch ($x)`, so truthy/falsy outer guards can remove dead `case 0`, `case ""`, `case null`, or analogous truthy literal labels inside mixed multi-pattern switches
 - `switch (true|false)` cases using single guard-like patterns can feed the same internal region pruning inside the selected case body, again with local-write invalidation to stay conservative
 - `catch` and `finally` bodies now invalidate outer guard facts only for locals written on the relevant pre-handler paths, so nested pruning there stays sound without discarding unrelated guard facts
+- throw-path invalidation for `switch` now consults the CFG-lite reachable block set, so writes in impossible case bodies do not unnecessarily kill catch-body guards, while reachable case writes before a `throw` still invalidate them
 - catch-side guard invalidation is now path-aware: writes that only happen on non-throwing `try` paths no longer block pruning inside the `catch`
 - condition-only empty `if` / `elseif` chains reduced to just the observable condition checks that still matter
 - empty `elseif` bodies in the middle of a live chain folded into the minimum negated guard needed for later branches
@@ -224,6 +236,8 @@ Current dead-code-elimination coverage includes:
 - pure expression statements that become exposed by earlier normalization
 
 The current path-aware DCE work uses small path-outcome helpers for `if`, `ifdef`, `switch`, and `try`, all speaking the same local tail-path vocabulary (`falls through`, `breaks`, `no tail`, `unknown`). That lets tail-sinking and shell collapsing share one reachability model instead of duplicating ad-hoc logic per statement shape.
+
+The first `dead-code-elimination v3` slices also start moving some of that reasoning onto a tiny CFG-lite layer. Today that covers `switch`, `if`, and `try/catch/finally`: branch bodies are lowered to small basic-block graphs and their tail reachability is classified from successor edges instead of only from hand-written scans. It is still AST-local, not a full function CFG, but it is the first step toward block-aware DCE.
 
 ### Example
 
@@ -326,7 +340,8 @@ The current optimizer is still intentionally local. It does not yet implement:
 
 - CFG-aware or fixed-point constant propagation across wider loops and general path merges
 - richer memory-model-aware propagation across heap-backed locals and broader aliasing situations
-- deeper exception-aware dead-code elimination beyond conservative `try` heuristics
+- exact exception-type reachability, nested rethrow modeling, and less conservative `finally` invalidation beyond the current path-aware `try` heuristics
+- broader guard reasoning for range facts and multi-variable relationships beyond the current boolean, scalar, loose-comparison, and safe relational-complement facts
 - broader control-flow normalization beyond the current local AST shell rewrites
 - backend-specific peephole cleanup
 - runtime dead stripping

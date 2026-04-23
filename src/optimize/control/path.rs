@@ -46,16 +46,21 @@ pub(crate) fn analyze_if_tail_paths(
     elseif_clauses: &[(Expr, Vec<Stmt>)],
     else_body: &Option<Vec<Stmt>>,
 ) -> IfTailReachability {
+    let cfg = build_if_cfg(then_body, elseif_clauses, else_body);
+    let body_paths = classify_if_cfg_paths(&cfg);
     IfTailReachability {
-        then_sinks_tail: block_reaches_following_stmt(then_body),
-        elseif_sinks_tail: elseif_clauses
+        then_sinks_tail: matches!(body_paths.first(), Some(BasicBlockSuccessor::FallsThrough)),
+        elseif_sinks_tail: body_paths[1..]
             .iter()
-            .map(|(_, body)| block_reaches_following_stmt(body))
+            .map(|successor| matches!(successor, BasicBlockSuccessor::FallsThrough))
             .collect(),
-        else_sinks_tail: else_body
-            .as_ref()
-            .is_some_and(|body| block_reaches_following_stmt(body)),
-        implicit_else_sinks_tail: else_body.is_none(),
+        else_sinks_tail: cfg.else_entry.is_some_and(|entry| {
+            matches!(
+                classify_cfg_successor(&cfg.blocks, BasicBlockSuccessor::Block(entry)),
+                BasicBlockSuccessor::FallsThrough
+            )
+        }),
+        implicit_else_sinks_tail: matches!(cfg.implicit_else_successor, BasicBlockSuccessor::FallsThrough),
     }
 }
 
@@ -76,21 +81,14 @@ pub(crate) fn analyze_switch_tail_paths(
     cases: &[(Vec<Expr>, Vec<Stmt>)],
     default: &Option<Vec<Stmt>>,
 ) -> SwitchTailReachability {
-    let mut case_tail_paths = vec![TailPathKind::NoTail; cases.len()];
-    let default_tail_path = default
-        .as_ref()
-        .map(|body| terminal_effect_tail_path(block_terminal_effect(body)));
-
-    let mut next_tail_path = default_tail_path.unwrap_or(TailPathKind::FallsThrough);
-
-    for (index, (_, body)) in cases.iter().enumerate().rev() {
-        let case_tail_path = match block_terminal_effect(body) {
-            TerminalEffect::FallsThrough => next_tail_path,
-            effect => terminal_effect_tail_path(effect),
-        };
-        case_tail_paths[index] = case_tail_path;
-        next_tail_path = case_tail_path;
-    }
+    let cfg = build_switch_cfg(cases, default);
+    let case_tail_paths = classify_switch_cfg_paths(&cfg)
+        .into_iter()
+        .map(cfg_successor_tail_path)
+        .collect();
+    let default_tail_path = cfg
+        .default_entry
+        .map(|entry| cfg_successor_tail_path(classify_cfg_successor(&cfg.blocks, BasicBlockSuccessor::Block(entry))));
 
     SwitchTailReachability {
         case_tail_paths,
@@ -103,14 +101,15 @@ pub(crate) fn analyze_try_tail_paths(
     catches: &[crate::parser::ast::CatchClause],
     finally_body: &Option<Vec<Stmt>>,
 ) -> TryTailReachability {
-    let try_tail_path = terminal_effect_tail_path(block_terminal_effect(try_body));
-    let catch_tail_paths = catches
-        .iter()
-        .map(|catch| terminal_effect_tail_path(block_terminal_effect(&catch.body)))
-        .collect();
-    let finally_tail_path = finally_body
-        .as_ref()
-        .map(|body| terminal_effect_tail_path(block_terminal_effect(body)));
+    let cfg = build_try_cfg(try_body, catches, finally_body);
+    let mut path_iter = classify_try_cfg_paths(&cfg)
+        .into_iter()
+        .map(cfg_successor_tail_path);
+    let try_tail_path = path_iter.next().unwrap_or(TailPathKind::Unknown);
+    let catch_tail_paths: Vec<_> = path_iter.take(catches.len()).collect();
+    let finally_tail_path = cfg.finally_entry.map(|entry| {
+        cfg_successor_tail_path(classify_cfg_successor(&cfg.blocks, BasicBlockSuccessor::Block(entry)))
+    });
 
     TryTailReachability {
         try_tail_path,
@@ -123,11 +122,11 @@ pub(crate) fn analyze_try_tail_paths(
     }
 }
 
-fn terminal_effect_tail_path(effect: TerminalEffect) -> TailPathKind {
-    match effect {
-        TerminalEffect::FallsThrough => TailPathKind::FallsThrough,
-        TerminalEffect::Breaks => TailPathKind::Breaks,
-        TerminalEffect::ExitsCurrentBlock => TailPathKind::NoTail,
-        TerminalEffect::TerminatesMixed => TailPathKind::Unknown,
+fn cfg_successor_tail_path(successor: BasicBlockSuccessor) -> TailPathKind {
+    match successor {
+        BasicBlockSuccessor::FallsThrough => TailPathKind::FallsThrough,
+        BasicBlockSuccessor::Breaks => TailPathKind::Breaks,
+        BasicBlockSuccessor::Exits => TailPathKind::NoTail,
+        BasicBlockSuccessor::Unknown | BasicBlockSuccessor::Block(_) => TailPathKind::Unknown,
     }
 }
