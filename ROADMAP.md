@@ -326,7 +326,8 @@ Proper type system for PHP compatibility.
 - [x] Alias-aware constant propagation so local callables and scalar values can stay precise across `if` / `switch` / `try` merges
 - [x] Relational and loose-comparison contradiction guards for dead-code elimination
 - [x] Constant propagation v2 — known-subject `switch` path merges, non-throwing `try` / unreachable-catch env merges, known `match` folding, and scalar indexed/associative array-literal access folding
-- [ ] Constant propagation v3 — fixed-point / basic-block propagation through loops and wider control-flow beyond the current conservative local env model
+- [x] Constant propagation v3 — local loop path summaries for `while(false)`, `do...while(false)`, `while(true)` / `for(;;)` break exits, branch-local loop-exit merges, and safe pruning around `do...while(false)` loop exits
+- [ ] Constant propagation v4 — full fixed-point / basic-block propagation across arbitrary loops and general path merges once there are measured cases that justify the extra pass complexity
 - [ ] Memory-model-aware propagation for heap-backed locals and targeted runtime invalidations beyond `unset($var)` and the currently modeled local writes
 - [ ] Purity / may-throw v2 for dynamic instance dispatch, richer property/array reads, and less pessimistic builtin modeling
 - [ ] Guard reasoning v2 for dead-code elimination — broader range reasoning and multi-variable facts beyond current strict-scalar, boolean, loose-comparison, and safe relational-complement guards

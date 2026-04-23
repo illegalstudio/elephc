@@ -155,6 +155,7 @@ This pass is still conservative, but it can already:
 - infer uniform scalar outcomes from assignments using local `?:` and `match` expressions
 - infer scalar locals from fixed destructuring assignments such as `[$a, $b] = [2, 3]`
 - preserve unrelated scalar locals across simple loops when the loop's local writes are conservatively known, including simple nested `switch`, `try/catch/finally`, `foreach`, other simple nested loop shapes, local array writes such as `$items[] = $i` / `$items[0] = $i`, local property writes such as `$box->last = $i` / `$box->items[] = $i`, and targeted local invalidations like `unset($tmp)`, while also keeping stable scalar values introduced by `for` init clauses
+- summarize known loop paths such as `while(false)`, `do...while(false)`, `while(true)` / `for(;;)` with `break`, and branch-local loop exits whose scalar envs agree
 - re-run folding after substitutions so expressions like `$x ** $y` can collapse to a literal
 
 In our running example, this *does* change the program. The pass can forward `$x = 10` into the later comparison, re-run folding, and effectively turn the condition into `true`:
