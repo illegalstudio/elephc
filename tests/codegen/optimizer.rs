@@ -1890,6 +1890,84 @@ run(true, true);
 }
 
 #[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_loose_comparison_guard() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_loose_comparison_guard");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+function run($value) {
+    if ($value == 0) {
+        if ($value != 0) {
+            echo "dead-loose";
+        } else {
+            echo "a";
+        }
+    } else {
+        echo "b";
+    }
+}
+
+run(0);
+run(2);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    assert_eq!(out, "ab");
+    assert!(!user_asm.contains("dead-loose"));
+}
+
+#[test]
+fn test_dead_code_elimination_prunes_nested_if_region_from_relational_guard() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_relational_guard");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+function run($value) {
+    if ($value > 10) {
+        if ($value <= 10) {
+            echo "dead-rel";
+        } else {
+            echo "a";
+        }
+    } else {
+        echo "b";
+    }
+}
+
+run(11);
+run(10);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    assert_eq!(out, "ab");
+    assert!(!user_asm.contains("dead-rel"));
+}
+
+#[test]
 fn test_dead_code_elimination_prunes_nested_elseif_from_composite_guard_refinement() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_composite_guard_refinement");
     let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(

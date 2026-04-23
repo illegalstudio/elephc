@@ -3025,6 +3025,90 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_demorgan_equivalent_gua
 }
 
 #[test]
+fn test_eliminate_dead_code_prunes_nested_if_region_from_loose_comparison_guard() {
+    let loose_eq = Expr::binop(Expr::var("value"), BinOp::Eq, Expr::int_lit(0));
+    let loose_neq = Expr::binop(Expr::var("value"), BinOp::NotEq, Expr::int_lit(0));
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![Stmt::new(
+                StmtKind::If {
+                    condition: loose_eq,
+                    then_body: vec![Stmt::new(
+                        StmtKind::If {
+                            condition: loose_neq,
+                            then_body: vec![Stmt::echo(Expr::int_lit(8))],
+                            elseif_clauses: Vec::new(),
+                            else_body: Some(vec![Stmt::echo(Expr::int_lit(7))]),
+                        },
+                        Span::dummy(),
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    let StmtKind::If { then_body, .. } = &body[0].kind else {
+        panic!("expected if");
+    };
+    assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(7))]);
+}
+
+#[test]
+fn test_eliminate_dead_code_prunes_nested_if_region_from_relational_guard() {
+    let greater_than = Expr::binop(Expr::var("value"), BinOp::Gt, Expr::int_lit(10));
+    let less_equal = Expr::binop(Expr::var("value"), BinOp::LtEq, Expr::int_lit(10));
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![Stmt::new(
+                StmtKind::If {
+                    condition: greater_than,
+                    then_body: vec![Stmt::new(
+                        StmtKind::If {
+                            condition: less_equal,
+                            then_body: vec![Stmt::echo(Expr::int_lit(8))],
+                            elseif_clauses: Vec::new(),
+                            else_body: Some(vec![Stmt::echo(Expr::int_lit(7))]),
+                        },
+                        Span::dummy(),
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    let StmtKind::If { then_body, .. } = &body[0].kind else {
+        panic!("expected if");
+    };
+    assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(7))]);
+}
+
+#[test]
 fn test_eliminate_dead_code_prunes_nested_elseif_from_composite_guard_refinement() {
     let left = Expr::binop(Expr::var("a"), BinOp::And, Expr::var("b"));
     let outer = Expr::binop(left.clone(), BinOp::Or, Expr::var("c"));

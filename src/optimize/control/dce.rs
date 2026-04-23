@@ -1814,7 +1814,25 @@ fn collect_trackable_condition_names(expr: &Expr, names: &mut Vec<String>) -> bo
     }
 }
 
-fn equivalent_condition_forms(condition: &Expr) -> Vec<Expr> {
+fn inverse_comparison_op(op: &BinOp) -> Option<BinOp> {
+    match op {
+        BinOp::Eq => Some(BinOp::NotEq),
+        BinOp::NotEq => Some(BinOp::Eq),
+        BinOp::StrictEq => Some(BinOp::StrictNotEq),
+        BinOp::StrictNotEq => Some(BinOp::StrictEq),
+        BinOp::Lt => Some(BinOp::GtEq),
+        BinOp::Gt => Some(BinOp::LtEq),
+        BinOp::LtEq => Some(BinOp::Gt),
+        BinOp::GtEq => Some(BinOp::Lt),
+        _ => None,
+    }
+}
+
+fn comparison_inverse_is_total(op: &BinOp) -> bool {
+    matches!(op, BinOp::Eq | BinOp::NotEq | BinOp::StrictEq | BinOp::StrictNotEq)
+}
+
+fn condition_guard_forms(condition: &Expr, value: bool) -> Vec<(Expr, bool)> {
     let mut forms = Vec::new();
 
     match &condition.kind {
@@ -1827,15 +1845,27 @@ fn equivalent_condition_forms(condition: &Expr) -> Vec<Expr> {
                 };
 
                 if let Some(de_morgan_op) = de_morgan_op {
-                    forms.push(Expr::binop(
-                        invert_condition((**left).clone()),
-                        de_morgan_op,
-                        invert_condition((**right).clone()),
+                    forms.push((
+                        Expr::binop(
+                            invert_condition((**left).clone()),
+                            de_morgan_op,
+                            invert_condition((**right).clone()),
+                        ),
+                        value,
                     ));
                 }
             }
         }
         ExprKind::BinaryOp { left, op, right } => {
+            if let Some(inverse_op) = inverse_comparison_op(op) {
+                if value || comparison_inverse_is_total(op) {
+                    forms.push((
+                        Expr::binop((**left).clone(), inverse_op, (**right).clone()),
+                        !value,
+                    ));
+                }
+            }
+
             let de_morgan_op = match op {
                 BinOp::And => Some(BinOp::Or),
                 BinOp::Or => Some(BinOp::And),
@@ -1848,11 +1878,14 @@ fn equivalent_condition_forms(condition: &Expr) -> Vec<Expr> {
                 ExprKind::Not(right_inner),
             ) = (de_morgan_op, &left.kind, &right.kind)
             {
-                forms.push(invert_condition(Expr::binop(
-                    (**left_inner).clone(),
-                    de_morgan_op,
-                    (**right_inner).clone(),
-                )));
+                forms.push((
+                    invert_condition(Expr::binop(
+                        (**left_inner).clone(),
+                        de_morgan_op,
+                        (**right_inner).clone(),
+                    )),
+                    value,
+                ));
             }
         }
         _ => {}
@@ -1896,12 +1929,12 @@ fn record_condition_guard(guards: &mut GuardState, condition: &Expr, value: bool
     }
 
     upsert_condition_guard(guards, condition.clone(), value, &names);
-    for equivalent in equivalent_condition_forms(condition) {
+    for (equivalent, equivalent_value) in condition_guard_forms(condition, value) {
         let equivalent_effect = expr_effect(&equivalent);
         if equivalent_effect.has_side_effects || equivalent_effect.may_throw {
             continue;
         }
-        upsert_condition_guard(guards, equivalent, value, &names);
+        upsert_condition_guard(guards, equivalent, equivalent_value, &names);
     }
 }
 
