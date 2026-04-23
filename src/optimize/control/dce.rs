@@ -2176,6 +2176,41 @@ fn collect_written_names_on_throw_paths_in_stmt(
             }
             return;
         }
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => {
+            if expr_effect(subject).may_throw {
+                merge_written_path(written, &path);
+            }
+
+            let mut fallthrough_paths = Vec::new();
+            for (patterns, body) in cases {
+                for pattern in patterns {
+                    if expr_effect(pattern).may_throw {
+                        merge_written_path(written, &path);
+                    }
+                }
+
+                let mut incoming = vec![path.clone()];
+                incoming.extend(fallthrough_paths);
+                fallthrough_paths = collect_written_names_on_throw_paths_in_block(body, incoming, written);
+            }
+
+            if let Some(body) = default {
+                let mut incoming = vec![path.clone()];
+                incoming.extend(fallthrough_paths);
+                let _ = collect_written_names_on_throw_paths_in_block(body, incoming, written);
+            }
+
+            if matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough) {
+                let mut fallthrough = path;
+                collect_written_names(stmt, &mut fallthrough);
+                next_paths.push(fallthrough);
+            }
+            return;
+        }
         _ => {}
     }
 

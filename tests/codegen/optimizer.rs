@@ -3144,6 +3144,37 @@ run(true);
 }
 
 #[test]
+fn test_dead_code_elimination_invalidates_outer_guard_before_catch_body_from_switch_throw_path() {
+    let out = compile_and_run(
+        r#"<?php
+function run($flag, $value) {
+    if ($flag) {
+        try {
+            switch ($value) {
+                case 1:
+                    $flag = false;
+                    throw new Exception("boom");
+                default:
+                    echo "default";
+            }
+        } catch (Exception $e) {
+            if ($flag) {
+                echo "bad";
+            } else {
+                echo "a";
+            }
+        }
+    }
+}
+
+run(true, 1);
+"#,
+    );
+
+    assert_eq!(out, "a");
+}
+
+#[test]
 fn test_dead_code_elimination_invalidates_outer_guard_before_finally_body() {
     let out = compile_and_run(
         r#"<?php

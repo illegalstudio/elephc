@@ -4451,6 +4451,88 @@ fn test_eliminate_dead_code_invalidates_outer_guard_before_catch_body() {
 }
 
 #[test]
+fn test_eliminate_dead_code_invalidates_outer_guard_before_catch_body_from_switch_throw_path() {
+    let throw_exception = Stmt::new(
+        StmtKind::Throw(Expr::new(
+            ExprKind::NewObject {
+                class_name: Name::unqualified("Exception"),
+                args: vec![Expr::string_lit("boom")],
+            },
+            Span::dummy(),
+        )),
+        Span::dummy(),
+    );
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: Vec::new(),
+            variadic: None,
+            return_type: None,
+            body: vec![Stmt::new(
+                StmtKind::If {
+                    condition: Expr::var("flag"),
+                    then_body: vec![Stmt::new(
+                        StmtKind::Try {
+                            try_body: vec![Stmt::new(
+                                StmtKind::Switch {
+                                    subject: Expr::var("value"),
+                                    cases: vec![(
+                                        vec![Expr::int_lit(1)],
+                                        vec![
+                                            Stmt::assign(
+                                                "flag",
+                                                Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
+                                            ),
+                                            throw_exception,
+                                        ],
+                                    )],
+                                    default: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+                                },
+                                Span::dummy(),
+                            )],
+                            catches: vec![crate::parser::ast::CatchClause {
+                                exception_types: vec![Name::unqualified("Exception")],
+                                variable: Some("e".into()),
+                                body: vec![Stmt::new(
+                                    StmtKind::If {
+                                        condition: Expr::var("flag"),
+                                        then_body: vec![Stmt::echo(Expr::int_lit(8))],
+                                        elseif_clauses: Vec::new(),
+                                        else_body: Some(vec![Stmt::echo(Expr::int_lit(7))]),
+                                    },
+                                    Span::dummy(),
+                                )],
+                            }],
+                            finally_body: None,
+                        },
+                        Span::dummy(),
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    let StmtKind::If { then_body, .. } = &body[0].kind else {
+        panic!("expected if");
+    };
+    let StmtKind::Try { catches, .. } = &then_body[0].kind else {
+        panic!("expected try");
+    };
+    let StmtKind::If { .. } = &catches[0].body[0].kind else {
+        panic!("expected catch inner if to remain after switch throw-path write invalidation");
+    };
+}
+
+#[test]
 fn test_eliminate_dead_code_prunes_exhaustive_switch_true_default_from_cumulative_guards() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
