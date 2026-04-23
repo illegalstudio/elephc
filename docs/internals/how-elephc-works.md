@@ -111,6 +111,8 @@ Typical examples include:
 - `(int)"42"` → `42`
 - `2 < 3 ? 8 : 9` → `8`
 - `null ?? "fallback"` → `"fallback"`
+- `match (1) { 1 => 8, default => 9 }` → `8`
+- `[2, 9][0]` / `["a" => 2]["a"]` → `2`
 
 The pass is deliberately local and side-effect aware. It simplifies scalar computations, but it does not speculate across arbitrary calls or other expressions that may have runtime behavior. More precise call-side purity and `may_throw` reasoning happens later, after type checking, when elephc has enough context to build conservative effect summaries for known call targets.
 
@@ -148,7 +150,8 @@ This pass is still conservative, but it can already:
 
 - forward scalar locals through straight-line code
 - merge identical scalar values across simple `if` fallthrough paths
-- merge identical scalar values across conservative `switch` and `try` / `catch` fallthrough paths
+- merge scalar values across conservative `switch` and `try` / `catch` fallthrough paths
+- use known `switch` subjects and non-throwing `try` bodies to keep unreachable path writes out of the merge
 - infer uniform scalar outcomes from assignments using local `?:` and `match` expressions
 - infer scalar locals from fixed destructuring assignments such as `[$a, $b] = [2, 3]`
 - preserve unrelated scalar locals across simple loops when the loop's local writes are conservatively known, including simple nested `switch`, `try/catch/finally`, `foreach`, other simple nested loop shapes, local array writes such as `$items[] = $i` / `$items[0] = $i`, local property writes such as `$box->last = $i` / `$box->items[] = $i`, and targeted local invalidations like `unset($tmp)`, while also keeping stable scalar values introduced by `for` init clauses
