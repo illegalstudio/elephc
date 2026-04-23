@@ -1281,6 +1281,122 @@ fn test_propagate_constants_preserves_unmodified_scalar_across_for_loop() {
 }
 
 #[test]
+fn test_propagate_constants_preserves_scalar_across_while_false_body_writes() {
+    let program = vec![
+        Stmt::assign("base", Expr::int_lit(2)),
+        Stmt::new(
+            StmtKind::While {
+                condition: Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
+                body: vec![Stmt::assign("base", Expr::int_lit(9))],
+            },
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[2],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
+fn test_propagate_constants_tracks_assignment_through_do_while_false() {
+    let program = vec![
+        Stmt::new(
+            StmtKind::DoWhile {
+                body: vec![Stmt::assign("base", Expr::int_lit(2))],
+                condition: Expr::new(ExprKind::BoolLiteral(false), Span::dummy()),
+            },
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[1],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
+fn test_propagate_constants_tracks_assignment_through_while_true_break() {
+    let program = vec![
+        Stmt::new(
+            StmtKind::While {
+                condition: Expr::new(ExprKind::BoolLiteral(true), Span::dummy()),
+                body: vec![
+                    Stmt::assign("base", Expr::int_lit(2)),
+                    Stmt::new(StmtKind::Break, Span::dummy()),
+                ],
+            },
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[1],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
+fn test_propagate_constants_tracks_assignment_through_for_infinite_break() {
+    let program = vec![
+        Stmt::new(
+            StmtKind::For {
+                init: None,
+                condition: None,
+                update: None,
+                body: vec![
+                    Stmt::assign("base", Expr::int_lit(2)),
+                    Stmt::new(StmtKind::Break, Span::dummy()),
+                ],
+            },
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[1],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
+fn test_propagate_constants_preserves_for_init_when_condition_is_false() {
+    let program = vec![
+        Stmt::new(
+            StmtKind::For {
+                init: Some(Box::new(Stmt::assign("base", Expr::int_lit(2)))),
+                condition: Some(Expr::new(ExprKind::BoolLiteral(false), Span::dummy())),
+                update: Some(Box::new(Stmt::assign("base", Expr::int_lit(9)))),
+                body: vec![Stmt::assign("base", Expr::int_lit(9))],
+            },
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::binop(Expr::var("base"), BinOp::Pow, Expr::int_lit(3))),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        propagated[1],
+        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+    );
+}
+
+#[test]
 fn test_propagate_constants_preserves_unmodified_scalar_inside_while_loop_body() {
     let program = vec![
         Stmt::assign("base", Expr::int_lit(2)),

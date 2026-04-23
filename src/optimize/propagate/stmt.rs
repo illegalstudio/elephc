@@ -80,18 +80,36 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             let loop_env = safe_loop_env(&env, std::slice::from_ref(&condition), &body, None);
             let condition = propagate_expr(condition, &loop_env);
             let (body, _) = propagate_block(body, loop_env.clone());
+            let next_env = match scalar_value(&condition) {
+                Some(value) if !value.truthy() => env,
+                Some(_) => merge_loop_exit_paths(simulate_loop_block_constant_paths(
+                    &body,
+                    loop_env.clone(),
+                )),
+                None => loop_env,
+            };
             (
                 Stmt::new(StmtKind::While { condition, body }, span),
-                loop_env,
+                next_env,
             )
         }
         StmtKind::DoWhile { body, condition } => {
             let loop_env = safe_loop_env(&env, std::slice::from_ref(&condition), &body, None);
             let (body, _) = propagate_block(body, loop_env.clone());
             let condition = propagate_expr(condition, &loop_env);
+            let next_env = match scalar_value(&condition) {
+                Some(value) if value.truthy() => merge_loop_exit_paths(
+                    simulate_loop_block_constant_paths(&body, loop_env.clone()),
+                ),
+                Some(_) => merge_do_while_false_exit_paths(simulate_loop_block_constant_paths(
+                    &body,
+                    loop_env.clone(),
+                )),
+                None => loop_env,
+            };
             (
                 Stmt::new(StmtKind::DoWhile { body, condition }, span),
-                loop_env,
+                next_env,
             )
         }
         StmtKind::For {
@@ -113,6 +131,13 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             let condition = condition.map(|expr| propagate_expr(expr, &loop_env));
             let update = update.map(|stmt| Box::new(propagate_stmt(*stmt, loop_env.clone()).0));
             let (body, _) = propagate_block(body, loop_env.clone());
+            let next_env = match condition.as_ref().and_then(scalar_value) {
+                Some(value) if !value.truthy() => init_env,
+                Some(_) | None if condition.is_none() => merge_loop_exit_paths(
+                    simulate_loop_block_constant_paths(&body, loop_env.clone()),
+                ),
+                _ => loop_env,
+            };
             (
                 Stmt::new(
                     StmtKind::For {
@@ -123,7 +148,7 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
                     },
                     span,
                 ),
-                loop_env,
+                next_env,
             )
         }
         StmtKind::ArrayAssign {
@@ -486,6 +511,18 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             env,
         ),
     }
+}
+
+pub(crate) fn merge_loop_exit_paths(summary: ConstantLoopPathSummary) -> ConstantEnv {
+    merge_constant_env_paths(summary.break_paths)
+}
+
+pub(crate) fn merge_do_while_false_exit_paths(mut summary: ConstantLoopPathSummary) -> ConstantEnv {
+    let mut paths = Vec::new();
+    paths.append(&mut summary.fallthrough_paths);
+    paths.append(&mut summary.break_paths);
+    paths.append(&mut summary.continue_paths);
+    merge_constant_env_paths(paths)
 }
 
 pub(crate) fn propagate_if_stmt(
