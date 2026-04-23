@@ -736,13 +736,11 @@ fn prune_switch_patterns_with_guards(
     (pruned_cases, default)
 }
 
-fn dce_switch_stmt(
-    subject: Expr,
+fn dce_switch_cases_with_guards(
+    subject: &Expr,
     cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
-    default: Option<Vec<Stmt>>,
-    span: crate::span::Span,
     guards: &GuardState,
-) -> Vec<Stmt> {
+) -> Vec<(Vec<Expr>, Vec<Stmt>)> {
     let trim_switch_noop_break = |body: Vec<Stmt>| {
         if body.len() == 1 && matches!(body[0].kind, StmtKind::Break) {
             Vec::new()
@@ -750,20 +748,46 @@ fn dce_switch_stmt(
             body
         }
     };
+
+    let mut direct_entry_guards = guards.clone();
+    let mut direct_only = true;
+    let mut processed = Vec::with_capacity(cases.len());
+
+    for (patterns, body) in cases {
+        let patterns: Vec<_> = patterns.into_iter().map(prune_expr).collect();
+        let base_guards = if direct_only {
+            &direct_entry_guards
+        } else {
+            guards
+        };
+        let case_guards = extend_guards_for_switch_case(subject, &patterns, base_guards);
+        let body = trim_switch_noop_break(dce_block_with_guards(body, case_guards));
+        if direct_only {
+            direct_entry_guards =
+                extend_guards_for_switch_case_no_match_subject(subject, &patterns, &direct_entry_guards);
+        }
+        direct_only = direct_only
+            && matches!(
+                block_terminal_effect(&body),
+                TerminalEffect::Breaks | TerminalEffect::ExitsCurrentBlock
+            );
+        processed.push((patterns, body));
+    }
+
+    processed
+}
+
+fn dce_switch_stmt(
+    subject: Expr,
+    cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
+    default: Option<Vec<Stmt>>,
+    span: crate::span::Span,
+    guards: &GuardState,
+) -> Vec<Stmt> {
     let subject = prune_expr(subject);
     let (cases, default) = prune_switch_patterns_with_guards(
         &subject,
-        cases
-            .into_iter()
-            .map(|(patterns, body)| {
-                let patterns: Vec<_> = patterns.into_iter().map(prune_expr).collect();
-                let case_guards = extend_guards_for_switch_case(&subject, &patterns, guards);
-                (
-                    patterns,
-                    trim_switch_noop_break(dce_block_with_guards(body, case_guards)),
-                )
-            })
-            .collect(),
+        dce_switch_cases_with_guards(&subject, cases, guards),
         default,
         guards,
     );
@@ -804,28 +828,11 @@ fn dce_switch_stmt_with_tail(
     span: crate::span::Span,
     guards: &GuardState,
 ) -> Vec<Stmt> {
-    let trim_switch_noop_break = |body: Vec<Stmt>| {
-        if body.len() == 1 && matches!(body[0].kind, StmtKind::Break) {
-            Vec::new()
-        } else {
-            body
-        }
-    };
     let subject = prune_expr(subject);
     let tail = dce_block_with_guards(tail, guards.clone());
     let (cases, default) = prune_switch_patterns_with_guards(
         &subject,
-        cases
-            .into_iter()
-            .map(|(patterns, body)| {
-                let patterns: Vec<_> = patterns.into_iter().map(prune_expr).collect();
-                let case_guards = extend_guards_for_switch_case(&subject, &patterns, guards);
-                (
-                    patterns,
-                    trim_switch_noop_break(dce_block_with_guards(body, case_guards)),
-                )
-            })
-            .collect(),
+        dce_switch_cases_with_guards(&subject, cases, guards),
         default,
         guards,
     );
@@ -1623,13 +1630,64 @@ fn expr_contains_subexpr(expr: &Expr, target: &Expr) -> bool {
 fn infer_child_value_from_composite_guard(
     op: BinOp,
     composite_value: bool,
-    sibling_value: bool,
+    sibling_value: Option<bool>,
 ) -> Option<bool> {
     match (op, composite_value, sibling_value) {
-        (BinOp::And, true, true) | (BinOp::Or, true, false) => Some(true),
-        (BinOp::And, false, true) | (BinOp::Or, false, false) => Some(false),
+        (BinOp::And, true, _) => Some(true),
+        (BinOp::Or, false, _) => Some(false),
+        (BinOp::And, false, Some(true)) => Some(false),
+        (BinOp::Or, true, Some(false)) => Some(true),
         _ => None,
     }
+}
+
+fn infer_condition_value_from_composite_tree(
+    condition: &Expr,
+    composite: &Expr,
+    composite_value: bool,
+    guards: &GuardState,
+    visiting: &mut Vec<Expr>,
+) -> Option<bool> {
+    if composite == condition {
+        return Some(composite_value);
+    }
+
+    if let ExprKind::Not(inner) = &composite.kind {
+        return infer_condition_value_from_composite_tree(
+            condition,
+            inner,
+            !composite_value,
+            guards,
+            visiting,
+        );
+    }
+
+    let ExprKind::BinaryOp { left, op, right } = &composite.kind else {
+        return None;
+    };
+
+    let left_contains = expr_contains_subexpr(left, condition);
+    let right_contains = expr_contains_subexpr(right, condition);
+    let (candidate, sibling) = match (left_contains, right_contains) {
+        (true, false) => (&**left, &**right),
+        (false, true) => (&**right, &**left),
+        _ => return None,
+    };
+
+    let candidate_value =
+        infer_child_value_from_composite_guard(
+            op.clone(),
+            composite_value,
+            known_condition_value_inner(sibling, guards, visiting),
+        )?;
+
+    infer_condition_value_from_composite_tree(
+        condition,
+        candidate,
+        candidate_value,
+        guards,
+        visiting,
+    )
 }
 
 fn infer_condition_value_from_composite_guards(
@@ -1638,35 +1696,18 @@ fn infer_condition_value_from_composite_guards(
     visiting: &mut Vec<Expr>,
 ) -> Option<bool> {
     for known in &guards.condition_guards {
-        let ExprKind::BinaryOp { left, op, right } = &known.condition.kind else {
+        if !expr_contains_subexpr(&known.condition, condition) {
             continue;
-        };
+        }
 
-        for (candidate, sibling) in [((**left).clone(), (**right).clone()), ((**right).clone(), (**left).clone())]
-        {
-            if !expr_contains_subexpr(&candidate, condition) {
-                continue;
-            }
-
-            let Some(sibling_value) = known_condition_value_inner(&sibling, guards, visiting) else {
-                continue;
-            };
-
-            let Some(candidate_value) =
-                infer_child_value_from_composite_guard(op.clone(), known.value, sibling_value)
-            else {
-                continue;
-            };
-
-            if candidate == *condition {
-                return Some(candidate_value);
-            }
-
-            let mut nested_guards = guards.clone();
-            record_condition_guard(&mut nested_guards, &candidate, candidate_value);
-            if let Some(value) = known_condition_value_inner(condition, &nested_guards, visiting) {
-                return Some(value);
-            }
+        if let Some(value) = infer_condition_value_from_composite_tree(
+            condition,
+            &known.condition,
+            known.value,
+            guards,
+            visiting,
+        ) {
+            return Some(value);
         }
     }
 

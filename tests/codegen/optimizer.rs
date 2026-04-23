@@ -2661,6 +2661,53 @@ switch (true) {
 }
 
 #[test]
+fn test_dead_code_elimination_uses_cumulative_switch_true_guards_inside_case_body() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_true_cumulative_body");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+function run($a, $b, $c, $d) {
+    if ($d) {
+        switch (true) {
+            case (($a && $b) || $c) && $d:
+                echo "A";
+                break;
+            case !$c:
+                if ($a && $b) {
+                    echo "dead-ab";
+                } else {
+                    echo "B";
+                }
+                break;
+            default:
+                echo "dead-default";
+        }
+    }
+}
+
+run(true, true, true, true);
+run(false, false, false, true);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    assert_eq!(out, "AB");
+    assert!(!user_asm.contains("dead-ab"));
+    assert!(!user_asm.contains("dead-default"));
+}
+
+#[test]
 fn test_dead_code_elimination_drops_scalar_switch_suffix_after_exhaustive_multi_pattern_case() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_scalar_multi_pattern");
     let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
