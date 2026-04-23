@@ -2081,7 +2081,7 @@ fn invalidated_guards_for_throw_paths(guards: &GuardState, stmts: &[Stmt]) -> Gu
     }
 
     let mut written = Vec::new();
-    collect_written_names_on_throw_paths_in_block(stmts, vec![Vec::new()], &mut written);
+    collect_written_names_on_throw_paths_in_block(stmts, vec![Vec::new()], &mut written, guards);
     if written.is_empty() {
         return guards.clone();
     }
@@ -2110,7 +2110,9 @@ fn collect_written_names_on_throw_paths_in_block(
     stmts: &[Stmt],
     mut incoming_paths: Vec<Vec<String>>,
     written: &mut Vec<String>,
+    guards: &GuardState,
 ) -> Vec<Vec<String>> {
+    let mut current_guards = guards.clone();
     for stmt in stmts {
         if incoming_paths.is_empty() {
             break;
@@ -2118,9 +2120,16 @@ fn collect_written_names_on_throw_paths_in_block(
 
         let mut next_paths = Vec::new();
         for path in incoming_paths {
-            collect_written_names_on_throw_paths_in_stmt(stmt, path, written, &mut next_paths);
+            collect_written_names_on_throw_paths_in_stmt(
+                stmt,
+                path,
+                written,
+                &mut next_paths,
+                &current_guards,
+            );
         }
         incoming_paths = next_paths;
+        invalidate_guards_for_stmt(stmt, &mut current_guards);
     }
 
     incoming_paths
@@ -2131,6 +2140,7 @@ fn collect_written_names_on_throw_paths_in_stmt(
     path: Vec<String>,
     written: &mut Vec<String>,
     next_paths: &mut Vec<Vec<String>>,
+    guards: &GuardState,
 ) {
     match &stmt.kind {
         StmtKind::If {
@@ -2146,12 +2156,14 @@ fn collect_written_names_on_throw_paths_in_stmt(
                 then_body,
                 vec![path.clone()],
                 written,
+                &extend_guards(guards, condition, true),
             ));
             next_paths.extend(collect_written_names_on_throw_paths_in_if_false_path(
                 elseif_clauses,
                 else_body,
                 path,
                 written,
+                &extend_guards(guards, condition, false),
             ));
             return;
         }
@@ -2164,12 +2176,14 @@ fn collect_written_names_on_throw_paths_in_stmt(
                 then_body,
                 vec![path.clone()],
                 written,
+                guards,
             ));
             if let Some(body) = else_body {
                 next_paths.extend(collect_written_names_on_throw_paths_in_block(
                     body,
                     vec![path],
                     written,
+                    guards,
                 ));
             } else {
                 next_paths.push(path);
@@ -2181,30 +2195,111 @@ fn collect_written_names_on_throw_paths_in_stmt(
             cases,
             default,
         } => {
+            let (direct_case_entries, direct_default_entry) =
+                direct_switch_entry_blocks(subject, cases, default.is_some(), guards);
+            let cfg = build_switch_cfg(cases, default);
+            let mut entry_blocks = direct_case_entries.clone();
+            if direct_default_entry {
+                if let Some(default_entry) = cfg.default_entry {
+                    entry_blocks.push(default_entry);
+                }
+            }
+            let reachable = collect_reachable_cfg_blocks(&cfg.blocks, &entry_blocks);
+
             if expr_effect(subject).may_throw {
                 merge_written_path(written, &path);
             }
 
             let mut fallthrough_paths = Vec::new();
-            for (patterns, body) in cases {
-                for pattern in patterns {
-                    if expr_effect(pattern).may_throw {
-                        merge_written_path(written, &path);
+            for (index, (patterns, body)) in cases.iter().enumerate() {
+                let direct_entry = direct_case_entries.contains(&index);
+                if !reachable.get(index).copied().unwrap_or_default() {
+                    fallthrough_paths.clear();
+                    continue;
+                }
+
+                if direct_entry {
+                    for pattern in patterns {
+                        if expr_effect(pattern).may_throw {
+                            merge_written_path(written, &path);
+                        }
                     }
                 }
 
-                let mut incoming = vec![path.clone()];
+                let mut incoming = Vec::new();
+                if direct_entry {
+                    incoming.push(path.clone());
+                }
                 incoming.extend(fallthrough_paths);
-                fallthrough_paths = collect_written_names_on_throw_paths_in_block(body, incoming, written);
+                if incoming.is_empty() {
+                    fallthrough_paths = Vec::new();
+                } else {
+                    fallthrough_paths = collect_written_names_on_throw_paths_in_block(
+                        body,
+                        incoming,
+                        written,
+                        guards,
+                    );
+                }
             }
 
             if let Some(body) = default {
-                let mut incoming = vec![path.clone()];
-                incoming.extend(fallthrough_paths);
-                let _ = collect_written_names_on_throw_paths_in_block(body, incoming, written);
+                let default_entry = cfg.default_entry.unwrap();
+                if reachable.get(default_entry).copied().unwrap_or_default() {
+                    let mut incoming = Vec::new();
+                    if direct_default_entry {
+                        incoming.push(path.clone());
+                    }
+                    incoming.extend(fallthrough_paths);
+                    if !incoming.is_empty() {
+                        let _ = collect_written_names_on_throw_paths_in_block(
+                            body,
+                            incoming,
+                            written,
+                            guards,
+                        );
+                    }
+                }
             }
 
             if matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough) {
+                let mut fallthrough = path;
+                collect_written_names(stmt, &mut fallthrough);
+                next_paths.push(fallthrough);
+            }
+            return;
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            next_paths.extend(collect_written_names_on_throw_paths_in_block(
+                try_body,
+                vec![path.clone()],
+                written,
+                guards,
+            ));
+            for catch in catches {
+                let mut catch_path = path.clone();
+                if let Some(variable) = catch.variable.as_deref() {
+                    push_written_name(&mut catch_path, variable);
+                }
+                next_paths.extend(collect_written_names_on_throw_paths_in_block(
+                    &catch.body,
+                    vec![catch_path],
+                    written,
+                    guards,
+                ));
+            }
+            if let Some(body) = finally_body {
+                next_paths.extend(collect_written_names_on_throw_paths_in_block(
+                    body,
+                    vec![path],
+                    written,
+                    guards,
+                ));
+            } else if matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough) {
                 let mut fallthrough = path;
                 collect_written_names(stmt, &mut fallthrough);
                 next_paths.push(fallthrough);
@@ -2230,12 +2325,13 @@ fn collect_written_names_on_throw_paths_in_if_false_path(
     else_body: &Option<Vec<Stmt>>,
     path: Vec<String>,
     written: &mut Vec<String>,
+    guards: &GuardState,
 ) -> Vec<Vec<String>> {
     let Some((condition, body)) = elseif_clauses.first() else {
         return else_body
             .as_ref()
             .map(|body| {
-                collect_written_names_on_throw_paths_in_block(body, vec![path.clone()], written)
+                collect_written_names_on_throw_paths_in_block(body, vec![path.clone()], written, guards)
             })
             .unwrap_or_else(|| vec![path]);
     };
@@ -2244,13 +2340,18 @@ fn collect_written_names_on_throw_paths_in_if_false_path(
         merge_written_path(written, &path);
     }
 
-    let mut next_paths =
-        collect_written_names_on_throw_paths_in_block(body, vec![path.clone()], written);
+    let mut next_paths = collect_written_names_on_throw_paths_in_block(
+        body,
+        vec![path.clone()],
+        written,
+        &extend_guards(guards, condition, true),
+    );
     next_paths.extend(collect_written_names_on_throw_paths_in_if_false_path(
         &elseif_clauses[1..],
         else_body,
         path,
         written,
+        &extend_guards(guards, condition, false),
     ));
     next_paths
 }

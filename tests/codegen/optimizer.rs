@@ -3175,6 +3175,54 @@ run(true, 1);
 }
 
 #[test]
+fn test_dead_code_elimination_ignores_unreachable_switch_throw_path_writes_before_catch_body() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_switch_throw_path_cfg_prune");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+function run($flag, $value) {
+    if ($value === 1) {
+        if ($flag) {
+            try {
+                switch ($value) {
+                    case 2:
+                        $flag = false;
+                        throw new Exception("dead-case");
+                    case 1:
+                        throw new Exception("boom");
+                }
+            } catch (Exception $e) {
+                if ($flag) {
+                    echo "a";
+                } else {
+                    echo "dead-switch-unreachable";
+                }
+            }
+        }
+    }
+}
+
+run(true, 1);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    assert_eq!(out, "a");
+    assert!(!user_asm.contains("dead-switch-unreachable"));
+}
+
+#[test]
 fn test_dead_code_elimination_invalidates_outer_guard_before_finally_body() {
     let out = compile_and_run(
         r#"<?php
