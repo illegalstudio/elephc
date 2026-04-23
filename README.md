@@ -4,6 +4,9 @@
 [![GitHub Downloads](https://img.shields.io/github/downloads/illegalstudio/elephc/total?style=flat-square&logo=github&label=downloads)](https://github.com/illegalstudio/elephc/releases)
 [![Unique Cloners](.github/traffic/clones-badge.svg)](https://github.com/illegalstudio/elephc)
 [![License: MIT](https://img.shields.io/github/license/illegalstudio/elephc?style=flat-square)](LICENSE)
+[![Follow @nahime0 on X](https://img.shields.io/badge/Follow%20%40nahime0-000000?logo=x&logoColor=white)](https://x.com/nahime0)
+
+> 🐦 **[Follow me on X (@nahime0)](https://x.com/nahime0) for updates, new features, and behind-the-scenes development.**
 
 A PHP-to-native compiler. Takes a subset of PHP and compiles it directly to native assembly, producing standalone binaries for the currently supported targets: **macOS ARM64**, **Linux ARM64**, and **Linux x86_64**. No interpreter, no VM, no Zend Engine, no opcode fallback.
 
