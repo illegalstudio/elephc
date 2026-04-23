@@ -5,7 +5,7 @@
 [![Unique Cloners](.github/traffic/clones-badge.svg)](https://github.com/illegalstudio/elephc)
 [![License: MIT](https://img.shields.io/github/license/illegalstudio/elephc?style=flat-square)](LICENSE)
 
-A PHP-to-native compiler. Takes a subset of PHP and compiles it directly to native assembly, producing standalone binaries for the currently supported targets: **macOS ARM64**, **Linux ARM64**, and **Linux x86_64**. No interpreter, no VM, no runtime dependencies.
+A PHP-to-native compiler. Takes a subset of PHP and compiles it directly to native assembly, producing standalone binaries for the currently supported targets: **macOS ARM64**, **Linux ARM64**, and **Linux x86_64**. No interpreter, no VM, no Zend Engine, no opcode fallback.
 
 > **If you like the idea or find it useful, please star the repo** — it helps others discover it and keeps the project going.
 
@@ -53,6 +53,23 @@ If you want to contribute, you're welcome. Mi casa es tu casa.
 ## Learn how a compiler works
 
 elephc is designed to be read. The code generation and runtime layers are heavily annotated, so you can see what each lowering step and emitted instruction is doing — from stack frame setup to syscall invocation, from integer-to-string conversion to array memory layout. If you've ever wondered what happens between `echo "hello"` and the CPU executing it, follow the code from `src/codegen/` and read the comments. **No prior assembly knowledge required.**
+
+## How elephc is different
+
+There are several ways to make PHP easier to distribute or faster to run: bundling a PHP runtime into one executable, encrypting bytecode, running through the Zend VM with JIT, or compiling selected hot paths while falling back to opcodes for dynamic code.
+
+elephc takes a narrower but cleaner route: it is a from-scratch compiler for a static subset of PHP. It parses PHP source, type-checks it, lowers it to target-specific assembly, assembles and links it into a native executable, and ships only the small runtime routines needed by the generated program. If elephc compiles a construct, that construct is native code rather than interpreted PHP.
+
+That tradeoff is intentional:
+
+- **Less legacy compatibility** than a VM-backed PHP implementation.
+- **More mechanical transparency**: readable assembly output, source maps, line-by-line commented codegen, and a documented memory model.
+- **No hidden runtime dependency**: the generated binary does not need PHP, the Zend Engine, a loader extension, or an embedded interpreter.
+- **Native-oriented extensions**: `extern`, `ptr`, `buffer<T>`, and `packed class` let PHP-shaped code cross into systems, FFI, game, and performance-sensitive workloads.
+
+That does not mean elephc has to live outside the existing PHP ecosystem. The current CLI path produces standalone executables, but the roadmap also includes shared/static library output and an experimental PHP extension bridge. That opens a practical middle path: keep a framework such as WordPress, Laravel, or Symfony running on PHP, then compile static, performance-sensitive modules into native libraries or PHP extensions.
+
+So elephc is not a drop-in replacement for an entire dynamic framework today. The longer-term goal is more useful: make it possible to move the parts of PHP code that are static enough to compile into inspectable native code, while the rest of the application can stay in ordinary PHP.
 
 ## Requirements
 
