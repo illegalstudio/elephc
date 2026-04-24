@@ -47,7 +47,7 @@ PHP source (.php)
       │
       ▼
 ┌──────────────┐
-│  Optimizer   │  src/optimize.rs
+│  Optimizer   │  src/optimize/
 │   (fold)     │  Folds scalar constants and simplifies pure expressions
 │              │  before type checking.
 └─────┬────────┘
@@ -61,28 +61,28 @@ PHP source (.php)
      │
      ▼
 ┌──────────────┐
-│  Optimizer   │  src/optimize.rs
+│  Optimizer   │  src/optimize/
 │ (propagate)  │  Propagates scalar locals conservatively after
 │              │  successful checking.
 └─────┬────────┘
       │
       ▼
 ┌──────────────┐
-│  Optimizer   │  src/optimize.rs
+│  Optimizer   │  src/optimize/
 │  (prune)     │  Removes constant-dead control flow after successful
 │              │  checking.
 └─────┬────────┘
       │
       ▼
 ┌──────────────┐
-│  Optimizer   │  src/optimize.rs
+│  Optimizer   │  src/optimize/
 │ (normalize)  │  Canonicalizes equivalent control-flow shells into
 │              │  simpler AST shapes.
 └─────┬────────┘
       │
       ▼
 ┌──────────────┐
-│  Optimizer   │  src/optimize.rs
+│  Optimizer   │  src/optimize/
 │   (DCE)      │  Drops leftover unreachable or non-observable
 │              │  statements from the normalized AST.
 └─────┬────────┘
@@ -127,7 +127,7 @@ src/
 ├── span.rs                    Source position (line, col)
 ├── conditional.rs             Build-time `ifdef` pass
 ├── resolver.rs                Include/require file resolution
-├── optimize.rs                Constant folding, constant propagation, control-flow pruning, normalization, dead-code elimination
+├── optimize/                  Constant folding, constant propagation, control-flow pruning, normalization, dead-code elimination
 ├── runtime_cache.rs           Cached shared runtime object preparation
 ├── source_map.rs              Assembly comment markers → JSON sidecar map
 ├── names.rs                   Qualified/FQN name model + assembly symbol mangling

@@ -100,7 +100,7 @@ In this example there are no namespaces or imports, so the AST still passes thro
 
 ## Phase 6: Early optimization (constant folding)
 
-**File:** `src/optimize.rs`
+**File:** `src/optimize/`
 
 Before type checking, elephc runs a conservative AST simplification pass. This stage folds expressions whose result is already statically known without needing any type-environment information.
 
@@ -142,7 +142,7 @@ On successful type checking, elephc also runs a warning pass that reports issues
 
 ## Phase 8: Post-typecheck constant propagation
 
-**File:** `src/optimize.rs`
+**File:** `src/optimize/`
 
 After the checker succeeds, elephc runs a local constant-propagation pass.
 
@@ -155,6 +155,7 @@ This pass is still conservative, but it can already:
 - infer uniform scalar outcomes from assignments using local `?:` and `match` expressions
 - infer scalar locals from fixed destructuring assignments such as `[$a, $b] = [2, 3]`
 - preserve unrelated scalar locals across simple loops when the loop's local writes are conservatively known, including simple nested `switch`, `try/catch/finally`, `foreach`, other simple nested loop shapes, local array writes such as `$items[] = $i` / `$items[0] = $i`, local property writes such as `$box->last = $i` / `$box->items[] = $i`, and targeted local invalidations like `unset($tmp)`, while also keeping stable scalar values introduced by `for` init clauses
+- summarize known loop paths such as `while(false)`, `do...while(false)`, `while(true)` / `for(;;)` with `break`, and branch-local loop exits whose scalar envs agree
 - re-run folding after substitutions so expressions like `$x ** $y` can collapse to a literal
 
 In our running example, this *does* change the program. The pass can forward `$x = 10` into the later comparison, re-run folding, and effectively turn the condition into `true`:
@@ -169,7 +170,7 @@ if (true) {
 
 ## Phase 9: Post-typecheck control-flow pruning
 
-**File:** `src/optimize.rs`
+**File:** `src/optimize/`
 
 After the checker succeeds, elephc runs a second optimization pass that is allowed to prune dead control flow without hiding diagnostics from the type checker.
 
@@ -196,7 +197,7 @@ echo "big\n";
 
 ## Phase 10: Control-flow normalization
 
-**File:** `src/optimize.rs`
+**File:** `src/optimize/`
 
 After control-flow pruning, elephc canonicalizes the remaining control-flow shells. This pass does not try to prove new constants; it rewrites structurally equivalent shapes into simpler, more uniform AST forms so later passes see fewer special cases.
 
@@ -211,7 +212,7 @@ This pass currently handles cases such as:
 
 ## Phase 11: Dead-code elimination
 
-**File:** `src/optimize.rs`
+**File:** `src/optimize/`
 
 After normalization, elephc runs a final dead-code-elimination pass over the already-canonical AST.
 

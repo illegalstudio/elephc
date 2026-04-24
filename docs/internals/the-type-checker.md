@@ -208,7 +208,7 @@ Warnings are returned through `CheckResult` and printed by the CLI without faili
 
 ## Where the checker sits in the optimizer pipeline
 
-The type checker sits between an early folding pass and four post-check cleanup passes in `src/optimize.rs`:
+The type checker sits between an early folding pass and four post-check cleanup passes in `src/optimize/`:
 
 - `fold_constants()` runs first and simplifies scalar expressions that are already statically decidable.
 - `propagate_constants()` runs after successful checking and pushes known scalar locals through conservative straight-line and merge shapes.

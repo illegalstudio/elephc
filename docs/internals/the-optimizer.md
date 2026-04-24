@@ -5,7 +5,7 @@ sidebar:
   order: 6
 ---
 
-**Source:** `src/optimize.rs`
+**Source:** `src/optimize/`
 
 elephc's optimizer is intentionally simple and AST-focused. It does not build a separate IR or run heavyweight SSA passes. Instead, it performs a small set of local rewrites that already pay off in generated assembly quality and compile-time clarity.
 
@@ -105,6 +105,7 @@ This pass is still intentionally local and conservative. Today it focuses on:
 - recognizing uniform scalar assignment outcomes from local merge expressions such as `?:` and `match`
 - recognizing scalar locals introduced by destructuring fixed scalar array literals with `list(...)` / `[...] = [...]`
 - preserving untouched scalar locals across simple loops when a conservative local write analysis can prove the loop only mutates other variables, including simple nested `switch`, `try/catch/finally`, `foreach`, other simple nested loop statements, local array writes like `$items[] = $i` / `$items[0] = $i`, local property writes like `$box->last = $i` / `$box->items[] = $i`, and targeted invalidations like `unset($tmp)`, while also retaining stable scalar values introduced by `for` init clauses
+- local loop path summaries for known `while(false)`, `do...while(false)`, `while(true)` / `for(;;)` break exits, and branch-local loop exits that agree on scalar values
 - re-running constant folding on expressions after substitutions are made
 - propagating into nested bodies conservatively without trying to solve full data-flow across loops or general path-sensitive CFGs
 
@@ -341,7 +342,7 @@ That conservatism is why the pass is safe to run by default: if an expression co
 
 The current optimizer is still intentionally local. It does not yet implement:
 
-- full fixed-point/basic-block constant propagation across wider loops and general path merges
+- full fixed-point/basic-block constant propagation across arbitrary loops and general path merges
 - richer memory-model-aware propagation across heap-backed locals and broader aliasing situations
 - exact exception-type reachability, nested rethrow modeling, and less conservative `finally` invalidation beyond the current path-aware `try` heuristics
 - broader guard reasoning for range facts and multi-variable relationships beyond the current boolean, scalar, loose-comparison, and safe relational-complement facts

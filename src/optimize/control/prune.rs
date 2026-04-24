@@ -70,11 +70,12 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
         }
         StmtKind::DoWhile { body, condition } => {
             let condition = prune_expr(condition);
+            let body = prune_block(body);
             match scalar_value(&condition) {
-            Some(value) if !value.truthy() => prune_block(body),
+            Some(value) if !value.truthy() && !block_contains_loop_exit(&body) => body,
             _ => vec![Stmt {
                 kind: StmtKind::DoWhile {
-                    body: prune_block(body),
+                    body,
                     condition,
                 },
                 span,
@@ -332,6 +333,60 @@ pub(crate) fn prune_method_without_context(method: ClassMethod) -> ClassMethod {
     ClassMethod {
         body: with_class_effect_context(None, || prune_block(method.body)),
         ..method
+    }
+}
+
+fn block_contains_loop_exit(body: &[Stmt]) -> bool {
+    body.iter().any(stmt_contains_loop_exit)
+}
+
+fn stmt_contains_loop_exit(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::Break | StmtKind::Continue => true,
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            block_contains_loop_exit(then_body)
+                || elseif_clauses
+                    .iter()
+                    .any(|(_, body)| block_contains_loop_exit(body))
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| block_contains_loop_exit(body))
+        }
+        StmtKind::IfDef {
+            then_body, else_body, ..
+        } => {
+            block_contains_loop_exit(then_body)
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| block_contains_loop_exit(body))
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            block_contains_loop_exit(try_body)
+                || catches
+                    .iter()
+                    .any(|catch| block_contains_loop_exit(&catch.body))
+                || finally_body
+                    .as_ref()
+                    .is_some_and(|body| block_contains_loop_exit(body))
+        }
+        StmtKind::Switch { cases, default, .. } => {
+            cases
+                .iter()
+                .any(|(_, body)| block_contains_loop_exit(body))
+                || default
+                    .as_ref()
+                    .is_some_and(|body| block_contains_loop_exit(body))
+        }
+        _ => false,
     }
 }
 
