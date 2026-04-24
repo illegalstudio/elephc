@@ -21,3 +21,29 @@ jobs:
 
       - name: Run tests
         run: cargo test
+
+  benchmark:
+    name: Benchmark Suite
+    runs-on: macos-14  # Apple Silicon runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Run benchmark suite
+        run: python3 scripts/benchmark_suite.py --iterations 3 --warmup 1 --json benchmark-results.json --markdown benchmark-results.md
+
+      - name: Publish benchmark summary
+        run: cat benchmark-results.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: |
+            benchmark-results.json
+            benchmark-results.md

@@ -312,7 +312,7 @@ Proper type system for PHP compatibility.
 - [x] Source maps (assembly ↔ PHP line mapping)
 - [x] Compiler timing / profiling output for parse, typecheck, codegen, assemble, and link phases
 - [ ] Source maps v2 — richer mappings for functions / expressions / labels and a more stable machine-readable schema for external tooling
-- [ ] Benchmark automation — run the benchmark harness in CI or release verification so performance regressions are tracked continuously
+- [x] Benchmark automation — run the benchmark harness in CI, publish markdown summaries and JSON artifacts, and use it as a correctness/trend gate without noisy hard thresholds
 - [x] Constant folding (`2 + 3` → `5` at compile time)
 - [x] Dead code elimination
 - [ ] Peephole optimization (redundant load/store elimination)
