@@ -344,6 +344,22 @@ fn test_warning_unused_param_has_real_span() {
 }
 
 #[test]
+fn test_warning_final_private_method() {
+    expect_warning(
+        "<?php class Box { final private function seal() { return 1; } }",
+        "Private methods cannot be final as they are never overridden by other classes",
+    );
+}
+
+#[test]
+fn test_warning_final_private_constructor_is_allowed() {
+    expect_no_warning(
+        "<?php class Box { final private function __construct() {} }",
+        "Private methods cannot be final",
+    );
+}
+
+#[test]
 fn test_error_magic_method_contracts_collect_multiple_errors() {
     let error = check_source_full(
         "<?php class A { private function __toString() { return \"x\"; } } class B { public static function __toString() { return \"y\"; } }",
@@ -2440,6 +2456,94 @@ fn test_error_abstract_method_with_body() {
     expect_error(
         "<?php abstract class Base { abstract public function run() { return 1; } }",
         "Abstract method cannot have a body: Base::run",
+    );
+}
+
+#[test]
+fn test_error_final_class_cannot_be_extended() {
+    expect_error(
+        "<?php final class Base {} class Child extends Base {}",
+        "Class Child cannot extend final class Base",
+    );
+}
+
+#[test]
+fn test_error_final_method_cannot_be_overridden() {
+    expect_error(
+        "<?php class Base { final public function run() { return 1; } } class Child extends Base { public function run() { return 2; } }",
+        "Cannot override final method Base::run",
+    );
+}
+
+#[test]
+fn test_error_final_static_method_cannot_be_overridden() {
+    expect_error(
+        "<?php class Base { final public static function run() { return 1; } } class Child extends Base { public static function run() { return 2; } }",
+        "Cannot override final method Base::run",
+    );
+}
+
+#[test]
+fn test_error_trait_final_method_cannot_be_overridden_by_subclass() {
+    expect_error(
+        "<?php trait T { final public function run() { return 1; } } class Base { use T; } class Child extends Base { public function run() { return 2; } }",
+        "Cannot override final method Base::run",
+    );
+}
+
+#[test]
+fn test_error_final_property_cannot_be_overridden() {
+    expect_error(
+        "<?php class Base { final public $value; } class Child extends Base { public $value; }",
+        "Cannot override final property Base::$value",
+    );
+}
+
+#[test]
+fn test_error_trait_final_property_cannot_be_overridden_by_subclass() {
+    expect_error(
+        "<?php trait T { final public $value; } class Base { use T; } class Child extends Base { public $value; }",
+        "Cannot override final property Base::$value",
+    );
+}
+
+#[test]
+fn test_error_final_abstract_class() {
+    expect_error(
+        "<?php final abstract class Base {}",
+        "Cannot use the final modifier on an abstract class",
+    );
+}
+
+#[test]
+fn test_error_abstract_final_class() {
+    expect_error(
+        "<?php abstract final class Base {}",
+        "Cannot use the final modifier on an abstract class",
+    );
+}
+
+#[test]
+fn test_error_final_abstract_method() {
+    expect_error(
+        "<?php abstract class Base { final abstract public function run(); }",
+        "Cannot use the final modifier on an abstract method: Base::run",
+    );
+}
+
+#[test]
+fn test_error_interface_method_cannot_be_final() {
+    expect_error(
+        "<?php interface Named { final public function name(); }",
+        "Interface method Named::name must not be final",
+    );
+}
+
+#[test]
+fn test_error_final_property_cannot_be_private() {
+    expect_error(
+        "<?php class Box { final private $value; }",
+        "Property cannot be both final and private",
     );
 }
 

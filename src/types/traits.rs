@@ -12,6 +12,7 @@ pub struct FlattenedClass {
     pub extends: Option<String>,
     pub implements: Vec<String>,
     pub is_abstract: bool,
+    pub is_final: bool,
     pub is_readonly_class: bool,
     pub properties: Vec<ClassProperty>,
     pub methods: Vec<ClassMethod>,
@@ -91,6 +92,7 @@ pub fn flatten_classes(program: &Program) -> (Vec<FlattenedClass>, Vec<CompileEr
             extends,
             implements,
             is_abstract,
+            is_final,
             is_readonly_class,
             trait_uses,
             properties,
@@ -120,6 +122,7 @@ pub fn flatten_classes(program: &Program) -> (Vec<FlattenedClass>, Vec<CompileEr
                 properties,
                 stmt.span,
                 &format!("class {}", name),
+                true,
             ) {
                 Ok(props) => props,
                 Err(error) => {
@@ -144,7 +147,8 @@ pub fn flatten_classes(program: &Program) -> (Vec<FlattenedClass>, Vec<CompileEr
                 extends: extends.as_ref().map(|name| name.as_str().to_string()),
                 implements: implements.iter().map(|name| name.as_str().to_string()).collect(),
                 is_abstract: *is_abstract,
-                    is_readonly_class: *is_readonly_class,
+                is_final: *is_final,
+                is_readonly_class: *is_readonly_class,
                 properties: merged_props,
                 methods: merged_methods,
             });
@@ -201,6 +205,7 @@ fn expand_trait(
         &trait_info.properties,
         trait_info.span,
         &format!("trait {}", trait_name),
+        true,
     )?;
     let methods = merge_methods(
         imported_methods,
@@ -247,6 +252,7 @@ fn resolve_trait_uses(
                     property,
                     trait_use.span,
                     owner_label,
+                    false,
                 )?;
             }
             for method in expanded.methods {
@@ -398,6 +404,7 @@ fn resolve_trait_uses(
             &imported_properties,
             owner_span,
             owner_label,
+            false,
         )?;
         merge_imported_method_set(&mut all_methods, selected_methods, owner_span, owner_label)?;
     }
@@ -410,10 +417,17 @@ fn merge_properties(
     local: &[ClassProperty],
     span: Span,
     owner_label: &str,
+    replace_compatible_existing: bool,
 ) -> Result<Vec<ClassProperty>, CompileError> {
     let mut merged = imported.to_vec();
     for property in local {
-        merge_property_into(&mut merged, property.clone(), span, owner_label)?;
+        merge_property_into(
+            &mut merged,
+            property.clone(),
+            span,
+            owner_label,
+            replace_compatible_existing,
+        )?;
     }
     Ok(merged)
 }
@@ -423,9 +437,17 @@ fn merge_property_into(
     property: ClassProperty,
     span: Span,
     owner_label: &str,
+    replace_compatible_existing: bool,
 ) -> Result<(), CompileError> {
-    if let Some(existing) = merged.iter().find(|existing| existing.name == property.name) {
+    if let Some(index) = merged
+        .iter()
+        .position(|existing| existing.name == property.name)
+    {
+        let existing = &merged[index];
         if properties_compatible(existing, &property) {
+            if replace_compatible_existing {
+                merged[index] = property;
+            }
             return Ok(());
         }
         return Err(CompileError::new(

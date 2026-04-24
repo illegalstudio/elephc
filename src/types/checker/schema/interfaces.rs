@@ -114,6 +114,15 @@ pub(crate) fn build_interface_info_recursive(
                 ),
             ));
         }
+        if method.is_final {
+            return Err(CompileError::new(
+                method.span,
+                &format!(
+                    "Interface method {}::{} must not be final",
+                    interface.name, method.name
+                ),
+            ));
+        }
         if method.is_static {
             return Err(CompileError::new(
                 method.span,

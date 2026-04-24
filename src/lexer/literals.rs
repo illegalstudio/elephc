@@ -317,6 +317,7 @@ pub fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
         "implements" => Ok(Token::Implements),
         "interface" => Ok(Token::Interface),
         "abstract" => Ok(Token::Abstract),
+        "final" => Ok(Token::Final),
         "INF" => Ok(Token::Inf),
         "NAN" => Ok(Token::Nan),
         "PHP_INT_MAX" => Ok(Token::PhpIntMax),

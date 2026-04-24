@@ -355,6 +355,7 @@ pub enum StmtKind {
         extends: Option<Name>,
         implements: Vec<Name>,
         is_abstract: bool,
+        is_final: bool,
         is_readonly_class: bool,
         trait_uses: Vec<TraitUse>,
         properties: Vec<ClassProperty>,
@@ -553,6 +554,7 @@ pub struct ClassProperty {
     pub name: String,
     pub visibility: Visibility,
     pub readonly: bool,
+    pub is_final: bool,
     pub default: Option<Expr>,
     #[allow(dead_code)] // Used for error reporting in future phases
     pub span: Span,
@@ -562,6 +564,7 @@ impl PartialEq for ClassProperty {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name && self.visibility == other.visibility
             && self.readonly == other.readonly
+            && self.is_final == other.is_final
     }
 }
 
@@ -571,6 +574,7 @@ pub struct ClassMethod {
     pub visibility: Visibility,
     pub is_static: bool,
     pub is_abstract: bool,
+    pub is_final: bool,
     pub has_body: bool,
     pub params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
     pub variadic: Option<String>,
@@ -586,6 +590,7 @@ impl PartialEq for ClassMethod {
         self.name == other.name && self.visibility == other.visibility
             && self.is_static == other.is_static
             && self.is_abstract == other.is_abstract
+            && self.is_final == other.is_final
             && self.has_body == other.has_body
     }
 }

@@ -24,13 +24,14 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
         Token::Variable(_) => assign::parse_variable_stmt(tokens, pos, span),
         Token::This => simple::parse_this_stmt(tokens, pos, span),
         Token::PlusPlus | Token::MinusMinus => assign::parse_incdec_stmt(tokens, pos, span),
-        Token::Class => oop::parse_class_decl(tokens, pos, span, false, false),
+        Token::Class => oop::parse_class_decl(tokens, pos, span, false, false, false),
         Token::Enum => oop::parse_enum_decl(tokens, pos, span),
         Token::ReadOnly => oop::parse_readonly_decl(tokens, pos, span),
         Token::Packed => oop::parse_packed_decl(tokens, pos, span),
         Token::Interface => oop::parse_interface_decl(tokens, pos, span),
         Token::Trait => oop::parse_trait_decl(tokens, pos, span),
         Token::Abstract => oop::parse_abstract_decl(tokens, pos, span),
+        Token::Final => oop::parse_final_decl(tokens, pos, span),
         Token::Function => params::parse_function_decl(tokens, pos, span),
         Token::Namespace => namespace_use::parse_namespace_stmt(tokens, pos, span),
         Token::Use => namespace_use::parse_use_stmt(tokens, pos, span),
@@ -136,6 +137,7 @@ pub(crate) fn recover_to_statement_boundary(tokens: &[(Token, Span)], pos: &mut 
             | Token::Interface
             | Token::Trait
             | Token::Abstract
+            | Token::Final
             | Token::Function
             | Token::Namespace
             | Token::Use

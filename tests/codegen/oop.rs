@@ -663,6 +663,82 @@ echo $user->id;
 }
 
 #[test]
+fn test_final_class_instantiates_and_dispatches_methods() {
+    let out = compile_and_run(
+        r#"<?php
+final class Receipt {
+    public $code = 41;
+
+    public function next() {
+        return $this->code + 1;
+    }
+}
+
+$receipt = new Receipt();
+echo $receipt->next();
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_final_method_dispatches_normally_without_override() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    final public function label() {
+        return "base";
+    }
+}
+
+class Child extends Base {
+    public function suffix() {
+        return "child";
+    }
+}
+
+$child = new Child();
+echo $child->label();
+echo ":";
+echo $child->suffix();
+"#,
+    );
+    assert_eq!(out, "base:child");
+}
+
+#[test]
+fn test_final_property_reads_normally_without_override() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    final public $value = 40;
+
+    public function value() {
+        return $this->value + 2;
+    }
+}
+
+class Child extends Base {
+    public function label() {
+        return "answer:";
+    }
+}
+
+$child = new Child();
+echo $child->label();
+echo $child->value();
+"#,
+    );
+    assert_eq!(out, "answer:42");
+}
+
+#[test]
+fn test_example_final_classes_compiles_and_runs() {
+    let out = compile_and_run(include_str!("../../examples/final-classes/main.php"));
+    assert_eq!(out, "invoice:42\n");
+}
+
+#[test]
 fn test_first_class_callable_named_function_indirect_call() {
     let out = compile_and_run(
         r#"<?php
