@@ -34,7 +34,7 @@ interface Named {
     public function name();
 }
 
-class Product implements Labeled {
+class Product implements Named {
     public function name() { return "widget"; }
     public function label() { return strtoupper($this->name()); }
 }
@@ -77,6 +77,7 @@ final class InvoiceNumber {
 - `public`, `protected`, `private` visibility
 - Optional default values
 - `readonly` properties (only assigned in `__construct`)
+- `final` properties, which can be read normally but cannot be redeclared by subclasses
 - `readonly class` makes all properties readonly
 
 ## Constructor
@@ -129,5 +130,6 @@ Pure and backed enums. `->value`, `::from()`, `::tryFrom()`, `::cases()`. Only `
 
 ## Limitations
 - No property type declarations
+- No static or abstract properties
 - No constructor promotion
 - No property redeclaration across inheritance chain

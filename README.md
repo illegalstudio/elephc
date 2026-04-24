@@ -346,8 +346,8 @@ src/
 ├── parser/              # Tokens → AST (Pratt parser)
 │   ├── ast.rs           # ExprKind, StmtKind, BinOp, CastType
 │   ├── expr/            # Expression parsing helpers and Pratt parser passes
-│   ├── stmt.rs          # Statement parsing
-│   └── control.rs       # if, while, for, foreach, do-while
+│   ├── stmt/            # Statement parsing, OOP, namespaces, FFI
+│   └── control.rs       # if, while, for, foreach, do-while, switch, try/catch/finally
 │
 ├── types/               # Static type checking
 │   ├── mod.rs           # PhpType, TypeEnv, check(), CheckResult

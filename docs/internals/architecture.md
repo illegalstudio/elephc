@@ -144,7 +144,7 @@ src/
 │   ├── mod.rs                 parse() → Program
 │   ├── ast.rs                 ExprKind, StmtKind, BinOp, CastType
 │   ├── expr/                  Pratt parser passes and expression helpers
-│   ├── stmt.rs                Statement parsing, assignment, functions, throw
+│   ├── stmt/                  Statement parsing, assignment, functions, OOP, namespaces, FFI
 │   └── control.rs             if, while, for, do-while, foreach, try/catch/finally
 │
 ├── types/

@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-**Source:** `src/parser/` — `expr.rs`, `stmt.rs`, `control.rs`, `ast.rs`, `mod.rs`
+**Source:** `src/parser/` — `expr/`, `stmt/`, `control.rs`, `ast.rs`, `mod.rs`
 
 The parser takes the token stream from the [lexer](the-lexer.md) and builds an **Abstract Syntax Tree** (AST) — a tree structure that represents the program's meaning, not just its text.
 
@@ -119,6 +119,8 @@ Things that do something:
 | `InterfaceDecl { name, extends, methods }` | `interface Named extends Jsonable { public function name(); }` |
 | `TraitDecl { name, trait_uses, properties, methods }` | `trait Named { ... }` |
 | `PropertyAssign { object, property, value }` | `$p->x = 10;` |
+| `PropertyArrayPush { object, property, value }` | `$p->items[] = 10;` |
+| `PropertyArrayAssign { object, property, index, value }` | `$p->items[0] = 10;` |
 | `ExternFunctionDecl { name, params, return_type, library }` | `extern function foo(int $x): int;` or entries inside `extern "lib" { ... }` — `params` is `Vec<ExternParam>`, where each `ExternParam` stores `{ name, c_type }`, and `return_type` is a `CType` |
 | `ExternClassDecl { name, fields }` | `extern class Point { public int $x; }` |
 | `ExternGlobalDecl { name, c_type }` | `extern global ptr $environ;` — the declared type is a C-facing `CType`, not a `PhpType` |
@@ -126,14 +128,14 @@ Things that do something:
 
 ### Statement dispatch
 
-At statement level, parsing is split between `parser/mod.rs` and `stmt.rs`:
+At statement level, parsing is split between `parser/mod.rs` and the `stmt/` submodules:
 
 - `parse()` in `mod.rs` special-cases `extern` so one `extern "lib" { ... }` block can expand into multiple AST statements.
 - Everything else flows through `stmt::parse_stmt()`, which selects the parser entry point from the current token.
 
 | Current token | Parse as |
 |---|---|
-| `Class` / `Abstract Class` / `Readonly Class` / `Abstract Readonly Class` | Class declaration |
+| `Class` / `Abstract Class` / `Final Class` / `Readonly Class` / combined class modifiers | Class declaration |
 | `Enum` | Enum declaration |
 | `Packed` | Packed-class declaration |
 | `Interface` | Interface declaration |
@@ -335,7 +337,7 @@ parent::boot()   →  StaticMethodCall { receiver: Parent, method: "boot", args:
 
 ## Statement parsing
 
-**Files:** `src/parser/stmt.rs`, `src/parser/control.rs`
+**Files:** `src/parser/stmt/`, `src/parser/control.rs`
 
 Statement parsing is simpler — after `parse()` has peeled off top-level `extern` blocks, `stmt.rs` looks at the current token to decide what kind of statement to parse:
 

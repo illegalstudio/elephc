@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-**Source:** `src/types/` — `mod.rs`, `traits.rs`, `checker/mod.rs`, `checker/builtins.rs`, `checker/functions.rs`
+**Source:** `src/types/` — `mod.rs`, `traits.rs`, `checker/mod.rs`, `checker/builtins/`, `checker/functions.rs`
 
 PHP is dynamically typed — variables can change type at runtime. But elephc compiles to native code where every value must have a known size and location. The type checker bridges this gap by **inferring types at compile time**.
 
@@ -135,7 +135,7 @@ Built-in functions have hardcoded type signatures (see below). User-defined func
 
 ## Built-in function signatures
 
-**Files:** `src/types/checker/builtins.rs`, plus `src/types/checker/mod.rs` for special expression forms such as `ExprKind::PtrCast`
+**Files:** `src/types/checker/builtins/`, plus `src/types/checker/mod.rs` for special expression forms such as `ExprKind::PtrCast`
 
 Every built-in function has a registered type signature:
 

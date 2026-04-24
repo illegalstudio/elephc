@@ -1,6 +1,6 @@
 ---
 title: "Types"
-description: "Data types supported by elephc: int, float, string, bool, array, null, mixed, object, enum."
+description: "Data types supported by elephc: int, float, string, bool, array, null, mixed, callable, object, enum, and extension types."
 sidebar:
   order: 1
 ---
@@ -16,10 +16,15 @@ sidebar:
 | `float` | Yes | 64-bit double-precision. Literals: `3.14`, `.5`, `1.5e3`, `1.0e-5`. Constants: `INF`, `NAN`. |
 | `array` | Yes | Indexed (`[1, 2, 3]`) and associative (`["key" => "value"]`). Arrays use copy-on-write semantics. |
 | `mixed` | Yes | Supported in type hints and typed locals. Runtime values are boxed with a per-value tag. |
+| `callable` | Yes | Closures, arrow functions, first-class callables, and FFI callback parameters. |
 | `object` | Yes | Class instances. Heap-allocated, fixed-layout. `new ClassName(...)` |
 | `enum` | Yes | Pure and backed enums. Cases are singletons. Backed enums support `->value`, `::from()`, `::tryFrom()`, `::cases()`. |
 | `int\|string` | Yes | Union type — variable accepts any of the listed types. Lowered to Mixed at runtime. |
 | `?int` | Yes | Nullable shorthand — sugar for `int\|null`. |
+| `void` | Return only | Valid as a function, method, closure, or extern return type. Internally, `null` is represented as `Void`. |
+| `ptr` / `ptr<T>` | elephc extension | Raw 64-bit pointer, optionally carrying a checked compile-time pointee tag. See [Pointers](../beyond-php/pointers.md). |
+| `buffer<T>` | elephc extension | Fixed-size contiguous storage for POD scalars, pointers, or packed records. See [Buffers](../beyond-php/buffers.md). |
+| `packed class` | elephc extension | Flat POD record type with compile-time field offsets. See [Packed Classes](../beyond-php/packed-classes.md). |
 | `resource` | No | File handles are modeled as integer file descriptors (`int`). |
 
 ### Typed local declarations
