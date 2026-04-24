@@ -138,7 +138,7 @@ global  static  self  class  abstract  final  interface  trait  extends  impleme
 public  protected  private  readonly  parent  insteadof  enum  packed
 ```
 
-Each keyword is a distinct token variant (e.g., `Token::If`, `Token::While`, `Token::Switch`).
+Each keyword is a distinct token variant (e.g., `Token::If`, `Token::While`, `Token::Switch`). Multi-word keyword spellings use camel-cased variants such as `Token::IncludeOnce` and `Token::RequireOnce`; `readonly` is `Token::ReadOnly`.
 
 ### Constants (keyword tokens)
 
@@ -149,7 +149,7 @@ PHP_EOL  PHP_OS  DIRECTORY_SEPARATOR
 STDIN  STDOUT  STDERR
 ```
 
-These are recognized as distinct tokens by the lexer, not as identifiers.
+These are recognized as distinct tokens by the lexer, not as identifiers. Their variants include forms such as `Token::Inf`, `Token::Nan`, `Token::PhpIntMax`, `Token::PhpFloatEpsilon`, and `Token::DirectorySeparator`.
 
 ### Operators
 
