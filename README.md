@@ -333,7 +333,7 @@ src/
 ├── span.rs              # Source position tracking (line, col)
 ├── conditional.rs       # Build-time `ifdef` pass driven by --define
 ├── resolver.rs          # Include/require file resolution
-├── optimize.rs          # AST optimizer: folding, propagation, pruning, normalization, dead-code elimination
+├── optimize/            # AST optimizer: folding, propagation, pruning, normalization, dead-code elimination
 ├── names.rs             # Qualified/FQN name model + symbol mangling helpers
 ├── name_resolver/       # Namespace/use resolution to canonical names
 │

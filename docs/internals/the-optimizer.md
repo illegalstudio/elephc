@@ -5,7 +5,7 @@ sidebar:
   order: 6
 ---
 
-**Source:** `src/optimize.rs`
+**Source:** `src/optimize/`
 
 elephc's optimizer is intentionally simple and AST-focused. It does not build a separate IR or run heavyweight SSA passes. Instead, it performs a small set of local rewrites that already pay off in generated assembly quality and compile-time clarity.
 

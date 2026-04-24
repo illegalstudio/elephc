@@ -100,7 +100,7 @@ In this example there are no namespaces or imports, so the AST still passes thro
 
 ## Phase 6: Early optimization (constant folding)
 
-**File:** `src/optimize.rs`
+**File:** `src/optimize/`
 
 Before type checking, elephc runs a conservative AST simplification pass. This stage folds expressions whose result is already statically known without needing any type-environment information.
 
@@ -142,7 +142,7 @@ On successful type checking, elephc also runs a warning pass that reports issues
 
 ## Phase 8: Post-typecheck constant propagation
 
-**File:** `src/optimize.rs`
+**File:** `src/optimize/`
 
 After the checker succeeds, elephc runs a local constant-propagation pass.
 
@@ -170,7 +170,7 @@ if (true) {
 
 ## Phase 9: Post-typecheck control-flow pruning
 
-**File:** `src/optimize.rs`
+**File:** `src/optimize/`
 
 After the checker succeeds, elephc runs a second optimization pass that is allowed to prune dead control flow without hiding diagnostics from the type checker.
 
@@ -197,7 +197,7 @@ echo "big\n";
 
 ## Phase 10: Control-flow normalization
 
-**File:** `src/optimize.rs`
+**File:** `src/optimize/`
 
 After control-flow pruning, elephc canonicalizes the remaining control-flow shells. This pass does not try to prove new constants; it rewrites structurally equivalent shapes into simpler, more uniform AST forms so later passes see fewer special cases.
 
@@ -212,7 +212,7 @@ This pass currently handles cases such as:
 
 ## Phase 11: Dead-code elimination
 
-**File:** `src/optimize.rs`
+**File:** `src/optimize/`
 
 After normalization, elephc runs a final dead-code-elimination pass over the already-canonical AST.
 
