@@ -82,6 +82,8 @@ Constants are global, resolved at compile time. Values must be literals.
 | `STDOUT` | int | 1 |
 | `STDERR` | int | 2 |
 
+`PHP_OS` currently returns `"Darwin"` on all targets, including Linux targets.
+
 ## Superglobals
 
 | Variable | Type | Description |

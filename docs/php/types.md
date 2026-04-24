@@ -106,8 +106,9 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 ### Known incompatibilities with PHP
 
 - `$argv[0]` returns the compiled binary path, not the `.php` file path.
+- `PHP_OS` and `php_uname()` currently return `"Darwin"` on all targets, including Linux targets.
 - `strpos()` returns `-1` when not found, not `false`.
-- `array_search()` returns `-1` when not found, not `false`.
+- `array_search()` returns `-1` when an indexed array search misses and `""` when an associative array search misses, not `false`.
 - Integer overflow wraps instead of promoting to float.
 - Loose comparison (`==`) between different types coerces both sides to integer.
 - elephc does not model PHP's uninitialized typed-property state; property slots without explicit defaults start from the compiler's existing zero/null-like object-slot initialization until assigned.

@@ -22,6 +22,14 @@ buffer<Enemy> $enemies = buffer_new<Enemy>(256);
 
 Only POD scalar, pointer, or packed-record element types are accepted. No union types (`buffer<int|string>`) or nullable (`buffer<?int>`).
 
+## Buffer builtins
+
+| Function | Signature | Description |
+|---|---|---|
+| `buffer_new<T>()` | `buffer_new<T>($length): buffer<T>` | Allocate a fixed-size buffer with `$length` elements of type `T` |
+| `buffer_len()` | `buffer_len($buffer): int` | Return the logical element count stored in the buffer header |
+| `buffer_free()` | `buffer_free($buffer): void` | Release a local buffer variable and nullify it |
+
 ## Reading and writing
 
 ```php
