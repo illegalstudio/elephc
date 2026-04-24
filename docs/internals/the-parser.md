@@ -113,7 +113,7 @@ Things that do something:
 | `ListUnpack { vars, value }` | `[$a, $b] = [1, 2];` |
 | `Global { vars }` | `global $x, $y;` — declares variables as referencing global storage |
 | `StaticVar { name, init }` | `static $count = 0;` — declares a variable that persists across function calls |
-| `ClassDecl { name, extends, implements, is_abstract, is_readonly_class, trait_uses, properties, methods }` | `abstract readonly class Point extends Shape implements Named { use NamedTrait; ... }` |
+| `ClassDecl { name, extends, implements, is_abstract, is_final, is_readonly_class, trait_uses, properties, methods }` | `final readonly class Point extends Shape implements Named { use NamedTrait; ... }` |
 | `EnumDecl { name, backing_type, cases }` | `enum Status: int { case Ok = 1; case Err = 2; }` |
 | `PackedClassDecl { name, fields }` | `packed class Vec2 { public float $x; public float $y; }` |
 | `InterfaceDecl { name, extends, methods }` | `interface Named extends Jsonable { public function name(); }` |
@@ -176,8 +176,8 @@ NullCoalesce
 | Type | Fields | Description |
 |---|---|---|
 | `Visibility` | `Public`, `Protected`, `Private` | Enum for property/method visibility |
-| `ClassProperty` | `name`, `visibility`, `readonly`, `default`, `span` | A property declaration inside a class |
-| `ClassMethod` | `name`, `visibility`, `is_static`, `is_abstract`, `has_body`, `params`, `variadic`, `return_type`, `body`, `span` | A method declaration inside a class, trait, or interface |
+| `ClassProperty` | `name`, `visibility`, `readonly`, `is_final`, `default`, `span` | A property declaration inside a class |
+| `ClassMethod` | `name`, `visibility`, `is_static`, `is_abstract`, `is_final`, `has_body`, `params`, `variadic`, `return_type`, `body`, `span` | A method declaration inside a class, trait, or interface |
 | `CatchClause` | `exception_types`, `variable`, `body` | A catch arm. `exception_types` supports both single-type and PHP-style multi-catch (`TypeA | TypeB`), and `variable` is optional for PHP 8-style `catch (Exception)` |
 | `StaticReceiver` | `Named(Name)`, `Self_`, `Static`, `Parent` | Left-hand side of `ClassName::method()`, `self::method()`, `static::method()`, and `parent::method()` |
 | `TraitUse` | `trait_names`, `adaptations`, `span` | A `use TraitA, TraitB { ... }` clause inside a class or trait body |
@@ -353,7 +353,7 @@ Statement parsing is simpler — after `parse()` has peeled off top-level `exter
 | `Foreach` | `Foreach` loop |
 | `Switch` | `Switch` statement with cases and optional default |
 | `Function` | Function declaration with parameters and body |
-| `Class` / `Abstract Class` / `Readonly Class` / `Abstract Readonly Class` | Class declaration with properties and methods |
+| `Class` / `Abstract Class` / `Final Class` / `Readonly Class` / combined class modifiers | Class declaration with properties and methods |
 | `Enum` | Enum declaration |
 | `Packed` | Packed class declaration |
 | `Interface` | Interface declaration |

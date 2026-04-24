@@ -293,6 +293,7 @@ Proper type system for PHP compatibility.
 - [x] First-class callable syntax (`strlen(...)`) — create closures from function names without string indirection
 - [x] `match` with no-match error — runtime fatal when no arm matches and no default
 - [x] Readonly classes (`readonly class Point {}`) — all properties implicitly readonly
+- [x] Final classes, methods, and properties (`final class Foo {}`, `final public function run() {}`, `final public $id`) — compile-time inheritance and override enforcement
 - [x] Union types (`int|string`) — tagged union with runtime type dispatch
 - [x] Nullable types (`?int`) — sugar for `int|null`
 - [x] Function / method parameter and return type hints (`function foo(int $x): string`) — compile-time validation for functions, methods, constructors, closures, and arrow functions

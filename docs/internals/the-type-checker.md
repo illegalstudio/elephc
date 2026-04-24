@@ -248,7 +248,7 @@ For each interface, the checker resolves `interface extends interface` transitiv
 
 ## Class type checking
 
-After interfaces are known, the checker builds each class so it sees parent-first property layout, inherited method signatures, abstract obligations, implemented interface contracts, and vtable slot assignments.
+After interfaces are known, the checker builds each class so it sees parent-first property layout, inherited method signatures, abstract/final constraints, implemented interface contracts, and vtable slot assignments.
 
 When the type checker encounters a `ClassDecl`, it:
 
@@ -256,7 +256,7 @@ When the type checker encounters a `ClassDecl`, it:
 2. **Resolves the parent chain** (`extends`) and merges inherited metadata
 3. **Records each property** with its type (inferred from default values or constructor assignments) and a fixed offset in the inherited object layout
 4. **Type-checks each method body** with `$this` bound to `Object(ClassName)`
-5. **Builds `ClassInfo`** containing property types, defaults, signatures, declaring/implementation class maps, instance/static vtable slots, implemented interface lists, and constructor-to-property mappings
+5. **Builds `ClassInfo`** containing property types, defaults, final property/method sets, signatures, declaring/implementation class maps, instance/static vtable slots, implemented interface lists, and constructor-to-property mappings
 
 The `ClassInfo` struct:
 
@@ -265,22 +265,26 @@ pub struct ClassInfo {
     pub class_id: u64,
     pub parent: Option<String>,
     pub is_abstract: bool,
+    pub is_final: bool,
     pub is_readonly_class: bool,
     pub properties: Vec<(String, PhpType)>,
     pub property_offsets: HashMap<String, usize>,
     pub property_declaring_classes: HashMap<String, String>,
     pub defaults: Vec<Option<Expr>>,
     pub property_visibilities: HashMap<String, Visibility>,
+    pub final_properties: HashSet<String>,
     pub readonly_properties: HashSet<String>,
     pub method_decls: Vec<ClassMethod>,
     pub methods: HashMap<String, FunctionSig>,
     pub static_methods: HashMap<String, FunctionSig>,
     pub method_visibilities: HashMap<String, Visibility>,
+    pub final_methods: HashSet<String>,
     pub method_declaring_classes: HashMap<String, String>,
     pub method_impl_classes: HashMap<String, String>,
     pub vtable_methods: Vec<String>,
     pub vtable_slots: HashMap<String, usize>,
     pub static_method_visibilities: HashMap<String, Visibility>,
+    pub final_static_methods: HashSet<String>,
     pub static_method_declaring_classes: HashMap<String, String>,
     pub static_method_impl_classes: HashMap<String, String>,
     pub static_vtable_methods: Vec<String>,

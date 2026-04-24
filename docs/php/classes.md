@@ -54,6 +54,25 @@ abstract class BaseGreeter {
 - abstract methods must be bodyless
 - non-abstract classes may not have abstract methods
 
+## Final classes, methods, and properties
+```php
+<?php
+final class InvoiceNumber {
+    final public $value = 42;
+
+    final public function label() {
+        return "invoice:" . $this->value;
+    }
+}
+```
+- `final class` cannot be extended
+- `final` methods cannot be overridden by subclasses
+- `final` properties cannot be redeclared by subclasses
+- `final` does not change object layout or dispatch for normal calls
+- `abstract final` classes and methods are rejected
+- `final private` methods emit a warning, matching PHP, because private methods are not overridden; `__construct` is the exception
+- `final private` properties are rejected, matching PHP
+
 ## Properties
 - `public`, `protected`, `private` visibility
 - Optional default values
@@ -109,7 +128,6 @@ Pure and backed enums. `->value`, `::from()`, `::tryFrom()`, `::cases()`. Only `
 - `__set($name, $value)` — writing undefined property
 
 ## Limitations
-- No `final` classes or methods
 - No property type declarations
 - No constructor promotion
 - No property redeclaration across inheritance chain
