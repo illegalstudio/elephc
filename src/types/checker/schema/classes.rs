@@ -42,6 +42,13 @@ pub(crate) fn build_class_info_recursive(
         )
     })?;
 
+    if class.is_abstract && class.is_final {
+        return Err(CompileError::new(
+            crate::span::Span::dummy(),
+            "Cannot use the final modifier on an abstract class",
+        ));
+    }
+
     let parent_info = if let Some(parent_name) = &class.extends {
         if checker.interfaces.contains_key(parent_name) {
             return Err(CompileError::new(
@@ -64,6 +71,12 @@ pub(crate) fn build_class_info_recursive(
     };
 
     if let (Some(parent), Some(parent_name)) = (&parent_info, class.extends.as_ref()) {
+        if parent.is_final {
+            return Err(CompileError::new(
+                crate::span::Span::dummy(),
+                &format!("Class {} cannot extend final class {}", class.name, parent_name),
+            ));
+        }
         if class.is_readonly_class != parent.is_readonly_class {
             let relation = if class.is_readonly_class {
                 "readonly class cannot extend non-readonly parent"
@@ -82,16 +95,19 @@ pub(crate) fn build_class_info_recursive(
     let mut property_declaring_classes = HashMap::new();
     let mut defaults = Vec::new();
     let mut property_visibilities = HashMap::new();
+    let mut final_properties = HashSet::new();
     let mut readonly_properties = std::collections::HashSet::new();
 
     let mut method_sigs = HashMap::new();
     let mut static_sigs = HashMap::new();
     let mut method_visibilities = HashMap::new();
+    let mut final_methods = HashSet::new();
     let mut method_declaring_classes = HashMap::new();
     let mut method_impl_classes = HashMap::new();
     let mut vtable_methods = Vec::new();
     let mut vtable_slots = HashMap::new();
     let mut static_method_visibilities = HashMap::new();
+    let mut final_static_methods = HashSet::new();
     let mut static_method_declaring_classes = HashMap::new();
     let mut static_method_impl_classes = HashMap::new();
     let mut static_vtable_methods = Vec::new();
@@ -109,6 +125,9 @@ pub(crate) fn build_class_info_recursive(
             if let Some(declaring_class) = parent.property_declaring_classes.get(name) {
                 property_declaring_classes.insert(name.clone(), declaring_class.clone());
             }
+            if parent.final_properties.contains(name) {
+                final_properties.insert(name.clone());
+            }
             if parent.readonly_properties.contains(name) {
                 readonly_properties.insert(name.clone());
             }
@@ -121,6 +140,9 @@ pub(crate) fn build_class_info_recursive(
             method_sigs.insert(name.clone(), sig.clone());
             if let Some(visibility) = parent.method_visibilities.get(name) {
                 method_visibilities.insert(name.clone(), visibility.clone());
+            }
+            if parent.final_methods.contains(name) {
+                final_methods.insert(name.clone());
             }
             if let Some(declaring_class) = parent.method_declaring_classes.get(name) {
                 method_declaring_classes.insert(name.clone(), declaring_class.clone());
@@ -140,6 +162,9 @@ pub(crate) fn build_class_info_recursive(
             if let Some(visibility) = parent.static_method_visibilities.get(name) {
                 static_method_visibilities.insert(name.clone(), visibility.clone());
             }
+            if parent.final_static_methods.contains(name) {
+                final_static_methods.insert(name.clone());
+            }
             if let Some(declaring_class) = parent.static_method_declaring_classes.get(name) {
                 static_method_declaring_classes.insert(name.clone(), declaring_class.clone());
             }
@@ -153,7 +178,26 @@ pub(crate) fn build_class_info_recursive(
     }
 
     for prop in &class.properties {
+        if prop.is_final && prop.visibility == Visibility::Private {
+            return Err(CompileError::new(
+                prop.span,
+                "Property cannot be both final and private",
+            ));
+        }
         if property_declaring_classes.contains_key(&prop.name) {
+            if final_properties.contains(&prop.name) {
+                let declaring_class = property_declaring_classes
+                    .get(&prop.name)
+                    .cloned()
+                    .unwrap_or_else(|| class.name.clone());
+                return Err(CompileError::new(
+                    prop.span,
+                    &format!(
+                        "Cannot override final property {}::${}",
+                        declaring_class, prop.name
+                    ),
+                ));
+            }
             return Err(CompileError::new(
                 prop.span,
                 &format!(
@@ -174,6 +218,11 @@ pub(crate) fn build_class_info_recursive(
         property_declaring_classes.insert(prop.name.clone(), class.name.clone());
         defaults.push(prop.default.clone());
         property_visibilities.insert(prop.name.clone(), prop.visibility.clone());
+        if prop.is_final {
+            final_properties.insert(prop.name.clone());
+        } else {
+            final_properties.remove(&prop.name);
+        }
         if class.is_readonly_class || prop.readonly {
             readonly_properties.insert(prop.name.clone());
         }
@@ -181,6 +230,15 @@ pub(crate) fn build_class_info_recursive(
 
     for method in &class.methods {
         let sig = build_method_sig(checker, method)?;
+        if method.is_abstract && method.is_final {
+            return Err(CompileError::new(
+                method.span,
+                &format!(
+                    "Cannot use the final modifier on an abstract method: {}::{}",
+                    class.name, method.name
+                ),
+            ));
+        }
         if method.is_abstract && method.has_body {
             return Err(CompileError::new(
                 method.span,
@@ -209,12 +267,38 @@ pub(crate) fn build_class_info_recursive(
             ));
         }
         if method.is_static {
+            if final_methods.contains(&method.name) {
+                let declaring_class = method_declaring_classes
+                    .get(&method.name)
+                    .cloned()
+                    .unwrap_or_else(|| class.name.clone());
+                return Err(CompileError::new(
+                    method.span,
+                    &format!(
+                        "Cannot override final method {}::{}",
+                        declaring_class, method.name
+                    ),
+                ));
+            }
             if method_sigs.contains_key(&method.name) {
                 return Err(CompileError::new(
                     method.span,
                     &format!(
                         "Cannot change method kind when overriding {}::{}",
                         class.name, method.name
+                    ),
+                ));
+            }
+            if final_static_methods.contains(&method.name) {
+                let declaring_class = static_method_declaring_classes
+                    .get(&method.name)
+                    .cloned()
+                    .unwrap_or_else(|| class.name.clone());
+                return Err(CompileError::new(
+                    method.span,
+                    &format!(
+                        "Cannot override final method {}::{}",
+                        declaring_class, method.name
                     ),
                 ));
             }
@@ -243,6 +327,11 @@ pub(crate) fn build_class_info_recursive(
             }
             static_sigs.insert(method.name.clone(), sig);
             static_method_visibilities.insert(method.name.clone(), method.visibility.clone());
+            if method.is_final {
+                final_static_methods.insert(method.name.clone());
+            } else {
+                final_static_methods.remove(&method.name);
+            }
             static_method_declaring_classes.insert(method.name.clone(), class.name.clone());
             if method.is_abstract {
                 static_method_impl_classes.remove(&method.name);
@@ -257,12 +346,38 @@ pub(crate) fn build_class_info_recursive(
                 static_vtable_methods.push(method.name.clone());
             }
         } else {
+            if final_static_methods.contains(&method.name) {
+                let declaring_class = static_method_declaring_classes
+                    .get(&method.name)
+                    .cloned()
+                    .unwrap_or_else(|| class.name.clone());
+                return Err(CompileError::new(
+                    method.span,
+                    &format!(
+                        "Cannot override final method {}::{}",
+                        declaring_class, method.name
+                    ),
+                ));
+            }
             if static_sigs.contains_key(&method.name) {
                 return Err(CompileError::new(
                     method.span,
                     &format!(
                         "Cannot change method kind when overriding {}::{}",
                         class.name, method.name
+                    ),
+                ));
+            }
+            if final_methods.contains(&method.name) {
+                let declaring_class = method_declaring_classes
+                    .get(&method.name)
+                    .cloned()
+                    .unwrap_or_else(|| class.name.clone());
+                return Err(CompileError::new(
+                    method.span,
+                    &format!(
+                        "Cannot override final method {}::{}",
+                        declaring_class, method.name
                     ),
                 ));
             }
@@ -291,6 +406,11 @@ pub(crate) fn build_class_info_recursive(
             }
             method_sigs.insert(method.name.clone(), sig);
             method_visibilities.insert(method.name.clone(), method.visibility.clone());
+            if method.is_final {
+                final_methods.insert(method.name.clone());
+            } else {
+                final_methods.remove(&method.name);
+            }
             method_declaring_classes.insert(method.name.clone(), class.name.clone());
             if method.is_abstract {
                 method_impl_classes.remove(&method.name);
@@ -449,22 +569,26 @@ pub(crate) fn build_class_info_recursive(
             class_id: *next_class_id,
             parent: class.extends.clone(),
             is_abstract: class.is_abstract,
+            is_final: class.is_final,
             is_readonly_class: class.is_readonly_class,
             properties: prop_types,
             property_offsets,
             property_declaring_classes,
             defaults,
             property_visibilities,
+            final_properties,
             readonly_properties,
             method_decls: class.methods.clone(),
             methods: method_sigs,
             static_methods: static_sigs,
             method_visibilities,
+            final_methods,
             method_declaring_classes,
             method_impl_classes,
             vtable_methods,
             vtable_slots,
             static_method_visibilities,
+            final_static_methods,
             static_method_declaring_classes,
             static_method_impl_classes,
             static_vtable_methods,

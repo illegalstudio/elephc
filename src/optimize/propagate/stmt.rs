@@ -368,6 +368,7 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             extends,
             implements,
             is_abstract,
+            is_final,
             is_readonly_class,
             trait_uses,
             properties,
@@ -379,6 +380,7 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
                     extends,
                     implements,
                     is_abstract,
+                    is_final,
                     is_readonly_class,
                     trait_uses,
                     properties: properties.into_iter().map(propagate_property).collect(),
@@ -653,6 +655,7 @@ pub(crate) fn propagate_property(property: ClassProperty) -> ClassProperty {
         name: property.name,
         visibility: property.visibility,
         readonly: property.readonly,
+        is_final: property.is_final,
         default: property
             .default
             .map(|expr| propagate_expr(expr, &HashMap::new())),

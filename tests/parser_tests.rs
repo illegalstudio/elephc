@@ -2175,6 +2175,51 @@ fn test_parse_readonly_class_flag() {
 }
 
 #[test]
+fn test_parse_final_class_flag() {
+    let stmts = parse_source("<?php final class User { public function id() { return 1; } }");
+    match &stmts[0].kind {
+        StmtKind::ClassDecl {
+            name,
+            is_final,
+            is_abstract,
+            is_readonly_class,
+            methods,
+            ..
+        } => {
+            assert_eq!(name, "User");
+            assert!(*is_final);
+            assert!(!is_abstract);
+            assert!(!is_readonly_class);
+            assert_eq!(methods.len(), 1);
+        }
+        other => panic!("Expected final ClassDecl, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_final_readonly_class_flags() {
+    for source in [
+        "<?php final readonly class User {}",
+        "<?php readonly final class User {}",
+    ] {
+        let stmts = parse_source(source);
+        match &stmts[0].kind {
+            StmtKind::ClassDecl {
+                name,
+                is_final,
+                is_readonly_class,
+                ..
+            } => {
+                assert_eq!(name, "User");
+                assert!(*is_final);
+                assert!(*is_readonly_class);
+            }
+            other => panic!("Expected final readonly ClassDecl, got {:?}", other),
+        }
+    }
+}
+
+#[test]
 fn test_parse_abstract_readonly_class_flags() {
     let stmts = parse_source("<?php abstract readonly class User {}");
     match &stmts[0].kind {
@@ -2189,6 +2234,35 @@ fn test_parse_abstract_readonly_class_flags() {
             assert!(*is_readonly_class);
         }
         other => panic!("Expected abstract readonly ClassDecl, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_final_method_flag() {
+    let stmts = parse_source("<?php class User { final public function id() { return 1; } }");
+    match &stmts[0].kind {
+        StmtKind::ClassDecl { methods, .. } => {
+            assert_eq!(methods.len(), 1);
+            assert_eq!(methods[0].name, "id");
+            assert!(methods[0].is_final);
+            assert!(!methods[0].is_abstract);
+            assert!(methods[0].has_body);
+        }
+        other => panic!("Expected ClassDecl with final method, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_final_property_flag() {
+    let stmts = parse_source("<?php class User { final public $id = 1; }");
+    match &stmts[0].kind {
+        StmtKind::ClassDecl { properties, .. } => {
+            assert_eq!(properties.len(), 1);
+            assert_eq!(properties[0].name, "id");
+            assert!(properties[0].is_final);
+            assert!(!properties[0].readonly);
+        }
+        other => panic!("Expected ClassDecl with final property, got {:?}", other),
     }
 }
 

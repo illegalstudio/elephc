@@ -14,6 +14,7 @@ pub(in crate::parser::stmt) fn parse_class_decl(
     pos: &mut usize,
     span: Span,
     is_abstract: bool,
+    is_final: bool,
     is_readonly_class: bool,
 ) -> Result<Stmt, CompileError> {
     *pos += 1; // consume 'class'
@@ -63,6 +64,7 @@ pub(in crate::parser::stmt) fn parse_class_decl(
             extends,
             implements,
             is_abstract,
+            is_final,
             is_readonly_class,
             trait_uses,
             properties,
@@ -181,7 +183,8 @@ pub(in crate::parser::stmt) fn parse_packed_decl(
                 | Token::Private
                 | Token::Static
                 | Token::ReadOnly
-                | Token::Abstract,
+                | Token::Abstract
+                | Token::Final,
             ) => {
                 return Err(CompileError::new(
                     field_span,
@@ -233,24 +236,7 @@ pub(in crate::parser::stmt) fn parse_abstract_decl(
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
-    *pos += 1; // consume 'abstract'
-    if *pos < tokens.len() && tokens[*pos].0 == Token::ReadOnly {
-        *pos += 1; // consume 'readonly'
-        if *pos < tokens.len() && tokens[*pos].0 == Token::Class {
-            return parse_class_decl(tokens, pos, span, true, true);
-        }
-        return Err(CompileError::new(
-            span,
-            "Expected 'class' after 'abstract readonly' at statement position",
-        ));
-    }
-    if *pos < tokens.len() && tokens[*pos].0 == Token::Class {
-        return parse_class_decl(tokens, pos, span, true, false);
-    }
-    Err(CompileError::new(
-        span,
-        "Expected 'class' after 'abstract' at statement position",
-    ))
+    parse_modified_class_decl(tokens, pos, span)
 }
 
 pub(in crate::parser::stmt) fn parse_readonly_decl(
@@ -258,22 +244,69 @@ pub(in crate::parser::stmt) fn parse_readonly_decl(
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
-    *pos += 1; // consume 'readonly'
-    if *pos < tokens.len() && tokens[*pos].0 == Token::Abstract {
-        *pos += 1; // consume 'abstract'
-        if *pos < tokens.len() && tokens[*pos].0 == Token::Class {
-            return parse_class_decl(tokens, pos, span, true, true);
+    parse_modified_class_decl(tokens, pos, span)
+}
+
+pub(in crate::parser::stmt) fn parse_final_decl(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    parse_modified_class_decl(tokens, pos, span)
+}
+
+fn parse_modified_class_decl(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    let mut is_abstract = false;
+    let mut is_final = false;
+    let mut is_readonly_class = false;
+
+    while *pos < tokens.len() {
+        match tokens[*pos].0 {
+            Token::Abstract => {
+                if is_abstract {
+                    return Err(CompileError::new(span, "Duplicate class modifier: abstract"));
+                }
+                is_abstract = true;
+                *pos += 1;
+            }
+            Token::Final => {
+                if is_final {
+                    return Err(CompileError::new(span, "Duplicate class modifier: final"));
+                }
+                is_final = true;
+                *pos += 1;
+            }
+            Token::ReadOnly => {
+                if is_readonly_class {
+                    return Err(CompileError::new(span, "Duplicate class modifier: readonly"));
+                }
+                is_readonly_class = true;
+                *pos += 1;
+            }
+            Token::Class => {
+                if is_abstract && is_final {
+                    return Err(CompileError::new(
+                        span,
+                        "Cannot use the final modifier on an abstract class",
+                    ));
+                }
+                return parse_class_decl(tokens, pos, span, is_abstract, is_final, is_readonly_class);
+            }
+            _ => {
+                return Err(CompileError::new(
+                    span,
+                    "Expected 'class' after class modifier at statement position",
+                ))
+            }
         }
-        return Err(CompileError::new(
-            span,
-            "Expected 'class' after 'readonly abstract' at statement position",
-        ));
     }
-    if *pos < tokens.len() && tokens[*pos].0 == Token::Class {
-        return parse_class_decl(tokens, pos, span, false, true);
-    }
+
     Err(CompileError::new(
         span,
-        "Expected 'class' after 'readonly' at statement position",
+        "Expected 'class' after class modifier at statement position",
     ))
 }

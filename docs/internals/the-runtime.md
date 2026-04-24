@@ -1,11 +1,11 @@
 ---
 title: "The Runtime"
-description: "Hand-written assembly routines for strings, arrays, and I/O."
+description: "Hand-written assembly routines for strings, arrays, system calls, exceptions, and I/O."
 sidebar:
   order: 8
 ---
 
-**Source:** `src/codegen/runtime/` — `mod.rs`, `data.rs`, `strings/`, `arrays/`, `buffers/`, `exceptions.rs`, `exceptions/`, `io/`, `system/`, `pointers/`
+**Source:** `src/codegen/runtime/` — `mod.rs`, `emitters.rs`, `data.rs`, `x86_minimal.rs`, `strings/`, `arrays/`, `buffers/`, `exceptions.rs`, `exceptions/`, `io/`, `system/`, `pointers/`
 
 The runtime is a collection of **hand-written assembly routines** that handle operations too complex for inline code generation. When the [code generator](the-codegen.md) needs to convert an integer to a string or concatenate two strings, it emits a `bl __rt_itoa` or `bl __rt_concat` — a call to a runtime routine.
 
@@ -158,7 +158,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 ## Array routines
 
-**Source:** `src/codegen/runtime/arrays/` (100 files)
+**Source:** `src/codegen/runtime/arrays/` (103 files)
 
 ### Core allocation
 
@@ -245,6 +245,7 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_array_column_str` | Extract column from array of assoc arrays (string values) |
 | `__rt_range` | Generate integer range array |
 | `__rt_shuffle` / `__rt_array_rand` | Randomize order / pick random |
+| `__rt_random_u32` / `__rt_random_uniform` | Target-aware random primitives used by `rand()`, `random_int()`, `shuffle()`, and `array_rand()` |
 | `__rt_asort` / `__rt_ksort` / `__rt_natsort` | Sort preserving keys |
 | `__rt_array_map` | Apply callback to each int element, return new array |
 | `__rt_array_map_str` | Apply callback to each string element, return new array |
@@ -296,7 +297,7 @@ At program start, the OS passes `argc` (argument count) in `x0` and `argv` (poin
 
 ## Exception routines
 
-**Source:** `src/codegen/runtime/exceptions.rs`
+**Source:** `src/codegen/runtime/exceptions.rs` plus `src/codegen/runtime/exceptions/` (4 files)
 
 elephc lowers exceptions with a small runtime layer around `_setjmp` / `_longjmp`. Codegen publishes the current exception object into `_exc_value`, pushes a handler record into `_exc_handler_top`, and then uses these helpers to unwind, match catch clauses, and resume control flow through `catch` / `finally`.
 
@@ -408,6 +409,7 @@ These helpers support the compiler-specific `buffer<T>` hot-path data type.
 |---|---|---|---|
 | `__rt_mixed_cast_int` | Unbox a mixed cell and cast to integer | `x0` = mixed cell pointer | `x0` = integer |
 | `__rt_mixed_cast_bool` | Unbox a mixed cell and cast to boolean | `x0` = mixed cell pointer | `x0` = 0 or 1 |
+| `__rt_mixed_cast_float` | Unbox a mixed cell and cast to float | `x0` = mixed cell pointer | `d0` = float |
 | `__rt_mixed_cast_string` | Unbox a mixed cell and cast to string | `x0` = mixed cell pointer | `x1`/`x2` = string |
 | `__rt_mixed_is_empty` | Check emptiness of a mixed cell (PHP semantics) | `x0` = mixed cell pointer | `x0` = 0 or 1 |
 | `__rt_mixed_strict_eq` | Compare two mixed cells by tag and value | `x0`, `x1` = mixed pointers | `x0` = 0 or 1 |
@@ -418,7 +420,7 @@ These helpers support the compiler-specific `buffer<T>` hot-path data type.
 
 ## How routines are emitted
 
-**File:** `src/codegen/runtime/mod.rs`
+**File:** `src/codegen/runtime/emitters.rs`
 
 The `emit_runtime()` function calls every routine emitter in a fixed order:
 

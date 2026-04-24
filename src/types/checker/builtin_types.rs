@@ -56,6 +56,7 @@ pub(crate) fn inject_builtin_throwables(
             extends: None,
             implements: vec!["Throwable".to_string()],
             is_abstract: false,
+            is_final: false,
             is_readonly_class: false,
             properties: vec![builtin_exception_message_property()],
             methods: vec![
@@ -73,6 +74,7 @@ fn builtin_exception_message_property() -> ClassProperty {
         name: "message".to_string(),
         visibility: Visibility::Public,
         readonly: false,
+        is_final: false,
         default: Some(Expr::new(
             ExprKind::StringLiteral(String::new()),
             crate::span::Span::dummy(),
@@ -87,6 +89,7 @@ fn builtin_exception_constructor_method() -> ClassMethod {
         visibility: Visibility::Public,
         is_static: false,
         is_abstract: false,
+        is_final: false,
         has_body: true,
         params: vec![(
             "message".to_string(),
@@ -120,6 +123,7 @@ fn builtin_exception_get_message_method() -> ClassMethod {
         visibility: Visibility::Public,
         is_static: false,
         is_abstract: false,
+        is_final: false,
         has_body: true,
         params: Vec::new(),
         variadic: None,
@@ -144,6 +148,7 @@ fn builtin_throwable_get_message_method() -> ClassMethod {
         visibility: Visibility::Public,
         is_static: false,
         is_abstract: true,
+        is_final: false,
         has_body: false,
         params: Vec::new(),
         variadic: None,

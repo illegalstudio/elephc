@@ -40,6 +40,7 @@ pub(super) fn resolve_decl_stmt(
             extends,
             implements,
             is_abstract,
+            is_final,
             is_readonly_class,
             trait_uses,
             properties,
@@ -75,6 +76,7 @@ pub(super) fn resolve_decl_stmt(
                         .map(|name| resolved_name(resolved_class_name(name, namespace, imports)))
                         .collect(),
                     is_abstract: *is_abstract,
+                    is_final: *is_final,
                     is_readonly_class: *is_readonly_class,
                     trait_uses,
                     properties: properties.clone(),

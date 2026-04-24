@@ -16,6 +16,7 @@ pub(super) fn fold_property(property: ClassProperty) -> ClassProperty {
         name: property.name,
         visibility: property.visibility,
         readonly: property.readonly,
+        is_final: property.is_final,
         default: property.default.map(fold_expr),
         span: property.span,
     }
@@ -27,6 +28,7 @@ pub(super) fn fold_method(method: ClassMethod) -> ClassMethod {
         visibility: method.visibility,
         is_static: method.is_static,
         is_abstract: method.is_abstract,
+        is_final: method.is_final,
         has_body: method.has_body,
         params: fold_params(method.params),
         variadic: method.variadic,

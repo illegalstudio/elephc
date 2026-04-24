@@ -53,11 +53,11 @@ pub(super) fn emit_float_literal(
             emitter.instruction(&format!("ldr {}, [{}]", abi::float_result_reg(emitter), scratch)); // load the 64-bit float literal through the symbol scratch register
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!(
+            emitter.instruction(&format!(                                       // load the 64-bit float literal through the symbol scratch register
                 "movsd {}, QWORD PTR [{}]",
                 abi::float_result_reg(emitter),
                 scratch
-            ));                                                                 // load the 64-bit float literal through the symbol scratch register
+            ));
         }
     }
     PhpType::Float
@@ -74,33 +74,33 @@ pub(super) fn emit_negate(
     if ty == PhpType::Float {
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!(
+                emitter.instruction(&format!(                                   // flip the sign bit of the current floating-point result
                     "fneg {}, {}",
                     abi::float_result_reg(emitter),
                     abi::float_result_reg(emitter)
-                ));                                                             // flip the sign bit of the current floating-point result
+                ));
             }
             Arch::X86_64 => {
                 emitter.instruction("xorpd xmm15, xmm15");                      // materialize +0.0 in a scratch xmm register before subtracting the value
-                emitter.instruction(&format!(
+                emitter.instruction(&format!(                                   // compute 0.0 - value to negate the current floating-point result
                     "subsd xmm15, {}",
                     abi::float_result_reg(emitter)
-                ));                                                             // compute 0.0 - value to negate the current floating-point result
-                emitter.instruction(&format!(
+                ));
+                emitter.instruction(&format!(                                   // move the negated floating-point result back into the ABI return register
                     "movsd {}, xmm15",
                     abi::float_result_reg(emitter)
-                ));                                                             // move the negated floating-point result back into the ABI return register
+                ));
             }
         }
         PhpType::Float
     } else {
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!(
+                emitter.instruction(&format!(                                   // two's-complement negate the current integer result in place
                     "neg {}, {}",
                     abi::int_result_reg(emitter),
                     abi::int_result_reg(emitter)
-                ));                                                             // two's-complement negate the current integer result in place
+                ));
             }
             Arch::X86_64 => {
                 emitter.instruction(&format!("neg {}", abi::int_result_reg(emitter))); // two's-complement negate the current integer result in place
@@ -121,11 +121,11 @@ pub(super) fn emit_bit_not(
     emitter.comment("bitwise not");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!(
+            emitter.instruction(&format!(                                       // invert every bit of the current integer result in place
                 "mvn {}, {}",
                 abi::int_result_reg(emitter),
                 abi::int_result_reg(emitter)
-            ));                                                                 // invert every bit of the current integer result in place
+            ));
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("not {}", abi::int_result_reg(emitter))); // invert every bit of the current integer result in place

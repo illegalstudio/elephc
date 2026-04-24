@@ -136,6 +136,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 modifiers.visibility,
                 modifiers.is_static,
                 modifiers.is_abstract,
+                modifiers.is_final,
             )?);
             continue;
         }
@@ -166,6 +167,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 name: prop_name,
                 visibility: modifiers.visibility,
                 readonly: modifiers.is_readonly,
+                is_final: modifiers.is_final,
                 default,
                 span: member_span,
             });
@@ -189,6 +191,7 @@ pub(super) struct MemberModifiers {
     is_static: bool,
     is_readonly: bool,
     is_abstract: bool,
+    is_final: bool,
 }
 
 fn parse_member_modifiers(tokens: &[(Token, Span)], pos: &mut usize) -> MemberModifiers {
@@ -196,6 +199,7 @@ fn parse_member_modifiers(tokens: &[(Token, Span)], pos: &mut usize) -> MemberMo
     let mut is_static = false;
     let mut is_readonly = false;
     let mut is_abstract = false;
+    let mut is_final = false;
 
     loop {
         match tokens.get(*pos).map(|(t, _)| t) {
@@ -223,6 +227,10 @@ fn parse_member_modifiers(tokens: &[(Token, Span)], pos: &mut usize) -> MemberMo
                 is_abstract = true;
                 *pos += 1;
             }
+            Some(Token::Final) => {
+                is_final = true;
+                *pos += 1;
+            }
             _ => break,
         }
     }
@@ -232,6 +240,7 @@ fn parse_member_modifiers(tokens: &[(Token, Span)], pos: &mut usize) -> MemberMo
         is_static,
         is_readonly,
         is_abstract,
+        is_final,
     }
 }
 
@@ -242,6 +251,7 @@ fn parse_class_like_method(
     visibility: Visibility,
     is_static: bool,
     is_abstract: bool,
+    is_final: bool,
 ) -> Result<ClassMethod, CompileError> {
     *pos += 1; // consume 'function'
     let method_name = match tokens.get(*pos).map(|(t, _)| t) {
@@ -279,6 +289,7 @@ fn parse_class_like_method(
         visibility,
         is_static,
         is_abstract,
+        is_final,
         has_body,
         params,
         variadic,
@@ -310,6 +321,7 @@ fn parse_interface_body(
             modifiers.visibility,
             modifiers.is_static,
             true,
+            modifiers.is_final,
         )?);
     }
 

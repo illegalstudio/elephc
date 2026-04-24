@@ -782,6 +782,8 @@ If the property does not exist but the class exposes `__get($name)`, codegen mat
 
 For property assignment (`$obj->prop = value`), the value is evaluated first, then stored at the resolved inherited offset. If the property is missing but the class exposes `__set($name, $value)`, codegen boxes the value as `Mixed`, materializes the property name, and dispatches `__set` instead of emitting a direct store.
 
+Property-array writes use the same fixed-offset property resolution first, then delegate to the ordinary array storage paths for the nested container. `$obj->items[] = $value` lowers through `PropertyArrayPush`, and `$obj->items[$key] = $value` lowers through `PropertyArrayAssign`; both require a concrete array/assoc-array property rather than a magic `__set` fallback.
+
 ### Method call (`$obj->method(args)`)
 
 1. Evaluate the object expression to get the pointer in `x0`

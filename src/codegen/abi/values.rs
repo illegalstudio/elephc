@@ -174,25 +174,25 @@ pub fn emit_load_int_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
                 let uval = value as u64;
                 emitter.instruction(&format!("movz {}, #0x{:x}", reg, uval & 0xFFFF)); // seed the low 16 bits of the wider immediate value
                 if (uval >> 16) & 0xFFFF != 0 {
-                    emitter.instruction(&format!(
+                    emitter.instruction(&format!(                               // patch bits 16-31 of the wider immediate value
                         "movk {}, #0x{:x}, lsl #16",
                         reg,
                         (uval >> 16) & 0xFFFF
-                    ));                                                         // patch bits 16-31 of the wider immediate value
+                    ));
                 }
                 if (uval >> 32) & 0xFFFF != 0 {
-                    emitter.instruction(&format!(
+                    emitter.instruction(&format!(                               // patch bits 32-47 of the wider immediate value
                         "movk {}, #0x{:x}, lsl #32",
                         reg,
                         (uval >> 32) & 0xFFFF
-                    ));                                                         // patch bits 32-47 of the wider immediate value
+                    ));
                 }
                 if (uval >> 48) & 0xFFFF != 0 {
-                    emitter.instruction(&format!(
+                    emitter.instruction(&format!(                               // patch bits 48-63 of the wider immediate value
                         "movk {}, #0x{:x}, lsl #48",
                         reg,
                         (uval >> 48) & 0xFFFF
-                    ));                                                         // patch bits 48-63 of the wider immediate value
+                    ));
                 }
             }
         }

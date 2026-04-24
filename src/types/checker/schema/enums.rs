@@ -174,6 +174,7 @@ pub(crate) fn build_enum_info(
     let mut property_declaring_classes = HashMap::new();
     let mut defaults = Vec::new();
     let mut property_visibilities = HashMap::new();
+    let final_properties = HashSet::new();
     let mut readonly_properties = HashSet::new();
     if let Some(backing_ty) = &resolved_backing {
         properties.push(("value".to_string(), backing_ty.clone()));
@@ -234,22 +235,26 @@ pub(crate) fn build_enum_info(
             class_id: *next_class_id,
             parent: None,
             is_abstract: false,
+            is_final: true,
             is_readonly_class: true,
             properties,
             property_offsets,
             property_declaring_classes,
             defaults,
             property_visibilities,
+            final_properties,
             readonly_properties,
             method_decls: Vec::new(),
             methods: HashMap::new(),
             static_methods,
             method_visibilities: HashMap::new(),
+            final_methods: HashSet::new(),
             method_declaring_classes: HashMap::new(),
             method_impl_classes: HashMap::new(),
             vtable_methods: Vec::new(),
             vtable_slots: HashMap::new(),
             static_method_visibilities,
+            final_static_methods: HashSet::new(),
             static_method_declaring_classes,
             static_method_impl_classes,
             static_vtable_methods: Vec::new(),

@@ -43,6 +43,7 @@ pub enum Token {
     Implements,
     Interface,
     Abstract,
+    Final,
     Inf,
     Nan,
     PhpIntMax,
