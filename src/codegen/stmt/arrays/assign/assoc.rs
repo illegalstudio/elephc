@@ -55,10 +55,10 @@ pub(super) fn emit_assoc_array_assign(
             };
             emitter.instruction(&format!("mov x3, {}", val_lo));                // place the low payload word into the hash-set helper value register
             emitter.instruction(&format!("mov x4, {}", val_hi));                // place the high payload word into the hash-set helper value register
-            emitter.instruction(&format!(
+            emitter.instruction(&format!(                                       // materialize the runtime value tag that describes the inserted associative-array payload
                 "mov x5, #{}",
                 super::super::super::super::runtime_value_tag(&val_ty)
-            ));                                                                 // materialize the runtime value tag that describes the inserted associative-array payload
+            ));
             abi::emit_pop_reg_pair(emitter, "x1", "x2");                              // restore the preserved key pointer and length into the hash-set helper argument registers
             abi::emit_pop_reg(emitter, "x0");                                          // restore the preserved hash-table pointer into the first hash-set helper argument register
         }

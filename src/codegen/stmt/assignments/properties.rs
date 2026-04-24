@@ -116,31 +116,31 @@ pub(crate) fn emit_property_array_push_stmt(
             abi::emit_pop_reg(emitter, "x9");
             match &val_ty {
                 crate::types::PhpType::Int | crate::types::PhpType::Bool => {
-                    emitter.instruction("mov x1, x0");                                  // move the appended scalar payload into the runtime helper value register
-                    emitter.instruction("mov x0, x9");                                  // move the current array pointer into the runtime helper receiver register
-                    emitter.instruction("bl __rt_array_push_int");                      // append the scalar payload and return the possibly-grown array pointer
+                    emitter.instruction("mov x1, x0");                          // move the appended scalar payload into the runtime helper value register
+                    emitter.instruction("mov x0, x9");                          // move the current array pointer into the runtime helper receiver register
+                    emitter.instruction("bl __rt_array_push_int");              // append the scalar payload and return the possibly-grown array pointer
                 }
                 crate::types::PhpType::Float => {
-                    emitter.instruction("fmov x1, d0");                                 // move the appended float payload bits into the runtime helper value register
-                    emitter.instruction("mov x0, x9");                                  // move the current array pointer into the runtime helper receiver register
-                    emitter.instruction("bl __rt_array_push_int");                      // append the float payload bits as an 8-byte scalar slot
+                    emitter.instruction("fmov x1, d0");                         // move the appended float payload bits into the runtime helper value register
+                    emitter.instruction("mov x0, x9");                          // move the current array pointer into the runtime helper receiver register
+                    emitter.instruction("bl __rt_array_push_int");              // append the float payload bits as an 8-byte scalar slot
                 }
                 crate::types::PhpType::Str => {
-                    emitter.instruction("mov x0, x9");                                  // move the current array pointer into the runtime helper receiver register
-                    emitter.instruction("bl __rt_array_push_str");                      // persist and append the string payload, returning the possibly-grown array pointer
+                    emitter.instruction("mov x0, x9");                          // move the current array pointer into the runtime helper receiver register
+                    emitter.instruction("bl __rt_array_push_str");              // persist and append the string payload, returning the possibly-grown array pointer
                 }
                 crate::types::PhpType::Callable => {
-                    emitter.instruction("mov x1, x0");                                  // move the callable pointer bits into the runtime helper value register
-                    emitter.instruction("mov x0, x9");                                  // move the current array pointer into the runtime helper receiver register
-                    emitter.instruction("bl __rt_array_push_int");                      // append the callable pointer bits as a plain scalar slot
+                    emitter.instruction("mov x1, x0");                          // move the callable pointer bits into the runtime helper value register
+                    emitter.instruction("mov x0, x9");                          // move the current array pointer into the runtime helper receiver register
+                    emitter.instruction("bl __rt_array_push_int");              // append the callable pointer bits as a plain scalar slot
                 }
                 crate::types::PhpType::Mixed
                 | crate::types::PhpType::Array(_)
                 | crate::types::PhpType::AssocArray { .. }
                 | crate::types::PhpType::Object(_) => {
-                    emitter.instruction("mov x1, x0");                                  // move the retained heap payload pointer into the runtime helper child register
-                    emitter.instruction("mov x0, x9");                                  // move the current array pointer into the runtime helper receiver register
-                    emitter.instruction("bl __rt_array_push_refcounted");               // append the retained heap payload and return the possibly-grown array pointer
+                    emitter.instruction("mov x1, x0");                          // move the retained heap payload pointer into the runtime helper child register
+                    emitter.instruction("mov x0, x9");                          // move the current array pointer into the runtime helper receiver register
+                    emitter.instruction("bl __rt_array_push_refcounted");       // append the retained heap payload and return the possibly-grown array pointer
                 }
                 _ => {
                     emitter.comment("WARNING: unsupported property array push payload");
@@ -155,31 +155,31 @@ pub(crate) fn emit_property_array_push_stmt(
             abi::emit_pop_reg(emitter, "r11");
             match &val_ty {
                 crate::types::PhpType::Int | crate::types::PhpType::Bool => {
-                    emitter.instruction("mov rsi, rax");                                // move the appended scalar payload into the SysV runtime helper value register
-                    emitter.instruction("mov rdi, r11");                                // move the current array pointer into the SysV runtime helper receiver register
+                    emitter.instruction("mov rsi, rax");                        // move the appended scalar payload into the SysV runtime helper value register
+                    emitter.instruction("mov rdi, r11");                        // move the current array pointer into the SysV runtime helper receiver register
                     abi::emit_call_label(emitter, "__rt_array_push_int");
                 }
                 crate::types::PhpType::Float => {
-                    emitter.instruction("movq rsi, xmm0");                              // move the appended float payload bits into the SysV runtime helper value register
-                    emitter.instruction("mov rdi, r11");                                // move the current array pointer into the SysV runtime helper receiver register
+                    emitter.instruction("movq rsi, xmm0");                      // move the appended float payload bits into the SysV runtime helper value register
+                    emitter.instruction("mov rdi, r11");                        // move the current array pointer into the SysV runtime helper receiver register
                     abi::emit_call_label(emitter, "__rt_array_push_int");
                 }
                 crate::types::PhpType::Str => {
-                    emitter.instruction("mov rsi, rax");                                // move the appended string pointer into the SysV runtime helper payload register
-                    emitter.instruction("mov rdi, r11");                                // move the current array pointer into the SysV runtime helper receiver register
+                    emitter.instruction("mov rsi, rax");                        // move the appended string pointer into the SysV runtime helper payload register
+                    emitter.instruction("mov rdi, r11");                        // move the current array pointer into the SysV runtime helper receiver register
                     abi::emit_call_label(emitter, "__rt_array_push_str");
                 }
                 crate::types::PhpType::Callable => {
-                    emitter.instruction("mov rsi, rax");                                // move the callable pointer bits into the SysV runtime helper value register
-                    emitter.instruction("mov rdi, r11");                                // move the current array pointer into the SysV runtime helper receiver register
+                    emitter.instruction("mov rsi, rax");                        // move the callable pointer bits into the SysV runtime helper value register
+                    emitter.instruction("mov rdi, r11");                        // move the current array pointer into the SysV runtime helper receiver register
                     abi::emit_call_label(emitter, "__rt_array_push_int");
                 }
                 crate::types::PhpType::Mixed
                 | crate::types::PhpType::Array(_)
                 | crate::types::PhpType::AssocArray { .. }
                 | crate::types::PhpType::Object(_) => {
-                    emitter.instruction("mov rsi, rax");                                // move the retained heap payload pointer into the SysV runtime helper child register
-                    emitter.instruction("mov rdi, r11");                                // move the current array pointer into the SysV runtime helper receiver register
+                    emitter.instruction("mov rsi, rax");                        // move the retained heap payload pointer into the SysV runtime helper child register
+                    emitter.instruction("mov rdi, r11");                        // move the current array pointer into the SysV runtime helper receiver register
                     abi::emit_call_label(emitter, "__rt_array_push_refcounted");
                 }
                 _ => {
@@ -236,7 +236,7 @@ pub(crate) fn emit_property_array_assign_stmt(
     match emitter.target.arch {
         crate::codegen::platform::Arch::AArch64 => {
             abi::emit_push_reg(emitter, object_reg);
-            emitter.instruction("bl __rt_array_ensure_unique");                         // split shared indexed arrays before mutating the property-backed array storage
+            emitter.instruction("bl __rt_array_ensure_unique");                 // split shared indexed arrays before mutating the property-backed array storage
             abi::emit_pop_reg(emitter, object_reg);
             abi::emit_store_to_address(emitter, "x0", object_reg, target.offset);
             abi::emit_push_reg(emitter, object_reg);
@@ -245,34 +245,34 @@ pub(crate) fn emit_property_array_assign_stmt(
             abi::emit_push_reg(emitter, "x0");
             let val_ty = prepare_property_array_assign_value(value, emitter, ctx, data, &elem_ty);
             let state = PropertyIndexedAssignState::new(&elem_ty, &val_ty);
-            emitter.instruction("ldr x9, [sp, #16]");                                   // reload the indexed target slot after preserving the assigned value on the temporary stack
-            emitter.instruction("ldr x10, [sp, #32]");                                  // reload the property-backed array pointer after preserving the assigned value on the temporary stack
-            emitter.instruction("ldr x11, [x10]");                                      // load the original logical length before growth so overwrites can be distinguished from extensions
-            emitter.instruction("ldr x12, [x10, #8]");                                  // load the current capacity before checking whether the target slot already fits
+            emitter.instruction("ldr x9, [sp, #16]");                           // reload the indexed target slot after preserving the assigned value on the temporary stack
+            emitter.instruction("ldr x10, [sp, #32]");                          // reload the property-backed array pointer after preserving the assigned value on the temporary stack
+            emitter.instruction("ldr x11, [x10]");                              // load the original logical length before growth so overwrites can be distinguished from extensions
+            emitter.instruction("ldr x12, [x10, #8]");                          // load the current capacity before checking whether the target slot already fits
             let grow_check = ctx.next_label("prop_array_assign_grow_check");
             let grow_ready = ctx.next_label("prop_array_assign_grow_ready");
             emitter.label(&grow_check);
-            emitter.instruction("cmp x9, x12");                                         // does the target index already fit within the current property-backed array capacity?
-            emitter.instruction(&format!("b.lo {}", grow_ready));                       // skip growth once the target indexed slot is already addressable
-            emitter.instruction("str x9, [sp, #-16]!");                                 // preserve the target index because the growth helper clobbers caller-saved registers
-            emitter.instruction("mov x0, x10");                                         // pass the property-backed array pointer to the growth helper
-            emitter.instruction("bl __rt_array_grow");                                  // grow the indexed array until the requested slot fits
-            emitter.instruction("mov x10, x0");                                         // keep the possibly-reallocated property-backed array pointer in the long-lived working register
-            emitter.instruction("ldr x9, [sp], #16");                                   // restore the target index after the growth helper returns
-            emitter.instruction("ldr x12, [x10, #8]");                                  // reload the capacity after growth so the loop converges on the new header values
-            emitter.instruction(&format!("b {}", grow_check));                          // continue growing until the target property slot fits
+            emitter.instruction("cmp x9, x12");                                 // does the target index already fit within the current property-backed array capacity?
+            emitter.instruction(&format!("b.lo {}", grow_ready));               // skip growth once the target indexed slot is already addressable
+            emitter.instruction("str x9, [sp, #-16]!");                         // preserve the target index because the growth helper clobbers caller-saved registers
+            emitter.instruction("mov x0, x10");                                 // pass the property-backed array pointer to the growth helper
+            emitter.instruction("bl __rt_array_grow");                          // grow the indexed array until the requested slot fits
+            emitter.instruction("mov x10, x0");                                 // keep the possibly-reallocated property-backed array pointer in the long-lived working register
+            emitter.instruction("ldr x9, [sp], #16");                           // restore the target index after the growth helper returns
+            emitter.instruction("ldr x12, [x10, #8]");                          // reload the capacity after growth so the loop converges on the new header values
+            emitter.instruction(&format!("b {}", grow_check));                  // continue growing until the target property slot fits
             emitter.label(&grow_ready);
-            emitter.instruction("ldr x13, [sp, #48]");                                  // reload the preserved owning object pointer before publishing the possibly-grown array pointer back into the property slot
+            emitter.instruction("ldr x13, [sp, #48]");                          // reload the preserved owning object pointer before publishing the possibly-grown array pointer back into the property slot
             abi::emit_store_to_address(emitter, "x10", "x13", target.offset);
             restore_property_array_assign_value_aarch64(emitter, &val_ty);
             normalize_property_indexed_array_layout_aarch64(&state, emitter, ctx);
             store_property_indexed_array_value_aarch64(&target.prop_ty, &state, emitter, ctx);
             extend_property_indexed_array_if_needed_aarch64(&state, emitter, ctx);
-            emitter.instruction("add sp, sp, #48");                                     // drop the preserved object pointer, array pointer, and index after completing the property-backed indexed write
+            emitter.instruction("add sp, sp, #48");                             // drop the preserved object pointer, array pointer, and index after completing the property-backed indexed write
         }
         crate::codegen::platform::Arch::X86_64 => {
             abi::emit_push_reg(emitter, object_reg);
-            emitter.instruction("mov rdi, rax");                                        // pass the property-backed array pointer to the x86_64 uniqueness helper before mutating indexed storage
+            emitter.instruction("mov rdi, rax");                                // pass the property-backed array pointer to the x86_64 uniqueness helper before mutating indexed storage
             abi::emit_call_label(emitter, "__rt_array_ensure_unique");
             abi::emit_pop_reg(emitter, object_reg);
             abi::emit_store_to_address(emitter, "rax", object_reg, target.offset);
@@ -282,29 +282,29 @@ pub(crate) fn emit_property_array_assign_stmt(
             abi::emit_push_reg(emitter, "rax");
             let val_ty = prepare_property_array_assign_value(value, emitter, ctx, data, &elem_ty);
             let state = PropertyIndexedAssignState::new(&elem_ty, &val_ty);
-            emitter.instruction("mov r9, QWORD PTR [rsp + 16]");                        // reload the indexed target slot after preserving the assigned value on the temporary stack
-            emitter.instruction("mov r10, QWORD PTR [rsp + 32]");                       // reload the property-backed array pointer after preserving the assigned value on the temporary stack
-            emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the original logical length before growth so overwrites can be distinguished from extensions
+            emitter.instruction("mov r9, QWORD PTR [rsp + 16]");                // reload the indexed target slot after preserving the assigned value on the temporary stack
+            emitter.instruction("mov r10, QWORD PTR [rsp + 32]");               // reload the property-backed array pointer after preserving the assigned value on the temporary stack
+            emitter.instruction("mov r11, QWORD PTR [r10]");                    // load the original logical length before growth so overwrites can be distinguished from extensions
             let grow_check = ctx.next_label("prop_array_assign_grow_check");
             let grow_ready = ctx.next_label("prop_array_assign_grow_ready");
             emitter.label(&grow_check);
-            emitter.instruction("mov r12, QWORD PTR [r10 + 8]");                        // load the current capacity before checking whether the target slot already fits
-            emitter.instruction("cmp r9, r12");                                         // does the target index already fit within the current property-backed array capacity?
-            emitter.instruction(&format!("jb {}", grow_ready));                         // skip growth once the target indexed slot is already addressable
+            emitter.instruction("mov r12, QWORD PTR [r10 + 8]");                // load the current capacity before checking whether the target slot already fits
+            emitter.instruction("cmp r9, r12");                                 // does the target index already fit within the current property-backed array capacity?
+            emitter.instruction(&format!("jb {}", grow_ready));                 // skip growth once the target indexed slot is already addressable
             abi::emit_push_reg(emitter, "r9");
-            emitter.instruction("mov rdi, r10");                                        // pass the property-backed array pointer to the x86_64 growth helper
+            emitter.instruction("mov rdi, r10");                                // pass the property-backed array pointer to the x86_64 growth helper
             abi::emit_call_label(emitter, "__rt_array_grow");
-            emitter.instruction("mov r10, rax");                                        // keep the possibly-reallocated property-backed array pointer in the long-lived working register
+            emitter.instruction("mov r10, rax");                                // keep the possibly-reallocated property-backed array pointer in the long-lived working register
             abi::emit_pop_reg(emitter, "r9");
-            emitter.instruction(&format!("jmp {}", grow_check));                        // continue growing until the target property slot fits
+            emitter.instruction(&format!("jmp {}", grow_check));                // continue growing until the target property slot fits
             emitter.label(&grow_ready);
-            emitter.instruction("mov r13, QWORD PTR [rsp + 48]");                       // reload the preserved owning object pointer before publishing the possibly-grown array pointer back into the property slot
+            emitter.instruction("mov r13, QWORD PTR [rsp + 48]");               // reload the preserved owning object pointer before publishing the possibly-grown array pointer back into the property slot
             abi::emit_store_to_address(emitter, "r10", "r13", target.offset);
             restore_property_array_assign_value_x86_64(emitter, &val_ty);
             normalize_property_indexed_array_layout_x86_64(&state, emitter, ctx);
             store_property_indexed_array_value_x86_64(&target.prop_ty, &state, emitter, ctx);
             extend_property_indexed_array_if_needed_x86_64(&state, emitter, ctx);
-            emitter.instruction("add rsp, 48");                                         // drop the preserved object pointer, array pointer, and index after completing the property-backed indexed write
+            emitter.instruction("add rsp, 48");                                 // drop the preserved object pointer, array pointer, and index after completing the property-backed indexed write
         }
     }
 }

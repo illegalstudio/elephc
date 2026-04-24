@@ -186,11 +186,11 @@ pub(super) fn emit_spaceship_binop(
         abi::emit_pop_reg(emitter, left_reg);
         match emitter.target.arch {
             Arch::AArch64 => emitter.instruction("cmp x1, x0"),                 // compare left (x1) against right (x0) before computing the spaceship result
-            Arch::X86_64 => emitter.instruction(&format!(
+            Arch::X86_64 => emitter.instruction(&format!(                       // compare left against right in integer registers
                 "cmp {}, {}",
                 left_reg,
                 abi::int_result_reg(emitter)
-            )),                                                                 // compare left against right in integer registers
+            )),
         }
     }
 
