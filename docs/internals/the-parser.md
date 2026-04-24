@@ -178,7 +178,7 @@ NullCoalesce
 | Type | Fields | Description |
 |---|---|---|
 | `Visibility` | `Public`, `Protected`, `Private` | Enum for property/method visibility |
-| `ClassProperty` | `name`, `visibility`, `readonly`, `is_final`, `default`, `span` | A property declaration inside a class |
+| `ClassProperty` | `name`, `visibility`, `type_expr`, `readonly`, `is_final`, `default`, `span` | A property declaration inside a class or trait, optionally carrying a parsed property type declaration |
 | `ClassMethod` | `name`, `visibility`, `is_static`, `is_abstract`, `is_final`, `has_body`, `params`, `variadic`, `return_type`, `body`, `span` | A method declaration inside a class, trait, or interface |
 | `CatchClause` | `exception_types`, `variable`, `body` | A catch arm. `exception_types` supports both single-type and PHP-style multi-catch (`TypeA | TypeB`), and `variable` is optional for PHP 8-style `catch (Exception)` |
 | `StaticReceiver` | `Named(Name)`, `Self_`, `Static`, `Parent` | Left-hand side of `ClassName::method()`, `self::method()`, `static::method()`, and `parent::method()` |

@@ -41,6 +41,23 @@ Rules:
 - at runtime these values are lowered to the compiler's boxed tagged representation
 - `?T|U` is not accepted; write `T|U|null` explicitly instead
 
+### Property type declarations
+
+```php
+<?php
+class User {
+    public int $id;
+    public string $name = "Ada";
+    public ?string $email = null;
+}
+```
+
+Rules:
+- property defaults and assignments must be compatible with the declared type
+- constructor assignments through untyped parameters are checked once call sites refine the parameter type
+- nullable and union property storage is boxed using the same mixed runtime shape as typed locals
+- `void` and `callable` are not valid property types
+
 ### Null behavior
 
 ```php
@@ -93,6 +110,7 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 - `array_search()` returns `-1` when not found, not `false`.
 - Integer overflow wraps instead of promoting to float.
 - Loose comparison (`==`) between different types coerces both sides to integer.
+- elephc does not model PHP's uninitialized typed-property state; property slots without explicit defaults start from the compiler's existing zero/null-like object-slot initialization until assigned.
 
 ### Compiler diagnostics
 
