@@ -2324,6 +2324,54 @@ fn test_error_readonly_assign() {
 }
 
 #[test]
+fn test_error_typed_property_rejects_invalid_default() {
+    expect_error(
+        "<?php class Box { public int $value = \"bad\"; }",
+        "Property Box::$value default expects Int, got Str",
+    );
+}
+
+#[test]
+fn test_error_typed_property_rejects_invalid_assignment() {
+    expect_error(
+        "<?php class Box { public int $value; } $b = new Box(); $b->value = \"bad\";",
+        "Property Box::$value expects Int, got Str",
+    );
+}
+
+#[test]
+fn test_error_typed_property_rejects_constructor_assignment_from_untyped_param() {
+    expect_error(
+        r#"<?php
+class Box {
+    public int $value;
+    public function __construct($value) {
+        $this->value = $value;
+    }
+}
+$box = new Box("bad");
+"#,
+        "Property Box::$value expects Int, got Str",
+    );
+}
+
+#[test]
+fn test_error_typed_property_rejects_void_type() {
+    expect_error(
+        "<?php class Box { public void $value; }",
+        "Property Box::$value cannot use type void",
+    );
+}
+
+#[test]
+fn test_error_typed_property_rejects_callable_type() {
+    expect_error(
+        "<?php class Box { public callable $callback; }",
+        "Property Box::$callback cannot use type callable",
+    );
+}
+
+#[test]
 fn test_error_static_this() {
     expect_error(
         "<?php class Demo { public static function bad() { return $this; } } Demo::bad();",
