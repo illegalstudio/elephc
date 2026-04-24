@@ -72,9 +72,11 @@ fn test_assoc_array_search_returns_first_inserted_matching_key() {
 $m = ["first" => "same", "second" => "same", "third" => "other"];
 $key = array_search("same", $m);
 echo $key;
+echo "|";
+echo count($m);
 "#,
     );
-    assert_eq!(out, "first");
+    assert_eq!(out, "first|3");
 }
 
 #[test]
@@ -186,4 +188,3 @@ echo $saved[1];
     );
     assert_eq!(out, "8");
 }
-
