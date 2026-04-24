@@ -1,6 +1,6 @@
 use crate::errors::CompileError;
 use crate::names::canonical_name_for_decl;
-use crate::parser::ast::{Stmt, StmtKind, TraitAdaptation, TraitUse};
+use crate::parser::ast::{ClassProperty, Stmt, StmtKind, TraitAdaptation, TraitUse};
 
 use super::expressions::resolve_expr;
 use super::names::{resolve_type_expr, resolved_class_name};
@@ -79,7 +79,7 @@ pub(super) fn resolve_decl_stmt(
                     is_final: *is_final,
                     is_readonly_class: *is_readonly_class,
                     trait_uses,
-                    properties: properties.clone(),
+                    properties: resolve_properties(properties, namespace, imports, symbols),
                     methods: resolved_methods,
                 },
                 stmt.span,
@@ -184,7 +184,7 @@ pub(super) fn resolve_decl_stmt(
                 StmtKind::TraitDecl {
                     name: canonical_name_for_decl(namespace, name),
                     trait_uses,
-                    properties: properties.clone(),
+                    properties: resolve_properties(properties, namespace, imports, symbols),
                     methods: resolved_methods,
                 },
                 stmt.span,
@@ -220,6 +220,28 @@ pub(super) fn resolve_decl_stmt(
         ))),
         _ => Ok(None),
     }
+}
+
+fn resolve_properties(
+    properties: &[ClassProperty],
+    namespace: Option<&str>,
+    imports: &Imports,
+    symbols: &Symbols,
+) -> Vec<ClassProperty> {
+    properties
+        .iter()
+        .map(|property| ClassProperty {
+            type_expr: property
+                .type_expr
+                .as_ref()
+                .map(|ty| resolve_type_expr(ty, namespace, imports)),
+            default: property
+                .default
+                .as_ref()
+                .map(|expr| resolve_expr(expr, namespace, imports, symbols)),
+            ..property.clone()
+        })
+        .collect()
 }
 
 pub(super) fn resolve_trait_use(

@@ -174,6 +174,7 @@ pub(crate) fn build_enum_info(
     let mut property_declaring_classes = HashMap::new();
     let mut defaults = Vec::new();
     let mut property_visibilities = HashMap::new();
+    let mut declared_properties = HashSet::new();
     let final_properties = HashSet::new();
     let mut readonly_properties = HashSet::new();
     if let Some(backing_ty) = &resolved_backing {
@@ -182,6 +183,7 @@ pub(crate) fn build_enum_info(
         property_declaring_classes.insert("value".to_string(), name.to_string());
         defaults.push(None);
         property_visibilities.insert("value".to_string(), Visibility::Public);
+        declared_properties.insert("value".to_string());
         readonly_properties.insert("value".to_string());
     }
 
@@ -242,6 +244,7 @@ pub(crate) fn build_enum_info(
             property_declaring_classes,
             defaults,
             property_visibilities,
+            declared_properties,
             final_properties,
             readonly_properties,
             method_decls: Vec::new(),

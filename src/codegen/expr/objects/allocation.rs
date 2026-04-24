@@ -8,8 +8,8 @@ use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
 use super::super::{
-    emit_expr, restore_concat_offset_after_nested_call, retain_borrowed_heap_arg,
-    save_concat_offset_before_nested_call,
+    coerce_result_to_type, emit_expr, restore_concat_offset_after_nested_call,
+    retain_borrowed_heap_arg, save_concat_offset_before_nested_call,
 };
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
@@ -77,7 +77,15 @@ pub(super) fn emit_new_object(
         if let Some(default_expr) = &class_info.defaults[i] {
             let default_expr = default_expr.clone();
             let offset = 8 + i * 16;
-            let prop_ty = emit_expr(&default_expr, emitter, ctx, data);
+            let actual_ty = emit_expr(&default_expr, emitter, ctx, data);
+            let prop_name = &class_info.properties[i].0;
+            let expected_ty = class_info.properties[i].1.clone();
+            let prop_ty = if class_info.declared_properties.contains(prop_name) {
+                coerce_result_to_type(emitter, ctx, data, &actual_ty, &expected_ty);
+                expected_ty
+            } else {
+                actual_ty
+            };
             let object_reg = abi::symbol_scratch_reg(emitter);
             match emitter.target.arch {
                 Arch::AArch64 => {

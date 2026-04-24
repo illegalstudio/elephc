@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
-use crate::parser::ast::Visibility;
+use crate::parser::ast::{ClassProperty, Visibility};
 use crate::types::{ClassInfo, PhpType};
 use crate::types::traits::FlattenedClass;
 
@@ -95,6 +95,7 @@ pub(crate) fn build_class_info_recursive(
     let mut property_declaring_classes = HashMap::new();
     let mut defaults = Vec::new();
     let mut property_visibilities = HashMap::new();
+    let mut declared_properties = HashSet::new();
     let mut final_properties = HashSet::new();
     let mut readonly_properties = std::collections::HashSet::new();
 
@@ -121,6 +122,9 @@ pub(crate) fn build_class_info_recursive(
             defaults.push(parent.defaults[index].clone());
             if let Some(visibility) = parent.property_visibilities.get(name) {
                 property_visibilities.insert(name.clone(), visibility.clone());
+            }
+            if parent.declared_properties.contains(name) {
+                declared_properties.insert(name.clone());
             }
             if let Some(declaring_class) = parent.property_declaring_classes.get(name) {
                 property_declaring_classes.insert(name.clone(), declaring_class.clone());
@@ -207,7 +211,16 @@ pub(crate) fn build_class_info_recursive(
             ));
         }
 
-        let ty = if let Some(default) = &prop.default {
+        let ty = if let Some(declared_ty) = resolve_property_declared_type(checker, &class.name, prop)? {
+            checker.validate_declared_default_type(
+                &declared_ty,
+                prop.default.as_ref(),
+                prop.span,
+                &format!("Property {}::${} default", class.name, prop.name),
+            )?;
+            declared_properties.insert(prop.name.clone());
+            declared_ty
+        } else if let Some(default) = &prop.default {
             infer_expr_type_syntactic(default)
         } else {
             PhpType::Int
@@ -576,6 +589,7 @@ pub(crate) fn build_class_info_recursive(
             property_declaring_classes,
             defaults,
             property_visibilities,
+            declared_properties,
             final_properties,
             readonly_properties,
             method_decls: class.methods.clone(),
@@ -600,4 +614,21 @@ pub(crate) fn build_class_info_recursive(
     *next_class_id += 1;
     building.remove(class_name);
     Ok(())
+}
+
+fn resolve_property_declared_type(
+    checker: &Checker,
+    class_name: &str,
+    prop: &ClassProperty,
+) -> Result<Option<PhpType>, CompileError> {
+    prop.type_expr
+        .as_ref()
+        .map(|type_expr| {
+            checker.resolve_declared_property_type_hint(
+                type_expr,
+                prop.span,
+                &format!("Property {}::${}", class_name, prop.name),
+            )
+        })
+        .transpose()
 }

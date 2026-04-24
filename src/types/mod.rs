@@ -199,6 +199,7 @@ pub struct ClassInfo {
     pub property_declaring_classes: HashMap<String, String>,
     pub defaults: Vec<Option<crate::parser::ast::Expr>>,
     pub property_visibilities: HashMap<String, Visibility>,
+    pub declared_properties: HashSet<String>,
     pub final_properties: HashSet<String>,
     pub readonly_properties: HashSet<String>,
     pub method_decls: Vec<ClassMethod>,

@@ -377,6 +377,7 @@ mod tests {
             property_declaring_classes: HashMap::new(),
             defaults: Vec::new(),
             property_visibilities: HashMap::new(),
+            declared_properties: HashSet::new(),
             final_properties: HashSet::new(),
             readonly_properties: HashSet::new(),
             method_decls: Vec::new(),

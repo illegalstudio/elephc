@@ -122,6 +122,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         ExprKind::IntLiteral(_) => PhpType::Int,
         ExprKind::FloatLiteral(_) => PhpType::Float,
         ExprKind::BoolLiteral(_) => PhpType::Bool,
+        ExprKind::Null => PhpType::Void,
         ExprKind::Cast {
             target: CastType::String,
             ..

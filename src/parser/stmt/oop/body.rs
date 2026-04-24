@@ -1,6 +1,8 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
-use crate::parser::ast::{ClassMethod, ClassProperty, Stmt, StmtKind, TraitUse, Visibility};
+use crate::parser::ast::{
+    ClassMethod, ClassProperty, Stmt, StmtKind, TraitUse, TypeExpr, Visibility,
+};
 use crate::parser::expr::parse_expr;
 use crate::span::Span;
 
@@ -141,6 +143,8 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
             continue;
         }
 
+        let type_expr = parse_optional_property_type(tokens, pos, member_span)?;
+
         if let Some(Token::Variable(prop_name)) = tokens.get(*pos).map(|(t, _)| t.clone()) {
             if modifiers.is_static {
                 return Err(CompileError::new(
@@ -166,6 +170,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
             properties.push(ClassProperty {
                 name: prop_name,
                 visibility: modifiers.visibility,
+                type_expr,
                 readonly: modifiers.is_readonly,
                 is_final: modifiers.is_final,
                 default,
@@ -184,6 +189,23 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
     }
 
     Ok((trait_uses, properties, methods))
+}
+
+fn parse_optional_property_type(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Option<TypeExpr>, CompileError> {
+    if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Variable(_))) {
+        return Ok(None);
+    }
+    if !matches!(
+        tokens.get(*pos).map(|(t, _)| t),
+        Some(Token::Identifier(_)) | Some(Token::Question) | Some(Token::Backslash)
+    ) {
+        return Ok(None);
+    }
+    Ok(Some(parse_type_expr(tokens, pos, span)?))
 }
 
 pub(super) struct MemberModifiers {

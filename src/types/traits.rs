@@ -601,6 +601,7 @@ fn resolve_adaptation_source(
 
 fn properties_compatible(left: &ClassProperty, right: &ClassProperty) -> bool {
     left.visibility == right.visibility
+        && left.type_expr == right.type_expr
         && left.readonly == right.readonly
         && left.default == right.default
 }

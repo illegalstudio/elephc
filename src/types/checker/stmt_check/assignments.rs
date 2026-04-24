@@ -261,20 +261,40 @@ impl Checker {
                                 ),
                             ));
                         }
+                        if class_info.declared_properties.contains(property) {
+                            let expected_ty = class_info
+                                .properties
+                                .iter()
+                                .find(|(n, _)| n == property)
+                                .map(|(_, ty)| ty.clone())
+                                .unwrap_or(PhpType::Int);
+                            self.require_compatible_arg_type(
+                                &expected_ty,
+                                &val_ty,
+                                stmt.span,
+                                &format!("Property {}::${}", class_name, property),
+                            )?;
+                        }
                     }
                     if let Some(class_info) = self.classes.get_mut(class_name) {
+                        let property_has_declared_type =
+                            class_info.declared_properties.contains(property);
                         if let Some(prop) = class_info
                             .properties
                             .iter_mut()
                             .find(|(n, _)| n == property)
                         {
-                            if prop.1 == PhpType::Int && val_ty != PhpType::Int {
-                                prop.1 = val_ty.clone();
-                            } else {
-                                let refined_ty =
-                                    Self::specialize_generic_array_hint(&prop.1, &val_ty);
-                                if refined_ty != prop.1 {
-                                    prop.1 = refined_ty;
+                            if !property_has_declared_type {
+                                if matches!(prop.1, PhpType::Int | PhpType::Void)
+                                    && prop.1 != val_ty
+                                {
+                                    prop.1 = val_ty.clone();
+                                } else {
+                                    let refined_ty =
+                                        Self::specialize_generic_array_hint(&prop.1, &val_ty);
+                                    if refined_ty != prop.1 {
+                                        prop.1 = refined_ty;
+                                    }
                                 }
                             }
                         }
@@ -324,7 +344,7 @@ impl Checker {
                 let val_ty = self.infer_type(value, env)?;
                 match &obj_ty {
                     PhpType::Object(class_name) => {
-                        let prop_ty = {
+                        let (prop_ty, property_has_declared_type) = {
                             let class_info = self.classes.get(class_name).ok_or_else(|| {
                                 CompileError::new(
                                     stmt.span,
@@ -371,17 +391,31 @@ impl Checker {
                                     ),
                                 ));
                             }
-                            class_info
+                            let property_has_declared_type =
+                                class_info.declared_properties.contains(property);
+                            let prop_ty = class_info
                                 .properties
                                 .iter()
                                 .find(|(name, _)| name == property)
                                 .map(|(_, ty)| ty.clone())
-                                .unwrap_or(PhpType::Int)
+                                .unwrap_or(PhpType::Int);
+                            (prop_ty, property_has_declared_type)
                         };
 
                         let updated_prop_ty = match prop_ty {
                             PhpType::Array(elem_ty) => {
-                                if *elem_ty == val_ty {
+                                if property_has_declared_type {
+                                    self.require_compatible_arg_type(
+                                        elem_ty.as_ref(),
+                                        &val_ty,
+                                        stmt.span,
+                                        &format!(
+                                            "Property {}::${}[]",
+                                            class_name, property
+                                        ),
+                                    )?;
+                                    PhpType::Array(elem_ty)
+                                } else if *elem_ty == val_ty {
                                     PhpType::Array(elem_ty)
                                 } else {
                                     let merged_ty = self
@@ -390,7 +424,9 @@ impl Checker {
                                     PhpType::Array(Box::new(merged_ty))
                                 }
                             }
-                            PhpType::Int => PhpType::Array(Box::new(val_ty.clone())),
+                            PhpType::Int | PhpType::Void if !property_has_declared_type => {
+                                PhpType::Array(Box::new(val_ty.clone()))
+                            }
                             PhpType::Buffer(_) => {
                                 return Err(CompileError::new(
                                     stmt.span,
@@ -409,12 +445,14 @@ impl Checker {
                         };
 
                         if let Some(class_info) = self.classes.get_mut(class_name) {
-                            if let Some(prop) = class_info
-                                .properties
-                                .iter_mut()
-                                .find(|(name, _)| name == property)
-                            {
-                                prop.1 = updated_prop_ty;
+                            if !property_has_declared_type {
+                                if let Some(prop) = class_info
+                                    .properties
+                                    .iter_mut()
+                                    .find(|(name, _)| name == property)
+                                {
+                                    prop.1 = updated_prop_ty;
+                                }
                             }
                         }
                         Ok(())
@@ -470,7 +508,7 @@ impl Checker {
                 let val_ty = self.infer_type(value, env)?;
                 match &obj_ty {
                     PhpType::Object(class_name) => {
-                        let prop_ty = {
+                        let (prop_ty, property_has_declared_type) = {
                             let class_info = self.classes.get(class_name).ok_or_else(|| {
                                 CompileError::new(
                                     stmt.span,
@@ -517,12 +555,15 @@ impl Checker {
                                     ),
                                 ));
                             }
-                            class_info
+                            let property_has_declared_type =
+                                class_info.declared_properties.contains(property);
+                            let prop_ty = class_info
                                 .properties
                                 .iter()
                                 .find(|(name, _)| name == property)
                                 .map(|(_, ty)| ty.clone())
-                                .unwrap_or(PhpType::Int)
+                                .unwrap_or(PhpType::Int);
+                            (prop_ty, property_has_declared_type)
                         };
 
                         if idx_ty != PhpType::Int {
@@ -534,7 +575,18 @@ impl Checker {
 
                         let updated_prop_ty = match prop_ty {
                             PhpType::Array(elem_ty) => {
-                                if *elem_ty == val_ty {
+                                if property_has_declared_type {
+                                    self.require_compatible_arg_type(
+                                        elem_ty.as_ref(),
+                                        &val_ty,
+                                        stmt.span,
+                                        &format!(
+                                            "Property {}::${}[]",
+                                            class_name, property
+                                        ),
+                                    )?;
+                                    PhpType::Array(elem_ty)
+                                } else if *elem_ty == val_ty {
                                     PhpType::Array(elem_ty)
                                 } else {
                                     let merged_ty = self
@@ -555,12 +607,14 @@ impl Checker {
                         };
 
                         if let Some(class_info) = self.classes.get_mut(class_name) {
-                            if let Some(prop) = class_info
-                                .properties
-                                .iter_mut()
-                                .find(|(name, _)| name == property)
-                            {
-                                prop.1 = updated_prop_ty;
+                            if !property_has_declared_type {
+                                if let Some(prop) = class_info
+                                    .properties
+                                    .iter_mut()
+                                    .find(|(name, _)| name == property)
+                                {
+                                    prop.1 = updated_prop_ty;
+                                }
                             }
                         }
                         Ok(())

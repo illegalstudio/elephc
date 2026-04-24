@@ -54,6 +54,40 @@ impl Checker {
         self.resolve_type_expr(type_expr, span)
     }
 
+    pub(crate) fn resolve_declared_property_type_hint(
+        &self,
+        type_expr: &TypeExpr,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<PhpType, CompileError> {
+        let ty = self.resolve_type_expr(type_expr, span)?;
+        if matches!(ty, PhpType::Void) {
+            return Err(CompileError::new(
+                span,
+                &format!("{} cannot use type void", context),
+            ));
+        }
+        if Self::type_contains_callable(&ty) {
+            return Err(CompileError::new(
+                span,
+                &format!("{} cannot use type callable", context),
+            ));
+        }
+        Ok(ty)
+    }
+
+    fn type_contains_callable(ty: &PhpType) -> bool {
+        match ty {
+            PhpType::Callable => true,
+            PhpType::Union(members) => members.iter().any(Self::type_contains_callable),
+            PhpType::Array(inner) | PhpType::Buffer(inner) => Self::type_contains_callable(inner),
+            PhpType::AssocArray { key, value } => {
+                Self::type_contains_callable(key) || Self::type_contains_callable(value)
+            }
+            _ => false,
+        }
+    }
+
     pub(crate) fn require_boxed_by_ref_storage(
         &self,
         expected_ty: &PhpType,
