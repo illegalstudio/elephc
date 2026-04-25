@@ -99,6 +99,12 @@ pub(crate) fn build_class_info_recursive(
     let mut final_properties = HashSet::new();
     let mut readonly_properties = std::collections::HashSet::new();
     let mut reference_properties = HashSet::new();
+    let mut static_prop_types = Vec::new();
+    let mut static_defaults = Vec::new();
+    let mut static_property_declaring_classes = HashMap::new();
+    let mut static_property_visibilities = HashMap::new();
+    let mut declared_static_properties = HashSet::new();
+    let mut final_static_properties = HashSet::new();
 
     let mut method_sigs = HashMap::new();
     let mut static_sigs = HashMap::new();
@@ -138,6 +144,22 @@ pub(crate) fn build_class_info_recursive(
             }
             if parent.reference_properties.contains(name) {
                 reference_properties.insert(name.clone());
+            }
+        }
+        for (index, (name, ty)) in parent.static_properties.iter().enumerate() {
+            static_prop_types.push((name.clone(), ty.clone()));
+            static_defaults.push(parent.static_defaults[index].clone());
+            if let Some(visibility) = parent.static_property_visibilities.get(name) {
+                static_property_visibilities.insert(name.clone(), visibility.clone());
+            }
+            if parent.declared_static_properties.contains(name) {
+                declared_static_properties.insert(name.clone());
+            }
+            if let Some(declaring_class) = parent.static_property_declaring_classes.get(name) {
+                static_property_declaring_classes.insert(name.clone(), declaring_class.clone());
+            }
+            if parent.final_static_properties.contains(name) {
+                final_static_properties.insert(name.clone());
             }
         }
 
@@ -186,10 +208,83 @@ pub(crate) fn build_class_info_recursive(
     }
 
     for prop in &class.properties {
+        if prop.is_static {
+            if prop.by_ref {
+                return Err(CompileError::new(
+                    prop.span,
+                    "Static by-reference properties are not supported",
+                ));
+            }
+            if property_declaring_classes.contains_key(&prop.name) {
+                return Err(CompileError::new(
+                    prop.span,
+                    &format!(
+                        "Cannot redeclare instance property as static property: {}::{}",
+                        class.name, prop.name
+                    ),
+                ));
+            }
+            if static_property_declaring_classes.contains_key(&prop.name) {
+                if final_static_properties.contains(&prop.name) {
+                    let declaring_class = static_property_declaring_classes
+                        .get(&prop.name)
+                        .cloned()
+                        .unwrap_or_else(|| class.name.clone());
+                    return Err(CompileError::new(
+                        prop.span,
+                        &format!(
+                            "Cannot override final static property {}::${}",
+                            declaring_class, prop.name
+                        ),
+                    ));
+                }
+                return Err(CompileError::new(
+                    prop.span,
+                    &format!(
+                        "Static property redeclaration across inheritance is not yet supported: {}::{}",
+                        class.name, prop.name
+                    ),
+                ));
+            }
+
+            let ty = if let Some(declared_ty) = resolve_property_declared_type(checker, &class.name, prop)? {
+                checker.validate_declared_default_type(
+                    &declared_ty,
+                    prop.default.as_ref(),
+                    prop.span,
+                    &format!("Static property {}::${} default", class.name, prop.name),
+                )?;
+                declared_static_properties.insert(prop.name.clone());
+                declared_ty
+            } else if let Some(default) = &prop.default {
+                infer_expr_type_syntactic(default)
+            } else {
+                PhpType::Int
+            };
+            static_prop_types.push((prop.name.clone(), ty));
+            static_defaults.push(prop.default.clone());
+            static_property_declaring_classes.insert(prop.name.clone(), class.name.clone());
+            static_property_visibilities.insert(prop.name.clone(), prop.visibility.clone());
+            if prop.is_final {
+                final_static_properties.insert(prop.name.clone());
+            } else {
+                final_static_properties.remove(&prop.name);
+            }
+            continue;
+        }
         if prop.is_final && prop.visibility == Visibility::Private {
             return Err(CompileError::new(
                 prop.span,
                 "Property cannot be both final and private",
+            ));
+        }
+        if static_property_declaring_classes.contains_key(&prop.name) {
+            return Err(CompileError::new(
+                prop.span,
+                &format!(
+                    "Cannot redeclare static property as instance property: {}::{}",
+                    class.name, prop.name
+                ),
             ));
         }
         if prop.by_ref && class.is_readonly_class {
@@ -606,6 +701,12 @@ pub(crate) fn build_class_info_recursive(
             final_properties,
             readonly_properties,
             reference_properties,
+            static_properties: static_prop_types,
+            static_defaults,
+            static_property_declaring_classes,
+            static_property_visibilities,
+            declared_static_properties,
+            final_static_properties,
             method_decls: class.methods.clone(),
             methods: method_sigs,
             static_methods: static_sigs,

@@ -45,6 +45,11 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
         Token::Global => assign::parse_global(tokens, pos, span),
         Token::Static => {
             if *pos + 1 < tokens.len() && tokens[*pos + 1].0 == Token::DoubleColon {
+                if let Some(stmt) =
+                    assign::try_parse_scoped_property_assignment(tokens, pos, span)?
+                {
+                    return Ok(stmt);
+                }
                 let expr = parse_expr(tokens, pos)?;
                 expect_semicolon(tokens, pos)?;
                 Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
@@ -60,6 +65,11 @@ pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, Com
         | Token::Question => {
             if assign::looks_like_typed_assign(tokens, *pos) {
                 return assign::parse_typed_assign(tokens, pos, span);
+            }
+            if let Some(stmt) =
+                assign::try_parse_scoped_property_assignment(tokens, pos, span)?
+            {
+                return Ok(stmt);
             }
             let expr = parse_expr(tokens, pos)?;
             expect_semicolon(tokens, pos)?;

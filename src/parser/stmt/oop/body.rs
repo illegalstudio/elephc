@@ -149,10 +149,10 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
         let type_expr = parse_optional_property_type(tokens, pos, member_span)?;
 
         if let Some(Token::Variable(prop_name)) = tokens.get(*pos).map(|(t, _)| t.clone()) {
-            if modifiers.is_static {
+            if modifiers.is_static && modifiers.is_readonly {
                 return Err(CompileError::new(
                     member_span,
-                    "Static properties are not supported",
+                    "Readonly static properties are not supported",
                 ));
             }
             if modifiers.is_abstract {
@@ -182,6 +182,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 type_expr,
                 readonly: modifiers.is_readonly,
                 is_final: modifiers.is_final,
+                is_static: modifiers.is_static,
                 by_ref: false,
                 default,
                 span: member_span,

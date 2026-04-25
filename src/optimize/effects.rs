@@ -19,7 +19,10 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         StmtKind::Throw(expr) => expr_effect(expr).with_side_effects().with_may_throw(),
         StmtKind::Assign { value, .. }
         | StmtKind::TypedAssign { value, .. }
-        | StmtKind::ArrayPush { value, .. } => expr_effect(value).with_side_effects(),
+        | StmtKind::ArrayPush { value, .. }
+        | StmtKind::StaticPropertyAssign { value, .. } => {
+            expr_effect(value).with_side_effects()
+        }
         StmtKind::ArrayAssign { index, value, .. }
         | StmtKind::PropertyArrayAssign { index, value, .. } => {
             expr_effect(index)
@@ -213,6 +216,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::Closure { .. } => Effect::PURE,
         ExprKind::NamedArg { value, .. } => expr_effect(value),
         ExprKind::PropertyAccess { object, .. } => expr_effect(object),
+        ExprKind::StaticPropertyAccess { .. } => Effect::PURE,
         ExprKind::FirstClassCallable(target) => callable_target_effect(target),
         ExprKind::BufferNew { len, .. } => expr_effect(len).with_side_effects(),
     }
@@ -743,4 +747,3 @@ pub(super) fn merge_callable_alias_paths(
         })
         .collect()
 }
-

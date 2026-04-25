@@ -1189,6 +1189,18 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             },
             span,
         }],
+        StmtKind::StaticPropertyAssign {
+            receiver,
+            property,
+            value,
+        } => vec![Stmt {
+            kind: StmtKind::StaticPropertyAssign {
+                receiver,
+                property,
+                value: prune_expr(value),
+            },
+            span,
+        }],
         StmtKind::PropertyArrayAssign {
             object,
             property,

@@ -166,6 +166,14 @@ pub fn static_method_symbol(class_name: &str, method_name: &str) -> String {
     )
 }
 
+pub fn static_property_symbol(class_name: &str, property_name: &str) -> String {
+    format!(
+        "_static_prop_{}_{}",
+        mangle_fqn(class_name),
+        mangle_fqn(property_name)
+    )
+}
+
 pub fn enum_case_symbol(enum_name: &str, case_name: &str) -> String {
     format!(
         "_enum_case_{}_{}",

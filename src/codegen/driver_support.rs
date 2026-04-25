@@ -1,9 +1,10 @@
-use crate::types::{EnumInfo, PhpType};
+use crate::types::{ClassInfo, EnumInfo, PhpType};
 
 use super::abi;
 use super::context::Context;
 use super::data_section::DataSection;
 use super::emit::Emitter;
+use super::expr::{coerce_result_to_type, emit_expr};
 use super::functions;
 use super::platform::{Arch, Target};
 use super::runtime;
@@ -118,6 +119,55 @@ pub(super) fn emit_enum_singleton_initializers(
             let slot_label = crate::names::enum_case_symbol(enum_name, &case.name);
             abi::emit_store_reg_to_symbol(emitter, result_reg, &slot_label, 0); // publish the enum singleton pointer in its global slot
         }
+    }
+}
+
+pub(super) fn emit_static_property_initializers(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    ctx: &mut Context,
+) {
+    let mut initializers = Vec::new();
+    let mut sorted_classes: Vec<(&String, &ClassInfo)> = ctx.classes.iter().collect();
+    sorted_classes.sort_by_key(|(class_name, _)| class_name.as_str());
+    for (class_name, class_info) in sorted_classes {
+        for (index, (property_name, prop_ty)) in class_info.static_properties.iter().enumerate() {
+            let declaring_class = class_info
+                .static_property_declaring_classes
+                .get(property_name)
+                .map(String::as_str)
+                .unwrap_or(class_name.as_str());
+            if declaring_class != class_name {
+                continue;
+            }
+            let Some(default_expr) = class_info.static_defaults.get(index).cloned().flatten() else {
+                continue;
+            };
+            let declared = class_info.declared_static_properties.contains(property_name);
+            initializers.push((
+                class_name.clone(),
+                property_name.clone(),
+                prop_ty.clone(),
+                default_expr,
+                declared,
+            ));
+        }
+    }
+
+    for (class_name, property_name, prop_ty, default_expr, declared) in initializers {
+        emitter.comment(&format!(
+            "initialize static property {}::${}",
+            class_name, property_name
+        ));
+        let actual_ty = emit_expr(&default_expr, emitter, ctx, data);
+        let store_ty = if declared {
+            coerce_result_to_type(emitter, ctx, data, &actual_ty, &prop_ty);
+            prop_ty
+        } else {
+            actual_ty
+        };
+        let symbol = crate::names::static_property_symbol(&class_name, &property_name);
+        abi::emit_store_result_to_symbol(emitter, &symbol, &store_ty, false);
     }
 }
 

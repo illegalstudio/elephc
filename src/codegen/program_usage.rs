@@ -141,6 +141,14 @@ fn collect_required_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<Stri
             | StmtKind::PropertyArrayPush { value, .. } => {
                 collect_required_class_names_in_expr(value, names);
             }
+            StmtKind::StaticPropertyAssign {
+                receiver, value, ..
+            } => {
+                if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
+                    names.insert(name.as_str().to_string());
+                }
+                collect_required_class_names_in_expr(value, names);
+            }
             StmtKind::PropertyArrayAssign { index, value, .. } => {
                 collect_required_class_names_in_expr(index, names);
                 collect_required_class_names_in_expr(value, names);
@@ -230,6 +238,11 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
         }
         ExprKind::PropertyAccess { object, .. } => {
             collect_required_class_names_in_expr(object, names);
+        }
+        ExprKind::StaticPropertyAccess { receiver, .. } => {
+            if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
+                names.insert(name.as_str().to_string());
+            }
         }
         ExprKind::MethodCall { object, args, .. } => {
             collect_required_class_names_in_expr(object, names);
@@ -382,6 +395,7 @@ fn stmt_uses_variable(stmt: &Stmt, needle: &str) -> bool {
         StmtKind::PropertyAssign { object, value, .. } => {
             expr_uses_variable(object, needle) || expr_uses_variable(value, needle)
         }
+        StmtKind::StaticPropertyAssign { value, .. } => expr_uses_variable(value, needle),
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_uses_variable(object, needle) || expr_uses_variable(value, needle)
         }
@@ -488,6 +502,7 @@ fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
             body.iter().any(|stmt| stmt_uses_variable(stmt, needle))
         }
         ExprKind::PropertyAccess { object, .. } => expr_uses_variable(object, needle),
+        ExprKind::StaticPropertyAccess { .. } => false,
         ExprKind::MethodCall { object, args, .. } => {
             expr_uses_variable(object, needle)
                 || args.iter().any(|arg| expr_uses_variable(arg, needle))

@@ -192,6 +192,9 @@ pub fn emit_expr(
         ExprKind::PropertyAccess { object, property } => {
             emit_property_access(object, property, emitter, ctx, data)
         }
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            emit_static_property_access(receiver, property, emitter, ctx)
+        }
         ExprKind::MethodCall {
             object,
             method,
@@ -232,6 +235,15 @@ fn emit_property_access(
     data: &mut DataSection,
 ) -> PhpType {
     objects::emit_property_access(object, property, emitter, ctx, data)
+}
+
+fn emit_static_property_access(
+    receiver: &crate::parser::ast::StaticReceiver,
+    property: &str,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) -> PhpType {
+    objects::emit_static_property_access(receiver, property, emitter, ctx)
 }
 
 fn emit_method_call(

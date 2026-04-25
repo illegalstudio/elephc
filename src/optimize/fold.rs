@@ -18,6 +18,7 @@ pub(super) fn fold_property(property: ClassProperty) -> ClassProperty {
         type_expr: property.type_expr,
         readonly: property.readonly,
         is_final: property.is_final,
+        is_static: property.is_static,
         by_ref: property.by_ref,
         default: property.default.map(fold_expr),
         span: property.span,
@@ -194,6 +195,9 @@ pub(super) fn fold_expr(expr: Expr) -> Expr {
             object: Box::new(fold_expr(*object)),
             property,
         },
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            ExprKind::StaticPropertyAccess { receiver, property }
+        }
         ExprKind::MethodCall {
             object,
             method,

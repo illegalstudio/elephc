@@ -337,6 +337,17 @@ pub(super) fn parse_named_expr(
     } else if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleColon {
         *pos += 1;
         let member = match tokens.get(*pos).map(|(token, _)| token) {
+            Some(Token::Variable(property)) => {
+                let property = property.clone();
+                *pos += 1;
+                return Ok(Expr::new(
+                    ExprKind::StaticPropertyAccess {
+                        receiver: StaticReceiver::Named(name),
+                        property,
+                    },
+                    span,
+                ));
+            }
             Some(Token::Identifier(member)) => {
                 let member = member.clone();
                 *pos += 1;

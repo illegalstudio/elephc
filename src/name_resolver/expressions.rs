@@ -162,6 +162,15 @@ pub(super) fn resolve_expr(
             object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
             property: property.clone(),
         },
+        ExprKind::StaticPropertyAccess { receiver, property } => ExprKind::StaticPropertyAccess {
+            receiver: match receiver {
+                StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
+                    resolve_special_or_class_name(name, current_namespace, imports),
+                )),
+                _ => receiver.clone(),
+            },
+            property: property.clone(),
+        },
         ExprKind::MethodCall { object, method, args } => ExprKind::MethodCall {
             object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
             method: method.clone(),

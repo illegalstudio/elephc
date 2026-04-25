@@ -1,5 +1,5 @@
 use crate::errors::CompileError;
-use crate::parser::ast::{ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{ExprKind, StaticReceiver, Stmt, StmtKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -207,6 +207,132 @@ impl Checker {
                 let ty = self.infer_type(init, env)?;
                 self.active_statics.insert(name.clone());
                 env.insert(name.clone(), ty);
+                Ok(())
+            }
+            StmtKind::StaticPropertyAssign {
+                receiver,
+                property,
+                value,
+            } => {
+                let val_ty = self.infer_type(value, env)?;
+                let class_name = match receiver {
+                    StaticReceiver::Named(class_name) => class_name.as_str().to_string(),
+                    StaticReceiver::Self_ => self.current_class.as_ref().cloned().ok_or_else(|| {
+                        CompileError::new(stmt.span, "Cannot use self:: outside class method scope")
+                    })?,
+                    StaticReceiver::Static => self.current_class.as_ref().cloned().ok_or_else(|| {
+                        CompileError::new(stmt.span, "Cannot use static:: outside class method scope")
+                    })?,
+                    StaticReceiver::Parent => {
+                        let current_class = self.current_class.as_ref().ok_or_else(|| {
+                            CompileError::new(stmt.span, "Cannot use parent:: outside class method scope")
+                        })?;
+                        let current_info = self.classes.get(current_class).ok_or_else(|| {
+                            CompileError::new(
+                                stmt.span,
+                                &format!("Undefined class: {}", current_class),
+                            )
+                        })?;
+                        current_info.parent.as_ref().cloned().ok_or_else(|| {
+                            CompileError::new(
+                                stmt.span,
+                                &format!("Class {} has no parent class", current_class),
+                            )
+                        })?
+                    }
+                };
+
+                let (property_has_declared_type, expected_ty, declaring_class) = {
+                    let class_info = self.classes.get(&class_name).ok_or_else(|| {
+                        CompileError::new(stmt.span, &format!("Undefined class: {}", class_name))
+                    })?;
+                    if !class_info
+                        .static_properties
+                        .iter()
+                        .any(|(name, _)| name == property)
+                    {
+                        return Err(CompileError::new(
+                            stmt.span,
+                            &format!(
+                                "Undefined static property: {}::{}",
+                                class_name, property
+                            ),
+                        ));
+                    }
+                    if let Some(visibility) =
+                        class_info.static_property_visibilities.get(property)
+                    {
+                        let declaring_class = class_info
+                            .static_property_declaring_classes
+                            .get(property)
+                            .map(String::as_str)
+                            .unwrap_or(class_name.as_str());
+                        if !self.can_access_member(declaring_class, visibility) {
+                            return Err(CompileError::new(
+                                stmt.span,
+                                &format!(
+                                    "Cannot access {} static property: {}::{}",
+                                    Self::visibility_label(visibility),
+                                    class_name,
+                                    property
+                                ),
+                            ));
+                        }
+                    }
+                    let declaring_class = class_info
+                        .static_property_declaring_classes
+                        .get(property)
+                        .cloned()
+                        .unwrap_or_else(|| class_name.clone());
+                    let property_has_declared_type =
+                        class_info.declared_static_properties.contains(property);
+                    let expected_ty = class_info
+                        .static_properties
+                        .iter()
+                        .find(|(name, _)| name == property)
+                        .map(|(_, ty)| ty.clone())
+                        .unwrap_or(PhpType::Int);
+                    (property_has_declared_type, expected_ty, declaring_class)
+                };
+
+                if property_has_declared_type {
+                    self.require_compatible_arg_type(
+                        &expected_ty,
+                        &val_ty,
+                        stmt.span,
+                        &format!("Static property {}::${}", class_name, property),
+                    )?;
+                }
+
+                if !property_has_declared_type {
+                    for class_info in self.classes.values_mut() {
+                        if class_info
+                            .static_property_declaring_classes
+                            .get(property)
+                            .map(String::as_str)
+                            != Some(declaring_class.as_str())
+                        {
+                            continue;
+                        }
+                        if let Some(prop) = class_info
+                            .static_properties
+                            .iter_mut()
+                            .find(|(name, _)| name == property)
+                        {
+                            if matches!(prop.1, PhpType::Int | PhpType::Void)
+                                && prop.1 != val_ty
+                            {
+                                prop.1 = val_ty.clone();
+                            } else {
+                                let refined_ty =
+                                    Self::specialize_generic_array_hint(&prop.1, &val_ty);
+                                if refined_ty != prop.1 {
+                                    prop.1 = refined_ty;
+                                }
+                            }
+                        }
+                    }
+                }
                 Ok(())
             }
             StmtKind::PropertyAssign {

@@ -2450,6 +2450,38 @@ fn test_error_typed_property_rejects_callable_type() {
 }
 
 #[test]
+fn test_error_static_property_rejects_readonly() {
+    expect_error(
+        "<?php class Box { public static readonly int $count = 1; }",
+        "Readonly static properties are not supported",
+    );
+}
+
+#[test]
+fn test_error_static_property_undefined() {
+    expect_error(
+        "<?php class Box {} echo Box::$count;",
+        "Undefined static property: Box::count",
+    );
+}
+
+#[test]
+fn test_error_static_property_type_mismatch() {
+    expect_error(
+        "<?php class Box { public static int $count = 1; } Box::$count = \"x\";",
+        "Static property Box::$count expects",
+    );
+}
+
+#[test]
+fn test_error_private_static_property_outside_class() {
+    expect_error(
+        "<?php class Box { private static int $count = 1; } echo Box::$count;",
+        "Cannot access private static property: Box::count",
+    );
+}
+
+#[test]
 fn test_error_static_this() {
     expect_error(
         "<?php class Demo { public static function bad() { return $this; } } Demo::bad();",

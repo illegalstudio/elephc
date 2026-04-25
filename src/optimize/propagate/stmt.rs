@@ -455,6 +455,21 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             ),
             env,
         ),
+        StmtKind::StaticPropertyAssign {
+            receiver,
+            property,
+            value,
+        } => (
+            Stmt::new(
+                StmtKind::StaticPropertyAssign {
+                    receiver,
+                    property,
+                    value: propagate_expr(value, &env),
+                },
+                span,
+            ),
+            env,
+        ),
         StmtKind::PropertyArrayPush {
             object,
             property,
@@ -657,6 +672,7 @@ pub(crate) fn propagate_property(property: ClassProperty) -> ClassProperty {
         type_expr: property.type_expr,
         readonly: property.readonly,
         is_final: property.is_final,
+        is_static: property.is_static,
         by_ref: property.by_ref,
         default: property
             .default

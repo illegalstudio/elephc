@@ -192,6 +192,44 @@ pub(super) fn try_parse_postfix_assignment(
     Ok(Some(Stmt::new(stmt, span)))
 }
 
+pub(super) fn try_parse_scoped_property_assignment(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Option<Stmt>, CompileError> {
+    let start = *pos;
+    let Some(assign_pos) = find_top_level_assign(tokens, start) else {
+        return Ok(None);
+    };
+    if assign_pos < start + 3 {
+        return Ok(None);
+    }
+
+    let lhs = &tokens[start..assign_pos];
+    let mut lhs_pos = 0;
+    let lhs_expr = parse_expr(lhs, &mut lhs_pos)?;
+    if lhs_pos != lhs.len() {
+        return Err(CompileError::new(span, "Invalid assignment target"));
+    }
+
+    *pos = assign_pos + 1;
+    let value = parse_expr(tokens, pos)?;
+    expect_semicolon(tokens, pos)?;
+
+    let ExprKind::StaticPropertyAccess { receiver, property } = lhs_expr.kind else {
+        return Err(CompileError::new(span, "Invalid assignment target"));
+    };
+
+    Ok(Some(Stmt::new(
+        StmtKind::StaticPropertyAssign {
+            receiver,
+            property,
+            value,
+        },
+        span,
+    )))
+}
+
 fn find_top_level_assign(tokens: &[(Token, Span)], start: usize) -> Option<usize> {
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;

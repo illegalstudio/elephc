@@ -512,6 +512,9 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             object: Box::new(prune_expr(*object)),
             property,
         },
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            ExprKind::StaticPropertyAccess { receiver, property }
+        }
         ExprKind::MethodCall {
             object,
             method,

@@ -412,6 +412,48 @@ pub(super) fn infer_local_type(
             }
             PhpType::Int
         }
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            if let Some(c) = ctx {
+                let class_name = match receiver {
+                    crate::parser::ast::StaticReceiver::Named(class_name) => {
+                        class_name.as_str().to_string()
+                    }
+                    crate::parser::ast::StaticReceiver::Self_
+                    | crate::parser::ast::StaticReceiver::Static => {
+                        if let Some(current_class) = &c.current_class {
+                            current_class.clone()
+                        } else {
+                            return PhpType::Int;
+                        }
+                    }
+                    crate::parser::ast::StaticReceiver::Parent => {
+                        if let Some(current_class) = &c.current_class {
+                            if let Some(parent_name) = c
+                                .classes
+                                .get(current_class)
+                                .and_then(|ci| ci.parent.as_ref())
+                            {
+                                parent_name.clone()
+                            } else {
+                                return PhpType::Int;
+                            }
+                        } else {
+                            return PhpType::Int;
+                        }
+                    }
+                };
+                if let Some(ci) = c.classes.get(&class_name) {
+                    if let Some((_, ty)) = ci
+                        .static_properties
+                        .iter()
+                        .find(|(name, _)| name == property)
+                    {
+                        return ty.clone();
+                    }
+                }
+            }
+            PhpType::Int
+        }
         ExprKind::MethodCall { object, method, .. } => {
             if let Some(c) = ctx {
                 let obj_ty = infer_local_type(object, sig, Some(c));
