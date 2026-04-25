@@ -457,6 +457,16 @@ Static variables persist their value across calls to the same function. Each sta
 
 The naming pattern is `_static_FUNCNAME_VARNAME`. The init flag ensures the initial value expression is evaluated only on the first call. At function epilogue, variables marked as static are saved back to their BSS storage.
 
+### Static properties (`ClassName::$prop`)
+
+Static properties are class-scoped storage rather than object fields. During `emit_runtime_data_user()`, each declaring class property gets one 16-byte BSS slot:
+
+```asm
+.comm _static_prop_Counter_count, 16, 3 ; 16 bytes for Counter::$count
+```
+
+The naming pattern comes from `static_property_symbol(...)`. Inherited static properties point back to the declaring class slot, so `Base::$count` and `Child::$count` share storage when the property is declared on `Base`. `_main` evaluates static-property defaults before user statements run, and later reads/writes load from or store to this slot directly.
+
 ## Memory limits and trade-offs
 
 | Resource | Size | What happens when full |
@@ -468,6 +478,7 @@ The naming pattern is `_static_FUNCNAME_VARNAME`. The init flag ensures the init
 | CLI globals | `_global_argc`, `_global_argv` = 16 bytes total | Fixed-size bookkeeping |
 | User globals | 16 bytes per `global $var` slot | Grows with number of referenced globals |
 | Static vars | 24 bytes per `static $var` (`16 + 8 init flag`) | Grows with number of declared static locals |
+| Static properties | 16 bytes per declaring class static property | Grows with number of declared static properties |
 | Array capacity | Fixed at creation until grow/re-hash logic runs | Fatal error: "array capacity exceeded" if a hard limit is hit |
 | C-string buffers | 4KB each (×2) | Long converted paths/strings are truncated to buffer size |
 | EOF flags | 256 bytes | Max 256 simultaneous file descriptors |

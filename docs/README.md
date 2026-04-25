@@ -24,7 +24,7 @@ Standard PHP features supported by elephc. All PHP syntax is **100% compatible**
 - [Strings](php/strings.md) — escape sequences, interpolation, heredoc/nowdoc, 50+ built-in string functions
 - [Arrays](php/arrays.md) — indexed, associative, copy-on-write, 45+ built-in array functions
 - [Math](php/math.md) — abs, floor, ceil, round, trigonometry, logarithms, random, constants
-- [Classes](php/classes.md) — inheritance, interfaces, abstract/final classes, typed/final properties and methods, traits, enums, magic methods
+- [Classes](php/classes.md) — inheritance, interfaces, abstract/final classes, typed/final/static properties and methods, traits, enums, magic methods
 - [Namespaces](php/namespaces.md) — namespace, use, include/require, constants, superglobals
 - [System & I/O](php/system-and-io.md) — file I/O, date/time, JSON, regex, exec, debugging
 

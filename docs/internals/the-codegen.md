@@ -602,6 +602,15 @@ That per-call local slot is tracked as `Borrowed`; the persisted static storage 
 
 At function epilogue, variables marked as static are written back to their BSS storage.
 
+### Static properties
+
+Static properties use one global 16-byte storage slot per declaring class property:
+
+- `_static_prop_CLASS_PROP` stores the current value payload
+- inherited static properties point back to the declaring class slot
+
+At program startup, `_main` evaluates static property defaults and stores them into these slots before user statements run. Reads such as `ClassName::$count` load directly from the symbol, and assignments store the new result back to the same symbol after type coercion and previous-value release for heap-backed values.
+
 ### List unpacking
 
 ```php

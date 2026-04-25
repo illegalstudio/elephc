@@ -74,6 +74,7 @@ Things that have a value:
 | `EnumCase { enum_name, case_name }` | `Color::Red`, `App\Status::Ok` | Reference to a declared enum case before later phases lower it to enum metadata |
 | `NewObject { class_name, args }` | `new Point(1, 2)`, `new App\Model\User()` | Object instantiation |
 | `PropertyAccess { object, property }` | `$p->x` | Property access via `->` |
+| `StaticPropertyAccess { receiver, property }` | `Point::$count`, `self::$count`, `parent::$count`, `static::$count` | Class-scoped property access via `::`, where `receiver` is a named class, `Self_`, `Static`, or `Parent` |
 | `MethodCall { object, method, args }` | `$p->move(1, 2)` | Instance method call |
 | `StaticMethodCall { receiver, method, args }` | `Point::origin()`, `self::boot()`, `parent::boot()`, `static::boot()` | Static-style call via `::`, where `receiver` is a named class, `Self_`, `Static`, or `Parent` |
 | `FirstClassCallable(CallableTarget)` | `strlen(...)`, `Tools\fmt(...)`, `Math::twice(...)` | PHP-style first-class callable syntax; the target is preserved structurally instead of being parsed as a call |
@@ -119,6 +120,7 @@ Things that do something:
 | `InterfaceDecl { name, extends, methods }` | `interface Named extends Jsonable { public function name(); }` |
 | `TraitDecl { name, trait_uses, properties, methods }` | `trait Named { ... }` |
 | `PropertyAssign { object, property, value }` | `$p->x = 10;` |
+| `StaticPropertyAssign { receiver, property, value }` | `Counter::$count = 10;`, `self::$count = 10;` |
 | `PropertyArrayPush { object, property, value }` | `$p->items[] = 10;` |
 | `PropertyArrayAssign { object, property, index, value }` | `$p->items[0] = 10;` |
 | `ExternFunctionDecl { name, params, return_type, library }` | `extern function foo(int $x): int;` or entries inside `extern "lib" { ... }` — `params` is `Vec<ExternParam>`, where each `ExternParam` stores `{ name, c_type }`, and `return_type` is a `CType` |
@@ -180,7 +182,7 @@ NullCoalesce
 | Type | Fields | Description |
 |---|---|---|
 | `Visibility` | `Public`, `Protected`, `Private` | Enum for property/method visibility |
-| `ClassProperty` | `name`, `visibility`, `type_expr`, `readonly`, `is_final`, `default`, `span` | A property declaration inside a class or trait, optionally carrying a parsed property type declaration |
+| `ClassProperty` | `name`, `visibility`, `type_expr`, `readonly`, `is_final`, `is_static`, `by_ref`, `default`, `span` | A property declaration inside a class or trait, optionally carrying a parsed property type declaration, static-property marker, or by-reference promotion marker |
 | `ClassMethod` | `name`, `visibility`, `is_static`, `is_abstract`, `is_final`, `has_body`, `params`, `variadic`, `return_type`, `body`, `span` | A method declaration inside a class, trait, or interface |
 | `CatchClause` | `exception_types`, `variable`, `body` | A catch arm. `exception_types` supports both single-type and PHP-style multi-catch (`TypeA | TypeB`), and `variable` is optional for PHP 8-style `catch (Exception)` |
 | `StaticReceiver` | `Named(Name)`, `Self_`, `Static`, `Parent` | Left-hand side of `ClassName::method()`, `self::method()`, `static::method()`, and `parent::method()` |

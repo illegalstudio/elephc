@@ -254,9 +254,9 @@ When the type checker encounters a `ClassDecl`, it:
 
 1. **Registers the class** in a `classes: HashMap<String, ClassInfo>` map
 2. **Resolves the parent chain** (`extends`) and merges inherited metadata
-3. **Records each property** with its type (declared when a property type is present, otherwise inferred from default values or constructor assignments) and a fixed offset in the inherited object layout
+3. **Records each instance property** with its type (declared when a property type is present, otherwise inferred from default values or constructor assignments) and a fixed offset in the inherited object layout
 4. **Type-checks each method body** with `$this` bound to `Object(ClassName)`
-5. **Builds `ClassInfo`** containing property types, defaults, final property/method sets, signatures, declaring/implementation class maps, instance/static vtable slots, implemented interface lists, and constructor-to-property mappings
+5. **Builds `ClassInfo`** containing instance and static property types, defaults, visibility maps, final property/method sets, signatures, declaring/implementation class maps, instance/static vtable slots, implemented interface lists, and constructor-to-property mappings
 
 The `ClassInfo` struct:
 
@@ -276,6 +276,12 @@ pub struct ClassInfo {
     pub final_properties: HashSet<String>,
     pub readonly_properties: HashSet<String>,
     pub reference_properties: HashSet<String>,
+    pub static_properties: Vec<(String, PhpType)>,
+    pub static_defaults: Vec<Option<Expr>>,
+    pub static_property_declaring_classes: HashMap<String, String>,
+    pub static_property_visibilities: HashMap<String, Visibility>,
+    pub declared_static_properties: HashSet<String>,
+    pub final_static_properties: HashSet<String>,
     pub method_decls: Vec<ClassMethod>,
     pub methods: HashMap<String, FunctionSig>,
     pub static_methods: HashMap<String, FunctionSig>,
@@ -304,6 +310,8 @@ When checking property access (`$obj->prop`), the type checker validates that:
 - The variable is an `Object` type
 - The class has a property with that name
 - The property is accessible (`public`, `protected` from the declaring class or a subclass, or `private` only from the declaring class)
+
+When checking static property access (`ClassName::$prop`, `self::$prop`, `parent::$prop`, or `static::$prop`), the checker resolves the receiver to a class scope, verifies the static property exists, applies visibility rules against the declaring class, and enforces declared property types on assignment. Static property storage is keyed by the declaring class so inherited static properties share the same slot.
 
 When checking property writes, explicitly declared property types stay fixed. Defaults, direct assignments, array writes, and constructor assignments routed through untyped parameters must be compatible with the declared property type. Nullable and union property types use the same boxed mixed runtime representation as typed locals, while untyped properties keep the existing inference and refinement behavior.
 
