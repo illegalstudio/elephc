@@ -9,6 +9,9 @@ echo "OS: " . PHP_OS . PHP_EOL;
 echo "Directory separator: " . DIRECTORY_SEPARATOR . PHP_EOL;
 echo "elephc version: " . phpversion() . PHP_EOL;
 echo "System name: " . php_uname("s") . PHP_EOL;
+echo "Node name: " . php_uname("n") . PHP_EOL;
+echo "Release: " . php_uname("r") . PHP_EOL;
+echo "Version: " . php_uname("v") . PHP_EOL;
 echo "Machine: " . php_uname("m") . PHP_EOL;
 echo "Full uname: " . php_uname() . PHP_EOL;
 

@@ -45,7 +45,7 @@ pub(crate) use json_encode_mixed::emit_json_encode_mixed;
 pub(crate) use match_unhandled::emit_match_unhandled;
 pub(crate) use microtime::emit_microtime;
 pub(crate) use mktime::emit_mktime;
-pub(crate) use php_uname::{emit_php_uname, emit_php_uname_data};
+pub(crate) use php_uname::emit_php_uname;
 pub(crate) use pcre_to_posix::emit_pcre_to_posix;
 pub(crate) use preg_match::emit_preg_match;
 pub(crate) use preg_match_all::emit_preg_match_all;

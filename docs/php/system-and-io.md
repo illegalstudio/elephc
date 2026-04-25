@@ -17,8 +17,9 @@ sidebar:
 | `usleep()` | `usleep($microseconds): void` | Sleep for microseconds |
 | `getenv()` | `getenv($name): string` | Get environment variable |
 | `putenv()` | `putenv($assignment): bool` | Set environment variable ("KEY=VALUE") |
+| `define()` | `define($name, $value): void` | Define a compile-time global constant with a string-literal name |
 | `php_uname()` | `php_uname($mode = "a"): string` | Get system information from the target runtime |
-| `phpversion()` | `phpversion(): string` | Get elephc version string |
+| `phpversion()` | `phpversion(): string` | Get the elephc package version from `Cargo.toml` |
 | `exec()` | `exec($command): string` | Execute command, return output |
 | `shell_exec()` | `shell_exec($command): string` | Execute via shell, return output |
 | `system()` | `system($command): string` | Execute, output to stdout |

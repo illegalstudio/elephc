@@ -4,18 +4,7 @@ use crate::codegen::{
     platform::{Arch, Platform},
 };
 
-const MODE_LEN_MSG: &str =
-    "Fatal error: php_uname(): Argument #1 ($mode) must be a single character\n";
-const MODE_VALUE_MSG: &str =
-    "Fatal error: php_uname(): Argument #1 ($mode) must be one of \"a\", \"m\", \"n\", \"r\", \"s\", or \"v\"\n";
-
-pub(crate) fn emit_php_uname_data() -> String {
-    format!(
-        ".globl _php_uname_mode_len_msg\n_php_uname_mode_len_msg:\n    .ascii {:?}\n\
-         .globl _php_uname_mode_value_msg\n_php_uname_mode_value_msg:\n    .ascii {:?}\n",
-        MODE_LEN_MSG, MODE_VALUE_MSG
-    )
-}
+use super::super::data::{PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG};
 
 pub(crate) fn emit_php_uname(emitter: &mut Emitter) {
     match emitter.target.arch {
@@ -113,12 +102,12 @@ fn emit_php_uname_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_php_uname_done");                               // finish after assembling the complete uname string
 
     emit_aarch64_done(emitter);
-    emit_aarch64_fail(emitter, "__rt_php_uname_mode_len_fail", "_php_uname_mode_len_msg", MODE_LEN_MSG.len());
+    emit_aarch64_fail(emitter, "__rt_php_uname_mode_len_fail", "_php_uname_mode_len_msg", PHP_UNAME_MODE_LEN_MSG.len());
     emit_aarch64_fail(
         emitter,
         "__rt_php_uname_mode_value_fail",
         "_php_uname_mode_value_msg",
-        MODE_VALUE_MSG.len(),
+        PHP_UNAME_MODE_VALUE_MSG.len(),
     );
 }
 
@@ -268,12 +257,12 @@ fn emit_php_uname_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_php_uname_done");                             // finish after assembling the complete uname string
 
     emit_x86_64_done(emitter);
-    emit_x86_64_fail(emitter, "__rt_php_uname_mode_len_fail", "_php_uname_mode_len_msg", MODE_LEN_MSG.len());
+    emit_x86_64_fail(emitter, "__rt_php_uname_mode_len_fail", "_php_uname_mode_len_msg", PHP_UNAME_MODE_LEN_MSG.len());
     emit_x86_64_fail(
         emitter,
         "__rt_php_uname_mode_value_fail",
         "_php_uname_mode_value_msg",
-        MODE_VALUE_MSG.len(),
+        PHP_UNAME_MODE_VALUE_MSG.len(),
     );
 }
 
