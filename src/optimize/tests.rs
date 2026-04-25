@@ -1886,6 +1886,7 @@ fn test_fold_string_concat_and_property_default() {
         type_expr: None,
         readonly: false,
         is_final: false,
+        by_ref: false,
         default: Some(Expr::new(
             ExprKind::BinaryOp {
                 left: Box::new(Expr::string_lit("hello ")),

@@ -556,6 +556,7 @@ pub struct ClassProperty {
     pub type_expr: Option<TypeExpr>,
     pub readonly: bool,
     pub is_final: bool,
+    pub by_ref: bool,
     pub default: Option<Expr>,
     #[allow(dead_code)] // Used for error reporting in future phases
     pub span: Span,
@@ -567,6 +568,7 @@ impl PartialEq for ClassProperty {
             && self.type_expr == other.type_expr
             && self.readonly == other.readonly
             && self.is_final == other.is_final
+            && self.by_ref == other.by_ref
     }
 }
 

@@ -6,8 +6,9 @@ use super::super::super::abi;
 use super::super::super::context::Context;
 use super::super::super::data_section::DataSection;
 use super::super::super::emit::Emitter;
+use super::super::super::expr::calls::args as call_args;
 use super::super::super::expr::{coerce_result_to_type, emit_expr};
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
 pub(crate) fn emit_property_assign_stmt(
@@ -23,6 +24,15 @@ pub(crate) fn emit_property_assign_stmt(
 
     let magic_set_class = magic_set::resolve_magic_set_target(object, property, ctx);
     let declared_target_ty = declared_property_type(object, property, ctx);
+    if is_reference_property(object, property, ctx) {
+        if let Some(var_name) = promoted_reference_bind_var(object, property, value, ctx) {
+            emit_property_reference_bind(&var_name, object, property, emitter, ctx, data);
+        } else {
+            emit_property_reference_write(value, object, property, emitter, ctx, data);
+        }
+        return;
+    }
+
     let mut val_ty = emit_expr(value, emitter, ctx, data);
     let boxed_to_mixed = declared_target_ty.as_ref().is_some_and(|target_ty| {
         matches!(target_ty, PhpType::Mixed | PhpType::Union(_))
@@ -70,6 +80,109 @@ pub(crate) fn emit_property_assign_stmt(
     storage::store_property_value(emitter, object_reg, &val_ty, target.offset);
 }
 
+fn is_reference_property(object: &Expr, property: &str, ctx: &Context) -> bool {
+    let obj_ty = crate::codegen::functions::infer_contextual_type(object, ctx);
+    let PhpType::Object(class_name) = obj_ty else {
+        return false;
+    };
+    ctx.classes
+        .get(&class_name)
+        .is_some_and(|class_info| class_info.reference_properties.contains(property))
+}
+
+fn promoted_reference_bind_var(
+    object: &Expr,
+    property: &str,
+    value: &Expr,
+    ctx: &Context,
+) -> Option<String> {
+    if !matches!(object.kind, ExprKind::This) {
+        return None;
+    }
+    let ExprKind::Variable(var_name) = &value.kind else {
+        return None;
+    };
+    if property != var_name || !ctx.ref_params.contains(var_name) {
+        return None;
+    }
+    Some(var_name.clone())
+}
+
+fn emit_property_reference_bind(
+    var_name: &str,
+    object: &Expr,
+    property: &str,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    if !call_args::emit_ref_arg_variable_address(var_name, "promoted property ref", emitter, ctx) {
+        return;
+    }
+    abi::emit_push_result_value(emitter, &PhpType::Int);
+
+    let obj_ty = emit_expr(object, emitter, ctx, data);
+    let target = match target::resolve_property_assign_target(&obj_ty, property, None, emitter, ctx) {
+        target::PropertyAssignResolution::Resolved(target) => target,
+        target::PropertyAssignResolution::UseMagicSet(_) | target::PropertyAssignResolution::Abort => {
+            emitter.comment("WARNING: reference property bind requires a concrete property");
+            return;
+        }
+    };
+
+    let object_reg = abi::symbol_scratch_reg(emitter);
+    emitter.instruction(&format!("mov {}, {}", object_reg, abi::int_result_reg(emitter))); // keep the object pointer while binding the promoted reference property slot
+    storage::store_property_reference_address(emitter, object_reg, target.offset);
+}
+
+fn emit_property_reference_write(
+    value: &Expr,
+    object: &Expr,
+    property: &str,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    let prop_ty = reference_property_type(object, property, ctx).unwrap_or(PhpType::Int);
+    let mut val_ty = emit_expr(value, emitter, ctx, data);
+    coerce_result_to_type(emitter, ctx, data, &val_ty, &prop_ty);
+    val_ty = prop_ty.clone();
+    super::super::helpers::retain_borrowed_heap_result(emitter, value, &val_ty);
+    abi::emit_push_result_value(emitter, &val_ty);
+
+    let obj_ty = emit_expr(object, emitter, ctx, data);
+    let target = match target::resolve_property_assign_target(&obj_ty, property, None, emitter, ctx) {
+        target::PropertyAssignResolution::Resolved(target) => target,
+        target::PropertyAssignResolution::UseMagicSet(_) | target::PropertyAssignResolution::Abort => {
+            emitter.comment("WARNING: reference property write requires a concrete property");
+            return;
+        }
+    };
+
+    let object_reg = abi::symbol_scratch_reg(emitter);
+    let pointer_reg = abi::temp_int_reg(emitter.target);
+    emitter.instruction(&format!("mov {}, {}", object_reg, abi::int_result_reg(emitter))); // keep the object pointer while resolving the referenced property slot
+    abi::emit_load_from_address(emitter, pointer_reg, object_reg, target.offset);
+    storage::release_previous_referenced_value(emitter, pointer_reg, &target.prop_ty, &val_ty);
+    storage::store_referenced_value(emitter, pointer_reg, &val_ty);
+}
+
+fn reference_property_type(object: &Expr, property: &str, ctx: &Context) -> Option<PhpType> {
+    let obj_ty = crate::codegen::functions::infer_contextual_type(object, ctx);
+    let PhpType::Object(class_name) = obj_ty else {
+        return None;
+    };
+    let class_info = ctx.classes.get(&class_name)?;
+    if !class_info.reference_properties.contains(property) {
+        return None;
+    }
+    class_info
+        .properties
+        .iter()
+        .find(|(name, _)| name == property)
+        .map(|(_, ty)| ty.clone())
+}
+
 fn declared_property_type(object: &Expr, property: &str, ctx: &Context) -> Option<PhpType> {
     let obj_ty = crate::codegen::functions::infer_contextual_type(object, ctx);
     let PhpType::Object(class_name) = obj_ty else {
@@ -105,6 +218,10 @@ pub(crate) fn emit_property_array_push_stmt(
             return;
         }
     };
+    if target.is_reference {
+        emitter.comment("WARNING: array push through reference properties is not supported yet");
+        return;
+    }
     let elem_ty = match &target.prop_ty {
         crate::types::PhpType::Array(elem_ty) => *elem_ty.clone(),
         _ => {
@@ -240,6 +357,10 @@ pub(crate) fn emit_property_array_assign_stmt(
             return;
         }
     };
+    if target.is_reference {
+        emitter.comment("WARNING: array assignment through reference properties is not supported yet");
+        return;
+    }
     let elem_ty = match &target.prop_ty {
         crate::types::PhpType::Array(elem_ty) => *elem_ty.clone(),
         _ => {

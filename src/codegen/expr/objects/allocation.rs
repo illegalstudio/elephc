@@ -2,6 +2,7 @@ use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
+use crate::codegen::expr::calls::args as call_args;
 use crate::codegen::platform::Arch;
 use crate::names::method_symbol;
 use crate::parser::ast::Expr;
@@ -9,7 +10,7 @@ use crate::types::PhpType;
 
 use super::super::{
     coerce_result_to_type, emit_expr, restore_concat_offset_after_nested_call,
-    retain_borrowed_heap_arg, save_concat_offset_before_nested_call,
+    save_concat_offset_before_nested_call,
 };
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
@@ -151,26 +152,61 @@ pub(super) fn emit_new_object(
 
     // -- call __construct if it exists --
     if class_info.methods.contains_key("__construct") {
-        let normalized_args = class_info
-            .methods
-            .get("__construct")
-            .map(|sig| {
-                let regular_param_count = if sig.variadic.is_some() {
-                    sig.params.len().saturating_sub(1)
-                } else {
-                    sig.params.len()
-                };
-                crate::codegen::expr::calls::args::normalize_named_call_args(sig, args, regular_param_count)
-            })
-            .unwrap_or_else(|| args.to_vec());
-        let mut arg_types = Vec::new();
-        for arg in &normalized_args {
-            let ty = emit_expr(arg, emitter, ctx, data);
-            retain_borrowed_heap_arg(emitter, arg, &ty);
-            if !matches!(ty, PhpType::Void) {
-                abi::emit_push_result_value(emitter, &ty);
+        let sig = class_info.methods.get("__construct").cloned();
+        let regular_param_count = call_args::regular_param_count(sig.as_ref(), args.len());
+        let prepared = call_args::prepare_call_args(sig.as_ref(), args, regular_param_count);
+        let mut arg_types = call_args::emit_pushed_non_variadic_args(
+            &prepared.all_args,
+            sig.as_ref(),
+            "constructor ref arg",
+            false,
+            emitter,
+            ctx,
+            data,
+        );
+
+        if prepared.spread_into_named {
+            if let Some(spread_expr) = prepared.spread_arg.as_ref() {
+                call_args::emit_spread_into_named_params(
+                    spread_expr,
+                    sig.as_ref(),
+                    prepared.spread_at_index,
+                    prepared.regular_param_count,
+                    "constructor params",
+                    emitter,
+                    ctx,
+                    data,
+                    &mut arg_types,
+                );
             }
-            arg_types.push(ty);
+        }
+
+        if prepared.is_variadic {
+            if let Some(spread_expr) = prepared.spread_arg.as_ref() {
+                let ty = call_args::emit_spread_variadic_array_arg(
+                    spread_expr,
+                    "spread array as constructor variadic param",
+                    emitter,
+                    ctx,
+                    data,
+                );
+                arg_types.push(ty);
+            } else if prepared.variadic_args.is_empty() {
+                arg_types.push(call_args::emit_empty_variadic_array_arg(
+                    "empty constructor variadic array",
+                    emitter,
+                ));
+            } else {
+                arg_types.push(call_args::emit_variadic_array_arg_from_exprs(
+                    &prepared.variadic_args,
+                    "build constructor variadic array",
+                    true,
+                    true,
+                    emitter,
+                    ctx,
+                    data,
+                ));
+            }
         }
 
         let assignments = crate::codegen::abi::build_outgoing_arg_assignments_for_target(

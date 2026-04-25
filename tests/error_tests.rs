@@ -2361,6 +2361,79 @@ $box = new Box("bad");
 }
 
 #[test]
+fn test_error_promoted_property_type_mismatch() {
+    expect_error(
+        r#"<?php
+class Box {
+    public function __construct(public int $value) {}
+}
+$box = new Box("bad");
+"#,
+        "Constructor 'Box::__construct' parameter $value expects Int, got Str",
+    );
+}
+
+#[test]
+fn test_error_constructor_promotion_outside_constructor() {
+    expect_error(
+        "<?php class Box { public function set(public int $value) {} }",
+        "Cannot declare promoted property outside a constructor",
+    );
+}
+
+#[test]
+fn test_error_constructor_promotion_redeclares_property() {
+    expect_error(
+        "<?php class Box { public int $value; public function __construct(public int $value) {} }",
+        "Cannot redeclare promoted property $value",
+    );
+    expect_error(
+        "<?php class Box { public function __construct(public int $value) {} public int $value; }",
+        "Cannot redeclare property $value",
+    );
+}
+
+#[test]
+fn test_error_constructor_promotion_rejects_variadic() {
+    expect_error(
+        "<?php class Box { public function __construct(public ...$values) {} }",
+        "Cannot declare variadic promoted property",
+    );
+}
+
+#[test]
+fn test_error_constructor_promotion_rejects_readonly_by_reference() {
+    expect_error(
+        "<?php class Box { public function __construct(public readonly int &$value) {} }",
+        "Readonly promoted by-reference properties are not supported",
+    );
+}
+
+#[test]
+fn test_error_constructor_promotion_rejects_by_reference_default() {
+    expect_error(
+        "<?php class Box { public function __construct(public int &$value = 1) {} }",
+        "Promoted by-reference properties cannot use default values yet",
+    );
+}
+
+#[test]
+fn test_error_constructor_promotion_by_reference_requires_variable_arg() {
+    expect_error(
+        "<?php class Box { public function __construct(public int &$value) {} } $box = new Box(1);",
+        "Constructor 'Box::__construct' parameter $value must be passed a variable",
+    );
+}
+
+#[test]
+fn test_error_constructor_promotion_rejects_abstract_constructor() {
+    expect_error(
+        "<?php abstract class Box { abstract public function __construct(public int $value); }",
+        "Cannot declare promoted property in an abstract constructor",
+    );
+}
+
+#[test]
 fn test_error_typed_property_rejects_void_type() {
     expect_error(
         "<?php class Box { public void $value; }",

@@ -311,21 +311,26 @@ pub(crate) fn emit_runtime_data_user(
                 if i > 0 {
                     out.push_str(", ");
                 }
-                let tag = match prop_ty {
-                    PhpType::Int => 0,
-                    PhpType::Str => 1,
-                    PhpType::Float => 2,
-                    PhpType::Bool => 3,
-                    PhpType::Array(_) => 4,
-                    PhpType::AssocArray { .. } => 5,
-                    PhpType::Object(_) => 6,
-                    PhpType::Mixed => 7,
-                    PhpType::Union(_) => 7,
-                    PhpType::Callable
-                    | PhpType::Pointer(_)
-                    | PhpType::Buffer(_)
-                    | PhpType::Packed(_)
-                    | PhpType::Void => 0,
+                let prop_name = &class_info.properties[i].0;
+                let tag = if class_info.reference_properties.contains(prop_name) {
+                    0
+                } else {
+                    match prop_ty {
+                        PhpType::Int => 0,
+                        PhpType::Str => 1,
+                        PhpType::Float => 2,
+                        PhpType::Bool => 3,
+                        PhpType::Array(_) => 4,
+                        PhpType::AssocArray { .. } => 5,
+                        PhpType::Object(_) => 6,
+                        PhpType::Mixed => 7,
+                        PhpType::Union(_) => 7,
+                        PhpType::Callable
+                        | PhpType::Pointer(_)
+                        | PhpType::Buffer(_)
+                        | PhpType::Packed(_)
+                        | PhpType::Void => 0,
+                    }
                 };
                 out.push_str(&tag.to_string());
             }
@@ -394,6 +399,7 @@ mod tests {
             declared_properties: HashSet::new(),
             final_properties: HashSet::new(),
             readonly_properties: HashSet::new(),
+            reference_properties: HashSet::new(),
             method_decls: Vec::new(),
             methods: HashMap::new(),
             static_methods: HashMap::new(),

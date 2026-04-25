@@ -1,5 +1,6 @@
 mod declarations;
 mod body;
+mod method_params;
 mod traits;
 
 pub(super) use declarations::*;

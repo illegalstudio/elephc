@@ -657,6 +657,7 @@ pub(crate) fn propagate_property(property: ClassProperty) -> ClassProperty {
         type_expr: property.type_expr,
         readonly: property.readonly,
         is_final: property.is_final,
+        by_ref: property.by_ref,
         default: property
             .default
             .map(|expr| propagate_expr(expr, &HashMap::new())),

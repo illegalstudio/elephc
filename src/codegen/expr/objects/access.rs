@@ -15,7 +15,7 @@ pub(super) fn emit_property_access(
     data: &mut DataSection,
 ) -> PhpType {
     let obj_ty = emit_expr(object, emitter, ctx, data);
-    let (class_name, prop_ty, offset, needs_deref) = match &obj_ty {
+    let (class_name, prop_ty, offset, needs_deref, is_reference) = match &obj_ty {
         PhpType::Object(class_name) => {
             let class_info = match ctx.classes.get(class_name).cloned() {
                 Some(c) => c,
@@ -59,7 +59,13 @@ pub(super) fn emit_property_access(
                 }
             };
 
-            (class_name.clone(), prop_ty, offset, false)
+            (
+                class_name.clone(),
+                prop_ty,
+                offset,
+                false,
+                class_info.reference_properties.contains(property),
+            )
         }
         PhpType::Pointer(Some(class_name)) if ctx.extern_classes.contains_key(class_name) => {
             let class_info = match ctx.extern_classes.get(class_name).cloned() {
@@ -82,7 +88,7 @@ pub(super) fn emit_property_access(
                 }
             };
 
-            (class_name.clone(), field.php_type, field.offset, true)
+            (class_name.clone(), field.php_type, field.offset, true, false)
         }
         PhpType::Pointer(Some(class_name)) if ctx.packed_classes.contains_key(class_name) => {
             let class_info = match ctx.packed_classes.get(class_name).cloned() {
@@ -105,7 +111,7 @@ pub(super) fn emit_property_access(
                 }
             };
 
-            (class_name.clone(), field.php_type, field.offset, true)
+            (class_name.clone(), field.php_type, field.offset, true, false)
         }
         _ => {
             emitter.comment("WARNING: property access on non-object");
@@ -124,6 +130,36 @@ pub(super) fn emit_property_access(
     }
 
     let object_reg = abi::int_result_reg(emitter);
+
+    if is_reference {
+        let pointer_reg = abi::symbol_scratch_reg(emitter);
+        abi::emit_load_from_address(emitter, pointer_reg, object_reg, offset);
+        match &prop_ty {
+            PhpType::Str => {
+                let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+                abi::emit_load_from_address(emitter, ptr_reg, pointer_reg, 0);
+                abi::emit_load_from_address(emitter, len_reg, pointer_reg, 8);
+            }
+            PhpType::Float => {
+                abi::emit_load_from_address(emitter, abi::float_result_reg(emitter), pointer_reg, 0);
+            }
+            PhpType::Bool | PhpType::Int | PhpType::Void => {
+                abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), pointer_reg, 0);
+            }
+            PhpType::Mixed
+            | PhpType::Union(_)
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Buffer(_)
+            | PhpType::Callable
+            | PhpType::Object(_)
+            | PhpType::Packed(_)
+            | PhpType::Pointer(_) => {
+                abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), pointer_reg, 0);
+            }
+        }
+        return prop_ty;
+    }
 
     match &prop_ty {
         PhpType::Str => {

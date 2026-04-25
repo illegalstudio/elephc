@@ -177,6 +177,7 @@ pub(crate) fn build_enum_info(
     let mut declared_properties = HashSet::new();
     let final_properties = HashSet::new();
     let mut readonly_properties = HashSet::new();
+    let reference_properties = HashSet::new();
     if let Some(backing_ty) = &resolved_backing {
         properties.push(("value".to_string(), backing_ty.clone()));
         property_offsets.insert("value".to_string(), 8);
@@ -247,6 +248,7 @@ pub(crate) fn build_enum_info(
             declared_properties,
             final_properties,
             readonly_properties,
+            reference_properties,
             method_decls: Vec::new(),
             methods: HashMap::new(),
             static_methods,

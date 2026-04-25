@@ -7,6 +7,7 @@ pub(super) struct PropertyAssignTarget {
     pub(super) offset: usize,
     pub(super) prop_ty: PhpType,
     pub(super) needs_deref: bool,
+    pub(super) is_reference: bool,
 }
 
 pub(super) enum PropertyAssignResolution {
@@ -79,6 +80,7 @@ fn resolve_object_property_target(
         offset,
         prop_ty,
         needs_deref: false,
+        is_reference: class_info.reference_properties.contains(property),
     })
 }
 
@@ -107,6 +109,7 @@ fn resolve_extern_field_target(
         offset: field.offset,
         prop_ty: field.php_type,
         needs_deref: true,
+        is_reference: false,
     })
 }
 
@@ -135,5 +138,6 @@ fn resolve_packed_field_target(
         offset: field.offset,
         prop_ty: field.php_type,
         needs_deref: true,
+        is_reference: false,
     })
 }
