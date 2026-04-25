@@ -106,7 +106,6 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 ### Known incompatibilities with PHP
 
 - `$argv[0]` returns the compiled binary path, not the `.php` file path.
-- `PHP_OS` and `php_uname()` currently return `"Darwin"` on all targets, including Linux targets.
 - `strpos()` returns `-1` when not found, not `false`.
 - `array_search()` returns `-1` when an indexed array search misses and `""` when an associative array search misses, not `false`.
 - Integer overflow wraps instead of promoting to float.

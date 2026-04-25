@@ -36,6 +36,13 @@ impl Platform {
         }
     }
 
+    pub fn php_os_name(&self) -> &'static str {
+        match self {
+            Platform::MacOS => "Darwin",
+            Platform::Linux => "Linux",
+        }
+    }
+
     pub fn o_wronly_creat_trunc(&self) -> u32 {
         match self {
             Platform::MacOS => 0x601,

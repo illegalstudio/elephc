@@ -140,7 +140,7 @@ fn test_php_eol() {
 #[test]
 fn test_php_os() {
     let out = compile_and_run("<?php echo PHP_OS;");
-    assert_eq!(out, "Darwin");
+    assert_eq!(out, target().platform.php_os_name());
 }
 
 #[test]
@@ -215,8 +215,8 @@ fn test_phpversion() {
 
 #[test]
 fn test_php_uname() {
-    let out = compile_and_run("<?php $os = php_uname(); if (strlen($os) > 0) { echo \"ok\"; }");
-    assert_eq!(out, "ok");
+    let out = compile_and_run("<?php echo php_uname();");
+    assert_eq!(out, target().platform.php_os_name());
 }
 
 // -- v0.8 exec / shell_exec / system / passthru --
@@ -244,4 +244,3 @@ fn test_passthru() {
     let out = compile_and_run("<?php passthru(\"echo bye\");");
     assert_eq!(out, "bye\n");
 }
-

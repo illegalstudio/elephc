@@ -1,5 +1,6 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
+use crate::names::Name;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
 use crate::span::Span;
 
@@ -96,7 +97,7 @@ pub(super) fn parse_prefix(
             tokens,
             pos,
             span,
-            ExprKind::StringLiteral("Darwin".to_string()),
+            ExprKind::ConstRef(Name::unqualified("PHP_OS")),
         ),
         Token::DirectorySeparator => parse_simple(
             tokens,

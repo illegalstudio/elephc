@@ -63,7 +63,7 @@ pub fn generate_user_asm(
     let mut data = DataSection::new();
 
     // Pre-scan for compile-time constants (const declarations and define() calls)
-    let global_constants = collect_constants(program);
+    let global_constants = collect_constants(program, target.platform);
 
     // Pre-scan for global variable names used in `global $var` statements across all functions
     let all_global_var_names = collect_global_var_names(program);

@@ -17,7 +17,7 @@ sidebar:
 | `usleep()` | `usleep($microseconds): void` | Sleep for microseconds |
 | `getenv()` | `getenv($name): string` | Get environment variable |
 | `putenv()` | `putenv($assignment): bool` | Set environment variable ("KEY=VALUE") |
-| `php_uname()` | `php_uname([$mode]): string` | Get OS name. Currently returns `"Darwin"` on all targets |
+| `php_uname()` | `php_uname([$mode]): string` | Get target OS name (`"Darwin"` for macOS targets, `"Linux"` for Linux targets) |
 | `phpversion()` | `phpversion(): string` | Get elephc version string |
 | `exec()` | `exec($command): string` | Execute command, return output |
 | `shell_exec()` | `shell_exec($command): string` | Execute via shell, return output |
