@@ -232,7 +232,7 @@ echo getenv("ELEPHC_TEST_VAR");
 #[test]
 fn test_phpversion() {
     let out = compile_and_run("<?php echo phpversion();");
-    assert_eq!(out, "0.7.1");
+    assert_eq!(out, env!("CARGO_PKG_VERSION"));
 }
 
 #[test]
