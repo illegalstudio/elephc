@@ -1109,6 +1109,38 @@ echo $u->id();
 }
 
 #[test]
+fn test_constructor_promoted_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class User {
+    public function __construct(public int $id, private string $name = "Ada") {}
+    public function name() { return $this->name; }
+}
+$u = new User(7);
+echo $u->id;
+echo ":";
+echo $u->name();
+"#,
+    );
+    assert_eq!(out, "7:Ada");
+}
+
+#[test]
+fn test_constructor_promoted_readonly_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Token {
+    public function __construct(public readonly int $id) {}
+    public function id() { return $this->id; }
+}
+$token = new Token(42);
+echo $token->id();
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+#[test]
 fn test_class_static_and_instance() {
     let out = compile_and_run(
         r#"<?php

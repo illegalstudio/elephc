@@ -306,6 +306,8 @@ When checking property access (`$obj->prop`), the type checker validates that:
 
 When checking property writes, explicitly declared property types stay fixed. Defaults, direct assignments, array writes, and constructor assignments routed through untyped parameters must be compatible with the declared property type. Nullable and union property types use the same boxed mixed runtime representation as typed locals, while untyped properties keep the existing inference and refinement behavior.
 
+Constructor-promoted properties reach the checker as ordinary class properties plus synthetic constructor assignments produced by the parser. This lets promoted parameter type hints, defaults, visibility, and readonly checks reuse the same `FunctionSig`, property metadata, and constructor-to-property mapping used by handwritten constructor assignments.
+
 When checking method calls, it verifies the method exists, enforces method visibility (`public`, subclass-visible `protected`, declaring-class-only `private`), validates argument count and types against the method's `FunctionSig`, resolves `parent::method()` against the immediate parent class, resolves `self::method()` against the current lexical class, and accepts `static::method()` as a late-static-bound static call against the current class hierarchy.
 
 When checking `new ClassName(...)`, it also rejects interfaces and abstract classes before codegen.

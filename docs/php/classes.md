@@ -102,6 +102,29 @@ Called automatically with `new`:
 $p = new Point(3, 4);
 ```
 
+Constructor property promotion is supported. Visibility or `readonly` before a constructor parameter declares a property and assigns the incoming argument at the start of `__construct`.
+
+```php
+<?php
+class User {
+    public function __construct(
+        public int $id,
+        private string $name = "Ada",
+        readonly ?int $rank = null
+    ) {}
+
+    public function name() {
+        return $this->name;
+    }
+}
+
+$user = new User(7);
+echo $user->id;      // 7
+echo $user->name();  // Ada
+```
+
+Promoted properties support `public`, `protected`, `private`, `readonly`, nullable and union type declarations, and constructor parameter defaults. Variadic promotion is rejected, matching PHP. By-reference promoted properties are not supported yet.
+
 ## Instance methods and $this
 Virtual dispatch for overrides.
 Private methods are not virtual.
@@ -146,5 +169,5 @@ Pure and backed enums. `->value`, `::from()`, `::tryFrom()`, `::cases()`. Only `
 
 ## Limitations
 - No static or abstract properties
-- No constructor promotion
+- No by-reference promoted properties
 - No property redeclaration across inheritance chain

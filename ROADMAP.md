@@ -298,6 +298,7 @@ Proper type system for PHP compatibility.
 - [x] Union types (`int|string`) — tagged union with runtime type dispatch
 - [x] Nullable types (`?int`) — sugar for `int|null`
 - [x] Function / method parameter and return type hints (`function foo(int $x): string`) — compile-time validation for functions, methods, constructors, closures, and arrow functions
+- [x] Constructor property promotion (`public function __construct(public int $x)`) — promoted parameters lower to declared properties plus constructor assignments
 
 ## v0.18.x — Multi-platform and optimizations
 
@@ -392,7 +393,6 @@ Features that are feasible but complex. Not currently planned for any specific v
 
 | Feature | Complexity | Notes |
 |---|---|---|
-| Constructor promotion (`public function __construct(public int $x)`) | Medium | Declare and assign promoted properties directly from constructor signatures, building on existing property type declaration support. |
 | Static properties | Medium | Add class-scoped property storage, visibility checks, initialization order, inheritance behavior, and `self::$x` / `static::$x` lowering. |
 | Generators / `yield` | High | Requires compile-time state machine transformation: every yield point becomes a switch case, all locals promoted to heap-allocated generator object. Edge cases with yield inside try/catch/finally are significant. |
 | `yield from` delegation | High | Depends on generators. Forwards iteration to an inner generator, propagating values and return. |

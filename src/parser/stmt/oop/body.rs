@@ -6,8 +6,9 @@ use crate::parser::ast::{
 use crate::parser::expr::parse_expr;
 use crate::span::Span;
 
-use super::super::params::{parse_name_list, parse_params, parse_type_expr};
+use super::super::params::{parse_name_list, parse_type_expr};
 use super::super::{expect_semicolon, expect_token, parse_block};
+use super::method_params::parse_method_params;
 use super::traits::parse_trait_use;
 
 pub(in crate::parser::stmt) fn parse_interface_decl(
@@ -131,7 +132,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                     "Readonly methods are not supported",
                 ));
             }
-            methods.push(parse_class_like_method(
+            let (method, promoted_properties) = parse_class_like_method(
                 tokens,
                 pos,
                 member_span,
@@ -139,7 +140,9 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 modifiers.is_static,
                 modifiers.is_abstract,
                 modifiers.is_final,
-            )?);
+            )?;
+            append_promoted_properties(&mut properties, promoted_properties)?;
+            methods.push(method);
             continue;
         }
 
@@ -160,6 +163,12 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
             }
             let prop_name = prop_name.clone();
             *pos += 1;
+            if properties.iter().any(|property| property.name == prop_name) {
+                return Err(CompileError::new(
+                    member_span,
+                    &format!("Cannot redeclare property ${}", prop_name),
+                ));
+            }
             let default = if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
                 *pos += 1;
                 Some(parse_expr(tokens, pos)?)
@@ -189,6 +198,22 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
     }
 
     Ok((trait_uses, properties, methods))
+}
+
+fn append_promoted_properties(
+    properties: &mut Vec<ClassProperty>,
+    promoted_properties: Vec<ClassProperty>,
+) -> Result<(), CompileError> {
+    for promoted in promoted_properties {
+        if properties.iter().any(|property| property.name == promoted.name) {
+            return Err(CompileError::new(
+                promoted.span,
+                &format!("Cannot redeclare promoted property ${}", promoted.name),
+            ));
+        }
+        properties.push(promoted);
+    }
+    Ok(())
 }
 
 fn parse_optional_property_type(
@@ -274,7 +299,7 @@ fn parse_class_like_method(
     is_static: bool,
     is_abstract: bool,
     is_final: bool,
-) -> Result<ClassMethod, CompileError> {
+) -> Result<(ClassMethod, Vec<ClassProperty>), CompileError> {
     *pos += 1; // consume 'function'
     let method_name = match tokens.get(*pos).map(|(t, _)| t) {
         Some(Token::Identifier(n)) => {
@@ -291,7 +316,8 @@ fn parse_class_like_method(
         &Token::LParen,
         "Expected '(' after method name",
     )?;
-    let (params, variadic) = parse_params(tokens, pos, span)?;
+    let (params, variadic, promoted_properties, promoted_assignments) =
+        parse_method_params(tokens, pos, span, &method_name)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')'")?;
     // Parse optional return type: `: TypeExpr`
     let return_type = if *pos < tokens.len() && tokens[*pos].0 == Token::Colon {
@@ -306,7 +332,26 @@ fn parse_class_like_method(
     } else {
         (true, parse_block(tokens, pos)?)
     };
-    Ok(ClassMethod {
+    if !promoted_properties.is_empty() {
+        if is_abstract || !has_body {
+            return Err(CompileError::new(
+                span,
+                "Cannot declare promoted property in an abstract constructor",
+            ));
+        }
+        if is_static {
+            return Err(CompileError::new(
+                span,
+                "Constructor promotion cannot be used on static constructors",
+            ));
+        }
+    }
+    let body = if promoted_assignments.is_empty() {
+        body
+    } else {
+        promoted_assignments.into_iter().chain(body).collect()
+    };
+    Ok((ClassMethod {
         name: method_name,
         visibility,
         is_static,
@@ -318,7 +363,7 @@ fn parse_class_like_method(
         return_type,
         body,
         span,
-    })
+    }, promoted_properties))
 }
 
 fn parse_interface_body(
@@ -336,7 +381,7 @@ fn parse_interface_body(
                 "Interfaces may only contain method declarations",
             ));
         }
-        methods.push(parse_class_like_method(
+        let (method, promoted_properties) = parse_class_like_method(
             tokens,
             pos,
             member_span,
@@ -344,7 +389,14 @@ fn parse_interface_body(
             modifiers.is_static,
             true,
             modifiers.is_final,
-        )?);
+        )?;
+        if !promoted_properties.is_empty() {
+            return Err(CompileError::new(
+                member_span,
+                "Cannot declare promoted property in an interface",
+            ));
+        }
+        methods.push(method);
     }
 
     Ok(methods)

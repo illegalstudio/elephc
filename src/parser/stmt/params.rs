@@ -26,71 +26,7 @@ pub(super) fn parse_function_decl(
         &Token::LParen,
         "Expected '(' after function name",
     )?;
-
-    let mut params = Vec::new();
-    let mut variadic = None;
-    while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
-        if !params.is_empty() || variadic.is_some() {
-            expect_token(
-                tokens,
-                pos,
-                &Token::Comma,
-                "Expected ',' between parameters",
-            )?;
-        }
-        if variadic.is_some() {
-            return Err(CompileError::new(
-                span,
-                "Variadic parameter must be the last parameter",
-            ));
-        }
-        // Check for & (pass by reference)
-        // Try to parse optional type annotation before $variable
-        let type_ann = if looks_like_typed_param(tokens, *pos) {
-            Some(parse_type_expr(tokens, pos, span)?)
-        } else {
-            None
-        };
-        let is_ref = if *pos < tokens.len() && tokens[*pos].0 == Token::Ampersand {
-            *pos += 1;
-            true
-        } else {
-            false
-        };
-        // Check for ... (variadic)
-        if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
-            if type_ann.is_some() {
-                return Err(CompileError::new(
-                    span,
-                    "Typed variadic parameters are not supported yet",
-                ));
-            }
-            *pos += 1;
-            match tokens.get(*pos).map(|(t, _)| t) {
-                Some(Token::Variable(n)) => {
-                    variadic = Some(n.clone());
-                    *pos += 1;
-                }
-                _ => return Err(CompileError::new(span, "Expected variable after '...'")),
-            }
-            continue;
-        }
-        match tokens.get(*pos).map(|(t, _)| t) {
-            Some(Token::Variable(n)) => {
-                let n = n.clone();
-                *pos += 1;
-                // Check for default value
-                let default = if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
-                    *pos += 1;
-                    Some(parse_expr(tokens, pos)?)
-                } else {
-                    None
-                };
-                params.push((n, type_ann, default, is_ref));
-            }
-            _ => return Err(CompileError::new(span, "Expected parameter variable")),
-        }
-    }
+    let (params, variadic) = parse_params(tokens, pos, span)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after parameters")?;
 
     // Parse optional return type: `: TypeExpr`
