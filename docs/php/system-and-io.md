@@ -17,12 +17,23 @@ sidebar:
 | `usleep()` | `usleep($microseconds): void` | Sleep for microseconds |
 | `getenv()` | `getenv($name): string` | Get environment variable |
 | `putenv()` | `putenv($assignment): bool` | Set environment variable ("KEY=VALUE") |
-| `php_uname()` | `php_uname([$mode]): string` | Get target OS name (`"Darwin"` for macOS targets, `"Linux"` for Linux targets) |
+| `php_uname()` | `php_uname($mode = "a"): string` | Get system information from the target runtime |
 | `phpversion()` | `phpversion(): string` | Get elephc version string |
 | `exec()` | `exec($command): string` | Execute command, return output |
 | `shell_exec()` | `shell_exec($command): string` | Execute via shell, return output |
 | `system()` | `system($command): string` | Execute, output to stdout |
 | `passthru()` | `passthru($command): void` | Execute, pass raw output |
+
+`php_uname()` supports PHP's standard one-character modes:
+
+| Mode | Result |
+|---|---|
+| `"a"` | Full system line: system name, node name, release, version, machine |
+| `"s"` | System name, matching `PHP_OS` (`"Darwin"` on macOS targets, `"Linux"` on Linux targets) |
+| `"n"` | Network node name |
+| `"r"` | Release |
+| `"v"` | Version |
+| `"m"` | Machine hardware name |
 
 ## Date and time
 

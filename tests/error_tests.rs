@@ -2221,6 +2221,11 @@ fn test_error_php_uname_wrong_args() {
 }
 
 #[test]
+fn test_error_php_uname_wrong_type() {
+    expect_error("<?php php_uname(1);", "php_uname() argument must be string");
+}
+
+#[test]
 fn test_error_exec_wrong_args() {
     expect_error("<?php exec();", "exec() takes exactly 1 argument");
 }
