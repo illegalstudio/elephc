@@ -98,6 +98,7 @@ pub(crate) fn build_class_info_recursive(
     let mut declared_properties = HashSet::new();
     let mut final_properties = HashSet::new();
     let mut readonly_properties = std::collections::HashSet::new();
+    let mut reference_properties = HashSet::new();
 
     let mut method_sigs = HashMap::new();
     let mut static_sigs = HashMap::new();
@@ -134,6 +135,9 @@ pub(crate) fn build_class_info_recursive(
             }
             if parent.readonly_properties.contains(name) {
                 readonly_properties.insert(name.clone());
+            }
+            if parent.reference_properties.contains(name) {
+                reference_properties.insert(name.clone());
             }
         }
 
@@ -188,6 +192,12 @@ pub(crate) fn build_class_info_recursive(
                 "Property cannot be both final and private",
             ));
         }
+        if prop.by_ref && class.is_readonly_class {
+            return Err(CompileError::new(
+                prop.span,
+                "Readonly promoted by-reference properties are not supported",
+            ));
+        }
         if property_declaring_classes.contains_key(&prop.name) {
             if final_properties.contains(&prop.name) {
                 let declaring_class = property_declaring_classes
@@ -238,6 +248,9 @@ pub(crate) fn build_class_info_recursive(
         }
         if class.is_readonly_class || prop.readonly {
             readonly_properties.insert(prop.name.clone());
+        }
+        if prop.by_ref {
+            reference_properties.insert(prop.name.clone());
         }
     }
 
@@ -592,6 +605,7 @@ pub(crate) fn build_class_info_recursive(
             declared_properties,
             final_properties,
             readonly_properties,
+            reference_properties,
             method_decls: class.methods.clone(),
             methods: method_sigs,
             static_methods: static_sigs,

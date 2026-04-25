@@ -76,6 +76,7 @@ fn builtin_exception_message_property() -> ClassProperty {
         type_expr: Some(TypeExpr::Str),
         readonly: false,
         is_final: false,
+        by_ref: false,
         default: Some(Expr::new(
             ExprKind::StringLiteral(String::new()),
             crate::span::Span::dummy(),

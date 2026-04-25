@@ -202,6 +202,7 @@ pub struct ClassInfo {
     pub declared_properties: HashSet<String>,
     pub final_properties: HashSet<String>,
     pub readonly_properties: HashSet<String>,
+    pub reference_properties: HashSet<String>,
     pub method_decls: Vec<ClassMethod>,
     pub methods: HashMap<String, FunctionSig>,
     pub static_methods: HashMap<String, FunctionSig>,

@@ -2402,10 +2402,26 @@ fn test_error_constructor_promotion_rejects_variadic() {
 }
 
 #[test]
-fn test_error_constructor_promotion_rejects_by_reference() {
+fn test_error_constructor_promotion_rejects_readonly_by_reference() {
     expect_error(
-        "<?php class Box { public function __construct(public int &$value) {} }",
-        "Promoted by-reference properties are not supported yet",
+        "<?php class Box { public function __construct(public readonly int &$value) {} }",
+        "Readonly promoted by-reference properties are not supported",
+    );
+}
+
+#[test]
+fn test_error_constructor_promotion_rejects_by_reference_default() {
+    expect_error(
+        "<?php class Box { public function __construct(public int &$value = 1) {} }",
+        "Promoted by-reference properties cannot use default values yet",
+    );
+}
+
+#[test]
+fn test_error_constructor_promotion_by_reference_requires_variable_arg() {
+    expect_error(
+        "<?php class Box { public function __construct(public int &$value) {} } $box = new Box(1);",
+        "Constructor 'Box::__construct' parameter $value must be passed a variable",
     );
 }
 

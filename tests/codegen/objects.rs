@@ -1141,6 +1141,54 @@ echo $token->id();
 }
 
 #[test]
+fn test_constructor_promoted_by_ref_property_reads_source_updates() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public function __construct(public int &$value) {}
+}
+$value = 1;
+$box = new Box($value);
+$value = 2;
+echo $box->value;
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+#[test]
+fn test_constructor_promoted_by_ref_property_writes_to_source() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public function __construct(public int &$value) {}
+}
+$value = 1;
+$box = new Box($value);
+$box->value = 3;
+echo $value;
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_constructor_promoted_by_ref_string_property_writes_to_source() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public function __construct(public string &$name) {}
+}
+$name = "Ada";
+$box = new Box($name);
+$box->name = "Grace";
+echo $name;
+"#,
+    );
+    assert_eq!(out, "Grace");
+}
+
+#[test]
 fn test_class_static_and_instance() {
     let out = compile_and_run(
         r#"<?php

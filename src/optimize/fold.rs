@@ -18,6 +18,7 @@ pub(super) fn fold_property(property: ClassProperty) -> ClassProperty {
         type_expr: property.type_expr,
         readonly: property.readonly,
         is_final: property.is_final,
+        by_ref: property.by_ref,
         default: property.default.map(fold_expr),
         span: property.span,
     }

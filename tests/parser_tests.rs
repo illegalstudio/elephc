@@ -2293,7 +2293,7 @@ fn test_parse_typed_properties() {
 #[test]
 fn test_parse_constructor_promoted_properties() {
     let stmts = parse_source(
-        "<?php class User { public function __construct(public int $id, private string $name, readonly ?int $rank = null) { echo $id; } }",
+        "<?php class User { public function __construct(public int $id, private string $name, readonly ?int $rank = null, protected int &$score) { echo $id; } }",
     );
     match &stmts[0].kind {
         StmtKind::ClassDecl {
@@ -2301,7 +2301,7 @@ fn test_parse_constructor_promoted_properties() {
             methods,
             ..
         } => {
-            assert_eq!(properties.len(), 3);
+            assert_eq!(properties.len(), 4);
             assert_eq!(properties[0].name, "id");
             assert_eq!(properties[0].visibility, Visibility::Public);
             assert_eq!(properties[0].type_expr, Some(TypeExpr::Int));
@@ -2316,22 +2316,30 @@ fn test_parse_constructor_promoted_properties() {
                 Some(TypeExpr::Nullable(Box::new(TypeExpr::Int)))
             );
             assert!(properties[2].readonly);
+            assert!(!properties[2].by_ref);
+            assert_eq!(properties[3].name, "score");
+            assert_eq!(properties[3].visibility, Visibility::Protected);
+            assert_eq!(properties[3].type_expr, Some(TypeExpr::Int));
+            assert!(properties[3].by_ref);
 
             assert_eq!(methods.len(), 1);
             let ctor = &methods[0];
             assert_eq!(ctor.name, "__construct");
-            assert_eq!(ctor.params.len(), 3);
+            assert_eq!(ctor.params.len(), 4);
             assert_eq!(ctor.params[0].0, "id");
             assert_eq!(ctor.params[0].1, Some(TypeExpr::Int));
             assert_eq!(ctor.params[1].0, "name");
             assert_eq!(ctor.params[1].1, Some(TypeExpr::Str));
             assert_eq!(ctor.params[2].0, "rank");
             assert!(ctor.params[2].2.is_some());
-            assert_eq!(ctor.body.len(), 4);
+            assert_eq!(ctor.params[3].0, "score");
+            assert!(ctor.params[3].3);
+            assert_eq!(ctor.body.len(), 5);
             assert_promoted_assignment(&ctor.body[0], "id");
             assert_promoted_assignment(&ctor.body[1], "name");
             assert_promoted_assignment(&ctor.body[2], "rank");
-            match &ctor.body[3].kind {
+            assert_promoted_assignment(&ctor.body[3], "score");
+            match &ctor.body[4].kind {
                 StmtKind::Echo(expr) => assert_eq!(expr.kind, ExprKind::Variable("id".into())),
                 other => panic!("Expected original constructor body after promotion, got {:?}", other),
             }

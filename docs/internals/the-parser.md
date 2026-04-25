@@ -126,7 +126,7 @@ Things that do something:
 | `ExternGlobalDecl { name, c_type }` | `extern global ptr $environ;` — the declared type is a C-facing `CType`, not a `PhpType` |
 | `ExprStmt(Expr)` | `my_func();` (expression used as statement) |
 
-Constructor property promotion is normalized during class-body parsing. A parameter such as `public int $id` in `__construct` becomes a `ClassProperty` plus a synthetic leading `PropertyAssign` statement equivalent to `$this->id = $id;`. Later passes therefore see ordinary properties and ordinary constructor assignments.
+Constructor property promotion is normalized during class-body parsing. A parameter such as `public int $id` in `__construct` becomes a `ClassProperty` plus a synthetic leading `PropertyAssign` statement equivalent to `$this->id = $id;`. By-reference promoted parameters preserve a `by_ref` flag on the generated property so codegen can bind the property slot to the referenced argument. Later passes otherwise see ordinary properties and ordinary constructor assignments.
 
 ### Statement dispatch
 

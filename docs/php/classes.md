@@ -123,7 +123,27 @@ echo $user->id;      // 7
 echo $user->name();  // Ada
 ```
 
-Promoted properties support `public`, `protected`, `private`, `readonly`, nullable and union type declarations, and constructor parameter defaults. Variadic promotion is rejected, matching PHP. By-reference promoted properties are not supported yet.
+Promoted properties support `public`, `protected`, `private`, `readonly`, nullable and union type declarations, constructor parameter defaults, and by-reference parameters. Variadic promotion is rejected, matching PHP.
+
+By-reference promoted properties are supported when the constructor argument is a variable:
+
+```php
+<?php
+class Counter {
+    public function __construct(public int &$value) {}
+}
+
+$value = 1;
+$counter = new Counter($value);
+
+$value = 2;
+echo $counter->value;  // 2
+
+$counter->value = 3;
+echo $value;           // 3
+```
+
+Current limitations for by-reference promotion: the promoted property cannot be `readonly`, and by-reference promoted parameters cannot use default values yet.
 
 ## Instance methods and $this
 Virtual dispatch for overrides.
@@ -169,5 +189,5 @@ Pure and backed enums. `->value`, `::from()`, `::tryFrom()`, `::cases()`. Only `
 
 ## Limitations
 - No static or abstract properties
-- No by-reference promoted properties
+- No `readonly` or default-valued by-reference promoted properties
 - No property redeclaration across inheritance chain

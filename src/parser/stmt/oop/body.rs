@@ -182,6 +182,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 type_expr,
                 readonly: modifiers.is_readonly,
                 is_final: modifiers.is_final,
+                by_ref: false,
                 default,
                 span: member_span,
             });

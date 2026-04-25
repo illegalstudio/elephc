@@ -51,10 +51,10 @@ pub(super) fn parse_method_params(
             None
         };
         let is_ref = if *pos < tokens.len() && tokens[*pos].0 == Token::Ampersand {
-            if promotion.is_some() {
+            if promotion.as_ref().is_some_and(|(_, readonly, _)| *readonly) {
                 return Err(CompileError::new(
                     span,
-                    "Promoted by-reference properties are not supported yet",
+                    "Readonly promoted by-reference properties are not supported",
                 ));
             }
             *pos += 1;
@@ -96,6 +96,12 @@ pub(super) fn parse_method_params(
                 } else {
                     None
                 };
+                if is_ref && promotion.is_some() && default.is_some() {
+                    return Err(CompileError::new(
+                        span,
+                        "Promoted by-reference properties cannot use default values yet",
+                    ));
+                }
                 if let Some((visibility, readonly, property_span)) = promotion {
                     promoted_properties.push(ClassProperty {
                         name: n.clone(),
@@ -103,6 +109,7 @@ pub(super) fn parse_method_params(
                         type_expr: type_ann.clone(),
                         readonly,
                         is_final: false,
+                        by_ref: is_ref,
                         default: None,
                         span: property_span,
                     });
