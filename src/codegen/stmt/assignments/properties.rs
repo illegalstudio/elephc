@@ -6,8 +6,9 @@ use super::super::super::abi;
 use super::super::super::context::Context;
 use super::super::super::data_section::DataSection;
 use super::super::super::emit::Emitter;
-use super::super::super::expr::emit_expr;
+use super::super::super::expr::{coerce_result_to_type, emit_expr};
 use crate::parser::ast::Expr;
+use crate::types::PhpType;
 
 pub(crate) fn emit_property_assign_stmt(
     object: &Expr,
@@ -21,8 +22,17 @@ pub(crate) fn emit_property_assign_stmt(
     emitter.comment(&format!("->{}  = ...", property));
 
     let magic_set_class = magic_set::resolve_magic_set_target(object, property, ctx);
-    let val_ty = emit_expr(value, emitter, ctx, data);
-    if magic_set_class.is_none() {
+    let declared_target_ty = declared_property_type(object, property, ctx);
+    let mut val_ty = emit_expr(value, emitter, ctx, data);
+    let boxed_to_mixed = declared_target_ty.as_ref().is_some_and(|target_ty| {
+        matches!(target_ty, PhpType::Mixed | PhpType::Union(_))
+            && !matches!(val_ty, PhpType::Mixed | PhpType::Union(_))
+    });
+    if let Some(target_ty) = &declared_target_ty {
+        coerce_result_to_type(emitter, ctx, data, &val_ty, target_ty);
+        val_ty = target_ty.clone();
+    }
+    if magic_set_class.is_none() && !boxed_to_mixed {
         super::super::helpers::retain_borrowed_heap_result(emitter, value, &val_ty);
     }
     abi::emit_push_result_value(emitter, &val_ty);
@@ -58,6 +68,22 @@ pub(crate) fn emit_property_assign_stmt(
     }
 
     storage::store_property_value(emitter, object_reg, &val_ty, target.offset);
+}
+
+fn declared_property_type(object: &Expr, property: &str, ctx: &Context) -> Option<PhpType> {
+    let obj_ty = crate::codegen::functions::infer_contextual_type(object, ctx);
+    let PhpType::Object(class_name) = obj_ty else {
+        return None;
+    };
+    let class_info = ctx.classes.get(&class_name)?;
+    if !class_info.declared_properties.contains(property) {
+        return None;
+    }
+    class_info
+        .properties
+        .iter()
+        .find(|(name, _)| name == property)
+        .map(|(_, ty)| ty.clone())
 }
 
 pub(crate) fn emit_property_array_push_stmt(

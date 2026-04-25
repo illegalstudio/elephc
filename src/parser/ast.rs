@@ -553,6 +553,7 @@ pub enum TraitAdaptation {
 pub struct ClassProperty {
     pub name: String,
     pub visibility: Visibility,
+    pub type_expr: Option<TypeExpr>,
     pub readonly: bool,
     pub is_final: bool,
     pub default: Option<Expr>,
@@ -563,6 +564,7 @@ pub struct ClassProperty {
 impl PartialEq for ClassProperty {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name && self.visibility == other.visibility
+            && self.type_expr == other.type_expr
             && self.readonly == other.readonly
             && self.is_final == other.is_final
     }

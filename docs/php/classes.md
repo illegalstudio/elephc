@@ -76,9 +76,25 @@ final class InvoiceNumber {
 ## Properties
 - `public`, `protected`, `private` visibility
 - Optional default values
+- Optional type declarations, for example `public int $id` or `public ?string $email = null`
 - `readonly` properties (only assigned in `__construct`)
 - `final` properties, which can be read normally but cannot be redeclared by subclasses
 - `readonly class` makes all properties readonly
+
+```php
+<?php
+class User {
+    public int $id;
+    public string $name = "Ada";
+    public ?string $email = null;
+
+    public function __construct($id) {
+        $this->id = $id;
+    }
+}
+```
+
+Property type declarations are checked at compile time. Defaults and later assignments must be compatible with the declared type, including constructor assignments through untyped parameters. Nullable shorthand (`?T`) and union storage use the compiler's boxed mixed representation internally. `void` and `callable` property types are rejected.
 
 ## Constructor
 Called automatically with `new`:
@@ -129,7 +145,6 @@ Pure and backed enums. `->value`, `::from()`, `::tryFrom()`, `::cases()`. Only `
 - `__set($name, $value)` — writing undefined property
 
 ## Limitations
-- No property type declarations
 - No static or abstract properties
 - No constructor promotion
 - No property redeclaration across inheritance chain

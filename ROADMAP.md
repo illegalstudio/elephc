@@ -189,6 +189,7 @@ Proper type system for PHP compatibility.
 - [x] `new` keyword for object instantiation
 - [x] `->` property access and method calls
 - [x] `readonly` properties (enforced at compile time)
+- [x] Property type declarations (`public int $x`, `readonly ?string $name`) with checked defaults and assignments
 - [x] Objects as function parameters and return values
 - [x] Objects stored in arrays
 
@@ -391,8 +392,7 @@ Features that are feasible but complex. Not currently planned for any specific v
 
 | Feature | Complexity | Notes |
 |---|---|---|
-| Constructor promotion (`public function __construct(public int $x)`) | Medium | Declare and assign promoted properties directly from constructor signatures. Depends on property type declarations for the fully typed PHP form. |
-| Property type declarations | Medium | Parse and check `public int $x` / `readonly string $name` while preserving the current fixed object layout and constructor-assignment inference. |
+| Constructor promotion (`public function __construct(public int $x)`) | Medium | Declare and assign promoted properties directly from constructor signatures, building on existing property type declaration support. |
 | Static properties | Medium | Add class-scoped property storage, visibility checks, initialization order, inheritance behavior, and `self::$x` / `static::$x` lowering. |
 | Generators / `yield` | High | Requires compile-time state machine transformation: every yield point becomes a switch case, all locals promoted to heap-allocated generator object. Edge cases with yield inside try/catch/finally are significant. |
 | `yield from` delegation | High | Depends on generators. Forwards iteration to an inner generator, propagating values and return. |

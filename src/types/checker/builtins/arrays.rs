@@ -231,7 +231,11 @@ pub(super) fn check_builtin(
                     "array_search() second argument must be array",
                 ));
             }
-            Ok(Some(PhpType::Int))
+            if matches!(arr_ty, PhpType::AssocArray { .. }) {
+                Ok(Some(PhpType::Str))
+            } else {
+                Ok(Some(PhpType::Int))
+            }
         }
         "array_merge" | "array_diff" | "array_intersect" | "array_diff_key"
         | "array_intersect_key" => {

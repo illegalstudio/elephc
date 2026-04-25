@@ -1,12 +1,23 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::codegen::platform::Platform;
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::context::Context;
 
-pub(super) fn collect_constants(program: &Program) -> HashMap<String, (ExprKind, PhpType)> {
+pub(super) fn collect_constants(
+    program: &Program,
+    target_platform: Platform,
+) -> HashMap<String, (ExprKind, PhpType)> {
     let mut constants = HashMap::new();
+    constants.insert(
+        "PHP_OS".to_string(),
+        (
+            ExprKind::StringLiteral(target_platform.php_os_name().to_string()),
+            PhpType::Str,
+        ),
+    );
     for stmt in program {
         match &stmt.kind {
             StmtKind::ConstDecl { name, value } => {

@@ -75,6 +75,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     system::emit_build_argv(emitter);
     system::emit_time(emitter);
     system::emit_microtime(emitter);
+    system::emit_php_uname(emitter);
     system::emit_getenv(emitter);
     system::emit_shell_exec(emitter);
     system::emit_date(emitter);

@@ -5,6 +5,11 @@ use crate::types::{ClassInfo, EnumInfo, InterfaceInfo, PhpType};
 
 use super::system;
 
+pub(crate) const PHP_UNAME_MODE_LEN_MSG: &str =
+    "Fatal error: php_uname(): Argument #1 ($mode) must be a single character\n";
+pub(crate) const PHP_UNAME_MODE_VALUE_MSG: &str =
+    "Fatal error: php_uname(): Argument #1 ($mode) must be one of \"a\", \"m\", \"n\", \"r\", \"s\", or \"v\"\n";
+
 /// Emit the fixed runtime data section — cacheable across compilations.
 /// Contains heap buffers, error messages, lookup tables, and other
 /// data that does not depend on the user's program.
@@ -82,8 +87,17 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(".globl _pcre_nword\n_pcre_nword:\n    .ascii \"[^[:alnum:]_]\"\n");
     out.push_str(&system::emit_json_data());
     out.push_str(&system::emit_date_data());
+    out.push_str(&emit_php_uname_data());
 
     out
+}
+
+fn emit_php_uname_data() -> String {
+    format!(
+        ".globl _php_uname_mode_len_msg\n_php_uname_mode_len_msg:\n    .ascii {:?}\n\
+         .globl _php_uname_mode_value_msg\n_php_uname_mode_value_msg:\n    .ascii {:?}\n",
+        PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG
+    )
 }
 
 /// Emit the user-dependent data section — globals, statics, class metadata.
@@ -377,6 +391,7 @@ mod tests {
             property_declaring_classes: HashMap::new(),
             defaults: Vec::new(),
             property_visibilities: HashMap::new(),
+            declared_properties: HashSet::new(),
             final_properties: HashSet::new(),
             readonly_properties: HashSet::new(),
             method_decls: Vec::new(),

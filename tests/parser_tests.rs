@@ -2267,6 +2267,30 @@ fn test_parse_final_property_flag() {
 }
 
 #[test]
+fn test_parse_typed_properties() {
+    let stmts = parse_source(
+        "<?php class User { public int $id; protected ?string $email = null; final public string $name = \"Ada\"; }",
+    );
+    match &stmts[0].kind {
+        StmtKind::ClassDecl { properties, .. } => {
+            assert_eq!(properties.len(), 3);
+            assert_eq!(properties[0].name, "id");
+            assert_eq!(properties[0].type_expr, Some(TypeExpr::Int));
+            assert_eq!(properties[1].name, "email");
+            assert_eq!(properties[1].visibility, Visibility::Protected);
+            assert_eq!(
+                properties[1].type_expr,
+                Some(TypeExpr::Nullable(Box::new(TypeExpr::Str)))
+            );
+            assert_eq!(properties[2].name, "name");
+            assert_eq!(properties[2].type_expr, Some(TypeExpr::Str));
+            assert!(properties[2].is_final);
+        }
+        other => panic!("Expected ClassDecl with typed properties, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_parse_first_class_callable_function() {
     let stmts = parse_source("<?php $f = strlen(...);");
     match &stmts[0].kind {

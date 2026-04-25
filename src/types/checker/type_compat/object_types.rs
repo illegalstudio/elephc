@@ -283,12 +283,15 @@ impl Checker {
                 continue;
             }
 
-            if let Some(prop) = class_info
-                .properties
-                .iter_mut()
-                .find(|(name, _)| name == &prop_name)
-            {
-                prop.1 = arg_ty.clone();
+            let property_has_declared_type = class_info.declared_properties.contains(&prop_name);
+            if !property_has_declared_type {
+                if let Some(prop) = class_info
+                    .properties
+                    .iter_mut()
+                    .find(|(name, _)| name == &prop_name)
+                {
+                    prop.1 = arg_ty.clone();
+                }
             }
 
             if let Some(sig) = class_info.methods.get_mut("__construct") {

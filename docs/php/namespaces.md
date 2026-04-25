@@ -76,7 +76,7 @@ Constants are global, resolved at compile time. Values must be literals.
 | Constant | Type | Value |
 |---|---|---|
 | `PHP_EOL` | string | `"\n"` |
-| `PHP_OS` | string | `"Darwin"` |
+| `PHP_OS` | string | `"Darwin"` on macOS targets, `"Linux"` on Linux targets |
 | `DIRECTORY_SEPARATOR` | string | `"/"` |
 | `STDIN` | int | 0 |
 | `STDOUT` | int | 1 |

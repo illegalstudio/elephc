@@ -88,6 +88,7 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     strings::emit_trim_mask(emitter);
     system::emit_time(emitter);
     system::emit_microtime(emitter);
+    system::emit_php_uname(emitter);
     system::emit_date(emitter);
     system::emit_mktime(emitter);
     system::emit_strtotime(emitter);
@@ -270,6 +271,7 @@ mod tests {
         assert!(asm.contains("__rt_base64_encode:\n"));
         assert!(asm.contains("__rt_base64_decode:\n"));
         assert!(asm.contains("__rt_date:\n"));
+        assert!(asm.contains("__rt_php_uname:\n"));
         assert!(asm.contains("__rt_mktime:\n"));
         assert!(asm.contains("__rt_strtotime:\n"));
         assert!(asm.contains("__rt_array_new:\n"));

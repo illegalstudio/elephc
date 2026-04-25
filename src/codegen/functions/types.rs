@@ -367,7 +367,9 @@ pub(super) fn infer_local_type(
             }
             PhpType::Int
         }
-        ExprKind::ConstRef(_) => PhpType::Int,
+        ExprKind::ConstRef(name) => ctx
+            .and_then(|c| c.constants.get(name.as_str()).map(|(_, ty)| ty.clone()))
+            .unwrap_or(PhpType::Int),
         ExprKind::EnumCase { enum_name, .. } => PhpType::Object(enum_name.as_str().to_string()),
         ExprKind::Spread(inner) => infer_local_type(inner, sig, ctx),
         ExprKind::NamedArg { value, .. } => infer_local_type(value, sig, ctx),

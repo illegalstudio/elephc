@@ -274,7 +274,7 @@ Refcounts are stored as a 32-bit value in the uniform 16-byte heap header, at `[
 
 ## System routines
 
-**Source:** `src/codegen/runtime/system/` (28 files)
+**Source:** `src/codegen/runtime/system/` (29 files)
 
 ### `__rt_build_argv` — Build $argv array
 
@@ -293,6 +293,7 @@ At program start, the OS passes `argc` (argument count) in `x0` and `argv` (poin
 | `__rt_time` | Get current Unix timestamp via `gettimeofday` syscall | — | `x0` = seconds since epoch |
 | `__rt_microtime` | Get current time as float seconds via `gettimeofday` syscall | — | `d0` = seconds.microseconds |
 | `__rt_getenv` | Get environment variable value via libc `getenv()` | `x1`/`x2` = name string | `x1`/`x2` = value string |
+| `__rt_php_uname` | Read target runtime system information via libc `uname()`; supports PHP modes `a`, `s`, `n`, `r`, `v`, and `m` | `x1`/`x2` = mode string | `x1`/`x2` = selected uname string |
 | `__rt_shell_exec` | Execute shell command and capture output via libc `popen()`/`pclose()` | `x1`/`x2` = command string | `x1`/`x2` = output string |
 
 ## Exception routines

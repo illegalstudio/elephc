@@ -733,9 +733,45 @@ echo $child->value();
 }
 
 #[test]
+fn test_typed_properties_defaults_constructor_assignment_and_nullable() {
+    let out = compile_and_run(
+        r#"<?php
+class User {
+    public int $id;
+    public string $name = "Ada";
+    public ?string $email = null;
+
+    public function __construct($id) {
+        $this->id = $id;
+    }
+
+    public function label() {
+        return $this->name . ":" . $this->id;
+    }
+}
+
+$user = new User(42);
+echo $user->label();
+echo ":";
+echo is_null($user->email);
+$user->email = "ada@example.test";
+echo ":";
+echo $user->email;
+"#,
+    );
+    assert_eq!(out, "Ada:42:1:ada@example.test");
+}
+
+#[test]
 fn test_example_final_classes_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../examples/final-classes/main.php"));
     assert_eq!(out, "invoice:42\n");
+}
+
+#[test]
+fn test_example_typed_properties_compiles_and_runs() {
+    let out = compile_and_run(include_str!("../../examples/typed-properties/main.php"));
+    assert_eq!(out, "Ada:42\nmissing email\n");
 }
 
 #[test]

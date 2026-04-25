@@ -1,5 +1,27 @@
 use crate::support::*;
 
+fn compile_and_run_expect_runtime_error(source: &str) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (user_asm, _runtime_asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    let stderr = assemble_and_run_expect_failure(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    stderr
+}
+
 // --- Constants (const / define) ---
 
 #[test]
@@ -140,7 +162,7 @@ fn test_php_eol() {
 #[test]
 fn test_php_os() {
     let out = compile_and_run("<?php echo PHP_OS;");
-    assert_eq!(out, "Darwin");
+    assert_eq!(out, target().platform.php_os_name());
 }
 
 #[test]
@@ -210,13 +232,62 @@ echo getenv("ELEPHC_TEST_VAR");
 #[test]
 fn test_phpversion() {
     let out = compile_and_run("<?php echo phpversion();");
-    assert_eq!(out, "0.7.1");
+    assert_eq!(out, env!("CARGO_PKG_VERSION"));
 }
 
 #[test]
 fn test_php_uname() {
-    let out = compile_and_run("<?php $os = php_uname(); if (strlen($os) > 0) { echo \"ok\"; }");
-    assert_eq!(out, "ok");
+    let out = compile_and_run(
+        r#"<?php
+$default = php_uname();
+$explicit = php_uname("a");
+echo $default === $explicit ? "same" : "different";
+"#,
+    );
+    assert_eq!(out, "same");
+}
+
+#[test]
+fn test_php_uname_modes() {
+    let out = compile_and_run(
+        r#"<?php
+$sys = php_uname("s");
+$node = php_uname("n");
+$release = php_uname("r");
+$version = php_uname("v");
+$machine = php_uname("m");
+$all = php_uname("a");
+echo $sys . "\n";
+if (
+    strlen($node) > 0 &&
+    strlen($release) > 0 &&
+    strlen($version) > 0 &&
+    strlen($machine) > 0 &&
+    str_contains($all, $sys) &&
+    str_contains($all, $node) &&
+    str_contains($all, $release) &&
+    str_contains($all, $version) &&
+    str_contains($all, $machine)
+) {
+    echo "ok";
+} else {
+    echo "bad";
+}
+"#,
+    );
+    assert_eq!(out, format!("{}\nok", target().platform.php_os_name()));
+}
+
+#[test]
+fn test_php_uname_rejects_invalid_mode_length_at_runtime() {
+    let err = compile_and_run_expect_runtime_error(r#"<?php $mode = "sn"; echo php_uname($mode);"#);
+    assert!(err.contains("php_uname(): Argument #1 ($mode) must be a single character"));
+}
+
+#[test]
+fn test_php_uname_rejects_invalid_mode_value_at_runtime() {
+    let err = compile_and_run_expect_runtime_error(r#"<?php $mode = "x"; echo php_uname($mode);"#);
+    assert!(err.contains("php_uname(): Argument #1 ($mode) must be one of"));
 }
 
 // -- v0.8 exec / shell_exec / system / passthru --
@@ -244,4 +315,3 @@ fn test_passthru() {
     let out = compile_and_run("<?php passthru(\"echo bye\");");
     assert_eq!(out, "bye\n");
 }
-

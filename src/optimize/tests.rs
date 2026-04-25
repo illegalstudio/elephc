@@ -1883,6 +1883,7 @@ fn test_fold_string_concat_and_property_default() {
     let property = ClassProperty {
         name: "label".to_string(),
         visibility: Visibility::Public,
+        type_expr: None,
         readonly: false,
         is_final: false,
         default: Some(Expr::new(

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::errors::CompileError;
 use crate::parser::ast::{
-    ClassMethod, ClassProperty, Expr, ExprKind, Stmt, StmtKind, Visibility,
+    ClassMethod, ClassProperty, Expr, ExprKind, Stmt, StmtKind, TypeExpr, Visibility,
 };
 use crate::types::traits::FlattenedClass;
 use crate::types::PhpType;
@@ -73,6 +73,7 @@ fn builtin_exception_message_property() -> ClassProperty {
     ClassProperty {
         name: "message".to_string(),
         visibility: Visibility::Public,
+        type_expr: Some(TypeExpr::Str),
         readonly: false,
         is_final: false,
         default: Some(Expr::new(

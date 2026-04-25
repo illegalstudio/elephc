@@ -2221,6 +2221,11 @@ fn test_error_php_uname_wrong_args() {
 }
 
 #[test]
+fn test_error_php_uname_wrong_type() {
+    expect_error("<?php php_uname(1);", "php_uname() argument must be string");
+}
+
+#[test]
 fn test_error_exec_wrong_args() {
     expect_error("<?php exec();", "exec() takes exactly 1 argument");
 }
@@ -2320,6 +2325,54 @@ fn test_error_readonly_assign() {
     expect_error(
         "<?php class User { public readonly $id; public function __construct($id) { $this->id = $id; } } $u = new User(1); $u->id = 2;",
         "Cannot assign to readonly property outside constructor: User::id",
+    );
+}
+
+#[test]
+fn test_error_typed_property_rejects_invalid_default() {
+    expect_error(
+        "<?php class Box { public int $value = \"bad\"; }",
+        "Property Box::$value default expects Int, got Str",
+    );
+}
+
+#[test]
+fn test_error_typed_property_rejects_invalid_assignment() {
+    expect_error(
+        "<?php class Box { public int $value; } $b = new Box(); $b->value = \"bad\";",
+        "Property Box::$value expects Int, got Str",
+    );
+}
+
+#[test]
+fn test_error_typed_property_rejects_constructor_assignment_from_untyped_param() {
+    expect_error(
+        r#"<?php
+class Box {
+    public int $value;
+    public function __construct($value) {
+        $this->value = $value;
+    }
+}
+$box = new Box("bad");
+"#,
+        "Property Box::$value expects Int, got Str",
+    );
+}
+
+#[test]
+fn test_error_typed_property_rejects_void_type() {
+    expect_error(
+        "<?php class Box { public void $value; }",
+        "Property Box::$value cannot use type void",
+    );
+}
+
+#[test]
+fn test_error_typed_property_rejects_callable_type() {
+    expect_error(
+        "<?php class Box { public callable $callback; }",
+        "Property Box::$callback cannot use type callable",
     );
 }
 

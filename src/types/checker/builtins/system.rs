@@ -61,8 +61,11 @@ pub(super) fn check_builtin(
             if args.len() > 1 {
                 return Err(CompileError::new(span, "php_uname() takes 0 or 1 arguments"));
             }
-            for arg in args {
-                checker.infer_type(arg, env)?;
+            if let Some(arg) = args.first() {
+                let ty = checker.infer_type(arg, env)?;
+                if ty != PhpType::Str {
+                    return Err(CompileError::new(span, "php_uname() argument must be string"));
+                }
             }
             Ok(Some(PhpType::Str))
         }

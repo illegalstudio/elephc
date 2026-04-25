@@ -153,11 +153,14 @@ pub(super) fn check_types_impl(
 
 impl Checker {
     fn new(target_platform: Platform) -> Self {
+        let mut constants = HashMap::new();
+        constants.insert("PHP_OS".to_string(), PhpType::Str);
+
         Self {
             target_platform,
             fn_decls: HashMap::new(),
             functions: HashMap::new(),
-            constants: HashMap::new(),
+            constants,
             closure_return_types: HashMap::new(),
             callable_sigs: HashMap::new(),
             first_class_callable_targets: HashMap::new(),

@@ -40,7 +40,7 @@ I made the project as modular as possible. Every function has its own codegen fi
 
 ## What you can expect
 
-You can write PHP using the constructs documented in the [docs](docs/). Classes with single inheritance, interfaces, abstract classes, final classes, methods and properties, traits, constructors, instance/static methods, `self::` / `parent::` / `static::` with late static binding, `readonly` properties and classes, enums, named arguments, first-class callables, typed parameters and returns, `try` / `catch` / `finally` / `throw`, visibility modifiers, union and nullable types, copy-on-write arrays, associative arrays with PHP insertion order, closures, namespaces, and includes.
+You can write PHP using the constructs documented in the [docs](docs/). Classes with single inheritance, interfaces, abstract classes, final classes, methods and typed properties, traits, constructors, instance/static methods, `self::` / `parent::` / `static::` with late static binding, `readonly` properties and classes, enums, named arguments, first-class callables, typed parameters and returns, `try` / `catch` / `finally` / `throw`, visibility modifiers, union and nullable types, copy-on-write arrays, associative arrays with PHP insertion order, closures, namespaces, and includes.
 
 For performance-oriented code, elephc exposes compiler extensions beyond standard PHP — see the Why section above.
 
@@ -234,10 +234,10 @@ if ($x === 3) {
 
 The full list of supported constructs, operators, and control structures is in the [docs](docs/). Highlights:
 
-- **OOP**: classes, abstract/final classes, final methods/properties, interfaces, traits, enums, `readonly`, static/instance methods, `self::`/`parent::`/`static::`, magic methods (`__toString`, `__get`, `__set`)
+- **OOP**: classes, abstract/final classes, typed/final methods and properties, interfaces, traits, enums, `readonly`, static/instance methods, `self::`/`parent::`/`static::`, magic methods (`__toString`, `__get`, `__set`)
 - **Functions**: default parameters, variadic/spread, pass by reference, named arguments, first-class callables, closures, arrow functions
 - **Control flow**: if/elseif/else, while, do-while, for, foreach, switch, match, break, continue, try/catch/finally/throw
-- **Types**: union types (`int|string`), nullable (`?int`), type casting, typed parameters and returns
+- **Types**: union types (`int|string`), nullable (`?int`), type casting, typed properties, typed parameters and returns
 - **Modules**: namespaces, use imports, include/require/require_once
 - **FFI**: extern functions, extern blocks, extern globals, extern classes, pointer builtins
 - **Extensions**: `ifdef`, `packed class`, `buffer<T>`, `buffer_new<T>()`, `buffer_len()`, `buffer_free()`

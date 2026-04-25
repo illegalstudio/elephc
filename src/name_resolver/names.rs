@@ -180,6 +180,9 @@ pub(super) fn resolve_constant_name(
         return name.as_canonical();
     }
     if name.is_unqualified() {
+        if matches!(name.as_str(), "PHP_OS") {
+            return name.as_canonical();
+        }
         if let Some(alias) = name
             .last_segment()
             .and_then(|segment| imports.constants.get(segment))

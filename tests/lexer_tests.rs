@@ -865,6 +865,20 @@ fn test_lex_class_keyword() {
 }
 
 #[test]
+fn test_lex_typed_property_tokens() {
+    let t = tokens("<?php class User { public ?string $email = null; final public int $id; }");
+    assert!(t.contains(&Token::Class));
+    assert!(t.contains(&Token::Public));
+    assert!(t.contains(&Token::Question));
+    assert!(t.contains(&Token::Identifier("string".into())));
+    assert!(t.contains(&Token::Variable("email".into())));
+    assert!(t.contains(&Token::Null));
+    assert!(t.contains(&Token::Final));
+    assert!(t.contains(&Token::Identifier("int".into())));
+    assert!(t.contains(&Token::Variable("id".into())));
+}
+
+#[test]
 fn test_lex_arrow_operator() {
     let t = tokens("<?php $obj->prop;");
     assert!(t.contains(&Token::Arrow));

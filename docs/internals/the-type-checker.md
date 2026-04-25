@@ -254,7 +254,7 @@ When the type checker encounters a `ClassDecl`, it:
 
 1. **Registers the class** in a `classes: HashMap<String, ClassInfo>` map
 2. **Resolves the parent chain** (`extends`) and merges inherited metadata
-3. **Records each property** with its type (inferred from default values or constructor assignments) and a fixed offset in the inherited object layout
+3. **Records each property** with its type (declared when a property type is present, otherwise inferred from default values or constructor assignments) and a fixed offset in the inherited object layout
 4. **Type-checks each method body** with `$this` bound to `Object(ClassName)`
 5. **Builds `ClassInfo`** containing property types, defaults, final property/method sets, signatures, declaring/implementation class maps, instance/static vtable slots, implemented interface lists, and constructor-to-property mappings
 
@@ -272,6 +272,7 @@ pub struct ClassInfo {
     pub property_declaring_classes: HashMap<String, String>,
     pub defaults: Vec<Option<Expr>>,
     pub property_visibilities: HashMap<String, Visibility>,
+    pub declared_properties: HashSet<String>,
     pub final_properties: HashSet<String>,
     pub readonly_properties: HashSet<String>,
     pub method_decls: Vec<ClassMethod>,
@@ -302,6 +303,8 @@ When checking property access (`$obj->prop`), the type checker validates that:
 - The variable is an `Object` type
 - The class has a property with that name
 - The property is accessible (`public`, `protected` from the declaring class or a subclass, or `private` only from the declaring class)
+
+When checking property writes, explicitly declared property types stay fixed. Defaults, direct assignments, array writes, and constructor assignments routed through untyped parameters must be compatible with the declared property type. Nullable and union property types use the same boxed mixed runtime representation as typed locals, while untyped properties keep the existing inference and refinement behavior.
 
 When checking method calls, it verifies the method exists, enforces method visibility (`public`, subclass-visible `protected`, declaring-class-only `private`), validates argument count and types against the method's `FunctionSig`, resolves `parent::method()` against the immediate parent class, resolves `self::method()` against the current lexical class, and accepts `static::method()` as a late-static-bound static call against the current class hierarchy.
 

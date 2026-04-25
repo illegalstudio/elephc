@@ -654,6 +654,7 @@ pub(crate) fn propagate_property(property: ClassProperty) -> ClassProperty {
     ClassProperty {
         name: property.name,
         visibility: property.visibility,
+        type_expr: property.type_expr,
         readonly: property.readonly,
         is_final: property.is_final,
         default: property
