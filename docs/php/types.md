@@ -63,6 +63,7 @@ Rules:
 - constructor assignments through untyped parameters are checked once call sites refine the parameter type
 - nullable and union property storage is boxed using the same mixed runtime shape as typed locals
 - static property redeclarations across inheritance follow PHP-style rules: non-private inherited properties keep invariant declared types, cannot reduce visibility, and cannot override `final` properties
+- private inherited static properties can be redeclared as independent subclass slots
 - untyped inherited static properties cannot be redeclared with a type, and typed inherited static properties cannot be redeclared without one
 - direct element writes to static array properties, such as `ClassName::$items[] = $value` or `ClassName::$items[0] = $value`, require the property to be an `array`
 - `void` and `callable` are not valid property types

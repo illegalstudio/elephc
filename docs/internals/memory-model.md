@@ -408,7 +408,7 @@ The runtime data layer is split into `emit_runtime_data_fixed()` (shared buffers
 - `_b64_encode_tbl` — 64-byte Base64 encoding lookup table
 - `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
 - `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` — fatal runtime error strings
-- `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_match_unhandled_msg`, `_enum_from_msg` — fatal runtime error strings for buffers, `match`, and enums
+- `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_match_unhandled_msg`, `_enum_from_msg`, `_static_prop_private_access_msg` — fatal runtime error strings for buffers, `match`, enums, and late-bound private static-property access
 - `_pcre_space`, `_pcre_digit`, `_pcre_word`, `_pcre_nspace`, `_pcre_ndigit`, `_pcre_nword` — regex shorthand replacement strings used by the POSIX regex bridge
 - `_json_true`, `_json_false`, `_json_null` — JSON keyword strings (4, 5, and 4 bytes) used by `json_encode` for boolean and null values
 - `_day_names` — 84-byte table (7 entries x 12 bytes each) with day names, lengths, and padding. Used by `date()` for day-of-week formatting
@@ -459,13 +459,13 @@ The naming pattern is `_static_FUNCNAME_VARNAME`. The init flag ensures the init
 
 ### Static properties (`ClassName::$prop`)
 
-Static properties are class-scoped storage rather than object fields. During `emit_runtime_data_user()`, each declaring class property gets one 16-byte BSS slot:
+Static properties are class-scoped storage rather than object fields. During `emit_runtime_data_user()`, each effective declaring class property gets one 16-byte BSS slot:
 
 ```asm
 .comm _static_prop_Counter_count, 16, 3 ; 16 bytes for Counter::$count
 ```
 
-The naming pattern comes from `static_property_symbol(...)`. Inherited static properties point back to the declaring class slot, so `Base::$count` and `Child::$count` share storage when the property is declared on `Base`. `_main` evaluates static-property defaults before user statements run, and later reads/writes load from or store to this slot directly.
+The naming pattern comes from `static_property_symbol(...)`. Inherited static properties point back to the declaring class slot, so `Base::$count` and `Child::$count` share storage when the property is declared only on `Base`. When a subclass redeclares the static property, that subclass receives its own slot and `static::$count` dispatches to it through the called-class id at runtime. `_main` evaluates static-property defaults before user statements run, and later reads/writes load from or store to the resolved slot directly.
 
 ## Memory limits and trade-offs
 
@@ -478,7 +478,7 @@ The naming pattern comes from `static_property_symbol(...)`. Inherited static pr
 | CLI globals | `_global_argc`, `_global_argv` = 16 bytes total | Fixed-size bookkeeping |
 | User globals | 16 bytes per `global $var` slot | Grows with number of referenced globals |
 | Static vars | 24 bytes per `static $var` (`16 + 8 init flag`) | Grows with number of declared static locals |
-| Static properties | 16 bytes per declaring class static property | Grows with number of declared static properties |
+| Static properties | 16 bytes per effective declaring class static property | Grows with number of declared and redeclared static properties |
 | Array capacity | Fixed at creation until grow/re-hash logic runs | Fatal error: "array capacity exceeded" if a hard limit is hit |
 | C-string buffers | 4KB each (×2) | Long converted paths/strings are truncated to buffer size |
 | EOF flags | 256 bytes | Max 256 simultaneous file descriptors |
