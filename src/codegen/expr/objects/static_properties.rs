@@ -3,13 +3,18 @@ use crate::codegen::context::Context;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::names::static_property_symbol;
-use crate::parser::ast::StaticReceiver;
+use crate::parser::ast::{StaticReceiver, Visibility};
 use crate::types::PhpType;
+
+const STATIC_PROP_PRIVATE_ACCESS_LABEL: &str = "_static_prop_private_access_msg";
+const STATIC_PROP_PRIVATE_ACCESS_MSG: &str =
+    "Fatal error: Cannot access private static property\n";
 
 #[derive(Clone)]
 struct StaticPropertyBranch {
     class_id: u64,
     declaring_class: String,
+    private_inaccessible: bool,
 }
 
 pub(super) fn emit_static_property_access(
@@ -68,6 +73,10 @@ fn emit_dynamic_load_static_property_result(
     emit_jump(emitter, &done);
     for (label, branch) in labels {
         emitter.label(&label);
+        if branch.private_inaccessible {
+            emit_private_static_property_access_fatal(emitter);
+            continue;
+        }
         let symbol = static_property_symbol(&branch.declaring_class, property);
         abi::emit_load_symbol_to_result(emitter, &symbol, prop_ty);
         emit_jump(emitter, &done);
@@ -104,11 +113,11 @@ fn emit_branch_if_class_id_matches(
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("cmp {}, {}", class_id_reg, compare_reg)); // compare the runtime called class id to a redeclared static property owner
-            emitter.instruction(&format!("b.eq {}", label));                   // read this static property slot when the called class id matches
+            emitter.instruction(&format!("b.eq {}", label));                    // read this static property slot when the called class id matches
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("cmp {}, {}", class_id_reg, compare_reg)); // compare the runtime called class id to a redeclared static property owner
-            emitter.instruction(&format!("je {}", label));                     // read this static property slot when the called class id matches
+            emitter.instruction(&format!("je {}", label));                      // read this static property slot when the called class id matches
         }
     }
 }
@@ -161,9 +170,15 @@ fn dynamic_static_property_branches(
         if declaring_class == fallback_declaring_class {
             continue;
         }
+        let visibility = class_info
+            .static_property_visibilities
+            .get(property)
+            .unwrap_or(&Visibility::Public);
         branches.push(StaticPropertyBranch {
             class_id: class_info.class_id,
             declaring_class: declaring_class.clone(),
+            private_inaccessible: matches!(visibility, Visibility::Private)
+                && Some(declaring_class.as_str()) != ctx.current_class.as_deref(),
         });
     }
     branches.sort_by_key(|branch| branch.class_id);
@@ -246,4 +261,29 @@ pub(crate) fn resolve_static_property(
         .cloned()
         .unwrap_or_else(|| class_name.clone());
     Some((class_name, declaring_class, prop_ty))
+}
+
+fn emit_private_static_property_access_fatal(emitter: &mut Emitter) {
+    let len = STATIC_PROP_PRIVATE_ACCESS_MSG.len();
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x0, #2");                                  // fd = stderr for the private static property fatal diagnostic
+            emitter.adrp("x1", STATIC_PROP_PRIVATE_ACCESS_LABEL);
+            emitter.add_lo12("x1", "x1", STATIC_PROP_PRIVATE_ACCESS_LABEL);
+            emitter.instruction(&format!("mov x2, #{}", len));                  // pass the private static property fatal diagnostic byte length to write()
+            emitter.syscall(4);
+            emitter.instruction("mov x0, #1");                                  // exit status 1 indicates abnormal termination
+            emitter.syscall(1);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "rsi", STATIC_PROP_PRIVATE_ACCESS_LABEL); // point the Linux write buffer at the private static property fatal diagnostic
+            emitter.instruction(&format!("mov edx, {}", len));                  // pass the private static property fatal diagnostic byte length to write()
+            emitter.instruction("mov edi, 2");                                  // fd = stderr for the private static property fatal diagnostic
+            emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall 1 = write
+            emitter.instruction("syscall");                                     // emit the private static property fatal diagnostic before terminating
+            emitter.instruction("mov edi, 1");                                  // exit status 1 indicates abnormal termination
+            emitter.instruction("mov eax, 60");                                 // Linux x86_64 syscall 60 = exit
+            emitter.instruction("syscall");                                     // terminate the process after reporting the private static property access
+        }
+    }
 }

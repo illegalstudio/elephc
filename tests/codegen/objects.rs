@@ -1540,6 +1540,50 @@ echo BaseBag::first() . ":" . ChildBag::first();
 }
 
 #[test]
+fn test_static_property_late_bound_private_redeclaration_read_is_fatal() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class Base {
+    private static int $count = 1;
+    public static function read() {
+        echo static::$count;
+    }
+}
+class Child extends Base {
+    private static int $count = 2;
+}
+Child::read();
+"#,
+    );
+    assert!(
+        err.contains("Cannot access private static property"),
+        "{err}"
+    );
+}
+
+#[test]
+fn test_static_property_late_bound_private_redeclaration_write_is_fatal() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class Base {
+    private static int $count = 1;
+    public static function write() {
+        static::$count = 3;
+    }
+}
+class Child extends Base {
+    private static int $count = 2;
+}
+Child::write();
+"#,
+    );
+    assert!(
+        err.contains("Cannot access private static property"),
+        "{err}"
+    );
+}
+
+#[test]
 fn test_static_string_property_assignment() {
     let out = compile_and_run(
         r#"<?php
