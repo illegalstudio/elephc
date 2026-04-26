@@ -2474,6 +2474,38 @@ fn test_error_static_property_type_mismatch() {
 }
 
 #[test]
+fn test_error_static_property_redeclaration_type_mismatch() {
+    expect_error(
+        "<?php class Base { public static int $count = 1; } class Child extends Base { public static string $count = \"x\"; }",
+        "Type of Child::$count must be int (as in class Base)",
+    );
+}
+
+#[test]
+fn test_error_static_property_redeclaration_cannot_add_type_to_untyped_parent() {
+    expect_error(
+        "<?php class Base { public static $count = 1; } class Child extends Base { public static int $count = 2; }",
+        "Type of Child::$count must not be defined (as in class Base)",
+    );
+}
+
+#[test]
+fn test_error_static_property_redeclaration_cannot_reduce_visibility() {
+    expect_error(
+        "<?php class Base { public static int $count = 1; } class Child extends Base { protected static int $count = 2; }",
+        "Cannot reduce visibility when overriding static property: Child::count",
+    );
+}
+
+#[test]
+fn test_error_static_property_array_push_requires_array() {
+    expect_error(
+        "<?php class Box { public static int $items = 1; } Box::$items[] = 2;",
+        "Array push requires an array static property, got int",
+    );
+}
+
+#[test]
 fn test_error_private_static_property_outside_class() {
     expect_error(
         "<?php class Box { private static int $count = 1; } echo Box::$count;",

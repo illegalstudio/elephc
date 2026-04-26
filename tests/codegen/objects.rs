@@ -1472,6 +1472,74 @@ echo Child::$count;
 }
 
 #[test]
+fn test_static_property_redeclaration_uses_child_storage() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public static int $count = 1;
+    public static function get() {
+        return static::$count;
+    }
+    public static function set($value) {
+        static::$count = $value;
+    }
+}
+class Child extends Base {
+    public static int $count = 2;
+}
+echo Base::get() . ":" . Child::get() . ":";
+Child::set(9);
+echo Base::$count . ":" . Child::$count;
+"#,
+    );
+    assert_eq!(out, "1:2:1:9");
+}
+
+#[test]
+fn test_static_property_direct_array_writes() {
+    let out = compile_and_run(
+        r#"<?php
+class Registry {
+    public static array $items = [];
+}
+Registry::$items[] = 4;
+Registry::$items[] = 5;
+Registry::$items[1] = 8;
+echo Registry::$items[0] . ":" . Registry::$items[1];
+"#,
+    );
+    assert_eq!(out, "4:8");
+}
+
+#[test]
+fn test_static_property_redeclared_array_writes_are_late_bound() {
+    let out = compile_and_run(
+        r#"<?php
+class BaseBag {
+    public static array $items = [];
+    public static function add($value) {
+        static::$items[] = $value;
+    }
+    public static function replaceFirst($value) {
+        static::$items[0] = $value;
+    }
+    public static function first() {
+        return static::$items[0];
+    }
+}
+class ChildBag extends BaseBag {
+    public static array $items = [];
+}
+BaseBag::add(1);
+ChildBag::add(2);
+ChildBag::replaceFirst(7);
+echo BaseBag::first() . ":" . ChildBag::first();
+"#,
+    );
+    assert_eq!(out, "1:7");
+}
+
+#[test]
 fn test_static_string_property_assignment() {
     let out = compile_and_run(
         r#"<?php

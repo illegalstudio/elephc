@@ -1622,6 +1622,42 @@ fn test_parse_static_property_assignment() {
 }
 
 #[test]
+fn test_parse_static_property_array_push() {
+    let stmts = parse_source("<?php Counter::$items[] = 2;");
+    match &stmts[0].kind {
+        StmtKind::StaticPropertyArrayPush {
+            receiver,
+            property,
+            value,
+        } => {
+            assert_eq!(receiver, &StaticReceiver::Named("Counter".into()));
+            assert_eq!(property, "items");
+            assert!(matches!(value.kind, ExprKind::IntLiteral(2)));
+        }
+        other => panic!("Expected StaticPropertyArrayPush, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_static_property_array_assign() {
+    let stmts = parse_source("<?php Counter::$items[1] = 3;");
+    match &stmts[0].kind {
+        StmtKind::StaticPropertyArrayAssign {
+            receiver,
+            property,
+            index,
+            value,
+        } => {
+            assert_eq!(receiver, &StaticReceiver::Named("Counter".into()));
+            assert_eq!(property, "items");
+            assert!(matches!(index.kind, ExprKind::IntLiteral(1)));
+            assert!(matches!(value.kind, ExprKind::IntLiteral(3)));
+        }
+        other => panic!("Expected StaticPropertyArrayAssign, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_parse_static_property_declaration() {
     let stmts = parse_source("<?php class Counter { public static int $count = 1; }");
     match &stmts[0].kind {
