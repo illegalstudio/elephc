@@ -604,12 +604,13 @@ At function epilogue, variables marked as static are written back to their BSS s
 
 ### Static properties
 
-Static properties use one global 16-byte storage slot per declaring class property:
+Static properties use one global 16-byte storage slot per effective declaring class property:
 
 - `_static_prop_CLASS_PROP` stores the current value payload
-- inherited static properties point back to the declaring class slot
+- inherited static properties point back to the declaring class slot until a subclass redeclares the property
+- redeclared static properties get a separate subclass slot
 
-At program startup, `_main` evaluates static property defaults and stores them into these slots before user statements run. Reads such as `ClassName::$count` load directly from the symbol, and assignments store the new result back to the same symbol after type coercion and previous-value release for heap-backed values.
+At program startup, `_main` evaluates static property defaults and stores them into these slots before user statements run. Reads such as `ClassName::$count` load directly from the resolved symbol, and assignments store the new result back to the same symbol after type coercion and previous-value release for heap-backed values. `static::$count` uses the forwarded called-class id (or `$this` in instance methods) to select a redeclared descendant slot at runtime; if that late-bound slot is private and inaccessible from the current method scope, generated code emits a fatal private-static-property diagnostic.
 
 ### List unpacking
 

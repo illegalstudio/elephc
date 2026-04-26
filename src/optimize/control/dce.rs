@@ -1201,6 +1201,32 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             },
             span,
         }],
+        StmtKind::StaticPropertyArrayPush {
+            receiver,
+            property,
+            value,
+        } => vec![Stmt {
+            kind: StmtKind::StaticPropertyArrayPush {
+                receiver,
+                property,
+                value: prune_expr(value),
+            },
+            span,
+        }],
+        StmtKind::StaticPropertyArrayAssign {
+            receiver,
+            property,
+            index,
+            value,
+        } => vec![Stmt {
+            kind: StmtKind::StaticPropertyArrayAssign {
+                receiver,
+                property,
+                index: prune_expr(index),
+                value: prune_expr(value),
+            },
+            span,
+        }],
         StmtKind::PropertyArrayAssign {
             object,
             property,

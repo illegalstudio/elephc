@@ -143,6 +143,9 @@ fn collect_required_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<Stri
             }
             StmtKind::StaticPropertyAssign {
                 receiver, value, ..
+            }
+            | StmtKind::StaticPropertyArrayPush {
+                receiver, value, ..
             } => {
                 if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
                     names.insert(name.as_str().to_string());
@@ -150,6 +153,18 @@ fn collect_required_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<Stri
                 collect_required_class_names_in_expr(value, names);
             }
             StmtKind::PropertyArrayAssign { index, value, .. } => {
+                collect_required_class_names_in_expr(index, names);
+                collect_required_class_names_in_expr(value, names);
+            }
+            StmtKind::StaticPropertyArrayAssign {
+                receiver,
+                index,
+                value,
+                ..
+            } => {
+                if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
+                    names.insert(name.as_str().to_string());
+                }
                 collect_required_class_names_in_expr(index, names);
                 collect_required_class_names_in_expr(value, names);
             }
@@ -395,7 +410,11 @@ fn stmt_uses_variable(stmt: &Stmt, needle: &str) -> bool {
         StmtKind::PropertyAssign { object, value, .. } => {
             expr_uses_variable(object, needle) || expr_uses_variable(value, needle)
         }
-        StmtKind::StaticPropertyAssign { value, .. } => expr_uses_variable(value, needle),
+        StmtKind::StaticPropertyAssign { value, .. }
+        | StmtKind::StaticPropertyArrayPush { value, .. } => expr_uses_variable(value, needle),
+        StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
+            expr_uses_variable(index, needle) || expr_uses_variable(value, needle)
+        }
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_uses_variable(object, needle) || expr_uses_variable(value, needle)
         }

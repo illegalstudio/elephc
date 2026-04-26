@@ -201,6 +201,34 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             }
             result_ty
         }
+        ExprKind::ArrayLiteral(elems) => {
+            let mut elem_ty = elems
+                .first()
+                .map(infer_expr_type_syntactic)
+                .unwrap_or(PhpType::Mixed);
+            for elem in elems.iter().skip(1) {
+                elem_ty = wider_type_syntactic(&elem_ty, &infer_expr_type_syntactic(elem));
+            }
+            PhpType::Array(Box::new(elem_ty))
+        }
+        ExprKind::ArrayLiteralAssoc(entries) => {
+            let mut key_ty = entries
+                .first()
+                .map(|(key, _)| infer_expr_type_syntactic(key))
+                .unwrap_or(PhpType::Mixed);
+            let mut value_ty = entries
+                .first()
+                .map(|(_, value)| infer_expr_type_syntactic(value))
+                .unwrap_or(PhpType::Mixed);
+            for (key, value) in entries.iter().skip(1) {
+                key_ty = wider_type_syntactic(&key_ty, &infer_expr_type_syntactic(key));
+                value_ty = wider_type_syntactic(&value_ty, &infer_expr_type_syntactic(value));
+            }
+            PhpType::AssocArray {
+                key: Box::new(key_ty),
+                value: Box::new(value_ty),
+            }
+        }
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.as_str().to_string()),
         ExprKind::EnumCase { enum_name, .. } => PhpType::Object(enum_name.as_str().to_string()),
         ExprKind::This => PhpType::Object(String::new()),

@@ -395,6 +395,17 @@ pub enum StmtKind {
         property: String,
         value: Expr,
     },
+    StaticPropertyArrayPush {
+        receiver: StaticReceiver,
+        property: String,
+        value: Expr,
+    },
+    StaticPropertyArrayAssign {
+        receiver: StaticReceiver,
+        property: String,
+        index: Expr,
+        value: Expr,
+    },
     PropertyArrayPush {
         object: Box<Expr>,
         property: String,

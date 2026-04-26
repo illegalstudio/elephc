@@ -223,7 +223,12 @@ pub(crate) fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
             expr_local_writes(object)?,
             expr_local_writes(value)?,
         ]),
-        StmtKind::StaticPropertyAssign { value, .. } => expr_local_writes(value),
+        StmtKind::StaticPropertyAssign { value, .. }
+        | StmtKind::StaticPropertyArrayPush { value, .. } => expr_local_writes(value),
+        StmtKind::StaticPropertyArrayAssign { index, value, .. } => merge_write_sets([
+            expr_local_writes(index)?,
+            expr_local_writes(value)?,
+        ]),
         StmtKind::PropertyArrayAssign {
             object,
             index,

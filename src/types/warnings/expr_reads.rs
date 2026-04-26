@@ -138,10 +138,12 @@ pub(super) fn collect_closure_warnings_in_stmt(stmt: &Stmt, warnings: &mut Vec<C
         | StmtKind::TypedAssign { value, .. }
         | StmtKind::ArrayPush { value, .. }
         | StmtKind::StaticPropertyAssign { value, .. }
+        | StmtKind::StaticPropertyArrayPush { value, .. }
         | StmtKind::Return(Some(value)) => {
             collect_expr_reads(value, &mut ScopeUsage::default(), warnings);
         }
-        StmtKind::ArrayAssign { index, value, .. } => {
+        StmtKind::ArrayAssign { index, value, .. }
+        | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             let mut scope = ScopeUsage::default();
             collect_expr_reads(index, &mut scope, warnings);
             collect_expr_reads(value, &mut scope, warnings);

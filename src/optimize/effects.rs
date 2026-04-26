@@ -20,11 +20,13 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         StmtKind::Assign { value, .. }
         | StmtKind::TypedAssign { value, .. }
         | StmtKind::ArrayPush { value, .. }
-        | StmtKind::StaticPropertyAssign { value, .. } => {
+        | StmtKind::StaticPropertyAssign { value, .. }
+        | StmtKind::StaticPropertyArrayPush { value, .. } => {
             expr_effect(value).with_side_effects()
         }
         StmtKind::ArrayAssign { index, value, .. }
-        | StmtKind::PropertyArrayAssign { index, value, .. } => {
+        | StmtKind::PropertyArrayAssign { index, value, .. }
+        | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_effect(index)
                 .combine(expr_effect(value))
                 .with_side_effects()

@@ -471,8 +471,12 @@ impl Checker {
                 Self::expr_contains_method_call(index) || Self::expr_contains_method_call(value)
             }
             StmtKind::ArrayPush { value, .. } => Self::expr_contains_method_call(value),
-            StmtKind::StaticPropertyAssign { value, .. } => {
+            StmtKind::StaticPropertyAssign { value, .. }
+            | StmtKind::StaticPropertyArrayPush { value, .. } => {
                 Self::expr_contains_method_call(value)
+            }
+            StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
+                Self::expr_contains_method_call(index) || Self::expr_contains_method_call(value)
             }
             StmtKind::PropertyAssign { object, value, .. } => {
                 Self::expr_contains_method_call(object) || Self::expr_contains_method_call(value)

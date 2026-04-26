@@ -435,6 +435,58 @@ pub(super) fn resolve_stmt_list(
                             stmt.span,
                         ));
                     }
+                    StmtKind::StaticPropertyArrayPush {
+                        receiver,
+                        property,
+                        value,
+                    } => {
+                        resolved.push(Stmt::new(
+                            StmtKind::StaticPropertyArrayPush {
+                                receiver: match receiver {
+                                    crate::parser::ast::StaticReceiver::Named(name) => {
+                                        crate::parser::ast::StaticReceiver::Named(resolved_name(
+                                            resolve_special_or_class_name(
+                                                name,
+                                                namespace.as_deref(),
+                                                &imports,
+                                            ),
+                                        ))
+                                    }
+                                    _ => receiver.clone(),
+                                },
+                                property: property.clone(),
+                                value: resolve_expr(value, namespace.as_deref(), &imports, symbols),
+                            },
+                            stmt.span,
+                        ));
+                    }
+                    StmtKind::StaticPropertyArrayAssign {
+                        receiver,
+                        property,
+                        index,
+                        value,
+                    } => {
+                        resolved.push(Stmt::new(
+                            StmtKind::StaticPropertyArrayAssign {
+                                receiver: match receiver {
+                                    crate::parser::ast::StaticReceiver::Named(name) => {
+                                        crate::parser::ast::StaticReceiver::Named(resolved_name(
+                                            resolve_special_or_class_name(
+                                                name,
+                                                namespace.as_deref(),
+                                                &imports,
+                                            ),
+                                        ))
+                                    }
+                                    _ => receiver.clone(),
+                                },
+                                property: property.clone(),
+                                index: resolve_expr(index, namespace.as_deref(), &imports, symbols),
+                                value: resolve_expr(value, namespace.as_deref(), &imports, symbols),
+                            },
+                            stmt.span,
+                        ));
+                    }
                     StmtKind::PropertyArrayPush {
                         object,
                         property,

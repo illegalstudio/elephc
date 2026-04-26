@@ -206,9 +206,12 @@ pub(super) fn try_parse_scoped_property_assignment(
     }
 
     let lhs = &tokens[start..assign_pos];
+    let is_append =
+        lhs.len() >= 3 && lhs[lhs.len() - 2].0 == Token::LBracket && lhs[lhs.len() - 1].0 == Token::RBracket;
     let mut lhs_pos = 0;
-    let lhs_expr = parse_expr(lhs, &mut lhs_pos)?;
-    if lhs_pos != lhs.len() {
+    let lhs_expr_tokens = if is_append { &lhs[..lhs.len() - 2] } else { lhs };
+    let lhs_expr = parse_expr(lhs_expr_tokens, &mut lhs_pos)?;
+    if lhs_pos != lhs_expr_tokens.len() {
         return Err(CompileError::new(span, "Invalid assignment target"));
     }
 
@@ -216,18 +219,34 @@ pub(super) fn try_parse_scoped_property_assignment(
     let value = parse_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
 
-    let ExprKind::StaticPropertyAccess { receiver, property } = lhs_expr.kind else {
-        return Err(CompileError::new(span, "Invalid assignment target"));
-    };
-
-    Ok(Some(Stmt::new(
-        StmtKind::StaticPropertyAssign {
+    let stmt = match lhs_expr.kind {
+        ExprKind::StaticPropertyAccess { receiver, property } if is_append => {
+            StmtKind::StaticPropertyArrayPush {
+                receiver,
+                property,
+                value,
+            }
+        }
+        ExprKind::ArrayAccess { array, index } => match array.kind {
+            ExprKind::StaticPropertyAccess { receiver, property } => {
+                StmtKind::StaticPropertyArrayAssign {
+                    receiver,
+                    property,
+                    index: *index,
+                    value,
+                }
+            }
+            _ => return Err(CompileError::new(span, "Invalid assignment target")),
+        },
+        ExprKind::StaticPropertyAccess { receiver, property } => StmtKind::StaticPropertyAssign {
             receiver,
             property,
             value,
         },
-        span,
-    )))
+        _ => return Err(CompileError::new(span, "Invalid assignment target")),
+    };
+
+    Ok(Some(Stmt::new(stmt, span)))
 }
 
 fn find_top_level_assign(tokens: &[(Token, Span)], start: usize) -> Option<usize> {

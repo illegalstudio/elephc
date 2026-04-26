@@ -116,7 +116,20 @@ Counter::$count = 5;
 echo Counter::bump(); // 6
 ```
 
-Supported receivers are `ClassName::$prop`, `self::$prop`, `parent::$prop`, and `static::$prop`. Static property visibility and declared types are checked at compile time. Inherited static properties share the declaring class storage; redeclaring properties across the inheritance chain is not supported yet, so `static::$prop` does not create a separate child-class slot.
+Supported receivers are `ClassName::$prop`, `self::$prop`, `parent::$prop`, and `static::$prop`. Static property visibility and declared types are checked at compile time. Inherited static properties share the declaring class storage until a subclass redeclares the property. Redeclarations follow PHP rules: non-private inherited properties keep invariant declared types, cannot reduce visibility, and cannot override `final` properties. Private static properties redeclared in subclasses are independent slots; `static::$prop` is still late-bound and reports a fatal runtime error if the current method scope cannot access the matched private slot.
+
+Static array properties support direct element writes:
+
+```php
+<?php
+class Registry {
+    public static array $items = [];
+}
+
+Registry::$items[] = 10;
+Registry::$items[0] = 12;
+echo Registry::$items[0]; // 12
+```
 
 ## Constructor
 Called automatically with `new`:
@@ -213,4 +226,4 @@ Pure and backed enums. `->value`, `::from()`, `::tryFrom()`, `::cases()`. Only `
 - No abstract properties
 - No `readonly static` properties
 - No `readonly` or default-valued by-reference promoted properties
-- No property redeclaration across inheritance chain
+- No instance property redeclaration across inheritance chain
