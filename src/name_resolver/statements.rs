@@ -410,6 +410,31 @@ pub(super) fn resolve_stmt_list(
                             stmt.span,
                         ));
                     }
+                    StmtKind::StaticPropertyAssign {
+                        receiver,
+                        property,
+                        value,
+                    } => {
+                        resolved.push(Stmt::new(
+                            StmtKind::StaticPropertyAssign {
+                                receiver: match receiver {
+                                    crate::parser::ast::StaticReceiver::Named(name) => {
+                                        crate::parser::ast::StaticReceiver::Named(resolved_name(
+                                            resolve_special_or_class_name(
+                                                name,
+                                                namespace.as_deref(),
+                                                &imports,
+                                            ),
+                                        ))
+                                    }
+                                    _ => receiver.clone(),
+                                },
+                                property: property.clone(),
+                                value: resolve_expr(value, namespace.as_deref(), &imports, symbols),
+                            },
+                            stmt.span,
+                        ));
+                    }
                     StmtKind::PropertyArrayPush {
                         object,
                         property,

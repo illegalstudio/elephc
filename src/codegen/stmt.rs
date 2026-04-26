@@ -252,6 +252,15 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
         } => {
             assignments::emit_property_assign_stmt(object, property, value, emitter, ctx, data);
         }
+        StmtKind::StaticPropertyAssign {
+            receiver,
+            property,
+            value,
+        } => {
+            assignments::emit_static_property_assign_stmt(
+                receiver, property, value, emitter, ctx, data,
+            );
+        }
         StmtKind::PropertyArrayPush {
             object,
             property,

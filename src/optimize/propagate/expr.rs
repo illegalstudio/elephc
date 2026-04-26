@@ -137,6 +137,9 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             object: Box::new(propagate_expr(*object, env)),
             property,
         },
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            ExprKind::StaticPropertyAccess { receiver, property }
+        }
         ExprKind::MethodCall {
             object,
             method,

@@ -1384,3 +1384,104 @@ echo score(1) . "|" . score(2) . "|" . score(3) . "|" . score(9);
     );
     assert_eq!(out, "100|80|60|0");
 }
+
+#[test]
+fn test_static_property_read_write() {
+    let out = compile_and_run(
+        r#"<?php
+class Counter {
+    public static int $count = 1;
+}
+echo Counter::$count;
+Counter::$count = 5;
+echo Counter::$count;
+"#,
+    );
+    assert_eq!(out, "15");
+}
+
+#[test]
+fn test_static_property_self_access_in_static_method() {
+    let out = compile_and_run(
+        r#"<?php
+class Counter {
+    public static int $count = 1;
+    public static function bump() {
+        self::$count = self::$count + 1;
+        return self::$count;
+    }
+}
+echo Counter::bump();
+echo Counter::bump();
+"#,
+    );
+    assert_eq!(out, "23");
+}
+
+#[test]
+fn test_static_property_parent_access_in_static_method() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    protected static int $seed = 4;
+}
+class Child extends Base {
+    public static function read() {
+        return parent::$seed;
+    }
+}
+echo Child::read();
+"#,
+    );
+    assert_eq!(out, "4");
+}
+
+#[test]
+fn test_private_static_property_access_inside_class() {
+    let out = compile_and_run(
+        r#"<?php
+class Secret {
+    private static int $code = 7;
+    public static function reveal() {
+        return self::$code;
+    }
+}
+echo Secret::reveal();
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_static_property_inherited_storage_is_shared() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public static int $count = 2;
+    public static function set($value) {
+        static::$count = $value;
+    }
+}
+class Child extends Base {}
+Child::set(9);
+echo Base::$count;
+echo Child::$count;
+"#,
+    );
+    assert_eq!(out, "99");
+}
+
+#[test]
+fn test_static_string_property_assignment() {
+    let out = compile_and_run(
+        r#"<?php
+class Labels {
+    public static string $name = "a";
+}
+echo Labels::$name;
+Labels::$name = "bc";
+echo Labels::$name;
+"#,
+    );
+    assert_eq!(out, "abc");
+}

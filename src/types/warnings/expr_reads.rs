@@ -112,6 +112,7 @@ pub(super) fn collect_expr_reads(
         }
         ExprKind::NamedArg { value, .. } => collect_expr_reads(value, scope, warnings),
         ExprKind::PropertyAccess { object, .. } => collect_expr_reads(object, scope, warnings),
+        ExprKind::StaticPropertyAccess { .. } => {},
         ExprKind::BufferNew { len, .. } => collect_expr_reads(len, scope, warnings),
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
@@ -136,6 +137,7 @@ pub(super) fn collect_closure_warnings_in_stmt(stmt: &Stmt, warnings: &mut Vec<C
         StmtKind::Assign { value, .. }
         | StmtKind::TypedAssign { value, .. }
         | StmtKind::ArrayPush { value, .. }
+        | StmtKind::StaticPropertyAssign { value, .. }
         | StmtKind::Return(Some(value)) => {
             collect_expr_reads(value, &mut ScopeUsage::default(), warnings);
         }

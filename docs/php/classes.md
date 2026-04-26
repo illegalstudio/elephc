@@ -79,6 +79,7 @@ final class InvoiceNumber {
 - Optional type declarations, for example `public int $id` or `public ?string $email = null`
 - `readonly` properties (only assigned in `__construct`)
 - `final` properties, which can be read normally but cannot be redeclared by subclasses
+- Static properties with `public static`, `protected static`, or `private static`, including typed static properties
 - `readonly class` makes all properties readonly
 
 ```php
@@ -94,7 +95,28 @@ class User {
 }
 ```
 
-Property type declarations are checked at compile time. Defaults and later assignments must be compatible with the declared type, including constructor assignments through untyped parameters. Nullable shorthand (`?T`) and union storage use the compiler's boxed mixed representation internally. `void` and `callable` property types are rejected.
+Property type declarations are checked at compile time for both instance and static properties. Defaults and later assignments must be compatible with the declared type, including constructor assignments through untyped parameters. Nullable shorthand (`?T`) and union storage use the compiler's boxed mixed representation internally. `void` and `callable` property types are rejected.
+
+## Static properties
+Static properties use class-scoped storage and are accessed with `::`.
+
+```php
+<?php
+class Counter {
+    public static int $count = 1;
+
+    public static function bump() {
+        self::$count = self::$count + 1;
+        return self::$count;
+    }
+}
+
+echo Counter::$count; // 1
+Counter::$count = 5;
+echo Counter::bump(); // 6
+```
+
+Supported receivers are `ClassName::$prop`, `self::$prop`, `parent::$prop`, and `static::$prop`. Static property visibility and declared types are checked at compile time. Inherited static properties share the declaring class storage; redeclaring properties across the inheritance chain is not supported yet, so `static::$prop` does not create a separate child-class slot.
 
 ## Constructor
 Called automatically with `new`:
@@ -188,6 +210,7 @@ Pure and backed enums. `->value`, `::from()`, `::tryFrom()`, `::cases()`. Only `
 - `__set($name, $value)` — writing undefined property
 
 ## Limitations
-- No static or abstract properties
+- No abstract properties
+- No `readonly static` properties
 - No `readonly` or default-valued by-reference promoted properties
 - No property redeclaration across inheritance chain

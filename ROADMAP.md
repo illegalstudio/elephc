@@ -186,6 +186,7 @@ Proper type system for PHP compatibility.
 - [x] Constructor (`__construct`) with arguments
 - [x] Instance methods with `$this` access
 - [x] Static methods via `ClassName::method()`
+- [x] Static properties via `ClassName::$prop`, `self::$prop`, `parent::$prop`, and `static::$prop`
 - [x] `new` keyword for object instantiation
 - [x] `->` property access and method calls
 - [x] `readonly` properties (enforced at compile time)
@@ -298,7 +299,7 @@ Proper type system for PHP compatibility.
 - [x] Union types (`int|string`) — tagged union with runtime type dispatch
 - [x] Nullable types (`?int`) — sugar for `int|null`
 - [x] Function / method parameter and return type hints (`function foo(int $x): string`) — compile-time validation for functions, methods, constructors, closures, and arrow functions
-- [x] Constructor property promotion (`public function __construct(public int $x)`) — promoted parameters lower to declared properties plus constructor assignments
+- [x] Constructor property promotion (`public function __construct(public int $x)`) — promoted parameters lower to declared properties plus constructor assignments, including visibility, `readonly`, defaults, nullable/union type declarations, and by-reference promoted parameters
 
 ## v0.18.x — Multi-platform and optimizations
 
@@ -393,7 +394,7 @@ Features that are feasible but complex. Not currently planned for any specific v
 
 | Feature | Complexity | Notes |
 |---|---|---|
-| Static properties | Medium | Add class-scoped property storage, visibility checks, initialization order, inheritance behavior, and `self::$x` / `static::$x` lowering. |
+| Advanced static property parity | Medium | Add static property redeclaration rules and direct array element writes such as `ClassName::$items[] = $value`. |
 | Generators / `yield` | High | Requires compile-time state machine transformation: every yield point becomes a switch case, all locals promoted to heap-allocated generator object. Edge cases with yield inside try/catch/finally are significant. |
 | `yield from` delegation | High | Depends on generators. Forwards iteration to an inner generator, propagating values and return. |
 | Fibers | Very high | Cooperative multitasking needs per-fiber stack allocation (~1MB each), custom context switch in assembly (save/restore x19-x28, d8-d15, SP), guard pages, and GC awareness of multiple stack roots. Best suited for async I/O workloads, not the current game/systems target. |

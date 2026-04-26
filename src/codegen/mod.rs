@@ -26,7 +26,8 @@ use data_section::DataSection;
 use driver_support::{
     align16, emit_deferred_closures, emit_enum_singleton_initializers,
     emit_main_activation_record_pop, emit_main_activation_record_push,
-    emit_main_cleanup_callback, emit_write_current_string_stderr, emit_write_literal_stderr,
+    emit_main_cleanup_callback, emit_static_property_initializers,
+    emit_write_current_string_stderr, emit_write_literal_stderr,
 };
 use emit::Emitter;
 pub(crate) use driver_support::{
@@ -328,6 +329,7 @@ pub fn generate_user_asm(
     }
     emit_main_activation_record_push(&mut emitter, &ctx, &main_cleanup_label);
     emit_enum_singleton_initializers(&mut emitter, &mut data, &ctx);
+    emit_static_property_initializers(&mut emitter, &mut data, &mut ctx);
 
     // -- emit user statements --
     for s in program {

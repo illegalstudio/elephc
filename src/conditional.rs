@@ -271,6 +271,15 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             property,
             value: rewrite_expr(value, defines),
         },
+        StmtKind::StaticPropertyAssign {
+            receiver,
+            property,
+            value,
+        } => StmtKind::StaticPropertyAssign {
+            receiver,
+            property,
+            value: rewrite_expr(value, defines),
+        },
         StmtKind::PropertyArrayPush {
             object,
             property,
@@ -441,6 +450,9 @@ fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
             object: Box::new(rewrite_expr(*object, defines)),
             property,
         },
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            ExprKind::StaticPropertyAccess { receiver, property }
+        }
         ExprKind::MethodCall { object, method, args } => ExprKind::MethodCall {
             object: Box::new(rewrite_expr(*object, defines)),
             method,

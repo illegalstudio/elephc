@@ -345,7 +345,7 @@ The runtime data emission in `src/codegen/runtime/data.rs` is split into `emit_r
 | I/O scratch | `_cstr_buf`, `_cstr_buf2`, `_eof_flags` | Syscall-oriented C-string scratch buffers and EOF bookkeeping |
 | String/regex tables | `_fmt_g`, `_b64_encode_tbl`, `_b64_decode_tbl`, `_pcre_*` | Formatting and lookup tables for runtime helpers |
 | JSON/date tables | `_json_true`, `_json_false`, `_json_null`, `_day_names`, `_month_names` | Static data used by JSON and date routines |
-| User-dependent storage | `_gvar_<name>`, `_static_<func>_<name>`, `_static_<func>_<name>_init`, enum-case `.comm` symbols via `enum_case_symbol(...)` | Global/static storage plus singleton backing slots for enum cases |
+| User-dependent storage | `_gvar_<name>`, `_static_<func>_<name>`, `_static_<func>_<name>_init`, `_static_prop_<class>_<prop>`, enum-case `.comm` symbols via `enum_case_symbol(...)` | Global/static local storage, class static-property storage, plus singleton backing slots for enum cases |
 | Class/interface metadata tables | `_interface_count`, `_interface_method_ptrs`, `_interface_methods_<id>`, `_class_interface_ptrs`, `_class_interfaces_<id>`, `_class_interface_impl_<class>_<iface>`, `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>`, `_class_vtable_ptrs`, `_class_vtable_<id>`, `_class_static_vtable_ptrs`, `_class_static_vtable_<id>` | Per-interface method-order metadata plus per-class property traversal metadata and instance/static dispatch tables |
 
 ### Heap allocator

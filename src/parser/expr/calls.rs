@@ -20,6 +20,14 @@ pub(super) fn parse_scoped_static_call(
     }
     *pos += 1;
     let method = match tokens.get(*pos).map(|(token, _)| token) {
+        Some(Token::Variable(property)) => {
+            let property = property.clone();
+            *pos += 1;
+            return Ok(Expr::new(
+                ExprKind::StaticPropertyAccess { receiver, property },
+                span,
+            ));
+        }
         Some(Token::Identifier(method)) => {
             let method = method.clone();
             *pos += 1;
@@ -28,7 +36,7 @@ pub(super) fn parse_scoped_static_call(
         _ => {
             return Err(CompileError::new(
                 span,
-                &format!("Expected method name after '{}::'", receiver_name),
+                &format!("Expected method or property name after '{}::'", receiver_name),
             ))
         }
     };

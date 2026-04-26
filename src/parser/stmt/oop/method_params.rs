@@ -109,6 +109,7 @@ pub(super) fn parse_method_params(
                         type_expr: type_ann.clone(),
                         readonly,
                         is_final: false,
+                        is_static: false,
                         by_ref: is_ref,
                         default: None,
                         span: property_span,

@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::names::{enum_case_symbol, mangle_fqn, method_symbol, static_method_symbol};
+use crate::names::{
+    enum_case_symbol, mangle_fqn, method_symbol, static_method_symbol, static_property_symbol,
+};
 use crate::types::{ClassInfo, EnumInfo, InterfaceInfo, PhpType};
 
 use super::system;
@@ -131,6 +133,26 @@ pub(crate) fn emit_runtime_data_user(
             mangle_fqn(func_name),
             var_name
         ));
+    }
+
+    let mut static_property_symbols = HashSet::new();
+    for (class_name, class_info) in classes {
+        if allowed_class_names.is_some_and(|allowed| !allowed.contains(class_name)) {
+            continue;
+        }
+        for (property_name, _) in &class_info.static_properties {
+            let declaring_class = class_info
+                .static_property_declaring_classes
+                .get(property_name)
+                .map(String::as_str)
+                .unwrap_or(class_name.as_str());
+            static_property_symbols.insert(static_property_symbol(declaring_class, property_name));
+        }
+    }
+    let mut static_property_symbols: Vec<String> = static_property_symbols.into_iter().collect();
+    static_property_symbols.sort();
+    for symbol in static_property_symbols {
+        out.push_str(&format!(".comm {}, 16, 3\n", symbol));
     }
 
     let mut sorted_enum_names: Vec<&String> = enums.keys().collect();
@@ -400,6 +422,12 @@ mod tests {
             final_properties: HashSet::new(),
             readonly_properties: HashSet::new(),
             reference_properties: HashSet::new(),
+            static_properties: Vec::new(),
+            static_defaults: Vec::new(),
+            static_property_declaring_classes: HashMap::new(),
+            static_property_visibilities: HashMap::new(),
+            declared_static_properties: HashSet::new(),
+            final_static_properties: HashSet::new(),
             method_decls: Vec::new(),
             methods: HashMap::new(),
             static_methods: HashMap::new(),

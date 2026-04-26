@@ -1,6 +1,7 @@
 mod access;
 mod allocation;
 mod dispatch;
+mod static_properties;
 
 use super::super::context::Context;
 use super::super::data_section::DataSection;
@@ -26,6 +27,15 @@ pub(super) fn emit_property_access(
     data: &mut DataSection,
 ) -> PhpType {
     access::emit_property_access(object, property, emitter, ctx, data)
+}
+
+pub(super) fn emit_static_property_access(
+    receiver: &StaticReceiver,
+    property: &str,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) -> PhpType {
+    static_properties::emit_static_property_access(receiver, property, emitter, ctx)
 }
 
 pub(super) fn emit_enum_case(

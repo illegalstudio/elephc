@@ -91,6 +91,10 @@ pub enum ExprKind {
         object: Box<Expr>,
         property: String,
     },
+    StaticPropertyAccess {
+        receiver: StaticReceiver,
+        property: String,
+    },
     MethodCall {
         object: Box<Expr>,
         method: String,
@@ -386,6 +390,11 @@ pub enum StmtKind {
         property: String,
         value: Expr,
     },
+    StaticPropertyAssign {
+        receiver: StaticReceiver,
+        property: String,
+        value: Expr,
+    },
     PropertyArrayPush {
         object: Box<Expr>,
         property: String,
@@ -556,6 +565,7 @@ pub struct ClassProperty {
     pub type_expr: Option<TypeExpr>,
     pub readonly: bool,
     pub is_final: bool,
+    pub is_static: bool,
     pub by_ref: bool,
     pub default: Option<Expr>,
     #[allow(dead_code)] // Used for error reporting in future phases
@@ -568,6 +578,7 @@ impl PartialEq for ClassProperty {
             && self.type_expr == other.type_expr
             && self.readonly == other.readonly
             && self.is_final == other.is_final
+            && self.is_static == other.is_static
             && self.by_ref == other.by_ref
     }
 }

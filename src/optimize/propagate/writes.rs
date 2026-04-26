@@ -223,6 +223,7 @@ pub(crate) fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
             expr_local_writes(object)?,
             expr_local_writes(value)?,
         ]),
+        StmtKind::StaticPropertyAssign { value, .. } => expr_local_writes(value),
         StmtKind::PropertyArrayAssign {
             object,
             index,
@@ -249,6 +250,7 @@ pub(crate) fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
         | ExprKind::Null
         | ExprKind::ConstRef(_)
         | ExprKind::EnumCase { .. }
+        | ExprKind::StaticPropertyAccess { .. }
         | ExprKind::This
         | ExprKind::FirstClassCallable(_)
         | ExprKind::Closure { .. } => Some(HashSet::new()),
