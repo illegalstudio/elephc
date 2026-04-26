@@ -470,6 +470,38 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             ),
             env,
         ),
+        StmtKind::StaticPropertyArrayPush {
+            receiver,
+            property,
+            value,
+        } => (
+            Stmt::new(
+                StmtKind::StaticPropertyArrayPush {
+                    receiver,
+                    property,
+                    value: propagate_expr(value, &env),
+                },
+                span,
+            ),
+            env,
+        ),
+        StmtKind::StaticPropertyArrayAssign {
+            receiver,
+            property,
+            index,
+            value,
+        } => (
+            Stmt::new(
+                StmtKind::StaticPropertyArrayAssign {
+                    receiver,
+                    property,
+                    index: propagate_expr(index, &env),
+                    value: propagate_expr(value, &env),
+                },
+                span,
+            ),
+            env,
+        ),
         StmtKind::PropertyArrayPush {
             object,
             property,

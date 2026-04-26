@@ -237,6 +237,13 @@ pub(super) fn collect_scope_reads(
             StmtKind::StaticPropertyAssign { value, .. } => {
                 collect_expr_reads(value, scope, warnings);
             }
+            StmtKind::StaticPropertyArrayPush { value, .. } => {
+                collect_expr_reads(value, scope, warnings);
+            }
+            StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
+                collect_expr_reads(index, scope, warnings);
+                collect_expr_reads(value, scope, warnings);
+            }
             StmtKind::PropertyArrayPush {
                 object,
                 value,

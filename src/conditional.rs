@@ -280,6 +280,26 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             property,
             value: rewrite_expr(value, defines),
         },
+        StmtKind::StaticPropertyArrayPush {
+            receiver,
+            property,
+            value,
+        } => StmtKind::StaticPropertyArrayPush {
+            receiver,
+            property,
+            value: rewrite_expr(value, defines),
+        },
+        StmtKind::StaticPropertyArrayAssign {
+            receiver,
+            property,
+            index,
+            value,
+        } => StmtKind::StaticPropertyArrayAssign {
+            receiver,
+            property,
+            index: rewrite_expr(index, defines),
+            value: rewrite_expr(value, defines),
+        },
         StmtKind::PropertyArrayPush {
             object,
             property,

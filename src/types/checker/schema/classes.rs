@@ -215,6 +215,12 @@ pub(crate) fn build_class_info_recursive(
                     "Static by-reference properties are not supported",
                 ));
             }
+            if prop.is_final && prop.visibility == Visibility::Private {
+                return Err(CompileError::new(
+                    prop.span,
+                    "Property cannot be both final and private",
+                ));
+            }
             if property_declaring_classes.contains_key(&prop.name) {
                 return Err(CompileError::new(
                     prop.span,
@@ -224,7 +230,15 @@ pub(crate) fn build_class_info_recursive(
                     ),
                 ));
             }
-            if static_property_declaring_classes.contains_key(&prop.name) {
+            let inherited_static_declaring_class =
+                static_property_declaring_classes.get(&prop.name).cloned();
+            let declared_ty = resolve_property_declared_type(checker, &class.name, prop)?;
+            if let Some(parent_declaring_class) = inherited_static_declaring_class.as_ref() {
+                let inherited_visibility = static_property_visibilities
+                    .get(&prop.name)
+                    .cloned()
+                    .unwrap_or(Visibility::Public);
+                let inherited_is_private = inherited_visibility == Visibility::Private;
                 if final_static_properties.contains(&prop.name) {
                     let declaring_class = static_property_declaring_classes
                         .get(&prop.name)
@@ -238,16 +252,64 @@ pub(crate) fn build_class_info_recursive(
                         ),
                     ));
                 }
-                return Err(CompileError::new(
-                    prop.span,
-                    &format!(
-                        "Static property redeclaration across inheritance is not yet supported: {}::{}",
-                        class.name, prop.name
-                    ),
-                ));
+                if !inherited_is_private {
+                    if visibility_rank(&prop.visibility) < visibility_rank(&inherited_visibility) {
+                        return Err(CompileError::new(
+                            prop.span,
+                            &format!(
+                                "Cannot reduce visibility when overriding static property: {}::{}",
+                                class.name, prop.name
+                            ),
+                        ));
+                    }
+
+                    let parent_declared = declared_static_properties.contains(&prop.name);
+                    match (parent_declared, declared_ty.as_ref()) {
+                        (true, None) => {
+                            let parent_ty = static_prop_types
+                                .iter()
+                                .find(|(name, _)| name == &prop.name)
+                                .map(|(_, ty)| ty.clone())
+                                .unwrap_or(PhpType::Int);
+                            return Err(CompileError::new(
+                                prop.span,
+                                &format!(
+                                    "Type of {}::${} must be {} (as in class {})",
+                                    class.name, prop.name, parent_ty, parent_declaring_class
+                                ),
+                            ));
+                        }
+                        (false, Some(_)) => {
+                            return Err(CompileError::new(
+                                prop.span,
+                                &format!(
+                                    "Type of {}::${} must not be defined (as in class {})",
+                                    class.name, prop.name, parent_declaring_class
+                                ),
+                            ));
+                        }
+                        (true, Some(child_ty)) => {
+                            let parent_ty = static_prop_types
+                                .iter()
+                                .find(|(name, _)| name == &prop.name)
+                                .map(|(_, ty)| ty.clone())
+                                .unwrap_or(PhpType::Int);
+                            if &parent_ty != child_ty {
+                                return Err(CompileError::new(
+                                    prop.span,
+                                    &format!(
+                                        "Type of {}::${} must be {} (as in class {})",
+                                        class.name, prop.name, parent_ty, parent_declaring_class
+                                    ),
+                                ));
+                            }
+                        }
+                        (false, None) => {}
+                    }
+                }
             }
 
-            let ty = if let Some(declared_ty) = resolve_property_declared_type(checker, &class.name, prop)? {
+            let ty = if let Some(declared_ty) = declared_ty {
                 checker.validate_declared_default_type(
                     &declared_ty,
                     prop.default.as_ref(),
@@ -257,12 +319,22 @@ pub(crate) fn build_class_info_recursive(
                 declared_static_properties.insert(prop.name.clone());
                 declared_ty
             } else if let Some(default) = &prop.default {
+                declared_static_properties.remove(&prop.name);
                 infer_expr_type_syntactic(default)
             } else {
+                declared_static_properties.remove(&prop.name);
                 PhpType::Int
             };
-            static_prop_types.push((prop.name.clone(), ty));
-            static_defaults.push(prop.default.clone());
+            if let Some(slot) = static_prop_types
+                .iter()
+                .position(|(name, _)| name == &prop.name)
+            {
+                static_prop_types[slot] = (prop.name.clone(), ty);
+                static_defaults[slot] = prop.default.clone();
+            } else {
+                static_prop_types.push((prop.name.clone(), ty));
+                static_defaults.push(prop.default.clone());
+            }
             static_property_declaring_classes.insert(prop.name.clone(), class.name.clone());
             static_property_visibilities.insert(prop.name.clone(), prop.visibility.clone());
             if prop.is_final {

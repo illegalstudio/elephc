@@ -231,6 +231,26 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             property,
             value: fold_expr(value),
         },
+        StmtKind::StaticPropertyArrayPush {
+            receiver,
+            property,
+            value,
+        } => StmtKind::StaticPropertyArrayPush {
+            receiver,
+            property,
+            value: fold_expr(value),
+        },
+        StmtKind::StaticPropertyArrayAssign {
+            receiver,
+            property,
+            index,
+            value,
+        } => StmtKind::StaticPropertyArrayAssign {
+            receiver,
+            property,
+            index: fold_expr(index),
+            value: fold_expr(value),
+        },
         StmtKind::PropertyArrayPush {
             object,
             property,
