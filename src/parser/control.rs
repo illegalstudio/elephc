@@ -358,6 +358,18 @@ pub fn parse_assign_inline(
         Token::PercentAssign => Some(BinOp::Mod),
         Token::DotAssign => Some(BinOp::Concat),
         Token::Assign => None,
+        Token::QuestionQuestionAssign => {
+            *pos += 1;
+            let rhs = parse_expr(tokens, pos)?;
+            let value = Expr::new(
+                ExprKind::NullCoalesce {
+                    value: Box::new(Expr::new(ExprKind::Variable(name.clone()), span)),
+                    default: Box::new(rhs),
+                },
+                span,
+            );
+            return Ok(Stmt::new(StmtKind::Assign { name, value }, span));
+        }
         _ => return Err(CompileError::new(span, "Expected '=' after variable name")),
     };
     *pos += 1;
@@ -442,4 +454,3 @@ pub fn parse_switch(
         span,
     ))
 }
-

@@ -71,8 +71,9 @@ sidebar:
 | `/=` | `$x /= 5` | `$x = $x / 5` |
 | `%=` | `$x %= 5` | `$x = $x % 5` |
 | `.=` | `$s .= "x"` | `$s = $s . "x"` |
+| `??=` | `$x ??= "default"` | Assign RHS only when `$x` is `null` |
 
-**Not supported yet:** `**=`, `&=`, `|=`, `^=`, `<<=`, `>>=`, `??=`.
+**Not supported yet:** `**=`, `&=`, `|=`, `^=`, `<<=`, `>>=`.
 
 ## List Unpacking
 
@@ -90,7 +91,12 @@ echo $a;  // 10
 $x = null;
 echo $x ?? "default";    // prints "default"
 echo $x ?? $y ?? "last"; // chained — right-associative
+
+$x ??= "fallback";       // assigns because $x is null
+$x ??= "ignored";        // keeps "fallback"; RHS is not evaluated
 ```
+
+`??=` is supported for already-declared local/global/static variables as a standalone assignment statement.
 
 ## Increment / Decrement
 

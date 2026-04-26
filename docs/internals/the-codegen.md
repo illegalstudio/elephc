@@ -358,6 +358,14 @@ _nc_done_1:
 
 The null check compares the value against the [null sentinel](memory-model.md). The operator is right-associative (`$a ?? $b ?? $c` = `$a ?? ($b ?? $c)`).
 
+Null coalescing assignment is parsed as `$x = $x ?? expr`, but assignment lowering recognizes that exact shape and emits a conditional store:
+
+```php
+$x ??= "default";
+```
+
+The generated code loads `$x`, branches past the assignment when it is non-null, and evaluates/stores the right-hand side only on the null path. This preserves PHP's `??=` short-circuit behavior and avoids rewriting an already-owned heap value back into the same local slot.
+
 ### Type coercions
 
 When types need to match (e.g., int + float), the codegen inserts conversion instructions:

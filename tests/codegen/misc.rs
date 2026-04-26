@@ -100,6 +100,71 @@ echo $result;
 }
 
 #[test]
+fn test_null_coalesce_assignment_assigns_when_null() {
+    let out = compile_and_run(
+        r#"<?php
+$x = null;
+$x ??= 7;
+echo $x;
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+#[test]
+fn test_null_coalesce_assignment_skips_rhs_when_non_null() {
+    let out = compile_and_run(
+        r#"<?php
+function fallback() {
+    echo "bad";
+    return 99;
+}
+$x = 5;
+$x ??= fallback();
+echo $x;
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+#[test]
+fn test_null_coalesce_assignment_updates_runtime_null() {
+    let out = compile_and_run(
+        r#"<?php
+$x = false ? 1 : null;
+$x ??= 9;
+echo $x;
+"#,
+    );
+    assert_eq!(out, "9");
+}
+
+#[test]
+fn test_null_coalesce_assignment_keeps_non_null_string() {
+    let out = compile_and_run(
+        r#"<?php
+$x = "keep";
+$x ??= "fallback";
+echo $x;
+"#,
+    );
+    assert_eq!(out, "keep");
+}
+
+#[test]
+fn test_null_coalesce_assignment_in_for_init() {
+    let out = compile_and_run(
+        r#"<?php
+$i = null;
+for ($i ??= 0; $i < 3; $i++) {
+    echo $i;
+}
+"#,
+    );
+    assert_eq!(out, "012");
+}
+
+#[test]
 fn test_closure_return_type_from_nested_branch() {
     let out = compile_and_run(
         r#"<?php

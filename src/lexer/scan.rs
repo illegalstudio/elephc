@@ -98,8 +98,17 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
         '\\' => { cursor.advance(); Ok(Token::Backslash) }
         '?' => {
             cursor.advance();
-            if cursor.peek() == Some('?') { cursor.advance(); Ok(Token::QuestionQuestion) }
-            else { Ok(Token::Question) }
+            if cursor.peek() == Some('?') {
+                cursor.advance();
+                if cursor.peek() == Some('=') {
+                    cursor.advance();
+                    Ok(Token::QuestionQuestionAssign)
+                } else {
+                    Ok(Token::QuestionQuestion)
+                }
+            } else {
+                Ok(Token::Question)
+            }
         }
         ':' => {
             cursor.advance();

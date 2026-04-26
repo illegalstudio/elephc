@@ -192,6 +192,11 @@ fn test_error_missing_equals() {
 }
 
 #[test]
+fn test_error_null_coalesce_assignment_missing_rhs() {
+    expect_error("<?php $x ??=;", "Unexpected token");
+}
+
+#[test]
 fn test_error_unclosed_paren() {
     expect_error("<?php echo (1 + 2;", "Expected closing ')'");
 }

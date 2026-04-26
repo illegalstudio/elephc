@@ -384,12 +384,13 @@ When the parser sees a `Variable`, it looks ahead to decide:
 ```php
 $x = 42;         →  Assign { name: "x", value: IntLiteral(42) }
 $x += 5;         →  Assign { name: "x", value: BinaryOp(Add, Variable("x"), IntLiteral(5)) }
+$x ??= 5;        →  Assign { name: "x", value: NullCoalesce(Variable("x"), IntLiteral(5)) }
 $arr[0] = 5;     →  ArrayAssign { array: "arr", index: IntLiteral(0), value: IntLiteral(5) }
 $arr[] = 5;      →  ArrayPush { array: "arr", value: IntLiteral(5) }
 $x++;            →  ExprStmt(PostIncrement("x"))
 ```
 
-Compound assignments (`+=`, `-=`, `*=`, `/=`, `.=`, `%=`) are desugared into regular assignments with binary operations.
+Compound assignments (`+=`, `-=`, `*=`, `/=`, `.=`, `%=`) are desugared into regular assignments with binary operations. Null coalescing assignment (`??=`) is represented as a regular assignment with a `NullCoalesce` value; codegen recognizes this shape and emits a conditional store so the right-hand side is only evaluated when the current variable value is `null`.
 
 ### `try` / `catch` / `finally`
 
