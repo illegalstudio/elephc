@@ -79,7 +79,7 @@ final class InvoiceNumber {
 - Optional type declarations, for example `public int $id` or `public ?string $email = null`
 - `readonly` properties (only assigned in `__construct`)
 - `final` properties, which can be read normally but cannot be redeclared by subclasses
-- Static properties with `public static`, `protected static`, or `private static`
+- Static properties with `public static`, `protected static`, or `private static`, including typed static properties
 - `readonly class` makes all properties readonly
 
 ```php
@@ -95,7 +95,7 @@ class User {
 }
 ```
 
-Property type declarations are checked at compile time. Defaults and later assignments must be compatible with the declared type, including constructor assignments through untyped parameters. Nullable shorthand (`?T`) and union storage use the compiler's boxed mixed representation internally. `void` and `callable` property types are rejected.
+Property type declarations are checked at compile time for both instance and static properties. Defaults and later assignments must be compatible with the declared type, including constructor assignments through untyped parameters. Nullable shorthand (`?T`) and union storage use the compiler's boxed mixed representation internally. `void` and `callable` property types are rejected.
 
 ## Static properties
 Static properties use class-scoped storage and are accessed with `::`.

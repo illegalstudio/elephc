@@ -299,7 +299,7 @@ Proper type system for PHP compatibility.
 - [x] Union types (`int|string`) — tagged union with runtime type dispatch
 - [x] Nullable types (`?int`) — sugar for `int|null`
 - [x] Function / method parameter and return type hints (`function foo(int $x): string`) — compile-time validation for functions, methods, constructors, closures, and arrow functions
-- [x] Constructor property promotion (`public function __construct(public int $x)`) — promoted parameters lower to declared properties plus constructor assignments
+- [x] Constructor property promotion (`public function __construct(public int $x)`) — promoted parameters lower to declared properties plus constructor assignments, including visibility, `readonly`, defaults, nullable/union type declarations, and by-reference promoted parameters
 
 ## v0.18.x — Multi-platform and optimizations
 

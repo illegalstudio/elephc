@@ -49,10 +49,12 @@ class User {
     public int $id;
     public string $name = "Ada";
     public ?string $email = null;
+    public static int $count = 0;
 }
 ```
 
 Rules:
+- instance and static properties can use declared property types
 - property defaults and assignments must be compatible with the declared type
 - constructor assignments through untyped parameters are checked once call sites refine the parameter type
 - nullable and union property storage is boxed using the same mixed runtime shape as typed locals
