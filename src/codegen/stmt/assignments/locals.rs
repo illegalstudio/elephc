@@ -188,6 +188,10 @@ fn emit_null_coalesce_assign_stmt(
 ) {
     emitter.blank();
     emitter.comment(&format!("${} ??= ...", name));
+    if matches!(default.kind, ExprKind::Null) {
+        emitter.comment("literal null fallback leaves the current value unchanged");
+        return;
+    }
     let current_ty = emit_expr(current, emitter, ctx, data);
     if current_ty != PhpType::Void {
         let keep_label = ctx.next_label("nca_keep");

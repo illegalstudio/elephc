@@ -197,6 +197,14 @@ fn test_error_null_coalesce_assignment_missing_rhs() {
 }
 
 #[test]
+fn test_error_null_coalesce_assignment_type_change() {
+    expect_error(
+        "<?php $x = 5; $x ??= 2.5;",
+        "null coalescing assignment for $x must keep int, got float",
+    );
+}
+
+#[test]
 fn test_error_unclosed_paren() {
     expect_error("<?php echo (1 + 2;", "Expected closing ')'");
 }

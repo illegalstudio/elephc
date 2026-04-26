@@ -97,6 +97,8 @@ $x ??= "ignored";        // keeps "fallback"; RHS is not evaluated
 ```
 
 `??=` is supported for already-declared local/global/static variables as a standalone assignment statement.
+For concrete local variable types, the fallback must keep the same static type, or be a literal `null`.
+Use a nullable, union, or `mixed` typed local when the fallback may change the stored runtime representation.
 
 ## Increment / Decrement
 

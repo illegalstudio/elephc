@@ -1,5 +1,5 @@
 use crate::errors::CompileError;
-use crate::parser::ast::{ExprKind, StaticReceiver, Stmt, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -12,6 +12,57 @@ struct StaticPropertyAssignmentTarget {
 }
 
 impl Checker {
+    fn null_coalesce_assignment_default<'a>(name: &str, value: &'a Expr) -> Option<&'a Expr> {
+        if let ExprKind::NullCoalesce {
+            value: current,
+            default,
+        } = &value.kind
+        {
+            if matches!(&current.kind, ExprKind::Variable(current_name) if current_name == name) {
+                return Some(default);
+            }
+        }
+        None
+    }
+
+    fn null_coalesce_assignment_type(
+        &self,
+        name: &str,
+        existing: &PhpType,
+        default_ty: &PhpType,
+        default: &Expr,
+        span: crate::span::Span,
+    ) -> Result<PhpType, CompileError> {
+        if *existing == PhpType::Void {
+            return Ok(default_ty.clone());
+        }
+        if *existing == PhpType::Mixed {
+            return Ok(PhpType::Mixed);
+        }
+        if matches!(existing, PhpType::Union(_)) {
+            if *default_ty == PhpType::Void || self.type_accepts(existing, default_ty) {
+                return Ok(existing.clone());
+            }
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Type error: null coalescing assignment for ${} must keep {}, got {}",
+                    name, existing, default_ty
+                ),
+            ));
+        }
+        if existing == default_ty || matches!(default.kind, ExprKind::Null) {
+            return Ok(existing.clone());
+        }
+        Err(CompileError::new(
+            span,
+            &format!(
+                "Type error: null coalescing assignment for ${} must keep {}, got {}",
+                name, existing, default_ty
+            ),
+        ))
+    }
+
     fn resolve_static_property_assignment_target(
         &self,
         receiver: &StaticReceiver,
@@ -158,16 +209,42 @@ impl Checker {
     ) -> Result<(), CompileError> {
         match &stmt.kind {
             StmtKind::Assign { name, value } => {
-                let ty = self.infer_type(value, env)?;
+                let null_coalesce_default =
+                    Self::null_coalesce_assignment_default(name, value);
+                let ty = if let Some(default) = null_coalesce_default {
+                    if let Some(existing) = env.get(name).cloned() {
+                        let default_ty = self.infer_type(default, env)?;
+                        self.null_coalesce_assignment_type(
+                            name,
+                            &existing,
+                            &default_ty,
+                            default,
+                            stmt.span,
+                        )?
+                    } else {
+                        self.infer_type(value, env)?
+                    }
+                } else {
+                    self.infer_type(value, env)?
+                };
+                let callable_source = if let Some(default) = null_coalesce_default {
+                    if matches!(env.get(name), Some(existing) if *existing == PhpType::Void) {
+                        default
+                    } else {
+                        value
+                    }
+                } else {
+                    value
+                };
                 if ty == PhpType::Callable {
-                    if let Some(sig) = self.resolve_expr_callable_sig(value, env)? {
+                    if let Some(sig) = self.resolve_expr_callable_sig(callable_source, env)? {
                         self.closure_return_types
                             .insert(name.clone(), sig.return_type.clone());
                         self.callable_sigs.insert(name.clone(), sig);
-                        if let ExprKind::FirstClassCallable(target) = &value.kind {
+                        if let ExprKind::FirstClassCallable(target) = &callable_source.kind {
                             self.first_class_callable_targets
                                 .insert(name.clone(), target.clone());
-                        } else if let ExprKind::Variable(src_name) = &value.kind {
+                        } else if let ExprKind::Variable(src_name) = &callable_source.kind {
                             if let Some(target) =
                                 self.first_class_callable_targets.get(src_name).cloned()
                             {

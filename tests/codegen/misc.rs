@@ -128,6 +128,21 @@ echo $x;
 }
 
 #[test]
+fn test_null_coalesce_assignment_literal_null_keeps_non_null_type() {
+    let out = compile_and_run(
+        r#"<?php
+function value(): int {
+    return 5;
+}
+$x = value();
+$x ??= null;
+echo $x;
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+#[test]
 fn test_null_coalesce_assignment_updates_runtime_null() {
     let out = compile_and_run(
         r#"<?php
