@@ -7,25 +7,27 @@ sidebar:
 
 ## Data Types
 
-| Type | Supported | Notes |
-|---|---|---|
-| `int` | Yes | 64-bit signed integer |
-| `string` | Yes | Pointer + length pair, double and single quoted |
-| `null` | Yes | Sentinel value, coerces to `0`/`""` in operations |
-| `bool` | Yes | `true`/`false` as distinct type. `echo false` prints nothing, `echo true` prints `1`. Coerces to 0/1 in arithmetic. |
-| `float` | Yes | 64-bit double-precision. Literals: `3.14`, `.5`, `1.5e3`, `1.0e-5`. Constants: `INF`, `NAN`. |
-| `array` | Yes | Indexed (`[1, 2, 3]`) and associative (`["key" => "value"]`). Arrays use copy-on-write semantics. |
-| `mixed` | Yes | Supported in type hints and typed locals. Runtime values are boxed with a per-value tag. |
-| `callable` | Yes | Closures, arrow functions, first-class callables, and FFI callback parameters. |
-| `object` | Yes | Class instances. Heap-allocated, fixed-layout. `new ClassName(...)` |
-| `enum` | Yes | Pure and backed enums. Cases are singletons. Backed enums support `->value`, `::from()`, `::tryFrom()`, `::cases()`. |
-| `int\|string` | Yes | Union type — variable accepts any of the listed types. Lowered to Mixed at runtime. |
-| `?int` | Yes | Nullable shorthand — sugar for `int\|null`. |
-| `void` | Return only | Valid as a function, method, closure, or extern return type. Internally, `null` is represented as `Void`. |
+
+| Type             | Supported        | Notes                                                                                                                  |
+| ---------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `int`            | Yes              | 64-bit signed integer                                                                                                  |
+| `string`         | Yes              | Pointer + length pair, double and single quoted                                                                        |
+| `null`           | Yes              | Sentinel value, coerces to `0`/`""` in operations                                                                      |
+| `bool`           | Yes              | `true`/`false` as distinct type. `echo false` prints nothing, `echo true` prints `1`. Coerces to 0/1 in arithmetic.    |
+| `float`          | Yes              | 64-bit double-precision. Literals: `3.14`, `.5`, `1.5e3`, `1.0e-5`. Constants: `INF`, `NAN`.                           |
+| `array`          | Yes              | Indexed (`[1, 2, 3]`) and associative (`["key" => "value"]`). Arrays use copy-on-write semantics.                      |
+| `mixed`          | Yes              | Supported in type hints and typed locals. Runtime values are boxed with a per-value tag.                               |
+| `callable`       | Yes              | Closures, arrow functions, first-class callables, and FFI callback parameters.                                         |
+| `object`         | Yes              | Class instances. Heap-allocated, fixed-layout. `new ClassName(...)`                                                    |
+| `enum`           | Yes              | Pure and backed enums. Cases are singletons. Backed enums support `->value`, `::from()`, `::tryFrom()`, `::cases()`.   |
+| `int|string`     | Yes              | Union type — variable accepts any of the listed types. Lowered to Mixed at runtime.                                    |
+| `?int`           | Yes              | Nullable shorthand — sugar for `int|null`.                                                                             |
+| `void`           | Return only      | Valid as a function, method, closure, or extern return type. Internally, `null` is represented as `Void`.              |
 | `ptr` / `ptr<T>` | elephc extension | Raw 64-bit pointer, optionally carrying a checked compile-time pointee tag. See [Pointers](../beyond-php/pointers.md). |
-| `buffer<T>` | elephc extension | Fixed-size contiguous storage for POD scalars, pointers, or packed records. See [Buffers](../beyond-php/buffers.md). |
-| `packed class` | elephc extension | Flat POD record type with compile-time field offsets. See [Packed Classes](../beyond-php/packed-classes.md). |
-| `resource` | No | File handles are modeled as integer file descriptors (`int`). |
+| `buffer<T>`      | elephc extension | Fixed-size contiguous storage for POD scalars, pointers, or packed records. See [Buffers](../beyond-php/buffers.md).   |
+| `packed class`   | elephc extension | Flat POD record type with compile-time field offsets. See [Packed Classes](../beyond-php/packed-classes.md).           |
+| `resource`       | No               | File handles are modeled as integer file descriptors (`int`).                                                          |
+
 
 ### Typed local declarations
 
@@ -36,6 +38,7 @@ int|string $value = 1;
 ```
 
 Rules:
+
 - union types are supported in typed local declarations, for example `int|string`
 - nullable shorthand `?T` is supported as sugar for `T|null`
 - at runtime these values are lowered to the compiler's boxed tagged representation
@@ -54,10 +57,14 @@ class User {
 ```
 
 Rules:
+
 - instance and static properties can use declared property types
 - property defaults and assignments must be compatible with the declared type
 - constructor assignments through untyped parameters are checked once call sites refine the parameter type
 - nullable and union property storage is boxed using the same mixed runtime shape as typed locals
+- static property redeclarations across inheritance follow PHP-style rules: non-private inherited properties keep invariant declared types, cannot reduce visibility, and cannot override `final` properties
+- untyped inherited static properties cannot be redeclared with a type, and typed inherited static properties cannot be redeclared without one
+- direct element writes to static array properties, such as `ClassName::$items[] = $value` or `ClassName::$items[0] = $value`, require the property to be an `array`
 - `void` and `callable` are not valid property types
 
 ### Null behavior
@@ -86,24 +93,26 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 
 ### Type functions
 
-| Function | Signature | Description |
-|---|---|---|
-| `is_null()` | `is_null($val): bool` | Returns true if null |
-| `is_float()` | `is_float($val): bool` | Returns true if float |
-| `is_int()` | `is_int($val): bool` | Returns true if integer |
-| `is_string()` | `is_string($val): bool` | Returns true if string |
-| `is_numeric()` | `is_numeric($val): bool` | Returns true if int or float |
-| `is_bool()` | `is_bool($val): bool` | Returns true if bool |
-| `is_nan()` | `is_nan($val): bool` | Returns true if NAN |
-| `is_finite()` | `is_finite($val): bool` | Returns true if not INF/NAN |
-| `is_infinite()` | `is_infinite($val): bool` | Returns true if INF or -INF |
-| `boolval()` | `boolval($val): bool` | Convert to bool |
-| `floatval()` | `floatval($val): float` | Convert to float |
-| `intval()` | `intval($val): int` | Converts to integer |
-| `gettype()` | `gettype($val): string` | Returns type name |
-| `empty()` | `empty($val): bool` | Returns true if value is falsy |
-| `unset()` | `unset($var): void` | Sets variable to null |
-| `settype()` | `settype($var, $type): bool` | Changes variable type in place |
+
+| Function        | Signature                    | Description                    |
+| --------------- | ---------------------------- | ------------------------------ |
+| `is_null()`     | `is_null($val): bool`        | Returns true if null           |
+| `is_float()`    | `is_float($val): bool`       | Returns true if float          |
+| `is_int()`      | `is_int($val): bool`         | Returns true if integer        |
+| `is_string()`   | `is_string($val): bool`      | Returns true if string         |
+| `is_numeric()`  | `is_numeric($val): bool`     | Returns true if int or float   |
+| `is_bool()`     | `is_bool($val): bool`        | Returns true if bool           |
+| `is_nan()`      | `is_nan($val): bool`         | Returns true if NAN            |
+| `is_finite()`   | `is_finite($val): bool`      | Returns true if not INF/NAN    |
+| `is_infinite()` | `is_infinite($val): bool`    | Returns true if INF or -INF    |
+| `boolval()`     | `boolval($val): bool`        | Convert to bool                |
+| `floatval()`    | `floatval($val): float`      | Convert to float               |
+| `intval()`      | `intval($val): int`          | Converts to integer            |
+| `gettype()`     | `gettype($val): string`      | Returns type name              |
+| `empty()`       | `empty($val): bool`          | Returns true if value is falsy |
+| `unset()`       | `unset($var): void`          | Sets variable to null          |
+| `settype()`     | `settype($var, $type): bool` | Changes variable type in place |
+
 
 ### Known incompatibilities with PHP
 
@@ -118,6 +127,7 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 ### Compiler diagnostics
 
 elephc reports errors with source spans. Example:
+
 ```text
 error[3:5]: Undefined variable: $name
 error[8:1]: Function 'foo' declared return type string but returns int
