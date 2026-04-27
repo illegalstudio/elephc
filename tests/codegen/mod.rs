@@ -12,6 +12,7 @@ mod array_basics;
 mod numeric_scalars;
 mod type_builtins;
 mod casts_and_constants;
+mod chained_assign;
 mod include_paths;
 mod magic_constants;
 mod strings;

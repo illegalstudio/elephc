@@ -10,6 +10,12 @@ pub fn collect_local_vars(
     sig: &FunctionSig,
 ) {
     for stmt in stmts {
+        // Pick up any variables introduced by chained assignment in the value
+        // expression of any assignment-like statement (e.g. the `$loader` in
+        // `self::$loader = $loader = new ...;`).
+        if let Some(value) = stmt_assigned_value(&stmt.kind) {
+            collect_chained_assign_vars(value, ctx, sig);
+        }
         match &stmt.kind {
             StmtKind::Assign { name, value } => {
                 if !ctx.variables.contains_key(name) {
@@ -157,6 +163,44 @@ pub fn collect_local_vars(
             }
             _ => {}
         }
+    }
+}
+
+/// Walk an expression looking for chained `ExprKind::Assign` whose target is
+/// a Variable, and allocate a slot for each one. This mirrors the type-checker
+/// pass that registers chained-assignment variables in the type env.
+fn collect_chained_assign_vars(
+    expr: &crate::parser::ast::Expr,
+    ctx: &mut Context,
+    sig: &FunctionSig,
+) {
+    if let ExprKind::Assign { target, value } = &expr.kind {
+        // Recurse into the value first so deeper variables are seen.
+        collect_chained_assign_vars(value, ctx, sig);
+        if let ExprKind::Variable(name) = &target.kind {
+            if !ctx.variables.contains_key(name) {
+                let ty = infer_local_type(value, sig, Some(ctx)).codegen_repr();
+                ctx.alloc_var(name, ty);
+            }
+        }
+    }
+}
+
+/// Returns the right-hand-side expression of an assignment-shaped statement
+/// (or None). Mirrors the equivalent helper in stmt_check/assignments.
+fn stmt_assigned_value(kind: &StmtKind) -> Option<&crate::parser::ast::Expr> {
+    match kind {
+        StmtKind::Assign { value, .. }
+        | StmtKind::TypedAssign { value, .. }
+        | StmtKind::ArrayAssign { value, .. }
+        | StmtKind::ArrayPush { value, .. }
+        | StmtKind::PropertyAssign { value, .. }
+        | StmtKind::PropertyArrayPush { value, .. }
+        | StmtKind::PropertyArrayAssign { value, .. }
+        | StmtKind::StaticPropertyAssign { value, .. }
+        | StmtKind::StaticPropertyArrayPush { value, .. }
+        | StmtKind::StaticPropertyArrayAssign { value, .. } => Some(value),
+        _ => None,
     }
 }
 

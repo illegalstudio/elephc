@@ -2978,3 +2978,53 @@ fn test_parse_dunder_trait_magic_constant() {
     let stmts = parse_source("<?php echo __TRAIT__;");
     assert_eq!(echoed_expr(&stmts), &ExprKind::MagicConstant(MagicConstant::Trait));
 }
+
+// --- Chained assignment ---
+
+#[test]
+fn test_parse_chained_variable_assign() {
+    let stmts = parse_source("<?php $a = $b = 5;");
+    match &stmts[0].kind {
+        StmtKind::Assign { name, value } => {
+            assert_eq!(name, "a");
+            match &value.kind {
+                ExprKind::Assign { target, value: inner } => {
+                    match &target.kind {
+                        ExprKind::Variable(n) => assert_eq!(n, "b"),
+                        other => panic!("expected Variable target, got {:?}", other),
+                    }
+                    assert_eq!(inner.kind, ExprKind::IntLiteral(5));
+                }
+                other => panic!("expected Assign value, got {:?}", other),
+            }
+        }
+        other => panic!("expected Assign stmt, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_three_level_chain() {
+    let stmts = parse_source("<?php $a = $b = $c = 5;");
+    match &stmts[0].kind {
+        StmtKind::Assign { name, value } => {
+            assert_eq!(name, "a");
+            match &value.kind {
+                ExprKind::Assign { value: middle, .. } => match &middle.kind {
+                    ExprKind::Assign { value: inner, .. } => {
+                        assert_eq!(inner.kind, ExprKind::IntLiteral(5));
+                    }
+                    other => panic!("expected nested Assign, got {:?}", other),
+                },
+                other => panic!("expected Assign, got {:?}", other),
+            }
+        }
+        other => panic!("expected Assign stmt, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_chained_with_static_property() {
+    let src = "<?php class C { public static int $x = 0; public static function f(): int { self::$x = $y = 7; return $y; } }";
+    let stmts = parse_source(src);
+    assert!(!stmts.is_empty());
+}

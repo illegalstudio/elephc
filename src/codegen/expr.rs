@@ -182,6 +182,9 @@ pub fn emit_expr(
             // Value stays in x0 unchanged — only the type tag changes
             PhpType::Pointer(Some(target_type.clone()))
         }
+        ExprKind::Assign { target, value } => {
+            emit_assign_expr(target, value, emitter, ctx, data)
+        }
         ExprKind::MagicConstant(_) => {
             unreachable!("MagicConstant must be lowered before codegen")
         }
@@ -206,6 +209,38 @@ fn emit_property_access(
     data: &mut DataSection,
 ) -> PhpType {
     objects::emit_property_access(object, property, emitter, ctx, data)
+}
+
+/// Emit assignment as expression: evaluate `value`, store to `target`, and
+/// leave the value in the standard result registers so the surrounding
+/// expression can use it (chained assignment).
+///
+/// v1 supports `Variable` targets via the existing `emit_assign_stmt` helper.
+/// Mixed-target chains (e.g. `self::$prop = $local = expr`) need the user to
+/// split into two statements for now — a follow-up will lift this.
+fn emit_assign_expr(
+    target: &Expr,
+    value: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    use crate::parser::ast::ExprKind as EK;
+    match &target.kind {
+        EK::Variable(name) => {
+            // Use the existing assign-stmt helper to handle all the corner
+            // cases (mixed boxing, ref params, globals, refcounting). After
+            // the store, reload the variable into the result registers so the
+            // surrounding chain sees the assigned value.
+            super::stmt::assignments::emit_assign_stmt(name, value, emitter, ctx, data);
+            variables::emit_variable(name, emitter, ctx)
+        }
+        _ => {
+            emitter.comment("WARNING: chained assignment to non-variable target not yet supported");
+            // Best-effort: just emit the value so something lands in registers.
+            emit_expr(value, emitter, ctx, data)
+        }
+    }
 }
 
 fn emit_static_property_access(

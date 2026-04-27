@@ -101,6 +101,28 @@ The operand is evaluated normally and its value is preserved. Only suppressible 
 
 Compound assignments are supported for local variable assignments and `for` init/update clauses.
 
+### Chained assignment
+
+PHP treats `=` as a right-associative expression operator, so an assignment can appear on the right-hand side of another assignment. elephc supports this for variable and static-property targets:
+
+```php
+<?php
+$a = $b = 7;            // both $a and $b become 7
+$a = $b = $c = 5;       // three-deep chain — all become 5
+
+class C {
+    public static int $loader = 0;
+    public static function init(): void {
+        // Composer-style: bind a static property and a local in one expression.
+        self::$loader = $local = 42;
+    }
+}
+```
+
+The chain is right-associative: `$a = $b = expr` is equivalent to `$a = ($b = expr)`. Each link's value is the assigned scalar/object, exactly as PHP.
+
+**Limitation (v1):** chained-assignment introduces variables only when the chain is the value of an assignment-shaped statement (e.g. `$a = $b = expr;`, `self::$x = $y = expr;`). Using a chained assignment as a sub-expression of a condition or function argument (`if (($x = read()) > 0)`, `f($x = 5)`) is parsed but the variable introduced is not yet registered into the surrounding scope — read it back via the explicit `$x` after the call site fails until that follow-up lands.
+
 ## List Unpacking
 
 ```php

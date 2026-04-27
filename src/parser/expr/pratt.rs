@@ -143,6 +143,35 @@ pub(super) fn parse_expr_bp(
             break;
         }
 
+        // Assignment as expression: `lhs = rhs`. Right-associative so that
+        // `$a = $b = expr` parses as `$a = ($b = expr)`. At precedence 7 it
+        // is recognised inside the RHS of statement-level assignments, where
+        // `parse_assignment_value_expr` calls with min_bp = 7.
+        if tokens[*pos].0 == Token::Assign {
+            let assign_l_bp = 7;
+            let assign_r_bp = 6;
+            if assign_l_bp < min_bp {
+                break;
+            }
+            if !is_assign_target(&lhs) {
+                return Err(CompileError::new(
+                    lhs.span,
+                    "Invalid assignment target: expected variable, property, static property, or array access",
+                ));
+            }
+            let span = tokens[*pos].1;
+            *pos += 1;
+            let rhs = parse_expr_bp(tokens, pos, assign_r_bp)?;
+            lhs = Expr::new(
+                ExprKind::Assign {
+                    target: Box::new(lhs),
+                    value: Box::new(rhs),
+                },
+                span,
+            );
+            continue;
+        }
+
         if tokens[*pos].0 == Token::Question {
             let ternary_bp = 7;
             if ternary_bp < min_bp {
@@ -260,6 +289,19 @@ fn parse_instanceof_target(
             "Expected class or interface name after 'instanceof'",
         ),
     }
+}
+
+/// Returns true if `expr` is a valid assignment target (lvalue) for `=` as
+/// expression. PHP accepts variables, static / instance properties, and array
+/// element access on the LHS.
+fn is_assign_target(expr: &Expr) -> bool {
+    matches!(
+        &expr.kind,
+        ExprKind::Variable(_)
+            | ExprKind::StaticPropertyAccess { .. }
+            | ExprKind::PropertyAccess { .. }
+            | ExprKind::ArrayAccess { .. }
+    )
 }
 
 fn infix_bp(token: &Token) -> Option<(BinOp, u8, u8)> {

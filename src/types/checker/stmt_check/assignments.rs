@@ -207,6 +207,13 @@ impl Checker {
         stmt: &Stmt,
         env: &mut TypeEnv,
     ) -> Result<(), CompileError> {
+        // Walk the assigned value and register any variables introduced by
+        // chained `ExprKind::Assign` (e.g. the `$loader` in
+        // `self::$loader = $loader = new ...;`) so that subsequent reads
+        // resolve. Touches every assignment-shaped statement.
+        if let Some(value) = stmt_assigned_value(&stmt.kind) {
+            self.register_chained_assign_targets(value, env)?;
+        }
         match &stmt.kind {
             StmtKind::Assign { name, value } => {
                 let null_coalesce_default =
@@ -1032,5 +1039,45 @@ impl Checker {
             }
             _ => unreachable!("non-assignment statement routed to assignment checker"),
         }
+    }
+
+    /// Walk an assigned value looking for nested `ExprKind::Assign` whose
+    /// target is a Variable. Each such variable is registered in `env` with
+    /// the type it would receive, so that subsequent reads of it resolve.
+    /// Handles arbitrary nesting depth (`$a = $b = $c = expr`).
+    pub(crate) fn register_chained_assign_targets(
+        &mut self,
+        expr: &Expr,
+        env: &mut TypeEnv,
+    ) -> Result<(), CompileError> {
+        if let ExprKind::Assign { target, value } = &expr.kind {
+            // Recurse first so deeper variables are registered before shallower
+            // ones (which may depend on them in their type derivation).
+            self.register_chained_assign_targets(value, env)?;
+            if let ExprKind::Variable(name) = &target.kind {
+                let ty = self.infer_type(value, env)?;
+                env.insert(name.clone(), ty);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Returns the right-hand-side expression of an assignment-shaped statement
+/// (or `None` if the statement isn't assignment-shaped). Used to feed
+/// `register_chained_assign_targets`.
+fn stmt_assigned_value(kind: &StmtKind) -> Option<&Expr> {
+    match kind {
+        StmtKind::Assign { value, .. }
+        | StmtKind::TypedAssign { value, .. }
+        | StmtKind::ArrayAssign { value, .. }
+        | StmtKind::ArrayPush { value, .. }
+        | StmtKind::PropertyAssign { value, .. }
+        | StmtKind::PropertyArrayPush { value, .. }
+        | StmtKind::PropertyArrayAssign { value, .. }
+        | StmtKind::StaticPropertyAssign { value, .. }
+        | StmtKind::StaticPropertyArrayPush { value, .. }
+        | StmtKind::StaticPropertyArrayAssign { value, .. } => Some(value),
+        _ => None,
     }
 }

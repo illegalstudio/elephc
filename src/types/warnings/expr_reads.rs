@@ -127,6 +127,18 @@ pub(super) fn collect_expr_reads(
         }
         ExprKind::StaticPropertyAccess { .. } => {},
         ExprKind::BufferNew { len, .. } => collect_expr_reads(len, scope, warnings),
+        ExprKind::Assign { target, value } => {
+            // The target's read-vs-write nature: for Variable, no read happens
+            // (it's purely written). For PropertyAccess / ArrayAccess /
+            // StaticPropertyAccess, the inner sub-expressions ARE read (e.g.
+            // `$arr[$idx] = ...` reads $arr and $idx). Recurse into value
+            // unconditionally; recurse into target only when it's not a bare
+            // Variable.
+            if !matches!(target.kind, ExprKind::Variable(_)) {
+                collect_expr_reads(target, scope, warnings);
+            }
+            collect_expr_reads(value, scope, warnings);
+        }
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)

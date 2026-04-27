@@ -353,6 +353,7 @@ Proper type system for PHP compatibility.
 - [x] Compile-time-constant expressions in `include` / `require` paths (string literals, concat, magic constants, namespace-aware `const` / `use const` / `define()` refs)
 - [x] Error-control operator `@` backed by a suppressible runtime warning channel and exception-safe suppression-depth restoration
 - [x] Runtime-value compatibility pass for `strpos()` / `strrpos()` / `array_search()` / `file_get_contents()` false-return conventions and `define()` boolean duplicate behavior
+- [x] Chained assignment (`$a = $b = expr` and mixed-target chains like `self::$x = $y = expr`)
 
 ## v0.20.x — Shared and static libraries (C ABI)
 

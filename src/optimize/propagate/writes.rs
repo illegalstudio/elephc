@@ -342,6 +342,17 @@ pub(crate) fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
         | ExprKind::BufferNew { .. } => None,
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::NullsafePropertyAccess { object, .. } => expr_local_writes(object),
+        ExprKind::Assign { target, value } => {
+            let mut writes = expr_local_writes(value)?;
+            // If target is a Variable, the assignment writes to it. For other
+            // lvalues we conservatively recurse so any sub-expressions count.
+            if let ExprKind::Variable(name) = &target.kind {
+                writes.insert(name.clone());
+            } else {
+                writes.extend(expr_local_writes(target)?);
+            }
+            Some(writes)
+        }
     }
 }
 

@@ -365,6 +365,22 @@ impl Checker {
                 target_type,
                 expr: inner,
             } => self.infer_ptr_cast_type(target_type, inner, expr, env),
+            ExprKind::Assign { target, value } => {
+                // Assignment as expression: validate the lvalue target, then
+                // yield the value's type. The target itself is a *write* site,
+                // not a read — we don't infer its current type. Variables
+                // introduced by chained assignment (`$a = $b = expr`) are
+                // registered into `env` by the statement-level wrapper
+                // (`register_chained_assign_targets`) before this runs, so
+                // any later read of the chained variable resolves correctly.
+                if !is_lvalue(target) {
+                    return Err(CompileError::new(
+                        target.span,
+                        "Invalid assignment target: expected variable, property, static property, or array access",
+                    ));
+                }
+                self.infer_type(value, env)
+            }
             ExprKind::MagicConstant(_) => {
                 unreachable!("MagicConstant must be lowered before type inference")
             }
@@ -471,4 +487,17 @@ impl Checker {
             _ => {}
         }
     }
+}
+
+/// Returns true if the expression is a valid PHP lvalue — i.e. an
+/// expression that can appear on the left side of `=`. Used to validate
+/// the `target` of `ExprKind::Assign`.
+fn is_lvalue(expr: &Expr) -> bool {
+    matches!(
+        &expr.kind,
+        ExprKind::Variable(_)
+            | ExprKind::StaticPropertyAccess { .. }
+            | ExprKind::PropertyAccess { .. }
+            | ExprKind::ArrayAccess { .. }
+    )
 }

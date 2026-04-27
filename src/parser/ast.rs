@@ -133,6 +133,15 @@ pub enum ExprKind {
         element_type: TypeExpr,
         len: Box<Expr>,
     },
+    /// Assignment as an expression: `$a = expr` returns the assigned value,
+    /// which enables chained assignment (`$a = $b = expr`). The `target` must
+    /// be an lvalue: Variable, StaticPropertyAccess, PropertyAccess, or
+    /// ArrayAccess. Statement-level simple assignments still use the existing
+    /// `StmtKind::Assign` / `StmtKind::StaticPropertyAssign` / etc.
+    Assign {
+        target: Box<Expr>,
+        value: Box<Expr>,
+    },
     MagicConstant(MagicConstant),
 }
 

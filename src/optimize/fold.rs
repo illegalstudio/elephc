@@ -256,6 +256,10 @@ pub(super) fn fold_expr(expr: Expr) -> Expr {
             element_type,
             len: Box::new(fold_expr(*len)),
         },
+        ExprKind::Assign { target, value } => ExprKind::Assign {
+            target: Box::new(fold_expr(*target)),
+            value: Box::new(fold_expr(*value)),
+        },
         ExprKind::MagicConstant(_) => {
             unreachable!("MagicConstant must be lowered before optimizer passes")
         }

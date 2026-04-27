@@ -87,6 +87,7 @@ Things that have a value:
 | `PtrCast { target_type, expr }` | `ptr_cast<Point>($p)` | Pointer-tag cast parsed specially after `ptr_cast<T>` |
 | `BufferNew { element_type, len }` | `buffer_new<int>(256)` | Compiler extension for contiguous hot-path buffers |
 | `MagicConstant(MagicConstant)` | `__DIR__`, `__CLASS__` | Parsed from case-insensitive magic-constant tokens. `__LINE__` is lowered immediately to `IntLiteral`; the remaining magic constants are lowered by `src/magic_constants.rs` before type checking. |
+| `Assign { target, value }` | `$a = $b = 7` | Assignment as an expression. Produced by the Pratt parser when `=` appears at infix position; the target must be an lvalue (`Variable`, `StaticPropertyAccess`, `PropertyAccess`, or `ArrayAccess`). Right-associative — `$a = $b = expr` parses as `$a = ($b = expr)`. Statement-level simple assignments still go through `StmtKind::Assign` / `StmtKind::StaticPropertyAssign` / etc. |
 
 ### Statements (`Stmt`)
 
@@ -225,6 +226,7 @@ Operator          Left BP    Right BP    Associativity
 or                  1          2         left
 xor                 3          4         left
 and                 5          6         left
+=  (assignment)     7          6         RIGHT (chained assignment)
 ? : / ?:            7          7         right-ish ternary parse
 ??                  9          8         RIGHT (null coalescing)
 ||                 11         12         left
@@ -255,7 +257,9 @@ The word-form logical operators (`and`, `xor`, `or`) have PHP's lower precedence
 
 The full ternary form builds `ExprKind::Ternary`. The omitted-middle form `expr ?: fallback` builds `ExprKind::ShortTernary` so later phases can preserve PHP's single-evaluation rule for the left-hand expression.
 
-Because assignment expressions are not represented in the AST yet, assignment statement right-hand sides are parsed starting at ternary precedence. That deliberately rejects unparenthesized forms such as `$x = true and false;` instead of compiling them with non-PHP semantics. Parenthesized logical RHS expressions such as `$x = (true and false);` are parsed normally.
+Assignment is treated as a right-associative infix operator at the same precedence band as the ternary so that `$a = $b = expr` parses as `$a = ($b = expr)`. The parser validates that the LHS is an lvalue (`Variable`, `StaticPropertyAccess`, `PropertyAccess`, or `ArrayAccess`) and emits `ExprKind::Assign { target, value }`; the surrounding statement-level dispatcher (`parse_variable_stmt`, `try_parse_scoped_property_assignment`, …) keeps producing the existing `StmtKind::Assign` / `StmtKind::StaticPropertyAssign` / etc. for the simple non-chained case.
+
+Word-form logical RHS in unparenthesized assignment statements (`$x = true and false;`) still fail to parse because `and`/`or`/`xor` sit *below* assignment in the binding-power table. Wrap them as `$x = (true and false);` to keep PHP semantics.
 
 ### The algorithm
 

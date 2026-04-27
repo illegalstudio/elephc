@@ -2,7 +2,7 @@ mod locals;
 mod properties;
 mod static_properties;
 
-pub(super) use locals::emit_assign_stmt;
+pub(crate) use locals::emit_assign_stmt;
 pub(super) use properties::{
     emit_property_array_assign_stmt,
     emit_property_array_push_stmt,

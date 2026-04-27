@@ -647,6 +647,10 @@ fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             element_type,
             len: Box::new(walk_expr(*len, pass)),
         },
+        ExprKind::Assign { target, value } => ExprKind::Assign {
+            target: Box::new(walk_expr(*target, pass)),
+            value: Box::new(walk_expr(*value, pass)),
+        },
     };
     Expr { kind, span }
 }

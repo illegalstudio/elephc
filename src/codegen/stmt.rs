@@ -1,4 +1,4 @@
-mod assignments;
+pub(crate) mod assignments;
 mod arrays;
 mod control_flow;
 mod helpers;

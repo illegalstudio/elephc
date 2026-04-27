@@ -3624,3 +3624,13 @@ fn test_include_path_with_function_call_errors() {
         err.message
     );
 }
+
+// --- Chained assignment ---
+
+#[test]
+fn test_error_chained_invalid_literal_lvalue() {
+    expect_error(
+        "<?php $a = 5 = $b;",
+        "Invalid assignment target",
+    );
+}

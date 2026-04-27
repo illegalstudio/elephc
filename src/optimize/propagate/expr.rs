@@ -209,6 +209,10 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             element_type,
             len: Box::new(propagate_expr(*len, env)),
         },
+        ExprKind::Assign { target, value } => ExprKind::Assign {
+            target: Box::new(propagate_expr(*target, env)),
+            value: Box::new(propagate_expr(*value, env)),
+        },
         ExprKind::MagicConstant(_) => {
             unreachable!("MagicConstant must be lowered before optimizer passes")
         }

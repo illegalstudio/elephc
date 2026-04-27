@@ -305,6 +305,10 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
             _ => {}
         },
         ExprKind::BufferNew { len, .. } => collect_required_class_names_in_expr(len, names),
+        ExprKind::Assign { target, value } => {
+            collect_required_class_names_in_expr(target, names);
+            collect_required_class_names_in_expr(value, names);
+        }
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
@@ -574,6 +578,9 @@ fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
         | ExprKind::ConstRef(_)
         | ExprKind::EnumCase { .. }
         | ExprKind::This => false,
+        ExprKind::Assign { target, value } => {
+            expr_uses_variable(target, needle) || expr_uses_variable(value, needle)
+        }
         ExprKind::MagicConstant(_) => {
             unreachable!("MagicConstant must be lowered before codegen analysis")
         }
