@@ -64,6 +64,7 @@ Things that have a value:
 | `Match { subject, arms, default }` | `match($x) { 1, 2 => "low", 3 => "high" }` | Match expression (returns a value). `arms` is `Vec<(Vec<Expr>, Expr)>`, so each arm can have multiple comma-separated patterns before `=>`, and `default` is optional (`Option<Box<Expr>>`) |
 | `ArrayAccess { array, index }` | `$arr[0]`, `$str[-1]` | Same AST node is used for indexed arrays, associative-array lookups, and string indexing |
 | `Ternary { condition, then_expr, else_expr }` | `$a ? $b : $c` | |
+| `ShortTernary { value, default }` | `$a ?: $fallback` | PHP short ternary / Elvis form. Codegen evaluates `value` once, returns it if truthy, otherwise returns `default`. |
 | `Cast { target, expr }` | `(int)$x` | |
 | `Closure { params, variadic, body, is_arrow, captures }` | `function(int $x = 1) use ($y) { ... }` or `fn(int $x): int => $x * 2` | Anonymous function / arrow function. Params is `Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>` — name, declared type, default, is_ref. `variadic` is an optional parameter name. `captures` is `Vec<String>` — variables captured via an explicit `use (...)` clause. Arrow functions are still represented as `Closure`, parse with `is_arrow = true`, and do not carry explicit `use (...)` captures in the AST. |
 | `NamedArg { name, value }` | `foo(name: "Alice")` | Named call argument. Later phases reorder these against the declared parameter list. |
@@ -217,7 +218,7 @@ Operator          Left BP    Right BP    Associativity
 or                  1          2         left
 xor                 3          4         left
 and                 5          6         left
-?:                  7          7         right-ish ternary parse
+? : / ?:            7          7         right-ish ternary parse
 ??                  9          8         RIGHT (null coalescing)
 ||                 11         12         left
 &&                 13         14         left
@@ -242,6 +243,8 @@ For `??`, the Pratt table still uses `BinOp::NullCoalesce` to assign binding pow
 
 The word-form logical operators (`and`, `xor`, `or`) have PHP's lower precedence. The symbolic `&&` and `||` continue to bind more tightly.
 
+The full ternary form builds `ExprKind::Ternary`. The omitted-middle form `expr ?: fallback` builds `ExprKind::ShortTernary` so later phases can preserve PHP's single-evaluation rule for the left-hand expression.
+
 Because assignment expressions are not represented in the AST yet, assignment statement right-hand sides are parsed starting at ternary precedence. That deliberately rejects unparenthesized forms such as `$x = true and false;` instead of compiling them with non-PHP semantics. Parenthesized logical RHS expressions such as `$x = (true and false);` are parsed normally.
 
 ### The algorithm
@@ -260,7 +263,7 @@ parse_expr_bp(min_bp):
        f. Build BinaryOp(left, op, right) → this becomes the new "left"
        g. Continue loop
 
-    3. After loop: check for ternary (? :) at min_bp == 0
+    3. The `?` arm handles both full ternary (`? :`) and short ternary (`?:`)
 
     Return left
 ```

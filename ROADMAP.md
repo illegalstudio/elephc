@@ -331,6 +331,7 @@ Proper type system for PHP compatibility.
 - [x] Alias-aware constant propagation so local callables and scalar values can stay precise across `if` / `switch` / `try` merges
 - [x] Relational and loose-comparison contradiction guards for dead-code elimination
 - [x] Advanced static property parity — PHP-style static property redeclaration rules and direct array element writes such as `ClassName::$items[] = $value`
+- [x] Short ternary operator `?:` — PHP Elvis form with single evaluation of the left-hand expression
 - [x] Constant propagation v2 — known-subject `switch` path merges, non-throwing `try` / unreachable-catch env merges, known `match` folding, and scalar indexed/associative array-literal access folding
 - [x] Constant propagation v3 — local loop path summaries for `while(false)`, `do...while(false)`, `while(true)` / `for(;;)` break exits, branch-local loop-exit merges, and safe pruning around `do...while(false)` loop exits
 - [ ] Constant propagation v4 — full fixed-point / basic-block propagation across arbitrary loops and general path merges once there are measured cases that justify the extra pass complexity
@@ -397,7 +398,6 @@ Features that are feasible but complex. Not currently planned for any specific v
 | Feature | Complexity | Notes |
 |---|---|---|
 | Assignment expressions with PHP low-precedence operators | Medium | Model assignment as an expression so forms like `$x = true and false;` match PHP exactly instead of requiring parentheses around the word-form logical RHS. Requires parser/AST/type/codegen changes and precedence regression tests. |
-| Short ternary operator `?:` | Low | Add PHP's omitted-middle ternary form while preserving the existing full ternary binding-power behavior and tests. |
 | Full PHP list destructuring | Medium | Extend `[$a, $b] = ...` beyond plain variables and indexed RHS values to cover skipped entries, nested patterns, and associative-key destructuring. |
 | Array union and heterogeneous indexed arrays | Medium | Add PHP array `+` union semantics and optionally allow mixed payloads in indexed arrays instead of requiring homogeneous indexed values. |
 | Multi-level `break` / `continue` | Low | Parse and lower numeric depths such as `break 2;` and `continue 2;` through nested loop/switch/finally exits. |
