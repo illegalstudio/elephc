@@ -400,6 +400,7 @@ Features that are feasible but complex. Not currently planned for any specific v
 | Feature | Complexity | Notes |
 |---|---|---|
 | Assignment expressions with PHP low-precedence operators | Medium | Model assignment as an expression so forms like `$x = true and false;` match PHP exactly instead of requiring parentheses around the word-form logical RHS. Requires parser/AST/type/codegen changes and precedence regression tests. |
+| PHP case-insensitive symbol parity | Medium | Extend PHP-compatible case-insensitive matching beyond magic constants to keywords, built-in/user function calls, class/interface/trait names, and method lookup while preserving PHP's case-sensitive variables, object properties, string array keys, and user constants. |
 | Full PHP list destructuring | Medium | Extend `[$a, $b] = ...` beyond plain variables and indexed RHS values to cover skipped entries, nested patterns, and associative-key destructuring. |
 | Array union and heterogeneous indexed arrays | Medium | Add PHP array `+` union semantics and optionally allow mixed payloads in indexed arrays instead of requiring homogeneous indexed values. |
 | Multi-level `break` / `continue` | Low | Parse and lower numeric depths such as `break 2;` and `continue 2;` through nested loop/switch/finally exits. |
