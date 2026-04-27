@@ -55,6 +55,8 @@ sidebar:
 
 Word-form logical precedence matches PHP: `and` binds tighter than `xor`, and `xor` binds tighter than `or`. All three bind looser than `&&`, `||`, `??`, and the full ternary operator.
 
+Word-form logical operators are case-insensitive (`AND`, `Or`, and `xOr` are accepted). Assignment expressions are not part of elephc's expression subset yet, so use parentheses when a word-form logical expression is the right-hand side of an assignment: `$x = (true and false);`.
+
 ## String
 
 | Operator | Example | Notes |

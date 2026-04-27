@@ -240,6 +240,8 @@ For `??`, the Pratt table still uses `BinOp::NullCoalesce` to assign binding pow
 
 The word-form logical operators (`and`, `xor`, `or`) have PHP's lower precedence. The symbolic `&&` and `||` continue to bind more tightly.
 
+Because assignment expressions are not represented in the AST yet, assignment statement right-hand sides are parsed starting at ternary precedence. That deliberately rejects unparenthesized forms such as `$x = true and false;` instead of compiling them with non-PHP semantics. Parenthesized logical RHS expressions such as `$x = (true and false);` are parsed normally.
+
 ### The algorithm
 
 ```

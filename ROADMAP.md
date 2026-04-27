@@ -396,6 +396,7 @@ Features that are feasible but complex. Not currently planned for any specific v
 
 | Feature | Complexity | Notes |
 |---|---|---|
+| Assignment expressions with PHP low-precedence operators | Medium | Model assignment as an expression so forms like `$x = true and false;` match PHP exactly instead of requiring parentheses around the word-form logical RHS. Requires parser/AST/type/codegen changes and precedence regression tests. |
 | Generators / `yield` | High | Requires compile-time state machine transformation: every yield point becomes a switch case, all locals promoted to heap-allocated generator object. Edge cases with yield inside try/catch/finally are significant. |
 | `yield from` delegation | High | Depends on generators. Forwards iteration to an inner generator, propagating values and return. |
 | Fibers | Very high | Cooperative multitasking needs per-fiber stack allocation (~1MB each), custom context switch in assembly (save/restore x19-x28, d8-d15, SP), guard pages, and GC awareness of multiple stack roots. Best suited for async I/O workloads, not the current game/systems target. |
