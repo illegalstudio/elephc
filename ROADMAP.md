@@ -314,7 +314,7 @@ Proper type system for PHP compatibility.
 
 ## v0.19.x — Tooling, compiler throughput, and optimization
 
-- [x] Runtime object cache — pre-assemble the runtime into `~/.cache/elephc/runtime-<version>.o` and reuse across compilations, invalidating on compiler version change. Cuts repeated compile time by ~50%.
+- [x] Runtime object cache — pre-assemble the runtime into `~/.cache/elephc/runtime-<version>-<runtime-hash>.o` and reuse across compilations, invalidating on compiler version, target, heap size, or generated runtime assembly changes. Cuts repeated compile time by ~50%.
 - [x] Benchmark suite (vs C, vs PHP interpreter)
 - [x] Source maps (assembly ↔ PHP line mapping)
 - [x] Compiler timing / profiling output for parse, typecheck, codegen, assemble, and link phases
@@ -351,6 +351,8 @@ Proper type system for PHP compatibility.
 - [ ] Installation / packaging documentation for the supported host platforms
 - [x] PHP-compatible magic constants: `__DIR__`, `__FILE__`, `__LINE__`, `__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`, `__TRAIT__` (case-insensitive names, per-file include scope, closure names, trait `__CLASS__` rebinding)
 - [x] Compile-time-constant expressions in `include` / `require` paths (string literals, concat, magic constants, namespace-aware `const` / `use const` / `define()` refs)
+- [x] Error-control operator `@` backed by a suppressible runtime warning channel and exception-safe suppression-depth restoration
+- [x] Runtime-value compatibility pass for `strpos()` / `strrpos()` / `array_search()` false-return conventions and `define()` boolean duplicate behavior
 
 ## v0.20.x — Shared and static libraries (C ABI)
 
@@ -418,7 +420,7 @@ Features that are feasible but complex. Not currently planned for any specific v
 | Runtime-dynamic include paths | Low | Model or explicitly reject runtime-evaluated `include`/`require` path expressions beyond the current compile-time string-folder (`$path`, function calls, ternaries, property access). |
 | Runtime-order-aware include_once / require_once | Medium | Add runtime guards for `include_once` / `require_once` inside functions, methods, loops, and conditional branches so skipped files match PHP execution order rather than only compile-time traversal order. |
 | PHP resource type compatibility | Medium | Model resources separately from integers so file handles and future extension handles can more closely match PHP behavior. |
-| Runtime-value compatibility polishing | Medium | Match PHP false-return conventions for `strpos()`/`array_search()`, `define()` return values, uninitialized typed-property state, integer overflow promotion, and broader loose-comparison semantics. |
+| Runtime-value compatibility polishing v2 | Medium | Continue with PHP's uninitialized typed-property state, integer overflow promotion, broader loose-comparison semantics, and future warning/notice sites as they are added. |
 | String-capable FFI callbacks | Medium | Allow C callback signatures that pass or return strings once ownership and temporary C-string lifetimes are modeled safely across callback boundaries. |
 | Generators / `yield` | High | Requires compile-time state machine transformation: every yield point becomes a switch case, all locals promoted to heap-allocated generator object. Edge cases with yield inside try/catch/finally are significant. |
 | `yield from` delegation | High | Depends on generators. Forwards iteration to an inner generator, propagating values and return. |

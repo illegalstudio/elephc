@@ -65,7 +65,7 @@ echo $matrix[0][1];    // 2
 | `array_keys()` | `array_keys($arr): array` | Returns the array keys |
 | `array_values()` | `array_values($arr): array` | Returns copy of values |
 | `array_key_exists()` | `array_key_exists($key, $arr): bool` | Check if key exists |
-| `array_search()` | `array_search($needle, $arr): int\|string` | Search for value, returning an integer index for indexed arrays or the first matching string key for associative arrays. Indexed arrays return `-1` if not found; associative arrays return `""` if not found |
+| `array_search()` | `array_search($needle, $arr): int\|string\|false` | Search for value, returning an integer index for indexed arrays, the first matching string key for associative arrays, or `false` if not found |
 | `array_slice()` | `array_slice($arr, $offset [, $length]): array` | Extract a slice |
 | `array_splice()` | `array_splice($arr, $offset [, $length]): array` | Remove/replace part |
 | `array_chunk()` | `array_chunk($arr, $size): array` | Split into chunks |

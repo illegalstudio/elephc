@@ -143,7 +143,9 @@ Every built-in function has a registered type signature:
 ```
 strlen($str: Str) → Int
 substr($str: Str, $start: Int, $len?: Int) → Str
-strpos($hay: Str, $needle: Str) → Int
+strpos($hay: Str, $needle: Str) → Int|Bool
+array_search($needle, $arr: Array|AssocArray) → Int|Str|Bool
+define($name: Str, $value: scalar) → Bool
 count($arr: Array|AssocArray) → Int
 abs($val: Int|Float) → Int|Float
 floor($val: Int|Float) → Float

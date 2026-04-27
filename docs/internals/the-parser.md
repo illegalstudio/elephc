@@ -66,6 +66,7 @@ Things that have a value:
 | `ArrayAccess { array, index }` | `$arr[0]`, `$str[-1]` | Same AST node is used for indexed arrays, associative-array lookups, and string indexing |
 | `Ternary { condition, then_expr, else_expr }` | `$a ? $b : $c` | |
 | `ShortTernary { value, default }` | `$a ?: $fallback` | PHP short ternary / Elvis form. Codegen evaluates `value` once, returns it if truthy, otherwise returns `default`. |
+| `ErrorSuppress(Expr)` | `@file_get_contents("missing.txt")` | PHP error-control prefix expression. Codegen wraps the operand in a runtime warning-suppression scope. |
 | `Cast { target, expr }` | `(int)$x` | |
 | `Closure { params, variadic, body, is_arrow, captures }` | `function(int $x = 1) use ($y) { ... }` or `fn(int $x): int => $x * 2` | Anonymous function / arrow function. Params is `Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>` — name, declared type, default, is_ref. `variadic` is an optional parameter name. `captures` is `Vec<String>` — variables captured via an explicit `use (...)` clause. Arrow functions are still represented as `Closure`, parse with `is_arrow = true`, and do not carry explicit `use (...)` captures in the AST. |
 | `NamedArg { name, value }` | `foo(name: "Alice")` | Named call argument. Later phases reorder these against the declared parameter list. |
@@ -324,6 +325,7 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `-` (minus) | Parse inner expr at bp=27, return `Negate` |
 | `!` (not) | Parse inner expr at bp=27, return `Not` |
 | `~` (bitwise not) | Parse inner expr at bp=27, return `BitNot` |
+| `@` (error control) | Parse inner expr at unary precedence, return `ErrorSuppress` |
 | `++` / `--` | Return `PreIncrement` / `PreDecrement` |
 | `(int)` / `(float)` / ... | Parse inner expr, return `Cast` |
 | `(` | Parse inner expr, expect `)`, return inner expr (and allow a later postfix call like `(expr)(args)`) |

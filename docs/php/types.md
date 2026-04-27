@@ -118,9 +118,6 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 ### Known incompatibilities with PHP
 
 - `$argv[0]` returns the compiled binary path, not the `.php` file path.
-- `strpos()` returns `-1` when not found, not `false`.
-- `array_search()` returns `-1` when an indexed array search misses and `""` when an associative array search misses, not `false`.
-- `define()` registers a compile-time constant and its return value is not modeled.
 - Integer overflow wraps instead of promoting to float.
 - Loose comparison (`==`) between different types coerces both sides to integer.
 - `??=` is checked against static local-slot storage; for concrete local variable types, the fallback must keep the same type or be a literal `null`.
@@ -136,3 +133,7 @@ error[8:1]: Function 'foo' declared return type string but returns int
 ```
 
 The compiler also emits non-fatal warnings (unused variables, unreachable code).
+
+### Runtime diagnostics
+
+Runtime warnings flow through a suppressible diagnostics channel. The `@` operator hides those warnings for its operand only, while fatal runtime errors and compile-time diagnostics remain visible. Current suppressible warnings include `file_get_contents()` open failures and duplicate `define()` calls.

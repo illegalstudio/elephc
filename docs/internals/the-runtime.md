@@ -432,6 +432,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
     // search/replace, explode/implode, hashing, encoding, sscanf, ...
     // system: argv, time, getenv, shell, date/mktime/strtotime, JSON, regex
     // exceptions: cleanup walk, catch matching, throw/rethrow helpers
+    // diagnostics: runtime warning emission and @ suppression state
     // arrays: heap alloc/free, array/hash helpers, sort, callbacks, refcount
     // buffers: contiguous buffer allocation, bounds checking, UAF traps
     // io: c-string buffers, file I/O, stat/fs helpers, scandir/glob/tempnam, CSV
@@ -439,7 +440,7 @@ pub fn emit_runtime(emitter: &mut Emitter) {
 }
 ```
 
-Notable runtime-only helpers emitted here include `__rt_exception_cleanup_frames`, `__rt_exception_matches`, `__rt_throw_current`, `__rt_heap_debug_fail`, `__rt_heap_kind`, `__rt_hash_insert_owned`, `__rt_hash_free_deep`, `__rt_array_column_ref`, `__rt_mixed_instanceof`, `__rt_preg_strip`, `__rt_pcre_to_posix`, `__rt_str_to_cstr`, and `__rt_cstr_to_str` in addition to the more user-visible helpers.
+Notable runtime-only helpers emitted here include `__rt_diag_push_suppression`, `__rt_diag_pop_suppression`, `__rt_diag_warning`, `__rt_exception_cleanup_frames`, `__rt_exception_matches`, `__rt_throw_current`, `__rt_heap_debug_fail`, `__rt_heap_kind`, `__rt_hash_insert_owned`, `__rt_hash_free_deep`, `__rt_array_column_ref`, `__rt_mixed_instanceof`, `__rt_preg_strip`, `__rt_pcre_to_posix`, `__rt_str_to_cstr`, and `__rt_cstr_to_str` in addition to the more user-visible helpers.
 
 All routines are included in every binary, even if unused. elephc already does AST-side control-flow pruning and dead-code elimination before codegen, but runtime-specific dead stripping is still future work.
 
@@ -455,6 +456,7 @@ The runtime data layer is split between `emit_runtime_data_fixed()` (shared buff
 .comm _exc_handler_top, 8    ; top of the active exception-handler stack
 .comm _exc_call_frame_top, 8 ; top of the activation-record cleanup stack
 .comm _exc_value, 8          ; currently propagating exception object
+.comm _rt_diag_suppression, 8 ; nested runtime warning-suppression depth for @
 .comm _heap_buf, 8388608     ; 8MB heap by default (--heap-size overrides)
 .comm _heap_off, 8           ; current heap offset
 .comm _heap_free_list, 8     ; head of the general address-ordered free list
@@ -489,6 +491,7 @@ Additionally, the runtime emits static data tables:
 - `_heap_dbg_bad_refcount_msg`, `_heap_dbg_double_free_msg`, `_heap_dbg_free_list_msg` — fatal heap-debug error strings enabled by `--heap-debug`
 - `_heap_dbg_*` summary labels — fixed strings used by `__rt_heap_debug_report` for alloc/free/live/leak output
 - `_uncaught_exc_msg` — fatal exception string written by `__rt_throw_current` when no handler exists
+- `_diag_file_get_contents_failed_msg`, `_diag_define_already_defined_msg` — suppressible runtime warning text routed through `__rt_diag_warning`
 - `_pcre_space`, `_pcre_digit`, `_pcre_word`, `_pcre_nspace`, `_pcre_ndigit`, `_pcre_nword` — PCRE shorthand replacement strings for regex translation
 - `_json_true`, `_json_false`, `_json_null` — JSON keyword strings used by `__rt_json_encode_bool` and `__rt_json_encode_null`
 - `_day_names` — 7 entries (84 bytes), each 12 bytes: day name padded to 10 chars + 1 length byte + 1 padding byte. Used by `__rt_date` for `l` (full name) and `D` (abbreviated) format characters

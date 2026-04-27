@@ -17,13 +17,15 @@ sidebar:
 | `usleep()` | `usleep($microseconds): void` | Sleep for microseconds |
 | `getenv()` | `getenv($name): string` | Get environment variable |
 | `putenv()` | `putenv($assignment): bool` | Set environment variable ("KEY=VALUE") |
-| `define()` | `define($name, $value): void` | Define a compile-time global constant with a string-literal name |
+| `define()` | `define($name, $value): bool` | Define a compile-time global constant with a string-literal name |
 | `php_uname()` | `php_uname($mode = "a"): string` | Get system information from the target runtime |
 | `phpversion()` | `phpversion(): string` | Get the elephc package version from `Cargo.toml` |
 | `exec()` | `exec($command): string` | Execute command, return output |
 | `shell_exec()` | `shell_exec($command): string` | Execute via shell, return output |
 | `system()` | `system($command): string` | Execute, output to stdout |
 | `passthru()` | `passthru($command): void` | Execute, pass raw output |
+
+`define()` returns `true` the first time a constant is defined at runtime. Duplicate attempts keep the first value, return `false`, and emit a suppressible runtime warning.
 
 `php_uname()` supports PHP's standard one-character modes:
 
