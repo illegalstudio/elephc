@@ -182,6 +182,14 @@ fn test_dunder_trait_inside_trait_method() {
     assert_eq!(out, "Greetable");
 }
 
+#[test]
+fn test_magic_constant_inside_short_ternary_is_lowered() {
+    let out = compile_and_run(
+        "<?php\nfunction f() {\n    echo __FUNCTION__ ?: 'fallback';\n    echo '|';\n    echo '' ?: __FUNCTION__;\n}\nf();\n",
+    );
+    assert_eq!(out, "f|f");
+}
+
 // `__FILE__` and `__DIR__` from an *included* file should reflect that
 // file's path, not the main file's.
 

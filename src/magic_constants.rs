@@ -505,6 +505,10 @@ fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             then_expr: Box::new(walk_expr(*then_expr, pass)),
             else_expr: Box::new(walk_expr(*else_expr, pass)),
         },
+        ExprKind::ShortTernary { value, default } => ExprKind::ShortTernary {
+            value: Box::new(walk_expr(*value, pass)),
+            default: Box::new(walk_expr(*default, pass)),
+        },
         ExprKind::Cast { target, expr: inner } => ExprKind::Cast {
             target,
             expr: Box::new(walk_expr(*inner, pass)),
