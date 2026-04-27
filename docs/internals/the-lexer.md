@@ -106,6 +106,30 @@ These are discarded entirely — they don't produce tokens.
 
 The full set of tokens elephc recognizes:
 
+Complete `Token` enum variants:
+
+```text
+OpenTag  Semicolon  LParen  RParen  LBrace  RBrace  StringLiteral  IntLiteral
+FloatLiteral  Variable  Identifier  Echo  If  IfDef  Else  ElseIf
+While  For  Break  Continue  Function  Return  True  False
+Null  Do  Foreach  As  Try  Catch  Finally  Throw
+Extends  Implements  Interface  Abstract  Final  Inf  Nan  PhpIntMax
+PhpIntMin  PhpFloatMax  MPi  ME  MSqrt2  MPi2  MPi4  MLog2e
+MLog10e  PhpFloatMin  PhpFloatEpsilon  Print  Switch  Case  Default  Match
+Include  IncludeOnce  Require  RequireOnce  Stdin  Stdout  Stderr  Fn
+Use  Namespace  Const  Global  Static  Self_  Trait  Parent
+InsteadOf  PhpEol  PhpOs  DirectorySeparator  DunderDir  DunderFile  DunderLine  DunderFunction
+DunderClass  DunderMethod  DunderNamespace  DunderTrait  Class  Enum  New  Public
+Protected  Private  ReadOnly  This  Extern  Packed  Assign  DoubleArrow
+Plus  Minus  Star  StarStar  Slash  Percent  Dot  Comma
+Backslash  LBracket  RBracket  Question  Colon  PlusAssign  MinusAssign  StarAssign
+StarStarAssign  SlashAssign  DotAssign  PercentAssign  AmpAssign  PipeAssign  CaretAssign  LessLessAssign
+GreaterGreaterAssign  PlusPlus  MinusMinus  AndAnd  OrOr  And  Or  Xor
+Bang  EqualEqual  EqualEqualEqual  NotEqual  NotEqualEqual  Less  Greater  LessEqual
+GreaterEqual  Spaceship  Ampersand  Pipe  Caret  Tilde  LessLess  GreaterGreater
+Arrow  DoubleColon  QuestionQuestion  QuestionQuestionAssign  Ellipsis  Eof
+```
+
 ### Literals
 
 | Token | Example | Carries |
@@ -150,6 +174,15 @@ STDIN  STDOUT  STDERR
 ```
 
 These are recognized as distinct tokens by the lexer, not as identifiers. Their variants include forms such as `Token::Inf`, `Token::Nan`, `Token::PhpIntMax`, `Token::PhpFloatEpsilon`, and `Token::DirectorySeparator`.
+
+### Magic constants
+
+```
+__DIR__  __FILE__  __LINE__  __FUNCTION__
+__CLASS__  __METHOD__  __NAMESPACE__  __TRAIT__
+```
+
+PHP magic constants are tokenized as `Token::DunderDir`, `Token::DunderFile`, `Token::DunderLine`, `Token::DunderFunction`, `Token::DunderClass`, `Token::DunderMethod`, `Token::DunderNamespace`, and `Token::DunderTrait`. They are matched case-insensitively, so `__dir__`, `__DIR__`, and `__DiR__` all produce the same token.
 
 ### Operators
 

@@ -15,7 +15,7 @@ elephc compiles PHP to native binaries for the supported targets — currently m
 
 ## PHP Syntax
 
-Standard PHP features supported by elephc. All PHP syntax is **100% compatible** with the PHP interpreter.
+Standard PHP features supported by elephc. Implemented PHP syntax is intended to match PHP behavior; known compatibility gaps are documented on the relevant reference pages and tracked in the roadmap.
 
 - [Types](php/types.md) — int, float, string, bool, array, null, mixed, callable, enum, union types, extension types, type casting
 - [Operators](php/operators.md) — arithmetic, comparison, logical, bitwise, string, assignment, ternary, null coalescing
