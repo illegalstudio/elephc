@@ -1,7 +1,7 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::parser::ast::{ExprKind, Stmt, StmtKind};
-use crate::parser::expr::parse_expr;
+use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::span::Span;
 
 use super::assign::try_parse_postfix_assignment;
@@ -101,7 +101,7 @@ pub(super) fn parse_this_stmt(
     // Check if followed by assignment
     if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
         *pos += 1;
-        let value = parse_expr(tokens, pos)?;
+        let value = parse_assignment_value_expr(tokens, pos)?;
         expect_semicolon(tokens, pos)?;
         if let ExprKind::PropertyAccess { object, property } = expr.kind {
             return Ok(Stmt::new(

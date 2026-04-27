@@ -1,7 +1,7 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::parser::ast::{BinOp, CatchClause, Expr, ExprKind, Stmt, StmtKind};
-use crate::parser::expr::parse_expr;
+use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::parser::stmt::{expect_semicolon, expect_token, name_starts_at, parse_block, parse_body, parse_name};
 use crate::span::Span;
 
@@ -366,7 +366,7 @@ pub fn parse_assign_inline(
         Token::Assign => None,
         Token::QuestionQuestionAssign => {
             *pos += 1;
-            let rhs = parse_expr(tokens, pos)?;
+            let rhs = parse_assignment_value_expr(tokens, pos)?;
             let value = Expr::new(
                 ExprKind::NullCoalesce {
                     value: Box::new(Expr::new(ExprKind::Variable(name.clone()), span)),
@@ -380,7 +380,7 @@ pub fn parse_assign_inline(
     };
     *pos += 1;
 
-    let rhs = parse_expr(tokens, pos)?;
+    let rhs = parse_assignment_value_expr(tokens, pos)?;
     let value = if let Some(op) = compound_op {
         Expr::new(
             ExprKind::BinaryOp {
