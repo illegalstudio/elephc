@@ -906,6 +906,14 @@ fn test_lex_arrow_operator() {
 }
 
 #[test]
+fn test_lex_nullsafe_arrow_operator() {
+    let t = tokens("<?php $obj?->prop;");
+    assert!(t.contains(&Token::QuestionArrow));
+    assert!(!t.contains(&Token::Question));
+    assert!(!t.contains(&Token::Arrow));
+}
+
+#[test]
 fn test_lex_double_colon() {
     let t = tokens("<?php Point::origin();");
     assert!(t.contains(&Token::DoubleColon));

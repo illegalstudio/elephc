@@ -2395,6 +2395,30 @@ fn test_error_undefined_method() {
 }
 
 #[test]
+fn test_error_nullsafe_property_rejects_scalar_receiver() {
+    expect_error(
+        "<?php ?int $value = null; echo $value?->missing;",
+        "Nullsafe property access requires an object or null",
+    );
+}
+
+#[test]
+fn test_error_nullsafe_method_rejects_scalar_receiver() {
+    expect_error(
+        "<?php ?int $value = null; $value?->missing();",
+        "Nullsafe method call requires an object or null",
+    );
+}
+
+#[test]
+fn test_error_nullsafe_first_class_callable_is_rejected() {
+    expect_error(
+        "<?php class Box { public function run() {} } $b = new Box(); $fn = $b?->run(...);",
+        "Cannot combine nullsafe operator with Closure creation",
+    );
+}
+
+#[test]
 fn test_error_private_access() {
     expect_error(
         "<?php class Secret { private $value = 7; } $s = new Secret(); echo $s->value;",
