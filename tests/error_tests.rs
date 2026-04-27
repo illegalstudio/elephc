@@ -1367,12 +1367,20 @@ echo pickSecond(loadNames());
 
 #[test]
 fn test_error_include_missing_path() {
-    expect_error("<?php include ;", "Expected string path");
+    // Empty `include ;` — parse_expr immediately sees `;` and errors out.
+    expect_error("<?php include ;", "Unexpected token");
 }
 
 #[test]
 fn test_error_include_non_string_path() {
-    expect_error("<?php include 42;", "Expected string path");
+    // Non-foldable path — parses fine but the resolver rejects it because
+    // an integer literal is not a compile-time-constant *string*.
+    let err = resolver_error("<?php include 42;");
+    assert!(
+        err.message.contains("compile-time-constant string"),
+        "message did not mention compile-time-constant string: {}",
+        err.message
+    );
 }
 
 // --- INF/NAN function errors ---
@@ -3471,5 +3479,60 @@ fn test_error_nullable_by_ref_parameter_requires_boxed_storage() {
     expect_error(
         "<?php function bump(?int &$x) { $x = null; } $value = 1; bump($value);",
         "requires a variable with mixed/union/nullable storage when passed by reference",
+    );
+}
+
+// --- Include/require path expression errors ---
+
+fn resolver_error(src: &str) -> elephc::errors::CompileError {
+    let id = TEST_PROJECT_ID.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!(
+        "elephc_resolver_err_{}_{}",
+        std::process::id(),
+        id
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let main_path = dir.join("main.php");
+    fs::write(&main_path, src).unwrap();
+
+    let result = (|| -> Result<(), elephc::errors::CompileError> {
+        let tokens = tokenize(src)?;
+        let ast = parse(&tokens)?;
+        let ast = elephc::magic_constants::substitute_file_constants(ast, &main_path);
+        let _ = elephc::resolver::resolve(ast, &dir)?;
+        Ok(())
+    })();
+
+    let _ = fs::remove_dir_all(&dir);
+    result.expect_err("expected resolver to fail")
+}
+
+#[test]
+fn test_include_path_with_variable_errors() {
+    let err = resolver_error("<?php $path = 'x'; require $path;");
+    assert!(
+        err.message.contains("compile-time-constant string"),
+        "message did not mention compile-time-constant: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_include_path_with_undefined_const_errors() {
+    let err = resolver_error("<?php require UNDEFINED . '/x.php';");
+    assert!(
+        err.message.contains("UNDEFINED"),
+        "message should reference the undefined constant: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_include_path_with_function_call_errors() {
+    let err = resolver_error("<?php require getenv('PATH');");
+    assert!(
+        err.message.contains("compile-time-constant string"),
+        "message did not mention compile-time-constant: {}",
+        err.message
     );
 }

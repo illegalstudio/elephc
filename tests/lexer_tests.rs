@@ -1175,3 +1175,93 @@ fn test_nullable_and_union_type_tokens() {
         ]
     );
 }
+
+// --- Magic constants ---
+
+#[test]
+fn test_dunder_dir_token() {
+    let t = tokens("<?php __DIR__;");
+    assert_eq!(
+        t,
+        vec![Token::OpenTag, Token::DunderDir, Token::Semicolon, Token::Eof]
+    );
+}
+
+#[test]
+fn test_dunder_file_token() {
+    let t = tokens("<?php __FILE__;");
+    assert_eq!(
+        t,
+        vec![Token::OpenTag, Token::DunderFile, Token::Semicolon, Token::Eof]
+    );
+}
+
+#[test]
+fn test_dunder_line_token() {
+    let t = tokens("<?php __LINE__;");
+    assert_eq!(
+        t,
+        vec![Token::OpenTag, Token::DunderLine, Token::Semicolon, Token::Eof]
+    );
+}
+
+#[test]
+fn test_dunder_function_token() {
+    let t = tokens("<?php __FUNCTION__;");
+    assert_eq!(
+        t,
+        vec![Token::OpenTag, Token::DunderFunction, Token::Semicolon, Token::Eof]
+    );
+}
+
+#[test]
+fn test_dunder_class_token() {
+    let t = tokens("<?php __CLASS__;");
+    assert_eq!(
+        t,
+        vec![Token::OpenTag, Token::DunderClass, Token::Semicolon, Token::Eof]
+    );
+}
+
+#[test]
+fn test_dunder_method_token() {
+    let t = tokens("<?php __METHOD__;");
+    assert_eq!(
+        t,
+        vec![Token::OpenTag, Token::DunderMethod, Token::Semicolon, Token::Eof]
+    );
+}
+
+#[test]
+fn test_dunder_namespace_token() {
+    let t = tokens("<?php __NAMESPACE__;");
+    assert_eq!(
+        t,
+        vec![Token::OpenTag, Token::DunderNamespace, Token::Semicolon, Token::Eof]
+    );
+}
+
+#[test]
+fn test_dunder_trait_token() {
+    let t = tokens("<?php __TRAIT__;");
+    assert_eq!(
+        t,
+        vec![Token::OpenTag, Token::DunderTrait, Token::Semicolon, Token::Eof]
+    );
+}
+
+#[test]
+fn test_dunder_lowercase_is_plain_identifier() {
+    // PHP magic constants are uppercase by convention; in elephc we match
+    // case-sensitively so __dir__ must remain a plain identifier.
+    let t = tokens("<?php __dir__;");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Identifier("__dir__".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}

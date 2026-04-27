@@ -127,6 +127,9 @@ pub(super) fn collect_expr_reads(
         | ExprKind::EnumCase { .. }
         | ExprKind::FirstClassCallable(_)
         | ExprKind::This => {}
+        ExprKind::MagicConstant(_) => {
+            unreachable!("MagicConstant must be lowered before warnings analysis")
+        }
     }
 }
 

@@ -22,16 +22,7 @@ pub(super) fn parse_include(
         *pos += 1;
     }
 
-    let path = match tokens.get(*pos).map(|(t, _)| t) {
-        Some(Token::StringLiteral(s)) => s.clone(),
-        _ => {
-            return Err(CompileError::new(
-                span,
-                "Expected string path after include/require",
-            ))
-        }
-    };
-    *pos += 1;
+    let path = parse_expr(tokens, pos)?;
 
     if has_parens {
         if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {

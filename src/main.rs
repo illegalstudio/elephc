@@ -2,6 +2,7 @@ mod codegen;
 mod conditional;
 mod errors;
 mod lexer;
+mod magic_constants;
 mod name_resolver;
 mod names;
 mod optimize;
@@ -283,6 +284,9 @@ fn main() {
     };
     timings.record_since("parse", phase_started);
 
+    let main_file_path = Path::new(filename).to_path_buf();
+    let parsed = magic_constants::substitute_file_constants(parsed, &main_file_path);
+
     let parsed = conditional::apply(parsed, &defines);
 
     let phase_started = Instant::now();
@@ -294,6 +298,10 @@ fn main() {
         }
     };
     timings.record_since("resolve", phase_started);
+
+    let phase_started = Instant::now();
+    let ast = magic_constants::substitute_scope_constants(ast);
+    timings.record_since("magic-constants", phase_started);
 
     let phase_started = Instant::now();
     let ast = match name_resolver::resolve(ast) {

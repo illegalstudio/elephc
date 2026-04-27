@@ -376,6 +376,14 @@ pub fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
         "PHP_EOL" => Ok(Token::PhpEol),
         "PHP_OS" => Ok(Token::PhpOs),
         "DIRECTORY_SEPARATOR" => Ok(Token::DirectorySeparator),
+        "__DIR__" => Ok(Token::DunderDir),
+        "__FILE__" => Ok(Token::DunderFile),
+        "__LINE__" => Ok(Token::DunderLine),
+        "__FUNCTION__" => Ok(Token::DunderFunction),
+        "__CLASS__" => Ok(Token::DunderClass),
+        "__METHOD__" => Ok(Token::DunderMethod),
+        "__NAMESPACE__" => Ok(Token::DunderNamespace),
+        "__TRAIT__" => Ok(Token::DunderTrait),
         _ => Ok(Token::Identifier(word)),
     }
 }

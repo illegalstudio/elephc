@@ -1,7 +1,7 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::names::Name;
-use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
+use crate::parser::ast::{Expr, ExprKind, MagicConstant, StaticReceiver};
 use crate::span::Span;
 
 use super::calls::{parse_scoped_static_call, peek_cast};
@@ -104,6 +104,51 @@ pub(super) fn parse_prefix(
             pos,
             span,
             ExprKind::StringLiteral("/".to_string()),
+        ),
+        Token::DunderLine => {
+            parse_simple(tokens, pos, span, ExprKind::IntLiteral(span.line as i64))
+        }
+        Token::DunderDir => parse_simple(
+            tokens,
+            pos,
+            span,
+            ExprKind::MagicConstant(MagicConstant::Dir),
+        ),
+        Token::DunderFile => parse_simple(
+            tokens,
+            pos,
+            span,
+            ExprKind::MagicConstant(MagicConstant::File),
+        ),
+        Token::DunderFunction => parse_simple(
+            tokens,
+            pos,
+            span,
+            ExprKind::MagicConstant(MagicConstant::Function),
+        ),
+        Token::DunderClass => parse_simple(
+            tokens,
+            pos,
+            span,
+            ExprKind::MagicConstant(MagicConstant::Class),
+        ),
+        Token::DunderMethod => parse_simple(
+            tokens,
+            pos,
+            span,
+            ExprKind::MagicConstant(MagicConstant::Method),
+        ),
+        Token::DunderNamespace => parse_simple(
+            tokens,
+            pos,
+            span,
+            ExprKind::MagicConstant(MagicConstant::Namespace),
+        ),
+        Token::DunderTrait => parse_simple(
+            tokens,
+            pos,
+            span,
+            ExprKind::MagicConstant(MagicConstant::Trait),
         ),
         Token::PlusPlus => parse_prefix_inc_dec(tokens, pos, span, true),
         Token::MinusMinus => parse_prefix_inc_dec(tokens, pos, span, false),

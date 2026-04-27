@@ -27,6 +27,7 @@ Standard PHP features supported by elephc. All PHP syntax is **100% compatible**
 - [Classes](php/classes.md) — inheritance, interfaces, abstract/final classes, typed/final/static properties, static property redeclarations, constructor promotion, methods, traits, enums, magic methods
 - [Namespaces](php/namespaces.md) — namespace, use, include/require, constants, superglobals
 - [System & I/O](php/system-and-io.md) — file I/O, date/time, JSON, regex, exec, debugging
+- [Magic Constants](php/magic-constants.md) — `__DIR__`, `__FILE__`, `__LINE__`, `__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`, `__TRAIT__`
 
 ## Beyond PHP
 

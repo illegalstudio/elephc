@@ -259,6 +259,9 @@ pub(crate) fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
         | ExprKind::This
         | ExprKind::FirstClassCallable(_)
         | ExprKind::Closure { .. } => Some(HashSet::new()),
+        ExprKind::MagicConstant(_) => {
+            unreachable!("MagicConstant must be lowered before optimizer passes")
+        }
         ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)

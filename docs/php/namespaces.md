@@ -61,7 +61,34 @@ All resolved at compile time (inlined). Paths relative to including file.
 
 Both `include 'f';` and `include('f');` syntax supported.
 
-**Limitations:** Path must be a string literal. Included files must start with `<?php`.
+### Path expressions
+
+The path may be any **compile-time-constant string expression**:
+
+```php
+<?php
+require __DIR__ . '/lib/util.php';      // magic constant + concat
+const BASE = __DIR__ . '/lib';
+require BASE . '/util.php';             // const reference
+define('PLUGIN', 'plugins/auth');
+require_once PLUGIN . '/init.php';      // define() reference
+require __DIR__ . '/' . 'sub' . '/' . 'x.php';  // nested concat
+```
+
+Accepted forms (foldable at compile time):
+
+- String literals (`'lib/x.php'`)
+- Concatenations (`.`) of foldable subexpressions
+- Magic constants (`__DIR__`, `__FILE__`, `__LINE__`, etc.)
+- References to `const` / `define()`-d string constants — the constant must be defined **before** the include statement (ordering matches PHP runtime semantics)
+
+Rejected (compile error):
+
+- Variables (`$path`)
+- Function calls (`getenv('PATH')`)
+- Non-constant expressions (ternaries, dynamic property access, etc.)
+
+**Other limitations:** Included files must start with `<?php`.
 
 ## Constants
 ```php

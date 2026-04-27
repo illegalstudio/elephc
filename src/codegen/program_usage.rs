@@ -302,6 +302,9 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
         | ExprKind::ConstRef(_)
         | ExprKind::EnumCase { .. }
         | ExprKind::This => {}
+        ExprKind::MagicConstant(_) => {
+            unreachable!("MagicConstant must be lowered before codegen analysis")
+        }
     }
 }
 
@@ -548,5 +551,8 @@ fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
         | ExprKind::ConstRef(_)
         | ExprKind::EnumCase { .. }
         | ExprKind::This => false,
+        ExprKind::MagicConstant(_) => {
+            unreachable!("MagicConstant must be lowered before codegen analysis")
+        }
     }
 }

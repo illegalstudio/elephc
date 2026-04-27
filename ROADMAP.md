@@ -347,6 +347,8 @@ Proper type system for PHP compatibility.
 - [ ] Real-world CLI tools compiled as validation
 - [ ] Apple notarization for direct downloads (codesign + notarytool)
 - [ ] Installation / packaging documentation for the supported host platforms
+- [x] Magic constants: `__DIR__`, `__FILE__`, `__LINE__`, `__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`, `__TRAIT__`
+- [x] Compile-time-constant expressions in `include` / `require` paths (string literals, concat, magic constants, `const` / `define()` refs)
 
 ## v0.20.x — Shared and static libraries (C ABI)
 

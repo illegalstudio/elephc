@@ -353,6 +353,9 @@ impl Checker {
                 target_type,
                 expr: inner,
             } => self.infer_ptr_cast_type(target_type, inner, expr, env),
+            ExprKind::MagicConstant(_) => {
+                unreachable!("MagicConstant must be lowered before type inference")
+            }
         }
     }
 

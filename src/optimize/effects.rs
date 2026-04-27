@@ -224,6 +224,9 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::StaticPropertyAccess { .. } => Effect::PURE,
         ExprKind::FirstClassCallable(target) => callable_target_effect(target),
         ExprKind::BufferNew { len, .. } => expr_effect(len).with_side_effects(),
+        ExprKind::MagicConstant(_) => {
+            unreachable!("MagicConstant must be lowered before optimizer passes")
+        }
     }
 }
 
