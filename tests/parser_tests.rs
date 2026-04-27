@@ -2764,6 +2764,12 @@ fn test_parse_dunder_dir_magic_constant() {
 }
 
 #[test]
+fn test_parse_dunder_dir_magic_constant_case_insensitive() {
+    let stmts = parse_source("<?php echo __dir__;");
+    assert_eq!(echoed_expr(&stmts), &ExprKind::MagicConstant(MagicConstant::Dir));
+}
+
+#[test]
 fn test_parse_dunder_file_magic_constant() {
     let stmts = parse_source("<?php echo __FILE__;");
     assert_eq!(echoed_expr(&stmts), &ExprKind::MagicConstant(MagicConstant::File));

@@ -3,13 +3,18 @@
 //! literals before the type checker and codegen run. `__LINE__` is already
 //! lowered at parse time (see `parser::expr::prefix`).
 //!
-//! Two public passes:
+//! Public passes:
 //! - [`substitute_file_constants`] resolves `__FILE__` and `__DIR__` against
 //!   the canonical path of the file the AST nodes came from. Run once per
 //!   source file before inlining (resolver) and once for the main file.
-//! - [`substitute_scope_constants`] resolves the scope-dependent constants
-//!   (`__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`, `__TRAIT__`)
-//!   based on lexical position. Run once after `name_resolver`.
+//! - [`substitute_scope_constants_in_file`] resolves the scope-dependent
+//!   constants (`__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`,
+//!   `__TRAIT__`) based on lexical position inside a single source file.
+//! - [`substitute_file_and_scope_constants`] applies both passes for a single
+//!   source file before that file is inlined into another file.
+//! - [`bind_trait_class_constants`] rebinds trait-origin `__CLASS__` literals
+//!   when trait members are flattened into a concrete class. `__METHOD__` and
+//!   `__TRAIT__` keep the trait identity, matching PHP.
 
 use std::path::Path;
 
@@ -19,6 +24,8 @@ use crate::parser::ast::{
     Stmt, StmtKind,
 };
 use crate::span::Span;
+
+const TRAIT_CLASS_PLACEHOLDER: &str = "\x1F__ELEPHC_TRAIT_CLASS__\x1F";
 
 /// Replaces `MagicConstant::File` and `MagicConstant::Dir` with string
 /// literals derived from `file_path`. Other magic constants are left untouched
@@ -36,14 +43,46 @@ pub fn substitute_file_constants(stmts: Vec<Stmt>, file_path: &Path) -> Vec<Stmt
     walk_program(stmts, &mut pass)
 }
 
-/// Replaces the lexically-scoped magic constants (`__NAMESPACE__`,
-/// `__CLASS__`, `__FUNCTION__`, `__METHOD__`, `__TRAIT__`) with string
-/// literals derived from the surrounding declaration site.
-pub fn substitute_scope_constants(program: Program) -> Program {
+/// Applies file-local and lexical-scope magic-constant lowering for one PHP
+/// source file. Resolver calls this before inlining included files so lexical
+/// scopes from one file cannot leak into another.
+pub fn substitute_file_and_scope_constants(stmts: Vec<Stmt>, file_path: &Path) -> Vec<Stmt> {
+    let stmts = substitute_file_constants(stmts, file_path);
+    substitute_scope_constants_in_file(stmts, file_path)
+}
+
+pub fn substitute_scope_constants_in_file(program: Program, file_path: &Path) -> Program {
+    let canonical = file_path
+        .canonicalize()
+        .unwrap_or_else(|_| file_path.to_path_buf());
+    substitute_scope_constants_with_file(program, Some(canonical.display().to_string()))
+}
+
+fn substitute_scope_constants_with_file(program: Program, file: Option<String>) -> Program {
     let mut pass = ScopePass {
         scope: Scope::default(),
+        file,
     };
     walk_program(program, &mut pass)
+}
+
+pub fn bind_trait_class_constants(
+    properties: Vec<ClassProperty>,
+    methods: Vec<ClassMethod>,
+    class_name: &str,
+) -> (Vec<ClassProperty>, Vec<ClassMethod>) {
+    let mut pass = TraitClassPass {
+        class_name: class_name.to_string(),
+    };
+    let properties = properties
+        .into_iter()
+        .map(|property| walk_class_property(property, &mut pass))
+        .collect();
+    let methods = methods
+        .into_iter()
+        .map(|method| walk_class_method(method, &mut pass))
+        .collect();
+    (properties, methods)
 }
 
 // ---------------------------------------------------------------------------
@@ -52,6 +91,9 @@ pub fn substitute_scope_constants(program: Program) -> Program {
 
 trait Pass {
     fn transform_magic(&self, span: Span, mc: MagicConstant) -> ExprKind;
+    fn transform_string(&self, value: String) -> ExprKind {
+        ExprKind::StringLiteral(value)
+    }
 
     fn enter_namespace_decl(&mut self, _name: &Option<Name>) {}
     fn enter_namespace_block(&mut self, _name: &Option<Name>) {}
@@ -64,7 +106,7 @@ trait Pass {
     fn leave_trait(&mut self) {}
     fn enter_method(&mut self, _name: &str) {}
     fn leave_method(&mut self) {}
-    fn enter_closure(&mut self) {}
+    fn enter_closure(&mut self, _span: Span) {}
     fn leave_closure(&mut self) {}
 }
 
@@ -432,9 +474,10 @@ fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
     let kind = match expr.kind {
         ExprKind::MagicConstant(mc) => pass.transform_magic(span, mc),
 
+        ExprKind::StringLiteral(value) => pass.transform_string(value),
+
         // Leaves with no Expr subtrees:
-        kind @ (ExprKind::StringLiteral(_)
-        | ExprKind::IntLiteral(_)
+        kind @ (ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
@@ -520,7 +563,7 @@ fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             is_arrow,
             captures,
         } => {
-            pass.enter_closure();
+            pass.enter_closure(span);
             let new_params = params
                 .into_iter()
                 .map(|(n, t, default, by_ref)| {
@@ -622,10 +665,12 @@ struct Scope {
     function: Option<String>,
     function_stack: Vec<Option<String>>,
     closure_depth: usize,
+    closure_names: Vec<String>,
 }
 
 struct ScopePass {
     scope: Scope,
+    file: Option<String>,
 }
 
 impl ScopePass {
@@ -649,6 +694,25 @@ impl ScopePass {
             Some(qualify(self.scope.namespace.as_deref(), function))
         }
     }
+
+    fn method_owner_for_closure(&self) -> Option<String> {
+        self.fqn_class().or_else(|| self.fqn_trait())
+    }
+
+    fn closure_name(&self, span: Span) -> String {
+        let context = if let Some(parent_closure) = self.scope.closure_names.last() {
+            parent_closure.clone()
+        } else if let Some(function) = &self.scope.function {
+            if let Some(owner) = self.method_owner_for_closure() {
+                format!("{}::{}()", owner, function)
+            } else {
+                format!("{}()", qualify(self.scope.namespace.as_deref(), function))
+            }
+        } else {
+            self.file.clone().unwrap_or_else(|| "unknown".to_string())
+        };
+        format!("{{closure:{}:{}}}", context, span.line)
+    }
 }
 
 impl Pass for ScopePass {
@@ -659,22 +723,26 @@ impl Pass for ScopePass {
                 ExprKind::StringLiteral(s.namespace.clone().unwrap_or_default())
             }
             MagicConstant::Class => {
-                ExprKind::StringLiteral(self.fqn_class().unwrap_or_default())
+                if s.class.is_none() && s.trait_.is_some() {
+                    ExprKind::StringLiteral(TRAIT_CLASS_PLACEHOLDER.to_string())
+                } else {
+                    ExprKind::StringLiteral(self.fqn_class().unwrap_or_default())
+                }
             }
             MagicConstant::Trait => {
                 ExprKind::StringLiteral(self.fqn_trait().unwrap_or_default())
             }
             MagicConstant::Function => {
-                let name = if s.closure_depth > 0 {
-                    "{closure}".to_string()
+                let name = if let Some(closure_name) = s.closure_names.last() {
+                    closure_name.clone()
                 } else {
                     self.fqn_function().unwrap_or_default()
                 };
                 ExprKind::StringLiteral(name)
             }
             MagicConstant::Method => {
-                if s.closure_depth > 0 {
-                    ExprKind::StringLiteral("{closure}".to_string())
+                if let Some(closure_name) = s.closure_names.last() {
+                    ExprKind::StringLiteral(closure_name.clone())
                 } else {
                     let name = match (self.fqn_class().or_else(|| self.fqn_trait()), &s.function) {
                         (Some(c), Some(f)) => format!("{}::{}", c, f),
@@ -747,12 +815,33 @@ impl Pass for ScopePass {
         self.leave_function();
     }
 
-    fn enter_closure(&mut self) {
+    fn enter_closure(&mut self, span: Span) {
+        let name = self.closure_name(span);
+        self.scope.closure_names.push(name);
         self.scope.closure_depth += 1;
     }
 
     fn leave_closure(&mut self) {
+        self.scope.closure_names.pop();
         self.scope.closure_depth -= 1;
+    }
+}
+
+struct TraitClassPass {
+    class_name: String,
+}
+
+impl Pass for TraitClassPass {
+    fn transform_magic(&self, _span: Span, mc: MagicConstant) -> ExprKind {
+        ExprKind::MagicConstant(mc)
+    }
+
+    fn transform_string(&self, value: String) -> ExprKind {
+        if value.contains(TRAIT_CLASS_PLACEHOLDER) {
+            ExprKind::StringLiteral(value.replace(TRAIT_CLASS_PLACEHOLDER, &self.class_name))
+        } else {
+            ExprKind::StringLiteral(value)
+        }
     }
 }
 

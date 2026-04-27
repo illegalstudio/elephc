@@ -1251,17 +1251,19 @@ fn test_dunder_trait_token() {
 }
 
 #[test]
-fn test_dunder_lowercase_is_plain_identifier() {
-    // PHP magic constants are uppercase by convention; in elephc we match
-    // case-sensitively so __dir__ must remain a plain identifier.
+fn test_dunder_lowercase_is_magic_constant() {
     let t = tokens("<?php __dir__;");
     assert_eq!(
         t,
-        vec![
-            Token::OpenTag,
-            Token::Identifier("__dir__".into()),
-            Token::Semicolon,
-            Token::Eof,
-        ]
+        vec![Token::OpenTag, Token::DunderDir, Token::Semicolon, Token::Eof]
+    );
+}
+
+#[test]
+fn test_dunder_mixed_case_is_magic_constant() {
+    let t = tokens("<?php __FuNcTiOn__;");
+    assert_eq!(
+        t,
+        vec![Token::OpenTag, Token::DunderFunction, Token::Semicolon, Token::Eof]
     );
 }

@@ -3498,7 +3498,7 @@ fn resolver_error(src: &str) -> elephc::errors::CompileError {
     let result = (|| -> Result<(), elephc::errors::CompileError> {
         let tokens = tokenize(src)?;
         let ast = parse(&tokens)?;
-        let ast = elephc::magic_constants::substitute_file_constants(ast, &main_path);
+        let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &main_path);
         let _ = elephc::resolver::resolve(ast, &dir)?;
         Ok(())
     })();

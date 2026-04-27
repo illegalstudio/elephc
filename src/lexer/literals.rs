@@ -300,6 +300,30 @@ pub fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
     if word.eq_ignore_ascii_case("xor") {
         return Ok(Token::Xor);
     }
+    if word.eq_ignore_ascii_case("__DIR__") {
+        return Ok(Token::DunderDir);
+    }
+    if word.eq_ignore_ascii_case("__FILE__") {
+        return Ok(Token::DunderFile);
+    }
+    if word.eq_ignore_ascii_case("__LINE__") {
+        return Ok(Token::DunderLine);
+    }
+    if word.eq_ignore_ascii_case("__FUNCTION__") {
+        return Ok(Token::DunderFunction);
+    }
+    if word.eq_ignore_ascii_case("__CLASS__") {
+        return Ok(Token::DunderClass);
+    }
+    if word.eq_ignore_ascii_case("__METHOD__") {
+        return Ok(Token::DunderMethod);
+    }
+    if word.eq_ignore_ascii_case("__NAMESPACE__") {
+        return Ok(Token::DunderNamespace);
+    }
+    if word.eq_ignore_ascii_case("__TRAIT__") {
+        return Ok(Token::DunderTrait);
+    }
 
     match word.as_str() {
         "echo" => Ok(Token::Echo),
@@ -376,14 +400,6 @@ pub fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
         "PHP_EOL" => Ok(Token::PhpEol),
         "PHP_OS" => Ok(Token::PhpOs),
         "DIRECTORY_SEPARATOR" => Ok(Token::DirectorySeparator),
-        "__DIR__" => Ok(Token::DunderDir),
-        "__FILE__" => Ok(Token::DunderFile),
-        "__LINE__" => Ok(Token::DunderLine),
-        "__FUNCTION__" => Ok(Token::DunderFunction),
-        "__CLASS__" => Ok(Token::DunderClass),
-        "__METHOD__" => Ok(Token::DunderMethod),
-        "__NAMESPACE__" => Ok(Token::DunderNamespace),
-        "__TRAIT__" => Ok(Token::DunderTrait),
         _ => Ok(Token::Identifier(word)),
     }
 }

@@ -39,6 +39,13 @@ fn test_dunder_dir_concat_produces_single_folded_string() {
     assert!(out.ends_with("/sub/file.php"));
 }
 
+#[test]
+fn test_magic_constants_are_case_insensitive() {
+    let out = compile_and_run("<?php echo __dir__ . '|'; echo __LiNe__;");
+    assert!(out.starts_with('/'), "__dir__ should resolve to a path, got {:?}", out);
+    assert!(out.ends_with("|1"), "__LiNe__ should resolve to line 1, got {:?}", out);
+}
+
 // `__LINE__` is substituted at parse time using the span line.
 
 #[test]
@@ -91,7 +98,11 @@ fn test_dunder_function_inside_closure_returns_closure_marker() {
     let out = compile_and_run(
         "<?php\n$f = function() {\n    echo __FUNCTION__;\n};\n$f();\n",
     );
-    assert_eq!(out, "{closure}");
+    assert!(
+        out.contains("{closure:") && out.ends_with("test.php:2}"),
+        "expected PHP-style closure marker, got {:?}",
+        out
+    );
 }
 
 // `__CLASS__` returns the (FQN) class name, empty outside.
@@ -183,6 +194,38 @@ fn test_dunder_trait_inside_trait_method() {
 }
 
 #[test]
+fn test_dunder_class_inside_trait_method_uses_importing_class() {
+    let out = compile_and_run(
+        "<?php\ntrait Greetable {\n    public function name() { echo __CLASS__ . '|' . __METHOD__; }\n}\nclass C { use Greetable; }\n$o = new C(); $o->name();\n",
+    );
+    assert_eq!(out, "C|Greetable::name");
+}
+
+#[test]
+fn test_dunder_class_inside_trait_property_uses_importing_class() {
+    let out = compile_and_run(
+        "<?php\ntrait Named {\n    public string $name = __CLASS__;\n}\nclass C { use Named; }\n$o = new C(); echo $o->name;\n",
+    );
+    assert_eq!(out, "C");
+}
+
+#[test]
+fn test_dunder_class_inside_namespaced_trait_uses_importing_class_fqn() {
+    let out = compile_and_run(
+        "<?php\nnamespace App;\ntrait Named {\n    public string $name = __CLASS__;\n    public function info() { echo __CLASS__ . '|' . __METHOD__ . '|' . __TRAIT__; }\n}\nclass C { use Named; }\n$o = new C(); echo $o->name . '|'; $o->info();\n",
+    );
+    assert_eq!(out, "App\\C|App\\C|App\\Named::info|App\\Named");
+}
+
+#[test]
+fn test_dunder_function_inside_closure_in_method_uses_php_style_name() {
+    let out = compile_and_run(
+        "<?php\nclass C {\n    public function m() {\n        $f = function() { echo __FUNCTION__ . '|' . __METHOD__; };\n        $f();\n    }\n}\n$o = new C(); $o->m();\n",
+    );
+    assert_eq!(out, "{closure:C::m():4}|{closure:C::m():4}");
+}
+
+#[test]
 fn test_magic_constant_inside_short_ternary_is_lowered() {
     let out = compile_and_run(
         "<?php\nfunction f() {\n    echo __FUNCTION__ ?: 'fallback';\n    echo '|';\n    echo '' ?: __FUNCTION__;\n}\nf();\n",
@@ -235,4 +278,58 @@ fn test_dunder_dir_inside_include_uses_included_files_dir() {
         "expected included file's __DIR__ (ending in /lib), got {:?}",
         out
     );
+}
+
+#[test]
+fn test_included_file_magic_namespace_does_not_inherit_caller_namespace() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nnamespace App;\nrequire 'lib/inner.php';\necho '[' . __NAMESPACE__ . ']';\n",
+            ),
+            (
+                "lib/inner.php",
+                "<?php\necho '[' . __NAMESPACE__ . ']';\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "[][App]");
+}
+
+#[test]
+fn test_included_file_namespace_does_not_leak_to_caller_magic_constants() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nnamespace App;\nrequire 'lib/inner.php';\necho '[' . __NAMESPACE__ . ']';\n",
+            ),
+            (
+                "lib/inner.php",
+                "<?php\nnamespace Lib;\necho '[' . __NAMESPACE__ . ']';\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "[Lib][App]");
+}
+
+#[test]
+fn test_included_file_magic_function_does_not_inherit_calling_function() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nfunction load() { require 'lib/inner.php'; }\nload();\n",
+            ),
+            (
+                "lib/inner.php",
+                "<?php\necho '[' . __FUNCTION__ . ']';\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "[]");
 }
