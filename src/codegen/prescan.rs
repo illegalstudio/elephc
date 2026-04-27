@@ -28,7 +28,7 @@ pub(super) fn collect_constants(
                     ExprKind::BoolLiteral(_) => PhpType::Bool,
                     _ => PhpType::Int,
                 };
-                constants.insert(name.clone(), (value.kind.clone(), ty));
+                constants.entry(name.clone()).or_insert((value.kind.clone(), ty));
             }
             StmtKind::ExprStmt(expr) => {
                 if let ExprKind::FunctionCall { name, args } = &expr.kind {
@@ -41,7 +41,9 @@ pub(super) fn collect_constants(
                                 ExprKind::BoolLiteral(_) => PhpType::Bool,
                                 _ => PhpType::Int,
                             };
-                            constants.insert(const_name.clone(), (args[1].kind.clone(), ty));
+                            constants
+                                .entry(const_name.clone())
+                                .or_insert((args[1].kind.clone(), ty));
                         }
                     }
                 }

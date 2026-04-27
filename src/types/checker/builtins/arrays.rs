@@ -232,9 +232,9 @@ pub(super) fn check_builtin(
                 ));
             }
             if matches!(arr_ty, PhpType::AssocArray { .. }) {
-                Ok(Some(PhpType::Str))
+                Ok(Some(PhpType::Union(vec![PhpType::Str, PhpType::Bool])))
             } else {
-                Ok(Some(PhpType::Int))
+                Ok(Some(PhpType::Union(vec![PhpType::Int, PhpType::Bool])))
             }
         }
         "array_merge" | "array_diff" | "array_intersect" | "array_diff_key"

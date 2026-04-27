@@ -322,6 +322,8 @@ pub(super) fn infer_local_type(
                 | "in_array" | "array_key_exists" | "str_contains" | "str_starts_with"
                 | "str_ends_with" | "ctype_alpha" | "ctype_digit" | "ctype_alnum"
                 | "ctype_space" | "function_exists" | "ptr_is_null" => PhpType::Bool,
+                "define" => PhpType::Bool,
+                "strpos" | "strrpos" | "array_search" => PhpType::Mixed,
                 "abs" => {
                     if !args.is_empty() {
                         let t = infer_local_type(&args[0], sig, ctx);

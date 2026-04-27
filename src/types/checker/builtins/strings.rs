@@ -29,7 +29,7 @@ pub(super) fn check_builtin(
                 return Err(CompileError::new(span, "intval() takes exactly 1 argument"));
             }
             checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Int))
+            Ok(Some(PhpType::Union(vec![PhpType::Int, PhpType::Bool])))
         }
         "substr" => {
             if args.len() < 2 || args.len() > 3 {

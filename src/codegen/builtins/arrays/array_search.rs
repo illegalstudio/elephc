@@ -128,11 +128,15 @@ pub fn emit(
                 emitter.label(&found_label);
                 abi::emit_pop_reg_pair(emitter, "x1", "x2");                        // return the matching associative-array key as the searched string result
                 abi::emit_call_label(emitter, "__rt_str_persist");                  // materialize an owned string result so array_search() does not leak a borrowed hash-key alias
+                emitter.instruction("mov x0, #1");                              // runtime tag 1 = string for a successful associative array_search() result
+                abi::emit_call_label(emitter, "__rt_mixed_from_value");          // box the matching string key so false remains distinguishable from an empty key
                 emitter.instruction(&format!("b {}", skip_label));              // jump to the common associative-array cleanup once a match is found
 
                 emitter.label(&end_label);
-                emitter.instruction("mov x1, #0");                              // return an empty string pointer when associative-array search does not find the needle
-                emitter.instruction("mov x2, #0");                              // return an empty string length when associative-array search does not find the needle
+                emitter.instruction("mov x1, #0");                              // false payload = 0 for an associative array_search() miss
+                emitter.instruction("mov x2, #0");                              // bool mixed payloads do not use a high word
+                emitter.instruction("mov x0, #3");                              // runtime tag 3 = bool false for an associative array_search() miss
+                abi::emit_call_label(emitter, "__rt_mixed_from_value");          // box false for PHP-compatible not-found semantics
             }
             Arch::X86_64 => {
                 emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");           // load the associative-array hash table pointer for the next insertion-order iteration step
@@ -191,11 +195,17 @@ pub fn emit(
                 emitter.label(&found_label);
                 abi::emit_pop_reg_pair(emitter, "rax", "rdx");                      // return the matching associative-array key through the standard x86_64 string result registers
                 abi::emit_call_label(emitter, "__rt_str_persist");                  // materialize an owned string result so array_search() does not leak a borrowed hash-key alias
+                emitter.instruction("mov rdi, rax");                            // move the persisted key pointer into the mixed helper payload register
+                emitter.instruction("mov rsi, rdx");                            // move the persisted key length into the mixed helper high-word register
+                emitter.instruction("mov eax, 1");                              // runtime tag 1 = string for a successful associative array_search() result
+                abi::emit_call_label(emitter, "__rt_mixed_from_value");          // box the matching string key so false remains distinguishable from an empty key
                 emitter.instruction(&format!("jmp {}", skip_label));            // jump to the common associative-array cleanup once a match is found
 
                 emitter.label(&end_label);
-                emitter.instruction("xor eax, eax");                            // return an empty string pointer when associative-array search does not find the needle
-                emitter.instruction("xor edx, edx");                            // return an empty string length when associative-array search does not find the needle
+                emitter.instruction("xor edi, edi");                            // false payload = 0 for an associative array_search() miss
+                emitter.instruction("xor esi, esi");                            // bool mixed payloads do not use a high word
+                emitter.instruction("mov eax, 3");                              // runtime tag 3 = bool false for an associative array_search() miss
+                abi::emit_call_label(emitter, "__rt_mixed_from_value");          // box false for PHP-compatible not-found semantics
             }
         }
 
@@ -209,8 +219,7 @@ pub fn emit(
             }
         }
 
-        // For assoc arrays, array_search returns a string key
-        return Some(PhpType::Str);
+        return Some(PhpType::Mixed);
     }
 
     // -- indexed array: use runtime for linear search --
@@ -227,6 +236,44 @@ pub fn emit(
         }
     }
     abi::emit_call_label(emitter, "__rt_array_search");                         // search the indexed-array values and return the first matching index or -1
+    box_index_search_result(emitter, ctx);
 
-    Some(PhpType::Int)
+    Some(PhpType::Mixed)
+}
+
+fn box_index_search_result(emitter: &mut Emitter, ctx: &mut Context) {
+    let found_label = ctx.next_label("asearch_index_found");
+    let end_label = ctx.next_label("asearch_index_done");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #0");                                  // distinguish a found index from the indexed array_search() not-found sentinel
+            emitter.instruction(&format!("b.ge {}", found_label));              // box a found index as an integer result
+            emitter.instruction("mov x1, #0");                                  // false payload = 0 for an indexed array_search() miss
+            emitter.instruction("mov x2, #0");                                  // bool mixed payloads do not use a high word
+            emitter.instruction("mov x0, #3");                                  // runtime tag 3 = bool false for an indexed array_search() miss
+            abi::emit_call_label(emitter, "__rt_mixed_from_value");             // box false so index 0 remains distinguishable from not found
+            emitter.instruction(&format!("b {}", end_label));                   // skip the integer boxing path after a miss
+            emitter.label(&found_label);
+            emitter.instruction("mov x1, x0");                                  // move the found index into the mixed helper payload register
+            emitter.instruction("mov x2, #0");                                  // integer mixed payloads do not use a high word
+            emitter.instruction("mov x0, #0");                                  // runtime tag 0 = int for found array_search() indexes
+            abi::emit_call_label(emitter, "__rt_mixed_from_value");             // box the found integer index as mixed
+            emitter.label(&end_label);
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, 0");                                  // distinguish a found index from the indexed array_search() not-found sentinel
+            emitter.instruction(&format!("jge {}", found_label));               // box a found index as an integer result
+            emitter.instruction("xor edi, edi");                                // false payload = 0 for an indexed array_search() miss
+            emitter.instruction("xor esi, esi");                                // bool mixed payloads do not use a high word
+            emitter.instruction("mov eax, 3");                                  // runtime tag 3 = bool false for an indexed array_search() miss
+            abi::emit_call_label(emitter, "__rt_mixed_from_value");             // box false so index 0 remains distinguishable from not found
+            emitter.instruction(&format!("jmp {}", end_label));                 // skip the integer boxing path after a miss
+            emitter.label(&found_label);
+            emitter.instruction("mov rdi, rax");                                // move the found index into the mixed helper payload register
+            emitter.instruction("xor esi, esi");                                // integer mixed payloads do not use a high word
+            emitter.instruction("xor eax, eax");                                // runtime tag 0 = int for found array_search() indexes
+            abi::emit_call_label(emitter, "__rt_mixed_from_value");             // box the found integer index as mixed
+            emitter.label(&end_label);
+        }
+    }
 }

@@ -3,9 +3,11 @@ use std::collections::HashMap;
 pub struct DataSection {
     entries: Vec<(String, Vec<u8>)>,
     float_entries: Vec<(String, u64)>,
+    comm_entries: Vec<(String, usize)>,
     counter: usize,
     dedup: HashMap<Vec<u8>, String>,
     float_dedup: HashMap<u64, String>,
+    comm_dedup: HashMap<String, String>,
 }
 
 impl DataSection {
@@ -13,9 +15,11 @@ impl DataSection {
         Self {
             entries: Vec::new(),
             float_entries: Vec::new(),
+            comm_entries: Vec::new(),
             counter: 0,
             dedup: HashMap::new(),
             float_dedup: HashMap::new(),
+            comm_dedup: HashMap::new(),
         }
     }
 
@@ -44,12 +48,25 @@ impl DataSection {
         (label, bytes.len())
     }
 
+    pub fn add_comm(&mut self, label: String, size: usize) -> String {
+        if let Some(existing) = self.comm_dedup.get(&label) {
+            return existing.clone();
+        }
+
+        self.comm_dedup.insert(label.clone(), label.clone());
+        self.comm_entries.push((label.clone(), size));
+        label
+    }
+
     pub fn emit(&self) -> String {
-        if self.entries.is_empty() && self.float_entries.is_empty() {
+        if self.entries.is_empty() && self.float_entries.is_empty() && self.comm_entries.is_empty() {
             return String::new();
         }
 
         let mut out = String::from(".data\n");
+        for (label, size) in &self.comm_entries {
+            out.push_str(&format!(".comm {}, {}, 3\n", label, size));
+        }
         for (label, bytes) in &self.entries {
             out.push_str(&format!(".globl {}\n{}:\n", label, label));
             out.push_str("    .ascii \"");

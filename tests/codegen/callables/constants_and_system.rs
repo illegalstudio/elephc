@@ -61,6 +61,46 @@ fn test_define_string() {
 }
 
 #[test]
+fn test_define_returns_true() {
+    let out = compile_and_run("<?php\necho define(\"FEATURE_ON\", true);\necho FEATURE_ON;\n");
+    assert_eq!(out, "11");
+}
+
+#[test]
+fn test_error_control_suppresses_duplicate_define_warning() {
+    let out = compile_and_run_capture(
+        "<?php\ndefine(\"DUPLICATE_CONST\", 1);\necho @define(\"DUPLICATE_CONST\", 2) ? \"bad\" : \"ok\";\necho DUPLICATE_CONST;\n",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ok1");
+    assert_eq!(out.stderr, "");
+}
+
+#[test]
+fn test_duplicate_define_emits_runtime_warning() {
+    let out = compile_and_run_capture(
+        "<?php\ndefine(\"DUPLICATE_WARN\", 1);\necho define(\"DUPLICATE_WARN\", 2) ? \"bad\" : \"ok\";\necho DUPLICATE_WARN;\n",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ok1");
+    assert!(
+        out.stderr.contains("Warning: define()"),
+        "expected duplicate define warning, got stderr={}",
+        out.stderr
+    );
+}
+
+#[test]
+fn test_define_duplicate_is_checked_at_runtime() {
+    let out = compile_and_run_capture(
+        "<?php\nfunction once() { return define(\"RUNTIME_DUPLICATE\", 1); }\necho once() ? \"T\" : \"F\";\necho @once() ? \"T\" : \"F\";\necho RUNTIME_DUPLICATE;\n",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "TF1");
+    assert_eq!(out.stderr, "");
+}
+
+#[test]
 fn test_const_in_expression() {
     let out = compile_and_run("<?php\nconst X = 10;\nconst Y = 20;\necho X + Y;\n");
     assert_eq!(out, "30");

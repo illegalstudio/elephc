@@ -51,6 +51,17 @@ echo $key;
 }
 
 #[test]
+fn test_assoc_array_search_not_found_is_strict_false() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ["first" => "Alice", "second" => "Bob"];
+echo array_search("Carol", $m) === false ? "miss" : "hit";
+"#,
+    );
+    assert_eq!(out, "miss");
+}
+
+#[test]
 fn test_assoc_array_keys() {
     let out = compile_and_run(
         r#"<?php

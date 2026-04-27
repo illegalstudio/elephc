@@ -32,6 +32,44 @@ pub fn emit(
         }
     }
     abi::emit_call_label(emitter, "__rt_strrpos");                              // find the last needle occurrence in the haystack through the shared runtime helper
+    box_search_result(emitter, ctx);
 
-    Some(PhpType::Int)
+    Some(PhpType::Mixed)
+}
+
+fn box_search_result(emitter: &mut Emitter, ctx: &mut Context) {
+    let found_label = ctx.next_label("strrpos_found");
+    let end_label = ctx.next_label("strrpos_done");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #0");                                  // distinguish a valid non-negative match offset from the not-found sentinel
+            emitter.instruction(&format!("b.ge {}", found_label));              // box a found offset as an integer result
+            emitter.instruction("mov x1, #0");                                  // false payload = 0 for the mixed bool box
+            emitter.instruction("mov x2, #0");                                  // bool mixed payloads do not use a high word
+            emitter.instruction("mov x0, #3");                                  // runtime tag 3 = bool false for strrpos() not found
+            abi::emit_call_label(emitter, "__rt_mixed_from_value");             // box false so offset 0 remains distinguishable from not found
+            emitter.instruction(&format!("b {}", end_label));                   // skip the integer boxing path after the not-found result
+            emitter.label(&found_label);
+            emitter.instruction("mov x1, x0");                                  // move the found offset into the mixed helper payload register
+            emitter.instruction("mov x2, #0");                                  // integer mixed payloads do not use a high word
+            emitter.instruction("mov x0, #0");                                  // runtime tag 0 = int for strrpos() found offsets
+            abi::emit_call_label(emitter, "__rt_mixed_from_value");             // box the found integer offset as mixed
+            emitter.label(&end_label);
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, 0");                                  // distinguish a valid non-negative match offset from the not-found sentinel
+            emitter.instruction(&format!("jge {}", found_label));               // box a found offset as an integer result
+            emitter.instruction("xor edi, edi");                                // false payload = 0 for the mixed bool box
+            emitter.instruction("xor esi, esi");                                // bool mixed payloads do not use a high word
+            emitter.instruction("mov eax, 3");                                  // runtime tag 3 = bool false for strrpos() not found
+            abi::emit_call_label(emitter, "__rt_mixed_from_value");             // box false so offset 0 remains distinguishable from not found
+            emitter.instruction(&format!("jmp {}", end_label));                 // skip the integer boxing path after the not-found result
+            emitter.label(&found_label);
+            emitter.instruction("mov rdi, rax");                                // move the found offset into the mixed helper payload register
+            emitter.instruction("xor esi, esi");                                // integer mixed payloads do not use a high word
+            emitter.instruction("xor eax, eax");                                // runtime tag 0 = int for strrpos() found offsets
+            abi::emit_call_label(emitter, "__rt_mixed_from_value");             // box the found integer offset as mixed
+            emitter.label(&end_label);
+        }
+    }
 }
