@@ -114,6 +114,18 @@ $x ??= "ignored";        // keeps "fallback"; RHS is not evaluated
 For concrete local variable types, the fallback must keep the same static type, or be a literal `null`.
 Use a nullable, union, or `mixed` typed local when the fallback may change the stored runtime representation.
 
+## Nullsafe Access
+
+```php
+<?php
+echo $user?->profile?->name ?? "anonymous";
+echo $user?->profile?->label() ?? "missing";
+```
+
+`?->` supports nullable object property access and method calls. If the receiver is `null`, the member access or method call is skipped and the expression returns `null`; method arguments are not evaluated on that skipped branch. Use `??` when you want to provide a fallback value.
+
+Nullsafe access cannot be used as an assignment target or combined with first-class callable creation, matching PHP. Full PHP parity for mixed chains such as `$a?->b->c` is tracked in `ROADMAP.md`; write each nullable hop explicitly as `?->` today.
+
 ## Increment / Decrement
 
 | Operator | Example | Returns |
