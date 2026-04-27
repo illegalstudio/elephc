@@ -90,7 +90,7 @@ Uses POSIX extended regex with common PCRE shorthand translation (`\s`, `\d`, `\
 
 | Function | Signature | Description |
 |---|---|---|
-| `file_get_contents()` | `file_get_contents($filename): string` | Read entire file |
+| `file_get_contents()` | `file_get_contents($filename): string\|false` | Read entire file, or `false` if the file cannot be opened |
 | `file_put_contents()` | `file_put_contents($filename, $data): int` | Write file |
 | `file()` | `file($filename): array` | Read into array of lines |
 | `file_exists()` | `file_exists($filename): bool` | Check exists |

@@ -59,6 +59,18 @@ echo array_search(99, $a) === false ? "miss" : "hit";
 }
 
 #[test]
+fn test_array_search_assigned_not_found_is_strict_false() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [10, 20, 30];
+$result = array_search(99, $a);
+echo $result === false ? "miss" : "hit";
+"#,
+    );
+    assert_eq!(out, "miss");
+}
+
+#[test]
 fn test_array_search_zero_index_is_not_false() {
     let out = compile_and_run(
         r#"<?php

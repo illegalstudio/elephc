@@ -1494,6 +1494,18 @@ fn test_error_strpos_wrong_args() {
 }
 
 #[test]
+fn test_error_strpos_false_return_rejects_int_return_type() {
+    expect_error(
+        r#"<?php
+function pos(): int {
+    return strpos("abc", "z");
+}
+"#,
+        "Function 'pos' return type expects Int, got Union([Int, Bool])",
+    );
+}
+
+#[test]
 fn test_error_str_replace_wrong_args() {
     expect_error(
         "<?php str_replace(\"a\", \"b\");",
@@ -1631,6 +1643,18 @@ fn test_error_file_get_contents_wrong_args() {
     expect_error(
         "<?php file_get_contents();",
         "file_get_contents() takes exactly 1 argument",
+    );
+}
+
+#[test]
+fn test_error_file_get_contents_false_return_rejects_string_return_type() {
+    expect_error(
+        r#"<?php
+function read_file(): string {
+    return file_get_contents("missing.txt");
+}
+"#,
+        "Function 'read_file' return type expects Str, got Union([Str, Bool])",
     );
 }
 

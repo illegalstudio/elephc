@@ -157,6 +157,32 @@ echo "after";
 }
 
 #[test]
+fn test_file_get_contents_missing_is_strict_false() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$value = @file_get_contents("missing.txt");
+echo $value === false ? "false" : "string";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "false");
+    assert_eq!(out.stderr, "");
+}
+
+#[test]
+fn test_file_get_contents_success_is_not_false() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("test.txt", "");
+$value = file_get_contents("test.txt");
+echo $value === false ? "false" : "string";
+"#,
+    );
+    assert_eq!(out, "string");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_error_control_suppresses_runtime_warning() {
     let out = compile_and_run_capture(
         r#"<?php

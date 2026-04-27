@@ -39,6 +39,17 @@ fn test_strpos_not_found_is_strict_false() {
 }
 
 #[test]
+fn test_strpos_assigned_not_found_is_strict_false() {
+    let out = compile_and_run(
+        r#"<?php
+$pos = strpos("Hello", "xyz");
+echo $pos === false ? "miss" : "hit";
+"#,
+    );
+    assert_eq!(out, "miss");
+}
+
+#[test]
 fn test_strpos_zero_offset_is_not_false() {
     let out = compile_and_run(r#"<?php echo strpos("abc", "a") === false ? "miss" : "zero";"#);
     assert_eq!(out, "zero");

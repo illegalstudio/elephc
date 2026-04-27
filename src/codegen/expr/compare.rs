@@ -126,6 +126,12 @@ pub(super) fn emit_strict_compare(
 
     let types_match = match (&lt_peek, &rt_peek) {
         (Some(PhpType::Pointer(_)), Some(PhpType::Pointer(_))) => true,
+        (Some(l), Some(r))
+            if matches!(l, PhpType::Mixed | PhpType::Union(_))
+                || matches!(r, PhpType::Mixed | PhpType::Union(_)) =>
+        {
+            true
+        }
         (Some(l), Some(r)) => l == r,
         _ => true,
     };
