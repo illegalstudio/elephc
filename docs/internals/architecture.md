@@ -234,7 +234,7 @@ src/
 │       ├── io/                fopen, fgets, fread, stat, scandir, ... (17 files)
 │       ├── buffers/           buffer_new, buffer_len, bounds_fail, use_after_free helpers (5 files incl. mod.rs)
 │       ├── exceptions.rs      Exception runtime module root / re-exports
-│       ├── exceptions/        cleanup_frames, matches, throw_current, rethrow_current helpers
+│       ├── exceptions/        cleanup_frames, matches, throw_current, rethrow_current helpers (4 files)
 │       ├── system/            build_argv, time, getenv, shell_exec, php_uname, date, mktime, strtotime, match_unhandled, enum_from_fail, json_encode_*, json_decode, preg_*, ... (29 files)
 │       └── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ... (5 files)
 │
