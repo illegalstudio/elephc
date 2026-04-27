@@ -2,6 +2,7 @@ pub mod codegen;
 pub mod conditional;
 pub mod errors;
 pub mod lexer;
+pub mod magic_constants;
 pub mod names;
 pub mod name_resolver;
 pub mod optimize;

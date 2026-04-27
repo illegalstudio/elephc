@@ -132,6 +132,7 @@ pub(crate) fn compile_and_run_files_with_defines(
 
     let tokens = elephc::lexer::tokenize(&source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
+    let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &php_path);
     let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();
     let ast = elephc::conditional::apply(ast, &define_set);
     let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
@@ -204,6 +205,7 @@ pub(crate) fn compile_files_fails_with_defines(
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
         let tokens = elephc::lexer::tokenize(&source)?;
         let ast = elephc::parser::parse(&tokens)?;
+        let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &php_path);
         let define_set: HashSet<String> =
             defines.iter().map(|define| (*define).to_string()).collect();
         let ast = elephc::conditional::apply(ast, &define_set);
@@ -227,6 +229,8 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
 
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
+    let synthetic_main = dir.join("test.php");
+    let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
     let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved = elephc::optimize::fold_constants(resolved);
@@ -324,6 +328,8 @@ pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBu
 
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
+    let synthetic_main = dir.join("test.php");
+    let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
     let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved = elephc::optimize::fold_constants(resolved);

@@ -82,6 +82,7 @@ Things that have a value:
 | `This` | `$this` | Reference to the current object inside a method |
 | `PtrCast { target_type, expr }` | `ptr_cast<Point>($p)` | Pointer-tag cast parsed specially after `ptr_cast<T>` |
 | `BufferNew { element_type, len }` | `buffer_new<int>(256)` | Compiler extension for contiguous hot-path buffers |
+| `MagicConstant(MagicConstant)` | `__DIR__`, `__CLASS__` | Parsed from case-insensitive magic-constant tokens. `__LINE__` is lowered immediately to `IntLiteral`; the remaining magic constants are lowered by `src/magic_constants.rs` before type checking. |
 
 ### Statements (`Stmt`)
 
@@ -330,6 +331,7 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `...` + expr | Parse spread/unpack → `Spread` |
 | `ptr_cast` + `<Type>` + `(` | Parse pointer cast syntax → `PtrCast` |
 | `buffer_new` + `<Type>` + `(` | Parse contiguous-buffer allocation → `BufferNew` |
+| `__DIR__` / `__FILE__` / other magic constants | Parse magic constants → `MagicConstant` (`__LINE__` becomes `IntLiteral`) |
 
 ### Postfix: calls, array access, and member access
 
@@ -381,7 +383,7 @@ Statement parsing is simpler — after `parse()` has peeled off top-level `exter
 | `Return` | Return with optional expression |
 | `Break` | Break statement |
 | `Continue` | Continue statement |
-| `Include`/`Require` | Include statement (path must be a string literal) |
+| `Include`/`Require` | Include statement (path is parsed as an expression and later folded by the resolver when it is a compile-time string) |
 | `Const` | Constant declaration (`const NAME = value;`) |
 | `Namespace` | Namespace declaration (`namespace App\Core;` or `namespace App\Core { ... }`) |
 | `Use` | Namespace import declaration (`use Foo\Bar;`, `use function Foo\bar as baz;`) |
@@ -426,10 +428,10 @@ Each `catch` becomes a `CatchClause { exception_types, variable, body }`. `excep
 
 ## How it connects
 
-The parser's output — `Program` (which is `Vec<Stmt>`) — first feeds into elephc's build-time conditional pass for `ifdef`, then into the [resolver](how-elephc-works.md), then into the dedicated name-resolution pass that canonicalizes namespace-aware names, and finally into the [type checker](the-type-checker.md):
+The parser's output — `Program` (which is `Vec<Stmt>`) — first feeds into per-file magic-constant lowering, then elephc's build-time conditional pass for `ifdef`, then into the [resolver](how-elephc-works.md), then into the dedicated name-resolution pass that canonicalizes namespace-aware names, and finally into the [type checker](the-type-checker.md):
 
 ```
-[(Token, Span), ...] → Parser → Program (Vec<Stmt>) → Conditional → Resolver → NameResolver → Type Checker
+[(Token, Span), ...] → Parser → Program (Vec<Stmt>) → MagicConstants → Conditional → Resolver → NameResolver → Type Checker
 ```
 
 ---

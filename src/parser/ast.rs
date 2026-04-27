@@ -119,6 +119,18 @@ pub enum ExprKind {
         element_type: TypeExpr,
         len: Box<Expr>,
     },
+    MagicConstant(MagicConstant),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+pub enum MagicConstant {
+    Dir,
+    File,
+    Function,
+    Class,
+    Method,
+    Namespace,
+    Trait,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -313,7 +325,7 @@ pub enum StmtKind {
         default: Option<Vec<Stmt>>,
     },
     Include {
-        path: String,
+        path: Expr,
         once: bool,
         required: bool,
     },

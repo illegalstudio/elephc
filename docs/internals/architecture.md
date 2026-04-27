@@ -25,6 +25,13 @@ PHP source (.php)
 └────┬─────┘
      │
      ▼
+┌────────────────┐
+│ MagicConstants │  src/magic_constants.rs
+│                │  Lowers PHP magic constants per source file before
+│                │  include inlining and semantic passes.
+└────┬───────────┘
+     │
+     ▼
 ┌─────────────┐
 │ Conditional │  src/conditional.rs
 │             │  Applies CLI `--define` symbols to `ifdef` branches.
@@ -125,6 +132,7 @@ src/
 ├── main.rs                    CLI entry point
 ├── lib.rs                     Public module exports
 ├── span.rs                    Source position (line, col)
+├── magic_constants.rs         Per-file lowering for PHP magic constants
 ├── conditional.rs             Build-time `ifdef` pass
 ├── resolver.rs                Include/require file resolution
 ├── optimize/                  Constant folding, constant propagation, control-flow pruning, normalization, dead-code elimination

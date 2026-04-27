@@ -239,7 +239,7 @@ The full list of supported constructs, operators, and control structures is in t
 - **Control flow**: if/elseif/else, while, do-while, for, foreach, switch, match, break, continue, try/catch/finally/throw
 - **Operators**: arithmetic, comparison, logical, bitwise, ternary, null coalescing (`??`), null coalescing assignment (`??=`), and compound assignments
 - **Types**: union types (`int|string`), nullable (`?int`), type casting, typed properties, typed parameters and returns
-- **Modules**: namespaces, use imports, include/require/require_once
+- **Modules**: namespaces, use imports, include/require/require_once, PHP magic constants
 - **FFI**: extern functions, extern blocks, extern globals, extern classes, pointer builtins
 - **Extensions**: `ifdef`, `packed class`, `buffer<T>`, `buffer_new<T>()`, `buffer_len()`, `buffer_free()`
 
@@ -268,7 +268,7 @@ User-defined constants are also supported via `const NAME = value;` and `define(
 ## How it works
 
 ```
-PHP source → Lexer → Parser (AST) → Conditional (ifdef/--define) → Resolver (include) → NameResolver (namespaces/use/FQNs) → Optimizer (constant folding) → Type Checker → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → Codegen → as + ld → native executable
+PHP source → Lexer → Parser (AST) → Magic constants (per-file) → Conditional (ifdef/--define) → Resolver (include + per-file constants for included files) → NameResolver (namespaces/use/FQNs) → Optimizer (constant folding) → Type Checker → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → Codegen → as + ld → native executable
 ```
 
 The compiler emits human-readable assembly for the selected target. You can inspect the `.s` file to see exactly what your PHP becomes:

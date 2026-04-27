@@ -83,6 +83,14 @@ pub enum Token {
     PhpEol,
     PhpOs,
     DirectorySeparator,
+    DunderDir,
+    DunderFile,
+    DunderLine,
+    DunderFunction,
+    DunderClass,
+    DunderMethod,
+    DunderNamespace,
+    DunderTrait,
     Class,          // class
     Enum,           // enum
     New,            // new

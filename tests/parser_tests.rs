@@ -1,7 +1,7 @@
 use elephc::lexer::tokenize;
 use elephc::names::Name;
 use elephc::parser::ast::{
-    BinOp, CallableTarget, CatchClause, Expr, ExprKind, StaticReceiver, Stmt, StmtKind,
+    BinOp, CallableTarget, CatchClause, Expr, ExprKind, MagicConstant, StaticReceiver, Stmt, StmtKind,
     TraitAdaptation, TypeExpr, UseKind, Visibility,
 };
 use elephc::parser::parse;
@@ -756,6 +756,13 @@ fn test_strict_equal_same_precedence_as_loose() {
 
 // --- Include/Require ---
 
+fn assert_path_string_literal(path: &Expr, expected: &str) {
+    match &path.kind {
+        ExprKind::StringLiteral(s) => assert_eq!(s, expected),
+        other => panic!("expected StringLiteral path, got {:?}", other),
+    }
+}
+
 #[test]
 fn test_include_parses() {
     let stmts = parse_source("<?php include 'file.php';");
@@ -766,7 +773,7 @@ fn test_include_parses() {
         required,
     } = &stmts[0].kind
     {
-        assert_eq!(path, "file.php");
+        assert_path_string_literal(path, "file.php");
         assert!(!once);
         assert!(!required);
     } else {
@@ -783,7 +790,7 @@ fn test_require_parses() {
         required,
     } = &stmts[0].kind
     {
-        assert_eq!(path, "file.php");
+        assert_path_string_literal(path, "file.php");
         assert!(!once);
         assert!(required);
     } else {
@@ -817,7 +824,42 @@ fn test_require_once_parses() {
 fn test_include_with_parens_parses() {
     let stmts = parse_source("<?php include('file.php');");
     if let StmtKind::Include { path, .. } = &stmts[0].kind {
-        assert_eq!(path, "file.php");
+        assert_path_string_literal(path, "file.php");
+    } else {
+        panic!("expected Include");
+    }
+}
+
+#[test]
+fn test_require_with_dunder_dir_concat_parses() {
+    let stmts = parse_source("<?php require __DIR__ . '/lib/x.php';");
+    if let StmtKind::Include { path, .. } = &stmts[0].kind {
+        match &path.kind {
+            ExprKind::BinaryOp { left, op: BinOp::Concat, right } => {
+                assert_eq!(left.kind, ExprKind::MagicConstant(MagicConstant::Dir));
+                assert_eq!(right.kind, ExprKind::StringLiteral("/lib/x.php".to_string()));
+            }
+            other => panic!("expected BinaryOp(Concat) path, got {:?}", other),
+        }
+    } else {
+        panic!("expected Include");
+    }
+}
+
+#[test]
+fn test_require_with_const_ref_parses() {
+    let stmts = parse_source("<?php require BASE . '/x.php';");
+    if let StmtKind::Include { path, .. } = &stmts[0].kind {
+        match &path.kind {
+            ExprKind::BinaryOp { left, op: BinOp::Concat, right } => {
+                match &left.kind {
+                    ExprKind::ConstRef(name) => assert_eq!(name.as_str(), "BASE"),
+                    other => panic!("expected ConstRef left, got {:?}", other),
+                }
+                assert_eq!(right.kind, ExprKind::StringLiteral("/x.php".to_string()));
+            }
+            other => panic!("expected BinaryOp(Concat) path, got {:?}", other),
+        }
     } else {
         panic!("expected Include");
     }
@@ -2704,4 +2746,86 @@ fn test_parse_union_typed_assign() {
 #[test]
 fn test_parse_nullable_shorthand_cannot_be_combined_with_union() {
     assert!(parse_fails("<?php ?int|string $value = null;"));
+}
+
+// --- Magic constants ---
+
+fn echoed_expr(stmts: &[Stmt]) -> &ExprKind {
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => &expr.kind,
+        other => panic!("Expected echo stmt, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_dunder_dir_magic_constant() {
+    let stmts = parse_source("<?php echo __DIR__;");
+    assert_eq!(echoed_expr(&stmts), &ExprKind::MagicConstant(MagicConstant::Dir));
+}
+
+#[test]
+fn test_parse_dunder_dir_magic_constant_case_insensitive() {
+    let stmts = parse_source("<?php echo __dir__;");
+    assert_eq!(echoed_expr(&stmts), &ExprKind::MagicConstant(MagicConstant::Dir));
+}
+
+#[test]
+fn test_parse_dunder_file_magic_constant() {
+    let stmts = parse_source("<?php echo __FILE__;");
+    assert_eq!(echoed_expr(&stmts), &ExprKind::MagicConstant(MagicConstant::File));
+}
+
+#[test]
+fn test_parse_dunder_line_lowers_to_int_literal() {
+    // __LINE__ is substituted at parse time using the span line.
+    let stmts = parse_source("<?php echo __LINE__;");
+    match echoed_expr(&stmts) {
+        ExprKind::IntLiteral(n) => assert_eq!(*n, 1),
+        other => panic!("expected IntLiteral, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_dunder_line_reports_correct_line_inside_multiline() {
+    let stmts = parse_source("<?php\n\necho __LINE__;\n");
+    match echoed_expr(&stmts) {
+        ExprKind::IntLiteral(n) => assert_eq!(*n, 3),
+        other => panic!("expected IntLiteral, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_dunder_function_magic_constant() {
+    let stmts = parse_source("<?php echo __FUNCTION__;");
+    assert_eq!(
+        echoed_expr(&stmts),
+        &ExprKind::MagicConstant(MagicConstant::Function)
+    );
+}
+
+#[test]
+fn test_parse_dunder_class_magic_constant() {
+    let stmts = parse_source("<?php echo __CLASS__;");
+    assert_eq!(echoed_expr(&stmts), &ExprKind::MagicConstant(MagicConstant::Class));
+}
+
+#[test]
+fn test_parse_dunder_method_magic_constant() {
+    let stmts = parse_source("<?php echo __METHOD__;");
+    assert_eq!(echoed_expr(&stmts), &ExprKind::MagicConstant(MagicConstant::Method));
+}
+
+#[test]
+fn test_parse_dunder_namespace_magic_constant() {
+    let stmts = parse_source("<?php echo __NAMESPACE__;");
+    assert_eq!(
+        echoed_expr(&stmts),
+        &ExprKind::MagicConstant(MagicConstant::Namespace)
+    );
+}
+
+#[test]
+fn test_parse_dunder_trait_magic_constant() {
+    let stmts = parse_source("<?php echo __TRAIT__;");
+    assert_eq!(echoed_expr(&stmts), &ExprKind::MagicConstant(MagicConstant::Trait));
 }

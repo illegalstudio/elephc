@@ -347,6 +347,8 @@ Proper type system for PHP compatibility.
 - [ ] Real-world CLI tools compiled as validation
 - [ ] Apple notarization for direct downloads (codesign + notarytool)
 - [ ] Installation / packaging documentation for the supported host platforms
+- [x] PHP-compatible magic constants: `__DIR__`, `__FILE__`, `__LINE__`, `__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`, `__TRAIT__` (case-insensitive names, per-file include scope, closure names, trait `__CLASS__` rebinding)
+- [x] Compile-time-constant expressions in `include` / `require` paths (string literals, concat, magic constants, namespace-aware `const` / `use const` / `define()` refs)
 
 ## v0.20.x — Shared and static libraries (C ABI)
 
@@ -398,6 +400,7 @@ Features that are feasible but complex. Not currently planned for any specific v
 | Feature | Complexity | Notes |
 |---|---|---|
 | Assignment expressions with PHP low-precedence operators | Medium | Model assignment as an expression so forms like `$x = true and false;` match PHP exactly instead of requiring parentheses around the word-form logical RHS. Requires parser/AST/type/codegen changes and precedence regression tests. |
+| PHP case-insensitive symbol parity | Medium | Extend PHP-compatible case-insensitive matching beyond magic constants to keywords, built-in/user function calls, class/interface/trait names, and method lookup while preserving PHP's case-sensitive variables, object properties, string array keys, and user constants. |
 | Full PHP list destructuring | Medium | Extend `[$a, $b] = ...` beyond plain variables and indexed RHS values to cover skipped entries, nested patterns, and associative-key destructuring. |
 | Array union and heterogeneous indexed arrays | Medium | Add PHP array `+` union semantics and optionally allow mixed payloads in indexed arrays instead of requiring homogeneous indexed values. |
 | Multi-level `break` / `continue` | Low | Parse and lower numeric depths such as `break 2;` and `continue 2;` through nested loop/switch/finally exits. |
@@ -408,7 +411,8 @@ Features that are feasible but complex. Not currently planned for any specific v
 | OOP property parity v2 | High | Cover abstract properties, `readonly static` properties, instance property redeclaration rules, and the remaining by-reference constructor-promotion gaps (`readonly` and default values). |
 | Buffer ergonomics v2 | Medium | Consider dynamic resize/push/pop, `foreach`, array conversion, and automatic cleanup for `buffer<T>` while keeping the hot-path POD contract explicit. |
 | Broader date, regex, and JSON PHP parity | High | Expand `strtotime()` relative formats, PCRE-compatible regex features/captures/backreferences, and `json_decode()` structured array/object decoding. |
-| Compile-time include path expressions | Low | Accept constant-folded string paths for `include`/`require`; fully runtime-dynamic includes remain incompatible with the current AOT model. |
+| Runtime-dynamic include paths | Low | Model or explicitly reject runtime-evaluated `include`/`require` path expressions beyond the current compile-time string-folder (`$path`, function calls, ternaries, property access). |
+| Runtime-order-aware include_once / require_once | Medium | Add runtime guards for `include_once` / `require_once` inside functions, methods, loops, and conditional branches so skipped files match PHP execution order rather than only compile-time traversal order. |
 | PHP resource type compatibility | Medium | Model resources separately from integers so file handles and future extension handles can more closely match PHP behavior. |
 | Runtime-value compatibility polishing | Medium | Match PHP false-return conventions for `strpos()`/`array_search()`, `define()` return values, uninitialized typed-property state, integer overflow promotion, and broader loose-comparison semantics. |
 | String-capable FFI callbacks | Medium | Allow C callback signatures that pass or return strings once ownership and temporary C-string lifetimes are modeled safely across callback boundaries. |

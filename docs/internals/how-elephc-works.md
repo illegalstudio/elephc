@@ -76,7 +76,15 @@ Program [
 
 The tree captures the **structure** — `IntLiteral(5)` is the right operand of `Gt`, and `Echo` is inside the `then_body` of the `If`. Token details like parentheses and braces are gone — they served their purpose during parsing.
 
-## Phase 3: Conditional compilation
+## Phase 3: Magic constant lowering
+
+**File:** `src/magic_constants.rs`
+
+Magic constants such as `__DIR__`, `__FILE__`, `__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`, and `__TRAIT__` are lowered to ordinary literals before later semantic passes run. The main file is lowered here; included files are lowered by the resolver as each file is parsed, so included files keep their own file path, namespace, and lexical scope.
+
+In this example, there are no magic constants, so the AST passes through unchanged.
+
+## Phase 4: Conditional compilation
 
 **File:** `src/conditional.rs`
 
@@ -84,13 +92,13 @@ If the program uses elephc-only `ifdef SYMBOL { ... } else { ... }` blocks, the 
 
 In this example, there are no `ifdef` blocks, so the AST passes through unchanged.
 
-## Phase 4: Resolving
+## Phase 5: Resolving
 
 **File:** `src/resolver.rs`
 
-If the program had `include` or `require` statements, the resolver would parse those files and inline their ASTs. In this example, there's nothing to resolve — the AST passes through unchanged.
+If the program had `include` or `require` statements, the resolver would parse those files, lower their file-local magic constants, and inline their ASTs. It also folds compile-time include path expressions, including namespace-aware `const`, `use const`, and `define()` references. In this example, there's nothing to resolve — the AST passes through unchanged.
 
-## Phase 5: Name resolution
+## Phase 6: Name resolution
 
 **File:** `src/name_resolver/`
 
@@ -98,7 +106,7 @@ After includes are flattened, elephc resolves namespace-aware names. This pass a
 
 In this example there are no namespaces or imports, so the AST still passes through unchanged.
 
-## Phase 6: Early optimization (constant folding)
+## Phase 7: Early optimization (constant folding)
 
 **File:** `src/optimize/`
 
@@ -118,7 +126,7 @@ The pass is deliberately local and side-effect aware. It simplifies scalar compu
 
 In our running example there is nothing to fold yet: the pass does not currently propagate `$x = 10` into the later `$x > 5` comparison.
 
-## Phase 7: Type checking
+## Phase 8: Type checking
 
 **File:** `src/types/` — See [The Type Checker](the-type-checker.md) for details.
 
@@ -140,7 +148,7 @@ If you tried `$x = "hello"` after `$x = 10`, the type checker would reject it �
 
 On successful type checking, elephc also runs a warning pass that reports issues such as unused variables and unreachable code. On failing compilations, the parser and checker both try to recover conservatively so they can often report more than one independent error in a single run.
 
-## Phase 8: Post-typecheck constant propagation
+## Phase 9: Post-typecheck constant propagation
 
 **File:** `src/optimize/`
 
@@ -168,7 +176,7 @@ if (true) {
 }
 ```
 
-## Phase 9: Post-typecheck control-flow pruning
+## Phase 10: Post-typecheck control-flow pruning
 
 **File:** `src/optimize/`
 
@@ -195,7 +203,7 @@ $x = 10;
 echo "big\n";
 ```
 
-## Phase 10: Control-flow normalization
+## Phase 11: Control-flow normalization
 
 **File:** `src/optimize/`
 
@@ -210,7 +218,7 @@ This pass currently handles cases such as:
 - merging adjacent identical `catch` handlers into canonical multi-catch clauses with deduplicated, stably ordered type lists
 - folding an outer `finally` into an inner `try` when the wrapper is structurally redundant
 
-## Phase 11: Dead-code elimination
+## Phase 12: Dead-code elimination
 
 **File:** `src/optimize/`
 
@@ -229,7 +237,7 @@ This pass currently handles cases such as:
 
 In our running example there is nothing else to remove: the remaining assignment and `echo` stay as they are.
 
-## Phase 12: Code generation
+## Phase 13: Code generation
 
 **File:** `src/codegen/` — See [The Code Generator](the-codegen.md) for details.
 
@@ -272,7 +280,7 @@ Key observations:
 - `echo "big\n"` → load string address + length, then `svc` to write to stdout
 - The string literal lives in the `.data` section, referenced by label `_str_0`
 
-## Phase 13: Runtime preparation, assembly, and linking
+## Phase 14: Runtime preparation, assembly, and linking
 
 **Tools:** native `as` and `ld` (or the equivalent system toolchain)
 
@@ -308,7 +316,7 @@ On Linux, elephc invokes the native assembler/linker for the requested target.
 
 The `.o` file is deleted after linking. The result is a standalone executable.
 
-## Phase 14: Execution
+## Phase 15: Execution
 
 ```bash
 ./file
@@ -327,6 +335,8 @@ The binary runs directly on the CPU. There is no PHP interpreter or VM at runtim
                     │
                     ▼ Parser
     [Assign{x, 10}, If{Gt(Var(x), 5), [Echo("big\n")]}]
+                    │
+                    ▼ Magic constants (no-op here)
                     │
                     ▼ Conditional (ifdef no-op here)
                     │

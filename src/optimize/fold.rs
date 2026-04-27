@@ -236,6 +236,9 @@ pub(super) fn fold_expr(expr: Expr) -> Expr {
             element_type,
             len: Box::new(fold_expr(*len)),
         },
+        ExprKind::MagicConstant(_) => {
+            unreachable!("MagicConstant must be lowered before optimizer passes")
+        }
     };
     Expr { kind, span }
 }

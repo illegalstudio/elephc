@@ -1,23 +1,143 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::errors::CompileError;
 use crate::lexer;
+use crate::names::{canonical_name_for_decl, Name, NameKind};
 use crate::parser;
-use crate::parser::ast::{CatchClause, ClassMethod, Program, Stmt, StmtKind};
+use crate::parser::ast::{
+    BinOp, CatchClause, ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind, UseKind,
+};
 use crate::span::Span;
+
+#[derive(Clone, Default)]
+struct ResolveState {
+    constants: HashMap<String, String>,
+    namespace: Option<String>,
+    const_imports: HashMap<String, String>,
+}
 
 /// Resolves all include/require statements by inlining the referenced files.
 /// Runs between parsing and type checking.
 pub fn resolve(program: Program, base_dir: &Path) -> Result<Program, CompileError> {
-    // Fast path: if no includes exist anywhere, return as-is
     if !has_includes(&program) {
         return Ok(program);
     }
 
     let mut included: HashSet<PathBuf> = HashSet::new();
     let mut include_chain: Vec<PathBuf> = Vec::new();
-    resolve_stmts(program, base_dir, &mut included, &mut include_chain)
+    let mut state = ResolveState::default();
+    resolve_stmts(program, base_dir, &mut included, &mut include_chain, &mut state)
+}
+
+/// Fold a path expression to a compile-time string. Handles string literals,
+/// concat of foldable subexpressions, and references to const/define-d string
+/// constants tracked in `state`. Returns the human-readable error message when
+/// the expression cannot be folded.
+fn fold_include_path(expr: &Expr, state: &ResolveState) -> Result<String, String> {
+    match &expr.kind {
+        ExprKind::StringLiteral(s) => Ok(s.clone()),
+        ExprKind::BinaryOp {
+            left,
+            op: BinOp::Concat,
+            right,
+        } => {
+            let l = fold_include_path(left, state)?;
+            let r = fold_include_path(right, state)?;
+            Ok(l + &r)
+        }
+        ExprKind::ConstRef(name) => resolve_constant_ref(name, state).ok_or_else(|| {
+            format!(
+                "include path references unknown constant '{}'; \
+                 the constant must be defined (via `const` or `define()`) \
+                 before the include statement",
+                name.as_str()
+            )
+        }),
+        _ => Err(
+            "include path must be a compile-time-constant string \
+             (string literal, concatenation thereof, or a `const`/`define()`-d \
+             string constant)"
+                .to_string(),
+        ),
+    }
+}
+
+fn resolve_constant_ref(name: &Name, state: &ResolveState) -> Option<String> {
+    constant_lookup_candidates(name, state)
+        .into_iter()
+        .find_map(|candidate| state.constants.get(&candidate).cloned())
+}
+
+fn constant_lookup_candidates(name: &Name, state: &ResolveState) -> Vec<String> {
+    if name.is_fully_qualified() {
+        return vec![name.as_canonical()];
+    }
+
+    if name.is_unqualified() {
+        if let Some(alias) = name
+            .last_segment()
+            .and_then(|segment| state.const_imports.get(segment))
+        {
+            return vec![alias.clone()];
+        }
+
+        let raw = name.as_canonical();
+        if let Some(namespace) = state.namespace.as_deref() {
+            if !namespace.is_empty() {
+                return vec![format!("{}\\{}", namespace, raw), raw];
+            }
+        }
+        return vec![raw];
+    }
+
+    if let Some(first) = name.parts.first() {
+        if let Some(alias) = state.const_imports.get(first) {
+            let suffix = &name.parts[1..];
+            if suffix.is_empty() {
+                return vec![alias.clone()];
+            }
+            return vec![format!("{}\\{}", alias, suffix.join("\\"))];
+        }
+    }
+
+    let raw = name.as_canonical();
+    if name.kind == NameKind::Qualified {
+        if let Some(namespace) = state.namespace.as_deref() {
+            if !namespace.is_empty() {
+                return vec![format!("{}\\{}", namespace, raw)];
+            }
+        }
+    }
+    vec![raw]
+}
+
+fn normalize_defined_constant_name(name: &str) -> String {
+    name.trim_start_matches('\\').to_string()
+}
+
+fn namespace_string(name: &Option<Name>) -> String {
+    name.as_ref().map(Name::as_canonical).unwrap_or_default()
+}
+
+fn register_const_imports(state: &mut ResolveState, stmt: &Stmt) {
+    let StmtKind::UseDecl { imports } = &stmt.kind else {
+        return;
+    };
+    for item in imports {
+        if item.kind == UseKind::Const {
+            state.const_imports.insert(
+                item.alias.clone(),
+                normalize_defined_constant_name(&item.name.as_canonical()),
+            );
+        }
+    }
+}
+
+fn is_define_call_name(name: &Name) -> bool {
+    matches!(name.kind, NameKind::Unqualified | NameKind::FullyQualified)
+        && name.parts.len() == 1
+        && name.parts[0] == "define"
 }
 
 /// Check if any statement (recursively) contains an Include.
@@ -27,7 +147,7 @@ fn has_includes(stmts: &[Stmt]) -> bool {
         StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
             has_includes(then_body)
                 || elseif_clauses.iter().any(|(_, body)| has_includes(body))
-                || else_body.as_ref().is_some_and(|b| has_includes(b))
+                || else_body.as_ref().is_some_and(|body| has_includes(body))
         }
         StmtKind::While { body, .. }
         | StmtKind::DoWhile { body, .. }
@@ -42,15 +162,10 @@ fn has_includes(stmts: &[Stmt]) -> bool {
         }
         StmtKind::ClassDecl { methods, .. }
         | StmtKind::InterfaceDecl { methods, .. }
-        | StmtKind::TraitDecl { methods, .. } => {
-            methods.iter().any(|m| has_includes(&m.body))
-        }
-        StmtKind::ConstDecl { .. } | StmtKind::ListUnpack { .. }
-        | StmtKind::Global { .. } | StmtKind::StaticVar { .. } => false,
-        StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. } => false,
+        | StmtKind::TraitDecl { methods, .. } => methods.iter().any(|m| has_includes(&m.body)),
         StmtKind::Switch { cases, default, .. } => {
             cases.iter().any(|(_, body)| has_includes(body))
-                || default.as_ref().is_some_and(|b| has_includes(b))
+                || default.as_ref().is_some_and(|body| has_includes(body))
         }
         _ => false,
     })
@@ -61,137 +176,202 @@ fn resolve_stmts(
     base_dir: &Path,
     included: &mut HashSet<PathBuf>,
     include_chain: &mut Vec<PathBuf>,
+    state: &mut ResolveState,
 ) -> Result<Vec<Stmt>, CompileError> {
     let mut result = Vec::new();
 
     for stmt in stmts {
         match &stmt.kind {
             StmtKind::Include { path, once, required } => {
-                let resolved = resolve_path(path, base_dir);
+                let path_str = fold_include_path(path, state)
+                    .map_err(|msg| CompileError::new(stmt.span, &msg))?;
+                let resolved = resolve_path(&path_str, base_dir);
                 let canonical = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
 
-                // Check if file exists
                 if !resolved.exists() {
                     if *required {
                         return Err(CompileError::new(
                             stmt.span,
-                            &format!("Required file not found: '{}'", path),
+                            &format!("Required file not found: '{}'", path_str),
                         ));
                     }
                     continue;
                 }
 
-                // Handle _once: skip if already included
                 if *once && included.contains(&canonical) {
                     continue;
                 }
 
-                // Detect circular includes
                 if include_chain.contains(&canonical) {
                     return Err(CompileError::new(
                         stmt.span,
-                        &format!("Circular include detected: '{}'", path),
+                        &format!("Circular include detected: '{}'", path_str),
                     ));
                 }
 
                 included.insert(canonical.clone());
 
-                // Read, tokenize, parse the included file
                 let included_stmts = parse_file(&resolved, stmt.span)?;
+                let included_stmts =
+                    crate::magic_constants::substitute_file_and_scope_constants(included_stmts, &resolved);
 
-                // Recursively resolve includes in the included file
                 let included_dir = resolved.parent().unwrap_or(base_dir);
                 include_chain.push(canonical);
+
+                let saved_namespace = state.namespace.clone();
+                let saved_imports = state.const_imports.clone();
+                state.namespace = None;
+                state.const_imports = HashMap::new();
                 let resolved_stmts =
-                    resolve_stmts(included_stmts, included_dir, included, include_chain)?;
+                    resolve_stmts(included_stmts, included_dir, included, include_chain, state)?;
+                state.namespace = saved_namespace;
+                state.const_imports = saved_imports;
+
                 include_chain.pop();
 
-                result.extend(resolved_stmts);
+                result.push(Stmt::new(
+                    StmtKind::NamespaceBlock {
+                        name: None,
+                        body: resolved_stmts,
+                    },
+                    stmt.span,
+                ));
             }
-            // Recurse into bodies that can contain statements
-            StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
-                let then_resolved =
-                    resolve_stmts(then_body.clone(), base_dir, included, include_chain)?;
-                let mut elseif_resolved = Vec::new();
-                for (cond, body) in elseif_clauses {
-                    let body_resolved =
-                        resolve_stmts(body.clone(), base_dir, included, include_chain)?;
-                    elseif_resolved.push((cond.clone(), body_resolved));
+            StmtKind::ConstDecl { name, value } => {
+                if let Ok(s) = fold_include_path(value, state) {
+                    let key = canonical_name_for_decl(state.namespace.as_deref(), name);
+                    state.constants.insert(key, s);
                 }
-                let else_resolved = if let Some(body) = else_body {
-                    Some(resolve_stmts(body.clone(), base_dir, included, include_chain)?)
-                } else {
-                    None
-                };
+                result.push(stmt);
+            }
+            StmtKind::ExprStmt(expr) => {
+                if let ExprKind::FunctionCall { name, args } = &expr.kind {
+                    if is_define_call_name(name) && args.len() == 2 {
+                        if let ExprKind::StringLiteral(const_name) = &args[0].kind {
+                            if let Ok(value) = fold_include_path(&args[1], state) {
+                                state
+                                    .constants
+                                    .insert(normalize_defined_constant_name(const_name), value);
+                            }
+                        }
+                    }
+                }
+                result.push(stmt);
+            }
+            StmtKind::NamespaceDecl { name } => {
+                state.namespace = Some(namespace_string(name));
+                state.const_imports = HashMap::new();
+                result.push(stmt);
+            }
+            StmtKind::NamespaceBlock { name, body } => {
+                let saved_namespace = state.namespace.clone();
+                let saved_imports = state.const_imports.clone();
+                state.namespace = Some(namespace_string(name));
+                state.const_imports = HashMap::new();
+                let body_resolved =
+                    resolve_stmts(body.clone(), base_dir, included, include_chain, state)?;
+                state.namespace = saved_namespace;
+                state.const_imports = saved_imports;
+                result.push(Stmt::new(
+                    StmtKind::NamespaceBlock {
+                        name: name.clone(),
+                        body: body_resolved,
+                    },
+                    stmt.span,
+                ));
+            }
+            StmtKind::UseDecl { .. } => {
+                register_const_imports(state, &stmt);
+                result.push(stmt);
+            }
+            StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
+                let then_body = resolve_isolated(then_body.clone(), base_dir, included, include_chain, state)?;
+                let elseif_clauses = elseif_clauses
+                    .iter()
+                    .map(|(cond, body)| {
+                        Ok((
+                            cond.clone(),
+                            resolve_isolated(body.clone(), base_dir, included, include_chain, state)?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, CompileError>>()?;
+                let else_body = else_body
+                    .as_ref()
+                    .map(|body| resolve_isolated(body.clone(), base_dir, included, include_chain, state))
+                    .transpose()?;
                 result.push(Stmt::new(
                     StmtKind::If {
                         condition: condition.clone(),
-                        then_body: then_resolved,
-                        elseif_clauses: elseif_resolved,
-                        else_body: else_resolved,
+                        then_body,
+                        elseif_clauses,
+                        else_body,
                     },
                     stmt.span,
                 ));
             }
             StmtKind::While { condition, body } => {
-                let body_resolved =
-                    resolve_stmts(body.clone(), base_dir, included, include_chain)?;
+                let body = resolve_isolated(body.clone(), base_dir, included, include_chain, state)?;
                 result.push(Stmt::new(
-                    StmtKind::While { condition: condition.clone(), body: body_resolved },
+                    StmtKind::While {
+                        condition: condition.clone(),
+                        body,
+                    },
                     stmt.span,
                 ));
             }
             StmtKind::DoWhile { body, condition } => {
-                let body_resolved =
-                    resolve_stmts(body.clone(), base_dir, included, include_chain)?;
+                let body = resolve_isolated(body.clone(), base_dir, included, include_chain, state)?;
                 result.push(Stmt::new(
-                    StmtKind::DoWhile { body: body_resolved, condition: condition.clone() },
+                    StmtKind::DoWhile {
+                        body,
+                        condition: condition.clone(),
+                    },
                     stmt.span,
                 ));
             }
             StmtKind::For { init, condition, update, body } => {
-                let body_resolved =
-                    resolve_stmts(body.clone(), base_dir, included, include_chain)?;
+                let body = resolve_isolated(body.clone(), base_dir, included, include_chain, state)?;
                 result.push(Stmt::new(
                     StmtKind::For {
                         init: init.clone(),
                         condition: condition.clone(),
                         update: update.clone(),
-                        body: body_resolved,
+                        body,
                     },
                     stmt.span,
                 ));
             }
             StmtKind::Foreach { array, key_var, value_var, body } => {
-                let body_resolved =
-                    resolve_stmts(body.clone(), base_dir, included, include_chain)?;
+                let body = resolve_isolated(body.clone(), base_dir, included, include_chain, state)?;
                 result.push(Stmt::new(
                     StmtKind::Foreach {
                         array: array.clone(),
                         key_var: key_var.clone(),
                         value_var: value_var.clone(),
-                        body: body_resolved,
+                        body,
                     },
                     stmt.span,
                 ));
             }
             StmtKind::Switch { subject, cases, default } => {
-                let mut cases_resolved = Vec::new();
-                for (values, body) in cases {
-                    let body_resolved =
-                        resolve_stmts(body.clone(), base_dir, included, include_chain)?;
-                    cases_resolved.push((values.clone(), body_resolved));
-                }
-                let default_resolved = if let Some(body) = default {
-                    Some(resolve_stmts(body.clone(), base_dir, included, include_chain)?)
-                } else {
-                    None
-                };
+                let cases = cases
+                    .iter()
+                    .map(|(values, body)| {
+                        Ok((
+                            values.clone(),
+                            resolve_isolated(body.clone(), base_dir, included, include_chain, state)?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, CompileError>>()?;
+                let default = default
+                    .as_ref()
+                    .map(|body| resolve_isolated(body.clone(), base_dir, included, include_chain, state))
+                    .transpose()?;
                 result.push(Stmt::new(
                     StmtKind::Switch {
                         subject: subject.clone(),
-                        cases: cases_resolved,
-                        default: default_resolved,
+                        cases,
+                        default,
                     },
                     stmt.span,
                 ));
@@ -201,57 +381,46 @@ fn resolve_stmts(
                 catches,
                 finally_body,
             } => {
-                let try_body_resolved =
-                    resolve_stmts(try_body.clone(), base_dir, included, include_chain)?;
-                let mut catches_resolved = Vec::new();
-                for catch_clause in catches {
-                    let body_resolved = resolve_stmts(
-                        catch_clause.body.clone(),
-                        base_dir,
-                        included,
-                        include_chain,
-                    )?;
-                    catches_resolved.push(CatchClause {
-                        exception_types: catch_clause.exception_types.clone(),
-                        variable: catch_clause.variable.clone(),
-                        body: body_resolved,
-                    });
-                }
-                let finally_resolved = if let Some(body) = finally_body {
-                    Some(resolve_stmts(body.clone(), base_dir, included, include_chain)?)
-                } else {
-                    None
-                };
+                let try_body =
+                    resolve_isolated(try_body.clone(), base_dir, included, include_chain, state)?;
+                let catches = catches
+                    .iter()
+                    .map(|catch_clause| {
+                        Ok(CatchClause {
+                            exception_types: catch_clause.exception_types.clone(),
+                            variable: catch_clause.variable.clone(),
+                            body: resolve_isolated(
+                                catch_clause.body.clone(),
+                                base_dir,
+                                included,
+                                include_chain,
+                                state,
+                            )?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, CompileError>>()?;
+                let finally_body = finally_body
+                    .as_ref()
+                    .map(|body| resolve_isolated(body.clone(), base_dir, included, include_chain, state))
+                    .transpose()?;
                 result.push(Stmt::new(
                     StmtKind::Try {
-                        try_body: try_body_resolved,
-                        catches: catches_resolved,
-                        finally_body: finally_resolved,
+                        try_body,
+                        catches,
+                        finally_body,
                     },
                     stmt.span,
                 ));
             }
             StmtKind::FunctionDecl { name, params, variadic, return_type, body } => {
-                let body_resolved =
-                    resolve_stmts(body.clone(), base_dir, included, include_chain)?;
+                let body = resolve_isolated(body.clone(), base_dir, included, include_chain, state)?;
                 result.push(Stmt::new(
                     StmtKind::FunctionDecl {
                         name: name.clone(),
                         params: params.clone(),
                         variadic: variadic.clone(),
                         return_type: return_type.clone(),
-                        body: body_resolved,
-                    },
-                    stmt.span,
-                ));
-            }
-            StmtKind::NamespaceBlock { name, body } => {
-                let body_resolved =
-                    resolve_stmts(body.clone(), base_dir, included, include_chain)?;
-                result.push(Stmt::new(
-                    StmtKind::NamespaceBlock {
-                        name: name.clone(),
-                        body: body_resolved,
+                        body,
                     },
                     stmt.span,
                 ));
@@ -267,15 +436,7 @@ fn resolve_stmts(
                 properties,
                 methods,
             } => {
-                let mut methods_resolved = Vec::new();
-                for method in methods {
-                    let body_resolved =
-                        resolve_stmts(method.body.clone(), base_dir, included, include_chain)?;
-                    methods_resolved.push(ClassMethod {
-                        body: body_resolved,
-                        ..method.clone()
-                    });
-                }
+                let methods = resolve_methods(methods, base_dir, included, include_chain, state)?;
                 result.push(Stmt::new(
                     StmtKind::ClassDecl {
                         name: name.clone(),
@@ -286,29 +447,18 @@ fn resolve_stmts(
                         is_readonly_class: *is_readonly_class,
                         trait_uses: trait_uses.clone(),
                         properties: properties.clone(),
-                        methods: methods_resolved,
+                        methods,
                     },
                     stmt.span,
                 ));
             }
-            StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. } => {
-                result.push(stmt);
-            }
             StmtKind::InterfaceDecl { name, extends, methods } => {
-                let mut methods_resolved = Vec::new();
-                for method in methods {
-                    let body_resolved =
-                        resolve_stmts(method.body.clone(), base_dir, included, include_chain)?;
-                    methods_resolved.push(ClassMethod {
-                        body: body_resolved,
-                        ..method.clone()
-                    });
-                }
+                let methods = resolve_methods(methods, base_dir, included, include_chain, state)?;
                 result.push(Stmt::new(
                     StmtKind::InterfaceDecl {
                         name: name.clone(),
                         extends: extends.clone(),
-                        methods: methods_resolved,
+                        methods,
                     },
                     stmt.span,
                 ));
@@ -319,21 +469,13 @@ fn resolve_stmts(
                 properties,
                 methods,
             } => {
-                let mut methods_resolved = Vec::new();
-                for method in methods {
-                    let body_resolved =
-                        resolve_stmts(method.body.clone(), base_dir, included, include_chain)?;
-                    methods_resolved.push(ClassMethod {
-                        body: body_resolved,
-                        ..method.clone()
-                    });
-                }
+                let methods = resolve_methods(methods, base_dir, included, include_chain, state)?;
                 result.push(Stmt::new(
                     StmtKind::TraitDecl {
                         name: name.clone(),
                         trait_uses: trait_uses.clone(),
                         properties: properties.clone(),
-                        methods: methods_resolved,
+                        methods,
                     },
                     stmt.span,
                 ));
@@ -345,6 +487,37 @@ fn resolve_stmts(
     }
 
     Ok(result)
+}
+
+fn resolve_isolated(
+    stmts: Vec<Stmt>,
+    base_dir: &Path,
+    included: &mut HashSet<PathBuf>,
+    include_chain: &mut Vec<PathBuf>,
+    state: &ResolveState,
+) -> Result<Vec<Stmt>, CompileError> {
+    let mut local = state.clone();
+    resolve_stmts(stmts, base_dir, included, include_chain, &mut local)
+}
+
+fn resolve_methods(
+    methods: &[ClassMethod],
+    base_dir: &Path,
+    included: &mut HashSet<PathBuf>,
+    include_chain: &mut Vec<PathBuf>,
+    state: &ResolveState,
+) -> Result<Vec<ClassMethod>, CompileError> {
+    methods
+        .iter()
+        .map(|method| {
+            let body =
+                resolve_isolated(method.body.clone(), base_dir, included, include_chain, state)?;
+            Ok(ClassMethod {
+                body,
+                ..method.clone()
+            })
+        })
+        .collect()
 }
 
 fn resolve_path(path: &str, base_dir: &Path) -> PathBuf {

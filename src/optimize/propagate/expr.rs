@@ -184,6 +184,9 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             element_type,
             len: Box::new(propagate_expr(*len, env)),
         },
+        ExprKind::MagicConstant(_) => {
+            unreachable!("MagicConstant must be lowered before optimizer passes")
+        }
     };
 
     fold_expr(Expr { kind, span })

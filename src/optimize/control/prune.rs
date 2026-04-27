@@ -549,6 +549,9 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             element_type,
             len: Box::new(prune_expr(*len)),
         },
+        ExprKind::MagicConstant(_) => {
+            unreachable!("MagicConstant must be lowered before optimizer passes")
+        }
     };
     let kind = prune_unused_pure_subexpressions(kind);
     Expr { kind, span }

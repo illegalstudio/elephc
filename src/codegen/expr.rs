@@ -167,6 +167,9 @@ pub fn emit_expr(
             // Value stays in x0 unchanged — only the type tag changes
             PhpType::Pointer(Some(target_type.clone()))
         }
+        ExprKind::MagicConstant(_) => {
+            unreachable!("MagicConstant must be lowered before codegen")
+        }
     }
 }
 

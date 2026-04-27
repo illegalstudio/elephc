@@ -142,6 +142,12 @@ pub fn flatten_classes(program: &Program) -> (Vec<FlattenedClass>, Vec<CompileEr
                     continue;
                 }
             };
+            let (merged_props, merged_methods) =
+                crate::magic_constants::bind_trait_class_constants(
+                    merged_props,
+                    merged_methods,
+                    name,
+                );
             flattened.push(FlattenedClass {
                 name: name.clone(),
                 extends: extends.as_ref().map(|name| name.as_str().to_string()),
