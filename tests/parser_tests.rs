@@ -470,6 +470,63 @@ fn test_word_logical_xor_higher_than_or() {
 }
 
 #[test]
+fn test_parse_instanceof_expression() {
+    let stmts = parse_source("<?php echo $a instanceof Foo;");
+    let expected = Stmt::echo(Expr::instance_of(
+        Expr::var("a"),
+        Name::unqualified("Foo"),
+    ));
+    assert_eq!(stmts, vec![expected]);
+}
+
+#[test]
+fn test_instanceof_binds_tighter_than_not() {
+    let stmts = parse_source("<?php echo !$a instanceof Foo;");
+    let expected = Stmt::echo(Expr::new(
+        ExprKind::Not(Box::new(Expr::instance_of(
+            Expr::var("a"),
+            Name::unqualified("Foo"),
+        ))),
+        elephc::span::Span::dummy(),
+    ));
+    assert_eq!(stmts, vec![expected]);
+}
+
+#[test]
+fn test_instanceof_binds_tighter_than_addition() {
+    let stmts = parse_source("<?php echo 1 + $a instanceof Foo;");
+    let expected = Stmt::echo(Expr::binop(
+        Expr::int_lit(1),
+        BinOp::Add,
+        Expr::instance_of(Expr::var("a"), Name::unqualified("Foo")),
+    ));
+    assert_eq!(stmts, vec![expected]);
+}
+
+#[test]
+fn test_instanceof_chains_left_to_right() {
+    let stmts = parse_source("<?php echo $a instanceof Foo instanceof Bar;");
+    let expected = Stmt::echo(Expr::instance_of(
+        Expr::instance_of(Expr::var("a"), Name::unqualified("Foo")),
+        Name::unqualified("Bar"),
+    ));
+    assert_eq!(stmts, vec![expected]);
+}
+
+#[test]
+fn test_instanceof_accepts_special_class_targets() {
+    let stmts = parse_source("<?php echo $a instanceof self; echo $a instanceof parent; echo $a instanceof static;");
+    assert_eq!(
+        stmts,
+        vec![
+            Stmt::echo(Expr::instance_of(Expr::var("a"), Name::unqualified("self"))),
+            Stmt::echo(Expr::instance_of(Expr::var("a"), Name::unqualified("parent"))),
+            Stmt::echo(Expr::instance_of(Expr::var("a"), Name::unqualified("static"))),
+        ]
+    );
+}
+
+#[test]
 fn test_word_logical_assignment_rhs_requires_parentheses() {
     assert!(parse_fails("<?php $x = true and false;"));
     assert!(parse_fails("<?php int $x = true or false;"));

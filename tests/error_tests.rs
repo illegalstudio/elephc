@@ -219,6 +219,30 @@ fn test_error_compound_assignment_missing_rhs() {
 }
 
 #[test]
+fn test_error_instanceof_missing_class_name() {
+    expect_error(
+        "<?php class A {} $a = new A(); echo $a instanceof 1;",
+        "Expected class or interface name after 'instanceof'",
+    );
+}
+
+#[test]
+fn test_error_instanceof_self_outside_class_scope() {
+    expect_error(
+        "<?php class A {} $a = new A(); echo $a instanceof self;",
+        "Cannot use self in instanceof outside of a class context",
+    );
+}
+
+#[test]
+fn test_error_instanceof_parent_requires_parent_class() {
+    expect_error(
+        "<?php class A { public function f(A $x) { return $x instanceof parent; } }",
+        "Class has no parent class",
+    );
+}
+
+#[test]
 fn test_error_bitwise_compound_assignment_requires_ints() {
     expect_error(
         "<?php $x = \"flags\"; $x &= 1;",

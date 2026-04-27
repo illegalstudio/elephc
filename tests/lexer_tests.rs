@@ -322,6 +322,12 @@ fn test_word_logical_operators_are_case_insensitive() {
 }
 
 #[test]
+fn test_instanceof_keyword_is_case_insensitive() {
+    let t = tokens("<?php instanceof INSTANCEOF InstanceOf");
+    assert_eq!(t[1..4], [Token::InstanceOf, Token::InstanceOf, Token::InstanceOf]);
+}
+
+#[test]
 fn test_interface_related_keywords() {
     let t = tokens("<?php interface implements abstract final");
     assert_eq!(t[1], Token::Interface);
