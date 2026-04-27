@@ -161,7 +161,7 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
                 crate::parser::ast::ExprKind::Null => PhpType::Void,
                 _ => PhpType::Int,
             };
-            ctx.constants.insert(name.clone(), (value.kind.clone(), ty));
+            ctx.constants.entry(name.clone()).or_insert((value.kind.clone(), ty));
         }
         StmtKind::ListUnpack { vars, value } => {
             arrays::emit_list_unpack_stmt(vars, value, emitter, ctx, data);

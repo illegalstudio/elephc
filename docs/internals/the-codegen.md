@@ -83,7 +83,7 @@ Statement emission also injects source markers of the form `@src line=<N> col=<M
 The compiler's codegen/runtime handoff now has three distinct artifacts:
 
 1. **User assembly** — emitted from the checked AST into the per-build `.s` file
-2. **Runtime object** — assembled from the shared runtime once and cached under `~/.cache/elephc/` (or `XDG_CACHE_HOME`) using the compiler version, target, and heap size in the filename
+2. **Runtime object** — assembled from the shared runtime once and cached under `~/.cache/elephc/` (or `XDG_CACHE_HOME`) using the compiler version, target, heap size, and generated runtime assembly hash in the filename
 3. **Optional source map** — a JSON sidecar generated from `@src` markers embedded in the user assembly comments
 
 This means normal CLI builds no longer concatenate the runtime text into every output assembly file before assembling. Instead, they:
@@ -366,6 +366,18 @@ $x ??= "default";
 
 The generated code loads `$x`, branches past the assignment when it is non-null, and evaluates/stores the right-hand side only on the null path. This preserves PHP's `??=` short-circuit behavior and avoids rewriting an already-owned heap value back into the same local slot.
 
+### Error-control operator
+
+The `@` operator lowers to a scoped runtime diagnostic-suppression pair:
+
+1. Call `__rt_diag_push_suppression`
+2. Evaluate the operand normally
+3. Preserve the operand result in the appropriate ABI result shape
+4. Call `__rt_diag_pop_suppression`
+5. Restore the operand result
+
+The exception handler frame also snapshots the current suppression depth before `setjmp()` and restores it after a `longjmp()` into catch dispatch. That prevents a thrown expression inside `@` from leaking warning suppression into later code.
+
 ### Nullsafe operator
 
 The `?->` operator lowers nullable receivers through the boxed mixed path used by nullable and union storage. Codegen unboxes the receiver, branches directly to a boxed `null` result when the runtime tag is null, and only evaluates property loads, method arguments, and method dispatch on the non-null object branch. Non-nullable object receivers reuse the ordinary `->` lowering.
@@ -392,7 +404,7 @@ const MAX = 100;
 echo MAX;
 ```
 
-Constants declared with `const` or `define()` are resolved at compile time. When the codegen encounters a `ConstRef`, it looks up the constant's value and emits it as a literal — `mov x0, #100` for an integer, or loads a string label from the data section. No runtime lookup is needed.
+Constants declared with `const` or `define()` are resolved at compile time. When the codegen encounters a `ConstRef`, it looks up the constant's value and emits it as a literal — `mov x0, #100` for an integer, or loads a string label from the data section. `define()` call sites still emit a per-constant runtime seen flag so the call returns `true` only for the first runtime definition and returns `false` with a suppressible warning on duplicate attempts.
 
 Enum cases reuse the same idea, but through enum metadata instead of scalar constants: `ExprKind::EnumCase` resolves to a canonical enum-case symbol emitted in runtime data, and helper builtins such as `Enum::from()` / `Enum::tryFrom()` lower through the checker/codegen enum tables carried in `Context`.
 

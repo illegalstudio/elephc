@@ -50,7 +50,7 @@ pub(super) fn check_builtin(
             for arg in args {
                 checker.infer_type(arg, env)?;
             }
-            Ok(Some(PhpType::Int))
+            Ok(Some(PhpType::Union(vec![PhpType::Int, PhpType::Bool])))
         }
         "strstr" => {
             if args.len() != 2 {

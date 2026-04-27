@@ -1,6 +1,7 @@
 mod arrays;
 mod buffers;
 mod data;
+mod diagnostics;
 mod emitters;
 mod exceptions;
 mod io;

@@ -29,13 +29,42 @@ fn test_strpos_found() {
 #[test]
 fn test_strpos_not_found() {
     let out = compile_and_run(r#"<?php echo strpos("Hello", "xyz");"#);
-    assert_eq!(out, "-1");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn test_strpos_not_found_is_strict_false() {
+    let out = compile_and_run(r#"<?php echo strpos("Hello", "xyz") === false ? "miss" : "hit";"#);
+    assert_eq!(out, "miss");
+}
+
+#[test]
+fn test_strpos_assigned_not_found_is_strict_false() {
+    let out = compile_and_run(
+        r#"<?php
+$pos = strpos("Hello", "xyz");
+echo $pos === false ? "miss" : "hit";
+"#,
+    );
+    assert_eq!(out, "miss");
+}
+
+#[test]
+fn test_strpos_zero_offset_is_not_false() {
+    let out = compile_and_run(r#"<?php echo strpos("abc", "a") === false ? "miss" : "zero";"#);
+    assert_eq!(out, "zero");
 }
 
 #[test]
 fn test_strrpos() {
     let out = compile_and_run(r#"<?php echo strrpos("abcabc", "bc");"#);
     assert_eq!(out, "4");
+}
+
+#[test]
+fn test_strrpos_not_found_is_strict_false() {
+    let out = compile_and_run(r#"<?php echo strrpos("abcabc", "zz") === false ? "miss" : "hit";"#);
+    assert_eq!(out, "miss");
 }
 
 #[test]
@@ -646,4 +675,3 @@ echo $result[0] . " " . $result[1];
     );
     assert_eq!(out, "John 30");
 }
-

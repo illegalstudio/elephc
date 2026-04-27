@@ -393,7 +393,7 @@ impl Checker {
             }
             StmtKind::ConstDecl { name, value } => {
                 let ty = self.infer_type(value, env)?;
-                self.constants.insert(name.clone(), ty);
+                self.constants.entry(name.clone()).or_insert(ty);
                 Ok(())
             }
             StmtKind::ListUnpack { vars, value } => {

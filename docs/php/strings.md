@@ -77,8 +77,8 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 |---|---|---|
 | `strlen()` | `strlen($str): int` | Returns string length |
 | `substr()` | `substr($str, $start [, $len]): string` | Extract substring |
-| `strpos()` | `strpos($hay, $needle): int` | Find first occurrence. Returns `-1` if not found (PHP returns `false`) |
-| `strrpos()` | `strrpos($hay, $needle): int` | Find last occurrence (-1 if not found) |
+| `strpos()` | `strpos($hay, $needle): int\|false` | Find first occurrence. Returns `false` if not found |
+| `strrpos()` | `strrpos($hay, $needle): int\|false` | Find last occurrence. Returns `false` if not found |
 | `strstr()` | `strstr($hay, $needle): string` | Find first occurrence and return rest |
 | `str_replace()` | `str_replace($search, $replace, $subject): string` | Replace all occurrences |
 | `str_ireplace()` | `str_ireplace($search, $replace, $subject): string` | Case-insensitive replace |

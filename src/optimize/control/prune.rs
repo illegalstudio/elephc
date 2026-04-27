@@ -419,6 +419,7 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         ExprKind::Not(inner) => ExprKind::Not(Box::new(prune_expr(*inner))),
         ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(prune_expr(*inner))),
         ExprKind::Throw(inner) => ExprKind::Throw(Box::new(prune_expr(*inner))),
+        ExprKind::ErrorSuppress(inner) => ExprKind::ErrorSuppress(Box::new(prune_expr(*inner))),
         ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce {
             value: Box::new(prune_expr(*value)),
             default: Box::new(prune_expr(*default)),

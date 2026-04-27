@@ -286,7 +286,7 @@ Key observations:
 
 elephc first prepares the shared runtime object, then writes the user assembly to a `.s` file, and finally invokes the system tools.
 
-The runtime is not reassembled on every compile. elephc caches a pre-assembled runtime object under the user's cache directory (typically `~/.cache/elephc/`) using the compiler version, target, and heap size in the cache key. If a matching object already exists, the compile reuses it directly.
+The runtime is not reassembled on every compile. elephc caches a pre-assembled runtime object under the user's cache directory (typically `~/.cache/elephc/`) using the compiler version, target, heap size, and generated runtime assembly hash in the cache key. If a matching object already exists, the compile reuses it directly.
 
 The user program still gets its own assembly file. If `--source-map` is enabled, elephc also writes a sidecar `.map` JSON file that records assembly-line to PHP-line/column mappings extracted from source markers inserted during statement emission.
 
@@ -366,7 +366,7 @@ The binary runs directly on the CPU. There is no PHP interpreter or VM at runtim
     "sub sp, sp, #32 / stp x29, x30, ... / mov x0, #10 / adrp x1, _str_0 / ..."
                     │
                     ▼ Runtime Cache
-    ~/.cache/elephc/runtime-v<version>-<target>-heap<size>.o
+    ~/.cache/elephc/runtime-v<version>-<target>-rt<hash>-heap<size>.o
                     │
                     ▼ optional Source Map
     file.map (asm line → PHP line/col)

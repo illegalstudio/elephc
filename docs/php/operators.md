@@ -1,6 +1,6 @@
 ---
 title: "Operators"
-description: "Arithmetic, comparison, logical, bitwise, string, and assignment operators."
+description: "Arithmetic, comparison, logical, bitwise, string, assignment, ternary, null coalescing, and error-control operators."
 sidebar:
   order: 2
 ---
@@ -59,6 +59,18 @@ sidebar:
 Word-form logical precedence matches PHP: `and` binds tighter than `xor`, and `xor` binds tighter than `or`. All three bind looser than `&&`, `||`, `??`, and the ternary operators.
 
 Word-form logical operators are case-insensitive (`AND`, `Or`, and `xOr` are accepted). Assignment expressions are not part of elephc's expression subset yet, so use parentheses when a word-form logical expression is the right-hand side of an assignment: `$x = (true and false);`.
+
+## Error Control
+
+PHP's error-control operator `@` suppresses runtime warnings for exactly one expression.
+
+```php
+<?php
+$value = @file_get_contents("missing.txt");
+echo "still running";
+```
+
+The operand is evaluated normally and its value is preserved. Only suppressible runtime warnings are hidden; compile-time errors and fatal runtime errors still report normally. Nested `@` scopes are tracked with a runtime suppression depth, and exception unwinds restore the previous suppression state before entering a `catch`.
 
 ## String
 

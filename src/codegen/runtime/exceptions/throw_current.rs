@@ -1,4 +1,5 @@
 use crate::codegen::{abi, emit::Emitter};
+use crate::codegen::context::TRY_HANDLER_JMP_BUF_OFFSET;
 use crate::codegen::platform::Arch;
 
 pub fn emit_throw_current(emitter: &mut Emitter) {
@@ -21,7 +22,7 @@ pub fn emit_throw_current(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x19, #8]");                                   // x0 = activation record that should survive this catch
     emitter.instruction("bl __rt_exception_cleanup_frames");                    // run cleanup callbacks for every unwound activation frame
     abi::emit_store_reg_to_symbol(emitter, "xzr", "_concat_off", 0);
-    emitter.instruction("add x0, x19, #16");                                    // x0 = jmp_buf base stored inside the active handler record
+    emitter.instruction(&format!("add x0, x19, #{}", TRY_HANDLER_JMP_BUF_OFFSET)); // x0 = jmp_buf base stored inside the active handler record
     emitter.instruction("mov x1, #1");                                          // longjmp return value = 1 to indicate exceptional control flow
     emitter.bl_c("longjmp");                                         // transfer control directly back to the saved catch resume point
 
@@ -51,7 +52,7 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [r12 + 8]");                        // rdi = activation record that should survive this catch
     emitter.instruction("call __rt_exception_cleanup_frames");                  // run cleanup callbacks for every unwound activation frame
     abi::emit_store_zero_to_symbol(emitter, "_concat_off", 0);
-    emitter.instruction("lea rdi, [r12 + 16]");                                 // rdi = jmp_buf base stored inside the active handler record
+    emitter.instruction(&format!("lea rdi, [r12 + {}]", TRY_HANDLER_JMP_BUF_OFFSET)); // rdi = jmp_buf base stored inside the active handler record
     emitter.instruction("mov esi, 1");                                          // longjmp return value = 1 to indicate exceptional control flow
     emitter.bl_c("longjmp");                                                    // transfer control directly back to the saved catch resume point
 

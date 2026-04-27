@@ -189,6 +189,7 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
         | ExprKind::Not(expr)
         | ExprKind::BitNot(expr)
         | ExprKind::Throw(expr)
+        | ExprKind::ErrorSuppress(expr)
         | ExprKind::Spread(expr)
         | ExprKind::Cast { expr, .. }
         | ExprKind::PtrCast { expr, .. } => collect_required_class_names_in_expr(expr, names),
@@ -488,6 +489,7 @@ fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
+        | ExprKind::ErrorSuppress(inner)
         | ExprKind::Spread(inner)
         | ExprKind::PtrCast { expr: inner, .. } => expr_uses_variable(inner, needle),
         ExprKind::NullCoalesce { value, default } => {

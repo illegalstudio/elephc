@@ -30,6 +30,7 @@ pub enum ExprKind {
     Not(Box<Expr>),
     BitNot(Box<Expr>),
     Throw(Box<Expr>),
+    ErrorSuppress(Box<Expr>),
     NullCoalesce {
         value: Box<Expr>,
         default: Box<Expr>,

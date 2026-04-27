@@ -26,6 +26,7 @@ pub(super) fn parse_prefix(
         Token::Minus => parse_unary(tokens, pos, span, ExprKind::Negate, 35),
         Token::Bang => parse_unary(tokens, pos, span, ExprKind::Not, 35),
         Token::Tilde => parse_unary(tokens, pos, span, ExprKind::BitNot, 35),
+        Token::At => parse_unary(tokens, pos, span, ExprKind::ErrorSuppress, 35),
         Token::Throw => parse_unary(tokens, pos, span, ExprKind::Throw, 0),
         Token::True => parse_simple(tokens, pos, span, ExprKind::BoolLiteral(true)),
         Token::False => parse_simple(tokens, pos, span, ExprKind::BoolLiteral(false)),

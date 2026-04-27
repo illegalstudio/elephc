@@ -112,7 +112,7 @@ pub(super) fn check_builtin(
                 ));
             }
             checker.infer_type(&args[0], env)?;
-            Ok(Some(PhpType::Str))
+            Ok(Some(PhpType::Union(vec![PhpType::Str, PhpType::Bool])))
         }
         "file_put_contents" => {
             if args.len() != 2 {

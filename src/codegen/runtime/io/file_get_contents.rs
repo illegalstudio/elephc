@@ -1,6 +1,8 @@
 use crate::codegen::{emit::Emitter, platform::Arch};
 
 const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
+const FILE_GET_CONTENTS_FAILED_WARNING: &str =
+    "Warning: file_get_contents(): Failed to open stream\n";
 
 /// file_get_contents: read an entire file into a string.
 /// Input:  x1/x2=filename string
@@ -41,6 +43,12 @@ pub fn emit_file_get_contents(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload path for stat64
     emitter.instruction(&format!("add x1, sp, #{}", stat_base));                // pointer to stat buffer on stack
     emitter.syscall(338);
+    if plat.needs_cmp_before_error_branch() {
+        emitter.instruction("cmp x0, #0");                                      // compare the Linux stat result against the success sentinel
+    }
+    emitter.instruction(&plat.branch_on_syscall_success("__rt_file_get_contents_stat_ok")); // continue only when stat succeeded
+    emitter.instruction("b __rt_file_get_contents_fail");                       // return an empty string and warn when stat fails
+    emitter.label("__rt_file_get_contents_stat_ok");
 
     // -- extract file size from stat struct --
     emitter.instruction(&format!("ldr x9, [sp, #{}]", st_size_abs));            // load st_size from stat struct
@@ -51,6 +59,12 @@ pub fn emit_file_get_contents(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #0");                                          // O_RDONLY = 0
     emitter.instruction("mov x2, #0");                                          // mode not needed for O_RDONLY
     emitter.syscall(5);
+    if plat.needs_cmp_before_error_branch() {
+        emitter.instruction("cmp x0, #0");                                      // compare the Linux open result against the success sentinel
+    }
+    emitter.instruction(&plat.branch_on_syscall_success("__rt_file_get_contents_open_ok")); // continue only when open succeeded
+    emitter.instruction("b __rt_file_get_contents_fail");                       // return an empty string and warn when open fails
+    emitter.label("__rt_file_get_contents_open_ok");
     emitter.instruction(&format!("str x0, [sp, #{}]", fd_off));                 // save fd on stack
 
     // -- allocate heap buffer for file contents --
@@ -79,6 +93,17 @@ pub fn emit_file_get_contents(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
+
+    emitter.label("__rt_file_get_contents_fail");
+    emitter.adrp("x1", "_diag_file_get_contents_failed_msg");
+    emitter.add_lo12("x1", "x1", "_diag_file_get_contents_failed_msg");
+    emitter.instruction(&format!("mov x2, #{}", FILE_GET_CONTENTS_FAILED_WARNING.len())); // pass the warning byte length to the diagnostic helper
+    emitter.instruction("bl __rt_diag_warning");                                // emit or suppress the file_get_contents() failure warning
+    emitter.instruction("mov x1, #0");                                          // return an empty string pointer on read-path failure
+    emitter.instruction("mov x2, #0");                                          // return an empty string length on read-path failure
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address on the failure path
+    emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame on the failure path
+    emitter.instruction("ret");                                                 // return the empty string result for the failed read path
 }
 
 fn emit_file_get_contents_linux_x86_64(emitter: &mut Emitter) {
@@ -140,6 +165,9 @@ fn emit_file_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the owned file contents as an elephc string
 
     emitter.label("__rt_file_get_contents_fail");
+    emitter.instruction("lea rdi, [rip + _diag_file_get_contents_failed_msg]"); // pass the file_get_contents() warning text pointer to the diagnostic helper
+    emitter.instruction(&format!("mov esi, {}", FILE_GET_CONTENTS_FAILED_WARNING.len())); // pass the warning byte length to the diagnostic helper
+    emitter.instruction("call __rt_diag_warning");                              // emit or suppress the file_get_contents() failure warning
     emitter.instruction("xor eax, eax");                                        // return an empty string pointer when the file could not be stated or opened
     emitter.instruction("xor edx, edx");                                        // return an empty string length when the file could not be stated or opened
     emitter.instruction(&format!("add rsp, {}", frame_size));                   // release the temporary Linux stat buffer and local spill slots on the failure path

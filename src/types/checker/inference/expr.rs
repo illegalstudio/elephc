@@ -31,6 +31,7 @@ impl Checker {
                 self.infer_type(inner, env)?;
                 Ok(PhpType::Bool)
             }
+            ExprKind::ErrorSuppress(inner) => self.infer_type(inner, env),
             ExprKind::PreIncrement(name)
             | ExprKind::PostIncrement(name)
             | ExprKind::PreDecrement(name)

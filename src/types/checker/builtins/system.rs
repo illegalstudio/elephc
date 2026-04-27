@@ -106,8 +106,8 @@ pub(super) fn check_builtin(
                 }
             };
             let ty = checker.infer_type(&args[1], env)?;
-            checker.constants.insert(name_str, ty);
-            Ok(Some(PhpType::Void))
+            checker.constants.entry(name_str).or_insert(ty);
+            Ok(Some(PhpType::Bool))
         }
         "date" => {
             if args.is_empty() || args.len() > 2 {

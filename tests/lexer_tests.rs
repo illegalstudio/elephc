@@ -96,6 +96,24 @@ fn test_dot_vs_ellipsis() {
     );
 }
 
+#[test]
+fn test_error_control_token() {
+    let t = tokens("<?php @file_get_contents(\"missing.txt\");");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::At,
+            Token::Identifier("file_get_contents".into()),
+            Token::LParen,
+            Token::StringLiteral("missing.txt".into()),
+            Token::RParen,
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
 // --- Basic tokens ---
 
 #[test]

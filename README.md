@@ -237,7 +237,7 @@ The full list of supported constructs, operators, and control structures is in t
 - **OOP**: classes, abstract/final classes, typed/final/static properties and methods, PHP-style static property redeclarations, direct static array property writes, constructor property promotion, interfaces, `instanceof`, traits, enums, `readonly`, static/instance methods, `self::`/`parent::`/`static::`, magic methods (`__toString`, `__get`, `__set`)
 - **Functions**: default parameters, variadic/spread, pass by reference, named arguments, first-class callables, closures, arrow functions
 - **Control flow**: if/elseif/else, while, do-while, for, foreach, switch, match, break, continue, try/catch/finally/throw
-- **Operators**: arithmetic, comparison, `instanceof`, logical, bitwise, ternary, null coalescing (`??`), null coalescing assignment (`??=`), and compound assignments
+- **Operators**: arithmetic, comparison, `instanceof`, logical, bitwise, ternary, null coalescing (`??`), null coalescing assignment (`??=`), error control (`@`), and compound assignments
 - **Types**: union types (`int|string`), nullable (`?int`), type casting, typed properties, typed parameters and returns
 - **Modules**: namespaces, use imports, include/require/require_once, PHP magic constants
 - **FFI**: extern functions, extern blocks, extern globals, extern classes, pointer builtins
@@ -390,6 +390,7 @@ src/
 │   └── runtime/         # Runtime routines and target-specific emission helpers
 │       ├── strings/     # itoa, concat, ftoa, strpos, str_replace, ...
 │       ├── arrays/      # heap_alloc, array_new, array_push, sort, ...
+│       ├── buffers/     # buffer_new, buffer_len, bounds and lifetime checks
 │       ├── exceptions.rs # exception runtime orchestration / re-exports
 │       ├── exceptions/  # setjmp/longjmp-based exception helpers
 │       ├── io/          # fopen, fclose, fread, fwrite, file_ops, ...

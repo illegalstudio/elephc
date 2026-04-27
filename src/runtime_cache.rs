@@ -33,7 +33,9 @@ pub fn prepare_runtime_object(heap_size: usize, target: Target) -> Result<Prepar
     fs::create_dir_all(&cache_dir)
         .map_err(|err| format!("failed to create runtime cache '{}': {}", cache_dir.display(), err))?;
 
-    let cache_path = cache_dir.join(runtime_cache_file_name(heap_size, target));
+    let runtime_asm = codegen::generate_runtime(heap_size, target);
+    let runtime_hash = runtime_asm_hash(&runtime_asm);
+    let cache_path = cache_dir.join(runtime_cache_file_name(heap_size, target, runtime_hash));
     if cache_path.exists() {
         return Ok(PreparedRuntimeObject {
             path: cache_path,
@@ -55,7 +57,6 @@ pub fn prepare_runtime_object(heap_size: usize, target: Target) -> Result<Prepar
         .unwrap_or("runtime");
     let temp_asm_path = cache_dir.join(format!("{stem}.{unique}.s"));
     let temp_obj_path = cache_dir.join(format!("{stem}.{unique}.o"));
-    let runtime_asm = codegen::generate_runtime(heap_size, target);
     fs::write(&temp_asm_path, runtime_asm).map_err(|err| {
         format!(
             "failed to write temporary runtime assembly '{}': {}",
@@ -119,11 +120,21 @@ fn runtime_cache_dir() -> PathBuf {
     }
 }
 
-fn runtime_cache_file_name(heap_size: usize, target: Target) -> String {
+fn runtime_cache_file_name(heap_size: usize, target: Target, runtime_hash: u64) -> String {
     format!(
-        "runtime-v{}-{}-heap{}.o",
+        "runtime-v{}-{}-rt{:016x}-heap{}.o",
         env!("CARGO_PKG_VERSION"),
         target.as_str(),
+        runtime_hash,
         heap_size
     )
+}
+
+fn runtime_asm_hash(asm: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in asm.bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }

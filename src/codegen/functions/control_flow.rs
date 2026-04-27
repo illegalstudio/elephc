@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::codegen::context::{Context, HeapOwnership};
+use crate::codegen::context::{Context, HeapOwnership, TRY_HANDLER_SLOT_SIZE};
 use crate::parser::ast::StmtKind;
 use crate::types::{FunctionSig, PhpType};
 
@@ -145,7 +145,7 @@ pub(super) fn collect_try_slots(stmts: &[crate::parser::ast::Stmt], ctx: &mut Co
                 catches,
                 finally_body,
             } => {
-                let slot_offset = ctx.alloc_hidden_slot(216);
+                let slot_offset = ctx.alloc_hidden_slot(TRY_HANDLER_SLOT_SIZE);
                 ctx.try_slot_offsets.push(slot_offset);
                 collect_try_slots(try_body, ctx);
                 for catch_clause in catches {

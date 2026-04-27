@@ -150,6 +150,42 @@ fn test_parse_throw_expression_in_null_coalesce() {
 }
 
 #[test]
+fn test_parse_error_control_expression() {
+    let stmts = parse_source("<?php echo @file_get_contents(\"missing.txt\");");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::ErrorSuppress(inner) => match &inner.kind {
+                ExprKind::FunctionCall { name, args } => {
+                    assert_eq!(name.as_str(), "file_get_contents");
+                    assert_eq!(args.len(), 1);
+                }
+                other => panic!("expected suppressed function call, got {:?}", other),
+            },
+            other => panic!("expected error suppression, got {:?}", other),
+        },
+        other => panic!("expected echo, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_error_control_has_unary_precedence() {
+    let stmts = parse_source("<?php echo @$x + 1;");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::Echo(expr) => match &expr.kind {
+            ExprKind::BinaryOp { left, op, right } => {
+                assert_eq!(*op, BinOp::Add);
+                assert!(matches!(left.kind, ExprKind::ErrorSuppress(_)));
+                assert_eq!(right.kind, ExprKind::IntLiteral(1));
+            }
+            other => panic!("expected binary add, got {:?}", other),
+        },
+        other => panic!("expected echo, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_parse_ifdef_statement() {
     let stmts = parse_source("<?php ifdef DEBUG { echo 1; }");
     assert_eq!(

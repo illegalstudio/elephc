@@ -193,6 +193,7 @@ pub(super) fn infer_local_type(
         }
         ExprKind::Not(_) => PhpType::Bool,
         ExprKind::BitNot(_) => PhpType::Int,
+        ExprKind::ErrorSuppress(inner) => infer_local_type(inner, sig, ctx),
         ExprKind::NullCoalesce { value, default } => {
             let left = infer_local_type(value, sig, ctx);
             let right = infer_local_type(default, sig, ctx);
@@ -261,7 +262,7 @@ pub(super) fn infer_local_type(
                 | "urlencode" | "urldecode" | "rawurlencode" | "rawurldecode" | "base64_encode"
                 | "base64_decode" | "bin2hex" | "hex2bin" | "md5" | "sha1" | "hash" | "gettype"
                 | "strstr" | "readline" | "date" | "json_encode" | "php_uname" | "phpversion"
-                | "file_get_contents" | "tempnam" | "getcwd" | "shell_exec" => PhpType::Str,
+                | "tempnam" | "getcwd" | "shell_exec" => PhpType::Str,
                 "explode"
                 | "str_split"
                 | "file"
@@ -321,6 +322,8 @@ pub(super) fn infer_local_type(
                 | "in_array" | "array_key_exists" | "str_contains" | "str_starts_with"
                 | "str_ends_with" | "ctype_alpha" | "ctype_digit" | "ctype_alnum"
                 | "ctype_space" | "function_exists" | "ptr_is_null" => PhpType::Bool,
+                "define" => PhpType::Bool,
+                "strpos" | "strrpos" | "array_search" | "file_get_contents" => PhpType::Mixed,
                 "abs" => {
                     if !args.is_empty() {
                         let t = infer_local_type(&args[0], sig, ctx);

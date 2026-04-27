@@ -48,6 +48,40 @@ echo array_search(20, $a);
 }
 
 #[test]
+fn test_array_search_not_found_is_strict_false() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [10, 20, 30];
+echo array_search(99, $a) === false ? "miss" : "hit";
+"#,
+    );
+    assert_eq!(out, "miss");
+}
+
+#[test]
+fn test_array_search_assigned_not_found_is_strict_false() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [10, 20, 30];
+$result = array_search(99, $a);
+echo $result === false ? "miss" : "hit";
+"#,
+    );
+    assert_eq!(out, "miss");
+}
+
+#[test]
+fn test_array_search_zero_index_is_not_false() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [10, 20, 30];
+echo array_search(10, $a) === false ? "miss" : "zero";
+"#,
+    );
+    assert_eq!(out, "zero");
+}
+
+#[test]
 fn test_array_key_exists() {
     let out = compile_and_run(
         r#"<?php
@@ -425,4 +459,3 @@ echo $a[0];
     );
     assert_eq!(out, "1");
 }
-

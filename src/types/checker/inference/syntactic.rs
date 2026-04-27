@@ -147,7 +147,8 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             | "htmlspecialchars" | "html_entity_decode" | "urlencode" | "urldecode"
             | "base64_encode" | "base64_decode" | "bin2hex" | "hex2bin" | "number_format"
             | "date" | "json_encode" | "gettype" | "str_word_count" | "chunk_split" => PhpType::Str,
-            "strlen" | "strpos" | "strrpos" | "ord" | "count" | "intval" | "abs" | "intdiv"
+            "strpos" | "strrpos" | "array_search" => PhpType::Mixed,
+            "strlen" | "ord" | "count" | "intval" | "abs" | "intdiv"
             | "rand" | "time" => PhpType::Int,
             "floatval" | "floor" | "ceil" | "round" | "sqrt" | "pow" | "fmod" | "sin" | "cos"
             | "tan" | "asin" | "acos" | "atan" | "atan2" | "sinh" | "cosh" | "tanh" | "log"
@@ -163,7 +164,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                     PhpType::Pointer(None)
                 }
             }
-            "ptr_is_null" => PhpType::Bool,
+            "ptr_is_null" | "define" => PhpType::Bool,
             "ptr_sizeof" | "ptr_get" | "ptr_read8" | "ptr_read32" => PhpType::Int,
             _ => PhpType::Int,
         },
@@ -172,6 +173,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             let right_ty = infer_expr_type_syntactic(default);
             wider_type_syntactic(&left_ty, &right_ty)
         }
+        ExprKind::ErrorSuppress(inner) => infer_expr_type_syntactic(inner),
         ExprKind::Throw(_) => PhpType::Void,
         ExprKind::Ternary {
             then_expr,

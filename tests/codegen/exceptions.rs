@@ -39,6 +39,30 @@ fn test_exception_throw_during_concat_resets_concat_cursor() {
 }
 
 #[test]
+fn test_error_control_restores_runtime_warnings_after_exception() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function boom() {
+    throw new Exception();
+}
+
+try {
+    echo @boom();
+} catch (Exception) {
+    file_get_contents("missing.txt");
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "");
+    assert!(
+        out.stderr.contains("Warning: file_get_contents()"),
+        "expected runtime warning after unwinding @ scope, got stderr={}",
+        out.stderr
+    );
+}
+
+#[test]
 fn test_exception_multi_catch_matches_each_type() {
     let out = compile_and_run(
         "<?php class AException extends Exception {} class BException extends Exception {} function boom($flag) { if ($flag) { throw new AException(); } throw new BException(); } try { boom(true); } catch (AException | BException $e) { echo 1; } try { boom(false); } catch (AException | BException $e) { echo 2; }",

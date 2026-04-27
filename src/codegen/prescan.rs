@@ -4,7 +4,7 @@ use crate::codegen::platform::Platform;
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
 use crate::types::{PhpType, TypeEnv};
 
-use super::context::Context;
+use super::context::{Context, TRY_HANDLER_SLOT_SIZE};
 
 pub(super) fn collect_constants(
     program: &Program,
@@ -28,7 +28,7 @@ pub(super) fn collect_constants(
                     ExprKind::BoolLiteral(_) => PhpType::Bool,
                     _ => PhpType::Int,
                 };
-                constants.insert(name.clone(), (value.kind.clone(), ty));
+                constants.entry(name.clone()).or_insert((value.kind.clone(), ty));
             }
             StmtKind::ExprStmt(expr) => {
                 if let ExprKind::FunctionCall { name, args } = &expr.kind {
@@ -41,7 +41,9 @@ pub(super) fn collect_constants(
                                 ExprKind::BoolLiteral(_) => PhpType::Bool,
                                 _ => PhpType::Int,
                             };
-                            constants.insert(const_name.clone(), (args[1].kind.clone(), ty));
+                            constants
+                                .entry(const_name.clone())
+                                .or_insert((args[1].kind.clone(), ty));
                         }
                     }
                 }
@@ -205,7 +207,7 @@ pub(super) fn collect_main_try_slots(stmts: &[Stmt], ctx: &mut Context) {
                 catches,
                 finally_body,
             } => {
-                let slot_offset = ctx.alloc_hidden_slot(216);
+                let slot_offset = ctx.alloc_hidden_slot(TRY_HANDLER_SLOT_SIZE);
                 ctx.try_slot_offsets.push(slot_offset);
                 collect_main_try_slots(try_body, ctx);
                 for catch_clause in catches {
