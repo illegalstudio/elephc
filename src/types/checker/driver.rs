@@ -595,6 +595,10 @@ impl Checker {
             | crate::parser::ast::ExprKind::ConstRef(_)
             | crate::parser::ast::ExprKind::This
             | crate::parser::ast::ExprKind::BufferNew { .. } => false,
+            crate::parser::ast::ExprKind::ClassConstant { .. } => false,
+            crate::parser::ast::ExprKind::NewScopedObject { args, .. } => {
+                args.iter().any(Self::expr_contains_method_call)
+            }
             crate::parser::ast::ExprKind::MagicConstant(_) => {
                 unreachable!("MagicConstant must be lowered before type checking")
             }

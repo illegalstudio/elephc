@@ -9,6 +9,7 @@ use super::super::context::Context;
 use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
 use crate::names::Name;
+use super::scalars;
 use crate::parser::ast::{Expr, StaticReceiver};
 use crate::types::PhpType;
 
@@ -20,6 +21,48 @@ pub(super) fn emit_new_object(
     data: &mut DataSection,
 ) -> PhpType {
     allocation::emit_new_object(class_name, args, emitter, ctx, data)
+}
+
+/// Resolve a `StaticReceiver` to a concrete class FQN at codegen time.
+/// Returns `None` if the receiver cannot be resolved (no enclosing class for
+/// `Self_`/`Static`, or no parent for `Parent`).
+fn resolve_static_receiver_to_class(receiver: &StaticReceiver, ctx: &Context) -> Option<String> {
+    match receiver {
+        // For `Static`, v1 falls back to the lexically enclosing class. True
+        // late static binding (resolving via `__elephc_called_class_id` at
+        // runtime) is a follow-up — the existing static-property dispatch
+        // already does this; matching that here would require synthesising
+        // a dynamic class-id-to-name lookup table.
+        StaticReceiver::Self_ | StaticReceiver::Static => ctx.current_class.clone(),
+        StaticReceiver::Parent => ctx
+            .current_class
+            .as_ref()
+            .and_then(|c| ctx.classes.get(c))
+            .and_then(|info| info.parent.clone()),
+        StaticReceiver::Named(name) => Some(name.as_canonical()),
+    }
+}
+
+pub(super) fn emit_class_constant(
+    receiver: &StaticReceiver,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let name = resolve_static_receiver_to_class(receiver, ctx).unwrap_or_default();
+    scalars::emit_string_literal(&name, emitter, data)
+}
+
+pub(super) fn emit_new_scoped_object(
+    receiver: &StaticReceiver,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let class_name = resolve_static_receiver_to_class(receiver, ctx)
+        .expect("new self/parent/static used outside class context — should be a type error");
+    allocation::emit_new_object(&class_name, args, emitter, ctx, data)
 }
 
 pub(super) fn emit_property_access(

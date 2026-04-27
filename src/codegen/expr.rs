@@ -114,6 +114,7 @@ pub fn emit_expr(
             params,
             body,
             is_arrow: _,
+            is_static: _,
             variadic,
             captures,
         } => emit_closure(params, variadic, body, captures, emitter, ctx, data),
@@ -181,6 +182,12 @@ pub fn emit_expr(
             emit_expr(expr, emitter, ctx, data);
             // Value stays in x0 unchanged — only the type tag changes
             PhpType::Pointer(Some(target_type.clone()))
+        }
+        ExprKind::ClassConstant { receiver } => {
+            objects::emit_class_constant(receiver, emitter, ctx, data)
+        }
+        ExprKind::NewScopedObject { receiver, args } => {
+            objects::emit_new_scoped_object(receiver, args, emitter, ctx, data)
         }
         ExprKind::MagicConstant(_) => {
             unreachable!("MagicConstant must be lowered before codegen")

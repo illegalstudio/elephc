@@ -228,6 +228,50 @@ Late static binding — resolves against called class at runtime.
 ## Static methods
 Called with `::`, no `$this`.
 
+## Class name reflection (`::class`)
+
+`::class` returns the fully-qualified class name as a string at compile time.
+
+```php
+<?php
+namespace App;
+class Logger {
+    public static function tag() {
+        return self::class;          // "App\Logger"
+    }
+}
+echo Logger::class;                  // "App\Logger"
+echo \App\Logger::class;             // "App\Logger"
+```
+
+Supported receivers: `Class::class`, `\Vendor\Class::class`, `self::class`, `parent::class`, `static::class`.
+
+**Limitation:** `static::class` is currently resolved to the lexically enclosing class (same as `self::class`), not the actual called class via late static binding. This matches `new static()` below — true LSB for these is a planned follow-up.
+
+## Late static binding constructors (`new self()`, `new static()`, `new parent()`)
+
+The `new self()`, `new static()`, and `new parent()` factory patterns are supported inside class methods:
+
+```php
+<?php
+class Box {
+    public string $label = "default";
+    public static function make(): Box {
+        return new self();
+    }
+}
+$b = Box::make();
+echo $b->label;                      // "default"
+
+class Child extends Base {
+    public static function makeBase(): Base {
+        return new parent();
+    }
+}
+```
+
+**Limitation:** `new static()` currently constructs an instance of the lexical class, not the called class. So inside `class Base { static function make() { return new static(); } }`, calling `Child::make()` returns a `Base` instance — not a `Child` as full PHP semantics would dictate. True LSB for `new static()` is a planned follow-up.
+
 ## Override rules
 Same parameter count, same pass-by-reference positions, same default layout, same variadic shape.
 

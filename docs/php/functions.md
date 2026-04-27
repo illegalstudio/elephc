@@ -82,6 +82,37 @@ echo $multiply(5); // 15
 
 **Limitation:** Closures with `use` captures cannot be passed to `array_map`, `array_filter`, etc.
 
+## Static closures
+
+A closure prefixed with `static` does not capture `$this` from its enclosing
+scope. This matches PHP's `static function () {}` and `static fn () => ...` —
+useful when a closure is meant to be unbound (often paired with
+`Closure::bind(..., null, ...)`):
+
+```php
+<?php
+$add = static function ($a, $b) {
+    return $a + $b;
+};
+echo $add(3, 4);                     // 7
+
+$double = static fn ($x) => $x * 2;
+echo $double(5);                     // 10
+```
+
+Inside a static closure, referencing `$this` is a compile-time error:
+
+```php
+<?php
+class C {
+    public int $count = 5;
+    public function bad() {
+        // Error: Cannot use $this inside a static closure
+        return static function () { return $this->count; };
+    }
+}
+```
+
 ## Arrow functions
 
 ```php

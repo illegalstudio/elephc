@@ -172,16 +172,30 @@ pub(super) fn parse_prefix(
         Token::LParen => parse_group_or_cast(tokens, pos, span),
         Token::LBracket => parse_array_literal(tokens, pos, span),
         Token::Match => parse_match_expr(tokens, pos, span),
-        Token::Function => parse_closure(tokens, pos, span),
-        Token::Fn => parse_arrow_closure(tokens, pos, span),
+        Token::Function => parse_closure(tokens, pos, span, false),
+        Token::Fn => parse_arrow_closure(tokens, pos, span, false),
         Token::Identifier(_) | Token::Backslash => parse_named_expr(tokens, pos, span),
         Token::Self_ => {
             *pos += 1;
             parse_scoped_static_call(tokens, pos, span, StaticReceiver::Self_, "self")
         }
         Token::Static => {
-            *pos += 1;
-            parse_scoped_static_call(tokens, pos, span, StaticReceiver::Static, "static")
+            // `static function() {}` and `static fn() => ...` — closures that
+            // do not capture $this. Routed here before parse_scoped_static_call.
+            match tokens.get(*pos + 1).map(|(t, _)| t) {
+                Some(Token::Function) => {
+                    *pos += 1; // consume `static`, leave `function` for parse_closure
+                    parse_closure(tokens, pos, span, true)
+                }
+                Some(Token::Fn) => {
+                    *pos += 1; // consume `static`, leave `fn` for parse_arrow_closure
+                    parse_arrow_closure(tokens, pos, span, true)
+                }
+                _ => {
+                    *pos += 1;
+                    parse_scoped_static_call(tokens, pos, span, StaticReceiver::Static, "static")
+                }
+            }
         }
         Token::Parent => {
             *pos += 1;

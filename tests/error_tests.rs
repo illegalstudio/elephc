@@ -3624,3 +3624,21 @@ fn test_include_path_with_function_call_errors() {
         err.message
     );
 }
+
+// --- Static closures ---
+
+#[test]
+fn test_error_static_closure_uses_this() {
+    expect_error(
+        "<?php class C { public int $count = 5; public function bad() { $f = static function() { return $this->count; }; return $f; } }",
+        "Cannot use $this inside a static closure",
+    );
+}
+
+#[test]
+fn test_error_static_arrow_closure_uses_this() {
+    expect_error(
+        "<?php class C { public int $count = 5; public function bad() { $f = static fn() => $this->count; return $f; } }",
+        "Cannot use $this inside a static closure",
+    );
+}

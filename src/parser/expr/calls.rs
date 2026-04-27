@@ -28,6 +28,10 @@ pub(super) fn parse_scoped_static_call(
                 span,
             ));
         }
+        Some(Token::Class) => {
+            *pos += 1;
+            return Ok(Expr::new(ExprKind::ClassConstant { receiver }, span));
+        }
         Some(Token::Identifier(method)) => {
             let method = method.clone();
             *pos += 1;

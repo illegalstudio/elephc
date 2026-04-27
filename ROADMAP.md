@@ -188,6 +188,8 @@ Proper type system for PHP compatibility.
 - [x] Instance methods with `$this` access
 - [x] Static methods via `ClassName::method()`
 - [x] Static properties via `ClassName::$prop`, `self::$prop`, `parent::$prop`, and `static::$prop`
+- [x] `::class` magic constant (`Class::class`, `self::class`, `parent::class`, `static::class`)
+- [x] `new self()` / `new static()` / `new parent()` factory pattern
 - [x] `new` keyword for object instantiation
 - [x] `->` property access and method calls
 - [x] Nullsafe property access and method calls with `?->` for nullable object receivers
@@ -353,6 +355,7 @@ Proper type system for PHP compatibility.
 - [x] Compile-time-constant expressions in `include` / `require` paths (string literals, concat, magic constants, namespace-aware `const` / `use const` / `define()` refs)
 - [x] Error-control operator `@` backed by a suppressible runtime warning channel and exception-safe suppression-depth restoration
 - [x] Runtime-value compatibility pass for `strpos()` / `strrpos()` / `array_search()` / `file_get_contents()` false-return conventions and `define()` boolean duplicate behavior
+- [x] Static closures: `static function() { }` and `static fn() => ...` (no `$this` capture)
 
 ## v0.20.x — Shared and static libraries (C ABI)
 

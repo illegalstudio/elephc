@@ -336,12 +336,14 @@ pub(crate) fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
         | ExprKind::ClosureCall { .. }
         | ExprKind::ExprCall { .. }
         | ExprKind::NewObject { .. }
+        | ExprKind::NewScopedObject { .. }
         | ExprKind::MethodCall { .. }
         | ExprKind::NullsafeMethodCall { .. }
         | ExprKind::StaticMethodCall { .. }
         | ExprKind::BufferNew { .. } => None,
         ExprKind::PropertyAccess { object, .. }
         | ExprKind::NullsafePropertyAccess { object, .. } => expr_local_writes(object),
+        ExprKind::ClassConstant { .. } => Some(HashSet::new()),
     }
 }
 

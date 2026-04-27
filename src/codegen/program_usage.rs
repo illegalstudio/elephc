@@ -305,6 +305,19 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
             _ => {}
         },
         ExprKind::BufferNew { len, .. } => collect_required_class_names_in_expr(len, names),
+        ExprKind::ClassConstant { receiver } => {
+            if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
+                names.insert(name.as_str().to_string());
+            }
+        }
+        ExprKind::NewScopedObject { receiver, args } => {
+            if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
+                names.insert(name.as_str().to_string());
+            }
+            for arg in args {
+                collect_required_class_names_in_expr(arg, names);
+            }
+        }
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
@@ -574,6 +587,10 @@ fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
         | ExprKind::ConstRef(_)
         | ExprKind::EnumCase { .. }
         | ExprKind::This => false,
+        ExprKind::ClassConstant { .. } => false,
+        ExprKind::NewScopedObject { args, .. } => {
+            args.iter().any(|arg| expr_uses_variable(arg, needle))
+        }
         ExprKind::MagicConstant(_) => {
             unreachable!("MagicConstant must be lowered before codegen analysis")
         }

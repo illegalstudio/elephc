@@ -2978,3 +2978,131 @@ fn test_parse_dunder_trait_magic_constant() {
     let stmts = parse_source("<?php echo __TRAIT__;");
     assert_eq!(echoed_expr(&stmts), &ExprKind::MagicConstant(MagicConstant::Trait));
 }
+
+// --- ::class magic constant ---
+
+#[test]
+fn test_parse_class_class_named() {
+    let stmts = parse_source("<?php echo MyClass::class;");
+    match echoed_expr(&stmts) {
+        ExprKind::ClassConstant {
+            receiver: StaticReceiver::Named(name),
+        } => assert_eq!(name.as_str(), "MyClass"),
+        other => panic!("expected ClassConstant Named, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_class_class_self() {
+    let stmts = parse_source("<?php echo self::class;");
+    assert_eq!(
+        echoed_expr(&stmts),
+        &ExprKind::ClassConstant {
+            receiver: StaticReceiver::Self_,
+        }
+    );
+}
+
+#[test]
+fn test_parse_class_class_static() {
+    let stmts = parse_source("<?php echo static::class;");
+    assert_eq!(
+        echoed_expr(&stmts),
+        &ExprKind::ClassConstant {
+            receiver: StaticReceiver::Static,
+        }
+    );
+}
+
+#[test]
+fn test_parse_class_class_parent() {
+    let stmts = parse_source("<?php echo parent::class;");
+    assert_eq!(
+        echoed_expr(&stmts),
+        &ExprKind::ClassConstant {
+            receiver: StaticReceiver::Parent,
+        }
+    );
+}
+
+// --- new self() / new static() / new parent() ---
+
+#[test]
+fn test_parse_new_self() {
+    let stmts = parse_source("<?php echo new self();");
+    match echoed_expr(&stmts) {
+        ExprKind::NewScopedObject {
+            receiver: StaticReceiver::Self_,
+            args,
+        } => assert!(args.is_empty()),
+        other => panic!("expected NewScopedObject Self_, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_new_static() {
+    let stmts = parse_source("<?php echo new static();");
+    match echoed_expr(&stmts) {
+        ExprKind::NewScopedObject {
+            receiver: StaticReceiver::Static,
+            args,
+        } => assert!(args.is_empty()),
+        other => panic!("expected NewScopedObject Static, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_new_parent_with_args() {
+    let stmts = parse_source("<?php echo new parent(1, 2);");
+    match echoed_expr(&stmts) {
+        ExprKind::NewScopedObject {
+            receiver: StaticReceiver::Parent,
+            args,
+        } => assert_eq!(args.len(), 2),
+        other => panic!("expected NewScopedObject Parent, got {:?}", other),
+    }
+}
+
+// --- Static closures ---
+
+#[test]
+fn test_parse_static_closure_sets_is_static() {
+    let stmts = parse_source("<?php $f = static function() { return 1; };");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::Closure { is_static, is_arrow, .. } => {
+                assert!(*is_static);
+                assert!(!*is_arrow);
+            }
+            other => panic!("expected Closure, got {:?}", other),
+        },
+        other => panic!("expected Assign, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_static_arrow_function_sets_is_static() {
+    let stmts = parse_source("<?php $g = static fn($x) => $x;");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::Closure { is_static, is_arrow, .. } => {
+                assert!(*is_static);
+                assert!(*is_arrow);
+            }
+            other => panic!("expected Closure, got {:?}", other),
+        },
+        other => panic!("expected Assign, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_non_static_closure_keeps_is_static_false() {
+    let stmts = parse_source("<?php $f = function() { return 1; };");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::Closure { is_static, .. } => assert!(!*is_static),
+            other => panic!("expected Closure, got {:?}", other),
+        },
+        other => panic!("expected Assign, got {:?}", other),
+    }
+}

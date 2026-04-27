@@ -104,12 +104,14 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             variadic,
             body,
             is_arrow,
+            is_static,
             captures,
         } => ExprKind::Closure {
             params: propagate_params(params),
             variadic,
             body: propagate_block(body, captured_constant_env(&captures, env)).0,
             is_arrow,
+            is_static,
             captures,
         },
         ExprKind::NamedArg { name, value } => ExprKind::NamedArg {
@@ -208,6 +210,11 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         ExprKind::BufferNew { element_type, len } => ExprKind::BufferNew {
             element_type,
             len: Box::new(propagate_expr(*len, env)),
+        },
+        ExprKind::ClassConstant { receiver } => ExprKind::ClassConstant { receiver },
+        ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
+            receiver,
+            args: propagate_args(args, None),
         },
         ExprKind::MagicConstant(_) => {
             unreachable!("MagicConstant must be lowered before optimizer passes")

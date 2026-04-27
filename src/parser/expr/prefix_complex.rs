@@ -86,6 +86,7 @@ pub(super) fn parse_closure(
     tokens: &[(Token, Span)],
     pos: &mut usize,
     span: Span,
+    is_static: bool,
 ) -> Result<Expr, CompileError> {
     if *pos + 1 >= tokens.len() || tokens[*pos + 1].0 != Token::LParen {
         return Err(CompileError::new(span, "Unexpected token: Function"));
@@ -137,6 +138,7 @@ pub(super) fn parse_closure(
             variadic,
             body,
             is_arrow: false,
+            is_static,
             captures,
         },
         span,
@@ -147,6 +149,7 @@ pub(super) fn parse_arrow_closure(
     tokens: &[(Token, Span)],
     pos: &mut usize,
     span: Span,
+    is_static: bool,
 ) -> Result<Expr, CompileError> {
     *pos += 1;
     if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
@@ -169,6 +172,7 @@ pub(super) fn parse_arrow_closure(
             variadic,
             body,
             is_arrow: true,
+            is_static,
             captures: vec![],
         },
         span,
@@ -348,6 +352,15 @@ pub(super) fn parse_named_expr(
                     span,
                 ));
             }
+            Some(Token::Class) => {
+                *pos += 1;
+                return Ok(Expr::new(
+                    ExprKind::ClassConstant {
+                        receiver: StaticReceiver::Named(name),
+                    },
+                    span,
+                ));
+            }
             Some(Token::Identifier(member)) => {
                 let member = member.clone();
                 *pos += 1;
@@ -396,6 +409,32 @@ pub(super) fn parse_new_object(
     span: Span,
 ) -> Result<Expr, CompileError> {
     *pos += 1;
+
+    // `new self()`, `new static()`, `new parent()` — late-static-binding
+    // factory pattern. Parsed as a NewScopedObject so codegen can apply LSB
+    // for `static`.
+    let scoped_receiver = match tokens.get(*pos).map(|(t, _)| t) {
+        Some(Token::Self_) => Some(StaticReceiver::Self_),
+        Some(Token::Static) => Some(StaticReceiver::Static),
+        Some(Token::Parent) => Some(StaticReceiver::Parent),
+        _ => None,
+    };
+    if let Some(receiver) = scoped_receiver {
+        *pos += 1;
+        if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
+            return Err(CompileError::new(
+                span,
+                "Expected '(' after self/static/parent",
+            ));
+        }
+        *pos += 1;
+        let args = parse_args(tokens, pos, span)?;
+        return Ok(Expr::new(
+            ExprKind::NewScopedObject { receiver, args },
+            span,
+        ));
+    }
+
     let class_name = parse_name(tokens, pos, span, "Expected class name after 'new'")?;
     if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
         return Err(CompileError::new(span, "Expected '(' after class name"));

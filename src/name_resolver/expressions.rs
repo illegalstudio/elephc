@@ -116,6 +116,7 @@ pub(super) fn resolve_expr(
             variadic,
             body,
             is_arrow,
+            is_static,
             captures,
         } => ExprKind::Closure {
             params: resolve_params(params, current_namespace, imports, symbols),
@@ -123,6 +124,7 @@ pub(super) fn resolve_expr(
             body: resolve_stmt_list(body, current_namespace, imports, symbols)
                 .expect("name resolver bug: closure body resolution failed"),
             is_arrow: *is_arrow,
+            is_static: *is_static,
             captures: captures.clone(),
         },
         ExprKind::Spread(inner) => {
@@ -188,6 +190,26 @@ pub(super) fn resolve_expr(
                 _ => receiver.clone(),
             },
             property: property.clone(),
+        },
+        ExprKind::ClassConstant { receiver } => ExprKind::ClassConstant {
+            receiver: match receiver {
+                StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
+                    resolve_special_or_class_name(name, current_namespace, imports),
+                )),
+                _ => receiver.clone(),
+            },
+        },
+        ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
+            receiver: match receiver {
+                StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
+                    resolve_special_or_class_name(name, current_namespace, imports),
+                )),
+                _ => receiver.clone(),
+            },
+            args: args
+                .iter()
+                .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
+                .collect(),
         },
         ExprKind::MethodCall { object, method, args } => ExprKind::MethodCall {
             object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
