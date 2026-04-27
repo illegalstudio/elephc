@@ -365,7 +365,7 @@ These routines handle file and filesystem operations via macOS system calls. PHP
 | `__rt_fgets` | Read line from file descriptor |
 | `__rt_feof` | Check end-of-file flag for a file descriptor |
 | `__rt_fread` | Read N bytes from file descriptor |
-| `__rt_file_get_contents` | Read entire file into string |
+| `__rt_file_get_contents` | Read entire file into string, or return a null pointer after emitting a suppressible warning on failure |
 | `__rt_file_put_contents` | Write string to file (create/truncate) |
 | `__rt_file` | Read file into array of lines |
 | `__rt_stat` | Get file metadata (size, timestamps) |

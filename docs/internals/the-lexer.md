@@ -126,7 +126,7 @@ Backslash  LBracket  RBracket  Question  Colon  PlusAssign  MinusAssign  StarAss
 StarStarAssign  SlashAssign  DotAssign  PercentAssign  AmpAssign  PipeAssign  CaretAssign  LessLessAssign
 GreaterGreaterAssign  PlusPlus  MinusMinus  AndAnd  OrOr  And  Or  Xor
 Bang  EqualEqual  EqualEqualEqual  NotEqual  NotEqualEqual  Less  Greater  LessEqual
-GreaterEqual  Spaceship  Ampersand  Pipe  Caret  Tilde  LessLess  GreaterGreater
+GreaterEqual  Spaceship  Ampersand  Pipe  Caret  Tilde  At  LessLess  GreaterGreater
 Arrow  QuestionArrow  DoubleColon  QuestionQuestion  QuestionQuestionAssign  Ellipsis  Eof
 ```
 
@@ -192,7 +192,7 @@ PHP magic constants are tokenized as `Token::DunderDir`, `Token::DunderFile`, `T
 ==  ===  !=  !==  <  >  <=  >=  <=>
 &&  ||  and  or  xor  !
 instanceof
-&  |  ^  ~  <<  >>
+&  |  ^  ~  @  <<  >>
 ??  ->  ::
 ++  --
 ...

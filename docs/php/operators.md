@@ -1,6 +1,6 @@
 ---
 title: "Operators"
-description: "Arithmetic, comparison, logical, bitwise, string, and assignment operators."
+description: "Arithmetic, comparison, logical, bitwise, string, assignment, ternary, null coalescing, and error-control operators."
 sidebar:
   order: 2
 ---

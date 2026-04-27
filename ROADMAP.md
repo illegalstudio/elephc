@@ -352,7 +352,7 @@ Proper type system for PHP compatibility.
 - [x] PHP-compatible magic constants: `__DIR__`, `__FILE__`, `__LINE__`, `__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`, `__TRAIT__` (case-insensitive names, per-file include scope, closure names, trait `__CLASS__` rebinding)
 - [x] Compile-time-constant expressions in `include` / `require` paths (string literals, concat, magic constants, namespace-aware `const` / `use const` / `define()` refs)
 - [x] Error-control operator `@` backed by a suppressible runtime warning channel and exception-safe suppression-depth restoration
-- [x] Runtime-value compatibility pass for `strpos()` / `strrpos()` / `array_search()` false-return conventions and `define()` boolean duplicate behavior
+- [x] Runtime-value compatibility pass for `strpos()` / `strrpos()` / `array_search()` / `file_get_contents()` false-return conventions and `define()` boolean duplicate behavior
 
 ## v0.20.x — Shared and static libraries (C ABI)
 
