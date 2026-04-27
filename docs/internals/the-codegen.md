@@ -786,6 +786,14 @@ When the codegen encounters a `NewObject` expression:
 
 The result is the object pointer in `x0`.
 
+### Type checks (`$obj instanceof ClassName`)
+
+`ExprKind::InstanceOf` evaluates the left-hand side exactly once, materializes the target class or interface id from emitted metadata, and returns a boolean in `x0`. Direct object values call `__rt_exception_matches`, the same metadata matcher used by exception catch lowering, so inherited classes and implemented interfaces are handled through the same parent-id and class-interface tables.
+
+When the left-hand side is lowered as `Mixed` or `Union`, codegen calls `__rt_mixed_instanceof` instead. That helper unwraps nested mixed boxes, returns `false` for scalar, array, null, and unknown payload tags, and only forwards object payloads into `__rt_exception_matches`. This keeps nullable and union object checks PHP-compatible without treating the boxed mixed cell itself as an object pointer.
+
+Targets are resolved before codegen. Named classes/interfaces become concrete metadata ids, `self` and `parent` resolve in the current lexical class context, and `static` uses the forwarded called-class id for late static binding.
+
 ### Property access (`$obj->prop`)
 
 Property access usually uses fixed offsets computed at compile time from `ClassInfo.property_offsets`:
