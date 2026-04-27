@@ -18,6 +18,14 @@ pub(super) fn resolve_expr(
             op: op.clone(),
             right: Box::new(resolve_expr(right, current_namespace, imports, symbols)),
         },
+        ExprKind::InstanceOf { value, target } => ExprKind::InstanceOf {
+            value: Box::new(resolve_expr(value, current_namespace, imports, symbols)),
+            target: resolved_name(resolve_special_or_class_name(
+                target,
+                current_namespace,
+                imports,
+            )),
+        },
         ExprKind::Throw(inner) => {
             ExprKind::Throw(Box::new(resolve_expr(inner, current_namespace, imports, symbols)))
         }

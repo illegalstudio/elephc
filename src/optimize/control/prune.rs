@@ -409,6 +409,10 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             op,
             right: Box::new(prune_expr(*right)),
         },
+        ExprKind::InstanceOf { value, target } => ExprKind::InstanceOf {
+            value: Box::new(prune_expr(*value)),
+            target,
+        },
         ExprKind::BoolLiteral(value) => ExprKind::BoolLiteral(value),
         ExprKind::Null => ExprKind::Null,
         ExprKind::Negate(inner) => ExprKind::Negate(Box::new(prune_expr(*inner))),

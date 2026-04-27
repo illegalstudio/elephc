@@ -300,6 +300,9 @@ pub fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
     if word.eq_ignore_ascii_case("xor") {
         return Ok(Token::Xor);
     }
+    if word.eq_ignore_ascii_case("instanceof") {
+        return Ok(Token::InstanceOf);
+    }
     if word.eq_ignore_ascii_case("__DIR__") {
         return Ok(Token::DunderDir);
     }

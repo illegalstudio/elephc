@@ -22,6 +22,10 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             op,
             right: Box::new(propagate_expr(*right, env)),
         },
+        ExprKind::InstanceOf { value, target } => ExprKind::InstanceOf {
+            value: Box::new(propagate_expr(*value, env)),
+            target,
+        },
         ExprKind::BoolLiteral(value) => ExprKind::BoolLiteral(value),
         ExprKind::Null => ExprKind::Null,
         ExprKind::Negate(inner) => ExprKind::Negate(Box::new(propagate_expr(*inner, env))),

@@ -1,11 +1,13 @@
 mod access;
 mod allocation;
 mod dispatch;
+mod instanceof;
 mod static_properties;
 
 use super::super::context::Context;
 use super::super::data_section::DataSection;
 use super::super::emit::Emitter;
+use crate::names::Name;
 use crate::parser::ast::{Expr, StaticReceiver};
 use crate::types::PhpType;
 
@@ -97,4 +99,14 @@ pub(super) fn emit_static_method_call(
     data: &mut DataSection,
 ) -> PhpType {
     dispatch::emit_static_method_call(receiver, method, args, emitter, ctx, data)
+}
+
+pub(super) fn emit_instanceof(
+    value: &Expr,
+    target: &Name,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    instanceof::emit_instanceof(value, target, emitter, ctx, data)
 }

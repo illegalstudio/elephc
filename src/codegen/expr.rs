@@ -133,6 +133,9 @@ pub fn emit_expr(
             objects::emit_enum_case(enum_name.as_str(), case_name, emitter, ctx)
         }
         ExprKind::BinaryOp { left, op, right } => emit_binop(left, op, right, emitter, ctx, data),
+        ExprKind::InstanceOf { value, target } => {
+            objects::emit_instanceof(value, target, emitter, ctx, data)
+        }
         ExprKind::Spread(inner) => {
             // Spread is handled at call site / array literal level.
             // If we reach here, just evaluate the inner expression.

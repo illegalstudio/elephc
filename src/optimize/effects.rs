@@ -162,6 +162,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         | ExprKind::PtrCast { expr: inner, .. }
         | ExprKind::Spread(inner) => expr_effect(inner),
         ExprKind::BinaryOp { left, right, .. } => expr_effect(left).combine(expr_effect(right)),
+        ExprKind::InstanceOf { value, .. } => expr_effect(value),
         ExprKind::Throw(inner) => expr_effect(inner).with_side_effects().with_may_throw(),
         ExprKind::NullCoalesce { value, default } => expr_effect(value).combine(expr_effect(default)),
         ExprKind::PreIncrement(_)
