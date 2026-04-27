@@ -123,6 +123,19 @@ pub(super) fn parse_expr_bp(
 
             let span = tokens[*pos].1;
             *pos += 1;
+            if *pos < tokens.len() && tokens[*pos].0 == Token::Colon {
+                *pos += 1;
+                let default = parse_expr_bp(tokens, pos, ternary_bp)?;
+                lhs = Expr::new(
+                    ExprKind::ShortTernary {
+                        value: Box::new(lhs),
+                        default: Box::new(default),
+                    },
+                    span,
+                );
+                continue;
+            }
+
             let then_expr = parse_expr(tokens, pos)?;
             if *pos >= tokens.len() || tokens[*pos].0 != Token::Colon {
                 return Err(CompileError::new(span, "Expected ':' in ternary operator"));

@@ -526,6 +526,10 @@ impl Checker {
                     || Self::expr_contains_method_call(then_expr)
                     || Self::expr_contains_method_call(else_expr)
             }
+            crate::parser::ast::ExprKind::ShortTernary { value, default } => {
+                Self::expr_contains_method_call(value)
+                    || Self::expr_contains_method_call(default)
+            }
             crate::parser::ast::ExprKind::NullCoalesce { value, default } => {
                 Self::expr_contains_method_call(value) || Self::expr_contains_method_call(default)
             }

@@ -7,6 +7,7 @@ mod helpers;
 mod objects;
 mod ownership;
 mod scalars;
+mod ternary;
 mod variables;
 
 use super::abi;
@@ -14,7 +15,6 @@ use super::context::{Context, HeapOwnership};
 use super::data_section::DataSection;
 use super::emit::Emitter;
 use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind, TypeExpr};
-use crate::types::FunctionSig;
 use crate::types::PhpType;
 
 /// Emits code to evaluate an expression.
@@ -90,56 +90,9 @@ pub fn emit_expr(
             condition,
             then_expr,
             else_expr,
-        } => {
-            let else_label = ctx.next_label("tern_else");
-            let end_label = ctx.next_label("tern_end");
-            emitter.comment("ternary");
-            let cond_ty = emit_expr(condition, emitter, ctx, data);
-            coerce_to_truthiness(emitter, ctx, &cond_ty);
-            // -- branch based on ternary condition --
-            abi::emit_branch_if_int_result_zero(emitter, &else_label);
-                                                                  // -- determine result type: widen to the broader type --
-            let dummy_sig = FunctionSig {
-                params: vec![],
-                defaults: vec![],
-                return_type: PhpType::Int,
-                ref_params: vec![],
-                declared_params: vec![],
-                variadic: None,
-            };
-            let then_syn = super::functions::infer_local_type_with_ctx(then_expr, &dummy_sig, ctx);
-            let else_syn = super::functions::infer_local_type_with_ctx(else_expr, &dummy_sig, ctx);
-            let result_ty = if then_syn == else_syn {
-                then_syn
-            } else if then_syn == PhpType::Str || else_syn == PhpType::Str {
-                PhpType::Str
-            } else if then_syn == PhpType::Float || else_syn == PhpType::Float {
-                PhpType::Float
-            } else {
-                then_syn
-            };
-            let then_ty = emit_expr(then_expr, emitter, ctx, data);
-            // -- coerce then-branch to result type if needed --
-            if result_ty != then_ty {
-                if result_ty == PhpType::Str {
-                    coerce_to_string(emitter, ctx, data, &then_ty);
-                } else if result_ty == PhpType::Float && then_ty == PhpType::Int {
-                    abi::emit_int_result_to_float_result(emitter);              // convert int to float for unified result type
-                }
-            }
-            abi::emit_jump(emitter, &end_label);                                // skip else branch after evaluating then-expr
-            emitter.label(&else_label);
-            let else_ty = emit_expr(else_expr, emitter, ctx, data);
-            // -- coerce else-branch to result type if needed --
-            if result_ty != else_ty {
-                if result_ty == PhpType::Str {
-                    coerce_to_string(emitter, ctx, data, &else_ty);
-                } else if result_ty == PhpType::Float && else_ty == PhpType::Int {
-                    abi::emit_int_result_to_float_result(emitter);              // convert int to float for unified result type
-                }
-            }
-            emitter.label(&end_label);
-            result_ty
+        } => ternary::emit_ternary(condition, then_expr, else_expr, emitter, ctx, data),
+        ExprKind::ShortTernary { value, default } => {
+            ternary::emit_short_ternary(value, default, emitter, ctx, data)
         }
         ExprKind::Cast { target, expr } => emit_cast(target, expr, emitter, ctx, data),
         ExprKind::FunctionCall { name, args } => {

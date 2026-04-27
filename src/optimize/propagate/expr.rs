@@ -84,6 +84,10 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             then_expr: Box::new(propagate_expr(*then_expr, env)),
             else_expr: Box::new(propagate_expr(*else_expr, env)),
         },
+        ExprKind::ShortTernary { value, default } => ExprKind::ShortTernary {
+            value: Box::new(propagate_expr(*value, env)),
+            default: Box::new(propagate_expr(*default, env)),
+        },
         ExprKind::Cast { target, expr } => ExprKind::Cast {
             target,
             expr: Box::new(propagate_expr(*expr, env)),

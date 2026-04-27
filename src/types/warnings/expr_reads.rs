@@ -91,6 +91,10 @@ pub(super) fn collect_expr_reads(
             collect_expr_reads(then_expr, scope, warnings);
             collect_expr_reads(else_expr, scope, warnings);
         }
+        ExprKind::ShortTernary { value, default } => {
+            collect_expr_reads(value, scope, warnings);
+            collect_expr_reads(default, scope, warnings);
+        }
         ExprKind::Cast { expr, .. } => collect_expr_reads(expr, scope, warnings),
         ExprKind::Closure {
             params,

@@ -235,6 +235,10 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
             collect_required_class_names_in_expr(then_expr, names);
             collect_required_class_names_in_expr(else_expr, names);
         }
+        ExprKind::ShortTernary { value, default } => {
+            collect_required_class_names_in_expr(value, names);
+            collect_required_class_names_in_expr(default, names);
+        }
         ExprKind::Closure { body, .. } => {
             collect_required_class_names_in_body(body, names);
         }
@@ -513,6 +517,9 @@ fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
             expr_uses_variable(condition, needle)
                 || expr_uses_variable(then_expr, needle)
                 || expr_uses_variable(else_expr, needle)
+        }
+        ExprKind::ShortTernary { value, default } => {
+            expr_uses_variable(value, needle) || expr_uses_variable(default, needle)
         }
         ExprKind::Cast { expr, .. }
         | ExprKind::NamedArg { value: expr, .. }

@@ -21,6 +21,9 @@ pub(super) fn expr_result_heap_ownership(expr: &Expr) -> HeapOwnership {
             else_expr,
             ..
         } => expr_result_heap_ownership(then_expr).merge(expr_result_heap_ownership(else_expr)),
+        ExprKind::ShortTernary { value, default } => {
+            expr_result_heap_ownership(value).merge(expr_result_heap_ownership(default))
+        }
         ExprKind::Match { arms, default, .. } => {
             let mut ownership = default
                 .as_ref()

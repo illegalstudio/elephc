@@ -190,6 +190,11 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                 then_ty
             }
         }
+        ExprKind::ShortTernary { value, default } => {
+            let value_ty = infer_expr_type_syntactic(value);
+            let default_ty = infer_expr_type_syntactic(default);
+            wider_type_syntactic(&value_ty, &default_ty)
+        }
         ExprKind::Match { arms, default, .. } => {
             let mut result_ty = default
                 .as_ref()

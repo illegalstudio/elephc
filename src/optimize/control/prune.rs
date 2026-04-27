@@ -466,6 +466,10 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             then_expr: Box::new(prune_expr(*then_expr)),
             else_expr: Box::new(prune_expr(*else_expr)),
         },
+        ExprKind::ShortTernary { value, default } => ExprKind::ShortTernary {
+            value: Box::new(prune_expr(*value)),
+            default: Box::new(prune_expr(*default)),
+        },
         ExprKind::Cast { target, expr } => ExprKind::Cast {
             target,
             expr: Box::new(prune_expr(*expr)),
@@ -575,6 +579,13 @@ pub(crate) fn prune_unused_pure_subexpressions(kind: ExprKind) -> ExprKind {
                 then_expr,
                 else_expr,
             },
+        },
+        ExprKind::ShortTernary { value, default } => match scalar_value(&value) {
+            Some(value_scalar) if value_scalar.truthy() && !expr_has_side_effects(&default) => {
+                value.kind
+            }
+            Some(value_scalar) if !value_scalar.truthy() => default.kind,
+            _ => ExprKind::ShortTernary { value, default },
         },
         ExprKind::NullCoalesce { value, default } => match scalar_value(&value) {
             Some(ScalarValue::Null) => default.kind,

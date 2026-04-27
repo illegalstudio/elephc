@@ -182,6 +182,20 @@ impl Checker {
                 };
                 Ok(result_ty)
             }
+            ExprKind::ShortTernary { value, default } => {
+                let value_ty = self.infer_type(value, env)?;
+                let default_ty = self.infer_type(default, env)?;
+                let result_ty = if value_ty == default_ty {
+                    value_ty
+                } else if value_ty == PhpType::Str || default_ty == PhpType::Str {
+                    PhpType::Str
+                } else if value_ty == PhpType::Float || default_ty == PhpType::Float {
+                    PhpType::Float
+                } else {
+                    value_ty
+                };
+                Ok(result_ty)
+            }
             ExprKind::Throw(inner) => {
                 let thrown_ty = self.infer_type(inner, env)?;
                 match thrown_ty {

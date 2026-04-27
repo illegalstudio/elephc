@@ -315,6 +315,10 @@ pub(crate) fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
             expr_local_writes(then_expr)?,
             expr_local_writes(else_expr)?,
         ]),
+        ExprKind::ShortTernary { value, default } => merge_write_sets([
+            expr_local_writes(value)?,
+            expr_local_writes(default)?,
+        ]),
         ExprKind::NamedArg { value, .. } => expr_local_writes(value),
         ExprKind::PreIncrement(name)
         | ExprKind::PostIncrement(name)
