@@ -96,9 +96,15 @@ pub(super) fn parse_assign(
         Token::PlusAssign => Some(BinOp::Add),
         Token::MinusAssign => Some(BinOp::Sub),
         Token::StarAssign => Some(BinOp::Mul),
+        Token::StarStarAssign => Some(BinOp::Pow),
         Token::SlashAssign => Some(BinOp::Div),
         Token::PercentAssign => Some(BinOp::Mod),
         Token::DotAssign => Some(BinOp::Concat),
+        Token::AmpAssign => Some(BinOp::BitAnd),
+        Token::PipeAssign => Some(BinOp::BitOr),
+        Token::CaretAssign => Some(BinOp::BitXor),
+        Token::LessLessAssign => Some(BinOp::ShiftLeft),
+        Token::GreaterGreaterAssign => Some(BinOp::ShiftRight),
         Token::Assign => None,
         Token::QuestionQuestionAssign => {
             *pos += 1;

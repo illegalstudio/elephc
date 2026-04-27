@@ -142,6 +142,7 @@ Proper type system for PHP compatibility.
 - [x] List unpacking: `[$a, $b] = $array;`
 - [x] Heredoc / nowdoc strings
 - [x] Bitwise operators: `&`, `|`, `^`, `~`, `<<`, `>>`
+- [x] Full compound assignment family: `**=`, `&=`, `|=`, `^=`, `<<=`, `>>=`
 - [x] Spaceship operator: `<=>`
 - [x] `call_user_func()` (string callbacks)
 - [x] `call_user_func_array()`

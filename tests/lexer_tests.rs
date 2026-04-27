@@ -329,16 +329,22 @@ fn test_bang() {
 
 #[test]
 fn test_compound_assignment() {
-    let t = tokens("<?php += -= *= /= .= %=");
+    let t = tokens("<?php += -= *= **= /= .= %= &= |= ^= <<= >>=");
     assert_eq!(
-        t[1..7],
+        t[1..13],
         [
             Token::PlusAssign,
             Token::MinusAssign,
             Token::StarAssign,
+            Token::StarStarAssign,
             Token::SlashAssign,
             Token::DotAssign,
             Token::PercentAssign,
+            Token::AmpAssign,
+            Token::PipeAssign,
+            Token::CaretAssign,
+            Token::LessLessAssign,
+            Token::GreaterGreaterAssign,
         ]
     );
 }
