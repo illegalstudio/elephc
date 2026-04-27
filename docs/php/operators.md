@@ -30,6 +30,9 @@ sidebar:
 | `<=` | `$a <= $b` | Less than or equal |
 | `>=` | `$a >= $b` | Greater than or equal |
 | `<=>` | `$a <=> $b` | Spaceship: returns -1, 0, or 1 |
+| `instanceof` | `$obj instanceof User` | Runtime class/interface check; returns bool |
+
+`instanceof` supports named class/interface targets plus `self`, `parent`, and `static`. Direct object values and boxed `mixed` / nullable / union values are checked at runtime; scalar, array, and null payloads return `false`. Unknown class/interface targets return `false`, matching PHP. Dynamic RHS targets such as `$obj instanceof $className` are not supported yet and are tracked in `ROADMAP.md`.
 
 ## Bitwise
 

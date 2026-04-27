@@ -49,6 +49,7 @@ Things that have a value:
 | `Null` | `null` | |
 | `Variable(String)` | `$x` | Name without `$` |
 | `BinaryOp { left, op, right }` | `$a + $b` | See operator table below |
+| `InstanceOf { value, target }` | `$obj instanceof User` | Class/interface runtime type check. The target is a parsed `Name`, not a general expression, so codegen never evaluates the RHS as a value. |
 | `Negate(Expr)` | `-$x` | Unary minus |
 | `Not(Expr)` | `!$x` | Logical NOT |
 | `BitNot(Expr)` | `~$x` | Bitwise NOT (complement) |
@@ -179,6 +180,8 @@ BitAnd  BitOr  BitXor  ShiftLeft  ShiftRight
 NullCoalesce
 ```
 
+`instanceof` is represented as `ExprKind::InstanceOf` rather than `BinOp` because PHP's supported RHS form is a class/interface target name (`User`, `self`, `parent`, `static`), not an ordinary expression to evaluate.
+
 ### Class-related types
 
 `ClassDecl` uses several supporting types:
@@ -232,6 +235,7 @@ and                 5          6         left
 .  (concat)        27         28         left
 + -                29         30         left
 * / %              31         32         left
+instanceof         35         special    left, target-name RHS
 unary (- ! ~)          35                prefix
 **                 37         36         RIGHT (r < l)
 ```
@@ -241,6 +245,8 @@ unary (- ! ~)          35                prefix
 **Right-associative** operators have `right_bp < left_bp`. This means `2 ** 3 ** 4` parses as `2 ** (3 ** 4)`.
 
 For `??`, the Pratt table still uses `BinOp::NullCoalesce` to assign binding power, but the parser builds a dedicated `ExprKind::NullCoalesce { value, default }` node rather than a generic `BinaryOp`.
+
+For `instanceof`, the Pratt loop handles the keyword at expression level and then parses only a class/interface target name. Its binding power matches PHP's behavior where `!$obj instanceof User` parses as `!($obj instanceof User)`.
 
 The word-form logical operators (`and`, `xor`, `or`) have PHP's lower precedence. The symbolic `&&` and `||` continue to bind more tightly.
 

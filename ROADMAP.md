@@ -276,6 +276,7 @@ Proper type system for PHP compatibility.
 - [x] Copy-on-write arrays — PHP-style shared-until-modified semantics with a COW flag in array headers and copy-on-mutation
 - [x] Inheritance (`extends`) — vtable-based method dispatch, property layout chaining, and `self::` / `parent::` / `static::` calls
 - [x] Interfaces / abstract classes — interface method tables and compile-time conformance checking
+- [x] `instanceof` — class/interface runtime metadata checks with inheritance, interface inheritance, `self`, `parent`, and late-bound `static`
 - [x] Traits — compile-time method copying / inlining with `use`, `as`, `insteadof`, and trait properties
 - [x] Exceptions (`try`/`catch`) — stack unwinding via `setjmp`/`longjmp` with runtime frame cleanup and `finally` support
 - [x] Hash table insertion order — preserve PHP associative-array insertion order with a secondary linked list through entries
@@ -401,6 +402,7 @@ Features that are feasible but complex. Not currently planned for any specific v
 |---|---|---|
 | Assignment expressions with PHP low-precedence operators | Medium | Model assignment as an expression so forms like `$x = true and false;` match PHP exactly instead of requiring parentheses around the word-form logical RHS. Requires parser/AST/type/codegen changes and precedence regression tests. |
 | PHP case-insensitive symbol parity | Medium | Extend PHP-compatible case-insensitive matching beyond magic constants to keywords, built-in/user function calls, class/interface/trait names, and method lookup while preserving PHP's case-sensitive variables, object properties, string array keys, and user constants. |
+| Dynamic `instanceof` targets | Medium | Support PHP forms such as `$obj instanceof $className` once class-string/object target expressions and their runtime validation semantics are modeled. Current support is for named class/interface targets plus `self`, `parent`, and `static`. |
 | Full PHP list destructuring | Medium | Extend `[$a, $b] = ...` beyond plain variables and indexed RHS values to cover skipped entries, nested patterns, and associative-key destructuring. |
 | Array union and heterogeneous indexed arrays | Medium | Add PHP array `+` union semantics and optionally allow mixed payloads in indexed arrays instead of requiring homogeneous indexed values. |
 | Multi-level `break` / `continue` | Low | Parse and lower numeric depths such as `break 2;` and `continue 2;` through nested loop/switch/finally exits. |

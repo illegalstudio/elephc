@@ -118,7 +118,7 @@ PhpIntMin  PhpFloatMax  MPi  ME  MSqrt2  MPi2  MPi4  MLog2e
 MLog10e  PhpFloatMin  PhpFloatEpsilon  Print  Switch  Case  Default  Match
 Include  IncludeOnce  Require  RequireOnce  Stdin  Stdout  Stderr  Fn
 Use  Namespace  Const  Global  Static  Self_  Trait  Parent
-InsteadOf  PhpEol  PhpOs  DirectorySeparator  DunderDir  DunderFile  DunderLine  DunderFunction
+InsteadOf  InstanceOf  PhpEol  PhpOs  DirectorySeparator  DunderDir  DunderFile  DunderLine  DunderFunction
 DunderClass  DunderMethod  DunderNamespace  DunderTrait  Class  Enum  New  Public
 Protected  Private  ReadOnly  This  Extern  Packed  Assign  DoubleArrow
 Plus  Minus  Star  StarStar  Slash  Percent  Dot  Comma
@@ -159,7 +159,7 @@ break  continue  function  return  include  require
 include_once  require_once  true  false  null  print
 switch  case  default  match  try  catch  finally  throw  fn  use  namespace  ifdef  extern  const
 global  static  self  class  abstract  final  interface  trait  extends  implements  new
-public  protected  private  readonly  parent  insteadof  enum  packed
+public  protected  private  readonly  parent  insteadof  instanceof  enum  packed
 ```
 
 Each keyword is a distinct token variant (e.g., `Token::If`, `Token::While`, `Token::Switch`). Multi-word keyword spellings use camel-cased variants such as `Token::IncludeOnce` and `Token::RequireOnce`; `readonly` is `Token::ReadOnly`.
@@ -191,6 +191,7 @@ PHP magic constants are tokenized as `Token::DunderDir`, `Token::DunderFile`, `T
 =  =>  +=  -=  *=  **=  /=  .=  %=  &=  |=  ^=  <<=  >>=  ??=
 ==  ===  !=  !==  <  >  <=  >=  <=>
 &&  ||  and  or  xor  !
+instanceof
 &  |  ^  ~  <<  >>
 ??  ->  ::
 ++  --
