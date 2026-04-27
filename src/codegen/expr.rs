@@ -3,6 +3,7 @@ mod binops;
 pub(crate) mod calls;
 mod coerce;
 mod compare;
+mod diagnostics;
 mod helpers;
 mod objects;
 mod ownership;
@@ -70,6 +71,9 @@ pub fn emit_expr(
         }
         ExprKind::Throw(inner) => {
             variables::emit_throw(inner, emitter, ctx, data)
+        }
+        ExprKind::ErrorSuppress(inner) => {
+            diagnostics::emit_error_suppress(inner, emitter, ctx, data)
         }
         ExprKind::NullCoalesce { value, default } => {
             emit_null_coalesce(value, default, emitter, ctx, data)

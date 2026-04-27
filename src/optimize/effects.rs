@@ -158,6 +158,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
+        | ExprKind::ErrorSuppress(inner)
         | ExprKind::Cast { expr: inner, .. }
         | ExprKind::PtrCast { expr: inner, .. }
         | ExprKind::Spread(inner) => expr_effect(inner),

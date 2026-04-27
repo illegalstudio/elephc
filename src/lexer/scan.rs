@@ -246,6 +246,7 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
         }
         // '"' is handled in the main loop (interpolation support)
         '\'' => literals::scan_single_string(cursor),
+        '@' => { cursor.advance(); Ok(Token::At) }
         '$' => literals::scan_variable(cursor),
         '0'..='9' => literals::scan_number(cursor),
         'a'..='z' | 'A'..='Z' | '_' => literals::scan_keyword(cursor),

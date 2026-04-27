@@ -140,6 +140,36 @@ echo file_get_contents("test.txt");
 }
 
 #[test]
+fn test_file_get_contents_missing_emits_runtime_warning() {
+    let out = compile_and_run_capture(
+        r#"<?php
+echo file_get_contents("missing.txt");
+echo "after";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "after");
+    assert!(
+        out.stderr.contains("Warning: file_get_contents()"),
+        "expected runtime warning, got stderr={}",
+        out.stderr
+    );
+}
+
+#[test]
+fn test_error_control_suppresses_runtime_warning() {
+    let out = compile_and_run_capture(
+        r#"<?php
+echo @file_get_contents("missing.txt");
+echo "after";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "after");
+    assert_eq!(out.stderr, "");
+}
+
+#[test]
 fn test_file_exists() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
@@ -549,4 +579,3 @@ unlink("eof.txt");
     assert_eq!(out, "eof");
     let _ = fs::remove_dir_all(&dir);
 }
-

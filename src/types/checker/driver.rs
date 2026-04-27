@@ -516,6 +516,7 @@ impl Checker {
             | crate::parser::ast::ExprKind::Not(object)
             | crate::parser::ast::ExprKind::BitNot(object)
             | crate::parser::ast::ExprKind::Spread(object)
+            | crate::parser::ast::ExprKind::ErrorSuppress(object)
             | crate::parser::ast::ExprKind::Throw(object) => Self::expr_contains_method_call(object),
             crate::parser::ast::ExprKind::ArrayAccess { array, index } => {
                 Self::expr_contains_method_call(array) || Self::expr_contains_method_call(index)

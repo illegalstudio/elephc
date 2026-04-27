@@ -1,5 +1,6 @@
 use super::arrays;
 use super::buffers;
+use super::diagnostics;
 use super::exceptions;
 use super::io;
 use super::pointers;
@@ -15,6 +16,7 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
         emitter.raw(".weak SHA256");
         emitter.blank();
     }
+    diagnostics::emit_diagnostics(emitter);
     arrays::emit_heap_alloc(emitter);
     arrays::emit_heap_debug_fail(emitter);
     arrays::emit_heap_debug_check_live(emitter);

@@ -9,6 +9,10 @@ use crate::types::{
 
 static GLOBAL_LABEL_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+pub(crate) const TRY_HANDLER_SLOT_SIZE: usize = 224;
+pub(crate) const TRY_HANDLER_DIAG_DEPTH_OFFSET: usize = 16;
+pub(crate) const TRY_HANDLER_JMP_BUF_OFFSET: usize = 24;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HeapOwnership {
     NonHeap,

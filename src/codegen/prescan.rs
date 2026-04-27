@@ -4,7 +4,7 @@ use crate::codegen::platform::Platform;
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
 use crate::types::{PhpType, TypeEnv};
 
-use super::context::Context;
+use super::context::{Context, TRY_HANDLER_SLOT_SIZE};
 
 pub(super) fn collect_constants(
     program: &Program,
@@ -205,7 +205,7 @@ pub(super) fn collect_main_try_slots(stmts: &[Stmt], ctx: &mut Context) {
                 catches,
                 finally_body,
             } => {
-                let slot_offset = ctx.alloc_hidden_slot(216);
+                let slot_offset = ctx.alloc_hidden_slot(TRY_HANDLER_SLOT_SIZE);
                 ctx.try_slot_offsets.push(slot_offset);
                 collect_main_try_slots(try_body, ctx);
                 for catch_clause in catches {

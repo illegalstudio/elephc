@@ -1,5 +1,6 @@
 use super::arrays;
 use super::buffers;
+use super::diagnostics;
 use super::exceptions;
 use super::io;
 use super::pointers;
@@ -16,6 +17,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter) {
     }
 
     emit_optional_linux_crypto_decls(emitter);
+    diagnostics::emit_diagnostics(emitter);
 
     // String runtime functions
     strings::emit_itoa(emitter);

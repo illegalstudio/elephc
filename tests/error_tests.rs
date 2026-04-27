@@ -148,7 +148,15 @@ fn test_error_bare_identifier() {
 
 #[test]
 fn test_error_unexpected_character() {
-    expect_error("<?php @", "Unexpected character");
+    expect_error("<?php `", "Unexpected character");
+}
+
+#[test]
+fn test_error_control_requires_operand() {
+    expect_error(
+        "<?php @;",
+        "Unexpected token",
+    );
 }
 
 #[test]
@@ -906,7 +914,7 @@ fn test_error_has_line_number() {
 
 #[test]
 fn test_error_has_column() {
-    let result = tokenize("<?php @");
+    let result = tokenize("<?php `");
     let err = result.unwrap_err();
     assert!(err.span.col > 0, "Error should have a column number");
 }

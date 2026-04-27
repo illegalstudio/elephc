@@ -74,6 +74,7 @@ pub(super) fn emit_try_stmt(
 
     emitter.label(&handler_resume);
     handlers::emit_try_handler_pop(emitter, handler_offset);
+    handlers::emit_restore_diagnostic_suppression(emitter, handler_offset);
     catches::emit_catch_dispatch(
         catches,
         finally_label.as_deref(),

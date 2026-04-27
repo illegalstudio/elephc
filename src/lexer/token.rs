@@ -162,6 +162,7 @@ pub enum Token {
     Pipe,           // |
     Caret,          // ^
     Tilde,          // ~
+    At,             // @
     LessLess,       // <<
     GreaterGreater, // >>
 

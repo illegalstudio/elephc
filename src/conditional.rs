@@ -358,6 +358,9 @@ fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
         ExprKind::Not(inner) => ExprKind::Not(Box::new(rewrite_expr(*inner, defines))),
         ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(rewrite_expr(*inner, defines))),
         ExprKind::Throw(inner) => ExprKind::Throw(Box::new(rewrite_expr(*inner, defines))),
+        ExprKind::ErrorSuppress(inner) => {
+            ExprKind::ErrorSuppress(Box::new(rewrite_expr(*inner, defines)))
+        }
         ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce {
             value: Box::new(rewrite_expr(*value, defines)),
             default: Box::new(rewrite_expr(*default, defines)),

@@ -1,5 +1,5 @@
 use crate::codegen::abi;
-use crate::codegen::context::Context;
+use crate::codegen::context::{Context, TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET};
 use crate::codegen::emit::Emitter;
 use crate::parser::ast::CatchClause;
 use crate::types::PhpType;
@@ -15,6 +15,8 @@ pub(super) fn emit_try_handler_push(emitter: &mut Emitter, ctx: &Context, handle
     abi::store_at_offset(emitter, scratch, handler_offset);                         // save the previous handler pointer in this try slot
     abi::emit_frame_slot_address(emitter, scratch, activation_prev_offset);         // compute the address of the current activation record
     abi::store_at_offset(emitter, scratch, handler_offset - 8);                     // remember which activation frame should survive this catch
+    abi::emit_load_symbol_to_reg(emitter, scratch, "_rt_diag_suppression", 0);
+    abi::store_at_offset(emitter, scratch, handler_offset - TRY_HANDLER_DIAG_DEPTH_OFFSET); // snapshot runtime warning-suppression depth for exception unwinds
     abi::emit_frame_slot_address(emitter, scratch, handler_offset);                 // compute the address of this try slot's handler header
     abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_handler_top", 0);
 }
@@ -27,7 +29,20 @@ pub(super) fn emit_try_handler_pop(emitter: &mut Emitter, handler_offset: usize)
 }
 
 pub(super) fn emit_handler_jmpbuf_address(emitter: &mut Emitter, handler_offset: usize, dest_reg: &str) {
-    abi::emit_frame_slot_address(emitter, dest_reg, handler_offset - 16);         // compute the jmp_buf base address inside this try slot
+    abi::emit_frame_slot_address(emitter, dest_reg, handler_offset - TRY_HANDLER_JMP_BUF_OFFSET); // compute the jmp_buf base address inside this try slot
+}
+
+pub(super) fn emit_restore_diagnostic_suppression(
+    emitter: &mut Emitter,
+    handler_offset: usize,
+) {
+    let scratch = abi::temp_int_reg(emitter.target);
+    abi::load_at_offset(
+        emitter,
+        scratch,
+        handler_offset - TRY_HANDLER_DIAG_DEPTH_OFFSET,
+    ); // reload the suppression depth captured before entering the try body
+    abi::emit_store_reg_to_symbol(emitter, scratch, "_rt_diag_suppression", 0);
 }
 
 pub(super) fn bind_catch_variable(catch_clause: &CatchClause, emitter: &mut Emitter, ctx: &Context) {

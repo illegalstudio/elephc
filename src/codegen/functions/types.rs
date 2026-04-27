@@ -193,6 +193,7 @@ pub(super) fn infer_local_type(
         }
         ExprKind::Not(_) => PhpType::Bool,
         ExprKind::BitNot(_) => PhpType::Int,
+        ExprKind::ErrorSuppress(inner) => infer_local_type(inner, sig, ctx),
         ExprKind::NullCoalesce { value, default } => {
             let left = infer_local_type(value, sig, ctx);
             let right = infer_local_type(default, sig, ctx);
