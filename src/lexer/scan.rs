@@ -97,8 +97,13 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
         ',' => { cursor.advance(); Ok(Token::Comma) }
         '\\' => { cursor.advance(); Ok(Token::Backslash) }
         '?' => {
-            cursor.advance();
-            if cursor.peek() == Some('?') {
+            if cursor.remaining().starts_with("?->") {
+                cursor.advance();
+                cursor.advance();
+                cursor.advance();
+                Ok(Token::QuestionArrow)
+            } else if cursor.remaining().starts_with("??") {
+                cursor.advance();
                 cursor.advance();
                 if cursor.peek() == Some('=') {
                     cursor.advance();
@@ -107,6 +112,7 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
                     Ok(Token::QuestionQuestion)
                 }
             } else {
+                cursor.advance();
                 Ok(Token::Question)
             }
         }

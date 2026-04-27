@@ -41,11 +41,15 @@ pub(super) fn collect_expr_reads(
         | ExprKind::ExprCall { args, .. }
         | ExprKind::NewObject { args, .. }
         | ExprKind::MethodCall { args, .. }
+        | ExprKind::NullsafeMethodCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. } => {
             if let ExprKind::ExprCall { callee, .. } = &expr.kind {
                 collect_expr_reads(callee, scope, warnings);
             }
             if let ExprKind::MethodCall { object, .. } = &expr.kind {
+                collect_expr_reads(object, scope, warnings);
+            }
+            if let ExprKind::NullsafeMethodCall { object, .. } = &expr.kind {
                 collect_expr_reads(object, scope, warnings);
             }
             for arg in args {
@@ -116,7 +120,10 @@ pub(super) fn collect_expr_reads(
             analyze_function_like_scope(params, variadic.as_ref(), body, expr.span, warnings);
         }
         ExprKind::NamedArg { value, .. } => collect_expr_reads(value, scope, warnings),
-        ExprKind::PropertyAccess { object, .. } => collect_expr_reads(object, scope, warnings),
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::NullsafePropertyAccess { object, .. } => {
+            collect_expr_reads(object, scope, warnings)
+        }
         ExprKind::StaticPropertyAccess { .. } => {},
         ExprKind::BufferNew { len, .. } => collect_expr_reads(len, scope, warnings),
         ExprKind::StringLiteral(_)

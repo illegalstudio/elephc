@@ -261,7 +261,7 @@ pub fn generate_user_asm(
         ctx.alloc_var("argv", PhpType::Array(Box::new(PhpType::Str)));
     }
     for (name, ty) in global_env {
-        ctx.alloc_var(name, ty.codegen_repr());
+        ctx.alloc_var_with_static_type(name, ty.codegen_repr(), ty.clone());
     }
     collect_main_try_slots(program, &mut ctx);
     let main_cleanup_label = ctx.next_label("main_cleanup_frame");

@@ -145,6 +145,12 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             object: Box::new(propagate_expr(*object, env)),
             property,
         },
+        ExprKind::NullsafePropertyAccess { object, property } => {
+            ExprKind::NullsafePropertyAccess {
+                object: Box::new(propagate_expr(*object, env)),
+                property,
+            }
+        }
         ExprKind::StaticPropertyAccess { receiver, property } => {
             ExprKind::StaticPropertyAccess { receiver, property }
         }
@@ -161,6 +167,18 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
                 object: Box::new(object),
                 method,
                 args: propagate_args(args, arg_env),
+            }
+        }
+        ExprKind::NullsafeMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            let object = propagate_expr(*object, env);
+            ExprKind::NullsafeMethodCall {
+                object: Box::new(object),
+                method,
+                args: propagate_args(args, None),
             }
         }
         ExprKind::StaticMethodCall {

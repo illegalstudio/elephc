@@ -167,6 +167,7 @@ pub enum Token {
 
     // Object access
     Arrow,          // ->
+    QuestionArrow,  // ?->
     DoubleColon,    // ::
 
     // Null coalescing

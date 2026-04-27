@@ -16,95 +16,128 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
         if let PhpType::Object(class_name) = &obj_ty {
-            let mut normalized_args = args.to_vec();
-            if let Some(class_info) = self.classes.get(class_name) {
-                if let Some(sig) = class_info.methods.get(method) {
-                    if let Some(visibility) = class_info.method_visibilities.get(method) {
-                        let declaring_class = class_info
-                            .method_declaring_classes
-                            .get(method)
-                            .map(String::as_str)
-                            .unwrap_or(class_name);
-                        if !self.can_access_member(declaring_class, visibility) {
-                            return Err(CompileError::new(
-                                expr.span,
-                                &format!(
-                                    "Cannot access {} method: {}::{}",
-                                    Self::visibility_label(visibility),
-                                    class_name,
-                                    method
-                                ),
-                            ));
-                        }
-                    }
-                    let declared_flags =
-                        Self::declared_method_param_flags(class_info, method, false);
-                    let effective_sig =
-                        Self::callable_sig_for_declared_params(sig, &declared_flags);
-                    normalized_args = self.normalize_named_call_args(
-                        &effective_sig,
-                        args,
-                        expr.span,
-                        &format!("Method {}::{}", class_name, method),
-                    )?;
-                    self.check_known_callable_call(
-                        &effective_sig,
-                        &normalized_args,
-                        expr.span,
-                        env,
-                        &format!("Method {}::{}", class_name, method),
-                    )?;
-                } else {
-                    return Err(CompileError::new(
-                        expr.span,
-                        &format!("Undefined method: {}::{}", class_name, method),
-                    ));
-                }
-            }
-            let mut arg_types = Vec::new();
-            for arg in &normalized_args {
-                arg_types.push(self.infer_type(arg, env)?);
-            }
+            return self.infer_method_call_on_class_type(class_name, method, args, expr, env);
+        }
+        Ok(PhpType::Int)
+    }
 
-            let impl_class_name = self
-                .classes
-                .get(class_name)
-                .and_then(|class_info| class_info.method_impl_classes.get(method))
-                .cloned()
-                .unwrap_or_else(|| class_name.clone());
-            let declared_flags = self
-                .classes
-                .get(&impl_class_name)
-                .map(|class_info| Self::declared_method_param_flags(class_info, method, false))
-                .unwrap_or_default();
-            if let Some(class_info) = self.classes.get_mut(&impl_class_name) {
-                if let Some(sig) = class_info.methods.get_mut(method) {
-                    let regular_param_count = if sig.variadic.is_some() {
-                        sig.params.len().saturating_sub(1)
-                    } else {
-                        sig.params.len()
-                    };
-                    for (i, arg_ty) in arg_types.iter().enumerate() {
-                        if i < regular_param_count
-                            && !declared_flags.get(i).copied().unwrap_or(false)
-                            && sig.params[i].1 == PhpType::Int
-                            && *arg_ty != PhpType::Int
-                        {
-                            sig.params[i].1 = arg_ty.clone();
-                        }
+    pub(crate) fn infer_nullsafe_method_call_type(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let obj_ty = self.infer_type(object, env)?;
+        let Some((class_name, nullable)) =
+            self.nullsafe_object_receiver(&obj_ty, expr, "method call")?
+        else {
+            return Ok(PhpType::Void);
+        };
+        let return_ty = self.infer_method_call_on_class_type(&class_name, method, args, expr, env)?;
+        if nullable {
+            Ok(self.normalize_union_type(vec![return_ty, PhpType::Void]))
+        } else {
+            Ok(return_ty)
+        }
+    }
+
+    fn infer_method_call_on_class_type(
+        &mut self,
+        class_name: &str,
+        method: &str,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let mut normalized_args = args.to_vec();
+        if let Some(class_info) = self.classes.get(class_name) {
+            if let Some(sig) = class_info.methods.get(method) {
+                if let Some(visibility) = class_info.method_visibilities.get(method) {
+                    let declaring_class = class_info
+                        .method_declaring_classes
+                        .get(method)
+                        .map(String::as_str)
+                        .unwrap_or(class_name);
+                    if !self.can_access_member(declaring_class, visibility) {
+                        return Err(CompileError::new(
+                            expr.span,
+                            &format!(
+                                "Cannot access {} method: {}::{}",
+                                Self::visibility_label(visibility),
+                                class_name,
+                                method
+                            ),
+                        ));
                     }
-                    if sig.variadic.is_some() && arg_types.len() > regular_param_count {
-                        let mut elem_ty = arg_types[regular_param_count].clone();
-                        for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
-                            elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
-                        }
-                        if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
-                            **existing_elem_ty =
-                                wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
-                        }
-                    }
-                    return Ok(sig.return_type.clone());
                 }
+                let declared_flags =
+                    Self::declared_method_param_flags(class_info, method, false);
+                let effective_sig = Self::callable_sig_for_declared_params(sig, &declared_flags);
+                normalized_args = self.normalize_named_call_args(
+                    &effective_sig,
+                    args,
+                    expr.span,
+                    &format!("Method {}::{}", class_name, method),
+                )?;
+                self.check_known_callable_call(
+                    &effective_sig,
+                    &normalized_args,
+                    expr.span,
+                    env,
+                    &format!("Method {}::{}", class_name, method),
+                )?;
+            } else {
+                return Err(CompileError::new(
+                    expr.span,
+                    &format!("Undefined method: {}::{}", class_name, method),
+                ));
+            }
+        }
+        let mut arg_types = Vec::new();
+        for arg in &normalized_args {
+            arg_types.push(self.infer_type(arg, env)?);
+        }
+
+        let impl_class_name = self
+            .classes
+            .get(class_name)
+            .and_then(|class_info| class_info.method_impl_classes.get(method))
+            .cloned()
+            .unwrap_or_else(|| class_name.to_string());
+        let declared_flags = self
+            .classes
+            .get(&impl_class_name)
+            .map(|class_info| Self::declared_method_param_flags(class_info, method, false))
+            .unwrap_or_default();
+        if let Some(class_info) = self.classes.get_mut(&impl_class_name) {
+            if let Some(sig) = class_info.methods.get_mut(method) {
+                let regular_param_count = if sig.variadic.is_some() {
+                    sig.params.len().saturating_sub(1)
+                } else {
+                    sig.params.len()
+                };
+                for (i, arg_ty) in arg_types.iter().enumerate() {
+                    if i < regular_param_count
+                        && !declared_flags.get(i).copied().unwrap_or(false)
+                        && sig.params[i].1 == PhpType::Int
+                        && *arg_ty != PhpType::Int
+                    {
+                        sig.params[i].1 = arg_ty.clone();
+                    }
+                }
+                if sig.variadic.is_some() && arg_types.len() > regular_param_count {
+                    let mut elem_ty = arg_types[regular_param_count].clone();
+                    for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
+                        elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
+                    }
+                    if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
+                        **existing_elem_ty =
+                            wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
+                    }
+                }
+                return Ok(sig.return_type.clone());
             }
         }
         Ok(PhpType::Int)

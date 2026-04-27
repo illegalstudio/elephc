@@ -520,6 +520,12 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             object: Box::new(prune_expr(*object)),
             property,
         },
+        ExprKind::NullsafePropertyAccess { object, property } => {
+            ExprKind::NullsafePropertyAccess {
+                object: Box::new(prune_expr(*object)),
+                property,
+            }
+        }
         ExprKind::StaticPropertyAccess { receiver, property } => {
             ExprKind::StaticPropertyAccess { receiver, property }
         }
@@ -528,6 +534,15 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             method,
             args,
         } => ExprKind::MethodCall {
+            object: Box::new(prune_expr(*object)),
+            method,
+            args: args.into_iter().map(prune_expr).collect(),
+        },
+        ExprKind::NullsafeMethodCall {
+            object,
+            method,
+            args,
+        } => ExprKind::NullsafeMethodCall {
             object: Box::new(prune_expr(*object)),
             method,
             args: args.into_iter().map(prune_expr).collect(),

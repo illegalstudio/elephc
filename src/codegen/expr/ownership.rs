@@ -6,6 +6,7 @@ pub(super) fn expr_result_heap_ownership(expr: &Expr) -> HeapOwnership {
         ExprKind::Variable(_)
         | ExprKind::ArrayAccess { .. }
         | ExprKind::PropertyAccess { .. }
+        | ExprKind::NullsafePropertyAccess { .. }
         | ExprKind::StaticPropertyAccess { .. }
         | ExprKind::EnumCase { .. }
         | ExprKind::This => HeapOwnership::Borrowed,
@@ -41,6 +42,7 @@ pub(super) fn expr_result_heap_ownership(expr: &Expr) -> HeapOwnership {
         | ExprKind::ClosureCall { .. }
         | ExprKind::ExprCall { .. }
         | ExprKind::MethodCall { .. }
+        | ExprKind::NullsafeMethodCall { .. }
         | ExprKind::StaticMethodCall { .. }
         | ExprKind::NewObject { .. } => HeapOwnership::Owned,
         _ => HeapOwnership::NonHeap,

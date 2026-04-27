@@ -207,6 +207,12 @@ pub(super) fn fold_expr(expr: Expr) -> Expr {
             object: Box::new(fold_expr(*object)),
             property,
         },
+        ExprKind::NullsafePropertyAccess { object, property } => {
+            ExprKind::NullsafePropertyAccess {
+                object: Box::new(fold_expr(*object)),
+                property,
+            }
+        }
         ExprKind::StaticPropertyAccess { receiver, property } => {
             ExprKind::StaticPropertyAccess { receiver, property }
         }
@@ -215,6 +221,15 @@ pub(super) fn fold_expr(expr: Expr) -> Expr {
             method,
             args,
         } => ExprKind::MethodCall {
+            object: Box::new(fold_expr(*object)),
+            method,
+            args: args.into_iter().map(fold_expr).collect(),
+        },
+        ExprKind::NullsafeMethodCall {
+            object,
+            method,
+            args,
+        } => ExprKind::NullsafeMethodCall {
             object: Box::new(fold_expr(*object)),
             method,
             args: args.into_iter().map(fold_expr).collect(),

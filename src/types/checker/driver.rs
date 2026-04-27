@@ -505,7 +505,13 @@ impl Checker {
                     || args.iter().any(Self::expr_contains_method_call)
                     || true
             }
+            crate::parser::ast::ExprKind::NullsafeMethodCall { object, args, .. } => {
+                Self::expr_contains_method_call(object)
+                    || args.iter().any(Self::expr_contains_method_call)
+                    || true
+            }
             crate::parser::ast::ExprKind::PropertyAccess { object, .. }
+            | crate::parser::ast::ExprKind::NullsafePropertyAccess { object, .. }
             | crate::parser::ast::ExprKind::Negate(object)
             | crate::parser::ast::ExprKind::Not(object)
             | crate::parser::ast::ExprKind::BitNot(object)

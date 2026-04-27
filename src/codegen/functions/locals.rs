@@ -2,7 +2,7 @@ use crate::codegen::context::Context;
 use crate::parser::ast::{ExprKind, StmtKind};
 use crate::types::{FunctionSig, PhpType};
 
-use super::types::{codegen_declared_type, infer_local_type};
+use super::types::{codegen_declared_type, codegen_static_type, infer_local_type};
 
 pub fn collect_local_vars(
     stmts: &[crate::parser::ast::Stmt],
@@ -13,16 +13,17 @@ pub fn collect_local_vars(
         match &stmt.kind {
             StmtKind::Assign { name, value } => {
                 if !ctx.variables.contains_key(name) {
-                    let ty = infer_local_type(value, sig, Some(ctx)).codegen_repr();
-                    ctx.alloc_var(name, ty);
+                    let static_ty = infer_local_type(value, sig, Some(ctx));
+                    ctx.alloc_var_with_static_type(name, static_ty.codegen_repr(), static_ty);
                 }
             }
             StmtKind::TypedAssign {
                 type_expr, name, ..
             } => {
                 if !ctx.variables.contains_key(name) {
+                    let static_ty = codegen_static_type(type_expr, ctx);
                     let ty = codegen_declared_type(type_expr, ctx).codegen_repr();
-                    ctx.alloc_var(name, ty);
+                    ctx.alloc_var_with_static_type(name, ty, static_ty);
                 }
             }
             StmtKind::Global { vars } => {
@@ -34,8 +35,8 @@ pub fn collect_local_vars(
             }
             StmtKind::StaticVar { name, init } => {
                 if !ctx.variables.contains_key(name) {
-                    let ty = infer_local_type(init, sig, Some(ctx)).codegen_repr();
-                    ctx.alloc_var(name, ty);
+                    let static_ty = infer_local_type(init, sig, Some(ctx));
+                    ctx.alloc_var_with_static_type(name, static_ty.codegen_repr(), static_ty);
                 }
             }
             StmtKind::If {
@@ -102,7 +103,7 @@ pub fn collect_local_vars(
                         PhpType::AssocArray { value, .. } => *value.clone(),
                         _ => PhpType::Int,
                     };
-                    ctx.alloc_var(value_var, elem_ty.codegen_repr());
+                    ctx.alloc_var_with_static_type(value_var, elem_ty.codegen_repr(), elem_ty);
                 }
                 collect_local_vars(body, ctx, sig);
             }
@@ -122,7 +123,7 @@ pub fn collect_local_vars(
                 };
                 for var in vars {
                     if !ctx.variables.contains_key(var) {
-                        ctx.alloc_var(var, elem_ty.codegen_repr());
+                        ctx.alloc_var_with_static_type(var, elem_ty.codegen_repr(), elem_ty.clone());
                     }
                 }
             }

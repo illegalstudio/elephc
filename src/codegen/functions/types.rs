@@ -104,6 +104,43 @@ pub(crate) fn codegen_declared_type(type_expr: &TypeExpr, ctx: &Context) -> PhpT
     }
 }
 
+pub(crate) fn codegen_static_type(type_expr: &TypeExpr, ctx: &Context) -> PhpType {
+    match type_expr {
+        TypeExpr::Nullable(inner) => {
+            merge_union_members(vec![codegen_static_type(inner, ctx), PhpType::Void])
+        }
+        TypeExpr::Union(members) => merge_union_members(
+            members
+                .iter()
+                .map(|member| codegen_static_type(member, ctx))
+                .collect(),
+        ),
+        _ => codegen_declared_type(type_expr, ctx),
+    }
+}
+
+fn merge_union_members(members: Vec<PhpType>) -> PhpType {
+    let mut flat = Vec::new();
+    for member in members {
+        match member {
+            PhpType::Union(inner) => flat.extend(inner),
+            PhpType::Mixed => return PhpType::Mixed,
+            other => flat.push(other),
+        }
+    }
+    let mut deduped = Vec::new();
+    for member in flat {
+        if !deduped.iter().any(|existing| existing == &member) {
+            deduped.push(member);
+        }
+    }
+    if deduped.len() == 1 {
+        deduped.pop().expect("union member exists")
+    } else {
+        PhpType::Union(deduped)
+    }
+}
+
 pub(super) fn infer_local_type(
     expr: &Expr,
     sig: &FunctionSig,
@@ -123,7 +160,7 @@ pub(super) fn infer_local_type(
             }
             if let Some(c) = ctx {
                 if let Some(var) = c.variables.get(name) {
-                    return var.ty.clone();
+                    return var.static_ty.clone();
                 }
             }
             PhpType::Int
@@ -419,6 +456,29 @@ pub(super) fn infer_local_type(
             }
             PhpType::Int
         }
+        ExprKind::NullsafePropertyAccess { object, property } => {
+            if let Some(c) = ctx {
+                if let Some((cn, nullable)) = nullsafe_context_class(object, sig, c) {
+                    if let Some(ci) = c.classes.get(&cn) {
+                        if let Some((_, ty)) = ci.properties.iter().find(|(n, _)| n == property) {
+                            return if nullable {
+                                merge_union_members(vec![ty.clone(), PhpType::Void])
+                            } else {
+                                ty.clone()
+                            };
+                        }
+                        if let Some(sig) = ci.methods.get("__get") {
+                            return if nullable {
+                                merge_union_members(vec![sig.return_type.clone(), PhpType::Void])
+                            } else {
+                                sig.return_type.clone()
+                            };
+                        }
+                    }
+                }
+            }
+            PhpType::Void
+        }
         ExprKind::StaticPropertyAccess { receiver, property } => {
             if let Some(c) = ctx {
                 let class_name = match receiver {
@@ -474,6 +534,22 @@ pub(super) fn infer_local_type(
             }
             PhpType::Int
         }
+        ExprKind::NullsafeMethodCall { object, method, .. } => {
+            if let Some(c) = ctx {
+                if let Some((cn, nullable)) = nullsafe_context_class(object, sig, c) {
+                    if let Some(ci) = c.classes.get(&cn) {
+                        if let Some(msig) = ci.methods.get(method) {
+                            return if nullable {
+                                merge_union_members(vec![msig.return_type.clone(), PhpType::Void])
+                            } else {
+                                msig.return_type.clone()
+                            };
+                        }
+                    }
+                }
+            }
+            PhpType::Void
+        }
         ExprKind::StaticMethodCall {
             receiver, method, ..
         } => {
@@ -524,5 +600,29 @@ pub(super) fn infer_local_type(
         }
         ExprKind::PtrCast { target_type, .. } => PhpType::Pointer(Some(target_type.clone())),
         _ => PhpType::Int,
+    }
+}
+
+fn nullsafe_context_class(
+    object: &Expr,
+    sig: &FunctionSig,
+    ctx: &Context,
+) -> Option<(String, bool)> {
+    match infer_local_type(object, sig, Some(ctx)) {
+        PhpType::Object(class_name) => Some((class_name, false)),
+        PhpType::Void => None,
+        PhpType::Union(members) => {
+            let mut class_name = None;
+            let mut nullable = false;
+            for member in members {
+                match member {
+                    PhpType::Void => nullable = true,
+                    PhpType::Object(candidate) => class_name = Some(candidate),
+                    _ => return None,
+                }
+            }
+            class_name.map(|name| (name, nullable))
+        }
+        _ => None,
     }
 }

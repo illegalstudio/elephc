@@ -125,6 +125,7 @@ pub struct Context {
 
 pub struct VarInfo {
     pub ty: PhpType,
+    pub static_ty: PhpType,
     pub stack_offset: usize,
     pub ownership: HeapOwnership,
     pub epilogue_cleanup_safe: bool,
@@ -190,6 +191,15 @@ impl Context {
     }
 
     pub fn alloc_var(&mut self, name: &str, ty: PhpType) -> usize {
+        self.alloc_var_with_static_type(name, ty.clone(), ty)
+    }
+
+    pub fn alloc_var_with_static_type(
+        &mut self,
+        name: &str,
+        ty: PhpType,
+        static_ty: PhpType,
+    ) -> usize {
         self.stack_offset += ty.stack_size();
         let offset = self.stack_offset;
         let ownership = HeapOwnership::for_type(&ty);
@@ -197,6 +207,7 @@ impl Context {
             name.to_string(),
             VarInfo {
                 ty,
+                static_ty,
                 stack_offset: offset,
                 ownership,
                 epilogue_cleanup_safe: true,
@@ -234,8 +245,19 @@ impl Context {
         ty: PhpType,
         ownership: HeapOwnership,
     ) {
+        self.update_var_type_static_and_ownership(name, ty.clone(), ty, ownership);
+    }
+
+    pub fn update_var_type_static_and_ownership(
+        &mut self,
+        name: &str,
+        ty: PhpType,
+        static_ty: PhpType,
+        ownership: HeapOwnership,
+    ) {
         if let Some(var) = self.variables.get_mut(name) {
             var.ty = ty;
+            var.static_ty = static_ty;
             var.ownership = ownership;
         }
     }

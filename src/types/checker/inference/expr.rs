@@ -338,6 +338,9 @@ impl Checker {
             ExprKind::PropertyAccess { object, property } => {
                 self.infer_property_access_type(object, property, expr, env)
             }
+            ExprKind::NullsafePropertyAccess { object, property } => {
+                self.infer_nullsafe_property_access_type(object, property, expr, env)
+            }
             ExprKind::StaticPropertyAccess { receiver, property } => {
                 self.infer_static_property_access_type(receiver, property, expr)
             }
@@ -346,6 +349,11 @@ impl Checker {
                 method,
                 args,
             } => self.infer_method_call_type(object, method, args, expr, env),
+            ExprKind::NullsafeMethodCall {
+                object,
+                method,
+                args,
+            } => self.infer_nullsafe_method_call_type(object, method, args, expr, env),
             ExprKind::StaticMethodCall {
                 receiver,
                 method,
