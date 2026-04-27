@@ -414,6 +414,10 @@ fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
             then_expr: Box::new(rewrite_expr(*then_expr, defines)),
             else_expr: Box::new(rewrite_expr(*else_expr, defines)),
         },
+        ExprKind::ShortTernary { value, default } => ExprKind::ShortTernary {
+            value: Box::new(rewrite_expr(*value, defines)),
+            default: Box::new(rewrite_expr(*default, defines)),
+        },
         ExprKind::Cast { target, expr } => ExprKind::Cast {
             target,
             expr: Box::new(rewrite_expr(*expr, defines)),

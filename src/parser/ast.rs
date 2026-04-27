@@ -54,6 +54,10 @@ pub enum ExprKind {
         then_expr: Box<Expr>,
         else_expr: Box<Expr>,
     },
+    ShortTernary {
+        value: Box<Expr>,
+        default: Box<Expr>,
+    },
     Cast {
         target: CastType,
         expr: Box<Expr>,

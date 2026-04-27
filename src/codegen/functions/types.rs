@@ -170,6 +170,11 @@ pub(super) fn infer_local_type(
             let else_ty = infer_local_type(else_expr, sig, ctx);
             wider_of(&then_ty, &else_ty)
         }
+        ExprKind::ShortTernary { value, default } => {
+            let value_ty = infer_local_type(value, sig, ctx);
+            let default_ty = infer_local_type(default, sig, ctx);
+            wider_of(&value_ty, &default_ty)
+        }
         ExprKind::BinaryOp { left, op, right } => {
             use crate::parser::ast::BinOp;
             match op {

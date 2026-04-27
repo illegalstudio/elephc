@@ -95,6 +95,10 @@ pub(super) fn resolve_expr(
             then_expr: Box::new(resolve_expr(then_expr, current_namespace, imports, symbols)),
             else_expr: Box::new(resolve_expr(else_expr, current_namespace, imports, symbols)),
         },
+        ExprKind::ShortTernary { value, default } => ExprKind::ShortTernary {
+            value: Box::new(resolve_expr(value, current_namespace, imports, symbols)),
+            default: Box::new(resolve_expr(default, current_namespace, imports, symbols)),
+        },
         ExprKind::Cast { target, expr } => ExprKind::Cast {
             target: target.clone(),
             expr: Box::new(resolve_expr(expr, current_namespace, imports, symbols)),

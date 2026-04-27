@@ -53,7 +53,7 @@ sidebar:
 | `xor` | `$a xor $b` | Word-form exclusive OR; evaluates both operands |
 | `!` | `!$a` | NOT |
 
-Word-form logical precedence matches PHP: `and` binds tighter than `xor`, and `xor` binds tighter than `or`. All three bind looser than `&&`, `||`, `??`, and the full ternary operator.
+Word-form logical precedence matches PHP: `and` binds tighter than `xor`, and `xor` binds tighter than `or`. All three bind looser than `&&`, `||`, `??`, and the ternary operators.
 
 Word-form logical operators are case-insensitive (`AND`, `Or`, and `xOr` are accepted). Assignment expressions are not part of elephc's expression subset yet, so use parentheses when a word-form logical expression is the right-hand side of an assignment: `$x = (true and false);`.
 
@@ -124,6 +124,7 @@ Use a nullable, union, or `mixed` typed local when the fallback may change the s
 
 ```php
 $max = $a > $b ? $a : $b;
+$label = $name ?: "anonymous";
 ```
 
-**Not supported yet:** `?:` (short ternary).
+The short ternary / Elvis form `expr ?: fallback` returns the original left-hand value when it is truthy, otherwise it evaluates and returns the fallback. The left-hand expression is evaluated once.

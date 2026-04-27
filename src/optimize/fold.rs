@@ -146,6 +146,14 @@ pub(super) fn fold_expr(expr: Expr) -> Expr {
                 }
             })
         }
+        ExprKind::ShortTernary { value, default } => {
+            let value = fold_expr(*value);
+            let default = fold_expr(*default);
+            try_fold_short_ternary(&value, &default).unwrap_or_else(|| ExprKind::ShortTernary {
+                value: Box::new(value),
+                default: Box::new(default),
+            })
+        }
         ExprKind::Cast { target, expr } => {
             let expr = fold_expr(*expr);
             try_fold_cast(&target, &expr).unwrap_or_else(|| ExprKind::Cast {
@@ -421,6 +429,15 @@ pub(super) fn try_fold_ternary(condition: &Expr, then_expr: &Expr, else_expr: &E
     }
 }
 
+pub(super) fn try_fold_short_ternary(value: &Expr, default: &Expr) -> Option<ExprKind> {
+    let value = scalar_value(value)?;
+    if value.truthy() {
+        Some(value.into_expr_kind())
+    } else {
+        Some(scalar_value(default)?.into_expr_kind())
+    }
+}
+
 pub(super) fn try_fold_array_access(array: &Expr, index: &Expr) -> Option<ExprKind> {
     match &array.kind {
         ExprKind::ArrayLiteral(items) => try_fold_indexed_array_access(items, index),
@@ -539,6 +556,14 @@ pub(super) fn assigned_scalar_value(expr: &Expr) -> Option<ScalarValue> {
             let then_value = assigned_scalar_value(then_expr)?;
             let else_value = assigned_scalar_value(else_expr)?;
             (then_value == else_value).then_some(then_value)
+        }
+        ExprKind::ShortTernary { value, default } => {
+            let value = assigned_scalar_value(value)?;
+            if value.truthy() {
+                Some(value)
+            } else {
+                assigned_scalar_value(default)
+            }
         }
         ExprKind::Match { arms, default, .. } => {
             let default = default.as_ref()?;

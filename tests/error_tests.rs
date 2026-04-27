@@ -770,6 +770,11 @@ fn test_error_word_logical_assignment_rhs_requires_parentheses() {
 }
 
 #[test]
+fn test_error_short_ternary_missing_default() {
+    expect_error("<?php echo $x ?:;", "Unexpected token: Semicolon");
+}
+
+#[test]
 fn test_error_undefined_function() {
     expect_error("<?php nope();", "Undefined function: nope");
 }

@@ -40,3 +40,8 @@ echo "Word or precedence: " . ($word_or ? "yes" : "no") . "\n";
 
 $word_xor = (true xor true and false);
 echo "Word xor precedence: " . ($word_xor ? "yes" : "no") . "\n";
+
+// Short ternary / Elvis keeps the left value when truthy
+$nickname = "";
+$display_name = $nickname ?: "anonymous";
+echo "Display name: " . $display_name . "\n";

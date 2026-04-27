@@ -215,6 +215,9 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         } => expr_effect(condition)
             .combine(expr_effect(then_expr))
             .combine(expr_effect(else_expr)),
+        ExprKind::ShortTernary { value, default } => {
+            expr_effect(value).combine(expr_effect(default))
+        }
         ExprKind::Closure { .. } => Effect::PURE,
         ExprKind::NamedArg { value, .. } => expr_effect(value),
         ExprKind::PropertyAccess { object, .. } => expr_effect(object),
@@ -493,6 +496,10 @@ pub(super) fn callable_alias_from_expr(expr: &Expr) -> Option<Effect> {
         } => merge_callable_value_effects([
             callable_alias_from_expr(then_expr),
             callable_alias_from_expr(else_expr),
+        ]),
+        ExprKind::ShortTernary { value, default } => merge_callable_value_effects([
+            callable_alias_from_expr(value),
+            callable_alias_from_expr(default),
         ]),
         ExprKind::NullCoalesce { value, default } => merge_callable_value_effects([
             callable_alias_from_expr(value),
