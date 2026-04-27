@@ -49,6 +49,24 @@ pub(super) fn emit_logical_binop(
             emit_set_bool_from_flags(emitter, "ne");
             PhpType::Bool
         }
+        BinOp::Xor => {
+            let left_ty = emit_expr(left, emitter, ctx, data);
+            coerce_to_truthiness(emitter, ctx, &left_ty);
+            abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
+            let right_ty = emit_expr(right, emitter, ctx, data);
+            coerce_to_truthiness(emitter, ctx, &right_ty);
+            match emitter.target.arch {
+                Arch::AArch64 => {
+                    abi::emit_pop_reg(emitter, "x9");
+                    emitter.instruction("eor x0, x9, x0");                      // true when exactly one operand is truthy
+                }
+                Arch::X86_64 => {
+                    abi::emit_pop_reg(emitter, "r10");
+                    emitter.instruction("xor rax, r10");                        // true when exactly one operand is truthy
+                }
+            }
+            PhpType::Bool
+        }
         _ => unreachable!(),
     }
 }

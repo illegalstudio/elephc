@@ -88,7 +88,7 @@ impl Checker {
                 Ok(PhpType::Bool)
             }
             BinOp::Concat => Ok(PhpType::Str),
-            BinOp::And | BinOp::Or => Ok(PhpType::Bool),
+            BinOp::And | BinOp::Or | BinOp::Xor => Ok(PhpType::Bool),
             BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight => {
                 let lt_ok = matches!(lt, PhpType::Int | PhpType::Bool | PhpType::Void)
                     || self.is_union_with_mixed_int_dispatch(&lt);

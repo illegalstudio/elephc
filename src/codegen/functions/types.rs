@@ -183,7 +183,8 @@ pub(super) fn infer_local_type(
                 | BinOp::StrictEq
                 | BinOp::StrictNotEq
                 | BinOp::And
-                | BinOp::Or => PhpType::Bool,
+                | BinOp::Or
+                | BinOp::Xor => PhpType::Bool,
                 BinOp::BitAnd
                 | BinOp::BitOr
                 | BinOp::BitXor

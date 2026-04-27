@@ -21,7 +21,9 @@ pub(super) fn emit_binop(
     data: &mut DataSection,
 ) -> PhpType {
     match op {
-        BinOp::And | BinOp::Or => emit_logical_binop(left, op, right, emitter, ctx, data),
+        BinOp::And | BinOp::Or | BinOp::Xor => {
+            emit_logical_binop(left, op, right, emitter, ctx, data)
+        }
         BinOp::Pow => emit_pow_binop(left, right, emitter, ctx, data),
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
             emit_numeric_binop(left, op, right, emitter, ctx, data)

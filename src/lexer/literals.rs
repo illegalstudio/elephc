@@ -293,6 +293,9 @@ pub fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
 
     match word.as_str() {
         "echo" => Ok(Token::Echo),
+        "and" => Ok(Token::And),
+        "or" => Ok(Token::Or),
+        "xor" => Ok(Token::Xor),
         "if" => Ok(Token::If),
         "ifdef" => Ok(Token::IfDef),
         "else" => Ok(Token::Else),
