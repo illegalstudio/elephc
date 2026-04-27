@@ -170,7 +170,7 @@ Current recovery behavior is intentionally simple:
 ```
 Add  Sub  Mul  Div  Mod  Pow  Concat
 Eq  NotEq  StrictEq  StrictNotEq  Lt  Gt  LtEq  GtEq  Spaceship
-And  Or
+And  Or  Xor
 BitAnd  BitOr  BitXor  ShiftLeft  ShiftRight
 NullCoalesce
 ```
@@ -212,20 +212,24 @@ elephc uses a **Pratt parser** (also called top-down operator precedence parser)
 ```
 Operator          Left BP    Right BP    Associativity
 ─────────────────────────────────────────────────────
-??                  2          1         RIGHT (null coalescing)
-||                  3          4         left
-&&                  5          6         left
-|  (bitwise OR)     7          8         left
-^  (bitwise XOR)    9         10         left
-&  (bitwise AND)   11         12         left
-== != === !==      13         14         left
-< > <= >= <=>      15         16         left
-<< >>              17         18         left
-.  (concat)        19         20         left
-+ -                21         22         left
-* / %              23         24         left
-unary (- ! ~)          27                prefix
-**                 29         28         RIGHT (r < l)
+or                  1          2         left
+xor                 3          4         left
+and                 5          6         left
+?:                  7          7         right-ish ternary parse
+??                  9          8         RIGHT (null coalescing)
+||                 11         12         left
+&&                 13         14         left
+|  (bitwise OR)    15         16         left
+^  (bitwise XOR)   17         18         left
+&  (bitwise AND)   19         20         left
+== != === !==      21         22         left
+< > <= >= <=>      23         24         left
+<< >>              25         26         left
+.  (concat)        27         28         left
++ -                29         30         left
+* / %              31         32         left
+unary (- ! ~)          35                prefix
+**                 37         36         RIGHT (r < l)
 ```
 
 **Left-associative** operators have `right_bp > left_bp`. This means `1 + 2 + 3` parses as `(1 + 2) + 3`.
@@ -233,6 +237,8 @@ unary (- ! ~)          27                prefix
 **Right-associative** operators have `right_bp < left_bp`. This means `2 ** 3 ** 4` parses as `2 ** (3 ** 4)`.
 
 For `??`, the Pratt table still uses `BinOp::NullCoalesce` to assign binding power, but the parser builds a dedicated `ExprKind::NullCoalesce { value, default }` node rather than a generic `BinaryOp`.
+
+The word-form logical operators (`and`, `xor`, `or`) have PHP's lower precedence. The symbolic `&&` and `||` continue to bind more tightly.
 
 ### The algorithm
 

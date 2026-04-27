@@ -157,7 +157,7 @@ These are recognized as distinct tokens by the lexer, not as identifiers. Their 
 +  -  *  **  /  %  .
 =  =>  +=  -=  *=  **=  /=  .=  %=  &=  |=  ^=  <<=  >>=  ??=
 ==  ===  !=  !==  <  >  <=  >=  <=>
-&&  ||  !
+&&  ||  and  or  xor  !
 &  |  ^  ~  <<  >>
 ??  ->  ::
 ++  --

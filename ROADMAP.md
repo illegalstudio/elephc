@@ -9,7 +9,7 @@
 - [x] `if` / `elseif` / `else`, `while`, `for`, `do...while`, `break`, `continue`
 - [x] Functions with local scope, return, recursion, nested calls
 - [x] Pre/post increment/decrement (`++$i`, `$i++`, `--$i`, `$i--`)
-- [x] Logical operators: `&&`, `||`, `!` (with short-circuit evaluation)
+- [x] Logical operators: `&&`, `||`, `and`, `or`, `xor`, `!` (`and`/`or`/symbolic forms use short-circuit evaluation)
 - [x] Assignment operators: `+=`, `-=`, `*=`, `/=`, `.=`, `%=`
 - [x] Boolean literals: `true`, `false` (as integer 1/0)
 - [x] Ternary operator: `$x = $a > $b ? $a : $b;`

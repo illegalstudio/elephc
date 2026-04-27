@@ -270,7 +270,7 @@ The result is always `x0` with value 0 or 1 (`PhpType::Bool`).
 
 ### Short-circuit logical operators
 
-`&&` and `||` use **short-circuit evaluation** — the right side isn't evaluated if the left determines the result:
+`&&`, `||`, `and`, and `or` use **short-circuit evaluation** — the right side isn't evaluated if the left determines the result. `xor` is also a logical operator, but it evaluates both operands because exclusive OR needs both truthiness values.
 
 ```php
 $a && $b
