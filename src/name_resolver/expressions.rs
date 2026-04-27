@@ -174,6 +174,12 @@ pub(super) fn resolve_expr(
             object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
             property: property.clone(),
         },
+        ExprKind::NullsafePropertyAccess { object, property } => {
+            ExprKind::NullsafePropertyAccess {
+                object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
+                property: property.clone(),
+            }
+        }
         ExprKind::StaticPropertyAccess { receiver, property } => ExprKind::StaticPropertyAccess {
             receiver: match receiver {
                 StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
@@ -184,6 +190,14 @@ pub(super) fn resolve_expr(
             property: property.clone(),
         },
         ExprKind::MethodCall { object, method, args } => ExprKind::MethodCall {
+            object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
+            method: method.clone(),
+            args: args
+                .iter()
+                .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
+                .collect(),
+        },
+        ExprKind::NullsafeMethodCall { object, method, args } => ExprKind::NullsafeMethodCall {
             object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
             method: method.clone(),
             args: args

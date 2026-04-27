@@ -732,6 +732,141 @@ echo $a->next->value;
 }
 
 #[test]
+fn test_nullsafe_property_access_returns_property_or_null() {
+    let out = compile_and_run(
+        r#"<?php
+class Profile {
+    public string $name = "Ada";
+}
+class User {
+    public ?Profile $profile;
+}
+$with = new User();
+$with->profile = new Profile();
+$without = new User();
+echo $with->profile?->name ?? "none";
+echo "|";
+echo $without->profile?->name ?? "none";
+"#,
+    );
+    assert_eq!(out, "Ada|none");
+}
+
+#[test]
+fn test_nullsafe_method_call_skips_arguments_when_receiver_is_null() {
+    let out = compile_and_run(
+        r#"<?php
+function side() {
+    echo "bad";
+    return "side";
+}
+class Box {
+    public function label($value): string {
+        return $value;
+    }
+}
+?Box $box = null;
+echo $box?->label(side()) ?? "none";
+"#,
+    );
+    assert_eq!(out, "none");
+}
+
+#[test]
+fn test_nullsafe_method_call_evaluates_receiver_before_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+function receiver() {
+    echo "receiver|";
+    return new Box();
+}
+function side() {
+    echo "arg|";
+    return "value";
+}
+class Box {
+    public function label($value): string {
+        echo "method|";
+        return $value;
+    }
+}
+echo receiver()?->label(side());
+"#,
+    );
+    assert_eq!(out, "receiver|arg|method|value");
+}
+
+#[test]
+fn test_nullsafe_chained_access_short_circuits_each_hop() {
+    let out = compile_and_run(
+        r#"<?php
+class Address {
+    public string $city = "Rome";
+}
+class Profile {
+    public ?Address $address;
+}
+class User {
+    public ?Profile $profile;
+}
+$with = new User();
+$profile = new Profile();
+$profile->address = new Address();
+$with->profile = $profile;
+$without = new User();
+echo $with?->profile?->address?->city ?? "none";
+echo "|";
+echo $without?->profile?->address?->city ?? "none";
+"#,
+    );
+    assert_eq!(out, "Rome|none");
+}
+
+#[test]
+fn test_nullsafe_chained_method_result_short_circuits() {
+    let out = compile_and_run(
+        r#"<?php
+class Profile {
+    public string $name = "Ada";
+}
+class User {
+    public ?Profile $profile;
+    public function profile(): ?Profile {
+        return $this->profile;
+    }
+}
+$with = new User();
+$with->profile = new Profile();
+$without = new User();
+echo $with?->profile()?->name ?? "none";
+echo "|";
+echo $without?->profile()?->name ?? "none";
+"#,
+    );
+    assert_eq!(out, "Ada|none");
+}
+
+#[test]
+fn test_nullsafe_static_null_receiver_keeps_receiver_side_effects() {
+    let out = compile_and_run(
+        r#"<?php
+function none() {
+    echo "receiver|";
+    return null;
+}
+function arg() {
+    echo "arg|";
+    return "value";
+}
+echo none()?->name ?? "none";
+echo "|";
+echo none()?->label(arg()) ?? "none";
+"#,
+    );
+    assert_eq!(out, "receiver|none|receiver|none");
+}
+
+#[test]
 fn test_class_array_of_objects_property_access() {
     let out = compile_and_run(
         r#"<?php

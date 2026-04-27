@@ -17,55 +17,7 @@ pub(super) fn emit_property_access(
     let obj_ty = emit_expr(object, emitter, ctx, data);
     let (class_name, prop_ty, offset, needs_deref, is_reference) = match &obj_ty {
         PhpType::Object(class_name) => {
-            let class_info = match ctx.classes.get(class_name).cloned() {
-                Some(c) => c,
-                None => {
-                    emitter.comment(&format!("WARNING: undefined class {}", class_name));
-                    return PhpType::Int;
-                }
-            };
-
-            let prop_ty = match class_info
-                .properties
-                .iter()
-                .find(|(n, _)| n == property)
-                .map(|(_, t)| t.clone())
-            {
-                Some(v) => v,
-                None => {
-                    if class_info.methods.contains_key("__get") {
-                        emitter.comment(&format!("magic __get('{}')", property));
-                        let object_reg = abi::symbol_scratch_reg(emitter);
-                        emitter.instruction(&format!("mov {}, {}", object_reg, abi::int_result_reg(emitter))); // preserve $this while the magic-property name setup clobbers normal result registers
-                        super::push_magic_property_name_arg(property, emitter, data);
-                        abi::emit_push_reg(emitter, object_reg);                  // push $this pointer for __get dispatch using the preserved object register
-                        return super::emit_method_call_with_pushed_args(
-                            class_name,
-                            "__get",
-                            &[PhpType::Str],
-                            emitter,
-                            ctx,
-                        );
-                    }
-                    emitter.comment(&format!("WARNING: undefined property {}", property));
-                    return PhpType::Int;
-                }
-            };
-            let offset = match class_info.property_offsets.get(property) {
-                Some(offset) => *offset,
-                None => {
-                    emitter.comment(&format!("WARNING: missing property offset {}", property));
-                    return PhpType::Int;
-                }
-            };
-
-            (
-                class_name.clone(),
-                prop_ty,
-                offset,
-                false,
-                class_info.reference_properties.contains(property),
-            )
+            return emit_loaded_object_property_access(class_name, property, emitter, ctx, data);
         }
         PhpType::Pointer(Some(class_name)) if ctx.extern_classes.contains_key(class_name) => {
             let class_info = match ctx.extern_classes.get(class_name).cloned() {
@@ -119,6 +71,147 @@ pub(super) fn emit_property_access(
         }
     };
 
+    if needs_deref {
+        abi::emit_call_label(emitter, "__rt_ptr_check_nonnull");               // abort with fatal error on null pointer dereference
+        emitter.comment(&format!(
+            "->{} via ptr<{}> (offset {})",
+            property, class_name, offset
+        ));
+    } else {
+        emitter.comment(&format!("->{}  (offset {})", property, offset));
+    }
+
+    let object_reg = abi::int_result_reg(emitter);
+
+    if is_reference {
+        let pointer_reg = abi::symbol_scratch_reg(emitter);
+        abi::emit_load_from_address(emitter, pointer_reg, object_reg, offset);
+        match &prop_ty {
+            PhpType::Str => {
+                let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+                abi::emit_load_from_address(emitter, ptr_reg, pointer_reg, 0);
+                abi::emit_load_from_address(emitter, len_reg, pointer_reg, 8);
+            }
+            PhpType::Float => {
+                abi::emit_load_from_address(emitter, abi::float_result_reg(emitter), pointer_reg, 0);
+            }
+            PhpType::Bool | PhpType::Int | PhpType::Void => {
+                abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), pointer_reg, 0);
+            }
+            PhpType::Mixed
+            | PhpType::Union(_)
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Buffer(_)
+            | PhpType::Callable
+            | PhpType::Object(_)
+            | PhpType::Packed(_)
+            | PhpType::Pointer(_) => {
+                abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), pointer_reg, 0);
+            }
+        }
+        return prop_ty;
+    }
+
+    match &prop_ty {
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+            let base_reg = abi::symbol_scratch_reg(emitter);
+            emitter.instruction(&format!("mov {}, {}", base_reg, object_reg));  // preserve the object base pointer while loading the two-word string property payload
+            abi::emit_load_from_address(emitter, ptr_reg, base_reg, offset);
+            abi::emit_load_from_address(emitter, len_reg, base_reg, offset + 8);
+        }
+        PhpType::Float => {
+            abi::emit_load_from_address(emitter, abi::float_result_reg(emitter), object_reg, offset);
+        }
+        PhpType::Bool | PhpType::Int | PhpType::Void => {
+            abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), object_reg, offset);
+        }
+        PhpType::Mixed
+        | PhpType::Union(_)
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Buffer(_)
+        | PhpType::Callable
+        | PhpType::Object(_)
+        | PhpType::Packed(_)
+        | PhpType::Pointer(_) => {
+            abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), object_reg, offset);
+        }
+    }
+
+    prop_ty
+}
+
+pub(super) fn emit_loaded_object_property_access(
+    class_name: &str,
+    property: &str,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    let class_info = match ctx.classes.get(class_name).cloned() {
+        Some(c) => c,
+        None => {
+            emitter.comment(&format!("WARNING: undefined class {}", class_name));
+            return PhpType::Int;
+        }
+    };
+
+    let prop_ty = match class_info
+        .properties
+        .iter()
+        .find(|(n, _)| n == property)
+        .map(|(_, t)| t.clone())
+    {
+        Some(v) => v,
+        None => {
+            if class_info.methods.contains_key("__get") {
+                emitter.comment(&format!("magic __get('{}')", property));
+                let object_reg = abi::symbol_scratch_reg(emitter);
+                emitter.instruction(&format!("mov {}, {}", object_reg, abi::int_result_reg(emitter))); // preserve $this while the magic-property name setup clobbers normal result registers
+                super::push_magic_property_name_arg(property, emitter, data);
+                abi::emit_push_reg(emitter, object_reg);                      // push $this pointer for __get dispatch using the preserved object register
+                return super::emit_method_call_with_pushed_args(
+                    class_name,
+                    "__get",
+                    &[PhpType::Str],
+                    emitter,
+                    ctx,
+                );
+            }
+            emitter.comment(&format!("WARNING: undefined property {}", property));
+            return PhpType::Int;
+        }
+    };
+    let offset = match class_info.property_offsets.get(property) {
+        Some(offset) => *offset,
+        None => {
+            emitter.comment(&format!("WARNING: missing property offset {}", property));
+            return PhpType::Int;
+        }
+    };
+
+    emit_loaded_object_property_value(
+        class_name,
+        property,
+        prop_ty,
+        offset,
+        false,
+        class_info.reference_properties.contains(property),
+        emitter,
+    )
+}
+
+fn emit_loaded_object_property_value(
+    class_name: &str,
+    property: &str,
+    prop_ty: PhpType,
+    offset: usize,
+    needs_deref: bool,
+    is_reference: bool,
+    emitter: &mut Emitter,
+) -> PhpType {
     if needs_deref {
         abi::emit_call_label(emitter, "__rt_ptr_check_nonnull");               // abort with fatal error on null pointer dereference
         emitter.comment(&format!(

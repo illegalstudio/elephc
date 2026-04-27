@@ -2,6 +2,7 @@ mod access;
 mod allocation;
 mod dispatch;
 mod instanceof;
+mod nullsafe;
 mod static_properties;
 
 use super::super::context::Context;
@@ -29,6 +30,16 @@ pub(super) fn emit_property_access(
     data: &mut DataSection,
 ) -> PhpType {
     access::emit_property_access(object, property, emitter, ctx, data)
+}
+
+pub(super) fn emit_nullsafe_property_access(
+    object: &Expr,
+    property: &str,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    nullsafe::emit_nullsafe_property_access(object, property, emitter, ctx, data)
 }
 
 pub(super) fn emit_static_property_access(
@@ -78,6 +89,17 @@ pub(super) fn emit_method_call(
     data: &mut DataSection,
 ) -> PhpType {
     dispatch::emit_method_call(object, method, args, emitter, ctx, data)
+}
+
+pub(super) fn emit_nullsafe_method_call(
+    object: &Expr,
+    method: &str,
+    args: &[Expr],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> PhpType {
+    nullsafe::emit_nullsafe_method_call(object, method, args, emitter, ctx, data)
 }
 
 pub(super) fn emit_method_call_with_pushed_args(

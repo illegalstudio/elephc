@@ -3,6 +3,7 @@ use super::super::super::context::Context;
 use super::super::super::data_section::DataSection;
 use super::super::super::emit::Emitter;
 use super::super::super::expr::emit_expr;
+use super::super::super::functions;
 use super::super::PhpType;
 use crate::parser::ast::{Expr, ExprKind};
 
@@ -26,6 +27,12 @@ pub(crate) fn emit_assign_stmt(
 
     emitter.blank();
     emitter.comment(&format!("${} = ...", name));
+    let static_ty = ctx
+        .variables
+        .get(name)
+        .map(|var| var.static_ty.clone())
+        .filter(|ty| matches!(ty, PhpType::Union(_)))
+        .unwrap_or_else(|| functions::infer_contextual_type(value, ctx));
     let mut ty = emit_expr(value, emitter, ctx, data);
     let dest_needs_mixed_box = ctx.variables.get(name).is_some_and(|var| {
         !ctx.ref_params.contains(name)
@@ -123,9 +130,10 @@ pub(crate) fn emit_assign_stmt(
         }
 
         abi::emit_store(emitter, &ty, offset);
-        ctx.update_var_type_and_ownership(
+        ctx.update_var_type_static_and_ownership(
             name,
             ty.clone(),
+            static_ty.clone(),
             super::super::helpers::local_slot_ownership_after_store(&ty),
         );
 
@@ -169,9 +177,10 @@ pub(crate) fn emit_assign_stmt(
 
     if let Some(var) = ctx.variables.get(name) {
         if var.ty != ty {
-            ctx.update_var_type_and_ownership(
+            ctx.update_var_type_static_and_ownership(
                 name,
                 ty.clone(),
+                static_ty,
                 super::super::helpers::local_slot_ownership_after_store(&ty),
             );
         }

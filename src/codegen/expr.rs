@@ -148,6 +148,9 @@ pub fn emit_expr(
         ExprKind::PropertyAccess { object, property } => {
             emit_property_access(object, property, emitter, ctx, data)
         }
+        ExprKind::NullsafePropertyAccess { object, property } => {
+            objects::emit_nullsafe_property_access(object, property, emitter, ctx, data)
+        }
         ExprKind::StaticPropertyAccess { receiver, property } => {
             emit_static_property_access(receiver, property, emitter, ctx)
         }
@@ -156,6 +159,11 @@ pub fn emit_expr(
             method,
             args,
         } => emit_method_call(object, method, args, emitter, ctx, data),
+        ExprKind::NullsafeMethodCall {
+            object,
+            method,
+            args,
+        } => objects::emit_nullsafe_method_call(object, method, args, emitter, ctx, data),
         ExprKind::StaticMethodCall {
             receiver,
             method,

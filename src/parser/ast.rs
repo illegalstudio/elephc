@@ -99,11 +99,20 @@ pub enum ExprKind {
         object: Box<Expr>,
         property: String,
     },
+    NullsafePropertyAccess {
+        object: Box<Expr>,
+        property: String,
+    },
     StaticPropertyAccess {
         receiver: StaticReceiver,
         property: String,
     },
     MethodCall {
+        object: Box<Expr>,
+        method: String,
+        args: Vec<Expr>,
+    },
+    NullsafeMethodCall {
         object: Box<Expr>,
         method: String,
         args: Vec<Expr>,

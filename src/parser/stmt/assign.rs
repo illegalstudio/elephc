@@ -42,7 +42,10 @@ pub(super) fn parse_variable_stmt(
     }
 
     if *pos + 1 < tokens.len()
-        && matches!(tokens[*pos + 1].0, Token::Arrow | Token::LBracket)
+        && matches!(
+            tokens[*pos + 1].0,
+            Token::Arrow | Token::QuestionArrow | Token::LBracket
+        )
     {
         let expr = parse_expr(tokens, pos)?;
         if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
@@ -161,7 +164,7 @@ pub(super) fn try_parse_postfix_assignment(
     let contains_postfix = lhs
         .iter()
         .skip(1)
-        .any(|(token, _)| matches!(token, Token::Arrow | Token::LBracket));
+        .any(|(token, _)| matches!(token, Token::Arrow | Token::QuestionArrow | Token::LBracket));
     if !contains_postfix {
         return Ok(None);
     }

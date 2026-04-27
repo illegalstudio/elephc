@@ -264,12 +264,21 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
         ExprKind::PropertyAccess { object, .. } => {
             collect_required_class_names_in_expr(object, names);
         }
+        ExprKind::NullsafePropertyAccess { object, .. } => {
+            collect_required_class_names_in_expr(object, names);
+        }
         ExprKind::StaticPropertyAccess { receiver, .. } => {
             if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
                 names.insert(name.as_str().to_string());
             }
         }
         ExprKind::MethodCall { object, args, .. } => {
+            collect_required_class_names_in_expr(object, names);
+            for arg in args {
+                collect_required_class_names_in_expr(arg, names);
+            }
+        }
+        ExprKind::NullsafeMethodCall { object, args, .. } => {
             collect_required_class_names_in_expr(object, names);
             for arg in args {
                 collect_required_class_names_in_expr(arg, names);
@@ -537,9 +546,14 @@ fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
         ExprKind::Closure { body, .. } => {
             body.iter().any(|stmt| stmt_uses_variable(stmt, needle))
         }
-        ExprKind::PropertyAccess { object, .. } => expr_uses_variable(object, needle),
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::NullsafePropertyAccess { object, .. } => expr_uses_variable(object, needle),
         ExprKind::StaticPropertyAccess { .. } => false,
         ExprKind::MethodCall { object, args, .. } => {
+            expr_uses_variable(object, needle)
+                || args.iter().any(|arg| expr_uses_variable(arg, needle))
+        }
+        ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_uses_variable(object, needle)
                 || args.iter().any(|arg| expr_uses_variable(arg, needle))
         }

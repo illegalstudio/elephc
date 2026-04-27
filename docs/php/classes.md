@@ -205,6 +205,17 @@ Current limitations for by-reference promotion: the promoted property cannot be 
 Virtual dispatch for overrides.
 Private methods are not virtual.
 
+## Nullsafe access
+Use `?->` when a receiver may be `null`:
+
+```php
+<?php
+echo $user?->profile?->name ?? "anonymous";
+echo $user?->profile?->label() ?? "missing";
+```
+
+When the receiver is `null`, elephc skips the property read or method call and returns `null`. Method arguments on the skipped branch are not evaluated.
+
 ## parent::method()
 Direct parent implementation call.
 

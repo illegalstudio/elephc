@@ -39,8 +39,9 @@ pub(super) fn parse_expr_bp(
                     span,
                 );
             }
-            Token::Arrow => {
+            Token::Arrow | Token::QuestionArrow => {
                 let arrow_span = tokens[*pos].1;
+                let nullsafe = tokens[*pos].0 == Token::QuestionArrow;
                 *pos += 1;
                 let member_name = match tokens.get(*pos).map(|(token, _)| token) {
                     Some(Token::Identifier(name)) => {
@@ -51,13 +52,23 @@ pub(super) fn parse_expr_bp(
                     _ => {
                         return Err(CompileError::new(
                             arrow_span,
-                            "Expected property or method name after '->'",
+                            if nullsafe {
+                                "Expected property or method name after '?->'"
+                            } else {
+                                "Expected property or method name after '->'"
+                            },
                         ))
                     }
                 };
                 if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
                     *pos += 1;
                     if parse_first_class_callable_parens(tokens, pos)? {
+                        if nullsafe {
+                            return Err(CompileError::new(
+                                arrow_span,
+                                "Cannot combine nullsafe operator with Closure creation",
+                            ));
+                        }
                         lhs = Expr::new(
                             ExprKind::FirstClassCallable(CallableTarget::Method {
                                 object: Box::new(lhs),
@@ -68,19 +79,34 @@ pub(super) fn parse_expr_bp(
                     } else {
                         let args = parse_args(tokens, pos, arrow_span)?;
                         lhs = Expr::new(
-                            ExprKind::MethodCall {
-                                object: Box::new(lhs),
-                                method: member_name,
-                                args,
+                            if nullsafe {
+                                ExprKind::NullsafeMethodCall {
+                                    object: Box::new(lhs),
+                                    method: member_name,
+                                    args,
+                                }
+                            } else {
+                                ExprKind::MethodCall {
+                                    object: Box::new(lhs),
+                                    method: member_name,
+                                    args,
+                                }
                             },
                             arrow_span,
                         );
                     }
                 } else {
                     lhs = Expr::new(
-                        ExprKind::PropertyAccess {
-                            object: Box::new(lhs),
-                            property: member_name,
+                        if nullsafe {
+                            ExprKind::NullsafePropertyAccess {
+                                object: Box::new(lhs),
+                                property: member_name,
+                            }
+                        } else {
+                            ExprKind::PropertyAccess {
+                                object: Box::new(lhs),
+                                property: member_name,
+                            }
                         },
                         arrow_span,
                     );

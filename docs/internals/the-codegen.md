@@ -366,6 +366,10 @@ $x ??= "default";
 
 The generated code loads `$x`, branches past the assignment when it is non-null, and evaluates/stores the right-hand side only on the null path. This preserves PHP's `??=` short-circuit behavior and avoids rewriting an already-owned heap value back into the same local slot.
 
+### Nullsafe operator
+
+The `?->` operator lowers nullable receivers through the boxed mixed path used by nullable and union storage. Codegen unboxes the receiver, branches directly to a boxed `null` result when the runtime tag is null, and only evaluates property loads, method arguments, and method dispatch on the non-null object branch. Non-nullable object receivers reuse the ordinary `->` lowering.
+
 ### Type coercions
 
 When types need to match (e.g., int + float), the codegen inserts conversion instructions:

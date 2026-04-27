@@ -605,11 +605,26 @@ fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             object: Box::new(walk_expr(*object, pass)),
             property,
         },
+        ExprKind::NullsafePropertyAccess { object, property } => {
+            ExprKind::NullsafePropertyAccess {
+                object: Box::new(walk_expr(*object, pass)),
+                property,
+            }
+        }
         ExprKind::MethodCall {
             object,
             method,
             args,
         } => ExprKind::MethodCall {
+            object: Box::new(walk_expr(*object, pass)),
+            method,
+            args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
+        },
+        ExprKind::NullsafeMethodCall {
+            object,
+            method,
+            args,
+        } => ExprKind::NullsafeMethodCall {
             object: Box::new(walk_expr(*object, pass)),
             method,
             args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),

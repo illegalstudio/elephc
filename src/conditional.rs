@@ -474,10 +474,28 @@ fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
             object: Box::new(rewrite_expr(*object, defines)),
             property,
         },
+        ExprKind::NullsafePropertyAccess { object, property } => {
+            ExprKind::NullsafePropertyAccess {
+                object: Box::new(rewrite_expr(*object, defines)),
+                property,
+            }
+        }
         ExprKind::StaticPropertyAccess { receiver, property } => {
             ExprKind::StaticPropertyAccess { receiver, property }
         }
         ExprKind::MethodCall { object, method, args } => ExprKind::MethodCall {
+            object: Box::new(rewrite_expr(*object, defines)),
+            method,
+            args: args
+                .into_iter()
+                .map(|arg| rewrite_expr(arg, defines))
+                .collect(),
+        },
+        ExprKind::NullsafeMethodCall {
+            object,
+            method,
+            args,
+        } => ExprKind::NullsafeMethodCall {
             object: Box::new(rewrite_expr(*object, defines)),
             method,
             args: args

@@ -14,36 +14,7 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
         if let PhpType::Object(class_name) = &obj_ty {
-            if let Some(class_info) = self.classes.get(class_name) {
-                if let Some(visibility) = class_info.property_visibilities.get(property) {
-                    let declaring_class = class_info
-                        .property_declaring_classes
-                        .get(property)
-                        .map(String::as_str)
-                        .unwrap_or(class_name);
-                    if !self.can_access_member(declaring_class, visibility) {
-                        return Err(CompileError::new(
-                            expr.span,
-                            &format!(
-                                "Cannot access {} property: {}::{}",
-                                Self::visibility_label(visibility),
-                                class_name,
-                                property
-                            ),
-                        ));
-                    }
-                }
-                if let Some((_, ty)) = class_info.properties.iter().find(|(n, _)| n == property) {
-                    return Ok(ty.clone());
-                }
-                if let Some(sig) = class_info.methods.get("__get") {
-                    return Ok(sig.return_type.clone());
-                }
-                return Err(CompileError::new(
-                    expr.span,
-                    &format!("Undefined property: {}::{}", class_name, property),
-                ));
-            }
+            return self.infer_property_on_class_type(class_name, property, expr);
         }
         if let PhpType::Pointer(Some(class_name)) = &obj_ty {
             if let Some(field_ty) = self.extern_field_type(class_name, property) {
@@ -69,6 +40,116 @@ impl Checker {
             expr.span,
             "Property access requires an object or typed pointer",
         ))
+    }
+
+    pub(crate) fn infer_nullsafe_property_access_type(
+        &mut self,
+        object: &Expr,
+        property: &str,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let obj_ty = self.infer_type(object, env)?;
+        let Some((class_name, nullable)) =
+            self.nullsafe_object_receiver(&obj_ty, expr, "property access")?
+        else {
+            return Ok(PhpType::Void);
+        };
+        let property_ty = self.infer_property_on_class_type(&class_name, property, expr)?;
+        if nullable {
+            Ok(self.normalize_union_type(vec![property_ty, PhpType::Void]))
+        } else {
+            Ok(property_ty)
+        }
+    }
+
+    pub(crate) fn infer_property_on_class_type(
+        &self,
+        class_name: &str,
+        property: &str,
+        expr: &Expr,
+    ) -> Result<PhpType, CompileError> {
+        if let Some(class_info) = self.classes.get(class_name) {
+            if let Some(visibility) = class_info.property_visibilities.get(property) {
+                let declaring_class = class_info
+                    .property_declaring_classes
+                    .get(property)
+                    .map(String::as_str)
+                    .unwrap_or(class_name);
+                if !self.can_access_member(declaring_class, visibility) {
+                    return Err(CompileError::new(
+                        expr.span,
+                        &format!(
+                            "Cannot access {} property: {}::{}",
+                            Self::visibility_label(visibility),
+                            class_name,
+                            property
+                        ),
+                    ));
+                }
+            }
+            if let Some((_, ty)) = class_info.properties.iter().find(|(n, _)| n == property) {
+                return Ok(ty.clone());
+            }
+            if let Some(sig) = class_info.methods.get("__get") {
+                return Ok(sig.return_type.clone());
+            }
+            return Err(CompileError::new(
+                expr.span,
+                &format!("Undefined property: {}::{}", class_name, property),
+            ));
+        }
+        Err(CompileError::new(
+            expr.span,
+            &format!("Undefined class: {}", class_name),
+        ))
+    }
+
+    pub(crate) fn nullsafe_object_receiver(
+        &self,
+        obj_ty: &PhpType,
+        expr: &Expr,
+        context: &str,
+    ) -> Result<Option<(String, bool)>, CompileError> {
+        match obj_ty {
+            PhpType::Void => Ok(None),
+            PhpType::Object(class_name) => Ok(Some((class_name.clone(), false))),
+            PhpType::Union(members) => {
+                let mut class_name = None;
+                let mut nullable = false;
+                for member in members {
+                    match member {
+                        PhpType::Void => nullable = true,
+                        PhpType::Object(candidate) => {
+                            if class_name
+                                .as_ref()
+                                .is_some_and(|existing: &String| existing != candidate)
+                            {
+                                return Err(CompileError::new(
+                                    expr.span,
+                                    &format!(
+                                        "Nullsafe {} requires a single nullable object type",
+                                        context
+                                    ),
+                                ));
+                            }
+                            class_name = Some(candidate.clone());
+                        }
+                        _ => {
+                            return Err(CompileError::new(
+                                expr.span,
+                                &format!("Nullsafe {} requires an object or null", context),
+                            ));
+                        }
+                    }
+                }
+                Ok(class_name.map(|name| (name, nullable)))
+            }
+            _ => Err(CompileError::new(
+                expr.span,
+                &format!("Nullsafe {} requires an object or null", context),
+            )),
+        }
     }
 
     pub(crate) fn infer_static_property_access_type(

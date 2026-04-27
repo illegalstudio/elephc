@@ -182,6 +182,9 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::MethodCall { object, method, args } => expr_effect(object)
             .combine(combine_effects(args.iter().map(expr_effect)))
             .combine(private_instance_method_call_effect(object, method)),
+        ExprKind::NullsafeMethodCall { object, args, .. } => expr_effect(object)
+            .combine(combine_effects(args.iter().map(expr_effect)))
+            .with_may_throw(),
         ExprKind::StaticMethodCall {
             receiver,
             method,
@@ -221,7 +224,8 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         }
         ExprKind::Closure { .. } => Effect::PURE,
         ExprKind::NamedArg { value, .. } => expr_effect(value),
-        ExprKind::PropertyAccess { object, .. } => expr_effect(object),
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::NullsafePropertyAccess { object, .. } => expr_effect(object),
         ExprKind::StaticPropertyAccess { .. } => Effect::PURE,
         ExprKind::FirstClassCallable(target) => callable_target_effect(target),
         ExprKind::BufferNew { len, .. } => expr_effect(len).with_side_effects(),

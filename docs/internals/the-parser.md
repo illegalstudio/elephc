@@ -76,8 +76,10 @@ Things that have a value:
 | `EnumCase { enum_name, case_name }` | `Color::Red`, `App\Status::Ok` | Reference to a declared enum case before later phases lower it to enum metadata |
 | `NewObject { class_name, args }` | `new Point(1, 2)`, `new App\Model\User()` | Object instantiation |
 | `PropertyAccess { object, property }` | `$p->x` | Property access via `->` |
+| `NullsafePropertyAccess { object, property }` | `$p?->x` | Nullsafe property access via `?->` |
 | `StaticPropertyAccess { receiver, property }` | `Point::$count`, `self::$count`, `parent::$count`, `static::$count` | Class-scoped property access via `::`, where `receiver` is a named class, `Self_`, `Static`, or `Parent` |
 | `MethodCall { object, method, args }` | `$p->move(1, 2)` | Instance method call |
+| `NullsafeMethodCall { object, method, args }` | `$p?->move(1, 2)` | Nullsafe instance method call; `?->method(...)` cannot form a first-class callable |
 | `StaticMethodCall { receiver, method, args }` | `Point::origin()`, `self::boot()`, `parent::boot()`, `static::boot()` | Static-style call via `::`, where `receiver` is a named class, `Self_`, `Static`, or `Parent` |
 | `FirstClassCallable(CallableTarget)` | `strlen(...)`, `Tools\fmt(...)`, `Math::twice(...)` | PHP-style first-class callable syntax; the target is preserved structurally instead of being parsed as a call |
 | `This` | `$this` | Reference to the current object inside a method |
@@ -346,6 +348,7 @@ After parsing a prefix, the parser checks for postfix operators:
 - `(` for calling the result of an expression (`ExprCall`)
 - `[` for array access
 - `->` for property access or method call
+- `?->` for nullsafe property access or method call
 - `::` for enum-case lookup, static method call, or static-method first-class callable (when the prefix is a parsed name)
 
 At statement level, `stmt.rs` also parses `trait` declarations and class/trait-body `use` clauses. That `use` handling is intentionally context-sensitive so it does not interfere with closure capture lists like `function () use ($x) { ... }`.
@@ -355,6 +358,8 @@ $arr[0]          →  ArrayAccess { array: Variable("arr"), index: IntLiteral(0)
 $arr[$i + 1]     →  ArrayAccess { array: Variable("arr"), index: BinaryOp(Add, ...) }
 $p->x            →  PropertyAccess { object: Variable("p"), property: "x" }
 $p->move(1, 2)   →  MethodCall { object: Variable("p"), method: "move", args: [...] }
+$p?->x           →  NullsafePropertyAccess { object: Variable("p"), property: "x" }
+$p?->move(1, 2)  →  NullsafeMethodCall { object: Variable("p"), method: "move", args: [...] }
 Point::origin()  →  StaticMethodCall { receiver: Named("Point"), method: "origin", args: [] }
 \Lib\Factory::make() → StaticMethodCall { receiver: Named("\\Lib\\Factory"), method: "make", args: [] }
 parent::boot()   →  StaticMethodCall { receiver: Parent, method: "boot", args: [] }

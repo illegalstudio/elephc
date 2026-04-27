@@ -223,18 +223,19 @@ fn emit_function_with_label_and_class(
         let is_ref = sig.ref_params.get(i).copied().unwrap_or(false);
         if is_ref {
             ctx.ref_params.insert(pname.clone());
-            ctx.alloc_var(pname, PhpType::Int);
-            ctx.update_var_type_and_ownership(
+            ctx.alloc_var_with_static_type(pname, PhpType::Int, pty.clone());
+            ctx.update_var_type_static_and_ownership(
                 pname,
                 pty.codegen_repr(),
+                pty.clone(),
                 HeapOwnership::borrowed_alias_for_type(pty),
             );
         } else if pname == "this" {
-            ctx.alloc_var(pname, pty.codegen_repr());
+            ctx.alloc_var_with_static_type(pname, pty.codegen_repr(), pty.clone());
             ctx.set_var_ownership(pname, HeapOwnership::borrowed_alias_for_type(pty));
             ctx.disable_epilogue_cleanup(pname);
         } else {
-            ctx.alloc_var(pname, pty.codegen_repr());
+            ctx.alloc_var_with_static_type(pname, pty.codegen_repr(), pty.clone());
             if matches!(pty.codegen_repr(), PhpType::Str) {
                 ctx.set_var_ownership(pname, HeapOwnership::borrowed_alias_for_type(pty));
             } else {

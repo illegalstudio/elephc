@@ -78,6 +78,42 @@ pub(super) fn emit_method_call_with_pushed_args(
     ret_ty
 }
 
+pub(super) fn emit_method_call_with_saved_receiver_below_args(
+    class_name: &str,
+    method: &str,
+    arg_types: &[PhpType],
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+) -> PhpType {
+    let arg_temp_bytes = pushed_arg_temp_bytes(arg_types);
+    abi::emit_load_temporary_stack_slot(
+        emitter,
+        abi::int_result_reg(emitter),
+        arg_temp_bytes,
+    );
+    abi::emit_push_reg(emitter, abi::int_result_reg(emitter));                 // duplicate the saved receiver above the evaluated arguments for normal method dispatch
+    let ret_ty = emit_method_call_with_pushed_args(class_name, method, arg_types, emitter, ctx);
+    abi::emit_release_temporary_stack(emitter, 16);                             // discard the original receiver slot saved below the argument temporaries
+    ret_ty
+}
+
+pub(super) fn emit_pushed_method_args(
+    args: &[Expr],
+    sig: Option<&crate::types::FunctionSig>,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) -> Vec<PhpType> {
+    eval_and_push_args(args, sig, emitter, ctx, data)
+}
+
+fn pushed_arg_temp_bytes(arg_types: &[PhpType]) -> usize {
+    arg_types
+        .iter()
+        .map(|ty| if matches!(ty, PhpType::Void) { 0 } else { 16 })
+        .sum()
+}
+
 pub(super) fn emit_method_call(
     object: &Expr,
     method: &str,
