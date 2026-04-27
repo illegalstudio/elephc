@@ -760,6 +760,11 @@ fn test_error_comparison_on_string() {
 }
 
 #[test]
+fn test_error_word_logical_missing_rhs() {
+    expect_error("<?php echo true xor;", "Unexpected token: Semicolon");
+}
+
+#[test]
 fn test_error_undefined_function() {
     expect_error("<?php nope();", "Undefined function: nope");
 }

@@ -422,6 +422,54 @@ fn test_concat_operator() {
 }
 
 #[test]
+fn test_word_logical_and_lower_than_oror() {
+    // $a || $b and $c should parse as ($a || $b) and $c — PHP precedence
+    let stmts = parse_source("<?php echo $a || $b and $c;");
+    let expected = Stmt::echo(Expr::binop(
+        Expr::binop(Expr::var("a"), BinOp::Or, Expr::var("b")),
+        BinOp::And,
+        Expr::var("c"),
+    ));
+    assert_eq!(stmts, vec![expected]);
+}
+
+#[test]
+fn test_word_logical_or_lower_than_andand() {
+    // $a && $b or $c should parse as ($a && $b) or $c — PHP precedence
+    let stmts = parse_source("<?php echo $a && $b or $c;");
+    let expected = Stmt::echo(Expr::binop(
+        Expr::binop(Expr::var("a"), BinOp::And, Expr::var("b")),
+        BinOp::Or,
+        Expr::var("c"),
+    ));
+    assert_eq!(stmts, vec![expected]);
+}
+
+#[test]
+fn test_word_logical_xor_precedence() {
+    // $a xor $b and $c should parse as $a xor ($b and $c)
+    let stmts = parse_source("<?php echo $a xor $b and $c;");
+    let expected = Stmt::echo(Expr::binop(
+        Expr::var("a"),
+        BinOp::Xor,
+        Expr::binop(Expr::var("b"), BinOp::And, Expr::var("c")),
+    ));
+    assert_eq!(stmts, vec![expected]);
+}
+
+#[test]
+fn test_word_logical_xor_higher_than_or() {
+    // $a or $b xor $c should parse as $a or ($b xor $c)
+    let stmts = parse_source("<?php echo $a or $b xor $c;");
+    let expected = Stmt::echo(Expr::binop(
+        Expr::var("a"),
+        BinOp::Or,
+        Expr::binop(Expr::var("b"), BinOp::Xor, Expr::var("c")),
+    ));
+    assert_eq!(stmts, vec![expected]);
+}
+
+#[test]
 fn test_comparison_lower_than_arithmetic() {
     // 1 + 2 == 3 should parse as (1 + 2) == 3
     let stmts = parse_source("<?php echo 1 + 2 == 3;");

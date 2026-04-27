@@ -284,6 +284,57 @@ echo $r;
 }
 
 #[test]
+fn test_word_and_short_circuit() {
+    let out = compile_and_run(
+        r#"<?php
+function mark() { echo "rhs"; return true; }
+$r = (false and mark());
+echo $r ? "T" : "F";
+"#,
+    );
+    assert_eq!(out, "F");
+}
+
+#[test]
+fn test_word_or_short_circuit() {
+    let out = compile_and_run(
+        r#"<?php
+function mark() { echo "rhs"; return false; }
+$r = (true or mark());
+echo $r ? "T" : "F";
+"#,
+    );
+    assert_eq!(out, "T");
+}
+
+#[test]
+fn test_word_xor_evaluates_rhs() {
+    let out = compile_and_run(
+        r#"<?php
+function mark() { echo "rhs"; return false; }
+$r = (true xor mark());
+echo $r ? "T" : "F";
+"#,
+    );
+    assert_eq!(out, "rhsT");
+}
+
+#[test]
+fn test_word_logical_precedence_against_symbolic_logical() {
+    let out = compile_and_run(
+        r#"<?php
+$a = (true || false and false);
+echo $a ? "T" : "F";
+$b = (false && true or true);
+echo $b ? "T" : "F";
+$c = (true xor true and false);
+echo $c ? "T" : "F";
+"#,
+    );
+    assert_eq!(out, "FTT");
+}
+
+#[test]
 fn test_boolean_true() {
     let out = compile_and_run("<?php echo true;");
     assert_eq!(out, "1");
