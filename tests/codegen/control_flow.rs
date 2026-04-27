@@ -340,6 +340,36 @@ fn test_dot_assign() {
 }
 
 #[test]
+fn test_pow_assign() {
+    let out = compile_and_run("<?php $x = 2; $x **= 3; echo $x;");
+    assert_eq!(out, "8");
+}
+
+#[test]
+fn test_bitwise_compound_assignments() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 6;
+$x &= 3;
+echo $x . ",";
+$x = 4;
+$x |= 1;
+echo $x . ",";
+$x = 7;
+$x ^= 3;
+echo $x . ",";
+$x = 1;
+$x <<= 5;
+echo $x . ",";
+$x = 64;
+$x >>= 3;
+echo $x;
+"#,
+    );
+    assert_eq!(out, "2,5,4,32,8");
+}
+
+#[test]
 fn test_logical_with_comparison() {
     let out = compile_and_run("<?php $x = 5; echo ($x > 3 && $x < 10);");
     assert_eq!(out, "1");

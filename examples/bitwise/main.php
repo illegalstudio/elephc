@@ -15,6 +15,23 @@ echo "~0 = " . ~0 . "\n";                     // -1
 echo "1 << 8 = " . (1 << 8) . "\n";           // 256
 echo "256 >> 4 = " . (256 >> 4) . "\n";       // 16
 
+// Compound assignment operators
+$mask = 15;
+$mask &= 10;
+echo "mask after &= 10 = " . $mask . "\n";     // 10
+$mask |= 1;
+echo "mask after |= 1 = " . $mask . "\n";      // 11
+$mask ^= 3;
+echo "mask after ^= 3 = " . $mask . "\n";      // 8
+$mask <<= 2;
+echo "mask after <<= 2 = " . $mask . "\n";     // 32
+$mask >>= 4;
+echo "mask after >>= 4 = " . $mask . "\n";     // 2
+
+$pow = 2;
+$pow **= 5;
+echo "pow after **= 5 = " . $pow . "\n";       // 32
+
 // Spaceship operator <=>
 echo "1 <=> 2 = " . (1 <=> 2) . "\n";         // -1
 echo "2 <=> 2 = " . (2 <=> 2) . "\n";         //  0

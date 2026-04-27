@@ -115,9 +115,15 @@ pub enum Token {
     PlusAssign,     // +=
     MinusAssign,    // -=
     StarAssign,     // *=
+    StarStarAssign, // **=
     SlashAssign,    // /=
     DotAssign,      // .=
     PercentAssign,  // %=
+    AmpAssign,      // &=
+    PipeAssign,     // |=
+    CaretAssign,    // ^=
+    LessLessAssign, // <<=
+    GreaterGreaterAssign, // >>=
 
     // Increment/Decrement
     PlusPlus,       // ++

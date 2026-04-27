@@ -68,12 +68,18 @@ sidebar:
 | `+=` | `$x += 5` | `$x = $x + 5` |
 | `-=` | `$x -= 5` | `$x = $x - 5` |
 | `*=` | `$x *= 5` | `$x = $x * 5` |
+| `**=` | `$x **= 5` | `$x = $x ** 5` |
 | `/=` | `$x /= 5` | `$x = $x / 5` |
 | `%=` | `$x %= 5` | `$x = $x % 5` |
 | `.=` | `$s .= "x"` | `$s = $s . "x"` |
+| `&=` | `$x &= 5` | `$x = $x & 5` |
+| `|=` | `$x |= 5` | `$x = $x | 5` |
+| `^=` | `$x ^= 5` | `$x = $x ^ 5` |
+| `<<=` | `$x <<= 2` | `$x = $x << 2` |
+| `>>=` | `$x >>= 2` | `$x = $x >> 2` |
 | `??=` | `$x ??= "default"` | Assign RHS only when `$x` is `null` |
 
-**Not supported yet:** `**=`, `&=`, `|=`, `^=`, `<<=`, `>>=`.
+Compound assignments are supported for local variable assignments and `for` init/update clauses.
 
 ## List Unpacking
 

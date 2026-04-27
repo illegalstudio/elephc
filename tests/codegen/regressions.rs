@@ -503,6 +503,16 @@ for ($i = 1; $i < 100; $i *= 2) { echo $i . " "; }
     assert_eq!(out, "1 2 4 8 16 32 64 ");
 }
 
+#[test]
+fn test_for_compound_shift_left() {
+    let out = compile_and_run(
+        r#"<?php
+for ($i = 1; $i < 20; $i <<= 1) { echo $i . " "; }
+"#,
+    );
+    assert_eq!(out, "1 2 4 8 16 ");
+}
+
 // --- Bug fix: array push with concat expression ---
 
 #[test]

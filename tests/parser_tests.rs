@@ -331,6 +331,36 @@ fn test_variable_assignment() {
 }
 
 #[test]
+fn test_compound_assignment_missing_ops_parse() {
+    let cases = [
+        ("<?php $x **= 3;", BinOp::Pow),
+        ("<?php $x &= 3;", BinOp::BitAnd),
+        ("<?php $x |= 3;", BinOp::BitOr),
+        ("<?php $x ^= 3;", BinOp::BitXor),
+        ("<?php $x <<= 3;", BinOp::ShiftLeft),
+        ("<?php $x >>= 3;", BinOp::ShiftRight),
+    ];
+
+    for (src, expected_op) in cases {
+        let stmts = parse_source(src);
+        match &stmts[0].kind {
+            StmtKind::Assign { name, value } => {
+                assert_eq!(name, "x");
+                match &value.kind {
+                    ExprKind::BinaryOp { left, op, right } => {
+                        assert_eq!(left.kind, ExprKind::Variable("x".into()));
+                        assert_eq!(op, &expected_op);
+                        assert_eq!(right.kind, ExprKind::IntLiteral(3));
+                    }
+                    other => panic!("expected BinaryOp, got {:?}", other),
+                }
+            }
+            other => panic!("expected Assign, got {:?}", other),
+        }
+    }
+}
+
+#[test]
 fn test_echo_variable() {
     let stmts = parse_source("<?php $x = 5; echo $x;");
     assert_eq!(stmts.len(), 2);

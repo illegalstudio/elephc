@@ -205,6 +205,28 @@ fn test_error_null_coalesce_assignment_type_change() {
 }
 
 #[test]
+fn test_error_compound_assignment_missing_rhs() {
+    for src in [
+        "<?php $x **=;",
+        "<?php $x &=;",
+        "<?php $x |=;",
+        "<?php $x ^=;",
+        "<?php $x <<=;",
+        "<?php $x >>=;",
+    ] {
+        expect_error(src, "Unexpected token");
+    }
+}
+
+#[test]
+fn test_error_bitwise_compound_assignment_requires_ints() {
+    expect_error(
+        "<?php $x = \"flags\"; $x &= 1;",
+        "Bitwise operators require integer operands",
+    );
+}
+
+#[test]
 fn test_error_unclosed_paren() {
     expect_error("<?php echo (1 + 2;", "Expected closing ')'");
 }

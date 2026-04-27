@@ -143,20 +143,27 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
         '&' => {
             cursor.advance();
             if cursor.peek() == Some('&') { cursor.advance(); Ok(Token::AndAnd) }
+            else if cursor.peek() == Some('=') { cursor.advance(); Ok(Token::AmpAssign) }
             else { Ok(Token::Ampersand) }
         }
         '|' => {
             cursor.advance();
             if cursor.peek() == Some('|') { cursor.advance(); Ok(Token::OrOr) }
+            else if cursor.peek() == Some('=') { cursor.advance(); Ok(Token::PipeAssign) }
             else { Ok(Token::Pipe) }
         }
-        '^' => { cursor.advance(); Ok(Token::Caret) }
+        '^' => {
+            cursor.advance();
+            if cursor.peek() == Some('=') { cursor.advance(); Ok(Token::CaretAssign) }
+            else { Ok(Token::Caret) }
+        }
         '~' => { cursor.advance(); Ok(Token::Tilde) }
         '<' => {
             cursor.advance();
             if cursor.peek() == Some('<') {
                 cursor.advance();
-                Ok(Token::LessLess)
+                if cursor.peek() == Some('=') { cursor.advance(); Ok(Token::LessLessAssign) }
+                else { Ok(Token::LessLess) }
             }
             else if cursor.peek() == Some('=') {
                 cursor.advance();
@@ -167,7 +174,11 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
         }
         '>' => {
             cursor.advance();
-            if cursor.peek() == Some('>') { cursor.advance(); Ok(Token::GreaterGreater) }
+            if cursor.peek() == Some('>') {
+                cursor.advance();
+                if cursor.peek() == Some('=') { cursor.advance(); Ok(Token::GreaterGreaterAssign) }
+                else { Ok(Token::GreaterGreater) }
+            }
             else if cursor.peek() == Some('=') { cursor.advance(); Ok(Token::GreaterEqual) }
             else { Ok(Token::Greater) }
         }
@@ -191,7 +202,11 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
         '*' => {
             cursor.advance();
             match cursor.peek() {
-                Some('*') => { cursor.advance(); Ok(Token::StarStar) }
+                Some('*') => {
+                    cursor.advance();
+                    if cursor.peek() == Some('=') { cursor.advance(); Ok(Token::StarStarAssign) }
+                    else { Ok(Token::StarStar) }
+                }
                 Some('=') => { cursor.advance(); Ok(Token::StarAssign) }
                 _ => Ok(Token::Star),
             }
