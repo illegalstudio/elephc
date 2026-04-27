@@ -12,13 +12,13 @@ PHP defines a set of *magic constants* that change value depending on where they
 | `__DIR__` | string | Canonical absolute path of the directory containing the source file |
 | `__FILE__` | string | Canonical absolute path of the source file |
 | `__LINE__` | int | Line number of the constant in the source file |
-| `__FUNCTION__` | string | FQN of the enclosing function, or empty string outside any function |
-| `__CLASS__` | string | FQN of the enclosing class, or empty string outside any class |
-| `__METHOD__` | string | `"Class::method"` (FQN class) inside a method, FQN function name in a free function, or empty string outside any function |
+| `__FUNCTION__` | string | FQN of the enclosing function, unqualified method name inside a method, PHP-style closure marker inside a closure, or empty string outside any function |
+| `__CLASS__` | string | FQN of the enclosing class, the importing class for trait members, or empty string outside any class |
+| `__METHOD__` | string | `"Class::method"` inside a class method, `"Trait::method"` inside a trait method, FQN function name in a free function, PHP-style closure marker inside a closure, or empty string outside any function |
 | `__NAMESPACE__` | string | The current namespace, or empty string outside any namespace |
 | `__TRAIT__` | string | FQN of the enclosing trait, or empty string outside any trait |
 
-All eight names are matched **case-sensitively** in uppercase form (e.g., `__dir__` is a plain identifier, not the magic constant).
+All eight names are matched case-insensitively, matching PHP (for example, `__dir__` and `__DIR__` are the same magic constant).
 
 ## When the substitution happens
 
@@ -26,7 +26,8 @@ Each magic constant is lowered to a plain literal **before type checking and cod
 
 - `__LINE__` is replaced with `IntLiteral(span.line)` at parse time.
 - `__FILE__` and `__DIR__` are replaced after parsing each source file (including any `include`d / `require`d files), against that file's canonical path.
-- `__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`, and `__TRAIT__` are replaced after the file is fully assembled (with includes inlined), based on the lexical position of each occurrence.
+- `__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`, and `__TRAIT__` are replaced per source file before that file is inlined, so included files keep their own namespace and lexical scope.
+- `__CLASS__` occurrences imported from a trait are rebound when the trait is flattened into the concrete class. `__METHOD__` and `__TRAIT__` keep the trait declaration identity, as they do in PHP.
 
 Because the substitution happens before the optimizer's constant-folding pass, expressions like `__DIR__ . '/file.php'` collapse into a single string literal at compile time:
 
@@ -77,6 +78,8 @@ echo __NAMESPACE__;        // "App\Util"
 
 trait Reportable {
     public function report() {
+        echo __CLASS__;    // class that uses the trait, e.g. "App\Util\Task"
+        echo __METHOD__;   // "App\Util\Reportable::report"
         echo __TRAIT__;    // "App\Util\Reportable"
     }
 }
@@ -87,14 +90,28 @@ trait Reportable {
 ```php
 <?php
 $f = function() {
-    echo __FUNCTION__;     // "{closure}"
+    echo __FUNCTION__;     // "{closure:/abs/path/main.php:2}"
 };
 $f();
 ```
 
+Inside a method, closures use the method as their context:
+
+```php
+<?php
+class Greeter {
+    public function hello() {
+        $f = function() {
+            echo __METHOD__; // "{closure:Greeter::hello():4}"
+        };
+        $f();
+    }
+}
+```
+
 ## Includes and `__FILE__` / `__DIR__`
 
-When a file is `include`d or `require`d, the magic constants inside that file expand to **its own** path — not the path of the file that included it. This matches PHP's behavior.
+When a file is `include`d or `require`d, the magic constants inside that file expand against **its own** file path, namespace, and lexical scope — not the file or function that included it. This matches PHP's behavior.
 
 ```php
 // /app/main.php
@@ -103,13 +120,11 @@ require __DIR__ . '/lib/util.php';
 
 // /app/lib/util.php
 <?php
+namespace App\Lib;
+
 echo __FILE__;             // "/app/lib/util.php" (not /app/main.php)
 echo __DIR__;              // "/app/lib"          (not /app)
+echo __NAMESPACE__;         // "App\Lib"
 ```
 
-`__DIR__` and `__FILE__` are also accepted in `include` / `require` path expressions (along with concatenation, string literals, and `const` / `define()`-d string constants). See [Namespaces & Includes](namespaces.md) for the full list of accepted path expressions.
-
-## Known limitations
-
-- **Closures inside class methods**: PHP 8.4 introduced a verbose closure-name format (e.g. `{closure:App\C::m():12}`) for `__FUNCTION__` and `__METHOD__` inside closures. elephc returns the plain `{closure}` marker (matching PHP 8.0–8.3 behavior). The class / namespace / trait constants are unaffected and resolve to the lexical enclosing scope as expected.
-- **`__CLASS__` / `__METHOD__` inside a trait method**: in PHP these evaluate at runtime to the *using* class. elephc resolves them at compile time at the trait declaration site, so they expand to `""` and `TraitName::method` respectively. `__TRAIT__` itself is correct in both cases. If you need runtime-bound class identity inside a trait method, use `static::class` or `self::class` instead.
+`__DIR__`, `__FILE__`, and the other string-valued magic constants are also accepted in `include` / `require` path expressions (along with concatenation, string literals, and `const` / `define()`-d string constants). See [Namespaces & Includes](namespaces.md) for the full list of accepted path expressions.

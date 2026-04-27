@@ -32,10 +32,13 @@ class Greeter {
 $g = new Greeter();
 $g->hello();
 
-// Inside a trait method, __TRAIT__ is the trait's FQN.
+// Inside a trait method, __CLASS__ is rebound to the class that uses the
+// trait, while __METHOD__ and __TRAIT__ keep the trait declaration identity.
 trait Reportable {
     public function report() {
         echo "  in Reportable::report():\n";
+        echo "    __CLASS__    = " . __CLASS__ . "\n";
+        echo "    __METHOD__   = " . __METHOD__ . "\n";
         echo "    __TRAIT__    = " . __TRAIT__ . "\n";
     }
 }
@@ -45,8 +48,11 @@ class Service {
 $s = new Service();
 $s->report();
 
-// Inside a closure, __FUNCTION__ becomes "{closure}".
+// Inside a closure, __FUNCTION__ uses PHP's closure marker with file + line.
 $f = function() {
     echo "  inside closure: __FUNCTION__ = " . __FUNCTION__ . "\n";
 };
 $f();
+
+// Magic constant names are case-insensitive, like PHP.
+echo "lowercase __dir__ = " . __dir__ . "\n";

@@ -36,7 +36,7 @@ Supported forms: `use Foo\Bar;`, `use Foo\Bar as Baz;`, `use function`, `use con
 - Unqualified class names honor `use` aliases, otherwise resolve relative to current namespace
 - Functions/constants: `use function`/`use const` aliases first, then current namespace, then global fallback
 - Fully-qualified `\Lib\Tool` always refers to global canonical name
-- Included files keep their own namespace
+- Included files keep their own namespace and imports; an include cannot inherit the caller's namespace scope
 
 ## Namespaces and callbacks
 String-literal callback names follow the same resolution rules as function calls.
@@ -79,8 +79,9 @@ Accepted forms (foldable at compile time):
 
 - String literals (`'lib/x.php'`)
 - Concatenations (`.`) of foldable subexpressions
-- Magic constants (`__DIR__`, `__FILE__`, `__LINE__`, etc.)
+- String-valued magic constants (`__DIR__`, `__FILE__`, `__FUNCTION__`, etc.)
 - References to `const` / `define()`-d string constants — the constant must be defined **before** the include statement (ordering matches PHP runtime semantics)
+- Namespace-aware constant references, including `use const` aliases
 
 Rejected (compile error):
 
@@ -88,7 +89,11 @@ Rejected (compile error):
 - Function calls (`getenv('PATH')`)
 - Non-constant expressions (ternaries, dynamic property access, etc.)
 
-**Other limitations:** Included files must start with `<?php`.
+`const` declarations used in path expressions follow the same namespace rules as PHP: unqualified names first check `use const`, then the current namespace, then the global namespace. `define()` creates a global constant unless the string name contains a namespace separator.
+
+`const` or `define()` calls inside functions, methods, loops, and branches are scoped to that resolved body during include expansion. They do not leak into the surrounding top-level include path resolver.
+
+**Other limitations:** Included files must start with `<?php`. Runtime-dynamic include paths are not supported by the current AOT resolver. Runtime-order-perfect `include_once` / `require_once` behavior inside functions and conditional control flow remains a future compatibility item.
 
 ## Constants
 ```php
@@ -96,7 +101,7 @@ Rejected (compile error):
 const MAX_RETRIES = 3;
 define("PI", 3.14159);
 ```
-Constants are global, resolved at compile time. Values must be literals.
+`const` declarations are namespace-aware and resolved at compile time. `define()` string names are global unless they contain an explicit namespace separator. Values must be literals or compile-time-foldable string concatenations when used by include path resolution.
 
 ## Predefined constants
 
