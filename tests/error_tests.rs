@@ -2419,6 +2419,14 @@ fn test_error_nullsafe_first_class_callable_is_rejected() {
 }
 
 #[test]
+fn test_error_nullsafe_assignment_target_is_rejected() {
+    expect_error(
+        "<?php class Profile {} class User { public ?Profile $profile; } $user = new User(); $user?->profile = new Profile();",
+        "Invalid assignment target",
+    );
+}
+
+#[test]
 fn test_error_private_access() {
     expect_error(
         "<?php class Secret { private $value = 7; } $s = new Secret(); echo $s->value;",

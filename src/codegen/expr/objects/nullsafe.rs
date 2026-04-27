@@ -60,15 +60,12 @@ pub(super) fn emit_nullsafe_method_call(
         emit_plain_null(emitter);
         return PhpType::Void;
     };
-    if !nullable {
-        return dispatch::emit_method_call(object, method, args, emitter, ctx, data);
-    }
 
     emitter.comment(&format!("?->{}()", method));
     let null_label = ctx.next_label("nullsafe_method_null");
     let done_label = ctx.next_label("nullsafe_method_done");
     let receiver_ty = emit_expr(object, emitter, ctx, data);
-    if !emit_nullable_receiver_to_object(&receiver_ty, &null_label, emitter) {
+    if nullable && !emit_nullable_receiver_to_object(&receiver_ty, &null_label, emitter) {
         emit_boxed_null(emitter);
         return PhpType::Mixed;
     }
@@ -87,6 +84,9 @@ pub(super) fn emit_nullsafe_method_call(
         emitter,
         ctx,
     );
+    if !nullable {
+        return return_ty;
+    }
     box_nullable_result(&return_ty, emitter);
     abi::emit_jump(emitter, &done_label);
     emitter.label(&null_label);

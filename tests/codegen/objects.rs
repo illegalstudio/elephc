@@ -773,6 +773,30 @@ echo $box?->label(side()) ?? "none";
 }
 
 #[test]
+fn test_nullsafe_method_call_evaluates_receiver_before_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+function receiver() {
+    echo "receiver|";
+    return new Box();
+}
+function side() {
+    echo "arg|";
+    return "value";
+}
+class Box {
+    public function label($value): string {
+        echo "method|";
+        return $value;
+    }
+}
+echo receiver()?->label(side());
+"#,
+    );
+    assert_eq!(out, "receiver|arg|method|value");
+}
+
+#[test]
 fn test_nullsafe_chained_access_short_circuits_each_hop() {
     let out = compile_and_run(
         r#"<?php
@@ -796,6 +820,30 @@ echo $without?->profile?->address?->city ?? "none";
 "#,
     );
     assert_eq!(out, "Rome|none");
+}
+
+#[test]
+fn test_nullsafe_chained_method_result_short_circuits() {
+    let out = compile_and_run(
+        r#"<?php
+class Profile {
+    public string $name = "Ada";
+}
+class User {
+    public ?Profile $profile;
+    public function profile(): ?Profile {
+        return $this->profile;
+    }
+}
+$with = new User();
+$with->profile = new Profile();
+$without = new User();
+echo $with?->profile()?->name ?? "none";
+echo "|";
+echo $without?->profile()?->name ?? "none";
+"#,
+    );
+    assert_eq!(out, "Ada|none");
 }
 
 #[test]
