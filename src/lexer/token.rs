@@ -132,6 +132,9 @@ pub enum Token {
     // Logical
     AndAnd,         // &&
     OrOr,           // ||
+    And,            // and
+    Or,             // or
+    Xor,            // xor
     Bang,           // !
 
     // Comparison

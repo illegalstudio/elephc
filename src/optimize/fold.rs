@@ -274,7 +274,7 @@ pub(super) fn try_fold_binary_op(op: &BinOp, left: &Expr, right: &Expr) -> Optio
         BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight => {
             try_fold_bitwise_binop(op, left, right)
         }
-        BinOp::And | BinOp::Or => try_fold_logical_binop(op, left, right),
+        BinOp::And | BinOp::Or | BinOp::Xor => try_fold_logical_binop(op, left, right),
         BinOp::Eq
         | BinOp::NotEq
         | BinOp::StrictEq
@@ -379,6 +379,7 @@ pub(super) fn try_fold_logical_binop(op: &BinOp, left: &Expr, right: &Expr) -> O
     let result = match op {
         BinOp::And => left.truthy() && right.truthy(),
         BinOp::Or => left.truthy() || right.truthy(),
+        BinOp::Xor => left.truthy() ^ right.truthy(),
         _ => return None,
     };
     Some(ExprKind::BoolLiteral(result))

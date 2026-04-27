@@ -30,3 +30,13 @@ $primary = 0;
 $backup = 42;
 $value = $primary || $backup;
 echo "Value (0 || 42): " . ($value ? "yes" : "no") . "\n";
+
+// Word-form logical operators use PHP's lower precedence
+$word_and = (true || false and false);
+echo "Word and precedence: " . ($word_and ? "yes" : "no") . "\n";
+
+$word_or = (false && true or true);
+echo "Word or precedence: " . ($word_or ? "yes" : "no") . "\n";
+
+$word_xor = (true xor true and false);
+echo "Word xor precedence: " . ($word_xor ? "yes" : "no") . "\n";

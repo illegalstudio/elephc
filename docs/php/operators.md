@@ -46,11 +46,16 @@ sidebar:
 
 | Operator | Example | Notes |
 |---|---|---|
-| `&&` | `$a && $b` | AND with short-circuit |
-| `\|\|` | `$a \|\| $b` | OR with short-circuit |
+| `&&` | `$a && $b` | AND with short-circuit; higher precedence than `and` |
+| `\|\|` | `$a \|\| $b` | OR with short-circuit; higher precedence than `or` |
+| `and` | `$a and $b` | Word-form AND with short-circuit; lower precedence than `?:` and `??` |
+| `or` | `$a or $b` | Word-form OR with short-circuit; lower precedence than `xor` and `and` |
+| `xor` | `$a xor $b` | Word-form exclusive OR; evaluates both operands |
 | `!` | `!$a` | NOT |
 
-**Not supported yet:** `and`, `or`, `xor` (word-form logical operators).
+Word-form logical precedence matches PHP: `and` binds tighter than `xor`, and `xor` binds tighter than `or`. All three bind looser than `&&`, `||`, `??`, and the full ternary operator.
+
+Word-form logical operators are case-insensitive (`AND`, `Or`, and `xOr` are accepted). Assignment expressions are not part of elephc's expression subset yet, so use parentheses when a word-form logical expression is the right-hand side of an assignment: `$x = (true and false);`.
 
 ## String
 

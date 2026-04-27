@@ -12,6 +12,13 @@ pub fn parse_expr(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Expr, Com
     pratt::parse_expr_bp(tokens, pos, 0)
 }
 
+pub(crate) fn parse_assignment_value_expr(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+) -> Result<Expr, CompileError> {
+    pratt::parse_expr_bp(tokens, pos, 7)
+}
+
 /// Parse a comma-separated argument list. The opening `(` must already be consumed.
 /// Consumes through the closing `)`.
 pub(crate) fn parse_args(

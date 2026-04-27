@@ -115,6 +115,31 @@ pub(super) fn parse_expr_bp(
             break;
         }
 
+        if tokens[*pos].0 == Token::Question {
+            let ternary_bp = 7;
+            if ternary_bp < min_bp {
+                break;
+            }
+
+            let span = tokens[*pos].1;
+            *pos += 1;
+            let then_expr = parse_expr(tokens, pos)?;
+            if *pos >= tokens.len() || tokens[*pos].0 != Token::Colon {
+                return Err(CompileError::new(span, "Expected ':' in ternary operator"));
+            }
+            *pos += 1;
+            let else_expr = parse_expr_bp(tokens, pos, ternary_bp)?;
+            lhs = Expr::new(
+                ExprKind::Ternary {
+                    condition: Box::new(lhs),
+                    then_expr: Box::new(then_expr),
+                    else_expr: Box::new(else_expr),
+                },
+                span,
+            );
+            continue;
+        }
+
         let (op, l_bp, r_bp) = match infix_bp(&tokens[*pos].0) {
             Some(binding) => binding,
             None => break,
@@ -147,54 +172,38 @@ pub(super) fn parse_expr_bp(
         }
     }
 
-    if *pos < tokens.len() && tokens[*pos].0 == Token::Question && min_bp == 0 {
-        let span = tokens[*pos].1;
-        *pos += 1;
-        let then_expr = parse_expr(tokens, pos)?;
-        if *pos >= tokens.len() || tokens[*pos].0 != Token::Colon {
-            return Err(CompileError::new(span, "Expected ':' in ternary operator"));
-        }
-        *pos += 1;
-        let else_expr = parse_expr_bp(tokens, pos, 0)?;
-        lhs = Expr::new(
-            ExprKind::Ternary {
-                condition: Box::new(lhs),
-                then_expr: Box::new(then_expr),
-                else_expr: Box::new(else_expr),
-            },
-            span,
-        );
-    }
-
     Ok(lhs)
 }
 
 fn infix_bp(token: &Token) -> Option<(BinOp, u8, u8)> {
     match token {
-        Token::QuestionQuestion => Some((BinOp::NullCoalesce, 2, 1)),
-        Token::OrOr => Some((BinOp::Or, 3, 4)),
-        Token::AndAnd => Some((BinOp::And, 5, 6)),
-        Token::Pipe => Some((BinOp::BitOr, 7, 8)),
-        Token::Caret => Some((BinOp::BitXor, 9, 10)),
-        Token::Ampersand => Some((BinOp::BitAnd, 11, 12)),
-        Token::EqualEqual => Some((BinOp::Eq, 13, 14)),
-        Token::NotEqual => Some((BinOp::NotEq, 13, 14)),
-        Token::EqualEqualEqual => Some((BinOp::StrictEq, 13, 14)),
-        Token::NotEqualEqual => Some((BinOp::StrictNotEq, 13, 14)),
-        Token::Less => Some((BinOp::Lt, 15, 16)),
-        Token::Greater => Some((BinOp::Gt, 15, 16)),
-        Token::LessEqual => Some((BinOp::LtEq, 15, 16)),
-        Token::GreaterEqual => Some((BinOp::GtEq, 15, 16)),
-        Token::Spaceship => Some((BinOp::Spaceship, 15, 16)),
-        Token::LessLess => Some((BinOp::ShiftLeft, 17, 18)),
-        Token::GreaterGreater => Some((BinOp::ShiftRight, 17, 18)),
-        Token::Dot => Some((BinOp::Concat, 19, 20)),
-        Token::Plus => Some((BinOp::Add, 21, 22)),
-        Token::Minus => Some((BinOp::Sub, 21, 22)),
-        Token::Star => Some((BinOp::Mul, 23, 24)),
-        Token::Slash => Some((BinOp::Div, 23, 24)),
-        Token::Percent => Some((BinOp::Mod, 23, 24)),
-        Token::StarStar => Some((BinOp::Pow, 29, 28)),
+        Token::Or => Some((BinOp::Or, 1, 2)),
+        Token::Xor => Some((BinOp::Xor, 3, 4)),
+        Token::And => Some((BinOp::And, 5, 6)),
+        Token::QuestionQuestion => Some((BinOp::NullCoalesce, 9, 8)),
+        Token::OrOr => Some((BinOp::Or, 11, 12)),
+        Token::AndAnd => Some((BinOp::And, 13, 14)),
+        Token::Pipe => Some((BinOp::BitOr, 15, 16)),
+        Token::Caret => Some((BinOp::BitXor, 17, 18)),
+        Token::Ampersand => Some((BinOp::BitAnd, 19, 20)),
+        Token::EqualEqual => Some((BinOp::Eq, 21, 22)),
+        Token::NotEqual => Some((BinOp::NotEq, 21, 22)),
+        Token::EqualEqualEqual => Some((BinOp::StrictEq, 21, 22)),
+        Token::NotEqualEqual => Some((BinOp::StrictNotEq, 21, 22)),
+        Token::Less => Some((BinOp::Lt, 23, 24)),
+        Token::Greater => Some((BinOp::Gt, 23, 24)),
+        Token::LessEqual => Some((BinOp::LtEq, 23, 24)),
+        Token::GreaterEqual => Some((BinOp::GtEq, 23, 24)),
+        Token::Spaceship => Some((BinOp::Spaceship, 23, 24)),
+        Token::LessLess => Some((BinOp::ShiftLeft, 25, 26)),
+        Token::GreaterGreater => Some((BinOp::ShiftRight, 25, 26)),
+        Token::Dot => Some((BinOp::Concat, 27, 28)),
+        Token::Plus => Some((BinOp::Add, 29, 30)),
+        Token::Minus => Some((BinOp::Sub, 29, 30)),
+        Token::Star => Some((BinOp::Mul, 31, 32)),
+        Token::Slash => Some((BinOp::Div, 31, 32)),
+        Token::Percent => Some((BinOp::Mod, 31, 32)),
+        Token::StarStar => Some((BinOp::Pow, 37, 36)),
         _ => None,
     }
 }

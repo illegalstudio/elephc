@@ -291,6 +291,16 @@ pub fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
         }
     }
 
+    if word.eq_ignore_ascii_case("and") {
+        return Ok(Token::And);
+    }
+    if word.eq_ignore_ascii_case("or") {
+        return Ok(Token::Or);
+    }
+    if word.eq_ignore_ascii_case("xor") {
+        return Ok(Token::Xor);
+    }
+
     match word.as_str() {
         "echo" => Ok(Token::Echo),
         "if" => Ok(Token::If),

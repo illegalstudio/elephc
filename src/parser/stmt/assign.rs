@@ -1,7 +1,7 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
-use crate::parser::expr::parse_expr;
+use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::span::Span;
 
 use super::params::parse_type_expr;
@@ -47,7 +47,7 @@ pub(super) fn parse_variable_stmt(
         let expr = parse_expr(tokens, pos)?;
         if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
             *pos += 1;
-            let value = parse_expr(tokens, pos)?;
+            let value = parse_assignment_value_expr(tokens, pos)?;
             expect_semicolon(tokens, pos)?;
             if let ExprKind::PropertyAccess { object, property } = expr.kind {
                 return Ok(Stmt::new(
@@ -108,7 +108,7 @@ pub(super) fn parse_assign(
         Token::Assign => None,
         Token::QuestionQuestionAssign => {
             *pos += 1;
-            let rhs = parse_expr(tokens, pos)?;
+            let rhs = parse_assignment_value_expr(tokens, pos)?;
             expect_semicolon(tokens, pos)?;
             let value = Expr::new(
                 ExprKind::NullCoalesce {
@@ -123,7 +123,7 @@ pub(super) fn parse_assign(
     };
     *pos += 1;
 
-    let rhs = parse_expr(tokens, pos)?;
+    let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
 
     let value = if let Some(op) = compound_op {
@@ -174,7 +174,7 @@ pub(super) fn try_parse_postfix_assignment(
     }
 
     *pos = assign_pos + 1;
-    let value = parse_expr(tokens, pos)?;
+    let value = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
 
     let stmt = match lhs_expr.kind {
@@ -235,7 +235,7 @@ pub(super) fn try_parse_scoped_property_assignment(
     }
 
     *pos = assign_pos + 1;
-    let value = parse_expr(tokens, pos)?;
+    let value = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
 
     let stmt = match lhs_expr.kind {
@@ -371,7 +371,7 @@ pub(super) fn parse_list_unpack(
         "Expected '=' after list pattern",
     )?;
 
-    let value = parse_expr(tokens, pos)?;
+    let value = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
 
     Ok(Stmt::new(StmtKind::ListUnpack { vars, value }, span))
@@ -424,7 +424,7 @@ pub(super) fn parse_static_var(
         "Expected '=' after static variable",
     )?;
 
-    let init = parse_expr(tokens, pos)?;
+    let init = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
 
     Ok(Stmt::new(StmtKind::StaticVar { name, init }, span))
@@ -463,7 +463,7 @@ pub(super) fn parse_typed_assign(
         &Token::Assign,
         "Expected '=' after typed variable",
     )?;
-    let value = parse_expr(tokens, pos)?;
+    let value = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     Ok(Stmt::new(
         StmtKind::TypedAssign {

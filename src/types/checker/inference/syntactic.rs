@@ -253,7 +253,8 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             | BinOp::StrictEq
             | BinOp::StrictNotEq
             | BinOp::And
-            | BinOp::Or => PhpType::Bool,
+            | BinOp::Or
+            | BinOp::Xor => PhpType::Bool,
             BinOp::Concat => PhpType::Str,
             _ => PhpType::Int,
         },

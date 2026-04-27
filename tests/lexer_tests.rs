@@ -308,8 +308,17 @@ fn test_comparison_operators() {
 
 #[test]
 fn test_logical_operators() {
-    let t = tokens("<?php && ||");
-    assert_eq!(t[1..3], [Token::AndAnd, Token::OrOr]);
+    let t = tokens("<?php && || and or xor");
+    assert_eq!(
+        t[1..6],
+        [Token::AndAnd, Token::OrOr, Token::And, Token::Or, Token::Xor]
+    );
+}
+
+#[test]
+fn test_word_logical_operators_are_case_insensitive() {
+    let t = tokens("<?php AND Or xOr");
+    assert_eq!(t[1..4], [Token::And, Token::Or, Token::Xor]);
 }
 
 #[test]

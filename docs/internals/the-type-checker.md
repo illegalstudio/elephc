@@ -124,7 +124,7 @@ The type checker computes the type of every expression:
 | `Str . Str` | concatenation | `Str` |
 | `Int . Str` | concat with coercion | `Str` |
 | `Int > Int` | comparison | `Bool` |
-| `Bool && Bool` | logical | `Bool` |
+| `Bool && Bool`, `Bool and Bool`, `Bool xor Bool` | logical | `Bool` |
 | `Int & Int` | bitwise | `Int` |
 | `Int <=> Int` | spaceship | `Int` (-1, 0, or 1) |
 | `expr ?? expr` | null coalescing | Type of the non-null operand |

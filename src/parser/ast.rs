@@ -212,6 +212,7 @@ pub enum BinOp {
     Pow,
     And,
     Or,
+    Xor,
     BitAnd,
     BitOr,
     BitXor,
