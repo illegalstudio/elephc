@@ -111,7 +111,7 @@ echo $matrix[0][1];    // 2
 
 > Callback arguments can be string literals, anonymous functions, or arrow functions.
 
-**Not yet supported:** `compact()`, `extract()`.
+**Not supported by design:** `compact()`, `extract()` require runtime variable-name tables and are listed in the roadmap's "Will not implement" section.
 
 ## Limitations
 - No array union operator (`+`)
