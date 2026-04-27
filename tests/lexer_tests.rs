@@ -913,6 +913,22 @@ fn test_question_question_token() {
 }
 
 #[test]
+fn test_question_question_assign_token() {
+    let t = tokens("<?php $x ??= $y;");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Variable("x".into()),
+            Token::QuestionQuestionAssign,
+            Token::Variable("y".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
 fn test_question_vs_question_question() {
     let t = tokens("<?php $x ? $y : $z ?? $w;");
     assert!(t.contains(&Token::Question));

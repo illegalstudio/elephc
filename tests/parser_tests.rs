@@ -1004,6 +1004,39 @@ fn test_null_coalesce_parse() {
     }
 }
 
+#[test]
+fn test_null_coalesce_assignment_parse() {
+    let stmts = parse_source("<?php $x ??= 10;");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::Assign { name, value } => {
+            assert_eq!(name, "x");
+            match &value.kind {
+                ExprKind::NullCoalesce { value, default } => {
+                    assert_eq!(value.kind, ExprKind::Variable("x".into()));
+                    assert_eq!(default.kind, ExprKind::IntLiteral(10));
+                }
+                other => panic!("expected NullCoalesce, got {:?}", other),
+            }
+        }
+        other => panic!("expected Assign, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_null_coalesce_assignment_rhs_is_expression() {
+    let stmts = parse_source("<?php $x ??= $fallback ?? 10;");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::NullCoalesce { default, .. } => {
+                assert!(matches!(default.kind, ExprKind::NullCoalesce { .. }));
+            }
+            other => panic!("expected outer NullCoalesce, got {:?}", other),
+        },
+        other => panic!("expected Assign, got {:?}", other),
+    }
+}
+
 // --- Spaceship operator ---
 
 #[test]

@@ -137,7 +137,7 @@ Proper type system for PHP compatibility.
 - [x] Variadic functions: `function foo(...$args) { }`
 - [x] Anonymous functions / closures: `$fn = function($x) { }` with `use ($var)` captures
 - [x] Arrow functions: `$fn = fn($x) => $x * 2`
-- [x] Null coalescing: `$x ?? $default` (`??=` not yet supported)
+- [x] Null coalescing: `$x ?? $default`, `$x ??= $default`
 - [x] Spread operator: `func(...$args)`, `[...$a, ...$b]`
 - [x] List unpacking: `[$a, $b] = $array;`
 - [x] Heredoc / nowdoc strings

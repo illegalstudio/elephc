@@ -88,7 +88,7 @@ For each token, the scanner looks at the current character and decides:
 
 6. **Operator characters** (`+`, `-`, `*`, `/`, `=`, `<`, `>`, `!`, `.`, `%`, `&`, `|`, `^`, `~`) → Look ahead to handle multi-character operators (`==`, `===`, `!=`, `!==`, `<=`, `>=`, `<=>`, `<<`, `>>`, `&&`, `||`, `**`, `++`, `--`, `+=`, `-=`, `*=`, `/=`, `.=`, `%=`). Note that `<` may lead to `<=`, `<=>`, `<<`, or `<<<` (heredoc/nowdoc — see [below](#heredoc-and-nowdoc)).
 
-7. **Structural characters** (`(`, `)`, `{`, `}`, `[`, `]`, `;`, `,`, `?`, `:`, `\`) → Single-character tokens. Note that `?` followed by another `?` produces the `??` (null coalescing) token instead. `\` is tokenized separately so the parser can build qualified and fully-qualified namespace names.
+7. **Structural characters** (`(`, `)`, `{`, `}`, `[`, `]`, `;`, `,`, `?`, `:`, `\`) → Single-character tokens. Note that `?` followed by another `?` produces `??`, and `??` followed by `=` produces `??=`. `\` is tokenized separately so the parser can build qualified and fully-qualified namespace names.
 
 ### Whitespace and comments
 
@@ -155,7 +155,7 @@ These are recognized as distinct tokens by the lexer, not as identifiers. Their 
 
 ```
 +  -  *  **  /  %  .
-=  =>  +=  -=  *=  /=  .=  %=
+=  =>  +=  -=  *=  /=  .=  %=  ??=
 ==  ===  !=  !==  <  >  <=  >=  <=>
 &&  ||  !
 &  |  ^  ~  <<  >>

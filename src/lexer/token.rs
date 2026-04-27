@@ -152,7 +152,8 @@ pub enum Token {
     DoubleColon,    // ::
 
     // Null coalescing
-    QuestionQuestion, // ??
+    QuestionQuestion,       // ??
+    QuestionQuestionAssign, // ??=
 
     // Variadic / spread
     Ellipsis,         // ...

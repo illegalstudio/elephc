@@ -26,3 +26,9 @@ $y = 42;
 echo "null ?? 'default' = " . ($x ?? "default") . "\n";
 echo "42 ?? 'default' = " . ($y ?? "default") . "\n";
 echo "null ?? null ?? 'found' = " . ($x ?? $x ?? "found") . "\n";
+
+// Null coalescing assignment ??=
+$name = null;
+$name ??= "guest";
+$name ??= "ignored";
+echo "name after ??= = " . $name . "\n";

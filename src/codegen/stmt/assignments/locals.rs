@@ -13,6 +13,17 @@ pub(crate) fn emit_assign_stmt(
     ctx: &mut Context,
     data: &mut DataSection,
 ) {
+    if let ExprKind::NullCoalesce {
+        value: current,
+        default,
+    } = &value.kind
+    {
+        if matches!(&current.kind, ExprKind::Variable(current_name) if current_name == name) {
+            emit_null_coalesce_assign_stmt(name, current, default, emitter, ctx, data);
+            return;
+        }
+    }
+
     emitter.blank();
     emitter.comment(&format!("${} = ...", name));
     let mut ty = emit_expr(value, emitter, ctx, data);
@@ -163,6 +174,75 @@ pub(crate) fn emit_assign_stmt(
                 ty.clone(),
                 super::super::helpers::local_slot_ownership_after_store(&ty),
             );
+        }
+    }
+}
+
+fn emit_null_coalesce_assign_stmt(
+    name: &str,
+    current: &Expr,
+    default: &Expr,
+    emitter: &mut Emitter,
+    ctx: &mut Context,
+    data: &mut DataSection,
+) {
+    emitter.blank();
+    emitter.comment(&format!("${} ??= ...", name));
+    if matches!(default.kind, ExprKind::Null) {
+        emitter.comment("literal null fallback leaves the current value unchanged");
+        return;
+    }
+    let current_ty = emit_expr(current, emitter, ctx, data);
+    if current_ty != PhpType::Void {
+        let keep_label = ctx.next_label("nca_keep");
+        emit_branch_if_result_non_null(&current_ty, &keep_label, emitter);
+        emit_assign_stmt(name, default, emitter, ctx, data);
+        emitter.label(&keep_label);
+    } else {
+        emit_assign_stmt(name, default, emitter, ctx, data);
+    }
+}
+
+fn emit_branch_if_result_non_null(ty: &PhpType, keep_label: &str, emitter: &mut Emitter) {
+    if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+        abi::emit_call_label(emitter, "__rt_mixed_unbox");                      // inspect the boxed value tag before deciding whether ??= should store
+        match emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => {
+                emitter.instruction("cmp x0, #8");                              // runtime tag 8 means the boxed value is null
+                emitter.instruction(&format!("b.ne {}", keep_label));           // keep the existing value when the boxed payload is non-null
+            }
+            crate::codegen::platform::Arch::X86_64 => {
+                emitter.instruction("cmp rax, 8");                              // runtime tag 8 means the boxed value is null
+                emitter.instruction(&format!("jne {}", keep_label));            // keep the existing value when the boxed payload is non-null
+            }
+        }
+        return;
+    }
+
+    let null_reg = abi::symbol_scratch_reg(emitter);
+    abi::emit_load_int_immediate(emitter, null_reg, 0x7fff_ffff_ffff_fffe_u64 as i64);
+    if ty == &PhpType::Float {
+        match emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => {
+                emitter.instruction("fmov x0, d0");                             // copy the float bits into x0 for the null-sentinel comparison
+            }
+            crate::codegen::platform::Arch::X86_64 => {
+                emitter.instruction("movq rax, xmm0");                          // copy the float bits into rax for the null-sentinel comparison
+            }
+        }
+    }
+    let cmp_reg = if ty == &PhpType::Str {
+        abi::string_result_regs(emitter).0
+    } else {
+        abi::int_result_reg(emitter)
+    };
+    emitter.instruction(&format!("cmp {}, {}", cmp_reg, null_reg));             // compare the current value with the shared null sentinel
+    match emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            emitter.instruction(&format!("b.ne {}", keep_label));               // keep the existing value when it is not null
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            emitter.instruction(&format!("jne {}", keep_label));                // keep the existing value when it is not null
         }
     }
 }
