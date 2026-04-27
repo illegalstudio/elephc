@@ -470,6 +470,24 @@ fn test_word_logical_xor_higher_than_or() {
 }
 
 #[test]
+fn test_word_logical_assignment_rhs_requires_parentheses() {
+    assert!(parse_fails("<?php $x = true and false;"));
+    assert!(parse_fails("<?php int $x = true or false;"));
+}
+
+#[test]
+fn test_parenthesized_word_logical_assignment_rhs() {
+    let stmts = parse_source("<?php $x = (true and false);");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::BinaryOp { op, .. } => assert_eq!(op, &BinOp::And),
+            other => panic!("expected BinaryOp, got {:?}", other),
+        },
+        other => panic!("expected Assign, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_comparison_lower_than_arithmetic() {
     // 1 + 2 == 3 should parse as (1 + 2) == 3
     let stmts = parse_source("<?php echo 1 + 2 == 3;");

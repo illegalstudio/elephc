@@ -320,6 +320,18 @@ echo $r ? "T" : "F";
 }
 
 #[test]
+fn test_word_logical_operators_are_case_insensitive_codegen() {
+    let out = compile_and_run(
+        r#"<?php
+echo (true AND false) ? "T" : "F";
+echo (false Or true) ? "T" : "F";
+echo (true xOr false) ? "T" : "F";
+"#,
+    );
+    assert_eq!(out, "FTT");
+}
+
+#[test]
 fn test_word_logical_precedence_against_symbolic_logical() {
     let out = compile_and_run(
         r#"<?php

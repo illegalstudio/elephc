@@ -765,6 +765,11 @@ fn test_error_word_logical_missing_rhs() {
 }
 
 #[test]
+fn test_error_word_logical_assignment_rhs_requires_parentheses() {
+    expect_error("<?php $x = true and false;", "Expected ';'");
+}
+
+#[test]
 fn test_error_undefined_function() {
     expect_error("<?php nope();", "Undefined function: nope");
 }
