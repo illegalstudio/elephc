@@ -304,10 +304,13 @@ The static type system tracks these runtime shapes at compile time:
 - **Void / null** — null sentinel value, coerces to 0/""
 - **Array** — indexed arrays with inferred element type
 - **AssocArray** — associative arrays with key/value types
+- **Buffer** — fixed-size contiguous `buffer<T>` storage for hot-path values
 - **Mixed** — boxed runtime-tagged payload used for heterogeneous assoc-array values and user-facing `mixed` hints
 - **Callable** — closures and callable function references
 - **Object** — heap-allocated class instances
+- **Packed** — nominal packed-record metadata used with pointers and buffers
 - **Pointer** — raw 64-bit addresses, optionally tagged via `ptr_cast<T>()`
+- **Union** — declared union types lowered to boxed tagged runtime payloads
 
 A variable's type is set at first assignment. Compatible types (int/float/bool/null) can be reassigned between each other.
 

@@ -121,6 +121,8 @@ Things that do something:
 | `TraitDecl { name, trait_uses, properties, methods }` | `trait Named { ... }` |
 | `PropertyAssign { object, property, value }` | `$p->x = 10;` |
 | `StaticPropertyAssign { receiver, property, value }` | `Counter::$count = 10;`, `self::$count = 10;` |
+| `StaticPropertyArrayPush { receiver, property, value }` | `Counter::$items[] = 10;`, `self::$items[] = 10;` |
+| `StaticPropertyArrayAssign { receiver, property, index, value }` | `Counter::$items[0] = 10;`, `self::$items[0] = 10;` |
 | `PropertyArrayPush { object, property, value }` | `$p->items[] = 10;` |
 | `PropertyArrayAssign { object, property, index, value }` | `$p->items[0] = 10;` |
 | `ExternFunctionDecl { name, params, return_type, library }` | `extern function foo(int $x): int;` or entries inside `extern "lib" { ... }` — `params` is `Vec<ExternParam>`, where each `ExternParam` stores `{ name, c_type }`, and `return_type` is a `CType` |
