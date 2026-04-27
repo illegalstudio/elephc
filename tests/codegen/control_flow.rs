@@ -693,6 +693,54 @@ echo true ? $b->get() : "fallback";
 }
 
 #[test]
+fn test_short_ternary_truthy_and_falsy_values() {
+    let out = compile_and_run(
+        r#"<?php
+echo (5 ?: 9) . ":";
+echo (0 ?: 9) . ":";
+echo ("hi" ?: "fallback") . ":";
+echo ("" ?: "empty") . ":";
+echo ("0" ?: "zero") . ":";
+echo (null ?: "null");
+"#,
+    );
+    assert_eq!(out, "5:9:hi:empty:zero:null");
+}
+
+#[test]
+fn test_short_ternary_evaluates_left_once() {
+    let out = compile_and_run(
+        r#"<?php
+function next_value() {
+    static $n = 0;
+    $n++;
+    return $n;
+}
+echo (next_value() ?: 99);
+echo ":";
+echo next_value();
+"#,
+    );
+    assert_eq!(out, "1:2");
+}
+
+#[test]
+fn test_short_ternary_rhs_only_evaluates_when_left_is_falsy() {
+    let out = compile_and_run(
+        r#"<?php
+function fallback() {
+    echo "rhs";
+    return 7;
+}
+echo (1 ?: fallback());
+echo ":";
+echo (0 ?: fallback());
+"#,
+    );
+    assert_eq!(out, "1:rhs7");
+}
+
+#[test]
 fn test_chained_closure_call() {
     let out = compile_and_run(
         "<?php $f = function() { return function() { return 99; }; }; echo $f()();",
