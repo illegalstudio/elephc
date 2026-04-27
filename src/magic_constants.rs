@@ -497,6 +497,10 @@ fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             op,
             right: Box::new(walk_expr(*right, pass)),
         },
+        ExprKind::InstanceOf { value, target } => ExprKind::InstanceOf {
+            value: Box::new(walk_expr(*value, pass)),
+            target,
+        },
         ExprKind::Negate(inner) => ExprKind::Negate(Box::new(walk_expr(*inner, pass))),
         ExprKind::Not(inner) => ExprKind::Not(Box::new(walk_expr(*inner, pass))),
         ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(walk_expr(*inner, pass))),

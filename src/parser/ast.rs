@@ -20,6 +20,10 @@ pub enum ExprKind {
         op: BinOp,
         right: Box<Expr>,
     },
+    InstanceOf {
+        value: Box<Expr>,
+        target: Name,
+    },
     BoolLiteral(bool),
     Null,
     Negate(Box<Expr>),
@@ -197,6 +201,16 @@ impl Expr {
                 left: Box::new(left),
                 op,
                 right: Box::new(right),
+            },
+            Span::dummy(),
+        )
+    }
+
+    pub fn instance_of(value: Expr, target: Name) -> Self {
+        Self::new(
+            ExprKind::InstanceOf {
+                value: Box::new(value),
+                target,
             },
             Span::dummy(),
         )

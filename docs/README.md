@@ -18,7 +18,7 @@ elephc compiles PHP to native binaries for the supported targets — currently m
 Standard PHP features supported by elephc. Implemented PHP syntax is intended to match PHP behavior; known compatibility gaps are documented on the relevant reference pages and tracked in the roadmap.
 
 - [Types](php/types.md) — int, float, string, bool, array, null, mixed, callable, enum, union types, extension types, type casting
-- [Operators](php/operators.md) — arithmetic, comparison, logical, bitwise, string, assignment, ternary, null coalescing
+- [Operators](php/operators.md) — arithmetic, comparison, `instanceof`, logical, bitwise, string, assignment, ternary, null coalescing
 - [Control Structures](php/control-structures.md) — if/else, while, for, foreach, switch, match, try/catch/finally
 - [Functions](php/functions.md) — declarations, closures, arrow functions, variadic, spread, pass-by-reference, static variables
 - [Strings](php/strings.md) — escape sequences, interpolation, heredoc/nowdoc, 50+ built-in string functions

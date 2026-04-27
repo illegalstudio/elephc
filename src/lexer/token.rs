@@ -80,6 +80,7 @@ pub enum Token {
     Trait,          // trait
     Parent,         // parent
     InsteadOf,      // insteadof
+    InstanceOf,     // instanceof
     PhpEol,
     PhpOs,
     DirectorySeparator,

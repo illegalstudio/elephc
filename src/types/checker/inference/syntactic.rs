@@ -263,6 +263,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             BinOp::Concat => PhpType::Str,
             _ => PhpType::Int,
         },
+        ExprKind::InstanceOf { .. } => PhpType::Bool,
         _ => PhpType::Int,
     }
 }

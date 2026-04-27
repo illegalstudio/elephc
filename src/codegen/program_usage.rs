@@ -179,6 +179,12 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
             collect_required_class_names_in_expr(left, names);
             collect_required_class_names_in_expr(right, names);
         }
+        ExprKind::InstanceOf { value, target } => {
+            collect_required_class_names_in_expr(value, names);
+            if !matches!(target.as_str(), "self" | "parent" | "static") {
+                names.insert(target.as_str().to_string());
+            }
+        }
         ExprKind::Negate(expr)
         | ExprKind::Not(expr)
         | ExprKind::BitNot(expr)
@@ -468,6 +474,7 @@ fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
         ExprKind::BinaryOp { left, right, .. } => {
             expr_uses_variable(left, needle) || expr_uses_variable(right, needle)
         }
+        ExprKind::InstanceOf { value, .. } => expr_uses_variable(value, needle),
         ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)

@@ -42,6 +42,27 @@ class Product implements Named {
 - signature-only methods, no bodies, no properties
 - interface inheritance flattened transitively with cycle detection
 
+## Type checks with instanceof
+```php
+<?php
+interface Renderable {
+    public function render();
+}
+
+class Widget {
+    public function render() { return "widget"; }
+}
+
+class Button extends Widget implements Renderable {}
+
+$item = new Button();
+echo ($item instanceof Button) ? "yes" : "no";      // yes
+echo ($item instanceof Widget) ? "yes" : "no";      // yes
+echo ($item instanceof Renderable) ? "yes" : "no";  // yes
+```
+
+The runtime check uses emitted class metadata, so subclasses match parent classes and implemented interfaces. The left-hand side may be a direct object or a boxed `mixed` / nullable / union value; non-object payloads return `false`. Supported targets are named classes/interfaces, `self`, `parent`, and late-bound `static`.
+
 ## Abstract classes
 ```php
 <?php

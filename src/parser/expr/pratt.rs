@@ -1,6 +1,8 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
+use crate::names::Name;
 use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind};
+use crate::parser::stmt::parse_name;
 use crate::span::Span;
 
 use super::calls::parse_first_class_callable_parens;
@@ -153,6 +155,25 @@ pub(super) fn parse_expr_bp(
             continue;
         }
 
+        if tokens[*pos].0 == Token::InstanceOf {
+            let instanceof_bp = 35;
+            if instanceof_bp < min_bp {
+                break;
+            }
+
+            let span = tokens[*pos].1;
+            *pos += 1;
+            let target = parse_instanceof_target(tokens, pos, span)?;
+            lhs = Expr::new(
+                ExprKind::InstanceOf {
+                    value: Box::new(lhs),
+                    target,
+                },
+                span,
+            );
+            continue;
+        }
+
         let (op, l_bp, r_bp) = match infix_bp(&tokens[*pos].0) {
             Some(binding) => binding,
             None => break,
@@ -186,6 +207,33 @@ pub(super) fn parse_expr_bp(
     }
 
     Ok(lhs)
+}
+
+fn parse_instanceof_target(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Name, CompileError> {
+    match tokens.get(*pos).map(|(token, _)| token) {
+        Some(Token::Self_) => {
+            *pos += 1;
+            Ok(Name::unqualified("self"))
+        }
+        Some(Token::Parent) => {
+            *pos += 1;
+            Ok(Name::unqualified("parent"))
+        }
+        Some(Token::Static) => {
+            *pos += 1;
+            Ok(Name::unqualified("static"))
+        }
+        _ => parse_name(
+            tokens,
+            pos,
+            span,
+            "Expected class or interface name after 'instanceof'",
+        ),
+    }
 }
 
 fn infix_bp(token: &Token) -> Option<(BinOp, u8, u8)> {

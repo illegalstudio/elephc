@@ -213,6 +213,7 @@ pub(super) fn infer_local_type(
                 }
             }
         }
+        ExprKind::InstanceOf { .. } => PhpType::Bool,
         ExprKind::FunctionCall { name, args } => {
             match name.as_str() {
                 "strtolower" | "strtoupper" | "ucfirst" | "lcfirst" | "ucwords" | "trim"

@@ -1,4 +1,5 @@
 use crate::errors::CompileError;
+use crate::names::Name;
 use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, TypeExpr};
 use crate::types::{PhpType, TypeEnv};
 
@@ -128,6 +129,49 @@ impl Checker {
                     Ok(lt)
                 }
             }
+        }
+    }
+
+    pub(crate) fn infer_instanceof_type(
+        &mut self,
+        value: &Expr,
+        target: &Name,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        self.infer_type(value, env)?;
+        self.resolve_instanceof_target_name(target, expr.span)?;
+        Ok(PhpType::Bool)
+    }
+
+    pub(crate) fn resolve_instanceof_target_name(
+        &self,
+        target: &Name,
+        span: crate::span::Span,
+    ) -> Result<String, CompileError> {
+        match target.as_str() {
+            "self" => self.current_class.clone().ok_or_else(|| {
+                CompileError::new(span, "Cannot use self in instanceof outside of a class context")
+            }),
+            "parent" => {
+                let current_class = self.current_class.as_ref().ok_or_else(|| {
+                    CompileError::new(
+                        span,
+                        "Cannot use parent in instanceof outside of a class context",
+                    )
+                })?;
+                self.classes
+                    .get(current_class)
+                    .and_then(|class_info| class_info.parent.clone())
+                    .ok_or_else(|| CompileError::new(span, "Class has no parent class"))
+            }
+            "static" => self.current_class.clone().ok_or_else(|| {
+                CompileError::new(
+                    span,
+                    "Cannot use static in instanceof outside of a class context",
+                )
+            }),
+            _ => Ok(target.as_str().to_string()),
         }
     }
 

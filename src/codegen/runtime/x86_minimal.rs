@@ -167,6 +167,7 @@ pub(super) fn emit_runtime_linux_x86_64_minimal(emitter: &mut Emitter) {
     arrays::emit_gc_mark_reachable(emitter);
     arrays::emit_gc_collect_cycles(emitter);
     arrays::emit_mixed_from_value(emitter);
+    arrays::emit_mixed_instanceof(emitter);
     arrays::emit_mixed_cast_bool(emitter);
     arrays::emit_mixed_cast_float(emitter);
     arrays::emit_mixed_cast_int(emitter);
@@ -324,6 +325,7 @@ mod tests {
         assert!(asm.contains("__rt_incref:\n"));
         assert!(asm.contains("__rt_decref_mixed:\n"));
         assert!(asm.contains("__rt_mixed_from_value:\n"));
+        assert!(asm.contains("__rt_mixed_instanceof:\n"));
         assert!(asm.contains("__rt_mixed_cast_bool:\n"));
         assert!(asm.contains("__rt_mixed_cast_int:\n"));
         assert!(asm.contains("__rt_mixed_free_deep:\n"));

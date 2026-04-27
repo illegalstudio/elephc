@@ -65,6 +65,10 @@ pub(super) fn fold_expr(expr: Expr) -> Expr {
                 right: Box::new(right),
             })
         }
+        ExprKind::InstanceOf { value, target } => ExprKind::InstanceOf {
+            value: Box::new(fold_expr(*value)),
+            target,
+        },
         ExprKind::BoolLiteral(value) => ExprKind::BoolLiteral(value),
         ExprKind::Null => ExprKind::Null,
         ExprKind::Negate(inner) => {

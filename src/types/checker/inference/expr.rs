@@ -325,6 +325,9 @@ impl Checker {
             ExprKind::BinaryOp { left, op, right } => {
                 self.infer_binary_op_type(left, op, right, expr, env)
             }
+            ExprKind::InstanceOf { value, target } => {
+                self.infer_instanceof_type(value, target, expr, env)
+            }
             ExprKind::NewObject { class_name, args } => {
                 self.infer_new_object_type(class_name.as_str(), args, expr, env)
             }

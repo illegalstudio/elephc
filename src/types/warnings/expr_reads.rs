@@ -16,6 +16,7 @@ pub(super) fn collect_expr_reads(
             collect_expr_reads(left, scope, warnings);
             collect_expr_reads(right, scope, warnings);
         }
+        ExprKind::InstanceOf { value, .. } => collect_expr_reads(value, scope, warnings),
         ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)

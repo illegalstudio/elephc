@@ -517,6 +517,9 @@ impl Checker {
             crate::parser::ast::ExprKind::BinaryOp { left, right, .. } => {
                 Self::expr_contains_method_call(left) || Self::expr_contains_method_call(right)
             }
+            crate::parser::ast::ExprKind::InstanceOf { value, .. } => {
+                Self::expr_contains_method_call(value)
+            }
             crate::parser::ast::ExprKind::Ternary {
                 condition,
                 then_expr,

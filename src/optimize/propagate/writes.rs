@@ -273,6 +273,7 @@ pub(crate) fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
             expr_local_writes(left)?,
             expr_local_writes(right)?,
         ]),
+        ExprKind::InstanceOf { value, .. } => expr_local_writes(value),
         ExprKind::NullCoalesce { value, default } => merge_write_sets([
             expr_local_writes(value)?,
             expr_local_writes(default)?,
