@@ -315,6 +315,19 @@ fn test_heap_debug_reports_exit_summary() {
 }
 
 #[test]
+fn test_heap_debug_preserves_alloc_size_during_assoc_string_insertions() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$user = ["name" => "Alice", "city" => "NYC", "lang" => "PHP"];
+echo "Name: " . $user["name"] . "\n";
+echo "City: " . $user["city"] . "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "Name: Alice\nCity: NYC\n");
+}
+
+#[test]
 fn test_heap_debug_poison_freed_payload() {
     let harness = match target().arch {
         Arch::AArch64 => {

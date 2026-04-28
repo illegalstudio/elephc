@@ -29,11 +29,9 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     crate::codegen::abi::emit_symbol_address(emitter, "x9", "_heap_debug_enabled");
     emitter.instruction("ldr x9, [x9]");                                        // load the heap-debug enabled flag
     emitter.instruction("cbz x9, __rt_heap_alloc_debug_checked");               // skip validation when heap-debug mode is disabled
-    emitter.instruction("mov x15, x0");                                         // preserve the requested allocation size across validation
-    emitter.instruction("str x30, [sp, #-16]!");                                // preserve the caller return address before making a nested call
+    emitter.instruction("stp x0, x30, [sp, #-16]!");                            // preserve allocation size and return address across validation
     emitter.instruction("bl __rt_heap_debug_validate_free_list");               // verify the ordered free list before searching it
-    emitter.instruction("ldr x30, [sp], #16");                                  // restore the caller return address after validation
-    emitter.instruction("mov x0, x15");                                         // restore the requested allocation size after validation
+    emitter.instruction("ldp x0, x30, [sp], #16");                              // restore allocation size and return address after validation
     emitter.label("__rt_heap_alloc_debug_checked");
 
     // -- try small segregated bins before walking the general free list --
