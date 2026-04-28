@@ -72,6 +72,7 @@ pub enum ExprKind {
         variadic: Option<String>,
         body: Vec<Stmt>,
         is_arrow: bool,
+        is_static: bool,
         captures: Vec<String>,
     },
     NamedArg {
@@ -132,6 +133,19 @@ pub enum ExprKind {
     BufferNew {
         element_type: TypeExpr,
         len: Box<Expr>,
+    },
+    /// `MyClass::class`, `self::class`, `parent::class`, `static::class`.
+    /// For `Named`, `Self_`, `Parent` the FQN is resolved at compile time;
+    /// `Static` resolves the called class via late static binding.
+    ClassConstant {
+        receiver: StaticReceiver,
+    },
+    /// `new self()`, `new static()`, `new parent()`. Distinct from `NewObject`
+    /// which uses a fixed class name; this variant carries a `StaticReceiver`
+    /// so that codegen can apply late static binding for `static`.
+    NewScopedObject {
+        receiver: StaticReceiver,
+        args: Vec<Expr>,
     },
     MagicConstant(MagicConstant),
 }

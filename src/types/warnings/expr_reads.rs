@@ -127,6 +127,12 @@ pub(super) fn collect_expr_reads(
         }
         ExprKind::StaticPropertyAccess { .. } => {},
         ExprKind::BufferNew { len, .. } => collect_expr_reads(len, scope, warnings),
+        ExprKind::ClassConstant { .. } => {}
+        ExprKind::NewScopedObject { args, .. } => {
+            for arg in args {
+                collect_expr_reads(arg, scope, warnings);
+            }
+        }
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)

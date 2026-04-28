@@ -430,6 +430,7 @@ fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
             variadic,
             body,
             is_arrow,
+            is_static,
             captures,
         } => ExprKind::Closure {
             params: params
@@ -441,6 +442,7 @@ fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
             variadic,
             body: apply_stmts(body, defines),
             is_arrow,
+            is_static,
             captures,
         },
         ExprKind::Spread(inner) => ExprKind::Spread(Box::new(rewrite_expr(*inner, defines))),

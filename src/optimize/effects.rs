@@ -230,6 +230,10 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::StaticPropertyAccess { .. } => Effect::PURE,
         ExprKind::FirstClassCallable(target) => callable_target_effect(target),
         ExprKind::BufferNew { len, .. } => expr_effect(len).with_side_effects(),
+        ExprKind::ClassConstant { .. } => Effect::PURE,
+        ExprKind::NewScopedObject { args, .. } => combine_effects(args.iter().map(expr_effect))
+            .with_side_effects()
+            .with_may_throw(),
         ExprKind::MagicConstant(_) => {
             unreachable!("MagicConstant must be lowered before optimizer passes")
         }

@@ -275,6 +275,8 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             }
         }
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.as_str().to_string()),
+        ExprKind::NewScopedObject { .. } => PhpType::Object(String::new()),
+        ExprKind::ClassConstant { .. } => PhpType::Str,
         ExprKind::EnumCase { enum_name, .. } => PhpType::Object(enum_name.as_str().to_string()),
         ExprKind::This => PhpType::Object(String::new()),
         ExprKind::PtrCast { target_type, .. } => PhpType::Pointer(Some(target_type.clone())),

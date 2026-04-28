@@ -566,6 +566,7 @@ fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             variadic,
             body,
             is_arrow,
+            is_static,
             captures,
         } => {
             pass.enter_closure(span);
@@ -582,6 +583,7 @@ fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
                 variadic,
                 body: new_body,
                 is_arrow,
+                is_static,
                 captures,
             }
         }
@@ -646,6 +648,11 @@ fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         ExprKind::BufferNew { element_type, len } => ExprKind::BufferNew {
             element_type,
             len: Box::new(walk_expr(*len, pass)),
+        },
+        ExprKind::ClassConstant { receiver } => ExprKind::ClassConstant { receiver },
+        ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
+            receiver,
+            args: args.into_iter().map(|a| walk_expr(a, pass)).collect(),
         },
     };
     Expr { kind, span }

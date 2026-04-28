@@ -234,8 +234,8 @@ if ($x === 3) {
 
 The full list of supported constructs, operators, and control structures is in the [docs](docs/). Highlights:
 
-- **OOP**: classes, abstract/final classes, typed/final/static properties and methods, PHP-style static property redeclarations, direct static array property writes, constructor property promotion, interfaces, `instanceof`, traits, enums, `readonly`, static/instance methods, `self::`/`parent::`/`static::`, magic methods (`__toString`, `__get`, `__set`)
-- **Functions**: default parameters, variadic/spread, pass by reference, named arguments, first-class callables, closures, arrow functions
+- **OOP**: classes, abstract/final classes, typed/final/static properties and methods, PHP-style static property redeclarations, direct static array property writes, constructor property promotion, interfaces, `instanceof`, traits, enums, `readonly`, static/instance methods, `self::`/`parent::`/`static::`, `::class` reflection, `new self()` / `new static()` / `new parent()`, magic methods (`__toString`, `__get`, `__set`)
+- **Functions**: default parameters, variadic/spread, pass by reference, named arguments, first-class callables, closures, arrow functions, static closures (`static function () { }`, `static fn () => ...`)
 - **Control flow**: if/elseif/else, while, do-while, for, foreach, switch, match, break, continue, try/catch/finally/throw
 - **Operators**: arithmetic, comparison, `instanceof`, logical, bitwise, ternary, null coalescing (`??`), null coalescing assignment (`??=`), error control (`@`), and compound assignments
 - **Types**: union types (`int|string`), nullable (`?int`), type casting, typed properties, typed parameters and returns

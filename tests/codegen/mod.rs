@@ -27,5 +27,6 @@ mod misc;
 mod pointers;
 mod ffi;
 mod oop;
+mod static_class_features;
 mod types;
 mod optimizer;

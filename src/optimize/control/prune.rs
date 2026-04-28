@@ -484,12 +484,14 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             variadic,
             body,
             is_arrow,
+            is_static,
             captures,
         } => ExprKind::Closure {
             params,
             variadic,
             body: prune_block(body),
             is_arrow,
+            is_static,
             captures,
         },
         ExprKind::NamedArg { name, value } => ExprKind::NamedArg {
@@ -568,6 +570,11 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         ExprKind::BufferNew { element_type, len } => ExprKind::BufferNew {
             element_type,
             len: Box::new(prune_expr(*len)),
+        },
+        ExprKind::ClassConstant { receiver } => ExprKind::ClassConstant { receiver },
+        ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
+            receiver,
+            args: args.into_iter().map(prune_expr).collect(),
         },
         ExprKind::MagicConstant(_) => {
             unreachable!("MagicConstant must be lowered before optimizer passes")
